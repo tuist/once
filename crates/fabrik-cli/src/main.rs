@@ -163,25 +163,39 @@ async fn run_command(
 
     let stdout = cas.get_blob(&outcome.result.stdout).await?;
     let stderr = cas.get_blob(&outcome.result.stderr).await?;
-    tokio::io::stdout().write_all(&stdout).await?;
-    tokio::io::stderr().write_all(&stderr).await?;
+    // tokio::io::stdout/stderr are line-buffered. Flush explicitly so
+    // the bytes reach the pipe before the process exits — without this,
+    // captured output is empty under timing pressure (we observed this
+    // as flaky shellspec failures on macOS CI).
+    let mut out = tokio::io::stdout();
+    out.write_all(&stdout).await?;
+    out.flush().await?;
+    let mut err = tokio::io::stderr();
+    err.write_all(&stderr).await?;
 
     let tag = match outcome.cache {
         CacheState::Hit => "hit",
         CacheState::Miss => "miss",
     };
-    eprintln!(
-        "fabrik: cache {tag} action={} exit={}",
+    let trailer = format!(
+        "fabrik: cache {tag} action={} exit={}\n",
         outcome.action, outcome.result.exit_code
     );
+    err.write_all(trailer.as_bytes()).await?;
+    err.flush().await?;
 
     Ok(exit_from(outcome.result.exit_code))
 }
 
 async fn print_stats(cas: &Cas) -> Result<()> {
     let s = cas.stats().await?;
-    println!("blobs:   {} ({} bytes)", s.blob_count, s.blob_bytes);
-    println!("actions: {} ({} bytes)", s.action_count, s.action_bytes);
+    let body = format!(
+        "blobs:   {} ({} bytes)\nactions: {} ({} bytes)\n",
+        s.blob_count, s.blob_bytes, s.action_count, s.action_bytes,
+    );
+    let mut out = tokio::io::stdout();
+    out.write_all(body.as_bytes()).await?;
+    out.flush().await?;
     Ok(())
 }
 
