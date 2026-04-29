@@ -12,10 +12,19 @@ use fabrik_core::{Action, CacheState, RunOpts, WorkspacePath};
 use tokio::io::AsyncWriteExt;
 use tracing_subscriber::{fmt, EnvFilter};
 
+/// Release pipeline sets `FABRIK_VERSION` at build time so the binary
+/// reports the actual release tag rather than the pre-1.0
+/// workspace.package version. Falls back to the Cargo version for
+/// local dev builds.
+const CLI_VERSION: &str = match option_env!("FABRIK_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Parser)]
 #[command(
     name = "fabrik",
-    version,
+    version = CLI_VERSION,
     about = "Polyglot, agent-native build system"
 )]
 struct Cli {
