@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MISE_VERSION: "2026.4.18"
+  MISE_GITHUB_ATTESTATIONS: 0
+
+jobs:
+  detect:
+    name: Check for releasable changes
+    runs-on: ubuntu-24.04
+    outputs:
+      should-release: ${{ steps.detect.outputs.should-release }}
+      latest-version: ${{ steps.detect.outputs.latest-version }}
+      next-version: ${{ steps.detect.outputs.next-version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v4.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "git-cliff"
+      - name: Detect release
+        id: detect
+        run: mise run release:detect
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: detect
+    if: needs.detect.outputs.should-release == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    defaults:
+      # mise-action provides Git Bash on Windows runners; using bash on
+      # every platform means the package script can stay one file.
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v4.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          # Restrict to rust so shellspec (no Windows binary) doesn't
+          # block the Windows job.
+          install_args: "rust"
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+          cache-on-failure: true
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Package release archive
+        run: mise run release:package --target "${{ matrix.target }}" --version "${{ needs.detect.outputs.next-version }}"
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    name: Publish GitHub release
+    needs:
+      - detect
+      - build
+    if: needs.detect.outputs.should-release == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v4.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "git-cliff"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Flatten artifacts
+        run: find dist -type f -exec mv {} dist/ \;
+      - name: Generate release notes
+        run: mise run release:notes --version "${{ needs.detect.outputs.next-version }}" > release-notes.md
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.detect.outputs.next-version }}
+          name: ${{ needs.detect.outputs.next-version }}
+          body_path: release-notes.md
+          files: dist/*

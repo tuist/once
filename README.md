@@ -7,10 +7,24 @@ A polyglot, agent-native build system. Bazel's ambitions, none of its mistakes.
 See [docs/design.md](docs/design.md) for the v0 design and
 [docs/roadmap.md](docs/roadmap.md) for the phased execution plan.
 
-## Quickstart
+## Install
+
+Once the first release lands, fabrik will be installable via mise's
+ubi backend:
 
 ```sh
-mise install              # installs the pinned Rust + shellspec toolchain
+mise use --global ubi:tuist/fabrik@latest
+fabrik --version
+```
+
+Releases are produced automatically from `main` on every push that
+contains conventional commits (`feat:`, `fix:`, `perf:`, `refactor:`).
+See [.github/workflows/release.yml](.github/workflows/release.yml).
+
+## Build from source
+
+```sh
+mise install              # installs the pinned Rust + shellspec + git-cliff toolchain
 cargo build --release     # builds the workspace
 cargo test                # unit tests
 mise exec -- shellspec    # end-to-end CLI tests
