@@ -238,27 +238,27 @@ async fn execute_run_command(
     let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
     tracing::Span::current().record("program", tracing::field::display(program));
 
-    let mut cmd = Command::new(program);
-    cmd.args(rest);
+    let mut command = Command::new(program);
+    command.args(rest);
     // Don't inherit the parent's env: actions must declare every
     // variable they depend on, or the cache key lies.
-    cmd.env_clear();
+    command.env_clear();
     for (k, v) in env {
-        cmd.env(k, v);
+        command.env(k, v);
     }
     // Close stdin — actions never read from a parent terminal.
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    cmd.current_dir(cwd.map_or_else(
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    command.current_dir(cwd.map_or_else(
         || workspace_root.to_path_buf(),
         |c| c.resolve(workspace_root),
     ));
     // If the future is dropped (e.g. timeout fires), tokio sends SIGKILL
     // to the child instead of orphaning it.
-    cmd.kill_on_drop(true);
+    command.kill_on_drop(true);
 
-    let mut child = cmd.spawn().map_err(|source| Error::Spawn {
+    let mut child = command.spawn().map_err(|source| Error::Spawn {
         program: program.clone(),
         source,
     })?;
@@ -453,7 +453,7 @@ mod tests {
             argv: vec![
                 "/bin/sh".into(),
                 "-c".into(),
-                r#"printf 'abc\000def'"#.into(),
+                r"printf 'abc\000def'".into(),
             ],
             env: BTreeMap::new(),
             cwd: None,
