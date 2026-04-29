@@ -10,9 +10,10 @@ See [docs/design.md](docs/design.md) for the v0 design and
 ## Quickstart
 
 ```sh
-mise install      # installs the pinned Rust toolchain
-cargo build       # builds the workspace
-cargo test        # runs unit tests
+mise install              # installs the pinned Rust + shellspec toolchain
+cargo build --release     # builds the workspace
+cargo test                # unit tests
+mise exec -- shellspec    # end-to-end CLI tests
 ```
 
 ## What works today (Phase 0)

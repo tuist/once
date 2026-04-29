@@ -1,5 +1,6 @@
 [tools]
 rust = "1.86"
+shellspec = "latest"
 
 [env]
 RUST_BACKTRACE = "1"
