@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fabrik-cli",
+    "crates/fabrik-core",
+    "crates/fabrik-cas",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.86"
+license = "MIT"
+repository = "https://github.com/tuist/fabrik"
+
+[workspace.dependencies]
+fabrik-core = { path = "crates/fabrik-core" }
+fabrik-cas = { path = "crates/fabrik-cas" }
+
+anyhow = "1"
+blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Pragmatic carve-outs from the pedantic group: documentation and
+# enum-variant naming aren't worth gating builds on yet.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
