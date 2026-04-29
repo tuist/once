@@ -1,0 +1,4 @@
+/target
+/.fabrik
+*.swp
+.DS_Store

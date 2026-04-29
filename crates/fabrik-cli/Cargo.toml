@@ -1,0 +1,18 @@
+[package]
+name = "fabrik-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "fabrik"
+path = "src/main.rs"
+
+[dependencies]
+fabrik-cas.workspace = true
+fabrik-core.workspace = true
+
+anyhow.workspace = true
+clap.workspace = true
