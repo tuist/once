@@ -98,3 +98,44 @@ jobs:
 
       - name: shellspec
         run: mise exec -- shellspec
+
+  windows:
+    # Windows isn't a first-class runtime target yet — most fabrik-core
+    # tests shell out to /bin/sh, and the shellspec suite is bash-only —
+    # but the workspace must compile cleanly on windows-msvc so that
+    # platform-specific regressions (path handling, Stdio piping, the
+    # cfg-gated fsync_dir fallback) are caught early. fabrik-cas has no
+    # subprocess dependency, so its tests run here too.
+    #
+    # mise is skipped on Windows because shellspec has no Windows
+    # binary; rust is installed directly via rustup, which is preloaded
+    # on windows-latest runners.
+    name: build (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install rust 1.86
+        shell: bash
+        run: |
+          rustup toolchain install 1.86 --profile minimal --no-self-update
+          rustup default 1.86
+
+      - name: cache cargo registry, git db, and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-windows
+          cache-on-failure: true
+          cache-bin: true
+
+      - name: cargo build --workspace --all-targets
+        # Compiles every target (lib, bin, tests, examples) without
+        # running them. Catches Windows-specific compile errors in any
+        # crate without needing the unit tests to be cross-platform.
+        run: cargo build --workspace --all-targets
+
+      - name: cargo test -p fabrik-cas
+        # fabrik-cas is the only crate that doesn't depend on /bin/sh
+        # for its tests; running it here proves the substrate's async
+        # fs paths actually work on Windows, not just compile.
+        run: cargo test -p fabrik-cas
