@@ -35,9 +35,15 @@ A phased plan optimized for **shortest path to self-hosting**. The design spec (
 - Links Phase 0's CAS for caching.
 - Inputs to cache key: source files (globbed by cargo metadata's `targets[].src_path` + a recursive glob), rustc version, feature set.
 
-**Exit criterion:** clean cache → `fabrik build` produces a working binary. Touch a `.rs` file → only that crate's rustc runs. No edits → 100% cache hit.
+**Substrate hardening folded in from the Phase 0 review** (foundation work that is cheap to do *before* Phase 1's first non-toy consumer arrives, expensive after):
 
-**Risks:** rustc has many implicit inputs (env vars, lockfile, target dir layout). Expect to discover them by diffing cargo's behavior. Worth keeping a `loose` mode escape hatch from day one to unblock progress.
+- **Streaming `Cas::get_blob` / `read_blob_to_writer`** to match the existing streaming `put_stream`. Phase 1's consumers — rustc stdout, future linker logs, dependency dumps — must not require materializing the whole blob into a `Vec<u8>`. Add the `AsyncRead` getter; keep the byte-vec convenience for tests.
+- **Plugin-shaped `Action` boundary.** The current `Action` enum is closed over `RunCommand` and bakes its JSON encoding into the cache key. Before the rust plugin emits actions, decide between (a) keeping `Action` closed and lowering plugin actions to `RunCommand` primitives, or (b) opening it to `Action { kind: String, payload: bytes, declared_inputs, declared_outputs }` with plugin-defined schemas. Whichever wins becomes the published v1 contract; pick now so Phase 1's rust plugin is the first real consumer of the right shape.
+- **Incremental `stats()` via a sidecar manifest.** The current implementation walks the entire CAS tree on every call — fine at 12 entries, brutal at the volumes Phase 1 produces. Track running totals in `<root>/meta.json`, updated on every `put_*` and `forget_*`, with `fabrik cache verify` as the recompute path. Keep the walking implementation behind `verify` only.
+
+**Exit criterion:** clean cache → `fabrik build` produces a working binary. Touch a `.rs` file → only that crate's rustc runs. No edits → 100% cache hit. The three substrate items above ship in the same phase, gated by the same exit criterion.
+
+**Risks:** rustc has many implicit inputs (env vars, lockfile, target dir layout). Expect to discover them by diffing cargo's behavior. Worth keeping a `loose` mode escape hatch from day one to unblock progress. The `Action`-shape decision is the load-bearing one — getting it wrong means Phase 4's plugin extraction is a flag-day cache invalidation.
 
 ## Phase 2 — Multi-crate parallel build (week 6–8)
 
