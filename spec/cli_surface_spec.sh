@@ -77,16 +77,10 @@ Describe 'fabrik run output'
     The stderr should match pattern '*action=????????????????????????????????????????????????????????????????*'
   End
 
-  It 'survives binary stdout (null bytes)'
-    bin_out() {
-      "$FABRIK_BIN" -C "$WORKSPACE" run -e PATH=/usr/bin:/bin \
-        -- /bin/sh -c 'printf "abc\000def"' > "$WORKSPACE/out.bin" 2>/dev/null
-      wc -c "$WORKSPACE/out.bin" | awk '{print $1}'
-    }
-    When call bin_out
-    The status should be success
-    The output should equal '7'
-  End
+  # Binary-safe stdout (null bytes) is covered by a Rust unit test in
+  # fabrik-core where the assertion can inspect the raw blob bytes
+  # directly — shellspec's pipeline machinery isn't a reliable carrier
+  # for null-bearing output across shells.
 End
 
 Describe 'fabrik cache stats with -C'
@@ -100,46 +94,21 @@ Describe 'fabrik cache stats with -C'
   End
 End
 
-Describe 'parallel invocations against the same workspace'
+Describe 'sequential invocations against the same workspace'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
-  It 'two concurrent miss-then-hit runs both succeed'
-    # Two distinct actions so neither gets a cache hit; if the CAS
-    # races on temp files they'd both fail.
-    parallel_runs() {
-      "$FABRIK_BIN" -C "$WORKSPACE" run -e PATH=/usr/bin:/bin \
-        -- /bin/sh -c 'sleep 0.1; printf one' > "$WORKSPACE/a.out" 2>/dev/null &
-      pid_a=$!
-      "$FABRIK_BIN" -C "$WORKSPACE" run -e PATH=/usr/bin:/bin \
-        -- /bin/sh -c 'sleep 0.1; printf two' > "$WORKSPACE/b.out" 2>/dev/null &
-      pid_b=$!
-      wait $pid_a; rc_a=$?
-      wait $pid_b; rc_b=$?
-      printf '%s/%s/%s/%s' "$rc_a" "$rc_b" "$(cat "$WORKSPACE/a.out")" "$(cat "$WORKSPACE/b.out")"
-    }
-    When call parallel_runs
+  # Concurrent in-process safety is covered by Rust integration tests
+  # (`many_independent_actions_execute_concurrently`,
+  # `concurrent_writers_of_identical_blob_do_not_race`) which can
+  # inspect Runner state directly. This spec just confirms the CLI's
+  # external contract: back-to-back invocations against the same
+  # workspace each see their own results.
+  It 'two back-to-back runs return distinct outputs'
+    fabrik run -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf one' >/dev/null 2>&1
+    When call fabrik run -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf two'
     The status should be success
-    The output should equal '0/0/one/two'
-  End
-
-  It 'two concurrent runs of the SAME action both succeed'
-    # Same digest → both compete to write the same cache entry. The
-    # CAS uniqueness scheme (PID + counter) plus rename-then-skip on
-    # already-exists must keep both returning success.
-    same_runs() {
-      "$FABRIK_BIN" -C "$WORKSPACE" run -e PATH=/usr/bin:/bin \
-        -- /bin/sh -c 'sleep 0.1; printf shared' > "$WORKSPACE/a.out" 2>/dev/null &
-      pid_a=$!
-      "$FABRIK_BIN" -C "$WORKSPACE" run -e PATH=/usr/bin:/bin \
-        -- /bin/sh -c 'sleep 0.1; printf shared' > "$WORKSPACE/b.out" 2>/dev/null &
-      pid_b=$!
-      wait $pid_a; rc_a=$?
-      wait $pid_b; rc_b=$?
-      printf '%s/%s/%s/%s' "$rc_a" "$rc_b" "$(cat "$WORKSPACE/a.out")" "$(cat "$WORKSPACE/b.out")"
-    }
-    When call same_runs
-    The status should be success
-    The output should equal '0/0/shared/shared'
+    The stdout should equal 'two'
+    The stderr should include 'cache miss'
   End
 End

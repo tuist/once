@@ -1,4 +1,4 @@
-name: ci
+name: fabrik
 
 on:
   push:
@@ -6,30 +6,61 @@ on:
   pull_request:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: fabrik-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
+  # rust-cache is more effective than cargo's incremental compilation in
+  # CI: incremental dirties artifacts that the cache then has to ship.
+  CARGO_INCREMENTAL: "0"
+  # Smaller debug info => smaller cache entries.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  # Be patient with flaky network steps so a one-off blip doesn't waste
+  # the cached compile.
+  CARGO_NET_RETRY: "10"
+  RUSTUP_MAX_RETRIES: "10"
+  RUST_BACKTRACE: "1"
 
 jobs:
   lint:
-    name: rustfmt + clippy
+    name: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+
+      - name: install mise toolchain (cached)
+        uses: jdx/mise-action@v2
         with:
           experimental: true
-      - uses: Swatinem/rust-cache@v2
-      - name: rustfmt
-        run: cargo fmt --all -- --check
-      - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+          # mise-action caches installed tools by default; this line
+          # makes it explicit so a future change is loud.
+          cache: true
 
-  unit:
-    name: unit tests (${{ matrix.os }})
+      - name: install rustfmt + clippy components
+        # mise's rust install ships rustup but no components; pull them
+        # in explicitly. rustup's own download cache is captured by
+        # rust-cache below.
+        run: rustup component add rustfmt clippy
+
+      - name: cache cargo registry, git db, and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          # A single shared key for the lint job means rustfmt and
+          # clippy reuse the same target directory across runs.
+          shared-key: lint
+          # Don't lose the cache when one of the lint commands fails;
+          # the next run still gets a warm restore after a red build.
+          cache-on-failure: true
+          # Cache cargo-installed binaries (currently none, but free).
+          cache-bin: true
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -37,30 +68,33 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
-        with:
-          experimental: true
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.os }}
-      - run: cargo test --workspace --all-targets
 
-  e2e:
-    name: shellspec (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - name: install mise toolchain (cached)
+        uses: jdx/mise-action@v2
         with:
           experimental: true
-      - uses: Swatinem/rust-cache@v2
+          cache: true
+
+      - name: cache cargo registry, git db, and target
+        uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.os }}-release
-      - name: build release
+          # Per-OS shared key so unit tests, the release build, and the
+          # shellspec suite all reuse one target/ directory inside one
+          # job, while staying isolated from the other OS and the lint
+          # job (different compile flags, different cache namespace).
+          shared-key: test-${{ matrix.os }}
+          cache-on-failure: true
+          cache-bin: true
+
+      - name: cargo test --workspace --all-targets
+        run: cargo test --workspace --all-targets
+
+      - name: cargo build --release
+        # Builds the binary the shellspec suite consumes. Sharing the
+        # target dir with the previous step avoids recompiling
+        # dependencies; only the release-profile codegen units are
+        # fresh work.
         run: cargo build --release
+
       - name: shellspec
         run: mise exec -- shellspec

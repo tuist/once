@@ -96,11 +96,13 @@ Describe 'fabrik run'
 
   Describe 'cwd'
     It 'resolves a workspace-relative cwd against the workspace root'
-      mkdir "$WORKSPACE/sub"
-      printf marker > "$WORKSPACE/sub/file"
-      When call fabrik run --cwd sub -e PATH=/usr/bin:/bin -- /bin/sh -c 'cat file'
+      # Use `pwd` (POSIX shell builtin) so the assertion checks the
+      # cwd resolution itself, without depending on file-write timing
+      # or external utilities discoverable through PATH.
+      mkdir -p "$WORKSPACE/sub"
+      When call fabrik run --cwd sub -e PATH=/usr/bin:/bin -- /bin/sh -c 'pwd'
       The status should be success
-      The stdout should equal 'marker'
+      The stdout should match pattern '*/sub*'
       The stderr should include 'cache miss'
     End
 

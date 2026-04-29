@@ -443,6 +443,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn captures_binary_stdout_with_null_bytes() {
+        // The cache stores stdout as a raw blob; null bytes and other
+        // non-printable bytes must round-trip unchanged. Shellspec's
+        // pipeline machinery is unreliable for this assertion across
+        // shells, so the contract lives here instead.
+        let (tmp, cas) = fresh_cas();
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                r#"printf 'abc\000def'"#.into(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            timeout_ms: Some(5_000),
+        };
+        let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(outcome.result.exit_code, 0);
+        let stdout = cas.get_blob(&outcome.result.stdout).await.unwrap();
+        assert_eq!(stdout, b"abc\x00def");
+    }
+
+    #[tokio::test]
     async fn streams_large_output_without_buffering_in_memory() {
         // Produces 4 MB of data — comfortably larger than the 64 KB
         // stream chunk. If we ever regress to buffering, this test
