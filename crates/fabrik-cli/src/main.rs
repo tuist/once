@@ -2,22 +2,32 @@
 
 use std::collections::BTreeMap;
 use std::env;
-use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use fabrik_cas::Cas;
-use fabrik_core::{Action, CacheState};
+use fabrik_core::{Action, CacheState, RunOpts, WorkspacePath};
+use tokio::io::AsyncWriteExt;
+use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Parser)]
-#[command(name = "fabrik", version, about = "Polyglot, agent-native build system")]
+#[command(
+    name = "fabrik",
+    version,
+    about = "Polyglot, agent-native build system"
+)]
 struct Cli {
-    /// Workspace root. Defaults to the current directory; the cache lives
-    /// under `<workspace>/.fabrik/`.
-    #[arg(long, global = true)]
-    workspace: Option<PathBuf>,
+    /// Workspace root. Defaults to the current directory; the cache
+    /// lives under `<workspace>/.fabrik/`. Mirrors `make -C`.
+    #[arg(short = 'C', long = "directory", global = true, value_name = "DIR")]
+    directory: Option<PathBuf>,
+
+    /// Increase log verbosity. Repeat for more (-v: info, -vv: debug,
+    /// -vvv: trace). Overridden by `RUST_LOG`.
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    verbose: u8,
 
     #[command(subcommand)]
     command: Cmd,
@@ -25,13 +35,32 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Run a command through the action cache. The cache key is the full
-    /// argv plus any `-e KEY=VALUE` env entries. Subsequent invocations
-    /// with the same key reuse the captured stdout/stderr/exit code.
+    /// Run a command through the action cache.
+    ///
+    /// The cache key is the full argv, declared environment variables,
+    /// optional working directory, and optional timeout. A second
+    /// invocation with the same key reuses the captured stdout, stderr,
+    /// and exit code.
     Run {
         /// Pass an environment variable to the command. Repeatable.
         #[arg(short = 'e', value_parser = parse_env)]
         env: Vec<(String, String)>,
+
+        /// Working directory, relative to the workspace root. Must not
+        /// be absolute or escape the workspace.
+        #[arg(long, value_parser = parse_workspace_path)]
+        cwd: Option<WorkspacePath>,
+
+        /// Per-action timeout in milliseconds. The child is killed if
+        /// it exceeds the deadline.
+        #[arg(long, value_name = "MS")]
+        timeout_ms: Option<u64>,
+
+        /// Cache non-zero exits the same way zero exits are cached.
+        /// Off by default — transient failures shouldn't poison the
+        /// cache.
+        #[arg(long)]
+        cache_failures: bool,
 
         /// Command and arguments. Use `--` to separate from fabrik flags.
         #[arg(trailing_var_arg = true, required = true)]
@@ -58,9 +87,15 @@ fn parse_env(raw: &str) -> std::result::Result<(String, String), String> {
     Ok((k.to_string(), v.to_string()))
 }
 
-fn main() -> ExitCode {
+fn parse_workspace_path(raw: &str) -> std::result::Result<WorkspacePath, String> {
+    WorkspacePath::try_from(raw).map_err(|e| e.to_string())
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
     let cli = Cli::parse();
-    match dispatch(cli) {
+    init_tracing(cli.verbose);
+    match dispatch(cli).await {
         Ok(code) => code,
         Err(e) => {
             eprintln!("fabrik: {e:#}");
@@ -69,35 +104,67 @@ fn main() -> ExitCode {
     }
 }
 
-fn dispatch(cli: Cli) -> Result<ExitCode> {
-    let workspace = cli
-        .workspace
-        .map(Ok)
-        .unwrap_or_else(env::current_dir)
-        .context("resolving workspace root")?;
-    let cas_root = workspace.join(".fabrik");
-    let cas = Cas::open(&cas_root).with_context(|| format!("opening cas at {cas_root:?}"))?;
+fn init_tracing(verbose: u8) {
+    // RUST_LOG always wins; otherwise -v sets the floor.
+    let default = match verbose {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
+    fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
+}
+
+async fn dispatch(cli: Cli) -> Result<ExitCode> {
+    let workspace = match cli.directory {
+        Some(d) => d,
+        None => env::current_dir().context("resolving workspace root")?,
+    };
+    let cas = Cas::open(workspace.join(".fabrik"));
 
     match cli.command {
-        Cmd::Run { env, argv } => run_command(&cas, env, argv),
+        Cmd::Run {
+            env,
+            cwd,
+            timeout_ms,
+            cache_failures,
+            argv,
+        } => run_command(&workspace, &cas, env, cwd, timeout_ms, cache_failures, argv).await,
         Cmd::Cache {
             cmd: CacheCmd::Stats,
-        } => print_stats(&cas).map(|()| ExitCode::SUCCESS),
+        } => print_stats(&cas).await.map(|()| ExitCode::SUCCESS),
     }
 }
 
-fn run_command(cas: &Cas, env: Vec<(String, String)>, argv: Vec<String>) -> Result<ExitCode> {
+#[allow(clippy::too_many_arguments)]
+async fn run_command(
+    workspace: &std::path::Path,
+    cas: &Cas,
+    env: Vec<(String, String)>,
+    cwd: Option<WorkspacePath>,
+    timeout_ms: Option<u64>,
+    cache_failures: bool,
+    argv: Vec<String>,
+) -> Result<ExitCode> {
     let action = Action::RunCommand {
         argv,
         env: env.into_iter().collect::<BTreeMap<_, _>>(),
-        cwd: None,
+        cwd,
+        timeout_ms,
     };
-    let outcome = fabrik_core::run(&action, cas).context("executing action")?;
+    let opts = RunOpts { cache_failures };
+    let outcome = fabrik_core::run(&action, workspace, cas, opts)
+        .await
+        .context("executing action")?;
 
-    let stdout = cas.get_blob(&outcome.result.stdout)?;
-    let stderr = cas.get_blob(&outcome.result.stderr)?;
-    io::stdout().write_all(&stdout)?;
-    io::stderr().write_all(&stderr)?;
+    let stdout = cas.get_blob(&outcome.result.stdout).await?;
+    let stderr = cas.get_blob(&outcome.result.stderr).await?;
+    tokio::io::stdout().write_all(&stdout).await?;
+    tokio::io::stderr().write_all(&stderr).await?;
 
     let tag = match outcome.cache {
         CacheState::Hit => "hit",
@@ -111,15 +178,22 @@ fn run_command(cas: &Cas, env: Vec<(String, String)>, argv: Vec<String>) -> Resu
     Ok(exit_from(outcome.result.exit_code))
 }
 
-fn print_stats(cas: &Cas) -> Result<()> {
-    let s = cas.stats()?;
+async fn print_stats(cas: &Cas) -> Result<()> {
+    let s = cas.stats().await?;
     println!("blobs:   {} ({} bytes)", s.blob_count, s.blob_bytes);
     println!("actions: {} ({} bytes)", s.action_count, s.action_bytes);
     Ok(())
 }
 
+/// Map a subprocess exit code to a CLI [`ExitCode`].
+///
+/// `Command::status().code()` returns `None` when the child was killed
+/// by a signal; we surface that as 255 (the lowest 8 bits of -1) which
+/// is what most build tools do. We do *not* attempt the shell
+/// convention of `128 + signo` — we don't have the signal number on
+/// stable Rust without `std::os::unix`-specific code, and pretending
+/// otherwise would be misleading.
 fn exit_from(code: i32) -> ExitCode {
-    // ExitCode only carries u8; clamp the way most shells do.
     let clamped = u8::try_from(code & 0xff).unwrap_or(1);
     ExitCode::from(clamped)
 }

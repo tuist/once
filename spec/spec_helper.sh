@@ -26,5 +26,5 @@ cleanup_workspace() {
 }
 
 fabrik() {
-  "$FABRIK_BIN" --workspace "$WORKSPACE" "$@"
+  "$FABRIK_BIN" -C "$WORKSPACE" "$@"
 }
