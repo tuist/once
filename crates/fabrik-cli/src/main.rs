@@ -76,6 +76,30 @@ enum Cmd {
         argv: Vec<String>,
     },
 
+    /// Run `cargo` against the workspace through the action cache.
+    ///
+    /// First invocation runs cargo end-to-end and captures the result.
+    /// Subsequent invocations with the same workspace source digest,
+    /// rust+cargo versions, and arguments replay the cached
+    /// stdout/stderr/exit instead of re-running.
+    ///
+    /// This is opaque-mode integration: cargo runs as one unit. cargo's
+    /// own incremental compilation still applies on a cache miss.
+    /// Future phases will replace this with per-crate `rustc`
+    /// invocations driven by `cargo metadata`.
+    Cargo {
+        /// Cache cargo failures the same way successes are cached. Off
+        /// by default so a transient `cargo build` failure doesn't
+        /// pin a red state.
+        #[arg(long)]
+        cache_failures: bool,
+
+        /// Arguments forwarded to cargo. Use `--` to separate from
+        /// fabrik flags, e.g. `fabrik cargo -- build --release -p foo`.
+        #[arg(trailing_var_arg = true, required = true)]
+        args: Vec<String>,
+    },
+
     /// Cache management.
     Cache {
         #[command(subcommand)]
@@ -143,10 +167,50 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
             cache_failures,
             argv,
         } => run_command(&workspace, &cas, env, cwd, timeout_ms, cache_failures, argv).await,
+        Cmd::Cargo {
+            cache_failures,
+            args,
+        } => cargo_command(&workspace, &cas, cache_failures, args).await,
         Cmd::Cache {
             cmd: CacheCmd::Stats,
         } => print_stats(&cas).await.map(|()| ExitCode::SUCCESS),
     }
+}
+
+async fn cargo_command(
+    workspace: &std::path::Path,
+    cas: &Cas,
+    cache_failures: bool,
+    args: Vec<String>,
+) -> Result<ExitCode> {
+    let toolchain = fabrik_rust::Toolchain::detect().context("probing rust toolchain")?;
+    let action =
+        fabrik_rust::cargo_action(workspace, &args, &toolchain).context("building cargo action")?;
+    let opts = RunOpts { cache_failures };
+    let outcome = fabrik_core::run(&action, workspace, cas, opts)
+        .await
+        .context("executing cargo action")?;
+
+    let stdout = cas.get_blob(&outcome.result.stdout).await?;
+    let stderr = cas.get_blob(&outcome.result.stderr).await?;
+    let mut out = tokio::io::stdout();
+    out.write_all(&stdout).await?;
+    out.flush().await?;
+    let mut err = tokio::io::stderr();
+    err.write_all(&stderr).await?;
+
+    let tag = match outcome.cache {
+        CacheState::Hit => "hit",
+        CacheState::Miss => "miss",
+    };
+    let trailer = format!(
+        "fabrik: cargo cache {tag} action={} exit={}\n",
+        outcome.action, outcome.result.exit_code
+    );
+    err.write_all(trailer.as_bytes()).await?;
+    err.flush().await?;
+
+    Ok(exit_from(outcome.result.exit_code))
 }
 
 #[allow(clippy::too_many_arguments)]

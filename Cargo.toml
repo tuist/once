@@ -4,6 +4,7 @@ members = [
     "crates/fabrik-cli",
     "crates/fabrik-core",
     "crates/fabrik-cas",
+    "crates/fabrik-rust",
 ]
 
 [workspace.package]
@@ -16,11 +17,13 @@ repository = "https://github.com/tuist/fabrik"
 [workspace.dependencies]
 fabrik-core = { path = "crates/fabrik-core" }
 fabrik-cas = { path = "crates/fabrik-cas" }
+fabrik-rust = { path = "crates/fabrik-rust" }
 
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"
+ignore = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"

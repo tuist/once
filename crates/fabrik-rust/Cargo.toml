@@ -1,25 +1,25 @@
 [package]
-name = "fabrik-cli"
+name = "fabrik-rust"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "fabrik"
-path = "src/main.rs"
-
 [dependencies]
 fabrik-cas.workspace = true
 fabrik-core.workspace = true
-fabrik-rust.workspace = true
 
 anyhow.workspace = true
-clap.workspace = true
+blake3.workspace = true
+ignore.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true
