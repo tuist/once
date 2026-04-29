@@ -1,4 +1,4 @@
-//! Phase 0 CLI: `fabrik run` and `fabrik cache stats`.
+//! `fabrik` CLI entry point.
 
 use std::collections::BTreeMap;
 use std::env;

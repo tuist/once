@@ -1,7 +1,8 @@
 //! Local content-addressed store and action-result cache.
 //!
-//! Phase 0 substrate: blobs are addressed by BLAKE3 digest, action results
-//! are keyed by action digest. Filesystem-backed; no remote tier yet.
+//! Blobs are addressed by their BLAKE3 digest; action results are keyed
+//! by an action digest supplied by the caller. Filesystem-backed, no
+//! remote tier.
 
 use std::fs;
 use std::io;

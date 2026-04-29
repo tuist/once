@@ -1,9 +1,8 @@
-//! Action graph primitives and execution.
+//! Action types and cache-aware execution.
 //!
-//! Phase 0 has exactly one action kind ([`Action::RunCommand`]) and a
-//! straight-line executor that consults the CAS for memoization. The
-//! action-graph types here are deliberately tiny — the v1 graph,
-//! scheduler, and provenance store will grow from these stubs.
+//! Currently exposes one action kind ([`Action::RunCommand`]) and a
+//! straight-line executor that consults a [`Cas`] for memoization
+//! before spawning a subprocess.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -28,7 +27,7 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// All actions Fabrik can execute. Phase 0: just `RunCommand`.
+/// All actions Fabrik can execute.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Action {
@@ -45,8 +44,9 @@ impl Action {
     /// Canonical, content-addressed key for this action. Two actions with
     /// the same canonical JSON encoding share a cache slot.
     pub fn digest(&self) -> Digest {
-        // serde_json with BTreeMap-backed env gives us deterministic
-        // ordering. Vec<String> is ordered. That's enough for Phase 0.
+        // BTreeMap gives deterministic key ordering in serde_json output;
+        // Vec<String> is intrinsically ordered. The canonical encoding
+        // is therefore stable across processes.
         let canonical = serde_json::to_vec(self).expect("Action is serializable");
         Digest::of_bytes(&canonical)
     }
@@ -92,8 +92,8 @@ fn execute(action: &Action, cas: &Cas) -> Result<ActionResult> {
             let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
             let mut cmd = Command::new(program);
             cmd.args(rest);
-            // Don't inherit the parent's env: Phase 0 commands declare
-            // exactly what they want. Hermeticity-by-default starts here.
+            // Don't inherit the parent's env: actions must declare every
+            // variable they depend on, or the cache key lies.
             cmd.env_clear();
             for (k, v) in env {
                 cmd.env(k, v);
