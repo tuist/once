@@ -2,3 +2,10 @@
 /.fabrik
 *.swp
 .DS_Store
+
+# Shellspec writes worker progress to ./file under --jobs > 1, and
+# leaves the others on failure. They're transient.
+/file
+/report
+/.shellspec-quick.log
+/.shellspec-failures.log
