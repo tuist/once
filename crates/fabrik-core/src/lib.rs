@@ -450,11 +450,7 @@ mod tests {
         // shells, so the contract lives here instead.
         let (tmp, cas) = fresh_cas();
         let action = Action::RunCommand {
-            argv: vec![
-                "/bin/sh".into(),
-                "-c".into(),
-                r"printf 'abc\000def'".into(),
-            ],
+            argv: vec!["/bin/sh".into(), "-c".into(), r"printf 'abc\000def'".into()],
             env: BTreeMap::new(),
             cwd: None,
             timeout_ms: Some(5_000),

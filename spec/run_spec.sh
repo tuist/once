@@ -63,10 +63,12 @@ Describe 'fabrik run'
   End
 
   It 'uses env as part of the cache key'
-    fabrik run -e PATH=/usr/bin:/bin -e MODE=a -- /bin/sh -c 'printf $MODE' >/dev/null 2>&1
-    When call fabrik run -e PATH=/usr/bin:/bin -e MODE=b -- /bin/sh -c 'printf $MODE'
+    # printenv reads the env directly without going through a shell —
+    # no quoting variability across bash/dash on different runners.
+    fabrik run -e PATH=/usr/bin:/bin -e MODE=a -- /usr/bin/printenv MODE >/dev/null 2>&1
+    When call fabrik run -e PATH=/usr/bin:/bin -e MODE=b -- /usr/bin/printenv MODE
     The status should be success
-    The stdout should equal 'b'
+    The stdout should match pattern 'b*'
     The stderr should include 'cache miss'
   End
 

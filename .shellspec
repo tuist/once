@@ -1,7 +1,9 @@
 --require spec_helper
 --format documentation
 --shell bash
-# Parallel execution. Each example uses an isolated tmp workspace
-# (see setup_workspace in spec_helper.sh), so parallel runs are safe.
---jobs 4
+# Random ordering catches accidental order-dependence between examples.
 --random examples
+# Sequential by default. Each example owns its tmp workspace and is
+# safe to parallelize, but shellspec's parallel-job output capture is
+# unreliable under load on CI runners (different tests fail each run).
+# Local devs can opt into parallelism with `mise exec -- shellspec --jobs N`.
