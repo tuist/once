@@ -7,6 +7,20 @@ A polyglot, agent-native build system. Bazel's ambitions, none of its mistakes.
 > there is no language plugin yet (it's the next phase). See the
 > [roadmap](docs/roadmap.md) for what lands when.
 
+## What you get
+
+- 🌍 **One build system for the whole polyglot stack.** Rust, Go, C/C++,
+  TypeScript, Python, Java/Kotlin, Elixir, Swift, Android, iOS.
+- ⚡ **Trustworthy, content-addressed caching** that's shareable across
+  machines via the Bazel REAPI protocol.
+- 🎯 **Honest boundaries.** When fidelity has to drop (Gradle, Vite, Mix),
+  Fabrik says so out loud rather than pretending.
+- 🤖 **Agent-native.** The build graph is a typed, queryable data
+  structure. Humans and AI agents talk to the same gRPC API.
+- 📈 **OpenTelemetry-native** with build-specific semantic conventions.
+
+The full picture is in [docs/design.md](docs/design.md).
+
 ## Install
 
 The recommended path is [mise](https://mise.jdx.dev) with the GitHub backend:
@@ -47,27 +61,13 @@ fabrik cache stats
 The cache lives under `<workspace>/.fabrik/`. Use `-C <dir>` to point at
 a different workspace, the same way `make -C` works.
 
-## What the design promises
-
-- **One build system for the whole polyglot stack.** Rust, Go, C/C++,
-  TypeScript, Python, Java/Kotlin, Elixir, Swift, Android, iOS.
-- **Trustworthy, content-addressed caching** that's shareable across
-  machines via the Bazel REAPI protocol.
-- **Honest boundaries.** When fidelity has to drop (Gradle, Vite, Mix),
-  Fabrik says so out loud rather than pretending.
-- **Agent-native.** The build graph is a typed, queryable data
-  structure. Humans and AI agents talk to the same gRPC API.
-- **OpenTelemetry-native** with build-specific semantic conventions.
-
-The full picture is in [docs/design.md](docs/design.md).
-
-## Project status
+## Contributing
 
 Phase 0 (walking skeleton: CAS, action executor, CLI) shipped in 0.1.0.
 The next phase brings the Rust language plugin so Fabrik can build
 itself. Track progress in the [roadmap](docs/roadmap.md).
 
-## Build from source
+To build from source:
 
 ```sh
 mise install
