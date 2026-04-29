@@ -467,4 +467,174 @@ mod tests {
         let s = cas.stats().await.unwrap();
         assert_eq!(s.blob_count, 1);
     }
+
+    #[tokio::test]
+    async fn stats_counts_blobs_and_actions() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        cas.put_blob(b"abc").await.unwrap();
+        cas.put_blob(b"defg").await.unwrap();
+        let key = Digest::of_bytes(b"k");
+        let stdout = cas.put_blob(b"out").await.unwrap();
+        cas.put_action_result(
+            &key,
+            &ActionResult {
+                exit_code: 0,
+                stdout,
+                stderr: stdout,
+            },
+        )
+        .await
+        .unwrap();
+        let s = cas.stats().await.unwrap();
+        assert_eq!(s.blob_count, 3);
+        assert_eq!(s.blob_bytes, 3 + 4 + 3);
+        assert_eq!(s.action_count, 1);
+        assert!(s.action_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn stats_on_empty_cas_returns_zeros() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let s = cas.stats().await.unwrap();
+        assert_eq!(s.blob_count, 0);
+        assert_eq!(s.blob_bytes, 0);
+        assert_eq!(s.action_count, 0);
+        assert_eq!(s.action_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn put_stream_roundtrip_small() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let payload = b"streamed payload";
+        let d = cas.put_stream(&payload[..]).await.unwrap();
+        assert_eq!(d, Digest::of_bytes(payload));
+        assert_eq!(cas.get_blob(&d).await.unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn put_stream_handles_empty_input() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let d = cas.put_stream(&b""[..]).await.unwrap();
+        assert_eq!(d, Digest::of_bytes(b""));
+        assert!(cas.get_blob(&d).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn put_stream_handles_payload_larger_than_chunk() {
+        // STREAM_CHUNK = 64 KiB; use a payload that crosses the
+        // boundary several times to exercise the loop.
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let payload: Vec<u8> = (0..(STREAM_CHUNK * 3 + 7))
+            .map(|i| u8::try_from(i & 0xff).unwrap())
+            .collect();
+        let d = cas.put_stream(&payload[..]).await.unwrap();
+        assert_eq!(d, Digest::of_bytes(&payload));
+        assert_eq!(cas.get_blob(&d).await.unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn put_stream_dedups_identical_content() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let payload = vec![42u8; STREAM_CHUNK + 100];
+        let d1 = cas.put_stream(&payload[..]).await.unwrap();
+        let d2 = cas.put_stream(&payload[..]).await.unwrap();
+        assert_eq!(d1, d2);
+        // Only one blob entry exists despite two puts.
+        assert_eq!(cas.stats().await.unwrap().blob_count, 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_put_stream_of_identical_content_is_safe() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Arc::new(Cas::open(tmp.path()));
+        let payload: Vec<u8> = (0..(STREAM_CHUNK * 2))
+            .map(|i| u8::try_from(i & 0xff).unwrap())
+            .collect();
+        let payload = Arc::new(payload);
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let cas = Arc::clone(&cas);
+            let payload = Arc::clone(&payload);
+            handles.push(tokio::spawn(async move {
+                cas.put_stream(payload.as_slice()).await
+            }));
+        }
+        let mut digests = Vec::new();
+        for h in handles {
+            digests.push(h.await.unwrap().unwrap());
+        }
+        assert!(digests.windows(2).all(|w| w[0] == w[1]));
+        assert_eq!(cas.stats().await.unwrap().blob_count, 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_writers_of_distinct_blobs_all_persist() {
+        // Different content goes to different shards; nothing races on
+        // the same final path.
+        let tmp = TempDir::new().unwrap();
+        let cas = Arc::new(Cas::open(tmp.path()));
+        let mut handles = Vec::new();
+        for i in 0..32u32 {
+            let cas = Arc::clone(&cas);
+            handles.push(tokio::spawn(async move {
+                cas.put_blob(format!("blob-{i}").as_bytes()).await
+            }));
+        }
+        let mut digests = Vec::new();
+        for h in handles {
+            digests.push(h.await.unwrap().unwrap());
+        }
+        // All 32 distinct, all readable.
+        let unique: std::collections::HashSet<_> = digests.iter().collect();
+        assert_eq!(unique.len(), 32);
+        for (i, d) in digests.iter().enumerate() {
+            assert_eq!(
+                cas.get_blob(d).await.unwrap(),
+                format!("blob-{i}").as_bytes()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn get_blob_returns_blob_not_found_for_unknown_digest() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let d = Digest::of_bytes(b"never-stored");
+        match cas.get_blob(&d).await {
+            Err(Error::BlobNotFound(missing)) => assert_eq!(missing, d),
+            other => panic!("expected BlobNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_action_result_surfaces_corruption() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        // Plant a corrupted action-result file at a known digest path.
+        let key = Digest::of_bytes(b"corrupt");
+        let stdout = cas.put_blob(b"x").await.unwrap();
+        cas.put_action_result(
+            &key,
+            &ActionResult {
+                exit_code: 0,
+                stdout,
+                stderr: stdout,
+            },
+        )
+        .await
+        .unwrap();
+        // Overwrite with non-JSON.
+        let action_path = cas.action_path(&key);
+        fs::write(&action_path, b"not json").await.unwrap();
+        match cas.get_action_result(&key).await {
+            Err(Error::Corrupt(path, _)) => assert_eq!(path, action_path),
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
 }

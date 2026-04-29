@@ -1,3 +1,7 @@
 --require spec_helper
 --format documentation
 --shell bash
+# Parallel execution. Each example uses an isolated tmp workspace
+# (see setup_workspace in spec_helper.sh), so parallel runs are safe.
+--jobs 4
+--random examples

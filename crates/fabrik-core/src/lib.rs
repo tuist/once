@@ -517,4 +517,175 @@ mod tests {
         };
         assert_eq!(action.digest(), expected);
     }
+
+    #[test]
+    fn digest_changes_when_timeout_changes() {
+        let mk = |t: Option<u64>| Action::RunCommand {
+            argv: vec!["true".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            timeout_ms: t,
+        };
+        // None vs Some are distinct slots; differing Some values are too.
+        assert_ne!(mk(None).digest(), mk(Some(1000)).digest());
+        assert_ne!(mk(Some(1000)).digest(), mk(Some(2000)).digest());
+    }
+
+    #[test]
+    fn digest_changes_when_cwd_changes() {
+        let mk = |c: Option<WorkspacePath>| Action::RunCommand {
+            argv: vec!["true".into()],
+            env: BTreeMap::new(),
+            cwd: c,
+            timeout_ms: None,
+        };
+        let a = mk(None);
+        let b = mk(Some(WorkspacePath::try_from("a").unwrap()));
+        let c = mk(Some(WorkspacePath::try_from("b").unwrap()));
+        assert_ne!(a.digest(), b.digest());
+        assert_ne!(b.digest(), c.digest());
+    }
+
+    #[test]
+    fn workspace_path_deserialization_rejects_absolute() {
+        // An absolute path encoded as JSON must round-trip into the
+        // structured WorkspacePathError, not silently accept.
+        let raw = serde_json::json!({
+            "kind": "run_command",
+            "argv": ["true"],
+            "cwd": "/etc/passwd"
+        });
+        let err = serde_json::from_value::<Action>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("relative"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_argv_returns_empty_argv_error() {
+        let (tmp, cas) = fresh_cas();
+        let action = Action::RunCommand {
+            argv: vec![],
+            env: BTreeMap::new(),
+            cwd: None,
+            timeout_ms: None,
+        };
+        let err = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::EmptyArgv));
+    }
+
+    #[tokio::test]
+    async fn nonexistent_program_returns_spawn_error() {
+        let (tmp, cas) = fresh_cas();
+        let action = Action::RunCommand {
+            argv: vec!["/this/program/does/not/exist".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            timeout_ms: None,
+        };
+        let err = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Spawn { .. }), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn child_stdin_is_closed() {
+        // If stdin were inherited (or a tty), `cat` would block waiting
+        // for input. With stdin closed, cat returns immediately on EOF.
+        let (tmp, cas) = fresh_cas();
+        let action = Action::RunCommand {
+            argv: vec!["/bin/sh".into(), "-c".into(), "cat".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            timeout_ms: Some(2_000),
+        };
+        let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(outcome.result.exit_code, 0);
+        assert!(cas
+            .get_blob(&outcome.result.stdout)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn runner_clones_share_the_same_permit_pool() {
+        // Cloning a Runner must not give each clone its own pool — the
+        // semaphore exists to bound *total* concurrency. Distinct argv
+        // ensures both invocations actually execute (not cache hits).
+        let (tmp, cas) = fresh_cas();
+        let runner =
+            Runner::new(cas, tmp.path().to_path_buf(), RunOpts::default()).with_max_concurrency(1);
+        let runner2 = runner.clone();
+        let action_a = Action::RunCommand {
+            argv: vec!["/bin/sh".into(), "-c".into(), "sleep 0.2; printf a".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            timeout_ms: Some(5_000),
+        };
+        let action_b = Action::RunCommand {
+            argv: vec!["/bin/sh".into(), "-c".into(), "sleep 0.2; printf b".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            timeout_ms: Some(5_000),
+        };
+        let started = std::time::Instant::now();
+        let (a, b) = tokio::join!(runner.run(&action_a), runner2.run(&action_b));
+        a.unwrap();
+        b.unwrap();
+        assert!(
+            started.elapsed() >= Duration::from_millis(380),
+            "clones must share the permit pool; took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_uses_the_supplied_workspace_root() {
+        // The workspace_root passed to Runner::new is what `cwd` resolves
+        // against — not the current working directory.
+        let (tmp, cas) = fresh_cas();
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("marker"), b"ok").unwrap();
+        let runner = Runner::new(cas, tmp.path().to_path_buf(), RunOpts::default());
+        let action = Action::RunCommand {
+            argv: vec!["/bin/sh".into(), "-c".into(), "cat marker".into()],
+            env: BTreeMap::new(),
+            cwd: Some(WorkspacePath::try_from("sub").unwrap()),
+            timeout_ms: Some(5_000),
+        };
+        let outcome = runner.run(&action).await.unwrap();
+        assert_eq!(outcome.result.exit_code, 0);
+        let stdout = runner.cas().get_blob(&outcome.result.stdout).await.unwrap();
+        assert_eq!(stdout, b"ok");
+    }
+
+    #[tokio::test]
+    async fn timeout_does_not_pollute_the_cache() {
+        // A timed-out action returns Error::Timeout; nothing should be
+        // written to the action cache, so a follow-up run also runs
+        // fresh (and may also time out, or may succeed if the deadline
+        // changes).
+        let (tmp, cas) = fresh_cas();
+        let action = Action::RunCommand {
+            argv: vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            timeout_ms: Some(50),
+        };
+        let _ = run(&action, tmp.path(), &cas, RunOpts::default()).await;
+        // Nothing was cached: the action's slot is empty.
+        assert!(cas
+            .get_action_result(&action.digest())
+            .await
+            .unwrap()
+            .is_none());
+    }
 }
