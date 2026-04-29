@@ -2,6 +2,7 @@
 
 A polyglot, agent-native build system. Bazel's ambitions, none of its mistakes.
 
+> [!WARNING]
 > 🚧 **Pre-alpha.** Not yet usable for real builds. The CLI runs and the cache works, but
 > there is no language plugin yet (it's the next phase). See the
 > [roadmap](docs/roadmap.md) for what lands when.
