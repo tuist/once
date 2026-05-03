@@ -530,6 +530,8 @@ dependencies = [
  "fabrik-cas",
  "fabrik-core",
  "fabrik-frontend",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

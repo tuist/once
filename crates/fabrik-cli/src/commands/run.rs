@@ -13,9 +13,9 @@ use fabrik_cas::Cas;
 use fabrik_core::{Action, CacheState, RunOpts};
 use tokio::io::AsyncWriteExt;
 
-use crate::cli::exit_from;
+use crate::cli::{exit_from, Format};
 
-pub async fn run(workspace: &Path, cas: &Cas, label: &str) -> Result<ExitCode> {
+pub async fn run(workspace: &Path, cas: &Cas, label: &str, format: Format) -> Result<ExitCode> {
     let targets = fabrik_frontend::load_workspace(workspace).context("loading workspace")?;
     let target = targets
         .iter()
@@ -36,18 +36,47 @@ pub async fn run(workspace: &Path, cas: &Cas, label: &str) -> Result<ExitCode> {
         .context("executing action")?;
 
     let stderr_blob = cas.get_blob(&outcome.result.stderr).await?;
-    let mut err = tokio::io::stderr();
-    err.write_all(&stderr_blob).await?;
-    let tag = match outcome.cache {
+    let cache_tag = match outcome.cache {
         CacheState::Hit => "hit",
         CacheState::Miss => "miss",
     };
-    let trailer = format!(
-        "fabrik: ran {label} (cache {tag}, exit={})\n",
-        outcome.result.exit_code
-    );
-    err.write_all(trailer.as_bytes()).await?;
-    err.flush().await?;
+
+    match format {
+        Format::Human => {
+            let mut err = tokio::io::stderr();
+            err.write_all(&stderr_blob).await?;
+            let trailer = format!(
+                "fabrik: ran {label} (cache {cache_tag}, exit={})\n",
+                outcome.result.exit_code
+            );
+            err.write_all(trailer.as_bytes()).await?;
+            err.flush().await?;
+        }
+        Format::Json => {
+            // Subprocess stderr stays on stderr (so e.g. rustc's
+            // diagnostics still flow to the terminal); the structured
+            // outcome record goes to stdout where agents pick it up.
+            let mut err = tokio::io::stderr();
+            err.write_all(&stderr_blob).await?;
+            err.flush().await?;
+            let output_rel = if target.package.is_empty() {
+                format!(".fabrik/out/{}", target.name)
+            } else {
+                format!(".fabrik/out/{}/{}", target.package, target.name)
+            };
+            let record = serde_json::json!({
+                "label": label,
+                "kind": target.kind,
+                "action_digest": outcome.action.to_string(),
+                "cache": cache_tag,
+                "exit_code": outcome.result.exit_code,
+                "output": output_rel,
+            });
+            let mut out = tokio::io::stdout();
+            out.write_all(format!("{record}\n").as_bytes()).await?;
+            out.flush().await?;
+        }
+    }
 
     Ok(exit_from(outcome.result.exit_code))
 }

@@ -3,8 +3,19 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use fabrik_core::WorkspacePath;
+
+/// Output format for verbs that emit Fabrik's own structured data
+/// (`targets`, `cache stats`, `run`, `exec` trailers). `human` is the
+/// readable default; `json` lets agents and scripts consume output
+/// without scraping prose.
+#[derive(Copy, Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
+pub enum Format {
+    #[default]
+    Human,
+    Json,
+}
 
 /// Release pipeline sets `FABRIK_VERSION` at build time so the binary
 /// reports the actual release tag rather than the pre-1.0
@@ -26,6 +37,13 @@ pub struct Cli {
     /// lives under `<workspace>/.fabrik/`. Mirrors `make -C`.
     #[arg(short = 'C', long = "directory", global = true, value_name = "DIR")]
     pub directory: Option<PathBuf>,
+
+    /// Output format for Fabrik's structured data (`targets`, `cache
+    /// stats`, `run`/`exec` trailers). Defaults to a human-readable
+    /// rendering; pass `json` to get machine-parseable output for
+    /// scripting and for agent consumers.
+    #[arg(long, global = true, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Increase log verbosity. Repeat for more (-v: info, -vv: debug,
     /// -vvv: trace). Overridden by `RUST_LOG`.

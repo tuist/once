@@ -69,4 +69,17 @@ EOF
     The status should not equal 0
     The stderr should include 'evaluation error'
   End
+
+  It 'emits one JSON record per target under --format json (NDJSON)'
+    cat > "$WORKSPACE/fabrik.star" <<'EOF'
+rust_binary(name = "top", srcs = ["main.rs"])
+rust_library(name = "lib", srcs = ["lib.rs"])
+EOF
+    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" targets
+    The status should be success
+    The line 1 of stdout should include '"label":"//:top"'
+    The line 1 of stdout should include '"kind":"rust_binary"'
+    The line 2 of stdout should include '"label":"//:lib"'
+    The line 2 of stdout should include '"kind":"rust_library"'
+  End
 End

@@ -129,6 +129,19 @@ Describe 'fabrik exec'
     End
   End
 
+  Describe '--format json'
+    It 'emits a JSON trailer on stderr; stdout stays the wrapped program transparent'
+      When call "$FABRIK_BIN" --format json -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
+      The status should be success
+      # Stdout is the program's literal output, untouched.
+      The stdout should equal 'hello'
+      # The Fabrik trailer on stderr is now a JSON object.
+      The stderr should include '"cache":"miss"'
+      The stderr should include '"exit_code":0'
+      The stderr should include '"action_digest":'
+    End
+  End
+
   Describe 'large outputs'
     big_exec() {
       "$FABRIK_BIN" -C "$WORKSPACE" exec --timeout-ms 10000 \

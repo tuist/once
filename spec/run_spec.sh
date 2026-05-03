@@ -59,4 +59,15 @@ EOF
     The status should not equal 0
     The stderr should include 'rust_library'
   End
+
+  It 'emits a JSON outcome record on stdout under --format json'
+    hello_workspace
+    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" run //hello:hello
+    The status should be success
+    The stdout should include '"label":"//hello:hello"'
+    The stdout should include '"cache":"miss"'
+    The stdout should include '"exit_code":0'
+    The stdout should include '"output":".fabrik/out/hello/hello"'
+    The stdout should include '"action_digest":'
+  End
 End

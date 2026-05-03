@@ -13,7 +13,7 @@ use clap::Parser;
 use fabrik_cas::Cas;
 use tracing_subscriber::{fmt, EnvFilter};
 
-use cli::{Cli, Cmd};
+use cli::{Cli, Cmd, Format};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -49,9 +49,10 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
         None => env::current_dir().context("resolving workspace root")?,
     };
     let cas = Cas::open(workspace.join(".fabrik"));
+    let format: Format = cli.format;
 
     match cli.command {
-        Cmd::Run { label } => commands::run::run(&workspace, &cas, &label).await,
+        Cmd::Run { label } => commands::run::run(&workspace, &cas, &label, format).await,
         Cmd::Exec {
             env,
             cwd,
@@ -59,14 +60,24 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
             cache_failures,
             argv,
         } => {
-            commands::exec::exec(&workspace, &cas, env, cwd, timeout_ms, cache_failures, argv).await
+            commands::exec::exec(
+                &workspace,
+                &cas,
+                env,
+                cwd,
+                timeout_ms,
+                cache_failures,
+                argv,
+                format,
+            )
+            .await
         }
         Cmd::Cache {
             cmd: cli::CacheCmd::Stats,
-        } => commands::cache::print_stats(&cas)
+        } => commands::cache::print_stats(&cas, format)
             .await
             .map(|()| ExitCode::SUCCESS),
-        Cmd::Targets => commands::targets::print_targets(&workspace)
+        Cmd::Targets => commands::targets::print_targets(&workspace, format)
             .await
             .map(|()| ExitCode::SUCCESS),
     }

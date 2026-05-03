@@ -4,6 +4,11 @@
 //! argv through the action cache. Useful for ad-hoc shell-outs and for
 //! exercising the cache directly. Most users want `fabrik run` against
 //! a declared target instead.
+//!
+//! Stdout always carries the wrapped program's stdout verbatim
+//! (transparency), regardless of `--format`. Stderr carries the
+//! wrapped program's stderr plus a Fabrik trailer; the trailer's
+//! shape is human-readable by default and JSON when `--format json`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -14,7 +19,7 @@ use fabrik_cas::Cas;
 use fabrik_core::{Action, CacheState, RunOpts, WorkspacePath};
 use tokio::io::AsyncWriteExt;
 
-use crate::cli::exit_from;
+use crate::cli::{exit_from, Format};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn exec(
@@ -25,6 +30,7 @@ pub async fn exec(
     timeout_ms: Option<u64>,
     cache_failures: bool,
     argv: Vec<String>,
+    format: Format,
 ) -> Result<ExitCode> {
     let action = Action::RunCommand {
         argv,
@@ -49,14 +55,24 @@ pub async fn exec(
     let mut err = tokio::io::stderr();
     err.write_all(&stderr).await?;
 
-    let tag = match outcome.cache {
+    let cache_tag = match outcome.cache {
         CacheState::Hit => "hit",
         CacheState::Miss => "miss",
     };
-    let trailer = format!(
-        "fabrik: cache {tag} action={} exit={}\n",
-        outcome.action, outcome.result.exit_code
-    );
+    let trailer = match format {
+        Format::Human => format!(
+            "fabrik: cache {cache_tag} action={} exit={}\n",
+            outcome.action, outcome.result.exit_code
+        ),
+        Format::Json => {
+            let v = serde_json::json!({
+                "action_digest": outcome.action.to_string(),
+                "cache": cache_tag,
+                "exit_code": outcome.result.exit_code,
+            });
+            format!("{v}\n")
+        }
+    };
     err.write_all(trailer.as_bytes()).await?;
     err.flush().await?;
 

@@ -21,4 +21,14 @@ Describe 'fabrik cache stats'
     The stdout should match pattern '*blobs:   [12]*'
     The stdout should match pattern '*actions: 1*'
   End
+
+  It 'emits a single JSON object under --format json'
+    fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hi' >/dev/null 2>&1
+    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" cache stats
+    The status should be success
+    The stdout should include '"blobs":'
+    The stdout should include '"actions":'
+    The stdout should include '"count":'
+    The stdout should include '"bytes":'
+  End
 End
