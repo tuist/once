@@ -1,0 +1,273 @@
+name: fabrik
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: fabrik-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  CARGO_NET_RETRY: "10"
+  RUSTUP_MAX_RETRIES: "10"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install mise toolchain
+        uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+
+      - name: install rustfmt
+        run: rustup component add rustfmt
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install mise toolchain
+        uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+
+      - name: install clippy
+        run: rustup component add clippy
+
+      - name: cache cargo registry, git db, and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+          cache-on-failure: true
+          cache-bin: true
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  unit-tests:
+    name: unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install mise toolchain
+        uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+
+      - name: cache cargo registry, git db, and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: unit-tests-${{ matrix.os }}
+          cache-on-failure: true
+          cache-bin: true
+
+      - name: cargo test
+        run: cargo test --workspace --all-targets
+
+  release-build:
+    name: release build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install mise toolchain
+        uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+
+      - name: cache cargo registry, git db, and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-build-${{ matrix.os }}
+          cache-on-failure: true
+          cache-bin: true
+
+      - name: cargo build
+        run: cargo build --release
+
+      - name: upload fabrik binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: fabrik-${{ matrix.os }}
+          path: target/release/fabrik
+
+  targets:
+    name: targets (${{ matrix.os }})
+    needs: release-build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install mise toolchain
+        uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+
+      - name: cache cargo registry, git db, and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: targets-${{ matrix.os }}
+          cache-on-failure: true
+          cache-bin: true
+
+      - name: download fabrik binary
+        uses: actions/download-artifact@v4
+        with:
+          name: fabrik-${{ matrix.os }}
+          path: target/release
+
+      - name: mark fabrik binary executable
+        run: chmod +x target/release/fabrik
+
+      - name: fabrik targets
+        run: target/release/fabrik targets
+
+  dogfood:
+    name: dogfood (${{ matrix.os }})
+    needs: release-build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install mise toolchain
+        uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+
+      - name: cache cargo registry, git db, and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dogfood-${{ matrix.os }}
+          cache-on-failure: true
+          cache-bin: true
+
+      - name: download fabrik binary
+        uses: actions/download-artifact@v4
+        with:
+          name: fabrik-${{ matrix.os }}
+          path: target/release
+
+      - name: mark fabrik binary executable
+        run: chmod +x target/release/fabrik
+
+      - name: fabrik run
+        run: target/release/fabrik run //:fabrik
+
+  shellspec:
+    name: shellspec (${{ matrix.os }})
+    needs: release-build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install mise toolchain
+        uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+
+      - name: cache cargo registry, git db, and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: shellspec-${{ matrix.os }}
+          cache-on-failure: true
+          cache-bin: true
+
+      - name: download fabrik binary
+        uses: actions/download-artifact@v4
+        with:
+          name: fabrik-${{ matrix.os }}
+          path: target/release
+
+      - name: mark fabrik binary executable
+        run: chmod +x target/release/fabrik
+
+      - name: shellspec
+        run: mise exec -- shellspec
+
+  windows-build:
+    name: windows build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install rust 1.86
+        shell: bash
+        run: |
+          rustup toolchain install 1.86 --profile minimal --no-self-update
+          rustup default 1.86
+
+      - name: cache cargo registry, git db, and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-build
+          cache-on-failure: true
+          cache-bin: true
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets
+
+  windows-cas-test:
+    name: windows cas test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install rust 1.86
+        shell: bash
+        run: |
+          rustup toolchain install 1.86 --profile minimal --no-self-update
+          rustup default 1.86
+
+      - name: cache cargo registry, git db, and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-cas-test
+          cache-on-failure: true
+          cache-bin: true
+
+      - name: cargo test
+        run: cargo test -p fabrik-cas

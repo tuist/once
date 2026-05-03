@@ -88,7 +88,7 @@ mise exec -- target/release/fabrik run //:fabrik
 ```
 
 CI runs lint, tests, and a Windows compile check on every PR. See
-[.github/workflows/ci.yml](.github/workflows/ci.yml) and
+[.github/workflows/fabrik.yml](.github/workflows/fabrik.yml) and
 [CONTRIBUTING](docs/contributing.md) (coming soon).
 
 ## Releases
