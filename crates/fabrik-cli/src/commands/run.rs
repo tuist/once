@@ -211,5 +211,10 @@ fn tool_env() -> BTreeMap<String, String> {
             env.insert(key.into(), value);
         }
     }
+    for (key, value) in std::env::vars() {
+        if key.starts_with("MISE_") {
+            env.insert(key, value);
+        }
+    }
     env
 }
