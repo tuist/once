@@ -5,12 +5,13 @@ A phased plan optimized for **shortest path to self-hosting**. The design spec (
 ## Sequencing principles
 
 1. **Self-hosting is the forcing function.** Every phase is judged by how much closer it gets us to "Fabrik builds Fabrik faster than cargo." Architectural elegance that doesn't move that needle waits.
-2. **Defer architectural complexity until the system works.** WASM plugins, the DSL, REAPI, and the query API are all in the v1 design — but each blocks self-hosting if we build them first. We bring them in once we have a working concrete system to extract them from.
+2. **Defer architectural complexity until the system works.** REAPI, the query API, and external plugin distribution are all in the v1 design but each blocks self-hosting if we build them first. We bring them in once we have a working concrete system to extract them from.
 3. **Every phase ships a working artifact.** No phase is "refactor with no user-visible change." If a phase doesn't produce something runnable that's better than the prior phase, the phase is wrong.
-4. **In-process before out-of-process.** Plugins start as Rust modules linked into the binary. The plugin *contract* (typed interface) gets designed early; the plugin *isolation* (WASM) comes later. This lets us iterate on the contract against real code.
-5. **Hardcode before generalize.** The Rust language support is hardcoded at first. We generalize once a second language exists to triangulate against.
+4. **The plugin contract is in from day one.** Built-in plugins live behind the same typed Starlark interface third-party plugins will use. We don't ship a "hardcoded Rust support, extract later" milestone, because that's the refactor we'd most regret. Starlark embeds in-process via `starlark-rust`, so there's no IPC cost to pay early.
+5. **Declared before adopted.** The Rust plugin's declared-mode targets (`rust_binary`, `rust_library`, `rust_test`) ship first because Fabrik's own build uses them. Adopted-mode (`rust_workspace`, reads `Cargo.toml`) lands afterward as the external-adoption story.
+6. **Hardcode before generalize.** Plugin-specific Rust handlers (rustc invocation, diagnostic parsing) are hardcoded at first. We generalize once a second language plugin exists to triangulate against.
 
-## Phase 0 — Walking skeleton (week 1–2)
+## Phase 0: Walking skeleton (week 1–2)
 
 **Goal:** `fabrik run "echo hello"` executes, caches the result by command digest, and returns cached output on second invocation.
 
@@ -20,38 +21,38 @@ A phased plan optimized for **shortest path to self-hosting**. The design spec (
 - Subprocess execution, no sandbox.
 - CLI: `fabrik run <cmd>`, `fabrik cache stats`.
 
-**Exit criterion:** running the same command twice — second run is a cache hit, < 10ms.
+**Exit criterion:** running the same command twice: second run is a cache hit, < 10ms.
 
 **Explicitly deferred:** sandbox, DSL, plugins, graph, telemetry, remote.
 
-## Phase 1 — Single-crate Rust build (week 3–5)
+## Phase 1: Starlark frontend + declared Rust (week 3–6)
 
-**Goal:** `fabrik build` produces the same binary as `cargo build` for a hello-world Rust crate, byte-identical or close to it.
+**Goal:** `fabrik build //hello:hello` reads a `.fabrik` file with a declared `rust_binary` target and produces a working binary, with the same caching behavior the CAS already has.
 
-- New crate `fabrik-rust` (in-process, linked into CLI).
-- Reads `Cargo.toml` directly. No DSL yet.
-- Invokes `cargo metadata` to get the crate graph.
-- Generates one action per crate: `rustc --crate-name foo --edition 2021 ...`.
-- Links Phase 0's CAS for caching.
-- Inputs to cache key: source files (globbed by cargo metadata's `targets[].src_path` + a recursive glob), rustc version, feature set.
+- New crate `fabrik-frontend`: embeds `starlark-rust`, defines the `.fabrik` file loader, registers built-in target type primitives (`glob`, `select`, etc.).
+- New crate `fabrik-rust`: bundles the Starlark module that exports `rust_binary`, `rust_library`, `rust_test`, `rust_proc_macro`, plus the Rust handlers (`rust.rustc_invoke`, `rust.parse_diagnostics`).
+- Plugin contract: typed Starlark functions emit typed `Action` records that the substrate runs. Same shape that any future plugin will use.
+- Generates one action per declared target. Cache key inputs: srcs digest, deps, rustc version, feature flags.
+- No `Cargo.toml` reading in this phase. Targets are written by hand in `.fabrik` files.
 
-**Exit criterion:** clean cache → `fabrik build` produces a working binary. Touch a `.rs` file → only that crate's rustc runs. No edits → 100% cache hit.
+**Exit criterion:** clean cache produces a working `hello` binary from a hand-written `.fabrik`. Touch the source, only that target's rustc runs. No edits, 100% cache hit.
 
-**Risks:** rustc has many implicit inputs (env vars, lockfile, target dir layout). Expect to discover them by diffing cargo's behavior. Worth keeping a `loose` mode escape hatch from day one to unblock progress.
+**Risks:** rustc has many implicit inputs (env vars, lockfile, target dir layout). We discover them by diffing cargo's behavior on the same source. A `loose` hermeticity escape hatch ships day one to unblock progress.
 
-## Phase 2 — Multi-crate parallel build (week 6–8)
+## Phase 2: Multi-crate parallel build (week 7–9)
 
-**Goal:** Build a multi-crate workspace (Fabrik's own) with parallelism, dependency ordering, and incremental rebuilds.
+**Goal:** Build the Fabrik workspace itself end-to-end from hand-written `.fabrik` files, with parallelism, dependency ordering, and incremental rebuilds.
 
 - Action graph in `fabrik-core`: typed nodes, edges from declared deps.
 - Scheduler: topological order, N-way parallel (default = num CPUs).
-- Build script support via **traced mode** — Linux-first using `bpftrace` or `LD_PRELOAD` shim. macOS via `dtrace` (best-effort) or fall back to `loose` mode. This is the highest-risk item in the early plan; budget time accordingly.
-- Proc macro support: separate host-platform compilation pass (no profile transitions yet — just a hardcoded host build).
+- Build script support via **traced mode**. Linux-first using `bpftrace` or `LD_PRELOAD` shim. macOS via `dtrace` (best-effort) or fall back to `loose` mode. Highest-risk item in the early plan; budget time accordingly.
+- Proc macro support: separate host-platform compilation pass (no profile transitions yet, just a hardcoded host build).
 - Error structure: capture `rustc --error-format=json` and surface it as the typed error from §7 of the design spec.
+- Hand-written `.fabrik` files for each Fabrik crate. This is one-time work that doubles as the first real test of the target schema ergonomics.
 
-**Exit criterion:** `fabrik build` builds Fabrik's own workspace end-to-end. Wall-clock time on a clean cache is within 2× of `cargo build`. Incremental rebuild on a 1-line change to a leaf crate is faster than `cargo build`.
+**Exit criterion:** `fabrik build` builds Fabrik's own workspace end-to-end from declared targets. Wall-clock time on a clean cache is within 2x of `cargo build`. Incremental rebuild on a 1-line change to a leaf crate is faster than `cargo build`.
 
-## Phase 3 — Self-hosting milestone (week 9–10)
+## Phase 3: Self-hosting milestone (week 10–11)
 
 **Goal:** Fabrik builds Fabrik *and* we use it daily.
 
@@ -64,44 +65,28 @@ A phased plan optimized for **shortest path to self-hosting**. The design spec (
 
 This is the dogfood gate. Don't proceed past Phase 3 until it's met.
 
-## Phase 4 — Extract the plugin contract (week 11–13)
+## Phase 4: Adopted-mode Rust + second plugin (week 12–15)
 
-**Goal:** Refactor `fabrik-rust` to live behind a typed plugin interface, still in-process. No user-visible change.
+**Goal:** Add `rust_workspace` (adopted mode) so external cargo projects can drop in. Add a second built-in plugin (`command`) to validate the plugin contract against two real implementations.
 
-- Define `Plugin` trait + protobuf schema for: target type registration, resolution (graph fragment emission), execution (action emission), queries.
-- `fabrik-rust` becomes the first implementation of this trait.
-- Add a stub `fabrik-command` plugin (generic `command` target type) so we have a second implementation to triangulate on.
-- The trait is the contract that WASM plugins will eventually implement. Designing it against two real implementations protects us from a contract that only fits one.
+- `rust_workspace` target type: reads `Cargo.toml`, runs `cargo metadata` cooperatively, generates declared-mode targets internally. Same handlers as declared mode; cache entries kept in a separate namespace.
+- `command` plugin: generic `command` target type for ad-hoc rules. Forces us to confirm the Starlark plugin SDK is reusable, not just rust-shaped.
+- Sharpen the plugin SDK based on what hurt during the second-plugin build: helper functions for action declaration, glob handling, output declaration, schema validation.
 
-**Exit criterion:** zero user-visible regression, `fabrik-rust` compiled out cleanly works only through the trait, and the trait is stable enough to publish as an internal-but-reviewable API.
+**Exit criterion:** an existing cargo workspace adopts Fabrik with one `.fabrik` file (`rust_workspace(name = "...", manifest = "Cargo.toml")`) and gets cache hits across builds. The `command` plugin is usable for shell-out targets without poking inside Fabrik internals.
 
-## Phase 5 — Build definition language (week 14–18)
+## Phase 5: DSL maturity: profiles, LSP, schema registry (week 16–19)
 
-**Goal:** Replace hardcoded `Cargo.toml` reading with `.fabrik` files. Cargo.toml becomes one *input* to the rust plugin, not the source of build truth.
+**Goal:** Make the build definition language production-grade for humans and agents. The language itself is settled (typed Starlark via `starlark-rust`); this phase is about ergonomics on top of it.
 
-- DSL parser, type checker, schema registry (every plugin contributes its target schemas).
-- Bootstrap migration: the rust plugin reads `Cargo.toml` automatically when the `.fabrik` file says `kind = "rust_workspace"` — i.e., we don't make users hand-write target stanzas for Rust crates immediately.
-- LSP server (basic completion + diagnostics) — agents and humans both benefit.
-- Profiles: implement `profile` blocks, partition cache namespaces by profile.
+- Profiles: implement `profile(...)` declarations, partition cache namespaces by profile, support `--profile` selection on the CLI.
+- LSP server: completion, type-aware diagnostics, jump-to-definition for `load(...)` imports. Agents and humans both benefit.
+- Schema registry: every plugin contributes its target schemas, the LSP and the Starlark evaluator share the same registry, errors are typed and located.
+- Documentation site: every built-in target type, generated from the schemas, with examples.
 
-**Exit criterion:** Fabrik's own build is described in `.fabrik` files; `Cargo.toml` is read by the rust plugin but no longer the build entry point. Two profiles (`debug`, `release`) work cleanly.
+**Exit criterion:** two profiles (`debug`, `release`) work cleanly with separate cache namespaces. The LSP gives type-aware completion for `rust_binary(...)` and friends. An agent can author a new `.fabrik` file from the docs without trial and error.
 
-**Open question to resolve in this phase:** bespoke DSL vs typed-TS subset (open question #1 in the design). Prototype both early in this phase and decide.
-
-## Phase 6 — WASM plugin host (week 19–22)
-
-**Goal:** Move the rust plugin to WASM. Prove the contract works across the WASM boundary.
-
-- WASI runtime (Wasmtime) integrated as `fabrik-plugin-host`.
-- `fabrik-rust` compiled to a `.wasm` artifact, distributed alongside the binary.
-- Plugin manifest: declared capabilities (filesystem reads, subprocess spawning), pinned digest.
-- Capability negotiation: the host grants narrow filesystem and subprocess access based on the manifest, refuses everything else.
-
-**Exit criterion:** `fabrik build` of Fabrik works with the rust plugin loaded as WASM. Performance overhead < 5% (plugin runs are dwarfed by rustc time anyway).
-
-**Risk:** WASI Preview 2 ecosystem maturity (open question #2). May need a constrained interface that grows with the ecosystem. Have a documented fallback to in-process plugins if a specific plugin needs capabilities WASI doesn't yet expose.
-
-## Phase 7 — REAPI substrate + remote cache (week 23–28)
+## Phase 6: REAPI substrate + remote cache (week 20–25)
 
 **Goal:** Swap local-only CAS for a REAPI client. Connect to a remote cache. Cache hits across machines.
 
@@ -113,7 +98,7 @@ This is the dogfood gate. Don't proceed past Phase 3 until it's met.
 
 **Exit criterion:** new contributor's first `fabrik build` of Fabrik completes in under 30 seconds via remote cache hits.
 
-## Phase 8 — Query API + OTel telemetry (week 29–32)
+## Phase 7: Query API + OTel telemetry (week 26–29)
 
 **Goal:** The introspection layer that makes Fabrik agent-native.
 
@@ -125,22 +110,25 @@ This is the dogfood gate. Don't proceed past Phase 3 until it's met.
 
 **Exit criterion:** an agent can answer "what would change if I removed crate X?" and "why did action Y rebuild?" using only the query API, no source reading.
 
-## Phase 9 — Second language (week 33–40)
+## Phase 8: Second language (week 30–37)
 
-**Goal:** Prove the plugin model with a non-Rust language. Choice: C/C++ or Go (open question #4).
+**Goal:** Prove the plugin model with a non-Rust language. Choice: C/C++ or Go (open question #2).
 
-**Recommended: Go first.** Cleaner cooperative integration (`go list -json` is excellent), simpler build model, faster path to a working second plugin. C/C++ second — it's strategically more important but technically harder (depfile handling, system libraries, hermetic toolchain bundles).
+**Recommended: Go first.** Cleaner cooperative integration (`go list -json` is excellent), simpler build model, faster path to a working second plugin. C/C++ second: strategically more important but technically harder (depfile handling, system libraries, hermetic toolchain bundles).
 
-- New `fabrik-go` plugin (WASM from day one, since the host exists now).
-- Cooperative resolution via `go list -json`.
+- New `fabrik-go` plugin: Starlark module + Go-specific Rust handlers, same shape as the Rust plugin.
+- Declared mode (`go_binary`, `go_library`, `go_test`) and adopted mode (`go_module`, reads `go.mod`) from the start, since both patterns are settled by now.
+- Cooperative resolution via `go list -json` for adopted mode.
 - Reimplemented execution: `go tool compile` per package.
 - Cross-language proof: a small Go service in the Fabrik repo that depends on a Rust-generated artifact. End-to-end caching across the language boundary.
 
 **Exit criterion:** the cross-language sample works end-to-end, with the integration mode visible in query results, and adding Go to a Fabrik workspace requires < 50 lines of `.fabrik` config.
 
-## Phase 10+ — Beyond v0
+## Phase 9+: Beyond v0
 
-After Phase 9 we have what the design spec calls v0.5: self-hosting Rust + a second language + REAPI + agent-queryable. The remaining roadmap follows the design spec's §11.3 onward — TypeScript, Python, Java/Kotlin, Elixir, Windows traced mode, then the hard mobile ecosystems. Detailed sequencing for those phases gets written when we get there; planning beyond a 6-month horizon for a project this novel is fiction.
+After Phase 8 we have what the design spec calls v0.5: self-hosting Rust + a second language + REAPI + agent-queryable. The remaining roadmap follows the design spec's §11.3 onward: TypeScript, Python, Java/Kotlin, Elixir, Windows traced mode, then the hard mobile ecosystems. Detailed sequencing for those phases gets written when we get there; planning beyond a 6-month horizon for a project this novel is fiction.
+
+Third-party plugin distribution (handler subprocess protocol, URL+digest pinning) lands somewhere in this window, driven by the first credible third-party plugin author.
 
 ## Cross-cutting workstreams
 
@@ -149,24 +137,27 @@ These run in parallel with the phased work, not as separate phases:
 - **Test infrastructure**: integration tests that build a real-but-small workspace end-to-end. Set up in Phase 0, expanded every phase. Without this we cannot dogfood safely.
 - **Benchmarks**: wall-clock comparison vs `cargo build` on a fixed corpus. Tracked in CI from Phase 1. The self-hosting milestone (Phase 3) requires this to even exist.
 - **Documentation**: keep [design.md](design.md) in sync with what's actually shipped. Mark unbuilt sections explicitly. Avoids the "specs as fiction" drift.
-- **Error structure**: the typed error contract from §7 of the design gets implemented incrementally — Phase 1 ships a stub, every plugin tightens its parsing as it matures.
+- **Error structure**: the typed error contract from §7 of the design gets implemented incrementally. Phase 1 ships a stub, every plugin tightens its parsing as it matures.
 
 ## Decision log: open questions and when they get answered
 
 | # | Question | Phase to decide |
 |---|---|---|
-| 1 | DSL: bespoke vs typed-TS subset | Phase 5 (prototype both early in the phase) |
-| 2 | WASI version + capability model | Phase 6 |
-| 3 | Workspace persistence format | Phase 2 (when the graph store starts mattering) |
-| 4 | First non-Rust language | Phase 9 (recommended: Go) |
-| 5 | `service` targets — own supervisor or integrate? | Defer to v0.5+ |
-| 6 | Query API surface | Phase 8 (deliberately narrow start, grow from agent dogfooding) |
-| 7 | Plugin distribution | Phase 6 (URL+digest pinning sufficient for v0; registry later) |
+| 1 | Workspace persistence format | Phase 2 (when the graph store starts mattering) |
+| 2 | First non-Rust language | Phase 8 (recommended: Go) |
+| 3 | `service` targets: own supervisor or integrate? | Defer to v0.5+ |
+| 4 | Query API surface | Phase 7 (deliberately narrow start, grow from agent dogfooding) |
+| 5 | Third-party plugin distribution + handler protocol | Phase 9+ (driven by first credible third-party plugin) |
+
+### Resolved (kept here for historical reference)
+
+- **Build definition language**: typed Starlark via `starlark-rust` (Buck2 dialect). Decided before the implementation work begins, before the Pkl/TypeScript prototype phase ever gets started.
+- **Plugin isolation**: in-process Starlark plus named Rust handlers. WASM dropped from the roadmap; revisit only if a third-party plugin author needs untrusted-code isolation.
 
 ## What gates progress
 
 Three gates that must hold for the plan to stay on track:
 
-- **Phase 3 (self-hosting)**: if we can't dogfood Fabrik on Fabrik by week 10, the architecture is wrong and we re-plan rather than push forward.
-- **Phase 6 (WASM)**: if the WASI Preview 2 ecosystem isn't ready and our fallback constraints are too painful, we ship v0 with in-process plugins and move WASM to v1. The plugin *contract* still exists.
-- **Phase 8 (query API + agent dogfooding)**: if agents can't usefully answer real questions via the API, the API is wrong and we redesign it. This is the agent-native bet; it has to be tested with real agents on real builds.
+- **Phase 3 (self-hosting)**: if we can't dogfood Fabrik on Fabrik by week 11, the architecture is wrong and we re-plan rather than push forward.
+- **Phase 4 (second plugin)**: if the plugin SDK requires substantial reshaping to fit a non-Rust plugin, the contract is wrong and the SDK gets a redesign before Phase 5 ships.
+- **Phase 7 (query API + agent dogfooding)**: if agents can't usefully answer real questions via the API, the API is wrong and we redesign it. This is the agent-native bet; it has to be tested with real agents on real builds.
