@@ -108,10 +108,10 @@ The plugin author writes Starlark; impure work (subprocess execution, output par
 
 Typed Starlark, evaluated in-process via `starlark-rust`. The Buck2 dialect with type annotations on all functions and providers. Reference points: Buck2's prelude, Bazel BUILD files (the surface a typical user writes, not the rule-author surface).
 
-A `.fabrik` file looks like this:
+A `fabrik.star` file looks like this (each package directory holds one; plugin and SDK modules use the same `.star` extension):
 
 ```python
-load("//build/rust.fabrik", "rust_binary", "rust_test")
+load("//build/rust.star", "rust_binary", "rust_test")
 
 rust_binary(
     name = "api",
@@ -134,7 +134,7 @@ rust_test(
 The language has:
 - Static typing on plugin-declared target functions (a plugin's `rust_binary` declares `srcs: list[str]`, `deps: list[str]`, etc., and the evaluator enforces it).
 - Typed providers (records produced by one target and consumed by another).
-- Imports via `load("//path/to/file.fabrik", "symbol")`.
+- Imports via `load("//path/to/file.star", "symbol")`.
 - Pure functions for data transformation (`glob`, `select`, `map`, `filter`).
 - No mutable state at module scope, no I/O at evaluation time, no recursion past Starlark's bounded recursion limit.
 
@@ -174,12 +174,12 @@ Cache namespaces are partitioned by profile. Same inputs + same profile → same
 
 ## 4. Plugin model
 
-A plugin is a Starlark module that declares typed target functions and registers them with `fabrik_plugin(...)`. The module is loaded into the same `starlark-rust` evaluator that loads user `.fabrik` files; there is no host/plugin boundary at the language level.
+A plugin is a Starlark module that declares typed target functions and registers them with `fabrik_plugin(...)`. The module is loaded into the same `starlark-rust` evaluator that loads user `fabrik.star` files; there is no host/plugin boundary at the language level.
 
 ```python
-load("//fabrik/sdk.fabrik", "fabrik_plugin", "resolution", "execution")
+load("//fabrik/sdk.star", "fabrik_plugin", "resolution", "execution")
 
-# Declared-mode entry points. Users write these directly in .fabrik files.
+# Declared-mode entry points. Users write these directly in fabrik.star files.
 def rust_binary(name, srcs, deps = [], visibility = None, ...):
     return _rust_target(kind = "binary", name = name, srcs = srcs, deps = deps, ...)
 
@@ -384,7 +384,7 @@ This section is honest about variance. Same architecture; different fidelities.
 
 The Rust plugin exposes both a declared-mode and an adopted-mode entry point. Same plugin, two faces.
 
-**Declared mode** (`rust_binary`, `rust_library`, `rust_test`, `rust_proc_macro`). The Bazel/Buck2 posture: targets are declared in `.fabrik` files, Fabrik is the source of truth, hermeticity defaults to `strict`.
+**Declared mode** (`rust_binary`, `rust_library`, `rust_test`, `rust_proc_macro`). The Bazel/Buck2 posture: targets are declared in `fabrik.star` files, Fabrik is the source of truth, hermeticity defaults to `strict`.
 
 - **Resolution**: reimplemented. The dependency graph comes from declared `deps` in the target stanza.
 - **Execution**: reimplemented. Direct `rustc` invocations with `--extern` per dep.
