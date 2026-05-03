@@ -16,6 +16,7 @@ use starlark::syntax::{AstModule, Dialect};
 
 use crate::error::{Error, Result};
 use crate::globals::fabrik_globals;
+use crate::prelude::{PRELUDE_NAME, PRELUDE_SOURCE};
 use crate::target::Target;
 
 pub(crate) struct EvalState {
@@ -48,11 +49,19 @@ pub(crate) fn eval_with(
     workspace_root: PathBuf,
     package: String,
 ) -> Result<Vec<Target>> {
-    let ast =
+    let user_ast =
         AstModule::parse(name, src.to_owned(), &Dialect::Standard).map_err(|e| Error::Parse {
             path: name.to_owned(),
             message: format!("{e:#}"),
         })?;
+    // The bundled prelude defines the typed wrappers (rust_binary,
+    // rust_library, rust_test) on top of the `target` primitive. It is
+    // evaluated into the same Module as the user file so its top-level
+    // `def` bindings are visible to user code without an explicit
+    // `load(...)`. Parse failure here is a packaging bug, not a user
+    // error.
+    let prelude_ast = AstModule::parse(PRELUDE_NAME, PRELUDE_SOURCE.to_owned(), &Dialect::Standard)
+        .expect("bundled prelude parses");
     let globals: Globals = GlobalsBuilder::new().with(fabrik_globals).build();
     let module = Module::new();
 
@@ -63,10 +72,12 @@ pub(crate) fn eval_with(
             targets: Vec::new(),
         });
     });
-    let eval_result = {
+    let eval_result = (|| -> std::result::Result<(), starlark::Error> {
         let mut eval = Evaluator::new(&module);
-        eval.eval_module(ast, &globals)
-    };
+        eval.eval_module(prelude_ast, &globals)?;
+        eval.eval_module(user_ast, &globals)?;
+        Ok(())
+    })();
     let collected = STATE
         .with(|c| c.borrow_mut().take())
         .map(|s| s.targets)
@@ -155,5 +166,20 @@ rust_test(name = "core_test", srcs = ["tests/core.rs"], deps = [":core"])
     fn non_string_in_srcs_is_an_evaluation_error() {
         let err = load_str("fabrik.star", "rust_binary(name = \"x\", srcs = [1, 2])").unwrap_err();
         assert!(matches!(err, Error::Eval { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn target_primitive_is_directly_callable() {
+        // The prelude's typed wrappers are sugar over `target`. User
+        // code (and future plugin authors) can call the primitive
+        // directly with arbitrary kinds.
+        let targets = load_str(
+            "fabrik.star",
+            "target(kind = \"custom\", name = \"x\", srcs = [\"a.rs\"], deps = [])",
+        )
+        .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].kind, "custom");
+        assert_eq!(targets[0].name, "x");
     }
 }

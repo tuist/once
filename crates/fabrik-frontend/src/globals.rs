@@ -1,9 +1,11 @@
 //! Built-in Starlark globals exposed to `fabrik.star` files.
 //!
-//! Today: three target builders (`rust_binary`, `rust_library`,
-//! `rust_test`) plus a `glob` primitive. Target builders push into the
-//! per-thread [`crate::eval::EvalState`]; `glob` reads the package
-//! directory from it and walks the filesystem.
+//! Two primitives:
+//! - `target(kind, name, srcs, deps)` records a target. Higher-level
+//!   typed wrappers (`rust_binary`, `rust_library`, `rust_test`, etc.)
+//!   are defined in Starlark and live in [`crate::prelude`], not here.
+//! - `glob(patterns)` expands shell-style patterns relative to the
+//!   current package directory.
 
 use starlark::environment::GlobalsBuilder;
 use starlark::starlark_module;
@@ -76,45 +78,17 @@ fn glob_expand(patterns: &[String]) -> anyhow::Result<Vec<String>> {
 
 #[starlark_module]
 pub(crate) fn fabrik_globals(builder: &mut GlobalsBuilder) {
-    fn rust_binary<'v>(
+    /// Record a target. Called by the bundled prelude's typed wrappers
+    /// (`rust_binary`, `rust_library`, `rust_test`, etc.) to push the
+    /// target onto the current evaluation's target list. Plugin authors
+    /// reach the same primitive when defining their own target types.
+    fn target<'v>(
+        #[starlark(require = named)] kind: &str,
         #[starlark(require = named)] name: &str,
         #[starlark(require = named)] srcs: Option<Value<'v>>,
         #[starlark(require = named)] deps: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
-        record_target(
-            "rust_binary",
-            name,
-            unpack_str_list(srcs)?,
-            unpack_str_list(deps)?,
-        );
-        Ok(NoneType)
-    }
-
-    fn rust_library<'v>(
-        #[starlark(require = named)] name: &str,
-        #[starlark(require = named)] srcs: Option<Value<'v>>,
-        #[starlark(require = named)] deps: Option<Value<'v>>,
-    ) -> anyhow::Result<NoneType> {
-        record_target(
-            "rust_library",
-            name,
-            unpack_str_list(srcs)?,
-            unpack_str_list(deps)?,
-        );
-        Ok(NoneType)
-    }
-
-    fn rust_test<'v>(
-        #[starlark(require = named)] name: &str,
-        #[starlark(require = named)] srcs: Option<Value<'v>>,
-        #[starlark(require = named)] deps: Option<Value<'v>>,
-    ) -> anyhow::Result<NoneType> {
-        record_target(
-            "rust_test",
-            name,
-            unpack_str_list(srcs)?,
-            unpack_str_list(deps)?,
-        );
+        record_target(kind, name, unpack_str_list(srcs)?, unpack_str_list(deps)?);
         Ok(NoneType)
     }
 

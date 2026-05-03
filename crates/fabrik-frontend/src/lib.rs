@@ -17,6 +17,7 @@
 mod error;
 mod eval;
 mod globals;
+mod prelude;
 mod target;
 mod workspace;
 
