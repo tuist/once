@@ -25,7 +25,7 @@ A polyglot, agent-native build system. Bazel's ambitions, none of its mistakes.
 - Fabrik builds itself (Rust + some C dependencies) faster and more reproducibly than `cargo build` within 6 months.
 - An agent can answer "why did this rebuild?" and "what would change if I removed this dep?" without reading source code.
 - A polyglot backend monorepo (Rust + Go + TypeScript + Python + protobuf) can adopt Fabrik in a week and see remote cache hits across all languages.
-- iOS, Android, and complex Gradle setups have a clear, honest story — not as good as Bazel-with-`rules_apple` on day one, on a credible path to parity.
+- iOS, Android, and complex Gradle setups have a clear, honest story: not as good as Bazel-with-`rules_apple` on day one, on a credible path to parity.
 
 ## 1. The mistakes we are not repeating
 
@@ -33,8 +33,8 @@ This section exists because every architectural decision below is a reaction to 
 
 | Bazel mistake | Our response |
 |---|---|
-| Starlark: Python-shaped, non-Turing-complete, neither human-friendly nor LLM-friendly | Typed declarative core (Pkl-influenced) + WASM plugins for computation |
-| Four overlapping extension mechanisms (macros, rules, aspects, repository rules) | One concept: plugins emit typed subgraphs |
+| Untyped Starlark, weakly-typed providers, sprawling rule complexity | Typed Starlark via `starlark-rust` (Buck2 dialect); typed providers and target schemas; one extension concept |
+| Four overlapping extension mechanisms (macros, rules, aspects, repository rules) | One concept: a plugin is a pure function that emits typed graph fragments |
 | BUILD files require manual enumeration of every source and dep | Globs and language-aware discovery are first-class, with deterministic resolution |
 | WORKSPACE → MODULE.bazel migration, still ongoing | One module file from day one. Versioned. Stable. |
 | `rules_*` ecosystem perpetually lags upstream language toolchains | Cooperative integration with native tools is the default; reimplementation is opt-in |
@@ -53,8 +53,8 @@ This section exists because every architectural decision below is a reaction to 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  Frontend                                                        │
-│   • Build definition language (typed, declarative)               │
-│   • Plugin host (WASM)                                           │
+│   • Build definition language (typed Starlark)                   │
+│   • Plugin host (starlark-rust, in-process)                      │
 ├──────────────────────────────────────────────────────────────────┤
 │  Coordinator                                                     │
 │   • Graph model (typed, persistent, queryable)                   │
@@ -83,7 +83,7 @@ REAPI-compatible at the wire level so we inherit BuildBuddy, Buildbarn, NativeLi
   - `strict`: declared inputs only, no network, hermetic env. Default for reimplemented plugins.
   - `traced`: syscall tracing (FUSE on Linux, EndpointSecurity on macOS, ETW on Windows) discovers actual inputs on first run; subsequent runs use that as the cache key. Default for cooperative plugins.
   - `loose`: runs in workspace, trusts user-declared inputs. Required acknowledgment in target definition. Required for most opaque-mode targets.
-- **User-defined cache keys**: the substrate stores and retrieves by digest; the plugin owns what goes into the digest. This is critical — cargo wants `Cargo.lock + features + rustc version`; vite wants `package-lock.json + vite.config + source digest`. One-size-fits-all keys are why Bazel struggles to integrate with native tools.
+- **User-defined cache keys**: the substrate stores and retrieves by digest; the plugin owns what goes into the digest. This is critical: cargo wants `Cargo.lock + features + rustc version`; vite wants `package-lock.json + vite.config + source digest`. One-size-fits-all keys are why Bazel struggles to integrate with native tools.
 
 ### 2.2 Coordinator
 
@@ -98,60 +98,74 @@ Owns:
 
 ### 2.3 Frontend
 
-The build definition language and plugin host. Build definitions are pure typed data. Plugins are WASM modules that emit graph fragments. There is no other way to extend Fabrik.
+The build definition language and plugin host. Build definitions and plugins are both written in typed Starlark, evaluated in-process via `starlark-rust` (the implementation Buck2 uses). Build files are pure data. Plugins are pure functions from typed inputs to typed action graphs. There is no other way to extend Fabrik.
+
+The plugin author writes Starlark; impure work (subprocess execution, output parsing, depfile handling) lives in Rust handlers in the substrate that the plugin references by name. The Starlark side stays deterministic by construction; the substrate is responsible for hermetic execution of the actions the plugin declares.
 
 ## 3. Build definition language
 
 ### 3.1 Core
 
-Typed declarative DSL. Reference points: Pkl (Apple), Cue. Looks like:
+Typed Starlark, evaluated in-process via `starlark-rust`. The Buck2 dialect with type annotations on all functions and providers. Reference points: Buck2's prelude, Bazel BUILD files (the surface a typical user writes, not the rule-author surface).
 
-```fabrik
-target "api" {
-  kind = "rust_binary"
-  srcs = glob("src/**/*.rs")
-  deps = [
-    "//lib/core",
-    "//lib/proto:rust",
-    "@crates//tokio",
-  ]
-  visibility = ["//services/..."]
-}
+A `.fabrik` file looks like this:
 
-target "api_test" {
-  kind = "rust_test"
-  srcs = glob("tests/**/*.rs")
-  deps = [":api", "@crates//tokio-test"]
-}
+```python
+load("//build/rust.fabrik", "rust_binary", "rust_test")
+
+rust_binary(
+    name = "api",
+    srcs = glob(["src/**/*.rs"]),
+    deps = [
+        "//lib/core",
+        "//lib/proto:rust",
+        "@crates//tokio",
+    ],
+    visibility = ["//services/..."],
+)
+
+rust_test(
+    name = "api_test",
+    srcs = glob(["tests/**/*.rs"]),
+    deps = [":api", "@crates//tokio-test"],
+)
 ```
 
-Everything you write at the top level is data. The language has:
-- Strong static typing (every target type has a schema declared by its plugin).
-- Imports (`load("//build/macros.fabrik", "...")`).
+The language has:
+- Static typing on plugin-declared target functions (a plugin's `rust_binary` declares `srcs: list[str]`, `deps: list[str]`, etc., and the evaluator enforces it).
+- Typed providers (records produced by one target and consumed by another).
+- Imports via `load("//path/to/file.fabrik", "symbol")`.
 - Pure functions for data transformation (`glob`, `select`, `map`, `filter`).
-- No I/O, no side effects, no recursion at the language level.
+- No mutable state at module scope, no I/O at evaluation time, no recursion past Starlark's bounded recursion limit.
 
-### 3.2 Computation: WASM plugins
+### 3.2 Computation: Starlark plugins
 
-When you need real computation — generating N targets from a manifest, polyglot stitching, conditional logic beyond what `select` covers — you write a plugin. Plugins are WASM modules that emit graph fragments as typed data.
+When you need real computation, generating N targets from a manifest, polyglot stitching, conditional logic beyond what `select` covers, you write a plugin. A plugin is a Starlark module that defines target types (functions that take typed kwargs and emit graph nodes) and exports them via a `fabrik_plugin(...)` declaration.
 
-Plugins can be written in any language that targets WASM. The plugin contract is a typed gRPC-over-WASI interface; the host validates inputs and outputs against the plugin's declared schema.
+Plugins are pure Starlark. They cannot do I/O, spawn subprocesses, or read arbitrary files. What they can do:
 
-This replaces Bazel's macros, rules, aspects, and repository rules with **one concept**.
+- Declare target types with typed schemas.
+- Compute target graphs from typed inputs (including the result of `glob`, which the host evaluates against the workspace as a typed primitive).
+- Emit `Action` records (typed: `command`, `inputs`, `outputs`, `env`, `cache_key_extras`) that the substrate runs.
+- Reference Rust handlers in the substrate by name when an action requires plugin-specific runtime work (parsing rustc JSON output, depfile handling, swiftc module map computation). The Starlark side names the handler; the Rust side implements it. Bundled handlers ship with the plugin.
+
+This replaces Bazel's macros, rules, aspects, and repository rules with **one concept**: a typed Starlark function that emits a typed graph fragment.
 
 ### 3.3 Configuration profiles
 
-```fabrik
-profile "release_linux_x64" {
-  platform = "linux/x86_64"
-  rust = { toolchain = "stable-1.78", opt_level = 3, lto = "thin" }
-  c = { toolchain = "clang-18", opt_level = 3, sanitizers = [] }
-}
+```python
+profile(
+    name = "release_linux_x64",
+    platform = "linux/x86_64",
+    rust = rust_settings(toolchain = "stable-1.78", opt_level = 3, lto = "thin"),
+    c = c_settings(toolchain = "clang-18", opt_level = 3, sanitizers = []),
+)
 
-profile "debug_macos_arm64" {
-  platform = "macos/aarch64"
-  rust = { toolchain = "stable-1.78", opt_level = 0, debug = true }
-}
+profile(
+    name = "debug_macos_arm64",
+    platform = "macos/aarch64",
+    rust = rust_settings(toolchain = "stable-1.78", opt_level = 0, debug = True),
+)
 ```
 
 A profile is a typed bundle of toolchain selections, build settings, and platform constraints. Replaces Bazel's `--config` sprawl, transitions, toolchains, and platforms with one concept.
@@ -160,36 +174,48 @@ Cache namespaces are partitioned by profile. Same inputs + same profile → same
 
 ## 4. Plugin model
 
-Every plugin declares per target type:
+A plugin is a Starlark module that declares typed target functions and registers them with `fabrik_plugin(...)`. The module is loaded into the same `starlark-rust` evaluator that loads user `.fabrik` files; there is no host/plugin boundary at the language level.
 
-```fabrik
-plugin "rust" {
-  version = "1.0.0"
-  target_types = ["rust_binary", "rust_library", "rust_test", "rust_proc_macro"]
+```python
+load("//fabrik/sdk.fabrik", "fabrik_plugin", "resolution", "execution")
 
-  # How to discover the dependency graph
-  resolution {
-    mode = "cooperative"
-    tool = "cargo"
-    inputs = ["Cargo.toml", "Cargo.lock"]
-    output_schema = "rust.resolved_graph.v1"
-  }
+# Declared-mode entry points. Users write these directly in .fabrik files.
+def rust_binary(name, srcs, deps = [], visibility = None, ...):
+    return _rust_target(kind = "binary", name = name, srcs = srcs, deps = deps, ...)
 
-  # How to execute individual actions
-  execution {
-    mode = "reimplemented"
-    sandbox = "strict"
-    cache_key_inputs = ["srcs", "deps", "rustc_version", "features", "profile.rust"]
-  }
+def rust_library(name, srcs, deps = [], visibility = None, ...):
+    return _rust_target(kind = "library", name = name, srcs = srcs, deps = deps, ...)
 
-  # What the plugin can answer about its targets
-  queries = [
-    "transitive_crates",
-    "feature_set",
-    "build_script_outputs",
-  ]
-}
+# Adopted-mode entry point. Reads Cargo.toml, generates declared-mode targets internally.
+def rust_workspace(name, manifest = "Cargo.toml", ...):
+    return _rust_workspace(name = name, manifest = manifest, ...)
+
+fabrik_plugin(
+    name = "rust",
+    version = "1.0.0",
+    target_types = {
+        "rust_binary": rust_binary,
+        "rust_library": rust_library,
+        "rust_test": rust_test,
+        "rust_proc_macro": rust_proc_macro,
+        "rust_workspace": rust_workspace,
+    },
+    # Declared-mode targets are reimplemented; adopted-mode targets are cooperative.
+    integration = {
+        "rust_binary": execution(mode = "reimplemented", sandbox = "strict"),
+        "rust_library": execution(mode = "reimplemented", sandbox = "strict"),
+        "rust_test": execution(mode = "reimplemented", sandbox = "strict"),
+        "rust_proc_macro": execution(mode = "reimplemented", sandbox = "strict"),
+        "rust_workspace": resolution(mode = "cooperative", tool = "cargo",
+                                     inputs = ["Cargo.toml", "Cargo.lock"]),
+    },
+    cache_key_inputs = ["srcs", "deps", "rustc_version", "features", "profile.rust"],
+    queries = ["transitive_crates", "feature_set", "build_script_outputs"],
+    handlers = ["rust.rustc_invoke", "rust.parse_diagnostics", "rust.cargo_metadata"],
+)
 ```
+
+The `handlers` field names Rust handlers in the substrate that the plugin's actions reference. Bundled handlers ship with the plugin distribution.
 
 ### 4.1 The three integration modes
 
@@ -201,6 +227,8 @@ These are not aspirational labels; they are typed contracts that determine cache
 
 **`opaque`**: one target = one tool invocation. Cache key is the input digest + tool version + flags. Fine-grained queries past this boundary return `{"boundary": "opaque", "tool": "...", "reason": "..."}`. Used where reimplementation is hopeless: Vite production builds, Gradle projects, Mix applications, xcodebuild.
 
+For most language plugins, both modes coexist within the same plugin: a "declared" target type (reimplemented, full graph control) and an "adopted" target type (cooperative, points at the upstream manifest). See §9.1 for how this looks for Rust.
+
 ### 4.2 Honest boundaries
 
 The integration mode is **visible to users and agents**, surfaced in:
@@ -211,10 +239,11 @@ The integration mode is **visible to users and agents**, surfaced in:
 
 This is the single biggest cultural difference from Bazel. Bazel claims total knowledge; we explicitly mark where knowledge ends.
 
-### 4.3 Plugin versioning
+### 4.3 Plugin distribution and versioning
 
 - Plugin API has semver. Workspaces declare plugin versions. Breakage is detected, not silent.
-- Plugins are WASM modules distributed via a registry (or pinned by URL+digest).
+- A plugin is a Starlark module plus a set of Rust handlers. Built-in plugins (rust, c, go, ...) ship inside the Fabrik binary; their Starlark sources are embedded and their handlers compiled in.
+- Third-party plugins ship as a (Starlark module, handler binary) bundle pinned by URL+digest. The handler binary is invoked by the substrate as a long-lived subprocess speaking a typed protocol (this is the only IPC boundary in the system; the Starlark layer never leaves the host process). Registry-based distribution is a follow-up to URL+digest pinning.
 - Plugin schemas (target types, providers, query methods) are versioned independently of plugin code.
 - A target compiled with plugin v1.2 can be cache-shared with a target compiled with plugin v1.3 only if the plugin declares schema compatibility. Otherwise, separate cache namespaces.
 
@@ -353,12 +382,26 @@ This section is honest about variance. Same architecture; different fidelities.
 
 ### 9.1 Rust (v0, dogfood from day one)
 
-- **Resolution**: cooperative via `cargo metadata`. Reuse cargo's resolver, feature unification, registry.
-- **Execution**: reimplemented. We invoke `rustc` directly with `--extern` flags per dep.
-- **Build scripts**: traced mode. The first run records the build script's actual inputs (env vars, probed files); subsequent runs use that as the cache key.
-- **Proc macros**: configuration profile transition (host vs target).
-- **Workspace ↔ Fabrik integration**: `Cargo.toml` is the source of truth for crate metadata; Fabrik reads it. We don't duplicate.
-- **Why first**: we're writing Fabrik in Rust, so we get to dogfood from week one. The Rust ecosystem is also unusually well-suited to this (clean resolver output, well-behaved compiler, mature toolchain).
+The Rust plugin exposes both a declared-mode and an adopted-mode entry point. Same plugin, two faces.
+
+**Declared mode** (`rust_binary`, `rust_library`, `rust_test`, `rust_proc_macro`). The Bazel/Buck2 posture: targets are declared in `.fabrik` files, Fabrik is the source of truth, hermeticity defaults to `strict`.
+
+- **Resolution**: reimplemented. The dependency graph comes from declared `deps` in the target stanza.
+- **Execution**: reimplemented. Direct `rustc` invocations with `--extern` per dep.
+- **Build scripts**: traced mode where they exist; explicit `build_script` target type so they show up in the graph.
+- **Proc macros**: separate host-platform compilation pass via a profile transition.
+- **What it's good for**: Fabrik's own build; new Rust projects that want full graph control; cross-language stitching where the typed graph matters.
+
+**Adopted mode** (`rust_workspace`). The drop-in posture: point at a `Cargo.toml`, get caching immediately.
+
+- **Resolution**: cooperative via `cargo metadata`. Reuse cargo's resolver, feature unification, registry. The plugin generates declared-mode targets internally; the user never sees them.
+- **Execution**: reimplemented (same handlers as declared mode), or opaque (`cargo build` per crate) if the user opts out for compatibility reasons.
+- **Build scripts**: traced. Cargo's build scripts are the canonical case for traced mode.
+- **What it's good for**: existing cargo workspaces adopting Fabrik without migration; `crates.io` dep graphs where reproducing cargo's resolver in declared form is impractical.
+
+**Mode boundary.** Declared and adopted targets coexist in the same workspace and the same graph. The integration mode is visible in queries (`fabrik introspect //x` reports it), in `fabrik cache stats --by-mode`, and in cache namespacing (the same crate built two ways produces two cache entries; no accidental sharing).
+
+**Why Rust first**: we're writing Fabrik in Rust, so we get to dogfood from week one. Self-hosting uses declared mode end-to-end; adopted mode lands as the adoption story for external projects.
 
 ### 9.2 C and C++
 
@@ -390,7 +433,7 @@ This section is honest about variance. Same architecture; different fidelities.
 
 - **Direct compilation (small projects)**: reimplemented via `javac` / `kotlinc`. Target = compilation unit.
 - **Gradle projects**: opaque. `gradle build` runs in a sandbox; outputs cached at the project level. Gradle stays in charge of its world; Fabrik handles cross-tool deps.
-- **Gradle Tooling API integration**: planned for v2 — finer-grained discovery without reimplementation. Research-grade.
+- **Gradle Tooling API integration**: planned for v2: finer-grained discovery without reimplementation. Research-grade.
 - **Honest limitation**: Gradle users opting in to Fabrik for Gradle-specific gains will be disappointed in v0–v1. The win is *cross-language*: their Gradle project depending on protobuf generated from a different language, all coherent in one cache.
 
 ### 9.6 Python
@@ -432,9 +475,9 @@ OTel as the wire format, with build-specific semantic conventions on top. (Conve
 
 - **Action spans**: digest, input root digest, output digests, cache state, exit code, plugin name+version, hermeticity level, platform.
 - **Build invocation root span**: command, args, profile, total wall time, cache hit rate, action counts.
-- **Cache hits**: not spans (would inflate counts catastrophically) — counters and attributes on the consuming span.
+- **Cache hits**: not spans (would inflate counts catastrophically): counters and attributes on the consuming span.
 - **Plugin internal spans**: plugins can emit their own spans within their actions (compile, link, codegen sub-steps).
-- **Structured event log**: alongside OTel, a separate log carries the full graph and result data — the BEP-equivalent. Spans are for performance; the event log is for correctness/lineage. Cross-referenced by IDs.
+- **Structured event log**: alongside OTel, a separate log carries the full graph and result data: the BEP-equivalent. Spans are for performance; the event log is for correctness/lineage. Cross-referenced by IDs.
 
 ### 10.2 Fabrik semantic conventions for OTel
 
@@ -462,32 +505,33 @@ One trace per build invocation will exceed backend limits for any non-trivial bu
 
 These need resolution before we cut v0. I have leanings on each but want them debated.
 
-1. **Build definition language: bespoke (Pkl-influenced) or typed TypeScript subset?** Bespoke gives us full control and a clear story; TypeScript gives us instant editor support and a familiar surface for plugin authors. Lean: bespoke, with first-class LSP. Worth prototyping both.
+1. **Workspace persistence format.** SQLite for the local graph index, flat files for the cache, content-addressed blobs in the substrate. But details (schema versioning, cross-machine sync of local index) need work.
 
-2. **WASI version and capability model for plugins.** WASI Preview 2 is the right target but the ecosystem isn't fully there. We may need to ship with a constrained subset and grow.
+2. **First non-Rust dogfooding language.** C/C++ is the strategic choice (large addressable audience, fits architecture well). Go is the easy choice (cleanest cooperative integration). Pick one for v0.5 focus.
 
-3. **Workspace persistence format.** SQLite for the local graph index, flat files for the cache, content-addressed blobs in the substrate. But details (schema versioning, cross-machine sync of local index) need work.
+3. **Should `service` targets exist at all?** Process supervision is its own world (systemd, pm2, mprocs, overmind). We might be better off integrating with one of these rather than building our own. Lean: build our own thin supervisor in v0, plan integration with external supervisors in v1.
 
-4. **First non-Rust dogfooding language.** C/C++ is the strategic choice (large addressable audience, fits architecture well). Go is the easy choice (cleanest cooperative integration). Pick one for v0.5 focus.
+4. **Agent-native query API surface.** §6 is a starting point, not exhaustive. We need to dogfood with real agents (including the one we're talking to right now) to find what's missing. v0 should ship a deliberately narrow API and grow it from observed need.
 
-5. **Should `service` targets exist at all?** Process supervision is its own world (systemd, pm2, mprocs, overmind). We might be better off integrating with one of these rather than building our own. Lean: build our own thin supervisor in v0, plan integration with external supervisors in v1.
+5. **Third-party plugin distribution.** Built-in plugins ship in the binary. For third-party plugins: registry vs URL+digest vs vendored. Lean: URL+digest pinning in v0 (simple, secure), registry once we have more than a handful of external plugins. The handler subprocess protocol also needs to be specified before third-party plugins are realistic.
 
-6. **Agent-native query API surface.** §6 is a starting point, not exhaustive. We need to dogfood with real agents (including the one we're talking to right now) to find what's missing. v0 should ship a deliberately narrow API and grow it from observed need.
+### Resolved
 
-7. **Plugin distribution.** Registry vs URL-pinned vs vendored. Lean: URL+digest pinning in v0 (simple, secure), registry in v1.
+- **Build definition language.** Typed Starlark via `starlark-rust` (Buck2 dialect). The earlier Pkl/TypeScript debate was settled by the realization that most of Fabrik's differentiation is structural, not language-level: typed providers, one extension concept, integration-mode boundaries, the typed query API. Starlark gives us all of that with no runtime to ship and a working precedent in Buck2.
+- **Plugin isolation.** Plugins are pure Starlark evaluated in-process; impure work lives in named Rust handlers in the substrate. WASM was considered as a sandboxing mechanism but does not earn its weight: build-system plugins are mostly data shaping (Starlark covers it) plus subprocess execution (which the substrate sandboxes regardless of who declared the action). The "untrusted plugin" story is deferred until third-party plugins exist.
 
 ## 13. Why this works
 
 The bet is structural:
 
-- **Cooperative-first means we ship per-language support fast.** No more `rules_*` death march.
-- **WASM plugins mean polyglot extensibility without a new language.** Plugin authors use what they know.
-- **Honest boundaries mean users know what they're getting.** No silent cache poisoning, no surprise gaps.
+- **Cooperative-first means we ship per-language support fast.** No more `rules_*` death march. Adopted-mode targets give projects a path in without rewriting.
+- **One language for build files and plugins, with no runtime to ship.** Typed Starlark via `starlark-rust` keeps the binary lean, the surface small, and the agent-fluency story tractable.
+- **Honest boundaries mean users know what they're getting.** No silent cache poisoning, no surprise gaps. Integration mode is queryable, not buried in docs.
 - **REAPI compatibility means we inherit infrastructure.** We don't build a remote-exec backend.
-- **Agent-native query API means we ride the wave.** As agents become real consumers of build telemetry — which they will, in this project's lifetime — we have the surface they need. Bazel doesn't.
+- **Agent-native query API means we ride the wave.** As agents become real consumers of build telemetry, which they will in this project's lifetime, we have the surface they need. Bazel doesn't.
 - **Rust-first dogfooding means we feel every paper cut.** No build system has ever been good without its authors using it daily.
 
-The risk is also structural: ambitious scope, multi-year arc, requires sustained investment in the hard ecosystems (iOS, Android, Gradle) that won't pay off for years. We mitigate by sequencing — backend polyglot first, hard mobile/Gradle ecosystems after we've earned the right to attempt them.
+The risk is also structural: ambitious scope, multi-year arc, requires sustained investment in the hard ecosystems (iOS, Android, Gradle) that won't pay off for years. We mitigate by sequencing: backend polyglot first, hard mobile/Gradle ecosystems after we've earned the right to attempt them.
 
 ---
 
@@ -495,7 +539,7 @@ The risk is also structural: ambitious scope, multi-year arc, requires sustained
 
 - **Action**: a single executable unit with declared inputs, outputs, and command. The substrate caches at this level.
 - **Target**: a user-facing unit defined in build files. Compiles to one or more actions.
-- **Plugin**: a WASM module that defines target types and translates them to actions.
+- **Plugin**: a Starlark module (plus optional Rust handlers in the substrate) that defines target types and translates them to actions.
 - **Profile**: a typed bundle of toolchain selections, build settings, and platform constraints.
 - **Hermeticity level**: `strict` / `traced` / `loose`, declared per target, stored on cache entries.
 - **Integration mode**: `reimplemented` / `cooperative` / `opaque`, declared per plugin per target type.
@@ -507,12 +551,12 @@ The risk is also structural: ambitious scope, multi-year arc, requires sustained
 
 ## Appendix B: References and prior art
 
-- Bazel — what we learn from and react against.
-- Buck2 (Meta) — the closest existing system in spirit; Rust-implemented, sound type system, action graph as data.
-- Pants — REAPI client, good Python/JVM story.
-- BuildStream — non-Bazel REAPI client, good design references.
-- Pkl (Apple), Cue — typed configuration language references for the build definition surface.
-- Nix — content-addressed everything; reference for hermeticity and reproducibility.
-- Turborepo, Nx — what cooperative-mode caching looks like for JS; what *not* to do (silent input mis-declaration).
-- `rules_rust`, `rules_go`, `rules_apple` — cooperative-resolution-plus-reimplemented-execution exemplars.
-- Gradle Develocity — what good build telemetry looks like at scale.
+- Bazel: what we learn from and react against.
+- Buck2 (Meta): the closest existing system in spirit; Rust-implemented, sound type system, action graph as data.
+- Pants: REAPI client, good Python/JVM story.
+- BuildStream: non-Bazel REAPI client, good design references.
+- Pkl (Apple), Cue: typed configuration language references for the build definition surface.
+- Nix: content-addressed everything; reference for hermeticity and reproducibility.
+- Turborepo, Nx: what cooperative-mode caching looks like for JS; what *not* to do (silent input mis-declaration).
+- `rules_rust`, `rules_go`, `rules_apple`: cooperative-resolution-plus-reimplemented-execution exemplars.
+- Gradle Develocity: what good build telemetry looks like at scale.
