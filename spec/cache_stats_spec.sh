@@ -12,8 +12,8 @@ Describe 'fabrik cache stats'
     The stdout should include 'actions: 0'
   End
 
-  It 'counts blobs and actions after a run'
-    fabrik run -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello' >/dev/null 2>&1
+  It 'counts blobs and actions after an exec'
+    fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello' >/dev/null 2>&1
     When call fabrik cache stats
     The status should be success
     # One action plus stdout + stderr blobs (stderr may be empty but is

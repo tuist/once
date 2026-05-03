@@ -38,13 +38,29 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
-    /// Run a command through the action cache.
+    /// Execute the action(s) that produce a target.
     ///
-    /// The cache key is the full argv, declared environment variables,
-    /// optional working directory, and optional timeout. A second
-    /// invocation with the same key reuses the captured stdout, stderr,
-    /// and exit code.
+    /// Loads the workspace, finds the matching target by label, and
+    /// runs its action(s) through the cache. For a `rust_binary`,
+    /// that action is the rustc invocation; the binary lands at
+    /// `.fabrik/out/<package>/<name>`. The verb is uniform across
+    /// target kinds: target-specific composition (e.g. compile then
+    /// exec the produced binary) lives in the build-file declarations,
+    /// not in the CLI.
     Run {
+        /// Target label, e.g. `//examples/hello:hello` or `//:hello`.
+        label: String,
+    },
+
+    /// Cache and execute a literal command (substrate escape hatch).
+    ///
+    /// Bypasses the target graph and puts any argv through the action
+    /// cache. The cache key is the full argv, declared environment
+    /// variables, optional working directory, and optional timeout. A
+    /// second invocation with the same key reuses the captured stdout,
+    /// stderr, and exit code. Most users want `fabrik run` against a
+    /// declared target instead.
+    Exec {
         /// Pass an environment variable to the command. Repeatable.
         #[arg(short = 'e', value_parser = parse_env)]
         env: Vec<(String, String)>,
@@ -84,17 +100,6 @@ pub enum Cmd {
     /// sanity-checking that build files evaluate before more expensive
     /// commands consume them.
     Targets,
-
-    /// Build a single target by label (`//package:name`).
-    ///
-    /// Loads the workspace, finds the matching target, emits a single
-    /// action through the cache, and writes the binary to
-    /// `.fabrik/out/<package>/<name>`. Currently only `rust_binary` is
-    /// supported.
-    Build {
-        /// Target label, e.g. `//examples/hello:hello` or `//:hello`.
-        label: String,
-    },
 }
 
 #[derive(Subcommand)]

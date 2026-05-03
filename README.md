@@ -47,12 +47,15 @@ binaries for:
 ## Quick taste
 
 ```sh
-# Run a command through the action cache.
-fabrik run -e PATH=/usr/bin:/bin -- /bin/sh -c 'echo hello'
+# Run a declared target.
+fabrik run //hello:hello
+
+# Cache an arbitrary command (substrate escape hatch).
+fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'echo hello'
 
 # A second identical invocation replays the cached stdout/stderr/exit
 # without re-running the command.
-fabrik run -e PATH=/usr/bin:/bin -- /bin/sh -c 'echo hello'
+fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'echo hello'
 
 # Cache stats.
 fabrik cache stats

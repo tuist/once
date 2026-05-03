@@ -51,15 +51,15 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
     let cas = Cas::open(workspace.join(".fabrik"));
 
     match cli.command {
-        Cmd::Run {
+        Cmd::Run { label } => commands::run::run(&workspace, &cas, &label).await,
+        Cmd::Exec {
             env,
             cwd,
             timeout_ms,
             cache_failures,
             argv,
         } => {
-            commands::run::run_command(&workspace, &cas, env, cwd, timeout_ms, cache_failures, argv)
-                .await
+            commands::exec::exec(&workspace, &cas, env, cwd, timeout_ms, cache_failures, argv).await
         }
         Cmd::Cache {
             cmd: cli::CacheCmd::Stats,
@@ -69,6 +69,5 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
         Cmd::Targets => commands::targets::print_targets(&workspace)
             .await
             .map(|()| ExitCode::SUCCESS),
-        Cmd::Build { label } => commands::build::build(&workspace, &cas, &label).await,
     }
 }

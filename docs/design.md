@@ -325,6 +325,17 @@ The query API is rich enough that an agent can:
 
 These are not features Fabrik ships; they are **uses of the API that agents naturally perform**. The bet: if the API is good enough, agent-driven optimization emerges.
 
+### 6.4 CLI verbs: one verb, target-shaped composition
+
+The CLI surface is deliberately small. Two production verbs:
+
+- `fabrik run //pkg:name`: execute the action(s) that produce the named target. The verb is uniform across target kinds. For a `rust_binary` it runs rustc; for a future `binary_run` wrapper it would run rustc and then exec the resulting binary; for a `command` target it runs the literal command. The composition is in the build-file declarations, not in the CLI.
+- `fabrik exec -- <argv>`: cache and execute a literal command without touching the target graph. Substrate-level escape hatch for ad-hoc shell-outs and for exercising the cache directly.
+
+Plus thin introspection verbs (`fabrik targets`, `fabrik cache stats`) that are clients of the query API, not parallel implementations.
+
+We deliberately do **not** offer a separate `build` verb (Bazel's split between `bazel build` and `bazel run`). At the action layer there is no distinction: producing a target's outputs is a matter of running its declared action(s); whether the result of that production also gets executed afterward is encoded in the target type, not the verb. This keeps the surface small for agents (one verb to learn) and pushes behavioural variation into the typed graph where it can be queried.
+
 ## 7. Errors
 
 Structured first, formatted second. Every error is a typed object:
