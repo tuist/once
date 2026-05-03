@@ -4,6 +4,7 @@
 
 mod cli;
 mod commands;
+mod render;
 
 use std::env;
 use std::process::ExitCode;

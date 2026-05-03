@@ -82,4 +82,18 @@ EOF
     The line 2 of stdout should include '"label":"//:lib"'
     The line 2 of stdout should include '"kind":"rust_library"'
   End
+
+  It 'emits a single TOON document under --format toon'
+    cat > "$WORKSPACE/fabrik.star" <<'EOF'
+rust_binary(name = "top", srcs = ["main.rs"])
+rust_library(name = "lib", srcs = ["lib.rs"])
+EOF
+    When call "$FABRIK_BIN" --format toon -C "$WORKSPACE" targets
+    The status should be success
+    The stdout should include 'targets:'
+    The stdout should include '//:top:'
+    The stdout should include '//:lib:'
+    The stdout should include 'kind: rust_binary'
+    The stdout should include 'kind: rust_library'
+  End
 End

@@ -12,6 +12,7 @@ Describe 'fabrik --help'
     The stdout should include 'exec'
     The stdout should include 'cache'
     The stdout should include '--directory'
+    The stdout should include 'toon'
   End
 End
 

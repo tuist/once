@@ -31,4 +31,14 @@ Describe 'fabrik cache stats'
     The stdout should include '"count":'
     The stdout should include '"bytes":'
   End
+
+  It 'emits a single TOON object under --format toon'
+    fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hi' >/dev/null 2>&1
+    When call "$FABRIK_BIN" --format toon -C "$WORKSPACE" cache stats
+    The status should be success
+    The stdout should include 'blobs:'
+    The stdout should include 'actions:'
+    The stdout should include 'count:'
+    The stdout should include 'bytes:'
+  End
 End

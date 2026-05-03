@@ -8,7 +8,8 @@
 //! Stdout always carries the wrapped program's stdout verbatim
 //! (transparency), regardless of `--format`. Stderr carries the
 //! wrapped program's stderr plus a Fabrik trailer; the trailer's
-//! shape is human-readable by default and JSON when `--format json`.
+//! shape is human-readable by default and structured under `json` or
+//! `toon`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -17,9 +18,18 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use fabrik_cas::Cas;
 use fabrik_core::{Action, CacheState, RunOpts, WorkspacePath};
+use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::{exit_from, Format};
+use crate::render;
+
+#[derive(Serialize)]
+struct ExecTrailer<'a> {
+    action_digest: String,
+    cache: &'a str,
+    exit_code: i32,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn exec(
@@ -59,19 +69,17 @@ pub async fn exec(
         CacheState::Hit => "hit",
         CacheState::Miss => "miss",
     };
+    let trailer = ExecTrailer {
+        action_digest: outcome.action.to_string(),
+        cache: cache_tag,
+        exit_code: outcome.result.exit_code,
+    };
     let trailer = match format {
         Format::Human => format!(
             "fabrik: cache {cache_tag} action={} exit={}\n",
             outcome.action, outcome.result.exit_code
         ),
-        Format::Json => {
-            let v = serde_json::json!({
-                "action_digest": outcome.action.to_string(),
-                "cache": cache_tag,
-                "exit_code": outcome.result.exit_code,
-            });
-            format!("{v}\n")
-        }
+        Format::Json | Format::Toon => render::structured(format, &trailer)?,
     };
     err.write_all(trailer.as_bytes()).await?;
     err.flush().await?;

@@ -70,4 +70,15 @@ EOF
     The stdout should include '"output":".fabrik/out/hello/hello"'
     The stdout should include '"action_digest":'
   End
+
+  It 'emits a TOON outcome record on stdout under --format toon'
+    hello_workspace
+    When call "$FABRIK_BIN" --format toon -C "$WORKSPACE" run //hello:hello
+    The status should be success
+    The stdout should include 'label: //hello:hello'
+    The stdout should include 'cache: miss'
+    The stdout should include 'exit_code: 0'
+    The stdout should include 'output: .fabrik/out/hello/hello'
+    The stdout should include 'action_digest:'
+  End
 End

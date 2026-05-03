@@ -8,13 +8,14 @@ use fabrik_core::WorkspacePath;
 
 /// Output format for verbs that emit Fabrik's own structured data
 /// (`targets`, `cache stats`, `run`, `exec` trailers). `human` is the
-/// readable default; `json` lets agents and scripts consume output
-/// without scraping prose.
+/// readable default; `json` and `toon` let agents and scripts consume
+/// output without scraping prose.
 #[derive(Copy, Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
 pub enum Format {
     #[default]
     Human,
     Json,
+    Toon,
 }
 
 /// Release pipeline sets `FABRIK_VERSION` at build time so the binary
@@ -40,8 +41,8 @@ pub struct Cli {
 
     /// Output format for Fabrik's structured data (`targets`, `cache
     /// stats`, `run`/`exec` trailers). Defaults to a human-readable
-    /// rendering; pass `json` to get machine-parseable output for
-    /// scripting and for agent consumers.
+    /// rendering; pass `json` or `toon` to get machine-parseable
+    /// output for scripting and for agent consumers.
     #[arg(long, global = true, value_enum, default_value_t = Format::Human)]
     pub format: Format,
 
