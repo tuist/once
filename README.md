@@ -3,8 +3,9 @@
 A polyglot, agent-native build system. Bazel's ambitions, none of its mistakes.
 
 > [!WARNING]
-> 🚧 **Pre-alpha.** Not yet usable for real builds. The CLI runs and the cache works, but
-> there is no language plugin yet (it's the next phase). See the
+> 🚧 **Pre-alpha.** The CLI runs, the cache works, and a Cargo-backed
+> dogfood target builds Fabrik itself. Fine-grained Rust targets and
+> full language plugins are still under active development. See the
 > [roadmap](docs/roadmap.md) for what lands when.
 
 ## What you get
@@ -74,14 +75,42 @@ To build from source:
 
 ```sh
 mise install
-cargo build --release
-cargo test
+mise exec -- cargo build --release
+mise exec -- cargo test --workspace
 mise exec -- shellspec
 ```
 
+Once a local release binary exists, dogfood the build graph with Fabrik:
+
+```sh
+mise exec -- target/release/fabrik targets
+mise exec -- target/release/fabrik run //:fabrik
+```
+
 CI runs lint, tests, and a Windows compile check on every PR. See
-[.github/workflows/ci.yml](.github/workflows/ci.yml) and
+[.github/workflows/fabrik.yml](.github/workflows/fabrik.yml) and
 [CONTRIBUTING](docs/contributing.md) (coming soon).
+
+## Releases
+
+Releases are driven by conventional commits and `git-cliff`. The
+release tooling is pinned in [mise.toml](mise.toml), so install it with:
+
+```sh
+mise install git-cliff
+```
+
+Useful release tasks:
+
+```sh
+mise run release:detect
+mise run release:changelog
+mise run release:notes --version <version>
+```
+
+[.github/workflows/release.yml](.github/workflows/release.yml) packages
+release archives and publishes GitHub releases that mise can install
+through the `github:` backend shown above.
 
 ## License
 

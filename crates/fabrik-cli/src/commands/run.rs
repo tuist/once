@@ -5,12 +5,12 @@
 //! lives in the build-file declarations, not in the CLI.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use fabrik_cas::Cas;
-use fabrik_core::{Action, CacheState, RunOpts};
+use fabrik_cas::{Cas, Digest};
+use fabrik_core::{Action, CacheState, RunOpts, WorkspacePath};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -27,6 +27,12 @@ struct RunRecord<'a> {
     output: String,
 }
 
+struct ActionPlan {
+    action: Action,
+    output: String,
+    output_dir: Option<PathBuf>,
+}
+
 pub async fn run(workspace: &Path, cas: &Cas, label: &str, format: Format) -> Result<ExitCode> {
     let targets = fabrik_frontend::load_workspace(workspace).context("loading workspace")?;
     let target = targets
@@ -34,16 +40,14 @@ pub async fn run(workspace: &Path, cas: &Cas, label: &str, format: Format) -> Re
         .find(|t| t.label() == label)
         .ok_or_else(|| anyhow::anyhow!("no target matches `{label}`"))?;
 
-    let action = action_for(target)?;
-    // The output directory must exist before rustc writes into it.
-    // Pre-create it here rather than wrap the action in a shell so the
-    // action's cache key stays focused on the compilation itself.
-    let out_dir = workspace.join(".fabrik").join("out").join(&target.package);
-    tokio::fs::create_dir_all(&out_dir)
-        .await
-        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+    let plan = action_for(workspace, target)?;
+    if let Some(out_dir) = &plan.output_dir {
+        tokio::fs::create_dir_all(out_dir)
+            .await
+            .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+    }
 
-    let outcome = fabrik_core::run(&action, workspace, cas, RunOpts::default())
+    let outcome = fabrik_core::run(&plan.action, workspace, cas, RunOpts::default())
         .await
         .context("executing action")?;
 
@@ -52,18 +56,13 @@ pub async fn run(workspace: &Path, cas: &Cas, label: &str, format: Format) -> Re
         CacheState::Hit => "hit",
         CacheState::Miss => "miss",
     };
-    let output_rel = if target.package.is_empty() {
-        format!(".fabrik/out/{}", target.name)
-    } else {
-        format!(".fabrik/out/{}/{}", target.package, target.name)
-    };
     let record = RunRecord {
         label,
         kind: &target.kind,
         action_digest: outcome.action.to_string(),
         cache: cache_tag,
         exit_code: outcome.result.exit_code,
-        output: output_rel,
+        output: plan.output,
     };
 
     match format {
@@ -94,54 +93,128 @@ pub async fn run(workspace: &Path, cas: &Cas, label: &str, format: Format) -> Re
     Ok(exit_from(outcome.result.exit_code))
 }
 
-fn action_for(target: &fabrik_frontend::Target) -> Result<Action> {
+fn action_for(workspace: &Path, target: &fabrik_frontend::Target) -> Result<ActionPlan> {
     match target.kind.as_str() {
-        "rust_binary" => rust_binary_action(target),
+        "rust_binary" => rust_binary_action(workspace, target),
+        "cargo_binary" => cargo_binary_action(workspace, target),
         other => anyhow::bail!("running `{other}` targets is not yet supported"),
     }
 }
 
-fn rust_binary_action(target: &fabrik_frontend::Target) -> Result<Action> {
+fn rust_binary_action(workspace: &Path, target: &fabrik_frontend::Target) -> Result<ActionPlan> {
     let main_src = target
         .srcs
         .first()
         .ok_or_else(|| anyhow::anyhow!("rust_binary {} has no srcs", target.label()))?;
-    let prefix = if target.package.is_empty() {
-        String::new()
-    } else {
-        format!("{}/", target.package)
-    };
-    let src_rel = format!("{prefix}{main_src}");
+    let src_rel = source_path(target, main_src)?;
     let out_rel = if target.package.is_empty() {
         format!(".fabrik/out/{}", target.name)
     } else {
         format!(".fabrik/out/{}/{}", target.package, target.name)
     };
+    let input_digest = input_digest(workspace, target)?;
+    let output_dir = workspace.join(".fabrik").join("out").join(&target.package);
 
-    // rustc needs at least PATH (so it can locate its own helpers like
-    // the linker). HOME unblocks toolchains installed via rustup, which
-    // resolves the active toolchain through `~/.rustup`. These pollute
-    // the cache key across machines; hermetic toolchains land later.
-    let mut env = BTreeMap::new();
-    if let Ok(path) = std::env::var("PATH") {
-        env.insert("PATH".into(), path);
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        env.insert("HOME".into(), home);
-    }
-
-    Ok(Action::RunCommand {
-        argv: vec![
-            "rustc".into(),
-            "--edition=2021".into(),
-            format!("--crate-name={}", target.name),
-            "--crate-type=bin".into(),
-            "-o".into(),
-            out_rel,
-            src_rel,
-        ],
-        env,
-        cwd: None,
-        timeout_ms: Some(120_000),
+    Ok(ActionPlan {
+        action: Action::RunCommand {
+            argv: vec![
+                "rustc".into(),
+                "--edition=2021".into(),
+                format!("--crate-name={}", target.name),
+                "--crate-type=bin".into(),
+                "-o".into(),
+                out_rel.clone(),
+                src_rel.as_str().to_string(),
+            ],
+            env: tool_env(),
+            cwd: None,
+            input_digest,
+            timeout_ms: Some(120_000),
+        },
+        output: out_rel,
+        output_dir: Some(output_dir),
     })
+}
+
+fn cargo_binary_action(workspace: &Path, target: &fabrik_frontend::Target) -> Result<ActionPlan> {
+    if target.srcs.is_empty() {
+        anyhow::bail!("cargo_binary {} has no srcs", target.label());
+    }
+    let cargo_package = target
+        .attrs
+        .get("cargo_package")
+        .ok_or_else(|| anyhow::anyhow!("cargo_binary {} has no cargo_package", target.label()))?;
+    let bin = target.attrs.get("bin").unwrap_or(&target.name);
+    let input_digest = input_digest(workspace, target)?;
+    let output = format!("target/debug/{bin}{}", std::env::consts::EXE_SUFFIX);
+
+    Ok(ActionPlan {
+        action: Action::RunCommand {
+            argv: vec![
+                "cargo".into(),
+                "build".into(),
+                "--locked".into(),
+                "--package".into(),
+                cargo_package.to_string(),
+                "--bin".into(),
+                bin.to_string(),
+            ],
+            env: tool_env(),
+            cwd: None,
+            input_digest,
+            timeout_ms: Some(300_000),
+        },
+        output,
+        output_dir: None,
+    })
+}
+
+fn source_path(target: &fabrik_frontend::Target, src: &str) -> Result<WorkspacePath> {
+    let rel = if target.package.is_empty() {
+        src.to_string()
+    } else {
+        format!("{}/{src}", target.package)
+    };
+    WorkspacePath::try_from(rel.as_str())
+        .with_context(|| format!("invalid source path `{src}` in {}", target.label()))
+}
+
+fn input_digest(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Option<Digest>> {
+    if target.srcs.is_empty() {
+        return Ok(None);
+    }
+
+    let mut paths: Vec<_> = target
+        .srcs
+        .iter()
+        .map(|src| source_path(target, src))
+        .collect::<Result<_>>()?;
+    paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+
+    let mut buf = Vec::new();
+    for path in paths {
+        let bytes = std::fs::read(path.resolve(workspace))
+            .with_context(|| format!("reading source input `{path}`"))?;
+        let digest = Digest::of_bytes(&bytes);
+        buf.extend_from_slice(path.as_str().as_bytes());
+        buf.push(0);
+        buf.extend_from_slice(digest.as_bytes());
+        buf.push(0);
+    }
+    Ok(Some(Digest::of_bytes(&buf)))
+}
+
+fn tool_env() -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    for key in ["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"] {
+        if let Ok(value) = std::env::var(key) {
+            env.insert(key.into(), value);
+        }
+    }
+    for (key, value) in std::env::vars() {
+        if key.starts_with("MISE_") {
+            env.insert(key, value);
+        }
+    }
+    env
 }
