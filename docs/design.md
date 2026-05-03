@@ -108,10 +108,10 @@ The plugin author writes Starlark; impure work (subprocess execution, output par
 
 Typed Starlark, evaluated in-process via `starlark-rust`. The Buck2 dialect with type annotations on all functions and providers. Reference points: Buck2's prelude, Bazel BUILD files (the surface a typical user writes, not the rule-author surface).
 
-A `.fabrik` file looks like this:
+A `fabrik.star` file looks like this (each package directory holds one; plugin and SDK modules use the same `.star` extension):
 
 ```python
-load("//build/rust.fabrik", "rust_binary", "rust_test")
+load("//build/rust.star", "rust_binary", "rust_test")
 
 rust_binary(
     name = "api",
@@ -134,7 +134,7 @@ rust_test(
 The language has:
 - Static typing on plugin-declared target functions (a plugin's `rust_binary` declares `srcs: list[str]`, `deps: list[str]`, etc., and the evaluator enforces it).
 - Typed providers (records produced by one target and consumed by another).
-- Imports via `load("//path/to/file.fabrik", "symbol")`.
+- Imports via `load("//path/to/file.star", "symbol")`.
 - Pure functions for data transformation (`glob`, `select`, `map`, `filter`).
 - No mutable state at module scope, no I/O at evaluation time, no recursion past Starlark's bounded recursion limit.
 
@@ -174,12 +174,12 @@ Cache namespaces are partitioned by profile. Same inputs + same profile → same
 
 ## 4. Plugin model
 
-A plugin is a Starlark module that declares typed target functions and registers them with `fabrik_plugin(...)`. The module is loaded into the same `starlark-rust` evaluator that loads user `.fabrik` files; there is no host/plugin boundary at the language level.
+A plugin is a Starlark module that declares typed target functions and registers them with `fabrik_plugin(...)`. The module is loaded into the same `starlark-rust` evaluator that loads user `fabrik.star` files; there is no host/plugin boundary at the language level.
 
 ```python
-load("//fabrik/sdk.fabrik", "fabrik_plugin", "resolution", "execution")
+load("//fabrik/sdk.star", "fabrik_plugin", "resolution", "execution")
 
-# Declared-mode entry points. Users write these directly in .fabrik files.
+# Declared-mode entry points. Users write these directly in fabrik.star files.
 def rust_binary(name, srcs, deps = [], visibility = None, ...):
     return _rust_target(kind = "binary", name = name, srcs = srcs, deps = deps, ...)
 
@@ -325,6 +325,17 @@ The query API is rich enough that an agent can:
 
 These are not features Fabrik ships; they are **uses of the API that agents naturally perform**. The bet: if the API is good enough, agent-driven optimization emerges.
 
+### 6.4 CLI verbs: one verb, target-shaped composition
+
+The CLI surface is deliberately small. Two production verbs:
+
+- `fabrik run //pkg:name`: execute the action(s) that produce the named target. The verb is uniform across target kinds. For a `rust_binary` it runs rustc; for a future `binary_run` wrapper it would run rustc and then exec the resulting binary; for a `command` target it runs the literal command. The composition is in the build-file declarations, not in the CLI.
+- `fabrik exec -- <argv>`: cache and execute a literal command without touching the target graph. Substrate-level escape hatch for ad-hoc shell-outs and for exercising the cache directly.
+
+Plus thin introspection verbs (`fabrik targets`, `fabrik cache stats`) that are clients of the query API, not parallel implementations.
+
+We deliberately do **not** offer a separate `build` verb (Bazel's split between `bazel build` and `bazel run`). At the action layer there is no distinction: producing a target's outputs is a matter of running its declared action(s); whether the result of that production also gets executed afterward is encoded in the target type, not the verb. This keeps the surface small for agents (one verb to learn) and pushes behavioural variation into the typed graph where it can be queried.
+
 ## 7. Errors
 
 Structured first, formatted second. Every error is a typed object:
@@ -384,7 +395,7 @@ This section is honest about variance. Same architecture; different fidelities.
 
 The Rust plugin exposes both a declared-mode and an adopted-mode entry point. Same plugin, two faces.
 
-**Declared mode** (`rust_binary`, `rust_library`, `rust_test`, `rust_proc_macro`). The Bazel/Buck2 posture: targets are declared in `.fabrik` files, Fabrik is the source of truth, hermeticity defaults to `strict`.
+**Declared mode** (`rust_binary`, `rust_library`, `rust_test`, `rust_proc_macro`). The Bazel/Buck2 posture: targets are declared in `fabrik.star` files, Fabrik is the source of truth, hermeticity defaults to `strict`.
 
 - **Resolution**: reimplemented. The dependency graph comes from declared `deps` in the target stanza.
 - **Execution**: reimplemented. Direct `rustc` invocations with `--extern` per dep.

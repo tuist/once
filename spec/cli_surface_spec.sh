@@ -9,8 +9,10 @@ Describe 'fabrik --help'
     The status should be success
     The stdout should include 'fabrik'
     The stdout should include 'run'
+    The stdout should include 'exec'
     The stdout should include 'cache'
     The stdout should include '--directory'
+    The stdout should include 'toon'
   End
 End
 
@@ -22,25 +24,25 @@ Describe 'fabrik --version'
   End
 End
 
-Describe 'fabrik run -e'
+Describe 'fabrik exec -e'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
   It 'rejects a malformed env entry without an equals sign'
-    When call fabrik run -e MALFORMED -- /bin/sh -c 'true'
+    When call fabrik exec -e MALFORMED -- /bin/sh -c 'true'
     The status should not equal 0
     The stderr should include 'KEY=VALUE'
   End
 
   It 'accepts an empty value (KEY=)'
-    When call fabrik run -e PATH=/usr/bin:/bin -e EMPTY= -- /bin/sh -c 'printf "[$EMPTY]"'
+    When call fabrik exec -e PATH=/usr/bin:/bin -e EMPTY= -- /bin/sh -c 'printf "[$EMPTY]"'
     The status should be success
     The stdout should equal '[]'
     The stderr should include 'cache miss'
   End
 
   It 'preserves equals signs inside the value'
-    When call fabrik run -e PATH=/usr/bin:/bin -e PAIR=a=b -- /bin/sh -c 'printf "$PAIR"'
+    When call fabrik exec -e PATH=/usr/bin:/bin -e PAIR=a=b -- /bin/sh -c 'printf "$PAIR"'
     The status should be success
     The stdout should equal 'a=b'
     The stderr should include 'cache miss'
@@ -50,7 +52,7 @@ End
 Describe 'fabrik -C <directory>'
   It 'creates the .fabrik tree under a previously empty directory'
     fresh="$(mktemp -d -t fabrik-cli-fresh.XXXXXX)"
-    "$FABRIK_BIN" -C "$fresh" run -e PATH=/usr/bin:/bin -- /bin/sh -c 'true' >/dev/null 2>&1
+    "$FABRIK_BIN" -C "$fresh" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true' >/dev/null 2>&1
     rc=$?
     test -d "$fresh/.fabrik/cas" && test -d "$fresh/.fabrik/actions"
     When call test $rc -eq 0
@@ -60,26 +62,26 @@ Describe 'fabrik -C <directory>'
 
   It 'errors clearly when given a non-directory path'
     file="$(mktemp -t fabrik-cli-notdir.XXXXXX)"
-    When call "$FABRIK_BIN" -C "$file" run -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
+    When call "$FABRIK_BIN" -C "$file" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
     The status should not equal 0
     The stderr should include 'fabrik:'
     rm -f "$file"
   End
 End
 
-Describe 'fabrik run output'
+Describe 'fabrik exec output'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
   It 'prints the action digest as 64 hex characters'
-    When call fabrik run -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
+    When call fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
     The status should be success
     The stderr should match pattern '*action=????????????????????????????????????????????????????????????????*'
   End
 
   # Binary-safe stdout (null bytes) is covered by a Rust unit test in
   # fabrik-core where the assertion can inspect the raw blob bytes
-  # directly — shellspec's pipeline machinery isn't a reliable carrier
+  # directly. Shellspec's pipeline machinery isn't a reliable carrier
   # for null-bearing output across shells.
 End
 
@@ -104,9 +106,9 @@ Describe 'sequential invocations against the same workspace'
   # inspect Runner state directly. This spec just confirms the CLI's
   # external contract: back-to-back invocations against the same
   # workspace each see their own results.
-  It 'two back-to-back runs return distinct outputs'
-    fabrik run -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf one' >/dev/null 2>&1
-    When call fabrik run -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf two'
+  It 'two back-to-back execs return distinct outputs'
+    fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf one' >/dev/null 2>&1
+    When call fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf two'
     The status should be success
     The stdout should equal 'two'
     The stderr should include 'cache miss'
