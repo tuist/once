@@ -23,6 +23,7 @@ fn cmd(script: &str) -> Action {
         argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
         env: BTreeMap::new(),
         cwd: None,
+        input_digest: None,
         timeout_ms: Some(10_000),
     }
 }
@@ -80,6 +81,7 @@ async fn cache_keys_partition_by_workspace_path() {
         argv: vec!["/bin/sh".into(), "-c".into(), "cat marker".into()],
         env: BTreeMap::new(),
         cwd: Some(WorkspacePath::try_from(sub).unwrap()),
+        input_digest: None,
         timeout_ms: Some(5_000),
     };
     let a = runner.run(&mk("a")).await.unwrap();
@@ -113,6 +115,7 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         argv: vec!["/bin/sh".into(), "-c".into(), "exit 1".into()],
         env: BTreeMap::new(),
         cwd: None,
+        input_digest: None,
         timeout_ms: Some(5_000),
     };
     let outcome = runner_fail.run(&bad).await.unwrap();
@@ -124,6 +127,7 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         argv: vec!["/bin/sh".into(), "-c".into(), "exit 0".into()],
         env: BTreeMap::new(),
         cwd: None,
+        input_digest: None,
         timeout_ms: Some(5_000),
     };
     let outcome = runner_fail.run(&good).await.unwrap();

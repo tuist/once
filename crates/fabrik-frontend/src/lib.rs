@@ -2,10 +2,10 @@
 //!
 //! Embeds `starlark-rust` to load typed Starlark build files. Today the
 //! evaluator recognises a fixed set of Rust target types (`rust_binary`,
-//! `rust_library`, `rust_test`) plus a `glob` primitive, and records each
-//! call as a [`Target`]. The plugin contract that lets external Starlark
-//! modules contribute target types lands later; the current shape is the
-//! built-in slice of that same contract.
+//! `rust_library`, `rust_test`, `cargo_binary`) plus a `glob` primitive,
+//! and records each call as a [`Target`]. The plugin contract that lets
+//! external Starlark modules contribute target types lands later; the
+//! current shape is the built-in slice of that same contract.
 //!
 //! Module layout:
 //! - [`target`]: the [`Target`] record.

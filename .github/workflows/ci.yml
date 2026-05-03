@@ -96,6 +96,12 @@ jobs:
         # fresh work.
         run: cargo build --release
 
+      - name: fabrik targets
+        run: target/release/fabrik targets
+
+      - name: fabrik builds itself
+        run: target/release/fabrik run //:fabrik
+
       - name: shellspec
         run: mise exec -- shellspec
 

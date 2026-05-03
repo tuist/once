@@ -46,6 +46,7 @@ pub async fn exec(
         argv,
         env: env.into_iter().collect::<BTreeMap<_, _>>(),
         cwd,
+        input_digest: None,
         timeout_ms,
     };
     let opts = RunOpts { cache_failures };

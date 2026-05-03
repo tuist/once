@@ -99,6 +99,8 @@ pub fn load_str(name: &str, src: &str) -> Result<Vec<Target>> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     #[test]
@@ -118,6 +120,7 @@ rust_binary(
                 name: "hello".into(),
                 srcs: vec!["src/main.rs".into()],
                 deps: vec![],
+                attrs: BTreeMap::new(),
             }]
         );
     }
@@ -181,5 +184,23 @@ rust_test(name = "core_test", srcs = ["tests/core.rs"], deps = [":core"])
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].kind, "custom");
         assert_eq!(targets[0].name, "x");
+    }
+
+    #[test]
+    fn cargo_binary_records_cargo_attrs() {
+        let targets = load_str(
+            "fabrik.star",
+            r#"cargo_binary(
+    name = "fabrik",
+    cargo_package = "fabrik-cli",
+    bin = "fabrik",
+    srcs = ["Cargo.toml"],
+)"#,
+        )
+        .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].kind, "cargo_binary");
+        assert_eq!(targets[0].attrs["cargo_package"], "fabrik-cli");
+        assert_eq!(targets[0].attrs["bin"], "fabrik");
     }
 }

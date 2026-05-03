@@ -68,6 +68,8 @@ pub enum Action {
         env: BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<WorkspacePath>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
         /// Per-action timeout in milliseconds. None = no timeout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
@@ -222,6 +224,7 @@ async fn execute(action: &Action, workspace_root: &Path, cas: &Cas) -> Result<Ac
             argv,
             env,
             cwd,
+            input_digest: _,
             timeout_ms,
         } => execute_run_command(argv, env, cwd.as_ref(), *timeout_ms, workspace_root, cas).await,
     }
@@ -310,6 +313,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), format!("printf '{msg}'")],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: None,
         }
     }
@@ -355,12 +359,14 @@ mod tests {
             argv: argv.clone(),
             env: env_a,
             cwd: None,
+            input_digest: None,
             timeout_ms: None,
         };
         let b = Action::RunCommand {
             argv,
             env: env_b,
             cwd: None,
+            input_digest: None,
             timeout_ms: None,
         };
         assert_ne!(a.digest(), b.digest());
@@ -373,6 +379,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), "exit 7".into()],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: None,
         };
         let first = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -393,6 +400,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), "exit 7".into()],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: None,
         };
         let opts = RunOpts {
@@ -412,6 +420,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: Some(100),
         };
         let err = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -430,6 +439,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), "cat marker".into()],
             env: BTreeMap::new(),
             cwd: Some(WorkspacePath::try_from("sub").unwrap()),
+            input_digest: None,
             timeout_ms: None,
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -453,6 +463,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), r"printf 'abc\000def'".into()],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: Some(5_000),
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -477,6 +488,7 @@ mod tests {
             ],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: Some(10_000),
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -503,6 +515,7 @@ mod tests {
             ],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: Some(5_000),
         };
         let started = std::time::Instant::now();
@@ -527,6 +540,7 @@ mod tests {
             argv: vec!["true".into()],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: None,
         };
         let expected = {
@@ -545,6 +559,7 @@ mod tests {
             argv: vec!["true".into()],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: t,
         };
         // None vs Some are distinct slots; differing Some values are too.
@@ -558,6 +573,7 @@ mod tests {
             argv: vec!["true".into()],
             env: BTreeMap::new(),
             cwd: c,
+            input_digest: None,
             timeout_ms: None,
         };
         let a = mk(None);
@@ -565,6 +581,21 @@ mod tests {
         let c = mk(Some(WorkspacePath::try_from("b").unwrap()));
         assert_ne!(a.digest(), b.digest());
         assert_ne!(b.digest(), c.digest());
+    }
+
+    #[test]
+    fn digest_changes_when_input_digest_changes() {
+        let mk = |input_digest: Option<Digest>| Action::RunCommand {
+            argv: vec!["true".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest,
+            timeout_ms: None,
+        };
+        let a = mk(Some(Digest::of_bytes(b"a")));
+        let b = mk(Some(Digest::of_bytes(b"b")));
+        assert_ne!(mk(None).digest(), a.digest());
+        assert_ne!(a.digest(), b.digest());
     }
 
     #[test]
@@ -590,6 +621,7 @@ mod tests {
             argv: vec![],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: None,
         };
         let err = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -605,6 +637,7 @@ mod tests {
             argv: vec!["/this/program/does/not/exist".into()],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: None,
         };
         let err = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -622,6 +655,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), "cat".into()],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: Some(2_000),
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -648,12 +682,14 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), "sleep 0.2; printf a".into()],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: Some(5_000),
         };
         let action_b = Action::RunCommand {
             argv: vec!["/bin/sh".into(), "-c".into(), "sleep 0.2; printf b".into()],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: Some(5_000),
         };
         let started = std::time::Instant::now();
@@ -680,6 +716,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), "cat marker".into()],
             env: BTreeMap::new(),
             cwd: Some(WorkspacePath::try_from("sub").unwrap()),
+            input_digest: None,
             timeout_ms: Some(5_000),
         };
         let outcome = runner.run(&action).await.unwrap();
@@ -699,6 +736,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()],
             env: BTreeMap::new(),
             cwd: None,
+            input_digest: None,
             timeout_ms: Some(50),
         };
         let _ = run(&action, tmp.path(), &cas, RunOpts::default()).await;

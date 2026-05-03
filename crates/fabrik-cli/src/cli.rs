@@ -62,10 +62,10 @@ pub enum Cmd {
     /// Loads the workspace, finds the matching target by label, and
     /// runs its action(s) through the cache. For a `rust_binary`,
     /// that action is the rustc invocation; the binary lands at
-    /// `.fabrik/out/<package>/<name>`. The verb is uniform across
-    /// target kinds: target-specific composition (e.g. compile then
-    /// exec the produced binary) lives in the build-file declarations,
-    /// not in the CLI.
+    /// `.fabrik/out/<package>/<name>`. For a `cargo_binary`, the
+    /// action is `cargo build --locked --package <pkg> --bin <bin>`.
+    /// The verb is uniform across target kinds: target-specific
+    /// composition lives in build-file declarations, not in the CLI.
     Run {
         /// Target label, e.g. `//examples/hello:hello` or `//:hello`.
         label: String,

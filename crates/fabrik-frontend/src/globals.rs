@@ -7,8 +7,11 @@
 //! - `glob(patterns)` expands shell-style patterns relative to the
 //!   current package directory.
 
+use std::collections::BTreeMap;
+
 use starlark::environment::GlobalsBuilder;
 use starlark::starlark_module;
+use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 use starlark::values::none::NoneType;
 use starlark::values::Value;
@@ -31,7 +34,32 @@ pub(crate) fn unpack_str_list(value: Option<Value<'_>>) -> anyhow::Result<Vec<St
         .collect()
 }
 
-fn record_target(kind: &str, name: &str, srcs: Vec<String>, deps: Vec<String>) {
+fn unpack_str_dict(value: Option<Value<'_>>) -> anyhow::Result<BTreeMap<String, String>> {
+    let Some(value) = value else {
+        return Ok(BTreeMap::new());
+    };
+    let dict =
+        DictRef::from_value(value).ok_or_else(|| anyhow::anyhow!("expected a dict of strings"))?;
+    dict.iter()
+        .map(|(key, value)| {
+            let key = key
+                .unpack_str()
+                .ok_or_else(|| anyhow::anyhow!("dict key is not a string"))?;
+            let value = value
+                .unpack_str()
+                .ok_or_else(|| anyhow::anyhow!("dict value is not a string"))?;
+            Ok((key.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn record_target(
+    kind: &str,
+    name: &str,
+    srcs: Vec<String>,
+    deps: Vec<String>,
+    attrs: BTreeMap<String, String>,
+) {
     with_state(|s| {
         s.targets.push(Target {
             package: s.package.clone(),
@@ -39,6 +67,7 @@ fn record_target(kind: &str, name: &str, srcs: Vec<String>, deps: Vec<String>) {
             name: name.to_owned(),
             srcs,
             deps,
+            attrs,
         });
     });
 }
@@ -87,8 +116,15 @@ pub(crate) fn fabrik_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] name: &str,
         #[starlark(require = named)] srcs: Option<Value<'v>>,
         #[starlark(require = named)] deps: Option<Value<'v>>,
+        #[starlark(require = named)] attrs: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
-        record_target(kind, name, unpack_str_list(srcs)?, unpack_str_list(deps)?);
+        record_target(
+            kind,
+            name,
+            unpack_str_list(srcs)?,
+            unpack_str_list(deps)?,
+            unpack_str_dict(attrs)?,
+        );
         Ok(NoneType)
     }
 

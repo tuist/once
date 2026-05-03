@@ -24,6 +24,8 @@ struct TargetView<'a> {
     srcs: &'a [String],
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     deps: &'a [String],
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    attrs: &'a BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -35,6 +37,8 @@ struct TargetFields<'a> {
     srcs: &'a [String],
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     deps: &'a [String],
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    attrs: &'a BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -57,6 +61,7 @@ pub async fn print_targets(workspace: &Path, format: Format) -> Result<()> {
                             name: &t.name,
                             srcs: &t.srcs,
                             deps: &t.deps,
+                            attrs: &t.attrs,
                         },
                     )
                 })
@@ -81,6 +86,7 @@ pub async fn print_targets(workspace: &Path, format: Format) -> Result<()> {
                     name: &t.name,
                     srcs: &t.srcs,
                     deps: &t.deps,
+                    attrs: &t.attrs,
                 };
                 format!("{}\n", serde_json::to_string(&view)?)
             }
