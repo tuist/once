@@ -9,6 +9,7 @@ Describe 'fabrik --help'
     The status should be success
     The stdout should include 'fabrik'
     The stdout should include 'run'
+    The stdout should include 'test'
     The stdout should include 'exec'
     The stdout should include 'cache'
     The stdout should include '--directory'

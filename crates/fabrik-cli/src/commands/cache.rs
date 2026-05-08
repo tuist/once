@@ -1,4 +1,4 @@
-//! `fabrik cache stats` — print blob/action counts for a workspace.
+//! `fabrik cache stats` - print blob/action counts for a workspace.
 
 use anyhow::Result;
 use fabrik_cas::Cas;

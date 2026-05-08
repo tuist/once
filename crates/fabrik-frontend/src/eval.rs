@@ -62,7 +62,11 @@ pub(crate) fn eval_with(
     // error.
     let prelude_ast = AstModule::parse(PRELUDE_NAME, PRELUDE_SOURCE.to_owned(), &Dialect::Standard)
         .expect("bundled prelude parses");
-    let globals: Globals = GlobalsBuilder::new().with(fabrik_globals).build();
+    // `standard()` brings in the Starlark spec's built-in constants
+    // (`True`, `False`, `None`) and core builtins (`len`, `dict`, ...).
+    // Without it, even a default arg of `False` in the prelude fails
+    // to resolve.
+    let globals: Globals = GlobalsBuilder::standard().with(fabrik_globals).build();
     let module = Module::new();
 
     STATE.with(|c| {
@@ -184,6 +188,89 @@ rust_test(name = "core_test", srcs = ["tests/core.rs"], deps = [":core"])
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].kind, "custom");
         assert_eq!(targets[0].name, "x");
+    }
+
+    #[test]
+    fn rust_library_passes_optional_attrs_through() {
+        let targets = load_str(
+            "fabrik.star",
+            r#"rust_library(
+    name = "fabrik-cas",
+    srcs = ["src/lib.rs"],
+    edition = "2021",
+    crate_name = "fabrik_cas",
+    crate_root = "src/lib.rs",
+)"#,
+        )
+        .unwrap();
+        assert_eq!(targets.len(), 1);
+        let t = &targets[0];
+        assert_eq!(t.kind, "rust_library");
+        assert_eq!(t.attrs.get("crate_name").unwrap(), "fabrik_cas");
+        assert_eq!(t.attrs.get("edition").unwrap(), "2021");
+        assert_eq!(t.attrs.get("crate_root").unwrap(), "src/lib.rs");
+    }
+
+    #[test]
+    fn cargo_crate_forwards_to_rust_library_by_default() {
+        let targets = load_str(
+            "fabrik.star",
+            r#"cargo_crate(
+    name = "anyhow",
+    crate_name = "anyhow",
+    edition = "2021",
+    crate_root = "src/lib.rs",
+    srcs = ["src/lib.rs"],
+)"#,
+        )
+        .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].kind, "rust_library");
+        assert_eq!(targets[0].attrs.get("crate_name").unwrap(), "anyhow");
+    }
+
+    #[test]
+    fn cargo_crate_forwards_to_proc_macro_when_flagged() {
+        let targets = load_str(
+            "fabrik.star",
+            r#"cargo_crate(
+    name = "serde-derive",
+    crate_name = "serde_derive",
+    crate_root = "src/lib.rs",
+    srcs = ["src/lib.rs"],
+    proc_macro = True,
+)"#,
+        )
+        .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].kind, "rust_proc_macro");
+    }
+
+    #[test]
+    fn cargo_build_script_is_recognised() {
+        let targets = load_str(
+            "fabrik.star",
+            r#"cargo_build_script(
+    name = "build",
+    srcs = ["build.rs"],
+    crate_dir = ".",
+)"#,
+        )
+        .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].kind, "cargo_build_script");
+        assert_eq!(targets[0].attrs.get("crate_dir").unwrap(), ".");
+    }
+
+    #[test]
+    fn rust_proc_macro_is_recognised() {
+        let targets = load_str(
+            "fabrik.star",
+            r#"rust_proc_macro(name = "derive-foo", srcs = ["src/lib.rs"])"#,
+        )
+        .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].kind, "rust_proc_macro");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! `fabrik exec` — cache and execute a literal command.
+//! `fabrik exec` - cache and execute a literal command.
 //!
 //! Substrate-level escape hatch: bypass the target graph and put any
 //! argv through the action cache. Useful for ad-hoc shell-outs and for
@@ -17,7 +17,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use fabrik_cas::Cas;
-use fabrik_core::{Action, CacheState, RunOpts, WorkspacePath};
+use fabrik_core::{Action, CacheState, ResourceRequest, RunOpts, WorkspacePath};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -47,6 +47,8 @@ pub async fn exec(
         env: env.into_iter().collect::<BTreeMap<_, _>>(),
         cwd,
         input_digest: None,
+        outputs: vec![],
+        resources: ResourceRequest::default(),
         timeout_ms,
     };
     let opts = RunOpts { cache_failures };

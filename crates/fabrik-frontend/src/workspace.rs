@@ -7,10 +7,11 @@ use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
 use crate::eval::eval_with;
+use crate::manifest::load_toml_with;
 use crate::target::Target;
-use crate::BUILD_FILE_NAME;
+use crate::{STAR_BUILD_FILE_NAME, TOML_BUILD_FILE_NAME};
 
-/// Load a single `fabrik.star` file from disk and return its targets.
+/// Load a single build file from disk and return its targets.
 /// The file's parent directory is treated as the workspace root and the
 /// package is empty; intended for cases where the caller has already
 /// located one file. Use [`load_workspace`] to walk a tree.
@@ -23,10 +24,13 @@ pub fn load_file(path: &Path) -> Result<Vec<Target>> {
     let workspace_root = path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    eval_with(&display, &src, workspace_root, String::new())
+    match path.file_name().and_then(|n| n.to_str()) {
+        Some(TOML_BUILD_FILE_NAME) => load_toml_with(&display, &src, &workspace_root, ""),
+        _ => eval_with(&display, &src, workspace_root, String::new()),
+    }
 }
 
-/// Recursively scan `root` for `fabrik.star` files and return every
+/// Recursively scan `root` for build files and return every
 /// target they declare, with `Target::package` set to the workspace
 /// path of each enclosing directory.
 ///
@@ -55,7 +59,7 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
             root: root.display().to_string(),
             source,
         })?;
-        if entry.file_type().is_file() && entry.file_name() == BUILD_FILE_NAME {
+        if entry.file_type().is_file() && is_build_file(entry.file_name().to_str()) {
             let parent = entry.path().parent().unwrap_or(root);
             let pkg = parent
                 .strip_prefix(root)
@@ -65,9 +69,7 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
             entries.push((pkg, entry.into_path()));
         }
     }
-    // Sort by package string so the root package ("") comes first and
-    // siblings appear alphabetically.
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
 
     let mut all = Vec::new();
     for (pkg, path) in entries {
@@ -76,14 +78,21 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
             source,
         })?;
         let display = if pkg.is_empty() {
-            format!("//:{BUILD_FILE_NAME}")
+            format!("//:{}", path.file_name().unwrap().to_string_lossy())
         } else {
-            format!("//{pkg}:{BUILD_FILE_NAME}")
+            format!("//{pkg}:{}", path.file_name().unwrap().to_string_lossy())
         };
-        let targets = eval_with(&display, &src, root.to_path_buf(), pkg)?;
+        let targets = match path.file_name().and_then(|n| n.to_str()) {
+            Some(TOML_BUILD_FILE_NAME) => load_toml_with(&display, &src, root, &pkg)?,
+            _ => eval_with(&display, &src, root.to_path_buf(), pkg)?,
+        };
         all.extend(targets);
     }
     Ok(all)
+}
+
+fn is_build_file(name: Option<&str>) -> bool {
+    matches!(name, Some(STAR_BUILD_FILE_NAME | TOML_BUILD_FILE_NAME))
 }
 
 #[cfg(test)]
@@ -132,6 +141,30 @@ mod tests {
             vec!["//:top", "//crates/a:a", "//crates/b:b"],
             "expected three labels in package-sorted order"
         );
+    }
+
+    #[test]
+    fn workspace_walk_loads_toml_build_files() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        std::fs::create_dir_all(root.join("crates/a")).unwrap();
+        std::fs::write(
+            root.join("crates/a/fabrik.toml"),
+            r#"
+[[rust.library]]
+name = "a"
+srcs = ["lib.rs"]
+"#,
+        )
+        .unwrap();
+
+        let labels: Vec<_> = load_workspace(root)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.label())
+            .collect();
+        assert_eq!(labels, vec!["//crates/a:a"]);
     }
 
     #[test]
