@@ -12,8 +12,10 @@ path = "src/main.rs"
 
 [dependencies]
 fabrik-cas.workspace = true
+fabrik-apple.workspace = true
 fabrik-core.workspace = true
 fabrik-frontend.workspace = true
+fabrik-rust.workspace = true
 
 anyhow.workspace = true
 clap.workspace = true

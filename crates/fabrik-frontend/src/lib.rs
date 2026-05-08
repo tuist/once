@@ -1,30 +1,39 @@
-//! `fabrik.star` build-file frontend.
+//! Build-file frontend.
 //!
-//! Embeds `starlark-rust` to load typed Starlark build files. Today the
-//! evaluator recognises a fixed set of Rust target types (`rust_binary`,
-//! `rust_library`, `rust_test`, `cargo_binary`) plus a `glob` primitive,
-//! and records each call as a [`Target`]. The plugin contract that lets
-//! external Starlark modules contribute target types lands later; the
-//! current shape is the built-in slice of that same contract.
+//! Loads declarative `fabrik.toml` package files and the existing
+//! `fabrik.star` Starlark files into a shared [`Target`] IR. TOML is
+//! the agent-friendly path: typed sections, literal values, and stable
+//! diffs. Starlark remains supported for compatibility with existing
+//! packages and tests.
 //!
 //! Module layout:
 //! - [`target`]: the [`Target`] record.
 //! - [`error`]: the [`Error`] enum and [`Result`] alias.
 //! - [`eval`]: the per-thread evaluation state and the `eval_with` driver.
 //! - [`globals`]: the `#[starlark_module]` definitions exposed to user code.
+//! - [`manifest`]: TOML schema lowering into [`Target`]s.
 //! - [`workspace`]: disk-side loaders ([`load_file`], [`load_workspace`]).
 
 mod error;
 mod eval;
 mod globals;
+mod manifest;
 mod prelude;
 mod target;
 mod workspace;
 
 /// The conventional filename for a per-package build file.
-pub const BUILD_FILE_NAME: &str = "fabrik.star";
+pub const STAR_BUILD_FILE_NAME: &str = "fabrik.star";
+
+/// The preferred declarative per-package build file.
+pub const TOML_BUILD_FILE_NAME: &str = "fabrik.toml";
+
+/// Backwards-compatible alias for callers that still refer to the
+/// historical Starlark filename.
+pub const BUILD_FILE_NAME: &str = STAR_BUILD_FILE_NAME;
 
 pub use error::{Error, Result};
 pub use eval::load_str;
+pub use manifest::load_toml_str;
 pub use target::Target;
 pub use workspace::{load_file, load_workspace};

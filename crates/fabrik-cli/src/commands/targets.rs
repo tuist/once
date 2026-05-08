@@ -1,4 +1,4 @@
-//! `fabrik targets` — list every declared target in the workspace.
+//! `fabrik targets` - list every declared target in the workspace.
 
 use std::collections::BTreeMap;
 use std::path::Path;

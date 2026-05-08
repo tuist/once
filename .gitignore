@@ -1,5 +1,6 @@
 /target
 /.fabrik
+/vendor
 *.swp
 .DS_Store
 

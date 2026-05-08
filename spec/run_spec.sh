@@ -90,6 +90,120 @@ EOF
     The path "$WORKSPACE/target/debug/app" should be exist
   End
 
+  It 'runs a task target declared in fabrik.toml'
+    mkdir -p "$WORKSPACE/tasks"
+    cat > "$WORKSPACE/tasks/input.txt" <<'EOF'
+hello task
+EOF
+    cat > "$WORKSPACE/tasks/fabrik.toml" <<'EOF'
+[[task]]
+name = "print"
+argv = ["/bin/sh", "-c", "cat tasks/input.txt"]
+srcs = ["input.txt"]
+EOF
+    When call fabrik run //tasks:print
+    The status should be success
+    The stdout should equal 'hello task'
+    The stderr should include 'cache miss'
+  End
+
+  It 'reuses the cache for a cacheable task target'
+    mkdir -p "$WORKSPACE/tasks"
+    cat > "$WORKSPACE/tasks/input.txt" <<'EOF'
+cached task
+EOF
+    cat > "$WORKSPACE/tasks/fabrik.toml" <<'EOF'
+[[task]]
+name = "print"
+argv = ["/bin/sh", "-c", "cat tasks/input.txt"]
+srcs = ["input.txt"]
+EOF
+    fabrik run //tasks:print >/dev/null 2>&1
+    When call fabrik run //tasks:print
+    The status should be success
+    The stdout should equal 'cached task'
+    The stderr should include 'cache hit'
+  End
+
+  It 'runs an uncached task target every time'
+    mkdir -p "$WORKSPACE/tasks"
+    cat > "$WORKSPACE/tasks/fabrik.toml" <<'EOF'
+[[task]]
+name = "counter"
+argv = ["/bin/sh", "-c", "n=0; [ -f tasks/count ] && n=$(cat tasks/count); n=$((n + 1)); printf \"$n\" > tasks/count; printf \"$n\""]
+cache = false
+EOF
+    fabrik run //tasks:counter >/dev/null 2>&1
+    When call fabrik run //tasks:counter
+    The status should be success
+    The stdout should equal '2'
+    The stderr should include 'cache miss'
+  End
+
+  It 'builds and launches an apple_ios_app target'
+    mkdir -p "$WORKSPACE/bin" "$WORKSPACE/App/Sources"
+    cat > "$WORKSPACE/bin/xcrun" <<'EOF'
+#!/bin/sh
+if [ "$1" = "--sdk" ] && [ "$3" = "--show-sdk-path" ]; then
+  echo "/tmp/fake-iphonesimulator.sdk"
+  exit 0
+fi
+if [ "$1" = "--sdk" ] && [ "$3" = "swiftc" ]; then
+  shift 3
+  exec swiftc "$@"
+fi
+if [ "$1" = "simctl" ]; then
+  echo "$*" >> simctl.log
+  exit 0
+fi
+echo "unexpected xcrun invocation: $*" >&2
+exit 2
+EOF
+    cat > "$WORKSPACE/bin/swiftc" <<'EOF'
+#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+mkdir -p "$(dirname "$out")"
+printf 'fake app binary' > "$out"
+EOF
+    cat > "$WORKSPACE/bin/codesign" <<'EOF'
+#!/bin/sh
+for last do :; done
+app="$last"
+mkdir -p "$app/_CodeSignature"
+printf 'signed' > "$app/_CodeSignature/CodeResources"
+EOF
+    chmod +x "$WORKSPACE/bin/xcrun" "$WORKSPACE/bin/swiftc" "$WORKSPACE/bin/codesign"
+    cat > "$WORKSPACE/App/Sources/App.swift" <<'EOF'
+import SwiftUI
+
+@main
+struct DemoApp: App {
+    var body: some Scene {
+        WindowGroup { Text("Hello") }
+    }
+}
+EOF
+    cat > "$WORKSPACE/App/fabrik.toml" <<'EOF'
+[[apple.ios_app]]
+name = "Demo"
+bundle_id = "dev.fabrik.demo"
+srcs = ["Sources/App.swift"]
+minimum_os = "17.0"
+EOF
+    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" run //App:Demo
+    The status should be success
+    The stderr should include 'cache miss'
+    The contents of file "$WORKSPACE/simctl.log" should include 'simctl install booted'
+    The contents of file "$WORKSPACE/simctl.log" should include 'simctl launch booted dev.fabrik.demo'
+  End
+
   It 'passes mise trust variables to cargo_binary actions'
     mkdir -p "$WORKSPACE/bin" "$WORKSPACE/src"
     cat > "$WORKSPACE/bin/cargo" <<EOF

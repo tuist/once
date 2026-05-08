@@ -7,7 +7,7 @@ export REPO_ROOT FABRIK_BIN
 
 spec_helper_precheck() {
   if [ ! -x "$FABRIK_BIN" ]; then
-    abort "fabrik binary missing at $FABRIK_BIN — run 'cargo build --release' first"
+    abort "fabrik binary missing at $FABRIK_BIN - run 'cargo build --release' first"
   fi
 }
 

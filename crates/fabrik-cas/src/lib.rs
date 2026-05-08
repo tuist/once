@@ -40,19 +40,27 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Cached result of a single action execution.
+///
+/// `outputs` records each declared output file the action produced
+/// (workspace-relative path -> blob digest). On a cache hit, the runner
+/// restores these blobs from the CAS to their declared paths so a
+/// dependent action sees the file it expected, even if the producing
+/// action did not actually run on this machine.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionResult {
     pub exit_code: i32,
     pub stdout: Digest,
     pub stderr: Digest,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub outputs: std::collections::BTreeMap<String, Digest>,
 }
 
 /// Local content-addressed store rooted at a workspace `.fabrik/`
 /// directory.
 ///
 /// Layout:
-/// - `cas/<aa>/<rest-of-hex>` — blob bodies, sharded by first byte.
-/// - `actions/<aa>/<rest-of-hex>.json` — action results, same sharding.
+/// - `cas/<aa>/<rest-of-hex>` - blob bodies, sharded by first byte.
+/// - `actions/<aa>/<rest-of-hex>.json` - action results, same sharding.
 ///
 /// `open` is cheap and side-effect-free; the directory tree is created
 /// lazily on the first write. A read-only consumer never touches disk
@@ -98,7 +106,7 @@ impl Cas {
         Self::shard_path(&self.actions_dir(), digest, ".json")
     }
 
-    /// Store a blob; returns its digest. Idempotent — putting the same
+    /// Store a blob; returns its digest. Idempotent - putting the same
     /// bytes twice is safe even from concurrent writers.
     pub async fn put_blob(&self, bytes: &[u8]) -> Result<Digest> {
         let digest = Digest::of_bytes(bytes);
@@ -113,7 +121,7 @@ impl Cas {
     /// Stream `reader` into the CAS, returning the content's digest.
     ///
     /// Memory use is bounded by `STREAM_CHUNK` regardless of the input
-    /// size — this is the path subprocess stdout/stderr go through, so
+    /// size - this is the path subprocess stdout/stderr go through, so
     /// a multi-GB linker log doesn't OOM the executor. The stream is
     /// hashed and written to a scratch file in one pass; on completion
     /// the scratch file is renamed into place (or discarded if the
@@ -422,6 +430,7 @@ mod tests {
             exit_code: 0,
             stdout,
             stderr,
+            outputs: std::collections::BTreeMap::new(),
         };
         cas.put_action_result(&action, &result).await.unwrap();
         assert_eq!(cas.get_action_result(&action).await.unwrap(), Some(result));
@@ -445,11 +454,12 @@ mod tests {
             exit_code: 0,
             stdout,
             stderr: stdout,
+            outputs: std::collections::BTreeMap::new(),
         };
         cas.put_action_result(&key, &result).await.unwrap();
         assert!(cas.forget_action(&key).await.unwrap());
         assert_eq!(cas.get_action_result(&key).await.unwrap(), None);
-        // Blob is untouched — multiple actions may share a stdout blob.
+        // Blob is untouched - multiple actions may share a stdout blob.
         assert_eq!(cas.get_blob(&stdout).await.unwrap(), b"x");
         // Forgetting again is a no-op.
         assert!(!cas.forget_action(&key).await.unwrap());
@@ -482,6 +492,7 @@ mod tests {
                 exit_code: 0,
                 stdout,
                 stderr: stdout,
+                outputs: std::collections::BTreeMap::new(),
             },
         )
         .await
@@ -625,6 +636,7 @@ mod tests {
                 exit_code: 0,
                 stdout,
                 stderr: stdout,
+                outputs: std::collections::BTreeMap::new(),
             },
         )
         .await
