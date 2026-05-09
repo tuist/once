@@ -117,23 +117,38 @@ impl Cas {
     /// a multi-GB linker log doesn't OOM the executor. The stream is
     /// hashed and written to a scratch file in one pass; on completion
     /// the scratch file is renamed into place (or discarded if the
-    /// blob already exists).
-    pub async fn put_stream<R: AsyncRead + Unpin>(&self, mut reader: R) -> Result<Digest> {
+    /// blob already exists). On any error along the way the scratch
+    /// file is removed; a crashed writer leaves at most one orphaned
+    /// `scratch/stream-*` that future cache invocations ignore.
+    pub async fn put_stream<R: AsyncRead + Unpin>(&self, reader: R) -> Result<Digest> {
         let scratch = self.scratch_dir();
         ensure_dir(&scratch).await?;
         let pid = process::id();
         let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let tmp = scratch.join(format!("stream-{pid}-{seq}"));
 
-        let mut file = File::create(&tmp).await.map_err(|source| Error::Io {
-            path: tmp.clone(),
+        // Run the body and clean up the scratch file on any error.
+        let outcome = self.put_stream_inner(reader, &tmp).await;
+        if outcome.is_err() {
+            let _ = fs::remove_file(&tmp).await;
+        }
+        outcome
+    }
+
+    async fn put_stream_inner<R: AsyncRead + Unpin>(
+        &self,
+        mut reader: R,
+        tmp: &Path,
+    ) -> Result<Digest> {
+        let mut file = File::create(tmp).await.map_err(|source| Error::Io {
+            path: tmp.to_path_buf(),
             source,
         })?;
         let mut hasher = blake3::Hasher::new();
         let mut buf = vec![0u8; STREAM_CHUNK];
         loop {
             let n = reader.read(&mut buf).await.map_err(|source| Error::Io {
-                path: tmp.clone(),
+                path: tmp.to_path_buf(),
                 source,
             })?;
             if n == 0 {
@@ -143,12 +158,12 @@ impl Cas {
             file.write_all(&buf[..n])
                 .await
                 .map_err(|source| Error::Io {
-                    path: tmp.clone(),
+                    path: tmp.to_path_buf(),
                     source,
                 })?;
         }
         file.sync_all().await.map_err(|source| Error::Io {
-            path: tmp.clone(),
+            path: tmp.to_path_buf(),
             source,
         })?;
         drop(file);
@@ -158,19 +173,18 @@ impl Cas {
 
         if fs::try_exists(&final_path).await.unwrap_or(false) {
             // Another writer beat us, or this content is already cached.
-            let _ = fs::remove_file(&tmp).await;
+            let _ = fs::remove_file(tmp).await;
             return Ok(digest);
         }
 
         let parent = final_path.parent().expect("shard path has parent");
         ensure_dir(parent).await?;
-        if let Err(source) = fs::rename(&tmp, &final_path).await {
-            let _ = fs::remove_file(&tmp).await;
-            return Err(Error::Io {
-                path: final_path,
+        fs::rename(tmp, &final_path)
+            .await
+            .map_err(|source| Error::Io {
+                path: final_path.clone(),
                 source,
-            });
-        }
+            })?;
         fsync_dir(parent).await?;
         Ok(digest)
     }
@@ -535,6 +549,44 @@ mod tests {
         let d = cas.put_stream(&payload[..]).await.unwrap();
         assert_eq!(d, Digest::of_bytes(&payload));
         assert_eq!(cas.get_blob(&d).await.unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn put_stream_cleans_up_scratch_on_read_error() {
+        use std::io;
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+        use tokio::io::ReadBuf;
+
+        struct ExplodingReader;
+        impl AsyncRead for ExplodingReader {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                _buf: &mut ReadBuf<'_>,
+            ) -> Poll<io::Result<()>> {
+                Poll::Ready(Err(io::Error::other("synthetic read failure")))
+            }
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let err = cas.put_stream(ExplodingReader).await.unwrap_err();
+        assert!(matches!(err, Error::Io { .. }));
+
+        // The scratch directory must contain no `stream-*` leftovers.
+        let scratch = cas.scratch_dir();
+        if scratch.exists() {
+            let mut entries = fs::read_dir(&scratch).await.unwrap();
+            while let Some(entry) = entries.next_entry().await.unwrap() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                assert!(
+                    !name.starts_with("stream-"),
+                    "leftover scratch file: {name}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

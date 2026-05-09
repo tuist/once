@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::{self, Read};
 
 use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
@@ -13,6 +14,23 @@ impl Digest {
 
     pub fn of_bytes(bytes: &[u8]) -> Self {
         Self(*blake3::hash(bytes).as_bytes())
+    }
+
+    /// Hash a streaming reader without buffering its full contents in
+    /// memory. Reads in 64 KiB chunks, so peak memory is independent of
+    /// the input size.
+    pub fn of_reader(mut reader: impl Read) -> io::Result<Self> {
+        const CHUNK: usize = 64 * 1024;
+        let mut hasher = blake3::Hasher::new();
+        let mut buf = vec![0u8; CHUNK];
+        loop {
+            let n = reader.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        Ok(Self(*hasher.finalize().as_bytes()))
     }
 
     pub fn from_bytes(bytes: [u8; Self::LEN]) -> Self {
@@ -89,6 +107,20 @@ mod tests {
         assert!(Digest::from_hex("ABCD").is_none());
         assert!(Digest::from_hex(&"a".repeat(63)).is_none());
         assert!(Digest::from_hex(&"A".repeat(64)).is_none());
+    }
+
+    #[test]
+    fn of_reader_matches_of_bytes() {
+        let payload: Vec<u8> = (0..200_000u32).map(|i| (i & 0xff) as u8).collect();
+        let from_bytes = Digest::of_bytes(&payload);
+        let from_reader = Digest::of_reader(payload.as_slice()).unwrap();
+        assert_eq!(from_bytes, from_reader);
+    }
+
+    #[test]
+    fn of_reader_handles_empty_input() {
+        let empty: &[u8] = &[];
+        assert_eq!(Digest::of_reader(empty).unwrap(), Digest::of_bytes(empty));
     }
 
     #[test]
