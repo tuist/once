@@ -57,31 +57,31 @@ EOF
     copy_examples
     When call fabrik targets
     The status should be success
-    The stdout should include '//examples/rust-app:greeting'
-    The stdout should include '//examples/rust-app:hello'
-    The stdout should include '//examples/rust-app:greeting_test'
-    The stdout should include '//examples/ios-app:Demo'
+    The stdout should include '//examples/rust/granular/basic-app:greeting'
+    The stdout should include '//examples/rust/granular/basic-app:hello'
+    The stdout should include '//examples/rust/granular/basic-app:greeting_test'
+    The stdout should include '//examples/apple/ios/simulator-app:Demo'
   End
 
   It 'builds and runs the checked-in Rust example'
     copy_examples
-    fabrik build //examples/rust-app:hello >/dev/null 2>&1
-    When call "$WORKSPACE/.fabrik/out/examples/rust-app/hello"
+    fabrik build //examples/rust/granular/basic-app:hello >/dev/null 2>&1
+    When call "$WORKSPACE/.fabrik/out/examples/rust/granular/basic-app/hello"
     The status should be success
     The stdout should equal 'Hello, Rust, from Fabrik'
   End
 
   It 'reuses the cache for the checked-in Rust example build'
     copy_examples
-    fabrik build //examples/rust-app:hello >/dev/null 2>&1
-    When call fabrik build //examples/rust-app:hello
+    fabrik build //examples/rust/granular/basic-app:hello >/dev/null 2>&1
+    When call fabrik build //examples/rust/granular/basic-app:hello
     The status should be success
     The stderr should include '2 nodes, 2 hit, 0 miss'
   End
 
   It 'builds and runs tests from the checked-in Rust example'
     copy_examples
-    When call fabrik test //examples/rust-app:greeting_test
+    When call fabrik test //examples/rust/granular/basic-app:greeting_test
     The status should be success
     The stdout should include 'test result: ok'
     The stderr should include 'build 2 nodes'
@@ -89,8 +89,8 @@ EOF
 
   It 'reuses the cache for the checked-in Rust example tests'
     copy_examples
-    fabrik test //examples/rust-app:greeting_test >/dev/null 2>&1
-    When call fabrik test //examples/rust-app:greeting_test
+    fabrik test //examples/rust/granular/basic-app:greeting_test >/dev/null 2>&1
+    When call fabrik test //examples/rust/granular/basic-app:greeting_test
     The status should be success
     The stdout should include 'test result: ok'
     The stderr should include 'test cache hit'
@@ -99,19 +99,19 @@ EOF
   It 'builds the checked-in iOS example with the Apple plugin'
     copy_examples
     fake_apple_tools
-    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build //examples/ios-app:Demo
+    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build //examples/apple/ios/simulator-app:Demo
     The status should be success
     The stderr should include 'apple_ios_app'
-    The path "$WORKSPACE/.fabrik/out/examples/ios-app/Demo.app" should be directory
-    The path "$WORKSPACE/.fabrik/out/examples/ios-app/Demo.app/Info.plist" should be file
-    The path "$WORKSPACE/.fabrik/out/examples/ios-app/Demo.app/Demo" should be file
+    The path "$WORKSPACE/.fabrik/out/examples/apple/ios/simulator-app/Demo.app" should be directory
+    The path "$WORKSPACE/.fabrik/out/examples/apple/ios/simulator-app/Demo.app/Info.plist" should be file
+    The path "$WORKSPACE/.fabrik/out/examples/apple/ios/simulator-app/Demo.app/Demo" should be file
   End
 
   It 'reuses the cache for the checked-in iOS example build'
     copy_examples
     fake_apple_tools
-    env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build //examples/ios-app:Demo >/dev/null 2>&1
-    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build //examples/ios-app:Demo
+    env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build //examples/apple/ios/simulator-app:Demo >/dev/null 2>&1
+    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build //examples/apple/ios/simulator-app:Demo
     The status should be success
     The stderr should include '1 nodes, 1 hit, 0 miss'
   End
@@ -119,7 +119,7 @@ EOF
   It 'launches the checked-in iOS example through simctl'
     copy_examples
     fake_apple_tools
-    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" run //examples/ios-app:Demo
+    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" run //examples/apple/ios/simulator-app:Demo
     The status should be success
     The stderr should include 'cache miss'
     The contents of file "$WORKSPACE/simctl.log" should include 'simctl install booted'
@@ -129,9 +129,9 @@ EOF
   It 'keeps iOS launch uncached while reusing the cached app build'
     copy_examples
     fake_apple_tools
-    env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build //examples/ios-app:Demo >/dev/null 2>&1
+    env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build //examples/apple/ios/simulator-app:Demo >/dev/null 2>&1
     rm -f "$WORKSPACE/swiftc.log"
-    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" run //examples/ios-app:Demo
+    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" run //examples/apple/ios/simulator-app:Demo
     The status should be success
     The stderr should include 'cache miss'
     The path "$WORKSPACE/swiftc.log" should not be exist
