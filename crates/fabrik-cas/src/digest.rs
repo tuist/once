@@ -17,19 +17,12 @@ impl Digest {
     }
 
     /// Hash a streaming reader without buffering its full contents in
-    /// memory. Reads in 64 KiB chunks, so peak memory is independent of
-    /// the input size.
+    /// memory. Delegates the read loop to `blake3::Hasher::update_reader`,
+    /// which uses internally-tuned chunking, so peak memory is bounded
+    /// regardless of the input size.
     pub fn of_reader(mut reader: impl Read) -> io::Result<Self> {
-        const CHUNK: usize = 64 * 1024;
         let mut hasher = blake3::Hasher::new();
-        let mut buf = vec![0u8; CHUNK];
-        loop {
-            let n = reader.read(&mut buf)?;
-            if n == 0 {
-                break;
-            }
-            hasher.update(&buf[..n]);
-        }
+        hasher.update_reader(&mut reader)?;
         Ok(Self(*hasher.finalize().as_bytes()))
     }
 
