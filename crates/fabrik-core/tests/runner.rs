@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use fabrik_cas::Cas;
-use fabrik_core::{Action, CacheState, RunOpts, Runner, WorkspacePath};
+use fabrik_core::{Action, CacheState, ResourceRequest, RunOpts, Runner, WorkspacePath};
 use tempfile::TempDir;
 
 fn ws() -> (TempDir, Runner) {
@@ -24,6 +24,8 @@ fn cmd(script: &str) -> Action {
         env: BTreeMap::new(),
         cwd: None,
         input_digest: None,
+        outputs: vec![],
+        resources: ResourceRequest::default(),
         timeout_ms: Some(10_000),
     }
 }
@@ -82,6 +84,8 @@ async fn cache_keys_partition_by_workspace_path() {
         env: BTreeMap::new(),
         cwd: Some(WorkspacePath::try_from(sub).unwrap()),
         input_digest: None,
+        outputs: vec![],
+        resources: ResourceRequest::default(),
         timeout_ms: Some(5_000),
     };
     let a = runner.run(&mk("a")).await.unwrap();
@@ -116,6 +120,8 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         env: BTreeMap::new(),
         cwd: None,
         input_digest: None,
+        outputs: vec![],
+        resources: ResourceRequest::default(),
         timeout_ms: Some(5_000),
     };
     let outcome = runner_fail.run(&bad).await.unwrap();
@@ -128,6 +134,8 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         env: BTreeMap::new(),
         cwd: None,
         input_digest: None,
+        outputs: vec![],
+        resources: ResourceRequest::default(),
         timeout_ms: Some(5_000),
     };
     let outcome = runner_fail.run(&good).await.unwrap();
@@ -149,7 +157,7 @@ async fn isolated_workspaces_have_independent_caches() {
     let in_a = runner_a.run(&action).await.unwrap();
     assert_eq!(in_a.cache, CacheState::Miss);
 
-    // Same action against B is still a miss — caches are per-workspace.
+    // Same action against B is still a miss - caches are per-workspace.
     let in_b = runner_b.run(&action).await.unwrap();
     assert_eq!(in_b.cache, CacheState::Miss);
 }

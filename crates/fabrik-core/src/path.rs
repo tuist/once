@@ -31,7 +31,7 @@ pub enum WorkspacePathError {
 pub struct WorkspacePath(String);
 
 impl WorkspacePath {
-    /// The empty path — equivalent to "the workspace root".
+    /// The empty path - equivalent to "the workspace root".
     pub fn root() -> Self {
         Self(String::new())
     }

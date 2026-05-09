@@ -37,6 +37,19 @@ EOF
     The stdout should equal 'rust_binary //pkg:pkg'
   End
 
+  It 'lists targets declared in fabrik.toml'
+    mkdir -p "$WORKSPACE/pkg/src"
+    : > "$WORKSPACE/pkg/src/lib.rs"
+    cat > "$WORKSPACE/pkg/fabrik.toml" <<'EOF'
+[[rust.library]]
+name = "pkg"
+srcs = ["src/lib.rs"]
+EOF
+    When call fabrik targets
+    The status should be success
+    The stdout should equal 'rust_library //pkg:pkg'
+  End
+
   It 'skips hidden directories like .fabrik and .git'
     cat > "$WORKSPACE/fabrik.star" <<'EOF'
 rust_binary(name = "visible", srcs = ["main.rs"])

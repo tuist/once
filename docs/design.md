@@ -33,7 +33,7 @@ This section exists because every architectural decision below is a reaction to 
 
 | Bazel mistake | Our response |
 |---|---|
-| Untyped Starlark, weakly-typed providers, sprawling rule complexity | Typed Starlark via `starlark-rust` (Buck2 dialect); typed providers and target schemas; one extension concept |
+| Untyped Starlark, weakly-typed providers, sprawling rule complexity | TOML declarations validated against plugin-owned schemas; first-party plugins emit typed graph fragments |
 | Four overlapping extension mechanisms (macros, rules, aspects, repository rules) | One concept: a plugin is a pure function that emits typed graph fragments |
 | BUILD files require manual enumeration of every source and dep | Globs and language-aware discovery are first-class, with deterministic resolution |
 | WORKSPACE → MODULE.bazel migration, still ongoing | One module file from day one. Versioned. Stable. |
@@ -53,12 +53,12 @@ This section exists because every architectural decision below is a reaction to 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  Frontend                                                        │
-│   • Build definition language (typed Starlark)                   │
-│   • Plugin host (starlark-rust, in-process)                      │
+│   • Build definition language (TOML declarations)                │
+│   • Plugin host (schema registry + Rust planners)                │
 ├──────────────────────────────────────────────────────────────────┤
 │  Coordinator                                                     │
 │   • Graph model (typed, persistent, queryable)                   │
-│   • Scheduler (local + remote workers)                           │
+│   • Scheduler (bounded local + remote workers)                   │
 │   • Query API (gRPC, primary interface)                          │
 │   • Telemetry router (OTel + structured event log)               │
 │   • Error provenance store                                       │
@@ -98,74 +98,77 @@ Owns:
 
 ### 2.3 Frontend
 
-The build definition language and plugin host. Build definitions and plugins are both written in typed Starlark, evaluated in-process via `starlark-rust` (the implementation Buck2 uses). Build files are pure data. Plugins are pure functions from typed inputs to typed action graphs. There is no other way to extend Fabrik.
+The build definition language and plugin host. Build files are TOML so agents can generate, validate, and patch them with ordinary structured-data tooling. The frontend validates those declarations against schemas contributed by plugins, then asks the owning plugin to emit typed graph fragments.
 
-The plugin author writes Starlark; impure work (subprocess execution, output parsing, depfile handling) lives in Rust handlers in the substrate that the plugin references by name. The Starlark side stays deterministic by construction; the substrate is responsible for hermetic execution of the actions the plugin declares.
+Plugins are Rust modules with explicit schemas and action planners. First-party plugins for hard ecosystems (Rust, Go, Swift/Apple, Android) ship in the Fabrik binary and are maintained with the core build system. Third-party plugins use the same schema and planning contracts once the external distribution story is ready.
 
 ## 3. Build definition language
 
 ### 3.1 Core
 
-Typed Starlark, evaluated in-process via `starlark-rust`. The Buck2 dialect with type annotations on all functions and providers. Reference points: Buck2's prelude, Bazel BUILD files (the surface a typical user writes, not the rule-author surface).
+Build files are named `fabrik.toml`. Each package directory can contain one file. TOML is deliberately less expressive than Starlark: declarations are data, not programs. The payoff is that agents can write and edit build files with normal parsers, schemas, diffs, and validation loops.
 
-A `fabrik.star` file looks like this (each package directory holds one; plugin and SDK modules use the same `.star` extension):
+A `fabrik.toml` file looks like this:
 
-```python
-load("//build/rust.star", "rust_binary", "rust_test")
+```toml
+[[rust.library]]
+name = "core"
+srcs = ["src/lib.rs"]
 
-rust_binary(
-    name = "api",
-    srcs = glob(["src/**/*.rs"]),
-    deps = [
-        "//lib/core",
-        "//lib/proto:rust",
-        "@crates//tokio",
-    ],
-    visibility = ["//services/..."],
-)
+[[rust.binary]]
+name = "api"
+srcs = ["src/main.rs"]
+deps = [":core", "//lib/proto:rust"]
 
-rust_test(
-    name = "api_test",
-    srcs = glob(["tests/**/*.rs"]),
-    deps = [":api", "@crates//tokio-test"],
-)
+[[rust.test]]
+name = "api_test"
+srcs = ["tests/api.rs"]
+deps = [":core"]
 ```
 
 The language has:
-- Static typing on plugin-declared target functions (a plugin's `rust_binary` declares `srcs: list[str]`, `deps: list[str]`, etc., and the evaluator enforces it).
-- Typed providers (records produced by one target and consumed by another).
-- Imports via `load("//path/to/file.star", "symbol")`.
-- Pure functions for data transformation (`glob`, `select`, `map`, `filter`).
-- No mutable state at module scope, no I/O at evaluation time, no recursion past Starlark's bounded recursion limit.
+- Schema validation from plugin-owned target declarations.
+- Deterministic target labels derived from package path, target kind, and target name.
+- Structured attributes with predictable error locations.
+- No user-defined functions, imports, mutation, or I/O.
+- Optional generated TOML from importers when a native manifest is the source of truth.
 
-### 3.2 Computation: Starlark plugins
+### 3.2 Computation: plugin planners
 
-When you need real computation, generating N targets from a manifest, polyglot stitching, conditional logic beyond what `select` covers, you write a plugin. A plugin is a Starlark module that defines target types (functions that take typed kwargs and emit graph nodes) and exports them via a `fabrik_plugin(...)` declaration.
+When computation is needed, it belongs in a plugin planner, not in the build file. A plugin owns:
 
-Plugins are pure Starlark. They cannot do I/O, spawn subprocesses, or read arbitrary files. What they can do:
+- The target schemas it accepts.
+- Importers that translate native manifests into TOML or graph fragments.
+- Planners that turn validated declarations into typed actions.
+- Runtime handlers for ecosystem-specific work such as parsing rustc JSON output, Swift bundle metadata, depfiles, and diagnostics.
 
-- Declare target types with typed schemas.
-- Compute target graphs from typed inputs (including the result of `glob`, which the host evaluates against the workspace as a typed primitive).
-- Emit `Action` records (typed: `command`, `inputs`, `outputs`, `env`, `cache_key_extras`) that the substrate runs.
-- Reference Rust handlers in the substrate by name when an action requires plugin-specific runtime work (parsing rustc JSON output, depfile handling, swiftc module map computation). The Starlark side names the handler; the Rust side implements it. Bundled handlers ship with the plugin.
-
-This replaces Bazel's macros, rules, aspects, and repository rules with **one concept**: a typed Starlark function that emits a typed graph fragment.
+This replaces Bazel's macros, rules, aspects, and repository rules with one concept: a plugin-owned schema plus a planner that emits typed graph fragments.
 
 ### 3.3 Configuration profiles
 
-```python
-profile(
-    name = "release_linux_x64",
-    platform = "linux/x86_64",
-    rust = rust_settings(toolchain = "stable-1.78", opt_level = 3, lto = "thin"),
-    c = c_settings(toolchain = "clang-18", opt_level = 3, sanitizers = []),
-)
+```toml
+[[profile]]
+name = "release_linux_x64"
+platform = "linux/x86_64"
 
-profile(
-    name = "debug_macos_arm64",
-    platform = "macos/aarch64",
-    rust = rust_settings(toolchain = "stable-1.78", opt_level = 0, debug = True),
-)
+[profile.rust]
+toolchain = "stable-1.78"
+opt_level = 3
+lto = "thin"
+
+[profile.c]
+toolchain = "clang-18"
+opt_level = 3
+sanitizers = []
+
+[[profile]]
+name = "debug_macos_arm64"
+platform = "macos/aarch64"
+
+[profile.rust]
+toolchain = "stable-1.78"
+opt_level = 0
+debug = true
 ```
 
 A profile is a typed bundle of toolchain selections, build settings, and platform constraints. Replaces Bazel's `--config` sprawl, transitions, toolchains, and platforms with one concept.
@@ -174,48 +177,28 @@ Cache namespaces are partitioned by profile. Same inputs + same profile → same
 
 ## 4. Plugin model
 
-A plugin is a Starlark module that declares typed target functions and registers them with `fabrik_plugin(...)`. The module is loaded into the same `starlark-rust` evaluator that loads user `fabrik.star` files; there is no host/plugin boundary at the language level.
+First-party plugins are Rust crates that register target schemas, importers, planners, runtime handlers, and query extensions. Users write the plugin's declarations in TOML; the plugin turns those declarations into typed actions.
 
-```python
-load("//fabrik/sdk.star", "fabrik_plugin", "resolution", "execution")
+```toml
+[[plugin]]
+name = "rust"
+version = "1.0.0"
 
-# Declared-mode entry points. Users write these directly in fabrik.star files.
-def rust_binary(name, srcs, deps = [], visibility = None, ...):
-    return _rust_target(kind = "binary", name = name, srcs = srcs, deps = deps, ...)
+[[rust.library]]
+name = "core"
+srcs = ["src/lib.rs"]
 
-def rust_library(name, srcs, deps = [], visibility = None, ...):
-    return _rust_target(kind = "library", name = name, srcs = srcs, deps = deps, ...)
+[[rust.binary]]
+name = "api"
+srcs = ["src/main.rs"]
+deps = [":core"]
 
-# Adopted-mode entry point. Reads Cargo.toml, generates declared-mode targets internally.
-def rust_workspace(name, manifest = "Cargo.toml", ...):
-    return _rust_workspace(name = name, manifest = manifest, ...)
-
-fabrik_plugin(
-    name = "rust",
-    version = "1.0.0",
-    target_types = {
-        "rust_binary": rust_binary,
-        "rust_library": rust_library,
-        "rust_test": rust_test,
-        "rust_proc_macro": rust_proc_macro,
-        "rust_workspace": rust_workspace,
-    },
-    # Declared-mode targets are reimplemented; adopted-mode targets are cooperative.
-    integration = {
-        "rust_binary": execution(mode = "reimplemented", sandbox = "strict"),
-        "rust_library": execution(mode = "reimplemented", sandbox = "strict"),
-        "rust_test": execution(mode = "reimplemented", sandbox = "strict"),
-        "rust_proc_macro": execution(mode = "reimplemented", sandbox = "strict"),
-        "rust_workspace": resolution(mode = "cooperative", tool = "cargo",
-                                     inputs = ["Cargo.toml", "Cargo.lock"]),
-    },
-    cache_key_inputs = ["srcs", "deps", "rustc_version", "features", "profile.rust"],
-    queries = ["transitive_crates", "feature_set", "build_script_outputs"],
-    handlers = ["rust.rustc_invoke", "rust.parse_diagnostics", "rust.cargo_metadata"],
-)
+[[rust.workspace]]
+name = "adopted"
+manifest = "Cargo.toml"
 ```
 
-The `handlers` field names Rust handlers in the substrate that the plugin's actions reference. Bundled handlers ship with the plugin distribution.
+The Rust plugin owns schemas for `rust.library`, `rust.binary`, `rust.test`, `rust.proc_macro`, and adopted Cargo targets. It also owns importers such as `cargo metadata` to generate declarations or graph fragments from native manifests.
 
 ### 4.1 The three integration modes
 
@@ -242,8 +225,8 @@ This is the single biggest cultural difference from Bazel. Bazel claims total kn
 ### 4.3 Plugin distribution and versioning
 
 - Plugin API has semver. Workspaces declare plugin versions. Breakage is detected, not silent.
-- A plugin is a Starlark module plus a set of Rust handlers. Built-in plugins (rust, c, go, ...) ship inside the Fabrik binary; their Starlark sources are embedded and their handlers compiled in.
-- Third-party plugins ship as a (Starlark module, handler binary) bundle pinned by URL+digest. The handler binary is invoked by the substrate as a long-lived subprocess speaking a typed protocol (this is the only IPC boundary in the system; the Starlark layer never leaves the host process). Registry-based distribution is a follow-up to URL+digest pinning.
+- A first-party plugin is a Rust module with schemas, importers, planners, handlers, and query methods. Built-in plugins ship inside the Fabrik binary.
+- Third-party plugins ship as a schema bundle plus a handler binary pinned by URL and digest. The handler binary is invoked by the substrate as a long-lived subprocess speaking a typed protocol. Registry-based distribution is a follow-up to URL and digest pinning.
 - Plugin schemas (target types, providers, query methods) are versioned independently of plugin code.
 - A target compiled with plugin v1.2 can be cache-shared with a target compiled with plugin v1.3 only if the plugin declares schema compatibility. Otherwise, separate cache namespaces.
 
@@ -251,12 +234,11 @@ This is the single biggest cultural difference from Bazel. Bazel claims total kn
 
 ### 5.1 Hermeticity is per-target, declared, queryable
 
-```fabrik
-target "build_with_system_lib" {
-  kind = "c_binary"
-  srcs = ["main.c"]
-  hermeticity = "loose"  # explicitly opted in; we link against /usr/lib/libfoo
-}
+```toml
+[[c.binary]]
+name = "build_with_system_lib"
+srcs = ["main.c"]
+hermeticity = "loose" # explicit opt-in; links against /usr/lib/libfoo
 ```
 
 Every cache entry stores its hermeticity level. `fabrik why-cached //x` tells you whether the result came from a `strict`, `traced`, or `loose` cache hit. Agents can filter cache hits by hermeticity for high-reliability operations.
@@ -279,6 +261,30 @@ Operators can:
 - Invalidate by predicate (plugin, version range, platform, age).
 - Audit cache hits (`fabrik cache audit //x` shows the chain of inputs).
 - Pin specific results as known-good or known-bad.
+
+### 5.4 Remote execution and resource bounds
+
+Fabrik uses Bazel's Remote Execution API at the wire boundary: CAS, action cache, and execution service. That lets Fabrik use existing REAPI servers such as BuildBuddy, Buildbarn, NativeLink, and EngFlow without asking teams to run a new backend.
+
+The local executor and remote executor share one action model:
+
+- `Action` is the cache and execution boundary.
+- Declared outputs are restored from CAS on cache hits.
+- `ResourceRequest` describes scheduling requirements such as `cpu_slots` and `memory_bytes`.
+- REAPI platform properties carry the same resource requirements for remote workers.
+- Non-build tasks such as simulator launch and interactive process control are modeled as uncached runtime actions.
+
+Resource bounding is mandatory, not an optimization. The scheduler owns separate pools for:
+
+- Local CPU slots.
+- Optional local memory bytes.
+- Remote execution queue depth.
+- Remote output download bytes in flight.
+- Prefetch work that is useful soon but not yet on the critical path.
+
+The prefetch strategy should beat Bazel by avoiding eager output materialization. The scheduler first checks action-cache entries for ready and soon-ready nodes, then downloads only the metadata and output digests. File contents are pulled lazily when a downstream local action needs them, while remote-only downstream actions can keep passing CAS digests through the graph. Prefetch gets its own resource budget so it cannot starve work that is already ready to run.
+
+Agent-facing diagnostics must expose the queue, not just the final failure. The query API should include resource snapshots, queue wait reasons, remote cache lookup timing, and why an action ran locally instead of remotely.
 
 ## 6. Introspection: the agent-native interface
 
@@ -329,7 +335,7 @@ These are not features Fabrik ships; they are **uses of the API that agents natu
 
 The CLI surface is deliberately small. Two production verbs:
 
-- `fabrik run //pkg:name`: execute the action(s) that produce the named target. The verb is uniform across target kinds. For a `rust_binary` it runs rustc; for a future `binary_run` wrapper it would run rustc and then exec the resulting binary; for a `command` target it runs the literal command. The composition is in the build-file declarations, not in the CLI.
+- `fabrik run //pkg:name`: execute the action(s) that produce the named target. The verb is uniform across target kinds. For a `rust.binary` it runs rustc; for a `task` target it runs the declared command. The composition is in the build-file declarations, not in the CLI.
 - `fabrik exec -- <argv>`: cache and execute a literal command without touching the target graph. Substrate-level escape hatch for ad-hoc shell-outs and for exercising the cache directly.
 
 Plus thin introspection verbs (`fabrik targets`, `fabrik cache stats`) that are clients of the query API, not parallel implementations.
@@ -375,14 +381,14 @@ The CLI renders these as human-readable; agents consume the JSON directly.
 
 Dev servers are not builds. They are supervised processes with their own incremental logic. Modeling them as `service` targets:
 
-```fabrik
-service "frontend_dev" {
-  kind = "vite_dev"
-  workspace = "//apps/web"
-  watches = glob("apps/web/src/**")
-  port = 5173
-  depends_on_build = ["//apps/web:assets"]
-}
+```toml
+[[service]]
+name = "frontend_dev"
+kind = "vite_dev"
+workspace = "//apps/web"
+watches = ["apps/web/src/**"]
+port = 5173
+depends_on_build = ["//apps/web:assets"]
 ```
 
 The coordinator launches and supervises; it does not own the dev tool's incremental graph. Vite owns its own world inside the service; we own the supervision and the cross-language deps that feed it.
@@ -395,7 +401,7 @@ This section is honest about variance. Same architecture; different fidelities.
 
 The Rust plugin exposes both a declared-mode and an adopted-mode entry point. Same plugin, two faces.
 
-**Declared mode** (`rust_binary`, `rust_library`, `rust_test`, `rust_proc_macro`). The Bazel/Buck2 posture: targets are declared in `fabrik.star` files, Fabrik is the source of truth, hermeticity defaults to `strict`.
+**Declared mode** (`rust.binary`, `rust.library`, `rust.test`, `rust.proc_macro`). The Bazel/Buck2 posture: targets are declared in `fabrik.toml` files, Fabrik is the source of truth, hermeticity defaults to `strict`.
 
 - **Resolution**: reimplemented. The dependency graph comes from declared `deps` in the target stanza.
 - **Execution**: reimplemented. Direct `rustc` invocations with `--extern` per dep.
@@ -403,7 +409,7 @@ The Rust plugin exposes both a declared-mode and an adopted-mode entry point. Sa
 - **Proc macros**: separate host-platform compilation pass via a profile transition.
 - **What it's good for**: Fabrik's own build; new Rust projects that want full graph control; cross-language stitching where the typed graph matters.
 
-**Adopted mode** (`rust_workspace`). The drop-in posture: point at a `Cargo.toml`, get caching immediately.
+**Adopted mode** (`rust.workspace`). The drop-in posture: point at a `Cargo.toml`, get caching immediately.
 
 - **Resolution**: cooperative via `cargo metadata`. Reuse cargo's resolver, feature unification, registry. The plugin generates declared-mode targets internally; the user never sees them.
 - **Execution**: reimplemented (same handlers as declared mode), or opaque (`cargo build` per crate) if the user opts out for compatibility reasons.
@@ -445,7 +451,7 @@ The Rust plugin exposes both a declared-mode and an adopted-mode entry point. Sa
 - **Direct compilation (small projects)**: reimplemented via `javac` / `kotlinc`. Target = compilation unit.
 - **Gradle projects**: opaque. `gradle build` runs in a sandbox; outputs cached at the project level. Gradle stays in charge of its world; Fabrik handles cross-tool deps.
 - **Gradle Tooling API integration**: planned for v2: finer-grained discovery without reimplementation. Research-grade.
-- **Honest limitation**: Gradle users opting in to Fabrik for Gradle-specific gains will be disappointed in v0–v1. The win is *cross-language*: their Gradle project depending on protobuf generated from a different language, all coherent in one cache.
+- **Honest limitation**: Gradle users opting in to Fabrik for Gradle-specific gains will be disappointed in v0-v1. The win is *cross-language*: their Gradle project depending on protobuf generated from a different language, all coherent in one cache.
 
 ### 9.6 Python
 
@@ -475,7 +481,7 @@ This is the hard one and we're not pretending otherwise.
 ### 9.9 Android
 
 - **Pure JVM modules**: same as Java/Kotlin above.
-- **Android resource compilation, dexing, packaging**: opaque via Gradle in v0–v1. Reimplemented in v2+ behind a first-party `android` plugin.
+- **Android resource compilation, dexing, packaging**: opaque via Gradle in v0-v1. Reimplemented in v2+ behind a first-party `android` plugin.
 - **Same honest framing as iOS**: hard ecosystem, multi-year effort to fully embrace, opaque mode is the v0 story.
 
 ## 10. Telemetry
@@ -509,7 +515,7 @@ One trace per build invocation will exceed backend limits for any non-trivial bu
 - Reimplement Vite, Webpack, esbuild. We integrate opaquely.
 - Reimplement Gradle. We integrate opaquely with cooperative discovery in v2.
 - Provide our own remote-execution backend. We use existing REAPI servers (BuildBuddy, Buildbarn, NativeLink).
-- Ship a UI in v0–v1. The OTel ecosystem provides this.
+- Ship a UI in v0-v1. The OTel ecosystem provides this.
 - Bazel BUILD compatibility. We learn from Bazel; we don't import its surface area.
 
 ## 12. Open questions
@@ -528,15 +534,16 @@ These need resolution before we cut v0. I have leanings on each but want them de
 
 ### Resolved
 
-- **Build definition language.** Typed Starlark via `starlark-rust` (Buck2 dialect). The earlier Pkl/TypeScript debate was settled by the realization that most of Fabrik's differentiation is structural, not language-level: typed providers, one extension concept, integration-mode boundaries, the typed query API. Starlark gives us all of that with no runtime to ship and a working precedent in Buck2.
-- **Plugin isolation.** Plugins are pure Starlark evaluated in-process; impure work lives in named Rust handlers in the substrate. WASM was considered as a sandboxing mechanism but does not earn its weight: build-system plugins are mostly data shaping (Starlark covers it) plus subprocess execution (which the substrate sandboxes regardless of who declared the action). The "untrusted plugin" story is deferred until third-party plugins exist.
+- **Build definition language.** TOML declarations. The Starlark/Pkl/TypeScript debate was settled by the agent workflow: build files should be structured data that can be generated, parsed, validated, and repaired without executing user code.
+- **Plugin implementation.** First-party plugins are Rust crates with schemas, importers, planners, handlers, and query methods. Third-party plugins use the same contracts once external distribution exists.
+- **Resource bounds.** Local and remote execution share `ResourceRequest`; schedulers must account for CPU slots, optional memory, remote queue capacity, output downloads, and prefetch work.
 
 ## 13. Why this works
 
 The bet is structural:
 
 - **Cooperative-first means we ship per-language support fast.** No more `rules_*` death march. Adopted-mode targets give projects a path in without rewriting.
-- **One language for build files and plugins, with no runtime to ship.** Typed Starlark via `starlark-rust` keeps the binary lean, the surface small, and the agent-fluency story tractable.
+- **Build files are data.** TOML keeps the authoring surface small and makes declaration repair straightforward for agents.
 - **Honest boundaries mean users know what they're getting.** No silent cache poisoning, no surprise gaps. Integration mode is queryable, not buried in docs.
 - **REAPI compatibility means we inherit infrastructure.** We don't build a remote-exec backend.
 - **Agent-native query API means we ride the wave.** As agents become real consumers of build telemetry, which they will in this project's lifetime, we have the surface they need. Bazel doesn't.
@@ -550,7 +557,7 @@ The risk is also structural: ambitious scope, multi-year arc, requires sustained
 
 - **Action**: a single executable unit with declared inputs, outputs, and command. The substrate caches at this level.
 - **Target**: a user-facing unit defined in build files. Compiles to one or more actions.
-- **Plugin**: a Starlark module (plus optional Rust handlers in the substrate) that defines target types and translates them to actions.
+- **Plugin**: a module that defines target schemas and translates declarations to actions. First-party plugins are Rust crates.
 - **Profile**: a typed bundle of toolchain selections, build settings, and platform constraints.
 - **Hermeticity level**: `strict` / `traced` / `loose`, declared per target, stored on cache entries.
 - **Integration mode**: `reimplemented` / `cooperative` / `opaque`, declared per plugin per target type.

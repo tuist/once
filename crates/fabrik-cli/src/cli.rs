@@ -1,4 +1,4 @@
-//! CLI argument parsing — the `clap` types and the small helpers they use.
+//! CLI argument parsing - the `clap` types and the small helpers they use.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -75,6 +75,34 @@ pub enum Cmd {
         label: String,
     },
 
+    /// Build a target via the granular per-crate action graph.
+    ///
+    /// Walks the target's transitive Rust deps, compiles each into
+    /// its own rustc action, and runs them through the cache-aware
+    /// scheduler. Each crate is its own cache slot, so a one-line
+    /// edit to a leaf crate invalidates only the affected nodes.
+    /// Use `fabrik run` instead for `cargo_binary` and other
+    /// single-action targets.
+    Build {
+        /// Target label, e.g. `//crates/fabrik-cli:fabrik`.
+        label: String,
+    },
+
+    /// Build and execute a Rust test target.
+    ///
+    /// Compiles the target's transitive Rust deps with the granular
+    /// planner, then runs the produced test binary as its own cached
+    /// action. Extra args after the label are passed to the Rust test
+    /// harness, for example `fabrik test //pkg:pkg_test -- --nocapture`.
+    Test {
+        /// Rust test target label, e.g. `//crates/foo:foo_test`.
+        label: String,
+
+        /// Arguments passed to the compiled test binary.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        test_args: Vec<String>,
+    },
+
     /// Cache and execute a literal command (substrate escape hatch).
     ///
     /// Bypasses the target graph and puts any argv through the action
@@ -114,6 +142,16 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: CacheCmd,
     },
+
+    /// Generate `vendor/fabrik.star` from the workspace's Cargo.lock.
+    ///
+    /// Reads `cargo metadata` for the resolve graph and emits one
+    /// `cargo_crate(...)` declaration per pure-rust dependency,
+    /// pointing at the cargo registry source cache. Crates that need
+    /// a `build.rs` are commented out (the granular pipeline does not
+    /// yet thread build-script outputs through dependent rustc
+    /// invocations); use the `cargo_binary` escape hatch for those.
+    Vendor,
 
     /// List targets declared across the workspace.
     ///

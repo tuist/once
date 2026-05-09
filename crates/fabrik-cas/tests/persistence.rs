@@ -1,5 +1,5 @@
 //! Integration tests for `fabrik-cas` that exercise the public API
-//! across `Cas` lifetimes — i.e. open, write, drop, reopen, read.
+//! across `Cas` lifetimes - i.e. open, write, drop, reopen, read.
 //!
 //! Each test allocates its own `TempDir`, so the suite is parallel-safe
 //! under `cargo test`'s default parallel execution.
@@ -19,7 +19,7 @@ async fn blobs_survive_dropping_and_reopening_the_cas() {
         let cas = open_in(&tmp);
         cas.put_blob(payload).await.unwrap()
     };
-    // Drop and reopen — same root.
+    // Drop and reopen - same root.
     let cas = open_in(&tmp);
     assert_eq!(cas.get_blob(&digest).await.unwrap(), payload);
 }
@@ -35,6 +35,7 @@ async fn action_results_survive_reopen() {
             exit_code: 0,
             stdout,
             stderr: stdout,
+            outputs: std::collections::BTreeMap::new(),
         };
         cas.put_action_result(&key, &result).await.unwrap();
         result
@@ -56,6 +57,7 @@ async fn forget_action_persists_across_reopen() {
                 exit_code: 0,
                 stdout,
                 stderr: stdout,
+                outputs: std::collections::BTreeMap::new(),
             },
         )
         .await

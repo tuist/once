@@ -54,6 +54,10 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
 
     match cli.command {
         Cmd::Run { label } => commands::run::run(&workspace, &cas, &label, format).await,
+        Cmd::Build { label } => commands::build::build(&workspace, &cas, &label, format).await,
+        Cmd::Test { label, test_args } => {
+            commands::test::test(&workspace, &cas, &label, test_args, format).await
+        }
         Cmd::Exec {
             env,
             cwd,
@@ -83,5 +87,6 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
         Cmd::Targets => commands::targets::print_targets(&workspace, format)
             .await
             .map(|()| ExitCode::SUCCESS),
+        Cmd::Vendor => commands::vendor::vendor(&workspace, format).await,
     }
 }

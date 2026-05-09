@@ -1,116 +1,45 @@
 # Fabrik
 
-A polyglot, agent-native build system. Bazel's ambitions, none of its mistakes.
-
 > [!WARNING]
-> 🚧 **Pre-alpha.** The CLI runs, the cache works, and a Cargo-backed
-> dogfood target builds Fabrik itself. Fine-grained Rust targets and
-> full language plugins are still under active development. See the
-> [roadmap](docs/roadmap.md) for what lands when.
+> Fabrik is beta software. The CLI, local cache, Rust targets, task targets, and iOS simulator app flow are usable, but target schemas and plugin behavior can still change.
 
-## What you get
+Fabrik is a polyglot, agent-native build system. It uses content-addressed actions, structured declarations, and explicit runtime semantics so humans and coding agents can build, run, test, and debug the same graph.
 
-- 🌍 **One build system for the whole polyglot stack.** Rust, Go, C/C++,
-  TypeScript, Python, Java/Kotlin, Elixir, Swift, Android, iOS.
-- ⚡ **Trustworthy, content-addressed caching** that's shareable across
-  machines via the Bazel REAPI protocol.
-- 🎯 **Honest boundaries.** When fidelity has to drop (Gradle, Vite, Mix),
-  Fabrik says so out loud rather than pretending.
-- 🤖 **Agent-native.** The build graph is a typed, queryable data
-  structure. Humans and AI agents talk to the same gRPC API.
-- 📈 **OpenTelemetry-native** with build-specific semantic conventions.
-
-The full picture is in [docs/design.md](docs/design.md).
-
-## Install
-
-The recommended path is [mise](https://mise.jdx.dev) with the GitHub backend:
-
-```sh
-mise use --global github:tuist/fabrik@latest
-fabrik --version
-```
-
-Pin to a specific release if you want reproducibility:
-
-```sh
-mise use --global github:tuist/fabrik@0.1.0
-```
-
-Or download a prebuilt archive directly from
-[releases](https://github.com/tuist/fabrik/releases). Each release ships
-binaries for:
-
-- 🐧 Linux x86_64
-- 🍎 macOS x86_64 and arm64
-- 🪟 Windows x86_64
-
-## Quick taste
-
-```sh
-# Run a declared target.
-fabrik run //hello:hello
-
-# Cache an arbitrary command (substrate escape hatch).
-fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'echo hello'
-
-# A second identical invocation replays the cached stdout/stderr/exit
-# without re-running the command.
-fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'echo hello'
-
-# Cache stats.
-fabrik cache stats
-```
-
-The cache lives under `<workspace>/.fabrik/`. Use `-C <dir>` to point at
-a different workspace, the same way `make -C` works.
-
-## Contributing
-
-Phase 0 (walking skeleton: CAS, action executor, CLI) shipped in 0.1.0.
-The next phase brings the Rust language plugin so Fabrik can build
-itself. Track progress in the [roadmap](docs/roadmap.md).
-
-To build from source:
+## Quick Start
 
 ```sh
 mise install
 mise exec -- cargo build --release
+mise exec -- target/release/fabrik targets
+```
+
+Try the checked-in examples:
+
+```sh
+mise exec -- target/release/fabrik build //examples/rust-app:hello
+mise exec -- target/release/fabrik test //examples/rust-app:greeting_test
+mise exec -- target/release/fabrik build //examples/ios-app:Demo
+```
+
+## Documentation
+
+- [Docs index](docs/README.md)
+- [Rust](docs/rust.md)
+- [Apple and iOS](docs/apple.md)
+- [Tasks](docs/tasks.md)
+- [Cache and execution](docs/cache-and-execution.md)
+- [Design](docs/design.md)
+- [Roadmap](docs/roadmap.md)
+
+## Development
+
+```sh
 mise exec -- cargo test --workspace
+mise exec -- cargo clippy --workspace --all-targets -- -D warnings
+mise exec -- cargo fmt --all -- --check
+mise exec -- cargo build --release
 mise exec -- shellspec
 ```
-
-Once a local release binary exists, dogfood the build graph with Fabrik:
-
-```sh
-mise exec -- target/release/fabrik targets
-mise exec -- target/release/fabrik run //:fabrik
-```
-
-CI runs lint, tests, and a Windows compile check on every PR. See
-[.github/workflows/fabrik.yml](.github/workflows/fabrik.yml) and
-[CONTRIBUTING](docs/contributing.md) (coming soon).
-
-## Releases
-
-Releases are driven by conventional commits and `git-cliff`. The
-release tooling is pinned in [mise.toml](mise.toml), so install it with:
-
-```sh
-mise install git-cliff
-```
-
-Useful release tasks:
-
-```sh
-mise run release:detect
-mise run release:changelog
-mise run release:notes --version <version>
-```
-
-[.github/workflows/release.yml](.github/workflows/release.yml) packages
-release archives and publishes GitHub releases that mise can install
-through the `github:` backend shown above.
 
 ## License
 
