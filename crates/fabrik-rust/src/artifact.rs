@@ -4,7 +4,7 @@
 use fabrik_cas::Digest;
 
 /// The kinds of Rust target this crate knows how to compile. Kept
-/// separate from the raw Starlark `kind` string so the rest of the
+/// separate from the raw target `kind` string so the rest of the
 /// code can match exhaustively without re-parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RustKind {
@@ -12,10 +12,11 @@ pub enum RustKind {
     Binary,
     Test,
     ProcMacro,
+    BuildScript,
 }
 
 impl RustKind {
-    /// Recognise a Starlark `kind` string. Unknown kinds are surfaced
+    /// Recognise a target `kind` string. Unknown kinds are surfaced
     /// to the caller as `None` so callers can produce an actionable
     /// error mentioning the name.
     pub fn parse(s: &str) -> Option<Self> {
@@ -24,17 +25,23 @@ impl RustKind {
             "rust_binary" => Some(Self::Binary),
             "rust_test" => Some(Self::Test),
             "rust_proc_macro" => Some(Self::ProcMacro),
+            "cargo_build_script" => Some(Self::BuildScript),
             _ => None,
         }
     }
 
-    /// The kind's user-facing name, matching the Starlark identifier.
+    pub fn is_rustc_target(self) -> bool {
+        !matches!(self, Self::BuildScript)
+    }
+
+    /// The kind's user-facing name, matching the target kind string.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Library => "rust_library",
             Self::Binary => "rust_binary",
             Self::Test => "rust_test",
             Self::ProcMacro => "rust_proc_macro",
+            Self::BuildScript => "cargo_build_script",
         }
     }
 }
@@ -56,6 +63,7 @@ pub struct DepArtifact {
     pub out_dir: String,
     pub action_digest: Digest,
     pub kind: RustKind,
+    pub build_script_outputs: Option<String>,
 }
 
 /// Map a Cargo-style hyphenated package name to a Rust identifier by
@@ -102,6 +110,11 @@ pub fn proc_macro_path(out_dir: &str, crate_name: &str) -> String {
     format!("{out_dir}/lib{crate_name}.{ext}")
 }
 
+/// Workspace-relative path to the stdout captured from a build script.
+pub fn build_script_outputs_path(out_dir: &str, name: &str) -> String {
+    format!("{out_dir}/{name}_build_script.out")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +142,10 @@ mod tests {
         assert_eq!(
             RustKind::parse("rust_proc_macro"),
             Some(RustKind::ProcMacro)
+        );
+        assert_eq!(
+            RustKind::parse("cargo_build_script"),
+            Some(RustKind::BuildScript)
         );
         assert_eq!(RustKind::parse("cargo_binary"), None);
     }

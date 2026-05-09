@@ -18,5 +18,6 @@
 
 ## Examples
 
-- `examples/rust-app`: Rust library, binary, and test target.
-- `examples/ios-app`: SwiftUI iOS simulator app.
+- `examples/rust/granular/basic-app`: Rust library, binary, and test target.
+- `examples/rust/granular/build-script-cfg`: granular Rust build script cfg propagation.
+- `examples/apple/ios/simulator-app`: SwiftUI iOS simulator app.

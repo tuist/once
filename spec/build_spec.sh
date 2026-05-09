@@ -27,6 +27,13 @@ rust_binary(name = "hello", srcs = ["src/main.rs"], deps = ["//crates/say:say"])
 EOF
   }
 
+  build_script_workspace() {
+    mkdir -p "$WORKSPACE/examples/rust/granular"
+    cp -R \
+      "$REPO_ROOT/examples/rust/granular/build-script-cfg" \
+      "$WORKSPACE/examples/rust/granular/build-script-cfg"
+  }
+
   It 'compiles a binary that depends on a library, one rustc per crate'
     granular_workspace
     When call fabrik build //crates/hello:hello
@@ -51,6 +58,33 @@ EOF
     The status should be success
     The stderr should include 'rust_binary'
     The path "$WORKSPACE/.fabrik/out/hello/hello" should be exist
+  End
+
+  It 'threads cargo build-script cfgs into dependent rustc actions'
+    build_script_workspace
+    fabrik build //examples/rust/granular/build-script-cfg:app >/dev/null 2>&1
+    When call "$WORKSPACE/.fabrik/out/examples/rust/granular/build-script-cfg/app"
+    The status should be success
+    The stdout should equal 'enabled'
+  End
+
+  It 'reuses the cache for a build-script-backed Rust graph'
+    build_script_workspace
+    fabrik build //examples/rust/granular/build-script-cfg:app >/dev/null 2>&1
+    When call fabrik build //examples/rust/granular/build-script-cfg:app
+    The status should be success
+    The stderr should include '3 nodes, 3 hit, 0 miss'
+  End
+
+  It 'invalidates build-script dependents when a declared script input changes'
+    build_script_workspace
+    fabrik build //examples/rust/granular/build-script-cfg:app >/dev/null 2>&1
+    cat > "$WORKSPACE/examples/rust/granular/build-script-cfg/flag.txt" <<'EOF'
+disabled
+EOF
+    When call fabrik build //examples/rust/granular/build-script-cfg:app
+    The status should be success
+    The stderr should include '3 nodes, 0 hit, 3 miss'
   End
 
   It 'builds an iOS simulator app bundle declared in fabrik.toml'

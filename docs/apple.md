@@ -13,19 +13,19 @@ minimum_os = "17.0"
 Build the app bundle:
 
 ```sh
-fabrik build //examples/ios-app:Demo
+fabrik build //examples/apple/ios/simulator-app:Demo
 ```
 
 Launch it in a simulator:
 
 ```sh
-fabrik run //examples/ios-app:Demo
+fabrik run //examples/apple/ios/simulator-app:Demo
 ```
 
 Set `FABRIK_IOS_SIMULATOR` to a simulator UDID when you do not want to use the booted device:
 
 ```sh
-FABRIK_IOS_SIMULATOR=<udid> fabrik run //examples/ios-app:Demo
+FABRIK_IOS_SIMULATOR=<udid> fabrik run //examples/apple/ios/simulator-app:Demo
 ```
 
 ## Cache Behavior

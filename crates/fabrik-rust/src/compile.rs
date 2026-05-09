@@ -55,10 +55,12 @@ pub fn compile_target(
     workspace_root: &Path,
     dep_artifacts: &BTreeMap<String, DepArtifact>,
 ) -> Result<(PlanNode, DepArtifact), CompileError> {
-    let kind = RustKind::parse(&target.kind).ok_or_else(|| CompileError::UnsupportedKind {
-        label: target.label(),
-        kind: target.kind.clone(),
-    })?;
+    let kind = RustKind::parse(&target.kind)
+        .filter(|kind| kind.is_rustc_target())
+        .ok_or_else(|| CompileError::UnsupportedKind {
+            label: target.label(),
+            kind: target.kind.clone(),
+        })?;
 
     if target.srcs.is_empty() {
         return Err(CompileError::NoSources {
@@ -106,6 +108,7 @@ pub fn compile_target(
             argv.push("--crate-type=proc-macro".into());
             argv.push("--emit=metadata,link".into());
         }
+        RustKind::BuildScript => unreachable!("build scripts do not compile through rustc target"),
     }
     argv.push("--out-dir".into());
     argv.push(out_dir.clone());
@@ -114,6 +117,7 @@ pub fn compile_target(
     // (e.g. proc-macros that reference shared deps by `-L`) we add
     // every dep's directory.
     let mut dep_dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut build_script_outputs = Vec::new();
     for dep_label in &target.deps {
         let artifact = dep_artifacts
             .get(dep_label)
@@ -121,6 +125,12 @@ pub fn compile_target(
                 label: target.label(),
                 dep: dep_label.clone(),
             })?;
+        if artifact.kind == RustKind::BuildScript {
+            if let Some(path) = &artifact.build_script_outputs {
+                build_script_outputs.push(path.clone());
+            }
+            continue;
+        }
         // Libraries link via rlib; proc-macros link via the platform
         // dylib (rustc loads it dynamically at proc-macro expansion
         // time). Both paths come pre-resolved on the DepArtifact so
@@ -130,7 +140,7 @@ pub fn compile_target(
             // Binaries and tests are not linkable artifacts; depending
             // on them in Rust is unusual but harmless to model as a
             // build-order edge alone (no --extern flag emitted).
-            RustKind::Binary | RustKind::Test => continue,
+            RustKind::Binary | RustKind::Test | RustKind::BuildScript => continue,
         }
         argv.push("--extern".into());
         argv.push(format!("{}={}", artifact.crate_name, artifact.extern_path));
@@ -141,6 +151,9 @@ pub fn compile_target(
         argv.push(format!("dependency={dir}"));
     }
     argv.push(crate_root_ws_rel.clone());
+    if !build_script_outputs.is_empty() {
+        argv = wrap_rustc_with_build_script_outputs(&argv, &build_script_outputs);
+    }
 
     // Build the input digest. It mixes the source file digests, the
     // dep action digests, and the rust toolchain identity. Two builds
@@ -176,6 +189,7 @@ pub fn compile_target(
     let extern_path = match kind {
         RustKind::Library => rlib_path(&out_dir, &crate_name),
         RustKind::ProcMacro => proc_macro_path(&out_dir, &crate_name),
+        RustKind::BuildScript => unreachable!("build scripts do not compile through rustc target"),
         // Binaries and tests aren't usable as `--extern` deps; the
         // path is recorded for completeness but never read.
         RustKind::Binary | RustKind::Test => binary_path(&out_dir, &target.name),
@@ -187,6 +201,7 @@ pub fn compile_target(
         out_dir: out_dir.clone(),
         action_digest,
         kind,
+        build_script_outputs: None,
     };
 
     let node = PlanNode {
@@ -217,6 +232,7 @@ fn pick_crate_root(target: &Target, kind: RustKind) -> Result<String, CompileErr
     let candidates: &[&str] = match kind {
         RustKind::Library | RustKind::ProcMacro => &["src/lib.rs", "lib.rs"],
         RustKind::Binary | RustKind::Test => &["src/main.rs", "main.rs"],
+        RustKind::BuildScript => unreachable!("build scripts do not use rustc crate roots"),
     };
     for c in candidates {
         if target.srcs.iter().any(|s| s == c) {
@@ -234,6 +250,7 @@ fn pick_crate_root(target: &Target, kind: RustKind) -> Result<String, CompileErr
         root: match kind {
             RustKind::Library | RustKind::ProcMacro => "src/lib.rs".into(),
             RustKind::Binary | RustKind::Test => "src/main.rs".into(),
+            RustKind::BuildScript => unreachable!("build scripts do not use rustc crate roots"),
         },
     })
 }
@@ -250,7 +267,54 @@ fn output_paths(kind: RustKind, out_dir: &str, crate_name: &str, target_name: &s
             proc_macro_path(out_dir, crate_name),
             rmeta_path(out_dir, crate_name),
         ],
+        RustKind::BuildScript => Vec::new(),
     }
+}
+
+fn wrap_rustc_with_build_script_outputs(
+    rustc_argv: &[String],
+    build_script_outputs: &[String],
+) -> Vec<String> {
+    let mut script = String::from("set -eu\nset --");
+    for arg in rustc_argv {
+        script.push(' ');
+        script.push_str(&shell_quote(arg));
+    }
+    script.push('\n');
+    for output in build_script_outputs {
+        script.push_str("while IFS= read -r line || [ -n \"$line\" ]; do\n");
+        script.push_str("  case \"$line\" in\n");
+        script.push_str(
+            "    cargo::rustc-cfg=*) set -- \"$@\" --cfg \"${line#cargo::rustc-cfg=}\" ;;\n",
+        );
+        script.push_str(
+            "    cargo:rustc-cfg=*) set -- \"$@\" --cfg \"${line#cargo:rustc-cfg=}\" ;;\n",
+        );
+        script.push_str("    cargo::rustc-env=*) export \"${line#cargo::rustc-env=}\" ;;\n");
+        script.push_str("    cargo:rustc-env=*) export \"${line#cargo:rustc-env=}\" ;;\n");
+        script.push_str(
+            "    cargo::rustc-link-lib=*) set -- \"$@\" -l \"${line#cargo::rustc-link-lib=}\" ;;\n",
+        );
+        script.push_str(
+            "    cargo:rustc-link-lib=*) set -- \"$@\" -l \"${line#cargo:rustc-link-lib=}\" ;;\n",
+        );
+        script.push_str(
+            "    cargo::rustc-link-search=*) set -- \"$@\" -L \"${line#cargo::rustc-link-search=}\" ;;\n",
+        );
+        script.push_str(
+            "    cargo:rustc-link-search=*) set -- \"$@\" -L \"${line#cargo:rustc-link-search=}\" ;;\n",
+        );
+        script.push_str("  esac\n");
+        script.push_str("done < ");
+        script.push_str(&shell_quote(output));
+        script.push('\n');
+    }
+    script.push_str("exec \"$@\"\n");
+    vec!["/bin/sh".into(), "-c".into(), script]
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 /// Hash sources, dep action digests, and toolchain identifiers into
@@ -496,6 +560,34 @@ mod tests {
         assert!(argv[extern_idx + 1].starts_with("macros="));
         assert!(argv[extern_idx + 1]
             .ends_with(&format!("libmacros.{}", std::env::consts::DLL_EXTENSION)));
+    }
+
+    #[test]
+    fn build_script_dep_wraps_rustc_invocation() {
+        let tmp = TempDir::new().unwrap();
+        write(tmp.path(), "pkg/src/lib.rs", "pub fn x() {}");
+        let mut deps = BTreeMap::new();
+        deps.insert(
+            "//pkg:build".to_string(),
+            DepArtifact {
+                crate_name: "build_build_script".into(),
+                extern_path: String::new(),
+                rmeta_path: String::new(),
+                out_dir: String::new(),
+                action_digest: Digest::of_bytes(b"build-script"),
+                kind: RustKind::BuildScript,
+                build_script_outputs: Some(".fabrik/out/pkg/build_build_script.out".into()),
+            },
+        );
+        let lib = lib_target("pkg", "pkg", &["src/lib.rs"], &["//pkg:build"]);
+        let (node, artifact) = compile_target(&lib, tmp.path(), &deps).unwrap();
+        let Action::RunCommand { argv, .. } = &node.action;
+        assert_eq!(argv[0], "/bin/sh");
+        assert_eq!(argv[1], "-c");
+        assert!(argv[2].contains(".fabrik/out/pkg/build_build_script.out"));
+        assert!(argv[2].contains("cargo::rustc-cfg="));
+        assert!(!argv.iter().any(|arg| arg.contains("--extern")));
+        assert_eq!(artifact.kind, RustKind::Library);
     }
 
     #[test]

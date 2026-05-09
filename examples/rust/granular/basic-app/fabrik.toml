@@ -5,10 +5,10 @@ srcs = ["src/lib.rs"]
 [[rust.binary]]
 name = "hello"
 srcs = ["src/main.rs"]
-deps = ["//examples/rust-app:greeting"]
+deps = ["//examples/rust/granular/basic-app:greeting"]
 
 [[rust.test]]
 name = "greeting_test"
 srcs = ["tests/greeting.rs"]
 crate_root = "tests/greeting.rs"
-deps = ["//examples/rust-app:greeting"]
+deps = ["//examples/rust/granular/basic-app:greeting"]

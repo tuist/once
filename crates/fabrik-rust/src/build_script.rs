@@ -2,18 +2,15 @@
 //! the cargo build-script env, and capture its stdout (the
 //! `cargo::rustc-cfg=`, `cargo::rustc-env=`, `cargo::rustc-link-lib=`,
 //! and `cargo::rustc-link-search=` lines) into a deterministic text
-//! artifact at `<out_dir>/<name>_build_script.out`.
+//! artifact at `.fabrik/out/<package>/<name>_build_script.out`.
 //!
 //! What this primitive *does*: compile + run the script in one cached
 //! action, with the captured stdout as a declared output that flows
 //! through the CAS like any other artifact.
 //!
-//! What it does **not** yet do: thread the captured directives into
-//! dependent rustc invocations. That requires either a multi-pass
-//! planner (run scripts first, then plan dependents with the resolved
-//! flags) or a fused action that wraps both. Until then, dependents
-//! that need build-script flags fall back to the `cargo_binary`
-//! escape hatch.
+//! Dependents consume the captured directives by reading the restored
+//! output file at execution time. This keeps the planner single-pass
+//! while still making the build script a visible cacheable graph node.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -22,12 +19,15 @@ use fabrik_cas::Digest;
 use fabrik_core::{Action, PlanNode, ResourceRequest, WorkspacePath};
 use fabrik_frontend::Target;
 
-use crate::artifact::out_dir;
+use crate::artifact::{build_script_outputs_path, out_dir};
 use crate::compile::CompileError;
 
-/// Filename of the captured build-script stdout, relative to the
-/// target's `out_dir`.
+/// Suffix of the captured build-script stdout.
 pub const BUILD_SCRIPT_OUTPUTS_FILENAME: &str = "build_script.out";
+
+pub fn output_path(package: &str, name: &str) -> String {
+    build_script_outputs_path(&out_dir(package, name), name)
+}
 
 pub fn compile_build_script(
     target: &Target,
@@ -64,7 +64,7 @@ pub fn compile_build_script(
     let out_dir = out_dir(&target.package, &target.name);
     let script_bin = format!("{out_dir}/{}_build_script_bin", target.name);
     let cargo_out = format!("{out_dir}/{}_cargo_out", target.name);
-    let stdout_capture = format!("{out_dir}/{}", BUILD_SCRIPT_OUTPUTS_FILENAME);
+    let stdout_capture = build_script_outputs_path(&out_dir, &target.name);
 
     // Single-action compile + run + capture. The shell uses `set -eu`
     // so a failed rustc or build-script run aborts the whole action;
@@ -145,16 +145,15 @@ impl BuildScriptOutputs {
     pub fn parse(stdout: &str) -> Self {
         let mut out = Self::default();
         for line in stdout.lines() {
-            let Some(rest) = line.strip_prefix("cargo::") else {
+            let Some(rest) = line
+                .strip_prefix("cargo::")
+                .or_else(|| line.strip_prefix("cargo:"))
+            else {
                 if !line.is_empty() {
                     out.other.push(line.to_string());
                 }
                 continue;
             };
-            // Cargo also accepts the legacy `cargo:` (single colon)
-            // prefix; stable Rust 1.77+ deprecated it. We keep this
-            // parser strict on the modern form to push users toward
-            // the supported style.
             if let Some(v) = rest.strip_prefix("rustc-cfg=") {
                 out.rustc_cfg.push(v.to_string());
             } else if let Some(v) = rest.strip_prefix("rustc-env=") {

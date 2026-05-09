@@ -6,12 +6,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
-use fabrik_cas::Digest;
 use fabrik_core::Plan;
 use fabrik_frontend::Target;
 
 use crate::artifact::{DepArtifact, RustKind};
-use crate::build_script::compile_build_script;
+use crate::build_script::{compile_build_script, output_path as build_script_output_path};
 use crate::compile::{compile_target, CompileError};
 
 /// The result of compiling a workspace + root label into a plan.
@@ -112,28 +111,26 @@ pub fn build_plan(
                 .filter_map(|d| label_to_plan_idx.get(d).copied())
                 .collect();
             let label = target.label();
+            let action_digest = node.action.digest();
             let plan_idx = plan.push(node);
             label_to_plan_idx.insert(label.clone(), plan_idx);
             node_info.push(NodeInfo {
                 label: label.clone(),
-                // We borrow the Library variant for build scripts in
-                // node_info so the CLI's display column stays
-                // monotonic. Future work: a richer NodeInfo enum that
-                // distinguishes scripts from libraries.
-                kind: RustKind::Library,
+                kind: RustKind::BuildScript,
             });
-            // No DepArtifact for build scripts: their output is a
-            // text artifact, not a linkable artifact, and dependent
-            // consumption is a separate (not-yet-implemented) feature.
             dep_artifacts.insert(
-                label,
+                label.clone(),
                 DepArtifact {
                     crate_name: format!("{}_build_script", target.name),
                     extern_path: String::new(),
                     rmeta_path: String::new(),
                     out_dir: String::new(),
-                    action_digest: Digest::of_bytes(b"build-script-no-extern"),
-                    kind: RustKind::Library,
+                    action_digest,
+                    kind: RustKind::BuildScript,
+                    build_script_outputs: Some(build_script_output_path(
+                        &target.package,
+                        &target.name,
+                    )),
                 },
             );
             if *target_idx == root_target_idx {
@@ -154,7 +151,7 @@ pub fn build_plan(
                         dep: dep.clone(),
                     })?;
             let dep_kind = &targets[*dep_target_idx].kind;
-            if RustKind::parse(dep_kind).is_none() && dep_kind != "cargo_build_script" {
+            if RustKind::parse(dep_kind).is_none() {
                 return Err(PlanBuildError::NonRustDep {
                     label: target.label(),
                     dep: dep.clone(),
@@ -214,11 +211,10 @@ fn dfs(
                 dep: dep.clone(),
             })?;
         // Non-rust deps would fail at compile time too; we only walk
-        // them here when they are rust targets (or cargo_build_script
-        // primitives) so the cycle detector does not misreport a
-        // rust -> non-rust edge.
+        // them here when they are rust-shaped targets so the cycle
+        // detector does not misreport a rust -> non-rust edge.
         let dep_kind = &targets[*dep_idx].kind;
-        if RustKind::parse(dep_kind).is_some() || dep_kind == "cargo_build_script" {
+        if RustKind::parse(dep_kind).is_some() {
             dfs(*dep_idx, targets, label_index, visited, on_stack, order)?;
         }
     }
@@ -332,6 +328,7 @@ mod tests {
         let built = build_plan(&[target], "//pkg:build", tmp.path()).unwrap();
         assert_eq!(built.plan.nodes.len(), 1);
         assert_eq!(built.plan.nodes[0].label, "//pkg:build");
+        assert_eq!(built.nodes[0].kind, RustKind::BuildScript);
         // The action's argv must reference build.rs and run via /bin/sh
         // (the build_script handler emits a single shell pipeline).
         let fabrik_core::Action::RunCommand { argv, outputs, .. } = &built.plan.nodes[0].action;
