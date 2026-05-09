@@ -158,14 +158,24 @@ impl Runner {
     }
 
     pub async fn run(&self, action: &Action) -> Result<Outcome> {
-        // Acquire is cancel-safe; if the caller drops the future, the
-        // permit is released without ever entering execute().
+        let key = action.digest();
+        if let Some(hit) = lookup_cached(&self.cas, &key).await? {
+            return Ok(hit);
+        }
+        // Permits guard real subprocess execution, not cache lookups.
+        // Acquire is cancel-safe: dropping the future releases the
+        // permit without ever entering execute().
         let _permit = self
             .permits
             .acquire()
             .await
             .expect("semaphore is not closed for the runner's lifetime");
-        run_inner(action, &self.workspace_root, &self.cas, self.opts).await
+        // Re-check under the permit: another runner may have produced
+        // the entry while we were queued.
+        if let Some(hit) = lookup_cached(&self.cas, &key).await? {
+            return Ok(hit);
+        }
+        produce(action, &self.workspace_root, &self.cas, self.opts, key).await
     }
 }
 
@@ -178,28 +188,34 @@ pub async fn run(
     cas: &Cas,
     opts: RunOpts,
 ) -> Result<Outcome> {
-    run_inner(action, workspace_root, cas, opts).await
+    let key = action.digest();
+    if let Some(hit) = lookup_cached(cas, &key).await? {
+        return Ok(hit);
+    }
+    produce(action, workspace_root, cas, opts, key).await
 }
 
-#[instrument(skip(action, cas), fields(action_digest))]
-async fn run_inner(
+#[instrument(skip(cas), fields(action_digest = %key))]
+async fn lookup_cached(cas: &Cas, key: &Digest) -> Result<Option<Outcome>> {
+    if let Some(result) = cas.get_action_result(key).await? {
+        debug!("cache hit");
+        return Ok(Some(Outcome {
+            action: *key,
+            result,
+            cache: CacheState::Hit,
+        }));
+    }
+    Ok(None)
+}
+
+#[instrument(skip(action, cas), fields(action_digest = %key))]
+async fn produce(
     action: &Action,
     workspace_root: &Path,
     cas: &Cas,
     opts: RunOpts,
+    key: Digest,
 ) -> Result<Outcome> {
-    let key = action.digest();
-    tracing::Span::current().record("action_digest", tracing::field::display(&key));
-
-    if let Some(result) = cas.get_action_result(&key).await? {
-        debug!("cache hit");
-        return Ok(Outcome {
-            action: key,
-            result,
-            cache: CacheState::Hit,
-        });
-    }
-
     let result = execute(action, workspace_root, cas).await?;
     let cacheable = result.exit_code == 0 || opts.cache_failures;
     if cacheable {
@@ -723,6 +739,42 @@ mod tests {
         assert_eq!(outcome.result.exit_code, 0);
         let stdout = runner.cas().get_blob(&outcome.result.stdout).await.unwrap();
         assert_eq!(stdout, b"ok");
+    }
+
+    #[tokio::test]
+    async fn cache_hits_do_not_queue_on_the_permit_pool() {
+        // Warm the cache, then issue many concurrent runs of the same
+        // action under max_concurrency=1. A naive implementation that
+        // holds a permit across the cache lookup would serialize all of
+        // them; with the lookup outside the permit they all return
+        // immediately.
+        let (tmp, cas) = fresh_cas();
+        let action = echo_action("warm");
+        run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+
+        let runner =
+            Runner::new(cas, tmp.path().to_path_buf(), RunOpts::default()).with_max_concurrency(1);
+        let started = std::time::Instant::now();
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let runner = runner.clone();
+            let action = action.clone();
+            handles.push(tokio::spawn(
+                async move { runner.run(&action).await.unwrap() },
+            ));
+        }
+        for h in handles {
+            assert_eq!(h.await.unwrap().cache, CacheState::Hit);
+        }
+        // 32 cache hits with no real concurrency cap on lookups should
+        // finish far faster than any single subprocess spawn would take.
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "32 cache hits took {:?}; permit must not gate lookups",
+            started.elapsed()
+        );
     }
 
     #[tokio::test]
