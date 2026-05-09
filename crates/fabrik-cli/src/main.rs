@@ -14,7 +14,7 @@ use clap::Parser;
 use fabrik_cas::Cas;
 use tracing_subscriber::{fmt, EnvFilter};
 
-use cli::{Cli, Cmd, Format};
+use cli::{Cli, Cmd, Format, CACHE_DIR};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -49,7 +49,7 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
         Some(d) => d,
         None => env::current_dir().context("resolving workspace root")?,
     };
-    let cas = Cas::open(workspace.join(".fabrik"));
+    let cas = Cas::open(workspace.join(CACHE_DIR));
     let format: Format = cli.format;
 
     match cli.command {
@@ -64,11 +64,13 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
             commands::exec::exec(
                 &workspace,
                 &cas,
-                env,
-                cwd,
-                timeout_ms,
-                cache_failures,
-                argv,
+                commands::exec::ExecArgs {
+                    env,
+                    cwd,
+                    timeout_ms,
+                    cache_failures,
+                    argv,
+                },
                 format,
             )
             .await

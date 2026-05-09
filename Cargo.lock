@@ -532,6 +532,7 @@ dependencies = [
  "fabrik-frontend",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "toon-rust",
  "tracing",

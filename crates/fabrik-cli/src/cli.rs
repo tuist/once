@@ -6,6 +6,10 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use fabrik_core::WorkspacePath;
 
+/// Workspace-relative directory holding Fabrik's CAS, action results,
+/// and build outputs. Hidden so VCS and editors ignore it by default.
+pub const CACHE_DIR: &str = ".fabrik";
+
 /// Output format for verbs that emit Fabrik's own structured data
 /// (`targets`, `cache stats`, `run`, `exec` trailers). `human` is the
 /// readable default; `json` and `toon` let agents and scripts consume

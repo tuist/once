@@ -31,17 +31,25 @@ struct ExecTrailer<'a> {
     exit_code: i32,
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn exec(
-    workspace: &Path,
-    cas: &Cas,
-    env: Vec<(String, String)>,
-    cwd: Option<WorkspacePath>,
-    timeout_ms: Option<u64>,
-    cache_failures: bool,
-    argv: Vec<String>,
-    format: Format,
-) -> Result<ExitCode> {
+/// Inputs to [`exec`], grouped so the function signature stays
+/// readable as the verb gains options. Owned types: the call site
+/// builds these from clap and hands them over.
+pub struct ExecArgs {
+    pub env: Vec<(String, String)>,
+    pub cwd: Option<WorkspacePath>,
+    pub timeout_ms: Option<u64>,
+    pub cache_failures: bool,
+    pub argv: Vec<String>,
+}
+
+pub async fn exec(workspace: &Path, cas: &Cas, args: ExecArgs, format: Format) -> Result<ExitCode> {
+    let ExecArgs {
+        env,
+        cwd,
+        timeout_ms,
+        cache_failures,
+        argv,
+    } = args;
     let action = Action::RunCommand {
         argv,
         env: env.into_iter().collect::<BTreeMap<_, _>>(),
