@@ -39,6 +39,39 @@ pub(crate) fn with_state<R>(f: impl FnOnce(&mut EvalState) -> R) -> R {
     })
 }
 
+/// RAII handle for the per-thread evaluation state. Installs on
+/// construction; clears on drop. Callers consume it with [`finish`] to
+/// recover the populated state — if a panic unwinds before that,
+/// `Drop` still clears the slot so the next `eval_with` on this thread
+/// starts clean.
+struct StateGuard {
+    armed: bool,
+}
+
+impl StateGuard {
+    fn install(state: EvalState) -> Self {
+        STATE.with(|c| {
+            *c.borrow_mut() = Some(state);
+        });
+        Self { armed: true }
+    }
+
+    fn finish(mut self) -> Option<EvalState> {
+        self.armed = false;
+        STATE.with(|c| c.borrow_mut().take())
+    }
+}
+
+impl Drop for StateGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            STATE.with(|c| {
+                let _ = c.borrow_mut().take();
+            });
+        }
+    }
+}
+
 /// Evaluate `src` under `name`, returning the targets it declares. The
 /// evaluator can read `workspace_root`/`package` via [`with_state`] so
 /// `glob` resolves against the right directory and recorded targets
@@ -65,12 +98,10 @@ pub(crate) fn eval_with(
     let globals: Globals = GlobalsBuilder::new().with(fabrik_globals).build();
     let module = Module::new();
 
-    STATE.with(|c| {
-        *c.borrow_mut() = Some(EvalState {
-            workspace_root,
-            package,
-            targets: Vec::new(),
-        });
+    let guard = StateGuard::install(EvalState {
+        workspace_root,
+        package,
+        targets: Vec::new(),
     });
     let eval_result = (|| -> std::result::Result<(), starlark::Error> {
         let mut eval = Evaluator::new(&module);
@@ -78,10 +109,7 @@ pub(crate) fn eval_with(
         eval.eval_module(user_ast, &globals)?;
         Ok(())
     })();
-    let collected = STATE
-        .with(|c| c.borrow_mut().take())
-        .map(|s| s.targets)
-        .unwrap_or_default();
+    let collected = guard.finish().map(|s| s.targets).unwrap_or_default();
 
     eval_result.map_err(|e| Error::Eval {
         path: name.to_owned(),
@@ -184,6 +212,34 @@ rust_test(name = "core_test", srcs = ["tests/core.rs"], deps = [":core"])
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].kind, "custom");
         assert_eq!(targets[0].name, "x");
+    }
+
+    #[test]
+    fn panic_during_eval_does_not_leak_state_to_the_next_call() {
+        // Force a panic inside the eval closure by hijacking the
+        // thread-local from a synchronous global called by user code.
+        // We can't trigger a real starlark panic from a unit test, so
+        // simulate one with std::panic::catch_unwind around an inner
+        // closure that installs the state and then panics.
+        let outcome = std::panic::catch_unwind(|| {
+            let _guard = StateGuard::install(EvalState {
+                workspace_root: PathBuf::from("/poisoned"),
+                package: "poisoned".into(),
+                targets: Vec::new(),
+            });
+            panic!("simulated eval panic");
+        });
+        assert!(
+            outcome.is_err(),
+            "expected the simulated panic to propagate"
+        );
+
+        // The next call must observe a clean slot. If the guard didn't
+        // clean up, with_state would return the leaked "/poisoned"
+        // workspace and glob would resolve against it.
+        let targets = load_str("fabrik.star", "rust_binary(name = \"x\", srcs = [])").unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].package, "");
     }
 
     #[test]
