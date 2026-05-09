@@ -545,6 +545,7 @@ dependencies = [
  "fabrik-rust",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "toon-rust",
  "tracing",

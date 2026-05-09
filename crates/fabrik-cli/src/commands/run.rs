@@ -15,7 +15,7 @@ use fabrik_core::{Action, CacheState, ResourceRequest, RunOpts, Runner, Workspac
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-use crate::cli::{exit_from, Format};
+use crate::cli::{exit_from, Format, CACHE_DIR};
 use crate::render;
 
 #[derive(Serialize)]
@@ -153,12 +153,12 @@ fn rust_binary_action(workspace: &Path, target: &fabrik_frontend::Target) -> Res
         .ok_or_else(|| anyhow::anyhow!("rust_binary {} has no srcs", target.label()))?;
     let src_rel = source_path(target, main_src)?;
     let out_rel = if target.package.is_empty() {
-        format!(".fabrik/out/{}", target.name)
+        format!("{CACHE_DIR}/out/{}", target.name)
     } else {
-        format!(".fabrik/out/{}/{}", target.package, target.name)
+        format!("{CACHE_DIR}/out/{}/{}", target.package, target.name)
     };
     let input_digest = input_digest(workspace, target)?;
-    let output_dir = workspace.join(".fabrik").join("out").join(&target.package);
+    let output_dir = workspace.join(CACHE_DIR).join("out").join(&target.package);
 
     Ok(ActionPlan {
         action: Action::RunCommand {
@@ -322,6 +322,16 @@ fn uncached_task_digest(target: &fabrik_frontend::Target) -> Digest {
     Digest::of_bytes(&buf)
 }
 
+/// Hash the declared sources of a target into a single digest the
+/// action depends on. Two targets that disagree on either the set of
+/// source paths or on any source's contents get different digests, so
+/// the action cache invalidates correctly.
+///
+/// Encoding (per source, after sorting by workspace path):
+/// `path_bytes || 0x00 || file_digest || 0x00`. Sorting before hashing
+/// makes the result stable across iteration orders. The terminator
+/// guards against ambiguity even though declared paths never contain
+/// NULs in practice.
 fn input_digest(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Option<Digest>> {
     if target.srcs.is_empty() {
         return Ok(None);
@@ -336,9 +346,10 @@ fn input_digest(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Op
 
     let mut buf = Vec::new();
     for path in paths {
-        let bytes = std::fs::read(path.resolve(workspace))
+        let file = std::fs::File::open(path.resolve(workspace))
             .with_context(|| format!("reading source input `{path}`"))?;
-        let digest = Digest::of_bytes(&bytes);
+        let digest = Digest::of_reader(std::io::BufReader::new(file))
+            .with_context(|| format!("hashing source input `{path}`"))?;
         buf.extend_from_slice(path.as_str().as_bytes());
         buf.push(0);
         buf.extend_from_slice(digest.as_bytes());
@@ -347,17 +358,197 @@ fn input_digest(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Op
     Ok(Some(Digest::of_bytes(&buf)))
 }
 
+/// Environment variables forwarded verbatim to spawned tool actions
+/// (rustc, cargo, ...). Anything not on this list, and not a `MISE_*`
+/// variable, is dropped: actions must declare every variable they
+/// depend on, or the cache key lies.
+const FORWARDED_TOOL_ENV: &[&str] = &["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"];
+
 fn tool_env() -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-    for key in ["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"] {
-        if let Ok(value) = std::env::var(key) {
-            env.insert(key.into(), value);
+    select_tool_env(std::env::vars())
+}
+
+fn select_tool_env<I>(vars: I) -> BTreeMap<String, String>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    vars.into_iter()
+        .filter(|(k, _)| FORWARDED_TOOL_ENV.contains(&k.as_str()) || k.starts_with("MISE_"))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fabrik_frontend::Target;
+    use tempfile::TempDir;
+
+    fn target(package: &str, kind: &str, srcs: &[&str]) -> Target {
+        Target {
+            package: package.into(),
+            kind: kind.into(),
+            name: "demo".into(),
+            srcs: srcs.iter().map(|s| (*s).into()).collect(),
+            deps: vec![],
+            attrs: BTreeMap::new(),
         }
     }
-    for (key, value) in std::env::vars() {
-        if key.starts_with("MISE_") {
-            env.insert(key, value);
+
+    #[test]
+    fn select_tool_env_keeps_allowlisted_keys_and_mise_prefix() {
+        let env = select_tool_env([
+            ("PATH".into(), "/usr/bin".into()),
+            ("CARGO_HOME".into(), "/cargo".into()),
+            ("MISE_TRUSTED_CONFIG_PATHS".into(), "/ws".into()),
+            ("MISE_YES".into(), "1".into()),
+            ("UNRELATED".into(), "leaked".into()),
+            ("FABRIK_PROBE".into(), "leaked".into()),
+        ]);
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/usr/bin"));
+        assert_eq!(env.get("CARGO_HOME").map(String::as_str), Some("/cargo"));
+        assert_eq!(
+            env.get("MISE_TRUSTED_CONFIG_PATHS").map(String::as_str),
+            Some("/ws")
+        );
+        assert_eq!(env.get("MISE_YES").map(String::as_str), Some("1"));
+        assert!(!env.contains_key("UNRELATED"));
+        assert!(!env.contains_key("FABRIK_PROBE"));
+    }
+
+    #[test]
+    fn source_path_joins_package_and_rejects_escapes() {
+        let t = target("crates/foo", "rust_binary", &["src/main.rs"]);
+        assert_eq!(
+            source_path(&t, "src/main.rs").unwrap().as_str(),
+            "crates/foo/src/main.rs"
+        );
+        let root = target("", "rust_binary", &["main.rs"]);
+        assert_eq!(source_path(&root, "main.rs").unwrap().as_str(), "main.rs");
+
+        // A `..` in the declared src must not let the target escape its
+        // own package. The frontend collects whatever the user wrote;
+        // path validation lives here.
+        let escape = target("pkg", "rust_binary", &["../escape.rs"]);
+        assert!(source_path(&escape, "../escape.rs").is_err());
+    }
+
+    #[test]
+    fn input_digest_is_none_when_no_srcs_are_declared() {
+        let tmp = TempDir::new().unwrap();
+        let t = target("", "rust_binary", &[]);
+        assert!(input_digest(tmp.path(), &t).unwrap().is_none());
+    }
+
+    #[test]
+    fn input_digest_changes_with_content_and_is_stable_across_runs() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("pkg")).unwrap();
+        std::fs::write(tmp.path().join("pkg/main.rs"), b"fn main() {}").unwrap();
+        let t = target("pkg", "rust_binary", &["main.rs"]);
+
+        let first = input_digest(tmp.path(), &t).unwrap().unwrap();
+        let second = input_digest(tmp.path(), &t).unwrap().unwrap();
+        assert_eq!(first, second, "stable for identical content");
+
+        // Edit the file: digest must change.
+        std::fs::write(tmp.path().join("pkg/main.rs"), b"fn main() { /*!*/ }").unwrap();
+        let third = input_digest(tmp.path(), &t).unwrap().unwrap();
+        assert_ne!(first, third, "content change must invalidate the digest");
+    }
+
+    #[test]
+    fn input_digest_is_independent_of_declared_src_order() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("pkg")).unwrap();
+        std::fs::write(tmp.path().join("pkg/a.rs"), b"a").unwrap();
+        std::fs::write(tmp.path().join("pkg/b.rs"), b"b").unwrap();
+        let forward = target("pkg", "rust_binary", &["a.rs", "b.rs"]);
+        let reversed = target("pkg", "rust_binary", &["b.rs", "a.rs"]);
+        assert_eq!(
+            input_digest(tmp.path(), &forward).unwrap().unwrap(),
+            input_digest(tmp.path(), &reversed).unwrap().unwrap()
+        );
+    }
+
+    #[test]
+    fn rust_binary_action_has_expected_argv_and_output() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("pkg")).unwrap();
+        std::fs::write(tmp.path().join("pkg/main.rs"), b"fn main() {}").unwrap();
+        let t = target("pkg", "rust_binary", &["main.rs"]);
+        let plan = rust_binary_action(tmp.path(), &t).unwrap();
+
+        assert_eq!(plan.output, format!("{CACHE_DIR}/out/pkg/demo"));
+        assert_eq!(
+            plan.output_dir.as_deref(),
+            Some(tmp.path().join(CACHE_DIR).join("out").join("pkg")).as_deref()
+        );
+        match plan.action {
+            Action::RunCommand {
+                argv,
+                input_digest,
+                cwd,
+                ..
+            } => {
+                assert_eq!(argv[0], "rustc");
+                assert!(argv.contains(&"--crate-type=bin".to_string()));
+                assert!(argv.iter().any(|a| a == "--crate-name=demo"));
+                assert_eq!(argv.last().map(String::as_str), Some("pkg/main.rs"));
+                assert!(input_digest.is_some(), "rust_binary must hash its inputs");
+                assert!(cwd.is_none(), "rust_binary runs at the workspace root");
+            }
         }
     }
-    env
+
+    #[test]
+    fn rust_binary_action_root_package_drops_separator() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("main.rs"), b"fn main() {}").unwrap();
+        let t = target("", "rust_binary", &["main.rs"]);
+        let plan = rust_binary_action(tmp.path(), &t).unwrap();
+        assert_eq!(plan.output, format!("{CACHE_DIR}/out/demo"));
+    }
+
+    #[test]
+    fn cargo_binary_action_uses_attrs_and_falls_back_to_name_for_bin() {
+        let mut t = target("", "cargo_binary", &["Cargo.toml"]);
+        t.attrs.insert("cargo_package".into(), "fabrik-cli".into());
+        // No explicit `bin`: defaults to `name`.
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), b"[package]\nname=\"x\"\n").unwrap();
+        let plan = cargo_binary_action(tmp.path(), &t).unwrap();
+        match plan.action {
+            Action::RunCommand { argv, .. } => {
+                assert_eq!(argv[0], "cargo");
+                assert!(argv.contains(&"--locked".to_string()));
+                assert!(argv
+                    .windows(2)
+                    .any(|w| w[0] == "--package" && w[1] == "fabrik-cli"));
+                assert!(argv.windows(2).any(|w| w[0] == "--bin" && w[1] == "demo"));
+            }
+        }
+        assert!(plan.output_dir.is_none());
+    }
+
+    #[test]
+    fn cargo_binary_action_requires_cargo_package_attr() {
+        let t = target("", "cargo_binary", &["Cargo.toml"]);
+        let tmp = TempDir::new().unwrap();
+        let err = cargo_binary_action(tmp.path(), &t)
+            .err()
+            .expect("missing cargo_package must error")
+            .to_string();
+        assert!(err.contains("cargo_package"), "got {err}");
+    }
+
+    #[test]
+    fn action_for_rejects_unsupported_kinds() {
+        let tmp = TempDir::new().unwrap();
+        let t = target("", "rust_library", &["lib.rs"]);
+        let err = action_for(tmp.path(), &t)
+            .err()
+            .expect("rust_library is unsupported")
+            .to_string();
+        assert!(err.contains("rust_library"), "got {err}");
+    }
 }

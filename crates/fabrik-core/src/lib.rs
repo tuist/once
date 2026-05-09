@@ -200,8 +200,20 @@ impl Runner {
     }
 
     pub async fn run(&self, action: &Action) -> Result<Outcome> {
+        let key = action.digest();
+        if let Some(hit) = lookup_cached(&self.cas, &self.workspace_root, &key).await? {
+            return Ok(hit);
+        }
+        // Permits guard real subprocess execution, not cache lookups.
+        // Dropping the future on cancellation releases the permit
+        // without ever entering execute().
         let _permit = self.resources.acquire(action.resource_request()).await;
-        run_inner(action, &self.workspace_root, &self.cas, self.opts).await
+        // Re-check under the permit: another runner may have produced
+        // the entry while we were queued.
+        if let Some(hit) = lookup_cached(&self.cas, &self.workspace_root, &key).await? {
+            return Ok(hit);
+        }
+        produce(action, &self.workspace_root, &self.cas, self.opts, key).await
     }
 }
 
@@ -214,29 +226,38 @@ pub async fn run(
     cas: &Cas,
     opts: RunOpts,
 ) -> Result<Outcome> {
-    run_inner(action, workspace_root, cas, opts).await
+    let key = action.digest();
+    if let Some(hit) = lookup_cached(cas, workspace_root, &key).await? {
+        return Ok(hit);
+    }
+    produce(action, workspace_root, cas, opts, key).await
 }
 
-#[instrument(skip(action, cas), fields(action_digest))]
-async fn run_inner(
+#[instrument(skip(cas), fields(action_digest = %key))]
+async fn lookup_cached(cas: &Cas, workspace_root: &Path, key: &Digest) -> Result<Option<Outcome>> {
+    if let Some(result) = cas.get_action_result(key).await? {
+        debug!("cache hit");
+        // A cache hit must materialize the action's declared outputs to
+        // disk; downstream actions see real files even though the
+        // upstream action did not actually run on this machine.
+        restore_outputs(&result, workspace_root, cas).await?;
+        return Ok(Some(Outcome {
+            action: *key,
+            result,
+            cache: CacheState::Hit,
+        }));
+    }
+    Ok(None)
+}
+
+#[instrument(skip(action, cas), fields(action_digest = %key))]
+async fn produce(
     action: &Action,
     workspace_root: &Path,
     cas: &Cas,
     opts: RunOpts,
+    key: Digest,
 ) -> Result<Outcome> {
-    let key = action.digest();
-    tracing::Span::current().record("action_digest", tracing::field::display(&key));
-
-    if let Some(result) = cas.get_action_result(&key).await? {
-        debug!("cache hit");
-        restore_outputs(&result, workspace_root, cas).await?;
-        return Ok(Outcome {
-            action: key,
-            result,
-            cache: CacheState::Hit,
-        });
-    }
-
     let result = execute(action, workspace_root, cas).await?;
     let cacheable = result.exit_code == 0 || opts.cache_failures;
     if cacheable {
@@ -328,10 +349,9 @@ async fn execute(action: &Action, workspace_root: &Path, cas: &Cas) -> Result<Ac
                 execute_run_command(argv, env, cwd.as_ref(), *timeout_ms, workspace_root, cas)
                     .await?;
             // Failed actions don't have to produce their declared
-            // outputs; the caller (`run_inner`) decides whether to
-            // cache the failure at all. When the action succeeded,
-            // every declared output must exist or it's a contract
-            // violation.
+            // outputs; the caller (`produce`) decides whether to cache
+            // the failure at all. When the action succeeded, every
+            // declared output must exist or it's a contract violation.
             if result.exit_code == 0 {
                 result.outputs = capture_outputs(outputs, workspace_root, cas).await?;
             }
@@ -1153,6 +1173,42 @@ mod tests {
         assert_eq!(outcome.result.exit_code, 0);
         let stdout = runner.cas().get_blob(&outcome.result.stdout).await.unwrap();
         assert_eq!(stdout, b"ok");
+    }
+
+    #[tokio::test]
+    async fn cache_hits_do_not_queue_on_the_permit_pool() {
+        // Warm the cache, then issue many concurrent runs of the same
+        // action under max_concurrency=1. A naive implementation that
+        // holds a permit across the cache lookup would serialize all of
+        // them; with the lookup outside the permit they all return
+        // immediately.
+        let (tmp, cas) = fresh_cas();
+        let action = echo_action("warm");
+        run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+
+        let runner =
+            Runner::new(cas, tmp.path().to_path_buf(), RunOpts::default()).with_max_concurrency(1);
+        let started = std::time::Instant::now();
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let runner = runner.clone();
+            let action = action.clone();
+            handles.push(tokio::spawn(
+                async move { runner.run(&action).await.unwrap() },
+            ));
+        }
+        for h in handles {
+            assert_eq!(h.await.unwrap().cache, CacheState::Hit);
+        }
+        // 32 cache hits with no real concurrency cap on lookups should
+        // finish far faster than any single subprocess spawn would take.
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "32 cache hits took {:?}; permit must not gate lookups",
+            started.elapsed()
+        );
     }
 
     #[tokio::test]
