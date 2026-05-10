@@ -1,10 +1,12 @@
-//! The [`Target`] record produced by evaluating a `fabrik.star` file.
+//! The [`Target`] record produced by loading a `fabrik.toml` file.
 
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-/// A target declared by a `fabrik.star` file.
+use crate::target_ref::target_id;
+
+/// A target declared by a `fabrik.toml` file.
 ///
 /// `package` is the workspace-relative directory holding the build file
 /// (forward-slash separated, empty string for the workspace root).
@@ -24,14 +26,10 @@ pub struct Target {
 }
 
 impl Target {
-    /// The `//package:name` label for this target.
+    /// The project-root-relative id for this target.
     #[must_use]
-    pub fn label(&self) -> String {
-        if self.package.is_empty() {
-            format!("//:{}", self.name)
-        } else {
-            format!("//{}:{}", self.package, self.name)
-        }
+    pub fn id(&self) -> String {
+        target_id(&self.package, &self.name)
     }
 }
 
@@ -40,7 +38,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn label_uses_package_path() {
+    fn id_uses_project_relative_path() {
         let t = Target {
             package: "crates/foo".into(),
             kind: "rust_binary".into(),
@@ -49,11 +47,11 @@ mod tests {
             deps: vec![],
             attrs: BTreeMap::new(),
         };
-        assert_eq!(t.label(), "//crates/foo:bar");
+        assert_eq!(t.id(), "crates/foo/bar");
         let root_t = Target {
             package: String::new(),
             ..t
         };
-        assert_eq!(root_t.label(), "//:bar");
+        assert_eq!(root_t.id(), "bar");
     }
 }

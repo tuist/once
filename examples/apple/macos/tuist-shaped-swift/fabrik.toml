@@ -14,8 +14,8 @@ minimum_os = "15.0"
 name = "TuistEnvironment"
 srcs = ["Sources/TuistEnvironment/Environment.swift"]
 deps = [
-  "//examples/tuist-shaped-swift:TuistConstants",
-  "//examples/tuist-shaped-swift:TuistThreadSafe",
+  "TuistConstants",
+  "TuistThreadSafe",
 ]
 module_name = "TuistEnvironment"
 minimum_os = "15.0"
@@ -24,8 +24,8 @@ minimum_os = "15.0"
 name = "TuistLogging"
 srcs = ["Sources/TuistLogging/Logging.swift"]
 deps = [
-  "//examples/tuist-shaped-swift:TuistConstants",
-  "//examples/tuist-shaped-swift:TuistEnvironment",
+  "TuistConstants",
+  "TuistEnvironment",
 ]
 module_name = "TuistLogging"
 minimum_os = "15.0"
@@ -33,7 +33,7 @@ minimum_os = "15.0"
 [[apple.swift_library]]
 name = "TuistServer"
 srcs = ["Sources/TuistServer/Server.swift"]
-deps = ["//examples/tuist-shaped-swift:TuistLogging"]
+deps = ["TuistLogging"]
 module_name = "TuistServer"
 minimum_os = "15.0"
 
@@ -41,9 +41,9 @@ minimum_os = "15.0"
 name = "TuistKit"
 srcs = ["Sources/TuistKit/Kit.swift"]
 deps = [
-  "//examples/tuist-shaped-swift:TuistEnvironment",
-  "//examples/tuist-shaped-swift:TuistLogging",
-  "//examples/tuist-shaped-swift:TuistServer",
+  "TuistEnvironment",
+  "TuistLogging",
+  "TuistServer",
 ]
 module_name = "TuistKit"
 minimum_os = "15.0"
@@ -52,11 +52,11 @@ minimum_os = "15.0"
 name = "tuist"
 srcs = ["Sources/TuistCLI/main.swift"]
 deps = [
-  "//examples/tuist-shaped-swift:TuistConstants",
-  "//examples/tuist-shaped-swift:TuistEnvironment",
-  "//examples/tuist-shaped-swift:TuistLogging",
-  "//examples/tuist-shaped-swift:TuistServer",
-  "//examples/tuist-shaped-swift:TuistKit",
+  "TuistConstants",
+  "TuistEnvironment",
+  "TuistLogging",
+  "TuistServer",
+  "TuistKit",
 ]
 module_name = "TuistCLI"
 minimum_os = "15.0"

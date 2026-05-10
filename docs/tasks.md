@@ -10,7 +10,7 @@ srcs = ["input.txt"]
 ```
 
 ```sh
-fabrik run //tasks:print
+fabrik run tasks/print
 ```
 
 ## Fields
@@ -19,9 +19,9 @@ fabrik run //tasks:print
 - `argv`: command and arguments.
 - `srcs`: package-relative inputs that participate in the cache key.
 - `src_globs`: package-relative glob inputs.
-- `outputs`: workspace-relative outputs to capture and restore from CAS.
+- `outputs`: project-root-relative outputs to capture and restore from CAS.
 - `env`: environment variables passed to the process.
-- `cwd`: workspace-relative working directory.
+- `cwd`: project-root-relative working directory.
 - `cache`: defaults to `true`. Set to `false` for side-effecting tasks.
 - `timeout_ms`: optional timeout.
 - `cpu_slots`: optional CPU slot request. Defaults to 1.

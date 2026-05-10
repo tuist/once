@@ -15,7 +15,7 @@ use crate::render;
 
 #[derive(Serialize)]
 struct TestSummary<'a> {
-    label: &'a str,
+    target: &'a str,
     build_nodes: usize,
     build_cache_hits: usize,
     build_cache_misses: usize,
@@ -28,40 +28,42 @@ struct TestSummary<'a> {
 pub async fn test(
     workspace: &Path,
     cas: &Cas,
-    label: &str,
+    target_id: &str,
     test_args: Vec<String>,
     format: Format,
 ) -> Result<ExitCode> {
     let targets = fabrik_frontend::load_workspace(workspace).context("loading workspace")?;
     let target = targets
         .iter()
-        .find(|t| t.label() == label)
-        .ok_or_else(|| anyhow::anyhow!("no target matches `{label}`"))?;
+        .find(|t| t.id() == target_id)
+        .ok_or_else(|| anyhow::anyhow!("no target matches `{target_id}`"))?;
     if target.kind != "rust_test" {
         anyhow::bail!(
-            "target {label} has kind `{}`; expected rust_test",
+            "target {target_id} has kind `{}`; expected rust_test",
             target.kind
         );
     }
 
     let built =
-        fabrik_rust::build_plan(&targets, label, workspace).context("building test plan")?;
+        fabrik_rust::build_plan(&targets, target_id, workspace).context("building test plan")?;
     let runner = Runner::new(cas.clone(), workspace.to_path_buf(), RunOpts::default());
     let build_outcomes = runner
         .run_plan(&built.plan)
         .await
-        .with_context(|| format!("building test target {label}"))?;
+        .with_context(|| format!("building test target {target_id}"))?;
 
     let root_outcome = build_outcomes
         .iter()
         .find(|o| o.index == built.root_index)
-        .ok_or_else(|| anyhow::anyhow!("test build did not produce root outcome for {label}"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("test build did not produce root outcome for {target_id}")
+        })?;
     let binary = test_binary_path(&built)?;
     let test_action = test_action(&binary, test_args, root_outcome.outcome.action);
     let test_outcome = runner
         .run(&test_action)
         .await
-        .with_context(|| format!("running test target {label}"))?;
+        .with_context(|| format!("running test target {target_id}"))?;
 
     let build_hits = build_outcomes
         .iter()
@@ -70,7 +72,7 @@ pub async fn test(
     let build_misses = build_outcomes.len() - build_hits;
     let test_cache = cache_tag(test_outcome.cache);
     let summary = TestSummary {
-        label,
+        target: target_id,
         build_nodes: build_outcomes.len(),
         build_cache_hits: build_hits,
         build_cache_misses: build_misses,
@@ -90,7 +92,7 @@ fn test_binary_path(built: &fabrik_rust::BuiltPlan) -> Result<String> {
     outputs
         .first()
         .map(|p| p.as_str().to_string())
-        .ok_or_else(|| anyhow::anyhow!("rust_test {} has no declared output", built.root_label))
+        .ok_or_else(|| anyhow::anyhow!("rust_test {} has no declared output", built.root_id))
 }
 
 fn test_action(binary: &str, test_args: Vec<String>, input_digest: fabrik_cas::Digest) -> Action {
@@ -125,7 +127,7 @@ async fn render_output(
             err.write_all(&stderr).await?;
             let trailer = format!(
                 "fabrik: tested {label} (build {nodes} nodes, {hits} hit, {misses} miss; test cache {test_cache}, exit={exit}) -> {binary}\n",
-                label = summary.label,
+                label = summary.target,
                 nodes = summary.build_nodes,
                 hits = summary.build_cache_hits,
                 misses = summary.build_cache_misses,
@@ -162,11 +164,6 @@ fn test_env() -> BTreeMap<String, String> {
     for key in ["PATH", "HOME", "RUST_BACKTRACE", "RUST_LOG"] {
         if let Ok(value) = std::env::var(key) {
             env.insert(key.into(), value);
-        }
-    }
-    for (key, value) in std::env::vars() {
-        if key.starts_with("MISE_") {
-            env.insert(key, value);
         }
     }
     env

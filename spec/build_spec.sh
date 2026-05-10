@@ -16,14 +16,19 @@ Describe 'fabrik build'
     cat > "$WORKSPACE/crates/say/src/lib.rs" <<'EOF'
 pub fn message() -> &'static str { "hello" }
 EOF
-    cat > "$WORKSPACE/crates/say/fabrik.star" <<'EOF'
-rust_library(name = "say", srcs = ["src/lib.rs"])
+    cat > "$WORKSPACE/crates/say/fabrik.toml" <<'EOF'
+[[rust.library]]
+name = "say"
+srcs = ["src/lib.rs"]
 EOF
     cat > "$WORKSPACE/crates/hello/src/main.rs" <<'EOF'
 fn main() { println!("{}", say::message()); }
 EOF
-    cat > "$WORKSPACE/crates/hello/fabrik.star" <<'EOF'
-rust_binary(name = "hello", srcs = ["src/main.rs"], deps = ["//crates/say:say"])
+    cat > "$WORKSPACE/crates/hello/fabrik.toml" <<'EOF'
+[[rust.binary]]
+name = "hello"
+srcs = ["src/main.rs"]
+deps = ["crates/say/say"]
 EOF
   }
 
@@ -36,7 +41,7 @@ EOF
 
   It 'compiles a binary that depends on a library, one rustc per crate'
     granular_workspace
-    When call fabrik build //crates/hello:hello
+    When call fabrik build crates/hello/hello
     The status should be success
     The stderr should include 'rust_library'
     The stderr should include 'rust_binary'
@@ -54,7 +59,7 @@ EOF
 name = "hello"
 srcs = ["src/main.rs"]
 EOF
-    When call fabrik build //hello:hello
+    When call fabrik build hello/hello
     The status should be success
     The stderr should include 'rust_binary'
     The path "$WORKSPACE/.fabrik/out/hello/hello" should be exist
@@ -62,7 +67,7 @@ EOF
 
   It 'threads cargo build-script cfgs into dependent rustc actions'
     build_script_workspace
-    fabrik build //examples/rust/granular/build-script-cfg:app >/dev/null 2>&1
+    fabrik build examples/rust/granular/build-script-cfg/app >/dev/null 2>&1
     When call "$WORKSPACE/.fabrik/out/examples/rust/granular/build-script-cfg/app"
     The status should be success
     The stdout should equal 'enabled'
@@ -70,19 +75,19 @@ EOF
 
   It 'reuses the cache for a build-script-backed Rust graph'
     build_script_workspace
-    fabrik build //examples/rust/granular/build-script-cfg:app >/dev/null 2>&1
-    When call fabrik build //examples/rust/granular/build-script-cfg:app
+    fabrik build examples/rust/granular/build-script-cfg/app >/dev/null 2>&1
+    When call fabrik build examples/rust/granular/build-script-cfg/app
     The status should be success
     The stderr should include '3 nodes, 3 hit, 0 miss'
   End
 
   It 'invalidates build-script dependents when a declared script input changes'
     build_script_workspace
-    fabrik build //examples/rust/granular/build-script-cfg:app >/dev/null 2>&1
+    fabrik build examples/rust/granular/build-script-cfg/app >/dev/null 2>&1
     cat > "$WORKSPACE/examples/rust/granular/build-script-cfg/flag.txt" <<'EOF'
 disabled
 EOF
-    When call fabrik build //examples/rust/granular/build-script-cfg:app
+    When call fabrik build examples/rust/granular/build-script-cfg/app
     The status should be success
     The stderr should include '3 nodes, 0 hit, 3 miss'
   End
@@ -140,7 +145,7 @@ bundle_id = "dev.fabrik.demo"
 srcs = ["Sources/App.swift"]
 minimum_os = "17.0"
 EOF
-    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build //App:Demo
+    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build App/Demo
     The status should be success
     The stderr should include 'apple_ios_app'
     The path "$WORKSPACE/.fabrik/out/App/Demo.app" should be directory
@@ -150,7 +155,7 @@ EOF
 
   It 'produces a runnable binary that links against the library'
     granular_workspace
-    fabrik build //crates/hello:hello >/dev/null 2>&1
+    fabrik build crates/hello/hello >/dev/null 2>&1
     When call "$WORKSPACE/.fabrik/out/crates/hello/hello"
     The status should be success
     The stdout should equal 'hello'
@@ -158,19 +163,19 @@ EOF
 
   It 'second invocation is a full cache hit on every node'
     granular_workspace
-    fabrik build //crates/hello:hello >/dev/null 2>&1
-    When call fabrik build //crates/hello:hello
+    fabrik build crates/hello/hello >/dev/null 2>&1
+    When call fabrik build crates/hello/hello
     The status should be success
     The stderr should include '2 nodes, 2 hit, 0 miss'
   End
 
   It 'invalidates only the binary when its source changes'
     granular_workspace
-    fabrik build //crates/hello:hello >/dev/null 2>&1
+    fabrik build crates/hello/hello >/dev/null 2>&1
     cat > "$WORKSPACE/crates/hello/src/main.rs" <<'EOF'
 fn main() { println!("PREFIX: {}", say::message()); }
 EOF
-    When call fabrik build //crates/hello:hello
+    When call fabrik build crates/hello/hello
     The status should be success
     # Library is reused; binary recompiles.
     The stderr should include '1 hit'
@@ -179,11 +184,11 @@ EOF
 
   It 'invalidates the dependent binary when the library changes'
     granular_workspace
-    fabrik build //crates/hello:hello >/dev/null 2>&1
+    fabrik build crates/hello/hello >/dev/null 2>&1
     cat > "$WORKSPACE/crates/say/src/lib.rs" <<'EOF'
 pub fn message() -> &'static str { "edited" }
 EOF
-    When call fabrik build //crates/hello:hello
+    When call fabrik build crates/hello/hello
     The status should be success
     The stderr should include '0 hit, 2 miss'
   End
@@ -194,9 +199,9 @@ EOF
     # remote execution possible: a fresh checkout can populate every
     # output from a shared CAS without any compile work.
     granular_workspace
-    fabrik build //crates/hello:hello >/dev/null 2>&1
+    fabrik build crates/hello/hello >/dev/null 2>&1
     rm -rf "$WORKSPACE/.fabrik/out"
-    When call fabrik build //crates/hello:hello
+    When call fabrik build crates/hello/hello
     The status should be success
     The stderr should include '2 nodes, 2 hit, 0 miss'
     The path "$WORKSPACE/.fabrik/out/crates/hello/hello" should be exist
@@ -204,17 +209,17 @@ EOF
 
   It 'restored binary still runs after a CAS-only rebuild'
     granular_workspace
-    fabrik build //crates/hello:hello >/dev/null 2>&1
+    fabrik build crates/hello/hello >/dev/null 2>&1
     rm -rf "$WORKSPACE/.fabrik/out"
-    fabrik build //crates/hello:hello >/dev/null 2>&1
+    fabrik build crates/hello/hello >/dev/null 2>&1
     When call "$WORKSPACE/.fabrik/out/crates/hello/hello"
     The status should be success
     The stdout should equal 'hello'
   End
 
-  It 'errors when the root label does not match a target'
+  It 'errors when the target id does not match a target'
     granular_workspace
-    When call fabrik build //crates/hello:nope
+    When call fabrik build crates/hello/nope
     The status should not equal 0
     The stderr should include 'no target matches'
   End

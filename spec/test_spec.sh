@@ -29,13 +29,13 @@ srcs = ["src/lib.rs"]
 name = "math_test"
 srcs = ["tests/math.rs"]
 crate_root = "tests/math.rs"
-deps = ["//crates/math:math"]
+deps = ["crates/math/math"]
 EOF
   }
 
   It 'builds and runs a rust_test target declared in fabrik.toml'
     rust_test_workspace_toml
-    When call fabrik test //crates/math:math_test
+    When call fabrik test crates/math/math_test
     The status should be success
     The stdout should include 'test result: ok'
     The stderr should include 'test cache miss'
@@ -44,8 +44,8 @@ EOF
 
   It 'reuses the cached test result on a second invocation'
     rust_test_workspace_toml
-    fabrik test //crates/math:math_test >/dev/null 2>&1
-    When call fabrik test //crates/math:math_test
+    fabrik test crates/math/math_test >/dev/null 2>&1
+    When call fabrik test crates/math/math_test
     The status should be success
     The stdout should include 'test result: ok'
     The stderr should include 'test cache hit'
@@ -53,7 +53,7 @@ EOF
 
   It 'passes arguments through to the Rust test harness'
     rust_test_workspace_toml
-    When call fabrik test //crates/math:math_test -- --list
+    When call fabrik test crates/math/math_test -- --list
     The status should be success
     The stdout should include 'adds_numbers: test'
     The stderr should include 'test cache miss'
@@ -73,30 +73,29 @@ name = "failing_test"
 srcs = ["tests/failing.rs"]
 crate_root = "tests/failing.rs"
 EOF
-    When call fabrik test //failing:failing_test
+    When call fabrik test failing/failing_test
     The status should not equal 0
     The stdout should include 'test result: FAILED'
     The stderr should include 'exit=101'
   End
 
-  It 'runs a rust_test target declared in fabrik.star'
+  It 'runs a rust_test target declared in a nested package'
     mkdir -p "$WORKSPACE/pkg/tests"
     cat > "$WORKSPACE/pkg/tests/pkg.rs" <<'EOF'
 #[test]
-fn starlark_test_runs() {
+fn package_test_runs() {
     assert!(true);
 }
 EOF
-    cat > "$WORKSPACE/pkg/fabrik.star" <<'EOF'
-rust_test(
-    name = "pkg_test",
-    srcs = ["tests/pkg.rs"],
-    crate_root = "tests/pkg.rs",
-)
+    cat > "$WORKSPACE/pkg/fabrik.toml" <<'EOF'
+[[rust.test]]
+name = "pkg_test"
+srcs = ["tests/pkg.rs"]
+crate_root = "tests/pkg.rs"
 EOF
-    When call fabrik test //pkg:pkg_test
+    When call fabrik test pkg/pkg_test
     The status should be success
-    The stdout should include 'starlark_test_runs'
+    The stdout should include 'package_test_runs'
     The stderr should include 'test cache miss'
   End
 
@@ -108,7 +107,7 @@ EOF
 name = "lib"
 srcs = ["src/lib.rs"]
 EOF
-    When call fabrik test //lib:lib
+    When call fabrik test lib/lib
     The status should not equal 0
     The stderr should include 'expected rust_test'
   End

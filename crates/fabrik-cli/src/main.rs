@@ -46,17 +46,24 @@ fn init_tracing(verbose: u8) {
 
 async fn dispatch(cli: Cli) -> Result<ExitCode> {
     let workspace = match cli.directory {
-        Some(d) => d,
+        Some(d) => fabrik_frontend::absolutize(d).context("resolving workspace root")?,
         None => env::current_dir().context("resolving workspace root")?,
     };
     let cas = Cas::open(workspace.join(CACHE_DIR));
     let format: Format = cli.format;
 
     match cli.command {
-        Cmd::Run { label } => commands::run::run(&workspace, &cas, &label, format).await,
-        Cmd::Build { label } => commands::build::build(&workspace, &cas, &label, format).await,
-        Cmd::Test { label, test_args } => {
-            commands::test::test(&workspace, &cas, &label, test_args, format).await
+        Cmd::Run { target } => {
+            let target = resolve_target_arg(&workspace, &target)?;
+            commands::run::run(&workspace, &cas, &target, format).await
+        }
+        Cmd::Build { target } => {
+            let target = resolve_target_arg(&workspace, &target)?;
+            commands::build::build(&workspace, &cas, &target, format).await
+        }
+        Cmd::Test { target, test_args } => {
+            let target = resolve_target_arg(&workspace, &target)?;
+            commands::test::test(&workspace, &cas, &target, test_args, format).await
         }
         Cmd::Exec {
             env,
@@ -89,4 +96,8 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
             .map(|()| ExitCode::SUCCESS),
         Cmd::Vendor => commands::vendor::vendor(&workspace, format).await,
     }
+}
+
+fn resolve_target_arg(workspace: &std::path::Path, raw: &str) -> Result<String> {
+    fabrik_frontend::normalize_cli_target(workspace, raw).context("resolving target argument")
 }

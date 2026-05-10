@@ -6,9 +6,9 @@ srcs = ["build.rs", "flag.txt"]
 name = "cfg-lib"
 crate_name = "cfg_lib"
 srcs = ["src/lib.rs"]
-deps = ["//examples/rust/granular/build-script-cfg:build"]
+deps = ["build"]
 
 [[rust.binary]]
 name = "app"
 srcs = ["src/main.rs"]
-deps = ["//examples/rust/granular/build-script-cfg:cfg-lib"]
+deps = ["cfg-lib"]

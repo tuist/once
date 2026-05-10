@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use crate::error::{Error, Result};
 use crate::target::Target;
+use crate::target_ref::{normalize_build_dep, validate_target_name};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -286,9 +287,9 @@ fn rust_target(
     Ok(Target {
         package: package.to_string(),
         kind: kind.to_string(),
-        name: t.name,
+        name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: t.deps,
+        deps: normalize_deps(t.deps, package, display_name)?,
         attrs,
     })
 }
@@ -305,9 +306,9 @@ fn cargo_binary_target(
     Ok(Target {
         package: package.to_string(),
         kind: "cargo_binary".to_string(),
-        name: t.name,
+        name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: t.deps,
+        deps: normalize_deps(t.deps, package, display_name)?,
         attrs,
     })
 }
@@ -323,9 +324,9 @@ fn cargo_build_script_target(
     Ok(Target {
         package: package.to_string(),
         kind: "cargo_build_script".to_string(),
-        name: t.name,
+        name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: t.deps,
+        deps: normalize_deps(t.deps, package, display_name)?,
         attrs,
     })
 }
@@ -344,9 +345,9 @@ fn apple_ios_app_target(
     Ok(Target {
         package: package.to_string(),
         kind: "apple_ios_app".to_string(),
-        name: t.name,
+        name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: t.deps,
+        deps: normalize_deps(t.deps, package, display_name)?,
         attrs,
     })
 }
@@ -365,9 +366,9 @@ fn apple_swift_target(
     Ok(Target {
         package: package.to_string(),
         kind: kind.to_string(),
-        name: t.name,
+        name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: t.deps,
+        deps: normalize_deps(t.deps, package, display_name)?,
         attrs,
     })
 }
@@ -387,9 +388,9 @@ fn apple_framework_target(
     Ok(Target {
         package: package.to_string(),
         kind: kind.to_string(),
-        name: t.name,
+        name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: t.deps,
+        deps: normalize_deps(t.deps, package, display_name)?,
         attrs,
     })
 }
@@ -403,9 +404,9 @@ fn generic_target(
     Ok(Target {
         package: package.to_string(),
         kind: t.kind,
-        name: t.name,
+        name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: t.deps,
+        deps: normalize_deps(t.deps, package, display_name)?,
         attrs: t.attrs,
     })
 }
@@ -447,7 +448,7 @@ fn task_target(
     Ok(Target {
         package: package.to_string(),
         kind: "task".to_string(),
-        name: t.name,
+        name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
         deps: Vec::new(),
         attrs,
@@ -467,6 +468,25 @@ fn insert_json_vec(attrs: &mut BTreeMap<String, String>, key: &str, value: &[Str
             serde_json::to_string(&value).expect("string vec is serializable"),
         );
     }
+}
+
+fn checked_name(name: String, display_name: &str) -> Result<String> {
+    validate_target_name(&name).map_err(|e| Error::Eval {
+        path: display_name.to_string(),
+        message: e.to_string(),
+    })?;
+    Ok(name)
+}
+
+fn normalize_deps(deps: Vec<String>, package: &str, display_name: &str) -> Result<Vec<String>> {
+    deps.into_iter()
+        .map(|dep| {
+            normalize_build_dep(package, &dep).map_err(|e| Error::Eval {
+                path: display_name.to_string(),
+                message: e.to_string(),
+            })
+        })
+        .collect()
 }
 
 const fn default_true() -> bool {
@@ -547,12 +567,18 @@ name = "cli"
 srcs = ["src/main.rs"]
 deps = [":core"]
 "#;
-        let targets = load_toml_str("fabrik.toml", src).unwrap();
+        let err = load_toml_str("fabrik.toml", src).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("target reference `:core` uses Bazel label syntax"));
+
+        let src = src.replace("deps = [\":core\"]", "deps = [\"core\"]");
+        let targets = load_toml_str("fabrik.toml", &src).unwrap();
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].kind, "rust_library");
         assert_eq!(targets[0].attrs["edition"], "2021");
         assert_eq!(targets[1].kind, "rust_binary");
-        assert_eq!(targets[1].deps, vec![":core".to_string()]);
+        assert_eq!(targets[1].deps, vec!["core".to_string()]);
     }
 
     #[test]
@@ -563,7 +589,7 @@ deps = [":core"]
         std::fs::write(root.join("pkg/src/lib.rs"), "pub fn hi() {}").unwrap();
         std::fs::write(root.join("pkg/src/main.rs"), "fn main() {}").unwrap();
         let targets = load_toml_with(
-            "//pkg:fabrik.toml",
+            "pkg/fabrik.toml",
             r#"
 [[rust.binary]]
 name = "pkg"
@@ -613,7 +639,7 @@ swiftc_flags = ["-D", "MOCKING"]
 [[apple.macos_command_line_application]]
 name = "hello"
 srcs = ["Sources/main.swift"]
-deps = ["//:Greeter"]
+deps = ["Greeter"]
 "#,
         )
         .unwrap();
@@ -622,7 +648,7 @@ deps = ["//:Greeter"]
         assert_eq!(targets[0].attrs["module_name"], "Greeter");
         assert!(targets[0].attrs["swiftc_flags_json"].contains("MOCKING"));
         assert_eq!(targets[1].kind, "macos_command_line_application");
-        assert_eq!(targets[1].deps, vec!["//:Greeter".to_string()]);
+        assert_eq!(targets[1].deps, vec!["Greeter".to_string()]);
     }
 
     #[test]

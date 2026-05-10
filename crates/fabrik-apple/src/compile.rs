@@ -47,7 +47,7 @@ enum Mode {
 pub fn compile_ios_app(target: &Target, workspace_root: &Path) -> Result<PlanNode, AppleError> {
     let action = build_ios_app_action(target, workspace_root)?;
     Ok(PlanNode {
-        label: target.label(),
+        label: target.id(),
         action: action.action,
         deps: Vec::new(),
     })
@@ -56,7 +56,7 @@ pub fn compile_ios_app(target: &Target, workspace_root: &Path) -> Result<PlanNod
 pub fn launch_ios_app(target: &Target, _workspace_root: &Path) -> Result<AppleAction, AppleError> {
     if target.kind != "apple_ios_app" {
         return Err(AppleError::UnsupportedKind {
-            label: target.label(),
+            label: target.id(),
             kind: target.kind.clone(),
         });
     }
@@ -90,14 +90,12 @@ pub fn launch_ios_app(target: &Target, _workspace_root: &Path) -> Result<AppleAc
 fn build_ios_app_action(target: &Target, workspace_root: &Path) -> Result<AppleAction, AppleError> {
     if target.kind != "apple_ios_app" {
         return Err(AppleError::UnsupportedKind {
-            label: target.label(),
+            label: target.id(),
             kind: target.kind.clone(),
         });
     }
     if target.srcs.is_empty() {
-        return Err(AppleError::NoSources {
-            label: target.label(),
-        });
+        return Err(AppleError::NoSources { label: target.id() });
     }
 
     let bundle_id = required_attr(target, "bundle_id")?;
@@ -130,7 +128,7 @@ fn build_ios_app_action(target: &Target, workspace_root: &Path) -> Result<AppleA
     let input_digest = build_input_digest(target, workspace_root, &bundle_id, &minimum_os)?;
     let output =
         WorkspacePath::try_from(app_dir.as_str()).map_err(|source| AppleError::InvalidPath {
-            label: target.label(),
+            label: target.id(),
             path: app_dir.clone(),
             source,
         })?;
@@ -240,7 +238,7 @@ fn required_attr(target: &Target, attr: &str) -> Result<String, AppleError> {
         .get(attr)
         .cloned()
         .ok_or_else(|| AppleError::MissingAttr {
-            label: target.label(),
+            label: target.id(),
             attr: attr.to_string(),
         })
 }
@@ -258,7 +256,7 @@ fn source_paths(target: &Target) -> Result<Vec<String>, AppleError> {
             WorkspacePath::try_from(rel.as_str())
                 .map(|p| p.as_str().to_string())
                 .map_err(|source| AppleError::InvalidPath {
-                    label: target.label(),
+                    label: target.id(),
                     path: rel,
                     source,
                 })
@@ -284,7 +282,7 @@ fn build_input_digest(
     for src in srcs {
         let abs = workspace_root.join(&src);
         let bytes = std::fs::read(&abs).map_err(|source| AppleError::ReadSource {
-            label: target.label(),
+            label: target.id(),
             path: src.clone(),
             source,
         })?;
@@ -309,7 +307,7 @@ fn uncached_launch_digest(target: &Target, bundle_id: &str) -> Digest {
         .as_nanos();
     let mut buf = Vec::new();
     buf.extend_from_slice(b"fabrik.apple.ios_app.launch.v1\0");
-    buf.extend_from_slice(target.label().as_bytes());
+    buf.extend_from_slice(target.id().as_bytes());
     buf.push(0);
     buf.extend_from_slice(bundle_id.as_bytes());
     buf.push(0);

@@ -27,9 +27,9 @@ A phased plan optimized for **shortest path to self-hosting**. The design spec (
 
 ## Phase 1: TOML frontend + declared Rust (week 3-6)
 
-**Goal:** `fabrik build //hello:hello` reads a `fabrik.toml` file with a declared `[[rust.binary]]` target and produces a working binary, with the same caching behavior the CAS already has.
+**Goal:** `fabrik build hello/hello` reads a `fabrik.toml` file with a declared `[[rust.binary]]` target and produces a working binary, with the same caching behavior the CAS already has.
 
-- New crate `fabrik-frontend`: defines the `fabrik.toml` loader, target schemas, validation, and label resolution.
+- New crate `fabrik-frontend`: defines the `fabrik.toml` loader, target schemas, validation, and target id resolution.
 - New crate `fabrik-rust`: registers `rust.library`, `rust.binary`, `rust.test`, `rust.proc_macro`, plus Rust handlers such as `rust.rustc_invoke` and `rust.parse_diagnostics`.
 - Plugin contract: validated TOML declarations are passed to plugin planners, which emit typed `Action` records that the substrate runs. Same shape that any future plugin will use.
 - Generates one action per declared target. Cache key inputs: srcs digest, deps, rustc version, feature flags.
@@ -80,7 +80,7 @@ This is the dogfood gate. Don't proceed past Phase 3 until it's met.
 **Goal:** Make TOML build declarations production-grade for humans and agents. The language itself is settled as structured data; this phase is about schemas, diagnostics, and importers on top of it.
 
 - Profiles: implement `[[profile]]` declarations, partition cache namespaces by profile, support `--profile` selection on the CLI.
-- LSP server: completion, schema-aware diagnostics, and jump-to-target for labels. Agents and humans both benefit.
+- LSP server: completion, schema-aware diagnostics, and jump-to-target for ids. Agents and humans both benefit.
 - Schema registry: every plugin contributes its target schemas, the LSP and the frontend share the same registry, errors are typed and located.
 - Documentation site: every built-in target type, generated from the schemas, with examples.
 
@@ -152,7 +152,7 @@ These run in parallel with the phased work, not as separate phases:
 
 ### Resolved (kept here for historical reference)
 
-- **Build definition language**: TOML declarations validated against plugin schemas. Decided after comparing Starlark, Pkl, and TypeScript against agent authoring and validation workflows.
+- **Build definition language**: TOML declarations validated against plugin schemas. Decided around agent authoring, validation, and repair workflows.
 - **Plugin implementation**: first-party Rust planners plus named runtime handlers. WASM is deferred until a third-party plugin author needs untrusted-code isolation.
 
 ## What gates progress

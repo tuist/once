@@ -15,6 +15,6 @@ from declared build-script inputs to dependent Rust targets.
 Run it from the repository root:
 
 ```sh
-mise exec -- target/release/fabrik build //examples/rust/granular/build-script-cfg:app
+mise exec -- target/release/fabrik build examples/rust/granular/build-script-cfg/app
 ./.fabrik/out/examples/rust/granular/build-script-cfg/app
 ```

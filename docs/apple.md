@@ -21,7 +21,7 @@ minimum_os = "15.0"
 [[apple.macos_command_line_application]]
 name = "hello"
 srcs = ["Sources/main.swift"]
-deps = ["//examples/macos-cli:Greeter"]
+deps = ["Greeter"]
 module_name = "Hello"
 minimum_os = "15.0"
 ```
@@ -29,7 +29,7 @@ minimum_os = "15.0"
 Build the executable:
 
 ```sh
-fabrik build //examples/macos-cli:hello
+fabrik build examples/apple/macos/cli/hello
 ```
 
 The compile, archive, and executable steps are separately cacheable. A
@@ -39,7 +39,7 @@ library cache entries reusable.
 
 Swift actions use a narrow, deterministic environment and pass path
 remapping flags so cached `.swiftmodule` outputs do not embed the local
-workspace path. Debug option serialization is disabled for cached Swift
+project path. Debug option serialization is disabled for cached Swift
 modules, matching the shape needed for remote cache reuse.
 
 Fabrik also has `apple.static_framework` and `apple.dynamic_framework`
@@ -68,19 +68,19 @@ minimum_os = "17.0"
 Build the app bundle:
 
 ```sh
-fabrik build //examples/apple/ios/simulator-app:Demo
+fabrik build examples/apple/ios/simulator-app/Demo
 ```
 
 Launch it in a simulator:
 
 ```sh
-fabrik run //examples/apple/ios/simulator-app:Demo
+fabrik run examples/apple/ios/simulator-app/Demo
 ```
 
 Set `FABRIK_IOS_SIMULATOR` to a simulator UDID when you do not want to use the booted device:
 
 ```sh
-FABRIK_IOS_SIMULATOR=<udid> fabrik run //examples/apple/ios/simulator-app:Demo
+FABRIK_IOS_SIMULATOR=<udid> fabrik run examples/apple/ios/simulator-app/Demo
 ```
 
 ## Cache Behavior

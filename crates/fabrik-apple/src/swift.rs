@@ -70,7 +70,7 @@ pub fn compile_swift_target(
     dep_artifacts: &BTreeMap<String, SwiftArtifact>,
 ) -> Result<SwiftPlan, SwiftError> {
     let kind = AppleKind::parse(&target.kind).ok_or_else(|| SwiftError::UnsupportedKind {
-        label: target.label(),
+        label: target.id(),
         kind: target.kind.clone(),
     })?;
     match kind {
@@ -82,7 +82,7 @@ pub fn compile_swift_target(
             compile_command_line_application(target, workspace_root, dep_artifacts)
         }
         AppleKind::IosApp => Err(SwiftError::UnsupportedKind {
-            label: target.label(),
+            label: target.id(),
             kind: target.kind.clone(),
         }),
     }
@@ -399,9 +399,7 @@ SDKROOT="$SDK" xcrun --sdk macosx swiftc -sdk "$SDK" -target {target_triple} {ca
 
 fn require_sources(target: &Target) -> Result<(), SwiftError> {
     if target.srcs.is_empty() {
-        return Err(SwiftError::NoSources {
-            label: target.label(),
-        });
+        return Err(SwiftError::NoSources { label: target.id() });
     }
     Ok(())
 }
@@ -441,7 +439,7 @@ fn minimum_os(target: &Target) -> String {
 fn swiftc_flags(target: &Target) -> Result<Vec<String>, SwiftError> {
     match target.attrs.get("swiftc_flags_json") {
         Some(raw) => serde_json::from_str(raw).map_err(|source| SwiftError::ParseAttr {
-            label: target.label(),
+            label: target.id(),
             attr: "swiftc_flags_json".to_string(),
             source,
         }),
@@ -462,7 +460,7 @@ fn source_paths(target: &Target) -> Result<Vec<String>, SwiftError> {
             WorkspacePath::try_from(rel.as_str())
                 .map(|p| p.as_str().to_string())
                 .map_err(|source| SwiftError::InvalidPath {
-                    label: target.label(),
+                    label: target.id(),
                     path: rel,
                     source,
                 })
@@ -480,7 +478,7 @@ fn dep_import_args(
         let artifact = dep_artifacts
             .get(dep)
             .ok_or_else(|| SwiftError::UnknownDep {
-                label: target.label(),
+                label: target.id(),
                 dep: dep.clone(),
             })?;
         let key = match &artifact.import_search {
@@ -504,7 +502,7 @@ fn direct_dep_link_inputs(
         let artifact = dep_artifacts
             .get(dep)
             .ok_or_else(|| SwiftError::UnknownDep {
-                label: target.label(),
+                label: target.id(),
                 dep: dep.clone(),
             })?;
         for input in &artifact.link_inputs {
@@ -526,7 +524,7 @@ fn direct_dep_import_searches(
         let artifact = dep_artifacts
             .get(dep)
             .ok_or_else(|| SwiftError::UnknownDep {
-                label: target.label(),
+                label: target.id(),
                 dep: dep.clone(),
             })?;
         for search in &artifact.import_searches {
@@ -588,7 +586,7 @@ fn build_input_digest(
     for src in srcs {
         let abs = workspace_root.join(&src);
         let bytes = std::fs::read(&abs).map_err(|source| SwiftError::ReadSource {
-            label: target.label(),
+            label: target.id(),
             path: src.clone(),
             source,
         })?;
@@ -634,7 +632,7 @@ fn archive_input_digest(
 ) -> Digest {
     let mut buf = Vec::new();
     buf.extend_from_slice(b"fabrik.apple.swift.archive.input.v1\0");
-    buf.extend_from_slice(target.label().as_bytes());
+    buf.extend_from_slice(target.id().as_bytes());
     buf.push(0);
     buf.extend_from_slice(module_name.as_bytes());
     buf.push(0);
@@ -663,7 +661,7 @@ fn apple_arch() -> Result<&'static str, SwiftError> {
 
 fn workspace_path(target: &Target, path: &str) -> Result<WorkspacePath, SwiftError> {
     WorkspacePath::try_from(path).map_err(|source| SwiftError::InvalidPath {
-        label: target.label(),
+        label: target.id(),
         path: path.to_string(),
         source,
     })
@@ -671,7 +669,7 @@ fn workspace_path(target: &Target, path: &str) -> Result<WorkspacePath, SwiftErr
 
 fn plan_node(target: &Target, action: Action) -> PlanNode {
     PlanNode {
-        label: target.label(),
+        label: target.id(),
         action,
         deps: Vec::new(),
     }
@@ -679,7 +677,7 @@ fn plan_node(target: &Target, action: Action) -> PlanNode {
 
 fn plan_node_with_label(target: &Target, suffix: &str, action: Action) -> PlanNode {
     PlanNode {
-        label: format!("{}#{suffix}", target.label()),
+        label: format!("{}#{suffix}", target.id()),
         action,
         deps: Vec::new(),
     }
@@ -886,26 +884,26 @@ mod tests {
         let base = target("swift_library", "Base", "Base", &["Base.swift"], &[]);
         let base_plan = compile_swift_target(&base, tmp.path(), &BTreeMap::new()).unwrap();
         let mut deps = BTreeMap::new();
-        deps.insert("//Base:Base".to_string(), base_plan.artifact);
+        deps.insert("Base/Base".to_string(), base_plan.artifact);
         let greeter = target(
             "swift_library",
             "Greeter",
             "Greeter",
             &["Greeter.swift"],
-            &["//Base:Base"],
+            &["Base/Base"],
         );
         let greeter_plan = compile_swift_target(&greeter, tmp.path(), &deps).unwrap();
         assert!(greeter_plan
             .artifact
             .import_args()
             .contains(&".fabrik/out/Base/Base".to_string()));
-        deps.insert("//Greeter:Greeter".to_string(), greeter_plan.artifact);
+        deps.insert("Greeter/Greeter".to_string(), greeter_plan.artifact);
         let app = target(
             "macos_command_line_application",
             "App",
             "hello",
             &["main.swift"],
-            &["//Greeter:Greeter"],
+            &["Greeter/Greeter"],
         );
         let app_plan = compile_swift_target(&app, tmp.path(), &deps).unwrap();
         let Action::RunCommand { argv, .. } = &app_plan.nodes[0].node.action;
@@ -935,12 +933,12 @@ mod tests {
             "App",
             "app",
             &["main.swift"],
-            &["//Lib:Lib"],
+            &["Lib/Lib"],
         );
         let mut deps_v1 = BTreeMap::new();
-        deps_v1.insert("//Lib:Lib".to_string(), lib_v1);
+        deps_v1.insert("Lib/Lib".to_string(), lib_v1);
         let mut deps_v2 = BTreeMap::new();
-        deps_v2.insert("//Lib:Lib".to_string(), lib_v2);
+        deps_v2.insert("Lib/Lib".to_string(), lib_v2);
         let node_v1 = compile_swift_target(&app, tmp.path(), &deps_v1)
             .unwrap()
             .nodes

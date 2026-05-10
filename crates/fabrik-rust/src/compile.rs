@@ -40,11 +40,10 @@ pub enum CompileError {
     },
 }
 
-/// Build the [`PlanNode`] for one target. `dep_artifacts` is the map
-/// from dep label (e.g. `//crates/fabrik-cas:fabrik-cas`) to the
-/// already-compiled [`DepArtifact`] for that label. Callers should
-/// have populated it via topological iteration over the workspace's
-/// targets.
+/// Build the [`PlanNode`] for one target. `dep_artifacts` is keyed by
+/// project-root-relative target id, for example
+/// `crates/fabrik-cas/fabrik-cas`. Callers should have populated it
+/// via topological iteration over the workspace's targets.
 ///
 /// On success, returns the new [`PlanNode`] (whose `deps` field is
 /// indices the caller has not yet assigned - see
@@ -58,14 +57,12 @@ pub fn compile_target(
     let kind = RustKind::parse(&target.kind)
         .filter(|kind| kind.is_rustc_target())
         .ok_or_else(|| CompileError::UnsupportedKind {
-            label: target.label(),
+            label: target.id(),
             kind: target.kind.clone(),
         })?;
 
     if target.srcs.is_empty() {
-        return Err(CompileError::NoSources {
-            label: target.label(),
-        });
+        return Err(CompileError::NoSources { label: target.id() });
     }
 
     let crate_name = target
@@ -122,7 +119,7 @@ pub fn compile_target(
         let artifact = dep_artifacts
             .get(dep_label)
             .ok_or_else(|| CompileError::UnknownDep {
-                label: target.label(),
+                label: target.id(),
                 dep: dep_label.clone(),
             })?;
         if artifact.kind == RustKind::BuildScript {
@@ -168,7 +165,7 @@ pub fn compile_target(
         .into_iter()
         .map(|p| {
             WorkspacePath::try_from(p.as_str()).map_err(|source| CompileError::InvalidPath {
-                label: target.label(),
+                label: target.id(),
                 path: p.clone(),
                 source,
             })
@@ -205,7 +202,7 @@ pub fn compile_target(
     };
 
     let node = PlanNode {
-        label: target.label(),
+        label: target.id(),
         action,
         // Dep indices are assigned by the plan builder; leave empty
         // here so this function stays oblivious to plan layout.
@@ -223,7 +220,7 @@ fn pick_crate_root(target: &Target, kind: RustKind) -> Result<String, CompileErr
     if let Some(explicit) = target.attrs.get("crate_root") {
         if !target.srcs.iter().any(|s| s == explicit) {
             return Err(CompileError::CrateRootMissing {
-                label: target.label(),
+                label: target.id(),
                 root: explicit.clone(),
             });
         }
@@ -246,7 +243,7 @@ fn pick_crate_root(target: &Target, kind: RustKind) -> Result<String, CompileErr
         }
     }
     Err(CompileError::CrateRootMissing {
-        label: target.label(),
+        label: target.id(),
         root: match kind {
             RustKind::Library | RustKind::ProcMacro => "src/lib.rs".into(),
             RustKind::Binary | RustKind::Test => "src/main.rs".into(),
@@ -340,7 +337,7 @@ fn build_input_digest(
         };
         let abs = workspace_root.join(&ws_rel);
         let bytes = std::fs::read(&abs).map_err(|source| CompileError::ReadSource {
-            label: target.label(),
+            label: target.id(),
             path: ws_rel.clone(),
             source,
         })?;
@@ -398,11 +395,6 @@ fn tool_env() -> BTreeMap<String, String> {
     ] {
         if let Ok(value) = std::env::var(key) {
             env.insert(key.into(), value);
-        }
-    }
-    for (key, value) in std::env::vars() {
-        if key.starts_with("MISE_") {
-            env.insert(key, value);
         }
     }
     env
@@ -470,12 +462,12 @@ mod tests {
         let lib = lib_target("crates/lib", "my-lib", &["src/lib.rs"], &[]);
         let (_lib_node, lib_art) = compile_target(&lib, tmp.path(), &BTreeMap::new()).unwrap();
         let mut deps = BTreeMap::new();
-        deps.insert("//crates/lib:my-lib".to_string(), lib_art);
+        deps.insert("crates/lib/my-lib".to_string(), lib_art);
         let bin = bin_target(
             "crates/bin",
             "the-bin",
             &["src/main.rs"],
-            &["//crates/lib:my-lib"],
+            &["crates/lib/my-lib"],
         );
         let (node, artifact) = compile_target(&bin, tmp.path(), &deps).unwrap();
         let Action::RunCommand { argv, outputs, .. } = &node.action;
@@ -547,12 +539,12 @@ mod tests {
             pm_art.extern_path
         );
         let mut deps = BTreeMap::new();
-        deps.insert("//crates/pm:macros".to_string(), pm_art);
+        deps.insert("crates/pm/macros".to_string(), pm_art);
         let user = lib_target(
             "crates/user",
             "user",
             &["src/lib.rs"],
-            &["//crates/pm:macros"],
+            &["crates/pm/macros"],
         );
         let (node, _) = compile_target(&user, tmp.path(), &deps).unwrap();
         let Action::RunCommand { argv, .. } = &node.action;
@@ -568,7 +560,7 @@ mod tests {
         write(tmp.path(), "pkg/src/lib.rs", "pub fn x() {}");
         let mut deps = BTreeMap::new();
         deps.insert(
-            "//pkg:build".to_string(),
+            "pkg/build".to_string(),
             DepArtifact {
                 crate_name: "build_build_script".into(),
                 extern_path: String::new(),
@@ -579,7 +571,7 @@ mod tests {
                 build_script_outputs: Some(".fabrik/out/pkg/build_build_script.out".into()),
             },
         );
-        let lib = lib_target("pkg", "pkg", &["src/lib.rs"], &["//pkg:build"]);
+        let lib = lib_target("pkg", "pkg", &["src/lib.rs"], &["pkg/build"]);
         let (node, artifact) = compile_target(&lib, tmp.path(), &deps).unwrap();
         let Action::RunCommand { argv, .. } = &node.action;
         assert_eq!(argv[0], "/bin/sh");
@@ -605,11 +597,11 @@ mod tests {
         // Build the binary against each version of the lib; its
         // action digest must change to reflect the dep change.
         let mut deps_v1 = BTreeMap::new();
-        deps_v1.insert("//crates/lib:lib".to_string(), lib_art_v1);
+        deps_v1.insert("crates/lib/lib".to_string(), lib_art_v1);
         let mut deps_v2 = BTreeMap::new();
-        deps_v2.insert("//crates/lib:lib".to_string(), lib_art_v2);
+        deps_v2.insert("crates/lib/lib".to_string(), lib_art_v2);
 
-        let bin = bin_target("crates/bin", "bin", &["src/main.rs"], &["//crates/lib:lib"]);
+        let bin = bin_target("crates/bin", "bin", &["src/main.rs"], &["crates/lib/lib"]);
         let (n1, _) = compile_target(&bin, tmp.path(), &deps_v1).unwrap();
         let (n2, _) = compile_target(&bin, tmp.path(), &deps_v2).unwrap();
         assert_ne!(n1.action.digest(), n2.action.digest());

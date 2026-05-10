@@ -31,11 +31,11 @@ This lets agents debug failures without scraping stderr or reverse-engineering t
 Fabrik should expose direct causality APIs:
 
 ```sh
-fabrik why //app:ios
-fabrik why-rebuilt //app:ios
-fabrik why-cache-miss //app:ios
-fabrik why-failed //app:ios
-fabrik why-slow //app:ios
+fabrik why app/ios
+fabrik why-rebuilt app/ios
+fabrik why-cache-miss app/ios
+fabrik why-failed app/ios
+fabrik why-slow app/ios
 fabrik impact Sources/App/View.swift
 ```
 
@@ -116,9 +116,9 @@ For an iOS app, a failed launch should report whether the simulator was unavaila
 Remote and local caching should be explainable:
 
 ```sh
-fabrik cache explain //app:ios
+fabrik cache explain app/ios
 fabrik cache diff <action-a> <action-b>
-fabrik cache tree //app:ios
+fabrik cache tree app/ios
 ```
 
 The primary question is simple: why was this not a cache hit?
@@ -128,7 +128,7 @@ The primary question is simple: why was this not a cache hit?
 Fabrik should produce candidate patches for common declaration and execution problems:
 
 ```sh
-fabrik repair //app:ios
+fabrik repair app/ios
 fabrik repair --dry-run
 ```
 
@@ -139,8 +139,8 @@ Repair mode should cover missing sources, wrong dependencies, undeclared outputs
 Agents need to inspect the consequences of a change before running expensive work:
 
 ```sh
-fabrik plan //app:ios
-fabrik plan --json //app:ios
+fabrik plan app/ios
+fabrik plan --json app/ios
 fabrik plan --changed-since main
 ```
 
