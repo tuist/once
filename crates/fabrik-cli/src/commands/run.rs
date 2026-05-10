@@ -11,11 +11,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use fabrik_cas::{Cas, Digest};
-use fabrik_core::{Action, CacheState, ResourceRequest, RunOpts, Runner, WorkspacePath};
+use fabrik_core::{
+    tool_env as core_tool_env, Action, InputDigestBuilder, ResourceRequest, RunOpts, Runner,
+    WorkspacePath,
+};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::{exit_from, Format, CACHE_DIR};
+use crate::commands::util::{cache_tag, find_target};
 use crate::render;
 
 #[derive(Serialize)]
@@ -35,11 +39,8 @@ struct ActionPlan {
 }
 
 pub async fn run(workspace: &Path, cas: &Cas, target_id: &str, format: Format) -> Result<ExitCode> {
-    let targets = fabrik_frontend::load_workspace(workspace).context("loading workspace")?;
-    let target = targets
-        .iter()
-        .find(|t| t.id() == target_id)
-        .ok_or_else(|| anyhow::anyhow!("no target matches `{target_id}`"))?;
+    let (targets, idx) = find_target(workspace, target_id)?;
+    let target = &targets[idx];
 
     if target.kind == "apple_ios_app" {
         return run_apple_ios_app(workspace, cas, target_id, &targets, target, format).await;
@@ -95,15 +96,12 @@ async fn render_run_output(
 ) -> Result<()> {
     let stdout_blob = cas.get_blob(&outcome.result.stdout).await?;
     let stderr_blob = cas.get_blob(&outcome.result.stderr).await?;
-    let cache_tag = match outcome.cache {
-        CacheState::Hit => "hit",
-        CacheState::Miss => "miss",
-    };
+    let tag = cache_tag(outcome.cache);
     let record = RunRecord {
         target: target_id,
         kind: &target.kind,
         action_digest: outcome.action.to_string(),
-        cache: cache_tag,
+        cache: tag,
         exit_code: outcome.result.exit_code,
         output: output.to_string(),
     };
@@ -116,7 +114,7 @@ async fn render_run_output(
             let mut err = tokio::io::stderr();
             err.write_all(&stderr_blob).await?;
             let trailer = format!(
-                "fabrik: ran {target_id} (cache {cache_tag}, exit={})\n",
+                "fabrik: ran {target_id} (cache {tag}, exit={})\n",
                 outcome.result.exit_code
             );
             err.write_all(trailer.as_bytes()).await?;
@@ -285,12 +283,7 @@ fn task_action(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Act
 }
 
 fn source_path(target: &fabrik_frontend::Target, src: &str) -> Result<WorkspacePath> {
-    let rel = if target.package.is_empty() {
-        src.to_string()
-    } else {
-        format!("{}/{src}", target.package)
-    };
-    WorkspacePath::try_from(rel.as_str())
+    WorkspacePath::from_package_relative(&target.package, src)
         .with_context(|| format!("invalid source path `{src}` in {}", target.id()))
 }
 
@@ -328,11 +321,11 @@ fn uncached_task_digest(target: &fabrik_frontend::Target) -> Digest {
 /// source paths or on any source's contents get different digests, so
 /// the action cache invalidates correctly.
 ///
-/// Encoding (per source, after sorting by workspace path):
-/// `path_bytes || 0x00 || file_digest || 0x00`. Sorting before hashing
-/// makes the result stable across iteration orders. The terminator
-/// guards against ambiguity even though declared paths never contain
-/// NULs in practice.
+/// The encoding is the empty domain prefix followed by sorted
+/// `(workspace_path, file_digest)` pairs. The empty domain matches the
+/// historical wire format from when this verb predated the granular
+/// rust planner; bumping it would invalidate every adopted-mode cache
+/// slot in the wild.
 fn input_digest(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Option<Digest>> {
     if target.srcs.is_empty() {
         return Ok(None);
@@ -345,42 +338,17 @@ fn input_digest(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Op
         .collect::<Result<_>>()?;
     paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
 
-    let mut buf = Vec::new();
+    let mut builder = InputDigestBuilder::new(b"");
     for path in paths {
-        let file = std::fs::File::open(path.resolve(workspace))
-            .with_context(|| format!("reading source input `{path}`"))?;
-        let digest = Digest::of_reader(std::io::BufReader::new(file))
+        builder
+            .push_source(workspace, path.as_str())
             .with_context(|| format!("hashing source input `{path}`"))?;
-        buf.extend_from_slice(path.as_str().as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(digest.as_bytes());
-        buf.push(0);
     }
-    Ok(Some(Digest::of_bytes(&buf)))
+    Ok(Some(builder.finish()))
 }
-
-/// Environment variables forwarded verbatim to spawned tool actions
-/// (rustc, cargo, ...). Anything not on this list is dropped: actions
-/// must declare every variable they depend on, or the cache key lies.
-const FORWARDED_TOOL_ENV: &[&str] = &[
-    "PATH",
-    "HOME",
-    "CARGO_HOME",
-    "RUSTUP_HOME",
-    "RUSTUP_TOOLCHAIN",
-];
 
 fn tool_env() -> BTreeMap<String, String> {
-    select_tool_env(std::env::vars())
-}
-
-fn select_tool_env<I>(vars: I) -> BTreeMap<String, String>
-where
-    I: IntoIterator<Item = (String, String)>,
-{
-    vars.into_iter()
-        .filter(|(k, _)| FORWARDED_TOOL_ENV.contains(&k.as_str()))
-        .collect()
+    core_tool_env(&["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"])
 }
 
 #[cfg(test)]
@@ -398,27 +366,6 @@ mod tests {
             deps: vec![],
             attrs: BTreeMap::new(),
         }
-    }
-
-    #[test]
-    fn select_tool_env_keeps_only_allowlisted_keys() {
-        let env = select_tool_env([
-            ("PATH".into(), "/usr/bin".into()),
-            ("CARGO_HOME".into(), "/cargo".into()),
-            ("RUSTUP_TOOLCHAIN".into(), "1.86.0".into()),
-            ("TOOL_PRIVATE".into(), "leaked".into()),
-            ("UNRELATED".into(), "leaked".into()),
-            ("FABRIK_PROBE".into(), "leaked".into()),
-        ]);
-        assert_eq!(env.get("PATH").map(String::as_str), Some("/usr/bin"));
-        assert_eq!(env.get("CARGO_HOME").map(String::as_str), Some("/cargo"));
-        assert_eq!(
-            env.get("RUSTUP_TOOLCHAIN").map(String::as_str),
-            Some("1.86.0")
-        );
-        assert!(!env.contains_key("TOOL_PRIVATE"));
-        assert!(!env.contains_key("UNRELATED"));
-        assert!(!env.contains_key("FABRIK_PROBE"));
     }
 
     #[test]

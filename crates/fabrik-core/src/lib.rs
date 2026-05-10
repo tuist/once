@@ -17,12 +17,16 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tracing::{debug, instrument};
 
+mod env;
+mod input_digest;
 mod path;
 mod plan;
 mod resources;
 
+pub use env::{select_tool_env, tool_env};
+pub use input_digest::InputDigestBuilder;
 pub use path::{WorkspacePath, WorkspacePathError};
-pub use plan::{Plan, PlanError, PlanNode, PlanOutcome};
+pub use plan::{BuiltPlan, NodeInfo, Plan, PlanError, PlanNode, PlanOutcome};
 pub use resources::{ResourceLimits, ResourcePool, ResourceRequest};
 
 /// Domain-separation prefix for action digests. Bump the version when

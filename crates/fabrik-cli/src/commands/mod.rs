@@ -8,4 +8,5 @@ pub mod exec;
 pub mod run;
 pub mod targets;
 pub mod test;
+pub mod util;
 pub mod vendor;

@@ -22,4 +22,4 @@ mod plan;
 pub use artifact::{DepArtifact, RustKind};
 pub use build_script::{compile_build_script, BuildScriptOutputs, BUILD_SCRIPT_OUTPUTS_FILENAME};
 pub use compile::{compile_target, CompileError};
-pub use plan::{build_plan, BuiltPlan, PlanBuildError};
+pub use plan::{build_plan, PlanBuildError};

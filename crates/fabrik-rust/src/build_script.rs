@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use fabrik_cas::Digest;
-use fabrik_core::{Action, PlanNode, ResourceRequest, WorkspacePath};
+use fabrik_core::{
+    tool_env as core_tool_env, Action, InputDigestBuilder, PlanNode, ResourceRequest, WorkspacePath,
+};
 use fabrik_frontend::Target;
 
 use crate::artifact::{build_script_outputs_path, out_dir};
@@ -169,8 +171,7 @@ impl BuildScriptOutputs {
 }
 
 fn build_input_digest(target: &Target, workspace_root: &Path) -> Result<Digest, CompileError> {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"fabrik.cargo_build_script.input.v1\0");
+    let mut builder = InputDigestBuilder::new(b"fabrik.cargo_build_script.input.v1\0");
     let mut srcs: Vec<&String> = target.srcs.iter().collect();
     srcs.sort();
     for src in srcs {
@@ -179,39 +180,23 @@ fn build_input_digest(target: &Target, workspace_root: &Path) -> Result<Digest, 
         } else {
             format!("{}/{}", target.package, src)
         };
-        let abs = workspace_root.join(&ws_rel);
-        let bytes = std::fs::read(&abs).map_err(|source| CompileError::ReadSource {
-            label: target.id(),
-            path: ws_rel.clone(),
-            source,
-        })?;
-        let digest = Digest::of_bytes(&bytes);
-        buf.extend_from_slice(ws_rel.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(digest.as_bytes());
-        buf.push(0);
+        builder
+            .push_source(workspace_root, &ws_rel)
+            .map_err(|source| CompileError::ReadSource {
+                label: target.id(),
+                path: ws_rel.clone(),
+                source,
+            })?;
     }
     let toolchain = std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "system-rustc".into());
-    buf.extend_from_slice(b"toolchain:");
-    buf.extend_from_slice(toolchain.as_bytes());
-    buf.push(0);
-    Ok(Digest::of_bytes(&buf))
+    let mut tag = b"toolchain:".to_vec();
+    tag.extend_from_slice(toolchain.as_bytes());
+    builder.push_bytes(&tag);
+    Ok(builder.finish())
 }
 
 fn tool_env() -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-    for key in [
-        "PATH",
-        "HOME",
-        "CARGO_HOME",
-        "RUSTUP_HOME",
-        "RUSTUP_TOOLCHAIN",
-    ] {
-        if let Ok(value) = std::env::var(key) {
-            env.insert(key.into(), value);
-        }
-    }
-    env
+    core_tool_env(&["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"])
 }
 
 #[cfg(test)]

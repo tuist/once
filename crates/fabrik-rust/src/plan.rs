@@ -6,32 +6,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
-use fabrik_core::Plan;
+use fabrik_core::{Action, BuiltPlan, NodeInfo, Plan};
 use fabrik_frontend::Target;
 
 use crate::artifact::{DepArtifact, RustKind};
 use crate::build_script::{compile_build_script, output_path as build_script_output_path};
 use crate::compile::{compile_target, CompileError};
-
-/// The result of compiling a workspace + root target into a plan.
-/// `root_index` identifies the root target's node so callers can pull
-/// its outcome out of the plan results.
-#[derive(Debug, Clone)]
-pub struct BuiltPlan {
-    pub plan: Plan,
-    pub root_index: usize,
-    /// Project-root-relative id of the root target.
-    pub root_id: String,
-    /// Per-node action label/kind index, exposed for telemetry and CLI
-    /// output. Order matches `plan.nodes`.
-    pub nodes: Vec<NodeInfo>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NodeInfo {
-    pub label: String,
-    pub kind: RustKind,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlanBuildError {
@@ -116,7 +96,7 @@ pub fn build_plan(
             id_to_plan_idx.insert(label.clone(), plan_idx);
             node_info.push(NodeInfo {
                 label: label.clone(),
-                kind: RustKind::BuildScript,
+                kind: RustKind::BuildScript.as_str().to_string(),
             });
             dep_artifacts.insert(
                 label.clone(),
@@ -172,7 +152,7 @@ pub fn build_plan(
         id_to_plan_idx.insert(target.id(), plan_idx);
         node_info.push(NodeInfo {
             label: target.id(),
-            kind: artifact.kind,
+            kind: artifact.kind.as_str().to_string(),
         });
         dep_artifacts.insert(target.id(), artifact);
         if *target_idx == root_target_idx {
@@ -180,12 +160,28 @@ pub fn build_plan(
         }
     }
 
+    let root_idx = root_index.expect("root was visited");
+    let output = root_output_path(&plan.nodes[root_idx]);
     Ok(BuiltPlan {
         plan,
-        root_index: root_index.expect("root was visited"),
+        root_index: root_idx,
         root_id: root_id.to_string(),
+        output,
         nodes: node_info,
     })
+}
+
+/// First declared output of the root node, or empty if the plugin's
+/// root has none (e.g. a build-script root). Mirrors the previous
+/// behavior the CLI wrapped this plan in: callers wanted "the file the
+/// build produced" and pulled it from `plan.nodes[root_index].action`.
+fn root_output_path(node: &fabrik_core::PlanNode) -> String {
+    match &node.action {
+        Action::RunCommand { outputs, .. } => outputs
+            .first()
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_default(),
+    }
 }
 
 fn dfs(
@@ -328,7 +324,7 @@ mod tests {
         let built = build_plan(&[target], "pkg/build", tmp.path()).unwrap();
         assert_eq!(built.plan.nodes.len(), 1);
         assert_eq!(built.plan.nodes[0].label, "pkg/build");
-        assert_eq!(built.nodes[0].kind, RustKind::BuildScript);
+        assert_eq!(built.nodes[0].kind, "cargo_build_script");
         // The action's argv must reference build.rs and run via /bin/sh
         // (the build_script handler emits a single shell pipeline).
         let fabrik_core::Action::RunCommand { argv, outputs, .. } = &built.plan.nodes[0].action;

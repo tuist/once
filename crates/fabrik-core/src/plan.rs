@@ -42,6 +42,39 @@ pub struct PlanOutcome {
     pub outcome: Outcome,
 }
 
+/// Per-node metadata that travels alongside a [`Plan`] for telemetry
+/// and CLI rendering. The `kind` is the originating target kind
+/// (`rust_library`, `apple_ios_app`, ...), kept as a string so the
+/// shape is uniform across plugins. Plugin-internal enum
+/// representations stay inside the plugin.
+#[derive(Debug, Clone)]
+pub struct NodeInfo {
+    /// Project-root-relative id of the source target, e.g.
+    /// `crates/fabrik-cas/fabrik-cas`. Named `label` for historical
+    /// continuity with [`PlanNode::label`] and [`PlanOutcome::label`].
+    pub label: String,
+    pub kind: String,
+}
+
+/// A plugin's compiled build description. Every plugin's `build_plan`
+/// returns this shape so the CLI dispatches on `target.kind`, then
+/// drives a plugin-agnostic execution and rendering pipeline. Adding a
+/// new plugin (Go, C++, ...) is a matter of producing a `BuiltPlan`,
+/// not extending the CLI's bridge structs.
+#[derive(Debug, Clone)]
+pub struct BuiltPlan {
+    pub plan: Plan,
+    pub root_index: usize,
+    /// Project-root-relative id of the root target.
+    pub root_id: String,
+    /// Workspace-relative path to the canonical output of the root
+    /// target. Empty for plugins that do not declare a primary output
+    /// (e.g. `task` targets).
+    pub output: String,
+    /// Per-node metadata, indexed in `plan.nodes` order.
+    pub nodes: Vec<NodeInfo>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PlanError {
     #[error("plan dependency cycle detected")]

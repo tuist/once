@@ -6,11 +6,14 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use fabrik_cas::Cas;
-use fabrik_core::{Action, CacheState, ResourceRequest, RunOpts, Runner};
+use fabrik_core::{
+    tool_env as core_tool_env, Action, CacheState, ResourceRequest, RunOpts, Runner,
+};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::{exit_from, Format};
+use crate::commands::util::{cache_tag, find_target};
 use crate::render;
 
 #[derive(Serialize)]
@@ -32,11 +35,8 @@ pub async fn test(
     test_args: Vec<String>,
     format: Format,
 ) -> Result<ExitCode> {
-    let targets = fabrik_frontend::load_workspace(workspace).context("loading workspace")?;
-    let target = targets
-        .iter()
-        .find(|t| t.id() == target_id)
-        .ok_or_else(|| anyhow::anyhow!("no target matches `{target_id}`"))?;
+    let (targets, idx) = find_target(workspace, target_id)?;
+    let target = &targets[idx];
     if target.kind != "rust_test" {
         anyhow::bail!(
             "target {target_id} has kind `{}`; expected rust_test",
@@ -70,13 +70,13 @@ pub async fn test(
         .filter(|o| o.outcome.cache == CacheState::Hit)
         .count();
     let build_misses = build_outcomes.len() - build_hits;
-    let test_cache = cache_tag(test_outcome.cache);
+    let test_cache_tag = cache_tag(test_outcome.cache);
     let summary = TestSummary {
         target: target_id,
         build_nodes: build_outcomes.len(),
         build_cache_hits: build_hits,
         build_cache_misses: build_misses,
-        test_cache,
+        test_cache: test_cache_tag,
         exit_code: test_outcome.result.exit_code,
         binary,
         test_action_digest: test_outcome.action.to_string(),
@@ -86,13 +86,15 @@ pub async fn test(
     Ok(exit_from(test_outcome.result.exit_code))
 }
 
-fn test_binary_path(built: &fabrik_rust::BuiltPlan) -> Result<String> {
-    let fabrik_core::Action::RunCommand { outputs, .. } =
-        &built.plan.nodes[built.root_index].action;
-    outputs
-        .first()
-        .map(|p| p.as_str().to_string())
-        .ok_or_else(|| anyhow::anyhow!("rust_test {} has no declared output", built.root_id))
+fn test_binary_path(built: &fabrik_core::BuiltPlan) -> Result<String> {
+    if built.output.is_empty() {
+        Err(anyhow::anyhow!(
+            "rust_test {} has no declared output",
+            built.root_id
+        ))
+    } else {
+        Ok(built.output.clone())
+    }
 }
 
 fn test_action(binary: &str, test_args: Vec<String>, input_digest: fabrik_cas::Digest) -> Action {
@@ -152,19 +154,6 @@ async fn render_output(
     Ok(())
 }
 
-fn cache_tag(cache: CacheState) -> &'static str {
-    match cache {
-        CacheState::Hit => "hit",
-        CacheState::Miss => "miss",
-    }
-}
-
 fn test_env() -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-    for key in ["PATH", "HOME", "RUST_BACKTRACE", "RUST_LOG"] {
-        if let Ok(value) = std::env::var(key) {
-            env.insert(key.into(), value);
-        }
-    }
-    env
+    core_tool_env(&["RUST_BACKTRACE", "RUST_LOG"])
 }
