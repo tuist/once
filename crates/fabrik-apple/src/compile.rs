@@ -3,7 +3,9 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fabrik_cas::Digest;
-use fabrik_core::{Action, PlanNode, ResourceRequest, WorkspacePath};
+use fabrik_core::{
+    tool_env as core_tool_env, Action, InputDigestBuilder, PlanNode, ResourceRequest, WorkspacePath,
+};
 use fabrik_frontend::Target;
 
 use crate::artifact::app_bundle_path;
@@ -248,16 +250,15 @@ fn source_paths(target: &Target) -> Result<Vec<String>, AppleError> {
         .srcs
         .iter()
         .map(|src| {
-            let rel = if target.package.is_empty() {
-                src.clone()
-            } else {
-                format!("{}/{src}", target.package)
-            };
-            WorkspacePath::try_from(rel.as_str())
+            WorkspacePath::from_package_relative(&target.package, src)
                 .map(|p| p.as_str().to_string())
                 .map_err(|source| AppleError::InvalidPath {
                     label: target.id(),
-                    path: rel,
+                    path: if target.package.is_empty() {
+                        src.clone()
+                    } else {
+                        format!("{}/{src}", target.package)
+                    },
                     source,
                 })
         })
@@ -270,34 +271,27 @@ fn build_input_digest(
     bundle_id: &str,
     minimum_os: &str,
 ) -> Result<Digest, AppleError> {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"fabrik.apple.ios_app.input.v1\0");
-    buf.extend_from_slice(bundle_id.as_bytes());
-    buf.push(0);
-    buf.extend_from_slice(minimum_os.as_bytes());
-    buf.push(0);
+    let mut builder = InputDigestBuilder::new(b"fabrik.apple.ios_app.input.v1\0");
+    builder.push_bytes(bundle_id.as_bytes());
+    builder.push_bytes(minimum_os.as_bytes());
 
     let mut srcs = source_paths(target)?;
     srcs.sort();
     for src in srcs {
-        let abs = workspace_root.join(&src);
-        let bytes = std::fs::read(&abs).map_err(|source| AppleError::ReadSource {
-            label: target.id(),
-            path: src.clone(),
-            source,
-        })?;
-        let digest = Digest::of_bytes(&bytes);
-        buf.extend_from_slice(src.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(digest.as_bytes());
-        buf.push(0);
+        builder
+            .push_source(workspace_root, &src)
+            .map_err(|source| AppleError::ReadSource {
+                label: target.id(),
+                path: src.clone(),
+                source,
+            })?;
     }
     if let Ok(developer_dir) = std::env::var("DEVELOPER_DIR") {
-        buf.extend_from_slice(b"developer_dir:");
-        buf.extend_from_slice(developer_dir.as_bytes());
-        buf.push(0);
+        let mut tag = b"developer_dir:".to_vec();
+        tag.extend_from_slice(developer_dir.as_bytes());
+        builder.push_bytes(&tag);
     }
-    Ok(Digest::of_bytes(&buf))
+    Ok(builder.finish())
 }
 
 fn uncached_launch_digest(target: &Target, bundle_id: &str) -> Digest {
@@ -316,18 +310,11 @@ fn uncached_launch_digest(target: &Target, bundle_id: &str) -> Digest {
 }
 
 fn tool_env(mode: Mode) -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-    for key in ["PATH", "HOME", "DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS"] {
-        if let Ok(value) = std::env::var(key) {
-            env.insert(key.into(), value);
-        }
-    }
+    let mut keys: Vec<&'static str> = vec!["DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS"];
     if matches!(mode, Mode::Launch) {
-        if let Ok(value) = std::env::var("FABRIK_IOS_SIMULATOR") {
-            env.insert("FABRIK_IOS_SIMULATOR".into(), value);
-        }
+        keys.push("FABRIK_IOS_SIMULATOR");
     }
-    env
+    core_tool_env(&keys)
 }
 
 fn sh_quote(value: &str) -> String {

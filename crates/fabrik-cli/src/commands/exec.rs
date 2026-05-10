@@ -17,11 +17,12 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use fabrik_cas::Cas;
-use fabrik_core::{Action, CacheState, ResourceRequest, RunOpts, WorkspacePath};
+use fabrik_core::{Action, ResourceRequest, RunOpts, WorkspacePath};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::{exit_from, Format};
+use crate::commands::util::cache_tag;
 use crate::render;
 
 #[derive(Serialize)]
@@ -76,18 +77,15 @@ pub async fn exec(workspace: &Path, cas: &Cas, args: ExecArgs, format: Format) -
     let mut err = tokio::io::stderr();
     err.write_all(&stderr).await?;
 
-    let cache_tag = match outcome.cache {
-        CacheState::Hit => "hit",
-        CacheState::Miss => "miss",
-    };
+    let tag = cache_tag(outcome.cache);
     let trailer = ExecTrailer {
         action_digest: outcome.action.to_string(),
-        cache: cache_tag,
+        cache: tag,
         exit_code: outcome.result.exit_code,
     };
     let trailer = match format {
         Format::Human => format!(
-            "fabrik: cache {cache_tag} action={} exit={}\n",
+            "fabrik: cache {tag} action={} exit={}\n",
             outcome.action, outcome.result.exit_code
         ),
         Format::Json | Format::Toon => render::structured(format, &trailer)?,

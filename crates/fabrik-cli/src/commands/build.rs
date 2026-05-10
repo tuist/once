@@ -13,11 +13,12 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use fabrik_cas::Cas;
-use fabrik_core::{CacheState, Plan, RunOpts, Runner};
+use fabrik_core::{BuiltPlan, CacheState, RunOpts, Runner};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::Format;
+use crate::commands::util::cache_tag;
 use crate::render;
 
 #[derive(Serialize)]
@@ -60,6 +61,7 @@ pub async fn build(workspace: &Path, cas: &Cas, target: &str, format: Format) ->
             let mut err = tokio::io::stderr();
             for o in &outcomes {
                 let info = &built.nodes[o.index];
+                // Right-pad single-letter "hit" so columns line up.
                 let tag = match o.outcome.cache {
                     CacheState::Hit => "hit ",
                     CacheState::Miss => "miss",
@@ -85,14 +87,10 @@ pub async fn build(workspace: &Path, cas: &Cas, target: &str, format: Format) ->
             let mut err = tokio::io::stderr();
             for o in &outcomes {
                 let info = &built.nodes[o.index];
-                let cache_tag = match o.outcome.cache {
-                    CacheState::Hit => "hit",
-                    CacheState::Miss => "miss",
-                };
                 let record = NodeRecord {
                     label: &o.label,
                     kind: &info.kind,
-                    cache: cache_tag,
+                    cache: cache_tag(o.outcome.cache),
                     action_digest: o.outcome.action.to_string(),
                 };
                 let line = serde_json::to_string(&record)? + "\n";
@@ -116,54 +114,22 @@ pub async fn build(workspace: &Path, cas: &Cas, target: &str, format: Format) ->
     Ok(ExitCode::SUCCESS)
 }
 
-struct BuiltCliPlan {
-    plan: Plan,
-    nodes: Vec<NodeInfo>,
-    output: String,
-}
-
-struct NodeInfo {
-    kind: String,
-}
-
+/// Dispatch to the matching plugin's planner. Adding a new plugin is
+/// one extra arm here; the CLI rendering and execution paths above
+/// stay plugin-agnostic because every plugin returns the unified
+/// [`BuiltPlan`] shape.
 fn build_plan(
     targets: &[fabrik_frontend::Target],
     target_id: &str,
     workspace: &Path,
-) -> Result<BuiltCliPlan> {
+) -> Result<BuiltPlan> {
     let target = targets
         .iter()
         .find(|t| t.id() == target_id)
         .ok_or_else(|| anyhow::anyhow!("no target matches `{target_id}`"))?;
     if fabrik_apple::supports_kind(&target.kind) {
-        let built = fabrik_apple::build_plan(targets, target_id, workspace)?;
-        Ok(BuiltCliPlan {
-            plan: built.plan,
-            nodes: built
-                .nodes
-                .into_iter()
-                .map(|n| NodeInfo { kind: n.kind })
-                .collect(),
-            output: built.output,
-        })
+        Ok(fabrik_apple::build_plan(targets, target_id, workspace)?)
     } else {
-        let built = fabrik_rust::build_plan(targets, target_id, workspace)?;
-        let fabrik_core::Action::RunCommand { outputs, .. } =
-            &built.plan.nodes[built.root_index].action;
-        let output = outputs
-            .first()
-            .map(|p| p.as_str().to_string())
-            .unwrap_or_default();
-        Ok(BuiltCliPlan {
-            plan: built.plan,
-            nodes: built
-                .nodes
-                .into_iter()
-                .map(|n| NodeInfo {
-                    kind: n.kind.as_str().to_string(),
-                })
-                .collect(),
-            output,
-        })
+        Ok(fabrik_rust::build_plan(targets, target_id, workspace)?)
     }
 }

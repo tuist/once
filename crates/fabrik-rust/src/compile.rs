@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use fabrik_cas::Digest;
-use fabrik_core::{Action, PlanNode, ResourceRequest, WorkspacePath};
+use fabrik_core::{
+    tool_env as core_tool_env, Action, InputDigestBuilder, PlanNode, ResourceRequest, WorkspacePath,
+};
 use fabrik_frontend::Target;
 
 use crate::artifact::{
@@ -323,8 +325,7 @@ fn build_input_digest(
     workspace_root: &Path,
     dep_artifacts: &BTreeMap<String, DepArtifact>,
 ) -> Result<Digest, CompileError> {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"fabrik.rust.input.v1\0");
+    let mut builder = InputDigestBuilder::new(b"fabrik.rust.input.v1\0");
 
     // Sources: deterministic order via sorted clone.
     let mut srcs: Vec<&String> = target.srcs.iter().collect();
@@ -335,17 +336,13 @@ fn build_input_digest(
         } else {
             format!("{}/{}", target.package, src)
         };
-        let abs = workspace_root.join(&ws_rel);
-        let bytes = std::fs::read(&abs).map_err(|source| CompileError::ReadSource {
-            label: target.id(),
-            path: ws_rel.clone(),
-            source,
-        })?;
-        let digest = Digest::of_bytes(&bytes);
-        buf.extend_from_slice(ws_rel.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(digest.as_bytes());
-        buf.push(0);
+        builder
+            .push_source(workspace_root, &ws_rel)
+            .map_err(|source| CompileError::ReadSource {
+                label: target.id(),
+                path: ws_rel.clone(),
+                source,
+            })?;
     }
 
     // Dep action digests, in label order. We only mix in deps that
@@ -355,11 +352,9 @@ fn build_input_digest(
     dep_labels.sort();
     for label in dep_labels {
         if let Some(art) = dep_artifacts.get(label) {
-            buf.extend_from_slice(b"dep:");
-            buf.extend_from_slice(label.as_bytes());
-            buf.push(0);
-            buf.extend_from_slice(art.action_digest.as_bytes());
-            buf.push(0);
+            let mut keyed = b"dep:".to_vec();
+            keyed.extend_from_slice(label.as_bytes());
+            builder.push_keyed(&keyed, &art.action_digest);
         }
     }
 
@@ -371,33 +366,24 @@ fn build_input_digest(
     // surface as a different cache slot for env reasons too (PATH is
     // in the env).
     let toolchain = std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "system-rustc".into());
-    buf.extend_from_slice(b"toolchain:");
-    buf.extend_from_slice(toolchain.as_bytes());
-    buf.push(0);
+    let mut tag = b"toolchain:".to_vec();
+    tag.extend_from_slice(toolchain.as_bytes());
+    builder.push_bytes(&tag);
 
-    Ok(Digest::of_bytes(&buf))
+    Ok(builder.finish())
 }
 
 /// Minimal env for rustc invocations. Anything not in this list is
 /// unobservable from the action and therefore not part of the cache
-/// key - keeping it small reduces accidental cache invalidation when
-/// a developer has unrelated env set.
+/// key.
 fn tool_env() -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-    for key in [
-        "PATH",
-        "HOME",
+    core_tool_env(&[
         "CARGO_HOME",
         "RUSTUP_HOME",
         "RUSTUP_TOOLCHAIN",
         "RUSTC",
         "RUSTC_WRAPPER",
-    ] {
-        if let Ok(value) = std::env::var(key) {
-            env.insert(key.into(), value);
-        }
-    }
-    env
+    ])
 }
 
 #[cfg(test)]

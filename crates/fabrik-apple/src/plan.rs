@@ -1,27 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
-use fabrik_core::Plan;
+use fabrik_core::{BuiltPlan, NodeInfo, Plan};
 use fabrik_frontend::Target;
 
 use crate::artifact::{AppleKind, SwiftArtifact};
 use crate::compile::{compile_ios_app, AppleError};
 use crate::swift::{compile_swift_target, SwiftError, TargetDepMode};
-
-#[derive(Debug, Clone)]
-pub struct BuiltPlan {
-    pub plan: Plan,
-    pub root_index: usize,
-    pub root_id: String,
-    pub output: String,
-    pub nodes: Vec<NodeInfo>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NodeInfo {
-    pub label: String,
-    pub kind: String,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlanBuildError {

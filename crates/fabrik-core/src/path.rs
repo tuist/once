@@ -48,6 +48,23 @@ impl WorkspacePath {
             workspace.join(&self.0)
         }
     }
+
+    /// Build a workspace path from a package directory and a
+    /// package-relative source path. Mirrors the ad-hoc string joins
+    /// every plugin used to do by hand and routes the result through
+    /// the same validation as [`WorkspacePath::try_from`], so a `..`
+    /// in the declared source still surfaces as a structured error.
+    pub fn from_package_relative(
+        package: &str,
+        src: &str,
+    ) -> std::result::Result<Self, WorkspacePathError> {
+        let joined = if package.is_empty() {
+            src.to_string()
+        } else {
+            format!("{package}/{src}")
+        };
+        Self::try_from(joined)
+    }
 }
 
 impl TryFrom<String> for WorkspacePath {
@@ -144,5 +161,22 @@ mod tests {
             p.resolve(Path::new("/ws")),
             Path::new("/ws/crates/fabrik-cli")
         );
+    }
+
+    #[test]
+    fn from_package_relative_joins_and_validates() {
+        let inside = WorkspacePath::from_package_relative("crates/foo", "src/main.rs").unwrap();
+        assert_eq!(inside.as_str(), "crates/foo/src/main.rs");
+        let root = WorkspacePath::from_package_relative("", "main.rs").unwrap();
+        assert_eq!(root.as_str(), "main.rs");
+    }
+
+    #[test]
+    fn from_package_relative_rejects_escapes() {
+        // The frontend collects whatever the user wrote in a `srcs`
+        // entry; preventing the join from escaping the package is a
+        // workspace-path concern, not a per-plugin one.
+        let err = WorkspacePath::from_package_relative("pkg", "../escape.rs").unwrap_err();
+        assert!(matches!(err, WorkspacePathError::Escape(_)));
     }
 }
