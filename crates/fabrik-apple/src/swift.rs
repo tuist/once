@@ -115,12 +115,13 @@ SDK="$(xcrun --sdk macosx --show-sdk-path)"
 OUT_DIR={out_dir}
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
-(cd "$OUT_DIR" && SDKROOT="$SDK" xcrun --sdk macosx swiftc -sdk "$SDK" -target {target_triple} -parse-as-library -module-name {module_name} -emit-module -emit-module-path "{module_segment}.swiftmodule" -emit-object {dep_import_args}{swiftc_flags}{source_args})
+(cd "$OUT_DIR" && SDKROOT="$SDK" xcrun --sdk macosx swiftc -sdk "$SDK" -target {target_triple} {cacheable_swift_args}-parse-as-library -module-name {module_name} -emit-module -emit-module-path "{module_segment}.swiftmodule" -emit-object {dep_import_args}{swiftc_flags}{source_args})
 "#,
         out_dir = sh_quote(&out_dir),
         target_triple = sh_quote(&target_triple),
         module_name = sh_quote(&module_name),
         module_segment = module_segment,
+        cacheable_swift_args = cacheable_swift_args(),
         dep_import_args = shell_import_args_from_root(&dep_import_args),
         swiftc_flags = shell_args(&swiftc_flags),
         source_args = source_args,
@@ -225,6 +226,7 @@ fn compile_framework(
     let plist = framework_info_plist(target, &module_name);
     let script = format!(
         r#"set -eu
+ROOT="$(pwd)"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 FRAMEWORK={framework}
 rm -rf "$FRAMEWORK"
@@ -232,7 +234,7 @@ mkdir -p "$FRAMEWORK/Modules/{module_name}.swiftmodule"
 cat > "$FRAMEWORK/Info.plist" <<'FABRIK_PLIST'
 {plist}
 FABRIK_PLIST
-SDKROOT="$SDK" xcrun --sdk macosx swiftc -sdk "$SDK" -target {target_triple} -parse-as-library -module-name {module_name} -emit-module -emit-module-path "$FRAMEWORK/Modules/{module_name}.swiftmodule/{module_triple}.swiftmodule" {emit_mode} -o {binary} {dep_import_args}{swiftc_flags}{source_args}
+SDKROOT="$SDK" xcrun --sdk macosx swiftc -sdk "$SDK" -target {target_triple} {cacheable_swift_args}-parse-as-library -module-name {module_name} -emit-module -emit-module-path "$FRAMEWORK/Modules/{module_name}.swiftmodule/{module_triple}.swiftmodule" {emit_mode} -o {binary} {dep_import_args}{swiftc_flags}{source_args}
 "#,
         framework = sh_quote(&framework),
         module_name = sh_single_segment(&module_name),
@@ -241,6 +243,7 @@ SDKROOT="$SDK" xcrun --sdk macosx swiftc -sdk "$SDK" -target {target_triple} -pa
         module_triple = sh_single_segment(&module_triple),
         emit_mode = emit_mode.replace("{module_name}", &sh_single_segment(&module_name)),
         binary = sh_quote(&binary),
+        cacheable_swift_args = cacheable_swift_args(),
         dep_import_args = shell_args(&dep_import_args),
         swiftc_flags = shell_args(&swiftc_flags),
         source_args = source_args,
@@ -336,15 +339,17 @@ fn compile_command_line_application(
         .collect::<Vec<_>>();
     let script = format!(
         r#"set -eu
+ROOT="$(pwd)"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 mkdir -p {output_parent}
 rm -f {executable}
-SDKROOT="$SDK" xcrun --sdk macosx swiftc -sdk "$SDK" -target {target_triple} -module-name {module_name} {dep_import_args}{swiftc_flags}{source_args} {link_args}{rpath_args}-o {executable}
+SDKROOT="$SDK" xcrun --sdk macosx swiftc -sdk "$SDK" -target {target_triple} {cacheable_swift_args}-module-name {module_name} {dep_import_args}{swiftc_flags}{source_args} {link_args}{rpath_args}-o {executable}
 "#,
         output_parent = sh_quote(&output_parent),
         executable = sh_quote(&executable),
         target_triple = sh_quote(&target_triple),
         module_name = sh_quote(&module_name),
+        cacheable_swift_args = cacheable_swift_args(),
         dep_import_args = shell_args(&dep_import_args),
         swiftc_flags = shell_args(&swiftc_flags),
         source_args = source_args,
@@ -745,18 +750,18 @@ fn shell_import_args_from_root(values: &[String]) -> String {
     args.join(" ") + " "
 }
 
+fn cacheable_swift_args() -> &'static str {
+    "-file-compilation-dir . -file-prefix-map \"$ROOT=.\" -debug-prefix-map \"$ROOT=.\" -Xfrontend -no-serialize-debugging-options "
+}
+
 fn tool_env() -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
-    for key in ["PATH", "HOME", "DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS"] {
+    for key in ["PATH", "DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS"] {
         if let Ok(value) = std::env::var(key) {
             env.insert(key.into(), value);
         }
     }
-    for (key, value) in std::env::vars() {
-        if key.starts_with("MISE_") {
-            env.insert(key, value);
-        }
-    }
+    env.insert("SWIFT_DETERMINISTIC_HASHING".into(), "1".into());
     env
 }
 
@@ -837,10 +842,21 @@ mod tests {
         );
         let plan = compile_swift_target(&lib, tmp.path(), &BTreeMap::new()).unwrap();
         assert_eq!(plan.nodes.len(), 2);
-        let Action::RunCommand { argv, outputs, .. } = &plan.nodes[0].node.action;
+        let Action::RunCommand {
+            argv, env, outputs, ..
+        } = &plan.nodes[0].node.action;
         assert_eq!(argv[0], "/bin/sh");
         assert!(argv[2].contains("-emit-object"));
         assert!(argv[2].contains("-module-name 'Greeter'"));
+        assert!(argv[2].contains("-file-compilation-dir ."));
+        assert!(argv[2].contains("-file-prefix-map \"$ROOT=.\""));
+        assert!(argv[2].contains("-debug-prefix-map \"$ROOT=.\""));
+        assert!(argv[2].contains("-Xfrontend -no-serialize-debugging-options"));
+        assert_eq!(
+            env.get("SWIFT_DETERMINISTIC_HASHING").map(String::as_str),
+            Some("1")
+        );
+        assert!(!env.contains_key("HOME"));
         assert_eq!(outputs[0].as_str(), ".fabrik/out/Lib/Greeter");
         let Action::RunCommand {
             argv: archive_argv,
@@ -893,6 +909,7 @@ mod tests {
         );
         let app_plan = compile_swift_target(&app, tmp.path(), &deps).unwrap();
         let Action::RunCommand { argv, .. } = &app_plan.nodes[0].node.action;
+        assert!(argv[2].contains("-file-compilation-dir ."));
         assert!(argv[2].contains("'.fabrik/out/Base/Base'"));
         assert!(argv[2].contains(".fabrik/out/Greeter/Greeter/libGreeter.a"));
         assert!(argv[2].contains(".fabrik/out/Base/Base/libBase.a"));

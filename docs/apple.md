@@ -37,6 +37,11 @@ source change in the library invalidates its compile action, archive
 action, and reverse deps; a source change in the executable leaves the
 library cache entries reusable.
 
+Swift actions use a narrow, deterministic environment and pass path
+remapping flags so cached `.swiftmodule` outputs do not embed the local
+workspace path. Debug option serialization is disabled for cached Swift
+modules, matching the shape needed for remote cache reuse.
+
 Fabrik also has `apple.static_framework` and `apple.dynamic_framework`
 TOML targets for Swift framework bundles:
 
