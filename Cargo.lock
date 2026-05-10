@@ -514,6 +514,7 @@ dependencies = [
  "fabrik-cas",
  "fabrik-core",
  "fabrik-frontend",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]

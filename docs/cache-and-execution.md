@@ -15,6 +15,7 @@ These are cacheable today:
 - Granular Rust build actions.
 - Rust test binary execution.
 - `cargo.binary` actions.
+- Apple Swift compile, archive, framework, and macOS executable actions.
 - `apple.ios_app` build actions.
 - `task` targets with `cache = true`.
 - Literal `fabrik exec` commands, unless the command or declared inputs change.

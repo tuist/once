@@ -9,7 +9,9 @@
 mod artifact;
 mod compile;
 mod plan;
+mod swift;
 
 pub use artifact::app_bundle_path;
 pub use compile::{compile_ios_app, launch_ios_app, AppleAction, AppleError};
-pub use plan::{build_plan, BuiltPlan, NodeInfo, PlanBuildError};
+pub use plan::{build_plan, supports_kind, BuiltPlan, NodeInfo, PlanBuildError};
+pub use swift::{compile_swift_target, SwiftError};

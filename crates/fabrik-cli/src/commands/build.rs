@@ -1,13 +1,12 @@
 //! `fabrik build` - compile a target via the granular per-crate
 //! action graph.
 //!
-//! Resolves the workspace's `fabrik.star` files, expands the requested
-//! target's transitive Rust deps into a [`fabrik_core::Plan`], and
-//! runs the plan through the shared cache-aware [`fabrik_core::Runner`].
-//! Each crate is its own action; a one-line edit in a leaf crate
-//! invalidates only its node and the nodes that transitively depend
-//! on it. The wire-up to remote execution is the same plan, executed
-//! by a different runner.
+//! Resolves the workspace's build files, expands the requested target's
+//! transitive deps into a [`fabrik_core::Plan`], and runs the plan through
+//! the shared cache-aware [`fabrik_core::Runner`]. Granular targets expand
+//! into one or more actions; a one-line edit in a leaf target invalidates
+//! only its node and the nodes that transitively depend on it. The wire-up
+//! to remote execution is the same plan, executed by a different runner.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -136,7 +135,7 @@ fn build_plan(
         .iter()
         .find(|t| t.label() == label)
         .ok_or_else(|| anyhow::anyhow!("no target matches `{label}`"))?;
-    if target.kind == "apple_ios_app" {
+    if fabrik_apple::supports_kind(&target.kind) {
         let built = fabrik_apple::build_plan(targets, label, workspace)?;
         Ok(BuiltCliPlan {
             plan: built.plan,

@@ -1,0 +1,62 @@
+[[apple.swift_library]]
+name = "TuistConstants"
+srcs = ["Sources/TuistConstants/Constants.swift"]
+module_name = "TuistConstants"
+minimum_os = "15.0"
+
+[[apple.swift_library]]
+name = "TuistThreadSafe"
+srcs = ["Sources/TuistThreadSafe/LockedValue.swift"]
+module_name = "TuistThreadSafe"
+minimum_os = "15.0"
+
+[[apple.swift_library]]
+name = "TuistEnvironment"
+srcs = ["Sources/TuistEnvironment/Environment.swift"]
+deps = [
+  "//examples/tuist-shaped-swift:TuistConstants",
+  "//examples/tuist-shaped-swift:TuistThreadSafe",
+]
+module_name = "TuistEnvironment"
+minimum_os = "15.0"
+
+[[apple.swift_library]]
+name = "TuistLogging"
+srcs = ["Sources/TuistLogging/Logging.swift"]
+deps = [
+  "//examples/tuist-shaped-swift:TuistConstants",
+  "//examples/tuist-shaped-swift:TuistEnvironment",
+]
+module_name = "TuistLogging"
+minimum_os = "15.0"
+
+[[apple.swift_library]]
+name = "TuistServer"
+srcs = ["Sources/TuistServer/Server.swift"]
+deps = ["//examples/tuist-shaped-swift:TuistLogging"]
+module_name = "TuistServer"
+minimum_os = "15.0"
+
+[[apple.swift_library]]
+name = "TuistKit"
+srcs = ["Sources/TuistKit/Kit.swift"]
+deps = [
+  "//examples/tuist-shaped-swift:TuistEnvironment",
+  "//examples/tuist-shaped-swift:TuistLogging",
+  "//examples/tuist-shaped-swift:TuistServer",
+]
+module_name = "TuistKit"
+minimum_os = "15.0"
+
+[[apple.macos_command_line_application]]
+name = "tuist"
+srcs = ["Sources/TuistCLI/main.swift"]
+deps = [
+  "//examples/tuist-shaped-swift:TuistConstants",
+  "//examples/tuist-shaped-swift:TuistEnvironment",
+  "//examples/tuist-shaped-swift:TuistLogging",
+  "//examples/tuist-shaped-swift:TuistServer",
+  "//examples/tuist-shaped-swift:TuistKit",
+]
+module_name = "TuistCLI"
+minimum_os = "15.0"

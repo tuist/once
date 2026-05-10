@@ -38,6 +38,10 @@ struct CargoSection {
 #[serde(default, deny_unknown_fields)]
 struct AppleSection {
     ios_app: Vec<AppleIosAppTarget>,
+    swift_library: Vec<AppleSwiftTarget>,
+    static_framework: Vec<AppleFrameworkTarget>,
+    dynamic_framework: Vec<AppleFrameworkTarget>,
+    macos_command_line_application: Vec<AppleSwiftTarget>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +125,39 @@ struct AppleIosAppTarget {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AppleSwiftTarget {
+    name: String,
+    #[serde(default)]
+    srcs: Vec<String>,
+    #[serde(default)]
+    src_globs: Vec<String>,
+    #[serde(default)]
+    deps: Vec<String>,
+    module_name: Option<String>,
+    minimum_os: Option<String>,
+    #[serde(default)]
+    swiftc_flags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AppleFrameworkTarget {
+    name: String,
+    #[serde(default)]
+    srcs: Vec<String>,
+    #[serde(default)]
+    src_globs: Vec<String>,
+    #[serde(default)]
+    deps: Vec<String>,
+    module_name: Option<String>,
+    minimum_os: Option<String>,
+    bundle_id: Option<String>,
+    #[serde(default)]
+    swiftc_flags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GenericTarget {
     kind: String,
     name: String,
@@ -188,6 +225,42 @@ pub(crate) fn load_toml_with(
     }
     for t in manifest.apple.ios_app {
         targets.push(apple_ios_app_target(t, workspace_root, package, name)?);
+    }
+    for t in manifest.apple.swift_library {
+        targets.push(apple_swift_target(
+            "swift_library",
+            t,
+            workspace_root,
+            package,
+            name,
+        )?);
+    }
+    for t in manifest.apple.static_framework {
+        targets.push(apple_framework_target(
+            "apple_static_framework",
+            t,
+            workspace_root,
+            package,
+            name,
+        )?);
+    }
+    for t in manifest.apple.dynamic_framework {
+        targets.push(apple_framework_target(
+            "apple_dynamic_framework",
+            t,
+            workspace_root,
+            package,
+            name,
+        )?);
+    }
+    for t in manifest.apple.macos_command_line_application {
+        targets.push(apple_swift_target(
+            "macos_command_line_application",
+            t,
+            workspace_root,
+            package,
+            name,
+        )?);
     }
     for t in manifest.task {
         targets.push(task_target(t, workspace_root, package, name)?);
@@ -278,6 +351,49 @@ fn apple_ios_app_target(
     })
 }
 
+fn apple_swift_target(
+    kind: &str,
+    t: AppleSwiftTarget,
+    workspace_root: &Path,
+    package: &str,
+    display_name: &str,
+) -> Result<Target> {
+    let mut attrs = BTreeMap::new();
+    insert_opt(&mut attrs, "module_name", t.module_name);
+    insert_opt(&mut attrs, "minimum_os", t.minimum_os);
+    insert_json_vec(&mut attrs, "swiftc_flags_json", &t.swiftc_flags);
+    Ok(Target {
+        package: package.to_string(),
+        kind: kind.to_string(),
+        name: t.name,
+        srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
+        deps: t.deps,
+        attrs,
+    })
+}
+
+fn apple_framework_target(
+    kind: &str,
+    t: AppleFrameworkTarget,
+    workspace_root: &Path,
+    package: &str,
+    display_name: &str,
+) -> Result<Target> {
+    let mut attrs = BTreeMap::new();
+    insert_opt(&mut attrs, "module_name", t.module_name);
+    insert_opt(&mut attrs, "minimum_os", t.minimum_os);
+    insert_opt(&mut attrs, "bundle_id", t.bundle_id);
+    insert_json_vec(&mut attrs, "swiftc_flags_json", &t.swiftc_flags);
+    Ok(Target {
+        package: package.to_string(),
+        kind: kind.to_string(),
+        name: t.name,
+        srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
+        deps: t.deps,
+        attrs,
+    })
+}
+
 fn generic_target(
     t: GenericTarget,
     workspace_root: &Path,
@@ -341,6 +457,15 @@ fn task_target(
 fn insert_opt(attrs: &mut BTreeMap<String, String>, key: &str, value: Option<String>) {
     if let Some(value) = value {
         attrs.insert(key.to_string(), value);
+    }
+}
+
+fn insert_json_vec(attrs: &mut BTreeMap<String, String>, key: &str, value: &[String]) {
+    if !value.is_empty() {
+        attrs.insert(
+            key.to_string(),
+            serde_json::to_string(&value).expect("string vec is serializable"),
+        );
     }
 }
 
@@ -471,6 +596,33 @@ minimum_os = "17.0"
         assert_eq!(targets[0].kind, "apple_ios_app");
         assert_eq!(targets[0].attrs["bundle_id"], "dev.fabrik.demo");
         assert_eq!(targets[0].attrs["minimum_os"], "17.0");
+    }
+
+    #[test]
+    fn loads_apple_swift_targets() {
+        let targets = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[apple.swift_library]]
+name = "Greeter"
+srcs = ["Sources/Greeter.swift"]
+module_name = "Greeter"
+minimum_os = "15.0"
+swiftc_flags = ["-D", "MOCKING"]
+
+[[apple.macos_command_line_application]]
+name = "hello"
+srcs = ["Sources/main.swift"]
+deps = ["//:Greeter"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].kind, "swift_library");
+        assert_eq!(targets[0].attrs["module_name"], "Greeter");
+        assert!(targets[0].attrs["swiftc_flags_json"].contains("MOCKING"));
+        assert_eq!(targets[1].kind, "macos_command_line_application");
+        assert_eq!(targets[1].deps, vec!["//:Greeter".to_string()]);
     }
 
     #[test]

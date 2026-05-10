@@ -18,6 +18,8 @@ Try the checked-in examples:
 ```sh
 mise exec -- target/release/fabrik build //examples/rust/granular/basic-app:hello
 mise exec -- target/release/fabrik test //examples/rust/granular/basic-app:greeting_test
+mise exec -- target/release/fabrik build //examples/macos-cli:hello
+mise exec -- target/release/fabrik build //examples/tuist-shaped-swift:tuist
 mise exec -- target/release/fabrik build //examples/apple/ios/simulator-app:Demo
 ```
 
