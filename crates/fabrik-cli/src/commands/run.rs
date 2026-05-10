@@ -362,7 +362,13 @@ fn input_digest(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Op
 /// Environment variables forwarded verbatim to spawned tool actions
 /// (rustc, cargo, ...). Anything not on this list is dropped: actions
 /// must declare every variable they depend on, or the cache key lies.
-const FORWARDED_TOOL_ENV: &[&str] = &["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"];
+const FORWARDED_TOOL_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+];
 
 fn tool_env() -> BTreeMap<String, String> {
     select_tool_env(std::env::vars())
@@ -399,12 +405,17 @@ mod tests {
         let env = select_tool_env([
             ("PATH".into(), "/usr/bin".into()),
             ("CARGO_HOME".into(), "/cargo".into()),
+            ("RUSTUP_TOOLCHAIN".into(), "1.86.0".into()),
             ("TOOL_PRIVATE".into(), "leaked".into()),
             ("UNRELATED".into(), "leaked".into()),
             ("FABRIK_PROBE".into(), "leaked".into()),
         ]);
         assert_eq!(env.get("PATH").map(String::as_str), Some("/usr/bin"));
         assert_eq!(env.get("CARGO_HOME").map(String::as_str), Some("/cargo"));
+        assert_eq!(
+            env.get("RUSTUP_TOOLCHAIN").map(String::as_str),
+            Some("1.86.0")
+        );
         assert!(!env.contains_key("TOOL_PRIVATE"));
         assert!(!env.contains_key("UNRELATED"));
         assert!(!env.contains_key("FABRIK_PROBE"));
