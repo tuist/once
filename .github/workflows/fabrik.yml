@@ -190,7 +190,7 @@ jobs:
         run: chmod +x target/release/fabrik
 
       - name: fabrik run
-        run: target/release/fabrik run //:fabrik
+        run: target/release/fabrik run fabrik
 
   shellspec:
     name: shellspec (${{ matrix.os }})

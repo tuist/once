@@ -1,0 +1,12 @@
+[[cargo.binary]]
+name = "fabrik"
+cargo_package = "fabrik-cli"
+bin = "fabrik"
+srcs = [
+  "Cargo.lock",
+  "Cargo.toml",
+]
+src_globs = [
+  "crates/*/Cargo.toml",
+  "crates/*/src/**/*.rs",
+]
