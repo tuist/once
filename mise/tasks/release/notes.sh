@@ -25,7 +25,15 @@ fi
 latest_version="$(git tag -l | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)"
 
 if [[ -n "${latest_version}" ]]; then
-  git cliff --config cliff.toml --repository . --tag "${version}" -- "${latest_version}..HEAD"
+  rendered="$(git cliff --config cliff.toml --repository . --tag "${version}" -- "${latest_version}..HEAD")"
 else
-  git cliff --config cliff.toml --repository . --tag "${version}"
+  rendered="$(git cliff --config cliff.toml --repository . --tag "${version}")"
 fi
+
+# GitHub release pages already display the version and a "Changelog"
+# heading, so drop everything up to the marker that the cliff template
+# emits right after those titles.
+awk '
+  !found && /<!-- RELEASE NOTES START -->/ { found = 1; next }
+  found
+' <<<"${rendered}"
