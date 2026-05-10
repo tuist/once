@@ -1,15 +1,18 @@
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use fabrik_core::Plan;
 use fabrik_frontend::Target;
 
+use crate::artifact::{AppleKind, SwiftArtifact};
 use crate::compile::{compile_ios_app, AppleError};
+use crate::swift::{compile_swift_target, SwiftError, TargetDepMode};
 
 #[derive(Debug, Clone)]
 pub struct BuiltPlan {
     pub plan: Plan,
     pub root_index: usize,
-    pub root_label: String,
+    pub root_id: String,
     pub output: String,
     pub nodes: Vec<NodeInfo>,
 }
@@ -26,25 +29,111 @@ pub enum PlanBuildError {
     UnknownRoot(String),
     #[error("apple_ios_app target {label} does not support deps yet")]
     UnsupportedDeps { label: String },
+    #[error("dependency cycle through `{0}`")]
+    Cycle(String),
+    #[error("dep `{dep}` of target {label} is not declared in any Fabrik build file")]
+    MissingDep { label: String, dep: String },
+    #[error("dep `{dep}` of target {label} is not an Apple target (kind `{kind}`)")]
+    NonAppleDep {
+        label: String,
+        dep: String,
+        kind: String,
+    },
     #[error(transparent)]
     Apple(#[from] AppleError),
+    #[error(transparent)]
+    Swift(#[from] SwiftError),
+}
+
+pub fn supports_kind(kind: &str) -> bool {
+    AppleKind::parse(kind).is_some()
 }
 
 pub fn build_plan(
     targets: &[Target],
-    root_label: &str,
+    root_id: &str,
     workspace_root: &Path,
 ) -> Result<BuiltPlan, PlanBuildError> {
+    let target_index: HashMap<String, usize> = targets
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id(), i))
+        .collect();
+    let root_target_idx = *target_index
+        .get(root_id)
+        .ok_or_else(|| PlanBuildError::UnknownRoot(root_id.to_string()))?;
     let target = targets
         .iter()
-        .find(|t| t.label() == root_label)
-        .ok_or_else(|| PlanBuildError::UnknownRoot(root_label.to_string()))?;
-    if !target.deps.is_empty() {
-        return Err(PlanBuildError::UnsupportedDeps {
-            label: target.label(),
-        });
+        .find(|t| t.id() == root_id)
+        .ok_or_else(|| PlanBuildError::UnknownRoot(root_id.to_string()))?;
+    let kind = AppleKind::parse(&target.kind).ok_or_else(|| PlanBuildError::NonAppleDep {
+        label: target.id(),
+        dep: root_id.to_string(),
+        kind: target.kind.clone(),
+    })?;
+    if kind == AppleKind::IosApp {
+        return build_ios_plan(target, root_id, workspace_root);
     }
 
+    let mut order = Vec::new();
+    let mut on_stack = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    dfs(
+        root_target_idx,
+        targets,
+        &target_index,
+        &mut visited,
+        &mut on_stack,
+        &mut order,
+    )?;
+
+    let mut plan = Plan::new();
+    let mut nodes = Vec::with_capacity(order.len() * 2);
+    let mut dep_artifacts: BTreeMap<String, SwiftArtifact> = BTreeMap::new();
+    let mut id_to_plan_idx: HashMap<String, usize> = HashMap::new();
+    let mut id_to_import_idx: HashMap<String, usize> = HashMap::new();
+    let mut root_index = None;
+    let mut output = String::new();
+
+    for target_idx in &order {
+        let target = &targets[*target_idx];
+        validate_swift_deps(target, targets, &target_index)?;
+        let (plan_idx, import_idx, artifact) = push_swift_target(
+            &mut plan,
+            &mut nodes,
+            target,
+            workspace_root,
+            &dep_artifacts,
+            &id_to_plan_idx,
+            &id_to_import_idx,
+        )?;
+        let label = target.id();
+        id_to_plan_idx.insert(label.clone(), plan_idx);
+        id_to_import_idx.insert(label.clone(), import_idx);
+        if *target_idx == root_target_idx {
+            root_index = Some(plan_idx);
+            output.clone_from(&artifact.output);
+        }
+        dep_artifacts.insert(label, artifact);
+    }
+
+    Ok(BuiltPlan {
+        plan,
+        root_index: root_index.expect("root was visited"),
+        root_id: root_id.to_string(),
+        output,
+        nodes,
+    })
+}
+
+fn build_ios_plan(
+    target: &Target,
+    root_id: &str,
+    workspace_root: &Path,
+) -> Result<BuiltPlan, PlanBuildError> {
+    if !target.deps.is_empty() {
+        return Err(PlanBuildError::UnsupportedDeps { label: target.id() });
+    }
     let node = compile_ios_app(target, workspace_root)?;
     let output = crate::app_bundle_path(&target.package, &target.name);
     let mut plan = Plan::new();
@@ -52,13 +141,136 @@ pub fn build_plan(
     Ok(BuiltPlan {
         plan,
         root_index,
-        root_label: root_label.to_string(),
+        root_id: root_id.to_string(),
         output,
         nodes: vec![NodeInfo {
-            label: target.label(),
+            label: target.id(),
             kind: target.kind.clone(),
         }],
     })
+}
+
+fn validate_swift_deps(
+    target: &Target,
+    targets: &[Target],
+    target_index: &HashMap<String, usize>,
+) -> Result<(), PlanBuildError> {
+    for dep in &target.deps {
+        let dep_target_idx = target_index
+            .get(dep)
+            .ok_or_else(|| PlanBuildError::MissingDep {
+                label: target.id(),
+                dep: dep.clone(),
+            })?;
+        let dep_kind = &targets[*dep_target_idx].kind;
+        if !supports_kind(dep_kind) || dep_kind == "apple_ios_app" {
+            return Err(PlanBuildError::NonAppleDep {
+                label: target.id(),
+                dep: dep.clone(),
+                kind: dep_kind.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn push_swift_target(
+    plan: &mut Plan,
+    nodes: &mut Vec<NodeInfo>,
+    target: &Target,
+    workspace_root: &Path,
+    dep_artifacts: &BTreeMap<String, SwiftArtifact>,
+    id_to_plan_idx: &HashMap<String, usize>,
+    id_to_import_idx: &HashMap<String, usize>,
+) -> Result<(usize, usize, SwiftArtifact), PlanBuildError> {
+    let swift_plan = compile_swift_target(target, workspace_root, dep_artifacts)?;
+    let root_dep_indices = target
+        .deps
+        .iter()
+        .filter_map(|d| id_to_plan_idx.get(d).copied())
+        .collect::<Vec<_>>();
+    let import_dep_indices = target
+        .deps
+        .iter()
+        .filter_map(|d| id_to_import_idx.get(d).copied())
+        .collect::<Vec<_>>();
+    let base_index = plan.nodes.len();
+    let emitted_node_count = swift_plan.nodes.len();
+    let import_index = base_index + swift_plan.import_node;
+    let mut target_root_index = None;
+
+    for (local_index, mut swift_node) in swift_plan.nodes.into_iter().enumerate() {
+        let local_deps = std::mem::take(&mut swift_node.node.deps);
+        swift_node.node.deps = local_deps
+            .into_iter()
+            .map(|dep| base_index + dep)
+            .collect::<Vec<_>>();
+        match swift_node.target_dep_mode {
+            TargetDepMode::None => {}
+            TargetDepMode::Root => {
+                swift_node
+                    .node
+                    .deps
+                    .extend(root_dep_indices.iter().copied());
+            }
+            TargetDepMode::Import => {
+                swift_node
+                    .node
+                    .deps
+                    .extend(import_dep_indices.iter().copied());
+            }
+        }
+
+        let node_label = swift_node.node.label.clone();
+        let node_kind = swift_node.kind;
+        let plan_idx = plan.push(swift_node.node);
+        if local_index + 1 == emitted_node_count {
+            target_root_index = Some(plan_idx);
+        }
+        nodes.push(NodeInfo {
+            label: node_label,
+            kind: node_kind,
+        });
+    }
+
+    Ok((
+        target_root_index.expect("swift target emitted at least one node"),
+        import_index,
+        swift_plan.artifact,
+    ))
+}
+
+fn dfs(
+    idx: usize,
+    targets: &[Target],
+    target_index: &HashMap<String, usize>,
+    visited: &mut BTreeSet<usize>,
+    on_stack: &mut BTreeSet<usize>,
+    order: &mut Vec<usize>,
+) -> Result<(), PlanBuildError> {
+    if visited.contains(&idx) {
+        return Ok(());
+    }
+    if on_stack.contains(&idx) {
+        return Err(PlanBuildError::Cycle(targets[idx].id()));
+    }
+    on_stack.insert(idx);
+    for dep in &targets[idx].deps {
+        let dep_idx = target_index
+            .get(dep)
+            .ok_or_else(|| PlanBuildError::MissingDep {
+                label: targets[idx].id(),
+                dep: dep.clone(),
+            })?;
+        let dep_kind = &targets[*dep_idx].kind;
+        if supports_kind(dep_kind) && dep_kind != "apple_ios_app" {
+            dfs(*dep_idx, targets, target_index, visited, on_stack, order)?;
+        }
+    }
+    on_stack.remove(&idx);
+    visited.insert(idx);
+    order.push(idx);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -82,8 +294,61 @@ mod tests {
             deps: Vec::new(),
             attrs,
         };
-        let built = build_plan(&[target], "//App:Demo", tmp.path()).unwrap();
+        let built = build_plan(&[target], "App/Demo", tmp.path()).unwrap();
         assert_eq!(built.plan.nodes.len(), 1);
         assert_eq!(built.output, ".fabrik/out/App/Demo.app");
+    }
+
+    fn swift_target(pkg: &str, kind: &str, name: &str, srcs: &[&str], deps: &[&str]) -> Target {
+        Target {
+            package: pkg.into(),
+            kind: kind.into(),
+            name: name.into(),
+            srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
+            deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            attrs: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn builds_swift_dependency_graph() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("Lib")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("Mid")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("App")).unwrap();
+        std::fs::write(
+            tmp.path().join("Lib/Lib.swift"),
+            "public func greeting() {}",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("Mid/Mid.swift"), "import Lib").unwrap();
+        std::fs::write(tmp.path().join("App/main.swift"), "import Mid").unwrap();
+        let targets = vec![
+            swift_target("Lib", "swift_library", "Lib", &["Lib.swift"], &[]),
+            swift_target("Mid", "swift_library", "Mid", &["Mid.swift"], &["Lib/Lib"]),
+            swift_target(
+                "App",
+                "macos_command_line_application",
+                "hello",
+                &["main.swift"],
+                &["Mid/Mid"],
+            ),
+        ];
+        let built = build_plan(&targets, "App/hello", tmp.path()).unwrap();
+        assert_eq!(built.plan.nodes.len(), 5);
+        assert_eq!(built.output, ".fabrik/out/App/hello");
+        assert_eq!(built.plan.nodes[1].deps, vec![0]);
+        assert_eq!(built.plan.nodes[2].deps, vec![0]);
+        assert_eq!(built.plan.nodes[3].deps, vec![2]);
+        assert_eq!(built.plan.nodes[built.root_index].deps, vec![3]);
+        assert_eq!(built.nodes[0].label, "Lib/Lib#compile");
+        assert_eq!(built.nodes[0].kind, "swift_compile");
+        assert_eq!(built.nodes[1].label, "Lib/Lib#archive");
+        assert_eq!(built.nodes[1].kind, "swift_archive");
+        assert_eq!(built.nodes[2].label, "Mid/Mid#compile");
+        assert_eq!(built.nodes[2].kind, "swift_compile");
+        assert_eq!(built.nodes[3].label, "Mid/Mid#archive");
+        assert_eq!(built.nodes[3].kind, "swift_archive");
+        assert_eq!(built.nodes[4].kind, "macos_command_line_application");
     }
 }

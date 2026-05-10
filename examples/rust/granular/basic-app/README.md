@@ -12,6 +12,6 @@ It contains:
 Run it from the repository root:
 
 ```sh
-mise exec -- target/release/fabrik build //examples/rust/granular/basic-app:hello
-mise exec -- target/release/fabrik test //examples/rust/granular/basic-app:greeting_test
+mise exec -- target/release/fabrik build examples/rust/granular/basic-app/hello
+mise exec -- target/release/fabrik test examples/rust/granular/basic-app/greeting_test
 ```

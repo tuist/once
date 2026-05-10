@@ -6,10 +6,9 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
-use crate::eval::eval_with;
 use crate::manifest::load_toml_with;
 use crate::target::Target;
-use crate::{STAR_BUILD_FILE_NAME, TOML_BUILD_FILE_NAME};
+use crate::TOML_BUILD_FILE_NAME;
 
 /// Load a single build file from disk and return its targets.
 /// The file's parent directory is treated as the workspace root and the
@@ -24,10 +23,7 @@ pub fn load_file(path: &Path) -> Result<Vec<Target>> {
     let workspace_root = path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    match path.file_name().and_then(|n| n.to_str()) {
-        Some(TOML_BUILD_FILE_NAME) => load_toml_with(&display, &src, &workspace_root, ""),
-        _ => eval_with(&display, &src, workspace_root, String::new()),
-    }
+    load_toml_with(&display, &src, &workspace_root, "")
 }
 
 /// Recursively scan `root` for build files and return every
@@ -77,22 +73,20 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
             path: path.display().to_string(),
             source,
         })?;
+        let filename = path.file_name().unwrap().to_string_lossy();
         let display = if pkg.is_empty() {
-            format!("//:{}", path.file_name().unwrap().to_string_lossy())
+            filename.to_string()
         } else {
-            format!("//{pkg}:{}", path.file_name().unwrap().to_string_lossy())
+            format!("{pkg}/{filename}")
         };
-        let targets = match path.file_name().and_then(|n| n.to_str()) {
-            Some(TOML_BUILD_FILE_NAME) => load_toml_with(&display, &src, root, &pkg)?,
-            _ => eval_with(&display, &src, root.to_path_buf(), pkg)?,
-        };
+        let targets = load_toml_with(&display, &src, root, &pkg)?;
         all.extend(targets);
     }
     Ok(all)
 }
 
 fn is_build_file(name: Option<&str>) -> bool {
-    matches!(name, Some(STAR_BUILD_FILE_NAME | TOML_BUILD_FILE_NAME))
+    matches!(name, Some(TOML_BUILD_FILE_NAME))
 }
 
 #[cfg(test)]
@@ -101,7 +95,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn workspace_walk_finds_packages_and_attaches_labels() {
+    fn workspace_walk_finds_packages_and_attaches_ids() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -110,36 +104,51 @@ mod tests {
         std::fs::create_dir_all(root.join(".fabrik/should-be-skipped")).unwrap();
 
         std::fs::write(
-            root.join("fabrik.star"),
-            "rust_binary(name = \"top\", srcs = [\"main.rs\"])\n",
+            root.join("fabrik.toml"),
+            r#"
+[[rust.binary]]
+name = "top"
+srcs = ["main.rs"]
+"#,
         )
         .unwrap();
         std::fs::write(
-            root.join("crates/a/fabrik.star"),
-            "rust_library(name = \"a\", srcs = [\"lib.rs\"])\n",
+            root.join("crates/a/fabrik.toml"),
+            r#"
+[[rust.library]]
+name = "a"
+srcs = ["lib.rs"]
+"#,
         )
         .unwrap();
         std::fs::write(
-            root.join("crates/b/fabrik.star"),
-            "rust_binary(name = \"b\", srcs = [\"main.rs\"])\n",
+            root.join("crates/b/fabrik.toml"),
+            r#"
+[[rust.binary]]
+name = "b"
+srcs = ["main.rs"]
+"#,
         )
         .unwrap();
-        // A fabrik.star inside a hidden dir must NOT be picked up.
         std::fs::write(
-            root.join(".fabrik/should-be-skipped/fabrik.star"),
-            "rust_binary(name = \"hidden\", srcs = [\"x.rs\"])\n",
+            root.join(".fabrik/should-be-skipped/fabrik.toml"),
+            r#"
+[[rust.binary]]
+name = "hidden"
+srcs = ["x.rs"]
+"#,
         )
         .unwrap();
 
-        let labels: Vec<_> = load_workspace(root)
+        let ids: Vec<_> = load_workspace(root)
             .unwrap()
             .into_iter()
-            .map(|t| t.label())
+            .map(|t| t.id())
             .collect();
         assert_eq!(
-            labels,
-            vec!["//:top", "//crates/a:a", "//crates/b:b"],
-            "expected three labels in package-sorted order"
+            ids,
+            vec!["top", "crates/a/a", "crates/b/b"],
+            "expected three ids in package-sorted order"
         );
     }
 
@@ -159,12 +168,12 @@ srcs = ["lib.rs"]
         )
         .unwrap();
 
-        let labels: Vec<_> = load_workspace(root)
+        let ids: Vec<_> = load_workspace(root)
             .unwrap()
             .into_iter()
-            .map(|t| t.label())
+            .map(|t| t.id())
             .collect();
-        assert_eq!(labels, vec!["//crates/a:a"]);
+        assert_eq!(ids, vec!["crates/a/a"]);
     }
 
     #[test]
@@ -177,8 +186,12 @@ srcs = ["lib.rs"]
         std::fs::write(root.join("pkg/src/lib.rs"), "pub fn hi() {}\n").unwrap();
         std::fs::write(root.join("pkg/README.md"), "ignored\n").unwrap();
         std::fs::write(
-            root.join("pkg/fabrik.star"),
-            "rust_binary(name = \"pkg\", srcs = glob([\"src/*.rs\"]))\n",
+            root.join("pkg/fabrik.toml"),
+            r#"
+[[rust.binary]]
+name = "pkg"
+src_globs = ["src/*.rs"]
+"#,
         )
         .unwrap();
 
@@ -198,8 +211,12 @@ srcs = ["lib.rs"]
         let root = tmp.path();
         std::fs::create_dir_all(root.join("pkg")).unwrap();
         std::fs::write(
-            root.join("pkg/fabrik.star"),
-            "rust_binary(name = \"empty\", srcs = glob([\"src/*.rs\"]))\n",
+            root.join("pkg/fabrik.toml"),
+            r#"
+[[rust.binary]]
+name = "empty"
+src_globs = ["src/*.rs"]
+"#,
         )
         .unwrap();
         let targets = load_workspace(root).unwrap();

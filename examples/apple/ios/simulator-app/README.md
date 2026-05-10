@@ -9,6 +9,6 @@ simulator flow when run.
 Run it from the repository root:
 
 ```sh
-mise exec -- target/release/fabrik build //examples/apple/ios/simulator-app:Demo
-mise exec -- target/release/fabrik run //examples/apple/ios/simulator-app:Demo
+mise exec -- target/release/fabrik build examples/apple/ios/simulator-app/Demo
+mise exec -- target/release/fabrik run examples/apple/ios/simulator-app/Demo
 ```

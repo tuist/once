@@ -16,7 +16,7 @@ A polyglot, agent-native build system. Bazel's ambitions, none of its mistakes.
 ### Non-goals
 
 - Replacing every native build tool. We coordinate with cargo, mix, gradle, xcodebuild, vite where reimplementation is worse than cooperation.
-- A novel programming language for build files. We learned from Starlark.
+- Executable build files. Declarations stay as data.
 - Shipping a UI in v0. The OTel ecosystem already has them.
 - Compatibility with Bazel BUILD files. We learn from Bazel; we don't carry its baggage.
 
@@ -33,14 +33,14 @@ This section exists because every architectural decision below is a reaction to 
 
 | Bazel mistake | Our response |
 |---|---|
-| Untyped Starlark, weakly-typed providers, sprawling rule complexity | TOML declarations validated against plugin-owned schemas; first-party plugins emit typed graph fragments |
+| Untyped build-file code, weakly-typed providers, sprawling rule complexity | TOML declarations validated against plugin-owned schemas; first-party plugins emit typed graph fragments |
 | Four overlapping extension mechanisms (macros, rules, aspects, repository rules) | One concept: a plugin is a pure function that emits typed graph fragments |
 | BUILD files require manual enumeration of every source and dep | Globs and language-aware discovery are first-class, with deterministic resolution |
 | WORKSPACE → MODULE.bazel migration, still ongoing | One module file from day one. Versioned. Stable. |
 | `rules_*` ecosystem perpetually lags upstream language toolchains | Cooperative integration with native tools is the default; reimplementation is opt-in |
 | Untyped providers, schema-by-convention | Typed plugin contracts validated at the boundary |
 | Hermeticity is aspirational; cache poisoning is silent | Hermeticity level is per-target, declared, stored in cache, queryable |
-| Error messages span Starlark/generated code/execution; root cause is buried | Structured errors with full provenance; "why" is queryable |
+| Error messages span generated code and execution; root cause is buried | Structured errors with full provenance; "why" is queryable |
 | `bazel query` is bolted on, action graph is internal | Query API is the primary interface; CLI is a thin client |
 | `--config` flag combinatorics produce non-deterministic caching | Configuration profiles are typed, named, part of the cache key namespace |
 | Long-running dev servers shoehorned into build target model (`ibazel`) | `service` targets are a separate first-class concept |
@@ -106,7 +106,7 @@ Plugins are Rust modules with explicit schemas and action planners. First-party 
 
 ### 3.1 Core
 
-Build files are named `fabrik.toml`. Each package directory can contain one file. TOML is deliberately less expressive than Starlark: declarations are data, not programs. The payoff is that agents can write and edit build files with normal parsers, schemas, diffs, and validation loops.
+Build files are named `fabrik.toml`. Each package directory can contain one file. Declarations are data, not programs. The payoff is that agents can write and edit build files with normal parsers, schemas, diffs, and validation loops.
 
 A `fabrik.toml` file looks like this:
 
@@ -118,17 +118,17 @@ srcs = ["src/lib.rs"]
 [[rust.binary]]
 name = "api"
 srcs = ["src/main.rs"]
-deps = [":core", "//lib/proto:rust"]
+deps = ["core", "lib/proto/rust"]
 
 [[rust.test]]
 name = "api_test"
 srcs = ["tests/api.rs"]
-deps = [":core"]
+deps = ["core"]
 ```
 
 The language has:
 - Schema validation from plugin-owned target declarations.
-- Deterministic target labels derived from package path, target kind, and target name.
+- Deterministic target ids derived from package path and target name.
 - Structured attributes with predictable error locations.
 - No user-defined functions, imports, mutation, or I/O.
 - Optional generated TOML from importers when a native manifest is the source of truth.
@@ -191,7 +191,7 @@ srcs = ["src/lib.rs"]
 [[rust.binary]]
 name = "api"
 srcs = ["src/main.rs"]
-deps = [":core"]
+deps = ["core"]
 
 [[rust.workspace]]
 name = "adopted"
@@ -202,7 +202,7 @@ The Rust plugin owns schemas for `rust.library`, `rust.binary`, `rust.test`, `ru
 
 ### 4.1 The three integration modes
 
-These are not aspirational labels; they are typed contracts that determine cache fidelity, query depth, error structure, and sandbox defaults.
+These are not aspirational ids; they are typed contracts that determine cache fidelity, query depth, error structure, and sandbox defaults.
 
 **`reimplemented`**: plugin emits explicit actions with declared inputs and outputs. Maximum cache fidelity. Used where the compilation unit maps cleanly to a single tool invocation: rustc per crate, gcc/clang per .c/.cpp, javac per source set, swiftc per module.
 
@@ -216,7 +216,7 @@ For most language plugins, both modes coexist within the same plugin: a "declare
 
 The integration mode is **visible to users and agents**, surfaced in:
 - The build definition (`kind = "gradle_project"` is implicitly opaque; we make this loud).
-- The query API (`fabrik introspect //app/android` returns the boundary type).
+- The query API (`fabrik introspect app/android` returns the boundary type).
 - Marketing materials and docs (we don't pretend Gradle gets the same treatment as Rust).
 - Cache statistics (`fabrik stats --by-mode` shows hit rates broken down by integration mode).
 
@@ -241,7 +241,7 @@ srcs = ["main.c"]
 hermeticity = "loose" # explicit opt-in; links against /usr/lib/libfoo
 ```
 
-Every cache entry stores its hermeticity level. `fabrik why-cached //x` tells you whether the result came from a `strict`, `traced`, or `loose` cache hit. Agents can filter cache hits by hermeticity for high-reliability operations.
+Every cache entry stores its hermeticity level. `fabrik why-cached x` tells you whether the result came from a `strict`, `traced`, or `loose` cache hit. Agents can filter cache hits by hermeticity for high-reliability operations.
 
 ### 5.2 Traced mode mechanics
 
@@ -259,7 +259,7 @@ Every cache entry is annotated with: producing plugin name+version, hermeticity 
 
 Operators can:
 - Invalidate by predicate (plugin, version range, platform, age).
-- Audit cache hits (`fabrik cache audit //x` shows the chain of inputs).
+- Audit cache hits (`fabrik cache audit x` shows the chain of inputs).
 - Pin specific results as known-good or known-bad.
 
 ### 5.4 Remote execution and resource bounds
@@ -295,19 +295,19 @@ This is the load-bearing differentiator. The query API is **not** a debugging to
 gRPC service exposed by the coordinator. Stable, versioned, typed. Examples:
 
 ```
-GraphService.GetTarget(label) → Target with full metadata
-GraphService.GetTransitiveDeps(label, depth) → DAG fragment
-GraphService.GetReverseDeps(label) → which targets depend on this
-GraphService.GetActionsForTarget(label) → action list with cache state
-GraphService.WhyRebuild(label) → causal trace
+GraphService.GetTarget(target_id) → Target with full metadata
+GraphService.GetTransitiveDeps(target_id, depth) → DAG fragment
+GraphService.GetReverseDeps(target_id) → which targets depend on this
+GraphService.GetActionsForTarget(target_id) → action list with cache state
+GraphService.WhyRebuild(target_id) → causal trace
 GraphService.Impact(file_path) → affected targets with reasons
 GraphService.Diff(build_id_1, build_id_2) → action-level diff between builds
 GraphService.ExplainCacheMiss(action_id) → structured reason
-GraphService.GetErrorHistory(label, time_range) → past failures with provenance
+GraphService.GetErrorHistory(target_id, time_range) → past failures with provenance
 GraphService.PredictRebuildCost(file_changes) → estimated wall time + actions
 ```
 
-Plugin-extensible: the Rust plugin registers `RustPluginService.GetTransitiveCrates(label)`, the Go plugin registers `GoPluginService.GetModulePath(label)`, etc. Plugins extend the query surface, never the CLI surface directly.
+Plugin-extensible: the Rust plugin registers `RustPluginService.GetTransitiveCrates(target_id)`, the Go plugin registers `GoPluginService.GetModulePath(target_id)`, etc. Plugins extend the query surface, never the CLI surface directly.
 
 ### 6.2 Designed for agents
 
@@ -335,7 +335,7 @@ These are not features Fabrik ships; they are **uses of the API that agents natu
 
 The CLI surface is deliberately small. Two production verbs:
 
-- `fabrik run //pkg:name`: execute the action(s) that produce the named target. The verb is uniform across target kinds. For a `rust.binary` it runs rustc; for a `task` target it runs the declared command. The composition is in the build-file declarations, not in the CLI.
+- `fabrik run pkg/name`: execute the action(s) that produce the named target. The verb is uniform across target kinds. For a `rust.binary` it runs rustc; for a `task` target it runs the declared command. The composition is in the build-file declarations, not in the CLI.
 - `fabrik exec -- <argv>`: cache and execute a literal command without touching the target graph. Substrate-level escape hatch for ad-hoc shell-outs and for exercising the cache directly.
 
 Plus thin introspection verbs (`fabrik targets`, `fabrik cache stats`) that are clients of the query API, not parallel implementations.
@@ -349,7 +349,7 @@ Structured first, formatted second. Every error is a typed object:
 ```json
 {
   "kind": "compile_error",
-  "target": "//api:server",
+  "target": "api/server",
   "action_id": "act_8a3f...",
   "build_id": "build_2026_04_28_001",
   "command": ["rustc", "--edition=2021", "..."],
@@ -367,7 +367,7 @@ Structured first, formatted second. Every error is a typed object:
     "hermeticity": "strict",
     "platform": "linux/x86_64",
     "profile": "debug_linux_x64",
-    "invocation_args": ["build", "//api:server"]
+    "invocation_args": ["build", "api/server"]
   },
   "related_actions": ["act_7b2c...", "act_9d4e..."]
 }
@@ -385,10 +385,10 @@ Dev servers are not builds. They are supervised processes with their own increme
 [[service]]
 name = "frontend_dev"
 kind = "vite_dev"
-workspace = "//apps/web"
+workspace = "apps/web"
 watches = ["apps/web/src/**"]
 port = 5173
-depends_on_build = ["//apps/web:assets"]
+depends_on_build = ["apps/web/assets"]
 ```
 
 The coordinator launches and supervises; it does not own the dev tool's incremental graph. Vite owns its own world inside the service; we own the supervision and the cross-language deps that feed it.
@@ -416,7 +416,7 @@ The Rust plugin exposes both a declared-mode and an adopted-mode entry point. Sa
 - **Build scripts**: traced. Cargo's build scripts are the canonical case for traced mode.
 - **What it's good for**: existing cargo workspaces adopting Fabrik without migration; `crates.io` dep graphs where reproducing cargo's resolver in declared form is impractical.
 
-**Mode boundary.** Declared and adopted targets coexist in the same workspace and the same graph. The integration mode is visible in queries (`fabrik introspect //x` reports it), in `fabrik cache stats --by-mode`, and in cache namespacing (the same crate built two ways produces two cache entries; no accidental sharing).
+**Mode boundary.** Declared and adopted targets coexist in the same workspace and the same graph. The integration mode is visible in queries (`fabrik introspect x` reports it), in `fabrik cache stats --by-mode`, and in cache namespacing (the same crate built two ways produces two cache entries; no accidental sharing).
 
 **Why Rust first**: we're writing Fabrik in Rust, so we get to dogfood from week one. Self-hosting uses declared mode end-to-end; adopted mode lands as the adoption story for external projects.
 
@@ -534,7 +534,7 @@ These need resolution before we cut v0. I have leanings on each but want them de
 
 ### Resolved
 
-- **Build definition language.** TOML declarations. The Starlark/Pkl/TypeScript debate was settled by the agent workflow: build files should be structured data that can be generated, parsed, validated, and repaired without executing user code.
+- **Build definition language.** TOML declarations. Build files should be structured data that can be generated, parsed, validated, and repaired without executing user code.
 - **Plugin implementation.** First-party plugins are Rust crates with schemas, importers, planners, handlers, and query methods. Third-party plugins use the same contracts once external distribution exists.
 - **Resource bounds.** Local and remote execution share `ResourceRequest`; schedulers must account for CPU slots, optional memory, remote queue capacity, output downloads, and prefetch work.
 

@@ -10,20 +10,20 @@ srcs = ["src/lib.rs"]
 [[rust.binary]]
 name = "hello"
 srcs = ["src/main.rs"]
-deps = ["//examples/rust/granular/basic-app:greeting"]
+deps = ["greeting"]
 
 [[rust.test]]
 name = "greeting_test"
 srcs = ["tests/greeting.rs"]
 crate_root = "tests/greeting.rs"
-deps = ["//examples/rust/granular/basic-app:greeting"]
+deps = ["greeting"]
 ```
 
 Run it:
 
 ```sh
-fabrik build //examples/rust/granular/basic-app:hello
-fabrik test //examples/rust/granular/basic-app:greeting_test
+fabrik build examples/rust/granular/basic-app/hello
+fabrik test examples/rust/granular/basic-app/greeting_test
 ```
 
 ## Build Scripts
@@ -40,7 +40,7 @@ srcs = ["build.rs", "config.txt"]
 [[rust.library]]
 name = "native"
 srcs = ["src/lib.rs"]
-deps = ["//crates/native:build"]
+deps = ["build"]
 ```
 
 The build script is a normal cacheable node. Its captured directives
@@ -62,7 +62,7 @@ srcs = ["Cargo.lock", "Cargo.toml", "crates/fabrik-cli/src/main.rs"]
 Run it:
 
 ```sh
-fabrik run //:fabrik
+fabrik run fabrik
 ```
 
 ## Cache Behavior

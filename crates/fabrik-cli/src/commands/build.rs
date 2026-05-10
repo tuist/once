@@ -1,13 +1,12 @@
 //! `fabrik build` - compile a target via the granular per-crate
 //! action graph.
 //!
-//! Resolves the workspace's `fabrik.star` files, expands the requested
-//! target's transitive Rust deps into a [`fabrik_core::Plan`], and
-//! runs the plan through the shared cache-aware [`fabrik_core::Runner`].
-//! Each crate is its own action; a one-line edit in a leaf crate
-//! invalidates only its node and the nodes that transitively depend
-//! on it. The wire-up to remote execution is the same plan, executed
-//! by a different runner.
+//! Resolves the workspace's build files, expands the requested target's
+//! transitive deps into a [`fabrik_core::Plan`], and runs the plan through
+//! the shared cache-aware [`fabrik_core::Runner`]. Granular targets expand
+//! into one or more actions; a one-line edit in a leaf target invalidates
+//! only its node and the nodes that transitively depend on it. The wire-up
+//! to remote execution is the same plan, executed by a different runner.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -23,7 +22,7 @@ use crate::render;
 
 #[derive(Serialize)]
 struct BuildSummary<'a> {
-    label: &'a str,
+    target: &'a str,
     nodes: usize,
     cache_hits: usize,
     cache_misses: usize,
@@ -38,15 +37,15 @@ struct NodeRecord<'a> {
     action_digest: String,
 }
 
-pub async fn build(workspace: &Path, cas: &Cas, label: &str, format: Format) -> Result<ExitCode> {
+pub async fn build(workspace: &Path, cas: &Cas, target: &str, format: Format) -> Result<ExitCode> {
     let targets = fabrik_frontend::load_workspace(workspace).context("loading workspace")?;
-    let built = build_plan(&targets, label, workspace).context("building plan")?;
+    let built = build_plan(&targets, target, workspace).context("building plan")?;
     let runner = Runner::new(cas.clone(), workspace.to_path_buf(), RunOpts::default());
 
     let outcomes = runner
         .run_plan(&built.plan)
         .await
-        .with_context(|| format!("executing plan for {label}"))?;
+        .with_context(|| format!("executing plan for {target}"))?;
 
     let cache_hits = outcomes
         .iter()
@@ -73,7 +72,7 @@ pub async fn build(workspace: &Path, cas: &Cas, label: &str, format: Format) -> 
                 err.write_all(line.as_bytes()).await?;
             }
             let trailer = format!(
-                "fabrik: built {label} ({n} nodes, {hits} hit, {miss} miss) -> {out}\n",
+                "fabrik: built {target} ({n} nodes, {hits} hit, {miss} miss) -> {out}\n",
                 n = outcomes.len(),
                 hits = cache_hits,
                 miss = cache_misses,
@@ -101,7 +100,7 @@ pub async fn build(workspace: &Path, cas: &Cas, label: &str, format: Format) -> 
             }
             err.flush().await?;
             let summary = BuildSummary {
-                label,
+                target,
                 nodes: outcomes.len(),
                 cache_hits,
                 cache_misses,
@@ -129,15 +128,15 @@ struct NodeInfo {
 
 fn build_plan(
     targets: &[fabrik_frontend::Target],
-    label: &str,
+    target_id: &str,
     workspace: &Path,
 ) -> Result<BuiltCliPlan> {
     let target = targets
         .iter()
-        .find(|t| t.label() == label)
-        .ok_or_else(|| anyhow::anyhow!("no target matches `{label}`"))?;
-    if target.kind == "apple_ios_app" {
-        let built = fabrik_apple::build_plan(targets, label, workspace)?;
+        .find(|t| t.id() == target_id)
+        .ok_or_else(|| anyhow::anyhow!("no target matches `{target_id}`"))?;
+    if fabrik_apple::supports_kind(&target.kind) {
+        let built = fabrik_apple::build_plan(targets, target_id, workspace)?;
         Ok(BuiltCliPlan {
             plan: built.plan,
             nodes: built
@@ -148,7 +147,7 @@ fn build_plan(
             output: built.output,
         })
     } else {
-        let built = fabrik_rust::build_plan(targets, label, workspace)?;
+        let built = fabrik_rust::build_plan(targets, target_id, workspace)?;
         let fabrik_core::Action::RunCommand { outputs, .. } =
             &built.plan.nodes[built.root_index].action;
         let output = outputs

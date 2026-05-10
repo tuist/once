@@ -11,12 +11,12 @@ use crate::cli::Format;
 use crate::render;
 
 /// JSON view of a [`fabrik_frontend::Target`] that includes the
-/// computed `label` field. We avoid embedding `label` directly in the
+/// computed `id` field. We avoid embedding `id` directly in the
 /// frontend's `Target` struct because the canonical representation is
-/// `(package, name)`; the label is a derived display form.
+/// `(package, name)`; the id is a derived display form.
 #[derive(Serialize)]
 struct TargetView<'a> {
-    label: String,
+    id: String,
     package: &'a str,
     kind: &'a str,
     name: &'a str,
@@ -54,7 +54,7 @@ pub async fn print_targets(workspace: &Path, format: Format) -> Result<()> {
                 .iter()
                 .map(|t| {
                     (
-                        t.label(),
+                        t.id(),
                         TargetFields {
                             package: &t.package,
                             kind: &t.kind,
@@ -77,10 +77,10 @@ pub async fn print_targets(workspace: &Path, format: Format) -> Result<()> {
     let mut out = tokio::io::stdout();
     for t in &targets {
         let line = match format {
-            Format::Human => format!("{} {}\n", t.kind, t.label()),
+            Format::Human => format!("{} {}\n", t.kind, t.id()),
             Format::Json => {
                 let view = TargetView {
-                    label: t.label(),
+                    id: t.id(),
                     package: &t.package,
                     kind: &t.kind,
                     name: &t.name,

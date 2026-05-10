@@ -20,7 +20,7 @@ use crate::render;
 
 #[derive(Serialize)]
 struct RunRecord<'a> {
-    label: &'a str,
+    target: &'a str,
     kind: &'a str,
     action_digest: String,
     cache: &'a str,
@@ -34,15 +34,15 @@ struct ActionPlan {
     output_dir: Option<PathBuf>,
 }
 
-pub async fn run(workspace: &Path, cas: &Cas, label: &str, format: Format) -> Result<ExitCode> {
+pub async fn run(workspace: &Path, cas: &Cas, target_id: &str, format: Format) -> Result<ExitCode> {
     let targets = fabrik_frontend::load_workspace(workspace).context("loading workspace")?;
     let target = targets
         .iter()
-        .find(|t| t.label() == label)
-        .ok_or_else(|| anyhow::anyhow!("no target matches `{label}`"))?;
+        .find(|t| t.id() == target_id)
+        .ok_or_else(|| anyhow::anyhow!("no target matches `{target_id}`"))?;
 
     if target.kind == "apple_ios_app" {
-        return run_apple_ios_app(workspace, cas, label, &targets, target, format).await;
+        return run_apple_ios_app(workspace, cas, target_id, &targets, target, format).await;
     }
 
     let plan = action_for(workspace, target)?;
@@ -56,38 +56,39 @@ pub async fn run(workspace: &Path, cas: &Cas, label: &str, format: Format) -> Re
         .await
         .context("executing action")?;
 
-    render_run_output(cas, &outcome, label, target, &plan.output, format).await?;
+    render_run_output(cas, &outcome, target_id, target, &plan.output, format).await?;
     Ok(exit_from(outcome.result.exit_code))
 }
 
 async fn run_apple_ios_app(
     workspace: &Path,
     cas: &Cas,
-    label: &str,
+    target_id: &str,
     targets: &[fabrik_frontend::Target],
     target: &fabrik_frontend::Target,
     format: Format,
 ) -> Result<ExitCode> {
-    let built = fabrik_apple::build_plan(targets, label, workspace).context("building app plan")?;
+    let built =
+        fabrik_apple::build_plan(targets, target_id, workspace).context("building app plan")?;
     let runner = Runner::new(cas.clone(), workspace.to_path_buf(), RunOpts::default());
     let _build_outcomes = runner
         .run_plan(&built.plan)
         .await
-        .with_context(|| format!("building app target {label}"))?;
+        .with_context(|| format!("building app target {target_id}"))?;
     let launch = fabrik_apple::launch_ios_app(target, workspace)?;
     let outcome = runner
         .run(&launch.action)
         .await
-        .with_context(|| format!("launching app target {label}"))?;
+        .with_context(|| format!("launching app target {target_id}"))?;
 
-    render_run_output(cas, &outcome, label, target, &launch.output, format).await?;
+    render_run_output(cas, &outcome, target_id, target, &launch.output, format).await?;
     Ok(exit_from(outcome.result.exit_code))
 }
 
 async fn render_run_output(
     cas: &Cas,
     outcome: &fabrik_core::Outcome,
-    label: &str,
+    target_id: &str,
     target: &fabrik_frontend::Target,
     output: &str,
     format: Format,
@@ -99,7 +100,7 @@ async fn render_run_output(
         CacheState::Miss => "miss",
     };
     let record = RunRecord {
-        label,
+        target: target_id,
         kind: &target.kind,
         action_digest: outcome.action.to_string(),
         cache: cache_tag,
@@ -115,7 +116,7 @@ async fn render_run_output(
             let mut err = tokio::io::stderr();
             err.write_all(&stderr_blob).await?;
             let trailer = format!(
-                "fabrik: ran {label} (cache {cache_tag}, exit={})\n",
+                "fabrik: ran {target_id} (cache {cache_tag}, exit={})\n",
                 outcome.result.exit_code
             );
             err.write_all(trailer.as_bytes()).await?;
@@ -150,7 +151,7 @@ fn rust_binary_action(workspace: &Path, target: &fabrik_frontend::Target) -> Res
     let main_src = target
         .srcs
         .first()
-        .ok_or_else(|| anyhow::anyhow!("rust_binary {} has no srcs", target.label()))?;
+        .ok_or_else(|| anyhow::anyhow!("rust_binary {} has no srcs", target.id()))?;
     let src_rel = source_path(target, main_src)?;
     let out_rel = if target.package.is_empty() {
         format!("{CACHE_DIR}/out/{}", target.name)
@@ -185,12 +186,12 @@ fn rust_binary_action(workspace: &Path, target: &fabrik_frontend::Target) -> Res
 
 fn cargo_binary_action(workspace: &Path, target: &fabrik_frontend::Target) -> Result<ActionPlan> {
     if target.srcs.is_empty() {
-        anyhow::bail!("cargo_binary {} has no srcs", target.label());
+        anyhow::bail!("cargo_binary {} has no srcs", target.id());
     }
     let cargo_package = target
         .attrs
         .get("cargo_package")
-        .ok_or_else(|| anyhow::anyhow!("cargo_binary {} has no cargo_package", target.label()))?;
+        .ok_or_else(|| anyhow::anyhow!("cargo_binary {} has no cargo_package", target.id()))?;
     let bin = target.attrs.get("bin").unwrap_or(&target.name);
     let input_digest = input_digest(workspace, target)?;
     let output = format!("target/debug/{bin}{}", std::env::consts::EXE_SUFFIX);
@@ -222,33 +223,33 @@ fn task_action(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Act
     let argv_json = target
         .attrs
         .get("argv_json")
-        .ok_or_else(|| anyhow::anyhow!("task {} has no argv", target.label()))?;
+        .ok_or_else(|| anyhow::anyhow!("task {} has no argv", target.id()))?;
     let argv: Vec<String> = serde_json::from_str(argv_json)
-        .with_context(|| format!("parsing argv for task {}", target.label()))?;
+        .with_context(|| format!("parsing argv for task {}", target.id()))?;
     if argv.is_empty() {
-        anyhow::bail!("task {} has empty argv", target.label());
+        anyhow::bail!("task {} has empty argv", target.id());
     }
     let env = match target.attrs.get("env_json") {
         Some(raw) => serde_json::from_str(raw)
-            .with_context(|| format!("parsing env for task {}", target.label()))?,
+            .with_context(|| format!("parsing env for task {}", target.id()))?,
         None => BTreeMap::new(),
     };
     let cwd = match target.attrs.get("cwd") {
         Some(raw) => Some(
             WorkspacePath::try_from(raw.as_str())
-                .with_context(|| format!("invalid cwd for task {}", target.label()))?,
+                .with_context(|| format!("invalid cwd for task {}", target.id()))?,
         ),
         None => None,
     };
     let outputs = match target.attrs.get("outputs_json") {
         Some(raw) => {
             let values: Vec<String> = serde_json::from_str(raw)
-                .with_context(|| format!("parsing outputs for task {}", target.label()))?;
+                .with_context(|| format!("parsing outputs for task {}", target.id()))?;
             values
                 .iter()
                 .map(|value| {
                     WorkspacePath::try_from(value.as_str())
-                        .with_context(|| format!("invalid output `{value}` in {}", target.label()))
+                        .with_context(|| format!("invalid output `{value}` in {}", target.id()))
                 })
                 .collect::<Result<_>>()?
         }
@@ -258,7 +259,7 @@ fn task_action(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Act
         .attrs
         .get("cache")
         .map_or(Ok(true), |raw| raw.parse::<bool>())
-        .with_context(|| format!("parsing cache setting for task {}", target.label()))?;
+        .with_context(|| format!("parsing cache setting for task {}", target.id()))?;
     let timeout_ms = parse_attr::<u64>(target, "timeout_ms")?;
     let cpu_slots = parse_attr::<usize>(target, "cpu_slots")?.unwrap_or(1);
     let memory_bytes = parse_attr::<u64>(target, "memory_bytes")?.unwrap_or(0);
@@ -290,7 +291,7 @@ fn source_path(target: &fabrik_frontend::Target, src: &str) -> Result<WorkspaceP
         format!("{}/{src}", target.package)
     };
     WorkspacePath::try_from(rel.as_str())
-        .with_context(|| format!("invalid source path `{src}` in {}", target.label()))
+        .with_context(|| format!("invalid source path `{src}` in {}", target.id()))
 }
 
 fn parse_attr<T>(target: &fabrik_frontend::Target, name: &str) -> Result<Option<T>>
@@ -304,7 +305,7 @@ where
         .map(|value| {
             value
                 .parse::<T>()
-                .with_context(|| format!("parsing {name} for {}", target.label()))
+                .with_context(|| format!("parsing {name} for {}", target.id()))
         })
         .transpose()
 }
@@ -316,7 +317,7 @@ fn uncached_task_digest(target: &fabrik_frontend::Target) -> Digest {
         .as_nanos();
     let mut buf = Vec::new();
     buf.extend_from_slice(b"fabrik.task.uncached.v1\0");
-    buf.extend_from_slice(target.label().as_bytes());
+    buf.extend_from_slice(target.id().as_bytes());
     buf.push(0);
     buf.extend_from_slice(&nonce.to_le_bytes());
     Digest::of_bytes(&buf)
@@ -359,10 +360,15 @@ fn input_digest(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Op
 }
 
 /// Environment variables forwarded verbatim to spawned tool actions
-/// (rustc, cargo, ...). Anything not on this list, and not a `MISE_*`
-/// variable, is dropped: actions must declare every variable they
-/// depend on, or the cache key lies.
-const FORWARDED_TOOL_ENV: &[&str] = &["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"];
+/// (rustc, cargo, ...). Anything not on this list is dropped: actions
+/// must declare every variable they depend on, or the cache key lies.
+const FORWARDED_TOOL_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+];
 
 fn tool_env() -> BTreeMap<String, String> {
     select_tool_env(std::env::vars())
@@ -373,7 +379,7 @@ where
     I: IntoIterator<Item = (String, String)>,
 {
     vars.into_iter()
-        .filter(|(k, _)| FORWARDED_TOOL_ENV.contains(&k.as_str()) || k.starts_with("MISE_"))
+        .filter(|(k, _)| FORWARDED_TOOL_ENV.contains(&k.as_str()))
         .collect()
 }
 
@@ -395,22 +401,22 @@ mod tests {
     }
 
     #[test]
-    fn select_tool_env_keeps_allowlisted_keys_and_mise_prefix() {
+    fn select_tool_env_keeps_only_allowlisted_keys() {
         let env = select_tool_env([
             ("PATH".into(), "/usr/bin".into()),
             ("CARGO_HOME".into(), "/cargo".into()),
-            ("MISE_TRUSTED_CONFIG_PATHS".into(), "/ws".into()),
-            ("MISE_YES".into(), "1".into()),
+            ("RUSTUP_TOOLCHAIN".into(), "1.86.0".into()),
+            ("TOOL_PRIVATE".into(), "leaked".into()),
             ("UNRELATED".into(), "leaked".into()),
             ("FABRIK_PROBE".into(), "leaked".into()),
         ]);
         assert_eq!(env.get("PATH").map(String::as_str), Some("/usr/bin"));
         assert_eq!(env.get("CARGO_HOME").map(String::as_str), Some("/cargo"));
         assert_eq!(
-            env.get("MISE_TRUSTED_CONFIG_PATHS").map(String::as_str),
-            Some("/ws")
+            env.get("RUSTUP_TOOLCHAIN").map(String::as_str),
+            Some("1.86.0")
         );
-        assert_eq!(env.get("MISE_YES").map(String::as_str), Some("1"));
+        assert!(!env.contains_key("TOOL_PRIVATE"));
         assert!(!env.contains_key("UNRELATED"));
         assert!(!env.contains_key("FABRIK_PROBE"));
     }

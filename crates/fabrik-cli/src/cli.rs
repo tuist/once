@@ -23,9 +23,8 @@ pub enum Format {
 }
 
 /// Release pipeline sets `FABRIK_VERSION` at build time so the binary
-/// reports the actual release tag rather than the pre-1.0
-/// workspace.package version. Falls back to the Cargo version for
-/// local dev builds.
+/// reports the actual release tag rather than the pre-1.0 root package
+/// version. Falls back to the Cargo version for local dev builds.
 pub const CLI_VERSION: &str = match option_env!("FABRIK_VERSION") {
     Some(v) => v,
     None => env!("CARGO_PKG_VERSION"),
@@ -38,8 +37,8 @@ pub const CLI_VERSION: &str = match option_env!("FABRIK_VERSION") {
     about = "Polyglot, agent-native build system"
 )]
 pub struct Cli {
-    /// Workspace root. Defaults to the current directory; the cache
-    /// lives under `<workspace>/.fabrik/`. Mirrors `make -C`.
+    /// Project root. Defaults to the current directory; the cache
+    /// lives under `<project>/.fabrik/`. Mirrors `make -C`.
     #[arg(short = 'C', long = "directory", global = true, value_name = "DIR")]
     pub directory: Option<PathBuf>,
 
@@ -63,7 +62,7 @@ pub struct Cli {
 pub enum Cmd {
     /// Execute the action(s) that produce a target.
     ///
-    /// Loads the workspace, finds the matching target by label, and
+    /// Loads the project, finds the matching target, and
     /// runs its action(s) through the cache. For a `rust_binary`,
     /// that action is the rustc invocation; the binary lands at
     /// `.fabrik/out/<package>/<name>`. For a `cargo_binary`, the
@@ -71,8 +70,8 @@ pub enum Cmd {
     /// The verb is uniform across target kinds: target-specific
     /// composition lives in build-file declarations, not in the CLI.
     Run {
-        /// Target label, e.g. `//examples/hello:hello` or `//:hello`.
-        label: String,
+        /// Target id, e.g. `examples/hello/hello` or `./hello`.
+        target: String,
     },
 
     /// Build a target via the granular per-crate action graph.
@@ -84,19 +83,19 @@ pub enum Cmd {
     /// Use `fabrik run` instead for `cargo_binary` and other
     /// single-action targets.
     Build {
-        /// Target label, e.g. `//crates/fabrik-cli:fabrik`.
-        label: String,
+        /// Target id, e.g. `crates/fabrik-cli/fabrik`.
+        target: String,
     },
 
     /// Build and execute a Rust test target.
     ///
     /// Compiles the target's transitive Rust deps with the granular
     /// planner, then runs the produced test binary as its own cached
-    /// action. Extra args after the label are passed to the Rust test
-    /// harness, for example `fabrik test //pkg:pkg_test -- --nocapture`.
+    /// action. Extra args after the target are passed to the Rust test
+    /// harness, for example `fabrik test pkg/pkg_test -- --nocapture`.
     Test {
-        /// Rust test target label, e.g. `//crates/foo:foo_test`.
-        label: String,
+        /// Rust test target id, e.g. `crates/foo/foo_test`.
+        target: String,
 
         /// Arguments passed to the compiled test binary.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -116,8 +115,8 @@ pub enum Cmd {
         #[arg(short = 'e', value_parser = parse_env)]
         env: Vec<(String, String)>,
 
-        /// Working directory, relative to the workspace root. Must not
-        /// be absolute or escape the workspace.
+        /// Working directory, relative to the project root. Must not
+        /// be absolute or escape the project.
         #[arg(long, value_parser = parse_workspace_path)]
         cwd: Option<WorkspacePath>,
 
@@ -143,20 +142,18 @@ pub enum Cmd {
         cmd: CacheCmd,
     },
 
-    /// Generate `vendor/fabrik.star` from the workspace's Cargo.lock.
+    /// Generate `vendor/fabrik.toml` from the project's Cargo.lock.
     ///
     /// Reads `cargo metadata` for the resolve graph and emits one
-    /// `cargo_crate(...)` declaration per pure-rust dependency,
-    /// pointing at the cargo registry source cache. Crates that need
-    /// a `build.rs` are commented out (the granular pipeline does not
-    /// yet thread build-script outputs through dependent rustc
-    /// invocations); use the `cargo_binary` escape hatch for those.
+    /// granular Rust declaration per pure-rust dependency. Crates that
+    /// need a `build.rs` are commented out; use the `cargo.binary`
+    /// escape hatch until the third-party graph is feature-complete.
     Vendor,
 
-    /// List targets declared across the workspace.
+    /// List targets declared across the project.
     ///
-    /// Walks the workspace root for `fabrik.star` files, evaluates each,
-    /// and prints one line per declared target as `<kind> <label>`, in
+    /// Walks the project root for build files, evaluates each,
+    /// and prints one line per declared target as `<kind> <id>`, in
     /// package then source order. Useful for scripting and for
     /// sanity-checking that build files evaluate before more expensive
     /// commands consume them.

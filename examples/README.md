@@ -11,6 +11,8 @@ matters.
 - `rust/granular/build-script-cfg`: a granular Rust graph where a
   `build.rs` emits a cfg consumed by a dependent library.
 
-## Apple / iOS
+## Apple
 
+- `apple/macos/cli`: a Swift library plus a macOS command-line app.
+- `apple/macos/tuist-shaped-swift`: a Tuist-shaped Swift module graph.
 - `apple/ios/simulator-app`: a SwiftUI iOS simulator app bundle.

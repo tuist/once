@@ -1,0 +1,12 @@
+[[apple.swift_library]]
+name = "Greeter"
+srcs = ["Sources/Greeter.swift"]
+module_name = "Greeter"
+minimum_os = "15.0"
+
+[[apple.macos_command_line_application]]
+name = "hello"
+srcs = ["Sources/main.swift"]
+deps = ["Greeter"]
+module_name = "Hello"
+minimum_os = "15.0"

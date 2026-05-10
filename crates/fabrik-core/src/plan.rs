@@ -19,8 +19,8 @@ use crate::{Action, Outcome, Runner};
 #[derive(Debug, Clone)]
 pub struct PlanNode {
     /// Human-readable label, surfaced in telemetry and CLI output.
-    /// Typically the target label, but the scheduler treats it as
-    /// opaque text.
+    /// Typically a target id or a target-local action id, but the
+    /// scheduler treats it as opaque text.
     pub label: String,
     pub action: Action,
     pub deps: Vec<usize>,

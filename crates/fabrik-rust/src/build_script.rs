@@ -34,9 +34,7 @@ pub fn compile_build_script(
     workspace_root: &Path,
 ) -> Result<PlanNode, CompileError> {
     if target.srcs.is_empty() {
-        return Err(CompileError::NoSources {
-            label: target.label(),
-        });
+        return Err(CompileError::NoSources { label: target.id() });
     }
     let build_rs = target
         .srcs
@@ -44,7 +42,7 @@ pub fn compile_build_script(
         .find(|s| s.ends_with("build.rs"))
         .cloned()
         .ok_or_else(|| CompileError::CrateRootMissing {
-            label: target.label(),
+            label: target.id(),
             root: "build.rs".into(),
         })?;
     let build_rs_ws = if target.package.is_empty() {
@@ -102,7 +100,7 @@ TARGET="$HOST_TRIPLE" \
     let outputs = vec![
         WorkspacePath::try_from(stdout_capture.as_str()).map_err(|source| {
             CompileError::InvalidPath {
-                label: target.label(),
+                label: target.id(),
                 path: stdout_capture.clone(),
                 source,
             }
@@ -120,7 +118,7 @@ TARGET="$HOST_TRIPLE" \
     };
 
     Ok(PlanNode {
-        label: target.label(),
+        label: target.id(),
         action,
         deps: Vec::new(),
     })
@@ -183,7 +181,7 @@ fn build_input_digest(target: &Target, workspace_root: &Path) -> Result<Digest, 
         };
         let abs = workspace_root.join(&ws_rel);
         let bytes = std::fs::read(&abs).map_err(|source| CompileError::ReadSource {
-            label: target.label(),
+            label: target.id(),
             path: ws_rel.clone(),
             source,
         })?;
@@ -211,11 +209,6 @@ fn tool_env() -> BTreeMap<String, String> {
     ] {
         if let Ok(value) = std::env::var(key) {
             env.insert(key.into(), value);
-        }
-    }
-    for (key, value) in std::env::vars() {
-        if key.starts_with("MISE_") {
-            env.insert(key, value);
         }
     }
     env
