@@ -92,8 +92,8 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
             .await
             .map(|()| ExitCode::SUCCESS),
         Cmd::Toolchain {
-            cmd: cli::ToolchainCmd::Inspect,
-        } => commands::toolchain::inspect(&workspace, format)
+            cmd: cli::ToolchainCmd::Inspect { platform },
+        } => commands::toolchain::inspect(&workspace, format, platform.as_deref())
             .await
             .map(|()| ExitCode::SUCCESS),
         Cmd::Targets => commands::targets::print_targets(&workspace, format)

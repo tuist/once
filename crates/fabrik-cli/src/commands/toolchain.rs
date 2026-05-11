@@ -39,8 +39,8 @@ struct ToolchainView {
 
 #[derive(Debug, Serialize)]
 struct PlatformView {
-    os: &'static str,
-    arch: &'static str,
+    os: String,
+    arch: String,
     mise: String,
 }
 
@@ -72,8 +72,8 @@ struct LockedPlatformView {
     url: Option<String>,
 }
 
-pub async fn inspect(workspace: &Path, format: Format) -> Result<()> {
-    let view = inspect_workspace(workspace)?;
+pub async fn inspect(workspace: &Path, format: Format, platform: Option<&str>) -> Result<()> {
+    let view = inspect_workspace(workspace, platform)?;
     let body = match format {
         Format::Human => render_human(&view),
         Format::Json | Format::Toon => render::structured(format, &view)?,
@@ -85,7 +85,7 @@ pub async fn inspect(workspace: &Path, format: Format) -> Result<()> {
     Ok(())
 }
 
-fn inspect_workspace(workspace: &Path) -> Result<ToolchainView> {
+fn inspect_workspace(workspace: &Path, platform: Option<&str>) -> Result<ToolchainView> {
     let config_path = workspace.join(MISE_CONFIG);
     let config_src = match std::fs::read_to_string(&config_path) {
         Ok(src) => src,
@@ -99,7 +99,7 @@ fn inspect_workspace(workspace: &Path) -> Result<ToolchainView> {
     let config: MiseConfig = toml::from_str(&config_src)
         .with_context(|| format!("parsing {}", config_path.display()))?;
 
-    let platform = current_platform();
+    let platform = requested_platform(platform)?;
     let lock_path = workspace.join(MISE_LOCK);
     let lock_src = match std::fs::read_to_string(&lock_path) {
         Ok(src) => Some(src),
@@ -196,6 +196,13 @@ fn fingerprint(
     Ok(format!("blake3:{}", Digest::of_bytes(&bytes)))
 }
 
+fn requested_platform(platform: Option<&str>) -> Result<PlatformView> {
+    match platform {
+        Some(raw) => parse_platform(raw),
+        None => Ok(current_platform()),
+    }
+}
+
 fn current_platform() -> PlatformView {
     let arch = std::env::consts::ARCH;
     let mise_arch = match arch {
@@ -204,10 +211,24 @@ fn current_platform() -> PlatformView {
         other => other,
     };
     PlatformView {
-        os: std::env::consts::OS,
-        arch,
+        os: std::env::consts::OS.to_string(),
+        arch: arch.to_string(),
         mise: format!("{}-{mise_arch}", std::env::consts::OS),
     }
+}
+
+fn parse_platform(raw: &str) -> Result<PlatformView> {
+    let (os, arch) = raw
+        .rsplit_once('-')
+        .ok_or_else(|| anyhow::anyhow!("platform must look like os-arch, got `{raw}`"))?;
+    if os.is_empty() || arch.is_empty() {
+        anyhow::bail!("platform must look like os-arch, got `{raw}`");
+    }
+    Ok(PlatformView {
+        os: os.to_string(),
+        arch: arch.to_string(),
+        mise: raw.to_string(),
+    })
 }
 
 fn render_human(view: &ToolchainView) -> String {
@@ -280,7 +301,7 @@ RUST_BACKTRACE = "1"
         )
         .unwrap();
 
-        let view = inspect_workspace(tmp.path()).unwrap();
+        let view = inspect_workspace(tmp.path(), None).unwrap();
 
         assert_eq!(view.source, "mise");
         assert_eq!(view.config, MISE_CONFIG);
@@ -298,7 +319,7 @@ RUST_BACKTRACE = "1"
     #[test]
     fn inspect_attaches_lockfile_versions_for_current_platform() {
         let tmp = TempDir::new().unwrap();
-        let platform = current_platform();
+        let platform = "linux-x64";
         std::fs::write(
             tmp.path().join(MISE_CONFIG),
             r#"
@@ -315,19 +336,19 @@ rust = "1.86"
 version = "1.86.0"
 backend = "core:rust"
 
-[tools.rust.platforms.{}]
+[tools.rust.platforms.{platform}]
 checksum = "sha256:abc"
 size = 123
 url = "https://example.test/rust.tar.gz"
-"#,
-                platform.mise
+"#
             ),
         )
         .unwrap();
 
-        let view = inspect_workspace(tmp.path()).unwrap();
+        let view = inspect_workspace(tmp.path(), Some(platform)).unwrap();
         let locked = view.tools[0].locked.as_ref().unwrap();
 
+        assert_eq!(view.platform.mise, platform);
         assert_eq!(view.lock.as_deref(), Some(MISE_LOCK));
         assert_eq!(locked.version, "1.86.0");
         assert_eq!(locked.backend.as_deref(), Some("core:rust"));
@@ -348,7 +369,7 @@ rust = "1.86"
 "#,
         )
         .unwrap();
-        let before = inspect_workspace(tmp.path()).unwrap().fingerprint;
+        let before = inspect_workspace(tmp.path(), None).unwrap().fingerprint;
 
         std::fs::write(
             tmp.path().join(MISE_CONFIG),
@@ -358,8 +379,14 @@ rust = "1.87"
 "#,
         )
         .unwrap();
-        let after = inspect_workspace(tmp.path()).unwrap().fingerprint;
+        let after = inspect_workspace(tmp.path(), None).unwrap().fingerprint;
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn rejects_malformed_platform() {
+        let err = parse_platform("linux").unwrap_err().to_string();
+        assert!(err.contains("os-arch"));
     }
 }

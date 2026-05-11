@@ -58,6 +58,27 @@ EOF
     The stdout should include '"backend":"core:rust"'
   End
 
+  It 'uses requested platform data when --platform is passed'
+    cat > "$WORKSPACE/mise.toml" <<'EOF'
+[tools]
+rust = "1.86"
+EOF
+    cat > "$WORKSPACE/mise.lock" <<'EOF'
+[[tools.rust]]
+version = "1.86.0"
+backend = "core:rust"
+
+[tools.rust.platforms.linux-x64]
+checksum = "sha256:linux"
+url = "https://example.test/rust-linux.tar.gz"
+EOF
+    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" toolchain inspect --platform linux-x64
+    The status should be success
+    The stdout should include '"mise":"linux-x64"'
+    The stdout should include '"key":"linux-x64"'
+    The stdout should include '"checksum":"sha256:linux"'
+  End
+
   It 'fails clearly when mise.toml is missing'
     When call fabrik toolchain inspect
     The status should not equal 0

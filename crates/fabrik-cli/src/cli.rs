@@ -175,7 +175,12 @@ pub enum CacheCmd {
 #[derive(Subcommand)]
 pub enum ToolchainCmd {
     /// Print the toolchain contract derived from mise.toml.
-    Inspect,
+    Inspect {
+        /// Mise platform key to inspect, e.g. linux-x64. Defaults to
+        /// the current host platform.
+        #[arg(long)]
+        platform: Option<String>,
+    },
 }
 
 fn parse_env(raw: &str) -> std::result::Result<(String, String), String> {
