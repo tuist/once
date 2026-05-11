@@ -1,3 +1,13 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Fabrik" width="50%" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/tuist/fabrik/actions/workflows/fabrik.yml"><img src="https://github.com/tuist/fabrik/actions/workflows/fabrik.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/tuist/fabrik/releases/latest"><img src="https://img.shields.io/github/v/release/tuist/fabrik?display_name=tag&sort=semver" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/tuist/fabrik" alt="License" /></a>
+</p>
+
 # Fabrik
 
 > [!WARNING]
