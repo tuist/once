@@ -104,9 +104,6 @@ jobs:
       - name: Generate release notes
         run: mise run release:notes --version "${{ needs.detect.outputs.next-version }}" > release-notes.md
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.detect.outputs.next-version }}
-          name: ${{ needs.detect.outputs.next-version }}
-          body_path: release-notes.md
-          files: dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mise run release:publish --version "${{ needs.detect.outputs.next-version }}" --notes release-notes.md --dist dist
