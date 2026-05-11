@@ -7,7 +7,8 @@ use std::path::Path;
 
 use fabrik_cas::Digest;
 use fabrik_core::{
-    tool_env as core_tool_env, Action, InputDigestBuilder, PlanNode, ResourceRequest, WorkspacePath,
+    workspace_tool, workspace_tool_env, workspace_tool_var, Action, InputDigestBuilder, PlanNode,
+    ResourceRequest, WorkspacePath,
 };
 use fabrik_frontend::Target;
 
@@ -39,6 +40,12 @@ pub enum CompileError {
         path: String,
         #[source]
         source: std::io::Error,
+    },
+    #[error("failed to resolve toolchain for target {label}: {source}")]
+    Toolchain {
+        label: String,
+        #[source]
+        source: fabrik_core::ToolEnvError,
     },
 }
 
@@ -87,8 +94,13 @@ pub fn compile_target(
     };
 
     let out_dir = out_dir(&target.package, &target.name);
+    let rustc =
+        workspace_tool(workspace_root, "rustc").map_err(|source| CompileError::Toolchain {
+            label: target.id(),
+            source,
+        })?;
     let mut argv: Vec<String> = vec![
-        "rustc".into(),
+        rustc,
         format!("--edition={edition}"),
         format!("--crate-name={crate_name}"),
     ];
@@ -159,6 +171,10 @@ pub fn compile_target(
     // with byte-identical sources but different toolchains must miss
     // each other's cache.
     let input_digest = build_input_digest(target, workspace_root, dep_artifacts)?;
+    let env = tool_env(workspace_root).map_err(|source| CompileError::Toolchain {
+        label: target.id(),
+        source,
+    })?;
 
     // Declared outputs: what rustc will write that downstream actions
     // (or the user) need to find on disk. The runner stores these in
@@ -176,7 +192,7 @@ pub fn compile_target(
 
     let action = Action::RunCommand {
         argv,
-        env: tool_env(),
+        env,
         cwd: None,
         input_digest: Some(input_digest),
         outputs,
@@ -358,14 +374,12 @@ fn build_input_digest(
         }
     }
 
-    // Toolchain identity. RUSTUP_TOOLCHAIN pins a specific channel
-    // when set (the mise-managed setup does set it). When unset, fall
-    // back to "system-rustc" so two machines with the same plain
-    // rustc on PATH still share a cache slot. The argv already
-    // includes "rustc" verbatim, so a different binary on PATH would
-    // surface as a different cache slot for env reasons too (PATH is
-    // in the env).
-    let toolchain = std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "system-rustc".into());
+    let toolchain = workspace_tool_var(workspace_root, "RUSTUP_TOOLCHAIN")
+        .map_err(|source| CompileError::Toolchain {
+            label: target.id(),
+            source,
+        })?
+        .unwrap_or_else(|| "system-rustc".into());
     let mut tag = b"toolchain:".to_vec();
     tag.extend_from_slice(toolchain.as_bytes());
     builder.push_bytes(&tag);
@@ -376,14 +390,18 @@ fn build_input_digest(
 /// Minimal env for rustc invocations. Anything not in this list is
 /// unobservable from the action and therefore not part of the cache
 /// key.
-fn tool_env() -> BTreeMap<String, String> {
-    core_tool_env(&[
-        "CARGO_HOME",
-        "RUSTUP_HOME",
-        "RUSTUP_TOOLCHAIN",
-        "RUSTC",
-        "RUSTC_WRAPPER",
-    ])
+fn tool_env(workspace_root: &Path) -> Result<BTreeMap<String, String>, fabrik_core::ToolEnvError> {
+    workspace_tool_env(
+        workspace_root,
+        &["rustc"],
+        &[
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "RUSTUP_TOOLCHAIN",
+            "RUSTC",
+            "RUSTC_WRAPPER",
+        ],
+    )
 }
 
 #[cfg(test)]

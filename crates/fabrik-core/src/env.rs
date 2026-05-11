@@ -10,6 +10,11 @@
 use std::collections::BTreeMap;
 use std::env;
 
+mod mise;
+mod path;
+
+pub use mise::{workspace_tool, workspace_tool_env, workspace_tool_var, ToolEnvError};
+
 /// Variables every spawned tool action wants regardless of toolchain.
 /// `PATH` and `HOME` are universal; adding more here would silently
 /// expand every plugin's cache key, so the list is kept deliberately
@@ -38,6 +43,19 @@ where
     allowed.extend(extra_keys.iter().copied());
     vars.into_iter()
         .filter(|(k, _)| allowed.contains(&k.as_str()))
+        .collect()
+}
+
+fn select_extra_env(
+    vars: &BTreeMap<String, String>,
+    extra_keys: &[&str],
+) -> BTreeMap<String, String> {
+    extra_keys
+        .iter()
+        .filter_map(|key| {
+            vars.get(*key)
+                .map(|value| ((*key).to_string(), value.clone()))
+        })
         .collect()
 }
 
@@ -116,5 +134,19 @@ mod tests {
         );
         assert_eq!(env.len(), 1);
         assert!(!env.contains_key("MISE_TRUSTED_CONFIG_PATHS"));
+    }
+
+    #[test]
+    fn select_extra_env_does_not_forward_path() {
+        let env = BTreeMap::from([
+            ("PATH".to_string(), "/global".to_string()),
+            ("RUSTUP_TOOLCHAIN".to_string(), "1.86.0".to_string()),
+        ]);
+        let selected = select_extra_env(&env, &["RUSTUP_TOOLCHAIN"]);
+        assert_eq!(
+            selected.get("RUSTUP_TOOLCHAIN").map(String::as_str),
+            Some("1.86.0")
+        );
+        assert!(!selected.contains_key("PATH"));
     }
 }

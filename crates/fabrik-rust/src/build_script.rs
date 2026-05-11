@@ -17,7 +17,8 @@ use std::path::Path;
 
 use fabrik_cas::Digest;
 use fabrik_core::{
-    tool_env as core_tool_env, Action, InputDigestBuilder, PlanNode, ResourceRequest, WorkspacePath,
+    workspace_tool_env, workspace_tool_var, Action, InputDigestBuilder, PlanNode, ResourceRequest,
+    WorkspacePath,
 };
 use fabrik_frontend::Target;
 
@@ -99,6 +100,10 @@ TARGET="$HOST_TRIPLE" \
     let argv = vec!["/bin/sh".into(), "-c".into(), inline];
 
     let input_digest = build_input_digest(target, workspace_root)?;
+    let env = tool_env(workspace_root).map_err(|source| CompileError::Toolchain {
+        label: target.id(),
+        source,
+    })?;
     let outputs = vec![
         WorkspacePath::try_from(stdout_capture.as_str()).map_err(|source| {
             CompileError::InvalidPath {
@@ -111,7 +116,7 @@ TARGET="$HOST_TRIPLE" \
 
     let action = Action::RunCommand {
         argv,
-        env: tool_env(),
+        env,
         cwd: None,
         input_digest: Some(input_digest),
         outputs,
@@ -188,15 +193,24 @@ fn build_input_digest(target: &Target, workspace_root: &Path) -> Result<Digest, 
                 source,
             })?;
     }
-    let toolchain = std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "system-rustc".into());
+    let toolchain = workspace_tool_var(workspace_root, "RUSTUP_TOOLCHAIN")
+        .map_err(|source| CompileError::Toolchain {
+            label: target.id(),
+            source,
+        })?
+        .unwrap_or_else(|| "system-rustc".into());
     let mut tag = b"toolchain:".to_vec();
     tag.extend_from_slice(toolchain.as_bytes());
     builder.push_bytes(&tag);
     Ok(builder.finish())
 }
 
-fn tool_env() -> BTreeMap<String, String> {
-    core_tool_env(&["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"])
+fn tool_env(workspace_root: &Path) -> Result<BTreeMap<String, String>, fabrik_core::ToolEnvError> {
+    workspace_tool_env(
+        workspace_root,
+        &["rustc"],
+        &["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"],
+    )
 }
 
 #[cfg(test)]

@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use fabrik_cas::{Cas, Digest};
 use fabrik_core::{
-    tool_env as core_tool_env, Action, InputDigestBuilder, ResourceRequest, RunOpts, Runner,
-    WorkspacePath,
+    workspace_tool, workspace_tool_env, Action, InputDigestBuilder, ResourceRequest, RunOpts,
+    Runner, WorkspacePath,
 };
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -158,11 +158,12 @@ fn rust_binary_action(workspace: &Path, target: &fabrik_frontend::Target) -> Res
     };
     let input_digest = input_digest(workspace, target)?;
     let output_dir = workspace.join(CACHE_DIR).join("out").join(&target.package);
+    let rustc = workspace_tool(workspace, "rustc")?;
 
     Ok(ActionPlan {
         action: Action::RunCommand {
             argv: vec![
-                "rustc".into(),
+                rustc,
                 "--edition=2021".into(),
                 format!("--crate-name={}", target.name),
                 "--crate-type=bin".into(),
@@ -170,7 +171,7 @@ fn rust_binary_action(workspace: &Path, target: &fabrik_frontend::Target) -> Res
                 out_rel.clone(),
                 src_rel.as_str().to_string(),
             ],
-            env: tool_env(),
+            env: tool_env(workspace, &["rustc"])?,
             cwd: None,
             input_digest,
             outputs: vec![],
@@ -193,11 +194,12 @@ fn cargo_binary_action(workspace: &Path, target: &fabrik_frontend::Target) -> Re
     let bin = target.attrs.get("bin").unwrap_or(&target.name);
     let input_digest = input_digest(workspace, target)?;
     let output = format!("target/debug/{bin}{}", std::env::consts::EXE_SUFFIX);
+    let cargo = workspace_tool(workspace, "cargo")?;
 
     Ok(ActionPlan {
         action: Action::RunCommand {
             argv: vec![
-                "cargo".into(),
+                cargo,
                 "build".into(),
                 "--locked".into(),
                 "--package".into(),
@@ -205,7 +207,7 @@ fn cargo_binary_action(workspace: &Path, target: &fabrik_frontend::Target) -> Re
                 "--bin".into(),
                 bin.to_string(),
             ],
-            env: tool_env(),
+            env: tool_env(workspace, &["cargo", "rustc"])?,
             cwd: None,
             input_digest,
             outputs: vec![],
@@ -347,8 +349,12 @@ fn input_digest(workspace: &Path, target: &fabrik_frontend::Target) -> Result<Op
     Ok(Some(builder.finish()))
 }
 
-fn tool_env() -> BTreeMap<String, String> {
-    core_tool_env(&["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"])
+fn tool_env(workspace: &Path, tools: &[&str]) -> Result<BTreeMap<String, String>> {
+    Ok(workspace_tool_env(
+        workspace,
+        tools,
+        &["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"],
+    )?)
 }
 
 #[cfg(test)]

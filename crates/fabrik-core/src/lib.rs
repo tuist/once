@@ -23,7 +23,9 @@ mod path;
 mod plan;
 mod resources;
 
-pub use env::{select_tool_env, tool_env};
+pub use env::{
+    select_tool_env, tool_env, workspace_tool, workspace_tool_env, workspace_tool_var, ToolEnvError,
+};
 pub use input_digest::InputDigestBuilder;
 pub use path::{WorkspacePath, WorkspacePathError};
 pub use plan::{BuiltPlan, NodeInfo, Plan, PlanError, PlanNode, PlanOutcome};
