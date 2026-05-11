@@ -81,7 +81,7 @@ pub fn compile_swift_target(
         AppleKind::MacosCommandLineApplication => {
             compile_command_line_application(target, workspace_root, dep_artifacts)
         }
-        AppleKind::IosApp => Err(SwiftError::UnsupportedKind {
+        AppleKind::SimulatorApp => Err(SwiftError::UnsupportedKind {
             label: target.id(),
             kind: target.kind.clone(),
         }),

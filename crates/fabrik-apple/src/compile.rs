@@ -56,12 +56,7 @@ pub fn compile_ios_app(target: &Target, workspace_root: &Path) -> Result<PlanNod
 }
 
 pub fn launch_ios_app(target: &Target, _workspace_root: &Path) -> Result<AppleAction, AppleError> {
-    if target.kind != "apple_ios_app" {
-        return Err(AppleError::UnsupportedKind {
-            label: target.id(),
-            kind: target.kind.clone(),
-        });
-    }
+    ensure_ios_simulator_app(target)?;
 
     let bundle_id = required_attr(target, "bundle_id")?;
     let app_dir = app_bundle_path(&target.package, &target.name);
@@ -90,12 +85,7 @@ pub fn launch_ios_app(target: &Target, _workspace_root: &Path) -> Result<AppleAc
 }
 
 fn build_ios_app_action(target: &Target, workspace_root: &Path) -> Result<AppleAction, AppleError> {
-    if target.kind != "apple_ios_app" {
-        return Err(AppleError::UnsupportedKind {
-            label: target.id(),
-            kind: target.kind.clone(),
-        });
-    }
+    ensure_ios_simulator_app(target)?;
     if target.srcs.is_empty() {
         return Err(AppleError::NoSources { label: target.id() });
     }
@@ -147,6 +137,17 @@ fn build_ios_app_action(target: &Target, workspace_root: &Path) -> Result<AppleA
         },
         output: app_dir,
     })
+}
+
+fn ensure_ios_simulator_app(target: &Target) -> Result<(), AppleError> {
+    match target.kind.as_str() {
+        "apple_ios_app" => Ok(()),
+        "apple_simulator_app" if target.attrs.get("platform").is_some_and(|p| p == "ios") => Ok(()),
+        _ => Err(AppleError::UnsupportedKind {
+            label: target.id(),
+            kind: target.kind.clone(),
+        }),
+    }
 }
 
 fn build_script(
@@ -356,10 +357,11 @@ mod tests {
 
     fn app_target(srcs: &[&str]) -> Target {
         let mut attrs = BTreeMap::new();
+        attrs.insert("platform".to_string(), "ios".to_string());
         attrs.insert("bundle_id".to_string(), "dev.fabrik.demo".to_string());
         Target {
             package: "App".to_string(),
-            kind: "apple_ios_app".to_string(),
+            kind: "apple_simulator_app".to_string(),
             name: "Demo".to_string(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: Vec::new(),
@@ -391,7 +393,7 @@ mod tests {
     #[test]
     fn missing_bundle_id_is_an_error() {
         let mut target = app_target(&["Sources/App.swift"]);
-        target.attrs.clear();
+        target.attrs.remove("bundle_id");
         let err = compile_ios_app(&target, Path::new("/tmp")).unwrap_err();
         assert!(matches!(err, AppleError::MissingAttr { .. }));
     }

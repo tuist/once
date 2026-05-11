@@ -44,7 +44,7 @@ pub struct PlanOutcome {
 
 /// Per-node metadata that travels alongside a [`Plan`] for telemetry
 /// and CLI rendering. The `kind` is the originating target kind
-/// (`rust_library`, `apple_ios_app`, ...), kept as a string so the
+/// (`rust_library`, `apple_simulator_app`, ...), kept as a string so the
 /// shape is uniform across plugins. Plugin-internal enum
 /// representations stay inside the plugin.
 #[derive(Debug, Clone)]

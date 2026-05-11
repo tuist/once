@@ -8,7 +8,7 @@ pub fn app_bundle_path(package: &str, name: &str) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppleKind {
-    IosApp,
+    SimulatorApp,
     SwiftLibrary,
     AppleStaticFramework,
     AppleDynamicFramework,
@@ -18,7 +18,7 @@ pub enum AppleKind {
 impl AppleKind {
     pub fn parse(kind: &str) -> Option<Self> {
         match kind {
-            "apple_ios_app" => Some(Self::IosApp),
+            "apple_ios_app" | "apple_simulator_app" => Some(Self::SimulatorApp),
             "swift_library" => Some(Self::SwiftLibrary),
             "apple_static_framework" => Some(Self::AppleStaticFramework),
             "apple_dynamic_framework" => Some(Self::AppleDynamicFramework),
@@ -29,7 +29,7 @@ impl AppleKind {
 
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::IosApp => "apple_ios_app",
+            Self::SimulatorApp => "apple_simulator_app",
             Self::SwiftLibrary => "swift_library",
             Self::AppleStaticFramework => "apple_static_framework",
             Self::AppleDynamicFramework => "apple_dynamic_framework",

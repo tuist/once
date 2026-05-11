@@ -12,7 +12,7 @@ use crate::swift::{compile_swift_target, SwiftError, TargetDepMode};
 pub enum PlanBuildError {
     #[error("no target matches `{0}`")]
     UnknownRoot(String),
-    #[error("apple_ios_app target {label} does not support deps yet")]
+    #[error("apple_simulator_app target {label} does not support deps yet")]
     UnsupportedDeps { label: String },
     #[error("dependency cycle through `{0}`")]
     Cycle(String),
@@ -56,7 +56,7 @@ pub fn build_plan(
         dep: root_id.to_string(),
         kind: target.kind.clone(),
     })?;
-    if kind == AppleKind::IosApp {
+    if kind == AppleKind::SimulatorApp {
         return build_ios_plan(target, root_id, workspace_root);
     }
 
@@ -148,7 +148,7 @@ fn validate_swift_deps(
                 dep: dep.clone(),
             })?;
         let dep_kind = &targets[*dep_target_idx].kind;
-        if !supports_kind(dep_kind) || dep_kind == "apple_ios_app" {
+        if !supports_kind(dep_kind) || is_simulator_app_kind(dep_kind) {
             return Err(PlanBuildError::NonAppleDep {
                 label: target.id(),
                 dep: dep.clone(),
@@ -248,7 +248,7 @@ fn dfs(
                 dep: dep.clone(),
             })?;
         let dep_kind = &targets[*dep_idx].kind;
-        if supports_kind(dep_kind) && dep_kind != "apple_ios_app" {
+        if supports_kind(dep_kind) && !is_simulator_app_kind(dep_kind) {
             dfs(*dep_idx, targets, target_index, visited, on_stack, order)?;
         }
     }
@@ -256,6 +256,10 @@ fn dfs(
     visited.insert(idx);
     order.push(idx);
     Ok(())
+}
+
+fn is_simulator_app_kind(kind: &str) -> bool {
+    matches!(kind, "apple_ios_app" | "apple_simulator_app")
 }
 
 #[cfg(test)]
@@ -270,10 +274,11 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("App")).unwrap();
         std::fs::write(tmp.path().join("App/App.swift"), "import SwiftUI").unwrap();
         let mut attrs = BTreeMap::new();
+        attrs.insert("platform".to_string(), "ios".to_string());
         attrs.insert("bundle_id".to_string(), "dev.fabrik.demo".to_string());
         let target = Target {
             package: "App".to_string(),
-            kind: "apple_ios_app".to_string(),
+            kind: "apple_simulator_app".to_string(),
             name: "Demo".to_string(),
             srcs: vec!["App.swift".to_string()],
             deps: Vec::new(),

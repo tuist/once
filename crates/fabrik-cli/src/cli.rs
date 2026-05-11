@@ -70,6 +70,15 @@ pub enum Cmd {
     /// The verb is uniform across target kinds: target-specific
     /// composition lives in build-file declarations, not in the CLI.
     Run {
+        /// Serve a local JSON-RPC runtime control socket for this run.
+        #[arg(long)]
+        runtime_rpc: bool,
+
+        /// Runtime RPC socket path. Defaults to
+        /// `.fabrik/runtime/<session>/control.sock`.
+        #[arg(long)]
+        runtime_rpc_socket: Option<PathBuf>,
+
         /// Target id, e.g. `examples/hello/hello` or `./hello`.
         target: String,
     },
@@ -148,6 +157,12 @@ pub enum Cmd {
         cmd: ToolchainCmd,
     },
 
+    /// Runtime session inspection and control.
+    Runtime {
+        #[command(subcommand)]
+        cmd: RuntimeCmd,
+    },
+
     /// Generate `vendor/fabrik.toml` from the project's Cargo.lock.
     ///
     /// Reads `cargo metadata` for the resolve graph and emits one
@@ -180,6 +195,19 @@ pub enum ToolchainCmd {
         /// the current host platform.
         #[arg(long)]
         platform: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum RuntimeCmd {
+    /// Serve the local runtime JSON-RPC endpoint for a session directory.
+    Rpc {
+        /// Runtime session directory containing session.json and logs.
+        session_dir: PathBuf,
+
+        /// Socket path. Defaults to `<session-dir>/control.sock`.
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
 }
 

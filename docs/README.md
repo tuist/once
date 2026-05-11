@@ -6,8 +6,10 @@
 ## Supported Today
 
 - [Rust](rust.md): granular `rust.library`, `rust.binary`, `rust.test`, `rust.proc_macro`, plus the `cargo.binary` escape hatch.
-- [Apple and iOS](apple.md): build and launch a Swift iOS simulator app bundle.
-- [Tasks](tasks.md): checked-in runtime tasks that run through `fabrik run`.
+- [Apple](apple.md): build and launch a Swift iOS simulator app bundle.
+- [Rules and targets](rules.md): canonical `[[target]] rule = "..."` model and Starlark rule-authoring direction.
+- [Tasks](tasks.md): checked-in command targets that run through `fabrik run`.
+- [Runtime sessions](runtime.md): headless runtime target inspection and control model.
 - [Cache and execution](cache-and-execution.md): action cache, CAS, declared outputs, uncached runtime work, and resource bounds.
 
 ## Target IDs

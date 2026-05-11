@@ -91,7 +91,7 @@ EOF
     The path "$WORKSPACE/target/debug/app" should be exist
   End
 
-  It 'runs a task target declared in fabrik.toml'
+  It 'runs a legacy task target declared in fabrik.toml'
     mkdir -p "$WORKSPACE/tasks"
     cat > "$WORKSPACE/tasks/input.txt" <<'EOF'
 hello task
@@ -108,7 +108,7 @@ EOF
     The stderr should include 'cache miss'
   End
 
-  It 'reuses the cache for a cacheable task target'
+  It 'reuses the cache for a cacheable legacy task target'
     mkdir -p "$WORKSPACE/tasks"
     cat > "$WORKSPACE/tasks/input.txt" <<'EOF'
 cached task
@@ -126,7 +126,7 @@ EOF
     The stderr should include 'cache hit'
   End
 
-  It 'runs an uncached task target every time'
+  It 'runs an uncached legacy task target every time'
     mkdir -p "$WORKSPACE/tasks"
     cat > "$WORKSPACE/tasks/fabrik.toml" <<'EOF'
 [[task]]
@@ -141,7 +141,36 @@ EOF
     The stderr should include 'cache miss'
   End
 
-  It 'builds and launches an apple_ios_app target'
+  It 'runs a runtime command target and emits its runtime interfaces'
+    mkdir -p "$WORKSPACE/tasks"
+    cat > "$WORKSPACE/tasks/fabrik.toml" <<'EOF'
+[[target]]
+name = "launch"
+rule = "command"
+
+[target.attrs]
+argv = ["/bin/sh", "-c", "printf launched"]
+
+[target.runtime]
+kind = "ios_simulator"
+capabilities = ["logs", "ui_tree", "ui_action"]
+
+[[target.runtime.interface]]
+name = "logs"
+kind = "stream"
+argv = ["xcrun", "simctl", "spawn", "booted", "log", "stream"]
+description = "Stream simulator logs"
+EOF
+    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" run tasks/launch
+    The status should be success
+    The stdout should include '"kind":"runtime_task"'
+    The stdout should include '"runtime":{"kind":"ios_simulator"'
+    The stdout should include '"capabilities":["logs","ui_tree","ui_action"]'
+    The stdout should include '"name":"logs"'
+    The stdout should include '"argv":["xcrun","simctl","spawn","booted","log","stream"]'
+  End
+
+  It 'builds and launches an apple_simulator_app target'
     mkdir -p "$WORKSPACE/bin" "$WORKSPACE/App/Sources"
     cat > "$WORKSPACE/bin/xcrun" <<'EOF'
 #!/bin/sh
@@ -192,8 +221,9 @@ struct DemoApp: App {
 }
 EOF
     cat > "$WORKSPACE/App/fabrik.toml" <<'EOF'
-[[apple.ios_app]]
+[[apple.simulator_app]]
 name = "Demo"
+platform = "ios"
 bundle_id = "dev.fabrik.demo"
 srcs = ["Sources/App.swift"]
 minimum_os = "17.0"
@@ -203,6 +233,70 @@ EOF
     The stderr should include 'cache miss'
     The contents of file "$WORKSPACE/simctl.log" should include 'simctl install booted'
     The contents of file "$WORKSPACE/simctl.log" should include 'simctl launch booted dev.fabrik.demo'
+  End
+
+  It 'emits simulator runtime interfaces for an apple_simulator_app target'
+    mkdir -p "$WORKSPACE/bin" "$WORKSPACE/App/Sources"
+    cat > "$WORKSPACE/bin/xcrun" <<'EOF'
+#!/bin/sh
+if [ "$1" = "--sdk" ] && [ "$3" = "--show-sdk-path" ]; then
+  echo "/tmp/fake-iphonesimulator.sdk"
+  exit 0
+fi
+if [ "$1" = "--sdk" ] && [ "$3" = "swiftc" ]; then
+  shift 3
+  exec swiftc "$@"
+fi
+if [ "$1" = "simctl" ]; then
+  exit 0
+fi
+exit 2
+EOF
+    cat > "$WORKSPACE/bin/swiftc" <<'EOF'
+#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+mkdir -p "$(dirname "$out")"
+printf 'fake app binary' > "$out"
+EOF
+    cat > "$WORKSPACE/bin/codesign" <<'EOF'
+#!/bin/sh
+for last do :; done
+app="$last"
+mkdir -p "$app/_CodeSignature"
+printf 'signed' > "$app/_CodeSignature/CodeResources"
+EOF
+    chmod +x "$WORKSPACE/bin/xcrun" "$WORKSPACE/bin/swiftc" "$WORKSPACE/bin/codesign"
+    cat > "$WORKSPACE/App/Sources/App.swift" <<'EOF'
+import SwiftUI
+
+@main
+struct DemoApp: App {
+    var body: some Scene {
+        WindowGroup { Text("Hello") }
+    }
+}
+EOF
+    cat > "$WORKSPACE/App/fabrik.toml" <<'EOF'
+[[apple.simulator_app]]
+name = "Demo"
+platform = "ios"
+bundle_id = "dev.fabrik.demo"
+srcs = ["Sources/App.swift"]
+minimum_os = "17.0"
+EOF
+    When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" --format json -C "$WORKSPACE" run App/Demo
+    The status should be success
+    The stdout should include '"runtime":{"kind":"ios_simulator"'
+    The stdout should include '"capabilities":["logs","screenshot","ui_tree","ui_action"]'
+    The stdout should include '"name":"ui_tree"'
+    The stdout should include '"name":"tap"'
   End
 
   It 'errors when the target id does not match any target'
