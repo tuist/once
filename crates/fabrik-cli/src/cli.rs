@@ -142,6 +142,12 @@ pub enum Cmd {
         cmd: CacheCmd,
     },
 
+    /// Inspect the project toolchain contract.
+    Toolchain {
+        #[command(subcommand)]
+        cmd: ToolchainCmd,
+    },
+
     /// Generate `vendor/fabrik.toml` from the project's Cargo.lock.
     ///
     /// Reads `cargo metadata` for the resolve graph and emits one
@@ -164,6 +170,12 @@ pub enum Cmd {
 pub enum CacheCmd {
     /// Print blob and action counts plus on-disk size.
     Stats,
+}
+
+#[derive(Subcommand)]
+pub enum ToolchainCmd {
+    /// Print the toolchain contract derived from mise.toml.
+    Inspect,
 }
 
 fn parse_env(raw: &str) -> std::result::Result<(String, String), String> {

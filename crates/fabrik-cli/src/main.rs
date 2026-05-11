@@ -91,6 +91,11 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
         } => commands::cache::print_stats(&cas, format)
             .await
             .map(|()| ExitCode::SUCCESS),
+        Cmd::Toolchain {
+            cmd: cli::ToolchainCmd::Inspect,
+        } => commands::toolchain::inspect(&workspace, format)
+            .await
+            .map(|()| ExitCode::SUCCESS),
         Cmd::Targets => commands::targets::print_targets(&workspace, format)
             .await
             .map(|()| ExitCode::SUCCESS),
