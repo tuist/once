@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
+use fabrik_core::{workspace_tool, workspace_tool_env};
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -136,8 +137,16 @@ pub async fn vendor(workspace: &Path, format: Format) -> Result<ExitCode> {
 }
 
 async fn run_cargo_metadata(workspace: &Path) -> Result<CargoMetadata> {
-    let output = Command::new("cargo")
+    let cargo = workspace_tool(workspace, "cargo")?;
+    let env = workspace_tool_env(
+        workspace,
+        &["cargo", "rustc"],
+        &["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"],
+    )?;
+    let output = Command::new(cargo)
         .args(["metadata", "--format-version", "1", "--locked"])
+        .env_clear()
+        .envs(env)
         .current_dir(workspace)
         .output()
         .await

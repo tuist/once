@@ -6,9 +6,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use fabrik_cas::Cas;
-use fabrik_core::{
-    tool_env as core_tool_env, Action, CacheState, ResourceRequest, RunOpts, Runner,
-};
+use fabrik_core::{workspace_tool_env, Action, CacheState, ResourceRequest, RunOpts, Runner};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -59,7 +57,7 @@ pub async fn test(
             anyhow::anyhow!("test build did not produce root outcome for {target_id}")
         })?;
     let binary = test_binary_path(&built)?;
-    let test_action = test_action(&binary, test_args, root_outcome.outcome.action);
+    let test_action = test_action(workspace, &binary, test_args, root_outcome.outcome.action)?;
     let test_outcome = runner
         .run(&test_action)
         .await
@@ -97,18 +95,23 @@ fn test_binary_path(built: &fabrik_core::BuiltPlan) -> Result<String> {
     }
 }
 
-fn test_action(binary: &str, test_args: Vec<String>, input_digest: fabrik_cas::Digest) -> Action {
+fn test_action(
+    workspace: &Path,
+    binary: &str,
+    test_args: Vec<String>,
+    input_digest: fabrik_cas::Digest,
+) -> Result<Action> {
     let mut argv = vec![binary.to_string()];
     argv.extend(test_args);
-    Action::RunCommand {
+    Ok(Action::RunCommand {
         argv,
-        env: test_env(),
+        env: test_env(workspace)?,
         cwd: None,
         input_digest: Some(input_digest),
         outputs: vec![],
         resources: ResourceRequest::default(),
         timeout_ms: Some(300_000),
-    }
+    })
 }
 
 async fn render_output(
@@ -154,6 +157,10 @@ async fn render_output(
     Ok(())
 }
 
-fn test_env() -> BTreeMap<String, String> {
-    core_tool_env(&["RUST_BACKTRACE", "RUST_LOG"])
+fn test_env(workspace: &Path) -> Result<BTreeMap<String, String>> {
+    Ok(workspace_tool_env(
+        workspace,
+        &[],
+        &["RUST_BACKTRACE", "RUST_LOG"],
+    )?)
 }
