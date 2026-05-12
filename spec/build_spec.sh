@@ -139,15 +139,16 @@ struct DemoApp: App {
 }
 EOF
     cat > "$WORKSPACE/App/fabrik.toml" <<'EOF'
-[[apple.ios_app]]
+[[apple.simulator_app]]
 name = "Demo"
+platform = "ios"
 bundle_id = "dev.fabrik.demo"
 srcs = ["Sources/App.swift"]
 minimum_os = "17.0"
 EOF
     When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build App/Demo
     The status should be success
-    The stderr should include 'apple_ios_app'
+    The stderr should include 'apple_simulator_app'
     The path "$WORKSPACE/.fabrik/out/App/Demo.app" should be directory
     The path "$WORKSPACE/.fabrik/out/App/Demo.app/Info.plist" should be file
     The path "$WORKSPACE/.fabrik/out/App/Demo.app/Demo" should be file

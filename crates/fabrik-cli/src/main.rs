@@ -53,9 +53,23 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
     let format: Format = cli.format;
 
     match cli.command {
-        Cmd::Run { target } => {
+        Cmd::Run {
+            target,
+            runtime_rpc,
+            runtime_rpc_socket,
+        } => {
             let target = resolve_target_arg(&workspace, &target)?;
-            commands::run::run(&workspace, &cas, &target, format).await
+            commands::run::run(
+                &workspace,
+                &cas,
+                &target,
+                commands::run::RunArgs {
+                    format,
+                    runtime_rpc,
+                    runtime_rpc_socket,
+                },
+            )
+            .await
         }
         Cmd::Build { target } => {
             let target = resolve_target_arg(&workspace, &target)?;
@@ -94,6 +108,15 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
         Cmd::Toolchain {
             cmd: cli::ToolchainCmd::Inspect { platform },
         } => commands::toolchain::inspect(&workspace, format, platform.as_deref())
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Cmd::Runtime {
+            cmd:
+                cli::RuntimeCmd::Rpc {
+                    session_dir,
+                    socket,
+                },
+        } => commands::runtime::rpc(&session_dir, socket.as_deref())
             .await
             .map(|()| ExitCode::SUCCESS),
         Cmd::Targets => commands::targets::print_targets(&workspace, format)

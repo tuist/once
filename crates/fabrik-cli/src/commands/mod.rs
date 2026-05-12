@@ -6,6 +6,7 @@ pub mod build;
 pub mod cache;
 pub mod exec;
 pub mod run;
+pub mod runtime;
 pub mod targets;
 pub mod test;
 pub mod toolchain;

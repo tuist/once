@@ -1,7 +1,7 @@
 # Apple and Swift
 
 Fabrik supports granular Swift/macOS targets and a first-pass
-`apple.ios_app` target for Swift iOS simulator apps.
+`apple.simulator_app` target for Swift simulator apps.
 
 ## Swift Libraries and macOS Tools
 
@@ -53,13 +53,16 @@ module_name = "Greeter"
 bundle_id = "dev.fabrik.Greeter"
 ```
 
-## iOS Simulator Apps
+## Simulator Apps
 
-`apple.ios_app` builds a simulator `.app` bundle.
+`apple.simulator_app` builds a simulator `.app` bundle. The only
+supported platform today is `ios`; the target name leaves room for
+watchOS and tvOS simulator apps without introducing a second concept.
 
 ```toml
-[[apple.ios_app]]
+[[apple.simulator_app]]
 name = "Demo"
+platform = "ios"
 bundle_id = "dev.fabrik.ios-demo"
 srcs = ["Sources/App.swift"]
 minimum_os = "17.0"
@@ -86,7 +89,7 @@ FABRIK_IOS_SIMULATOR=<udid> fabrik run examples/apple/ios/simulator-app/Demo
 ## Cache Behavior
 
 - Swift libraries, Swift frameworks, macOS command-line applications,
-  and `apple.ios_app` builds are cacheable.
+  and `apple.simulator_app` builds are cacheable.
 - `fabrik run` first reuses the cacheable app build, then runs an uncached install and launch action.
 - Simulator boot, install, and launch are runtime side effects and are intentionally not cached.
 
@@ -96,6 +99,6 @@ FABRIK_IOS_SIMULATOR=<udid> fabrik run examples/apple/ios/simulator-app/Demo
 - SwiftPM package resolution/import is not wired yet. The intended shape
   is to use `Package.swift` for external package resolution while keeping
   the local build graph declared with Fabrik's lower-level TOML targets.
-- iOS app dependencies are not wired yet.
+- Simulator app dependencies are not wired yet.
 - Apple resource processing, asset catalogs, entitlements, and signing
   beyond simulator ad hoc signing are still future work.

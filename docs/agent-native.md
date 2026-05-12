@@ -4,13 +4,13 @@ Fabrik should not stand out as "Bazel, but easier." The stronger position is:
 
 > Fabrik is the build system designed for coding agents and humans to understand, repair, and operate.
 
-Agents are effective when a system exposes structured data, schemas, precise causality, local reproductions, and machine-applicable patches. Fabrik should make those the default interface to builds, tests, runtime tasks, caching, and remote execution.
+Agents are effective when a system exposes structured data, schemas, precise causality, local reproductions, and machine-applicable patches. Fabrik should make those the default interface to builds, tests, runtime targets, caching, and remote execution.
 
 ## Standout Features
 
 ### Build Doctor
 
-Every failed build, test, or runtime task should produce a structured diagnosis object, not only logs.
+Every failed build, test, or runtime target should produce a structured diagnosis object, not only logs.
 
 The diagnosis should include:
 
@@ -100,16 +100,18 @@ Agents should be able to discover how to write a target from Fabrik itself:
 
 ```sh
 fabrik schema rust.binary
-fabrik explain-schema apple.ios_app
+fabrik explain-schema apple.simulator_app
 fabrik examples rust.test
 fabrik validate
 ```
 
 ### Runtime Observability
 
-Runtime tasks should be first-class. `fabrik run`, `fabrik test`, and checked-in task targets should expose structured state for live execution, retries, timeouts, side effects, simulator and process metadata, captured artifacts, and test failures.
+Runtime-capable targets should be first-class. `fabrik run`, `fabrik test`, and checked-in command targets should expose structured state for live execution, retries, timeouts, side effects, simulator and process metadata, captured artifacts, and test failures.
 
 For an iOS app, a failed launch should report whether the simulator was unavailable, bundle installation failed, the app crashed, signing failed, a runtime was missing, or boot timed out.
+
+Runtime metadata on `[[target]]` is the first concrete shape for this. A command target with `[target.runtime]` is an uncached runtime action that advertises a `runtime` descriptor in structured `fabrik run` output. The descriptor names the runtime kind, the subject being operated on, coarse capabilities, and concrete interfaces such as log streams, screenshots, accessibility tree capture, and UI actions.
 
 ### Cache Explainability
 

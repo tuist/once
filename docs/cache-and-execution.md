@@ -16,13 +16,13 @@ These are cacheable today:
 - Rust test binary execution.
 - `cargo.binary` actions.
 - Apple Swift compile, archive, framework, and macOS executable actions.
-- `apple.ios_app` build actions.
+- `apple.simulator_app` build actions.
 - `task` targets with `cache = true`.
 - Literal `fabrik exec` commands, unless the command or declared inputs change.
 
 These are intentionally uncached:
 
-- `apple.ios_app` simulator install and launch.
+- `apple.simulator_app` simulator install and launch.
 - `task` targets with `cache = false`.
 
 ## Resource Bounds

@@ -54,7 +54,7 @@ Describe 'Apple examples'
     fake_apple_tools
     When call env PATH="$WORKSPACE/bin:$PATH" "$FABRIK_BIN" -C "$WORKSPACE" build examples/apple/ios/simulator-app/Demo
     The status should be success
-    The stderr should include 'apple_ios_app'
+    The stderr should include 'apple_simulator_app'
     The path "$WORKSPACE/.fabrik/out/examples/apple/ios/simulator-app/Demo.app" should be directory
     The path "$WORKSPACE/.fabrik/out/examples/apple/ios/simulator-app/Demo.app/Info.plist" should be file
     The path "$WORKSPACE/.fabrik/out/examples/apple/ios/simulator-app/Demo.app/Demo" should be file

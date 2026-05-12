@@ -67,13 +67,13 @@ This is the dogfood gate. Don't proceed past Phase 3 until it's met.
 
 ## Phase 4: Adopted-mode Rust + second plugin (week 12-15)
 
-**Goal:** Add `rust.workspace` (adopted mode) so external cargo projects can drop in. Add a second built-in plugin (`task`) to validate the plugin contract against two real implementations.
+**Goal:** Add `rust.workspace` (adopted mode) so external cargo projects can drop in. Add a second built-in rule (`command`) to validate the rule contract against two real implementations.
 
 - `rust.workspace` target type: reads `Cargo.toml`, runs `cargo metadata` cooperatively, generates declared-mode targets internally. Same handlers as declared mode; cache entries kept in a separate namespace.
-- `task` plugin: generic runtime task target type for ad-hoc commands. Forces us to confirm the plugin SDK is reusable, not just rust-shaped.
-- Sharpen the plugin SDK based on what hurt during the second-plugin build: helper functions for action declaration, glob handling, output declaration, schema validation.
+- `command` rule: generic process target type for ad-hoc commands. Forces us to confirm the rule SDK is reusable, not just rust-shaped.
+- Sharpen the rule SDK based on what hurt during the second-rule build: helper functions for action declaration, glob handling, output declaration, schema validation.
 
-**Exit criterion:** an existing cargo workspace adopts Fabrik with one `fabrik.toml` file containing `[[rust.workspace]]` and gets cache hits across builds. The `task` plugin is usable for shell-out targets without poking inside Fabrik internals.
+**Exit criterion:** an existing cargo workspace adopts Fabrik with one `fabrik.toml` file containing `rule = "rust.workspace"` and gets cache hits across builds. The `command` rule is usable for shell-out targets without poking inside Fabrik internals.
 
 ## Phase 5: DSL maturity: profiles, LSP, schema registry (week 16-19)
 
