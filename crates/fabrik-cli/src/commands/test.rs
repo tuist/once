@@ -35,6 +35,17 @@ pub async fn test(
 ) -> Result<ExitCode> {
     let (targets, idx) = find_target(workspace, target_id)?;
     let target = &targets[idx];
+    if target.kind == "elixir_test" {
+        // ExUnit registers test modules at compile time inside the BEAM
+        // that runs the suite, so we cannot split compile and run into
+        // separate cached actions the way rust_test does. Wiring this
+        // properly needs a runner that loads sources via `-r` and starts
+        // ExUnit in the same VM; landing that with the right cache key
+        // is a follow-up.
+        anyhow::bail!(
+            "target {target_id} has kind `elixir_test`; the elixir test runner is not yet wired up. Use `fabrik build {target_id}` to compile it."
+        );
+    }
     if target.kind != "rust_test" {
         anyhow::bail!(
             "target {target_id} has kind `{}`; expected rust_test",

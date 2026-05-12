@@ -1,0 +1,9 @@
+[[elixir.library]]
+name = "greeting"
+srcs = ["lib/greeting.ex"]
+
+[[elixir.binary]]
+name = "hello"
+srcs = ["lib/hello.ex"]
+deps = ["greeting"]
+entry = "Hello"

@@ -15,6 +15,7 @@ struct Manifest {
     rust: RustSection,
     cargo: CargoSection,
     apple: AppleSection,
+    elixir: ElixirSection,
     task: Vec<TaskTarget>,
     target: Vec<RuleTarget>,
 }
@@ -44,6 +45,39 @@ struct AppleSection {
     static_framework: Vec<AppleFrameworkTarget>,
     dynamic_framework: Vec<AppleFrameworkTarget>,
     macos_command_line_application: Vec<AppleSwiftTarget>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ElixirSection {
+    library: Vec<ElixirTarget>,
+    binary: Vec<ElixirBinaryTarget>,
+    test: Vec<ElixirTarget>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ElixirTarget {
+    name: String,
+    #[serde(default)]
+    srcs: Vec<String>,
+    #[serde(default)]
+    src_globs: Vec<String>,
+    #[serde(default)]
+    deps: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ElixirBinaryTarget {
+    name: String,
+    entry: String,
+    #[serde(default)]
+    srcs: Vec<String>,
+    #[serde(default)]
+    src_globs: Vec<String>,
+    #[serde(default)]
+    deps: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -234,6 +268,7 @@ pub(crate) fn load_toml_with(
     push_rust_targets(&mut targets, manifest.rust, workspace_root, package, name)?;
     push_cargo_targets(&mut targets, manifest.cargo, workspace_root, package, name)?;
     push_apple_targets(&mut targets, manifest.apple, workspace_root, package, name)?;
+    push_elixir_targets(&mut targets, manifest.elixir, workspace_root, package, name)?;
     for t in manifest.task {
         targets.push(task_target(t, workspace_root, package, name)?);
     }
@@ -355,6 +390,72 @@ fn push_apple_targets(
         )?);
     }
     Ok(())
+}
+
+fn push_elixir_targets(
+    targets: &mut Vec<Target>,
+    elixir: ElixirSection,
+    workspace_root: &Path,
+    package: &str,
+    name: &str,
+) -> Result<()> {
+    for t in elixir.library {
+        targets.push(elixir_target(
+            "elixir_library",
+            t,
+            workspace_root,
+            package,
+            name,
+        )?);
+    }
+    for t in elixir.binary {
+        targets.push(elixir_binary_target(t, workspace_root, package, name)?);
+    }
+    for t in elixir.test {
+        targets.push(elixir_target(
+            "elixir_test",
+            t,
+            workspace_root,
+            package,
+            name,
+        )?);
+    }
+    Ok(())
+}
+
+fn elixir_target(
+    kind: &str,
+    t: ElixirTarget,
+    workspace_root: &Path,
+    package: &str,
+    display_name: &str,
+) -> Result<Target> {
+    Ok(Target {
+        package: package.to_string(),
+        kind: kind.to_string(),
+        name: checked_name(t.name, display_name)?,
+        srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
+        deps: normalize_deps(t.deps, package, display_name)?,
+        attrs: BTreeMap::new(),
+    })
+}
+
+fn elixir_binary_target(
+    t: ElixirBinaryTarget,
+    workspace_root: &Path,
+    package: &str,
+    display_name: &str,
+) -> Result<Target> {
+    let mut attrs = BTreeMap::new();
+    attrs.insert("entry".to_string(), t.entry);
+    Ok(Target {
+        package: package.to_string(),
+        kind: "elixir_binary".to_string(),
+        name: checked_name(t.name, display_name)?,
+        srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
+        deps: normalize_deps(t.deps, package, display_name)?,
+        attrs,
+    })
 }
 
 fn rust_target(
@@ -533,6 +634,11 @@ fn rule_target(
     }
 }
 
+// Flat dispatch table over every known `rule = "..."` value. Growing it
+// linearly is intentional: each plugin adds its own arm here so adding
+// a new rule is one diff site, not five. The line cap doesn't carry
+// real signal at this shape.
+#[allow(clippy::too_many_lines)]
 fn builtin_rule_target(
     rule: &str,
     t: RuleTarget,
@@ -624,6 +730,26 @@ fn builtin_rule_target(
         ),
         "apple.macos_command_line_application" => apple_swift_target(
             "macos_command_line_application",
+            decode_rule_attrs(&name, attrs, display_name)?,
+            workspace_root,
+            package,
+            display_name,
+        ),
+        "elixir.library" => elixir_target(
+            "elixir_library",
+            decode_rule_attrs(&name, attrs, display_name)?,
+            workspace_root,
+            package,
+            display_name,
+        ),
+        "elixir.binary" => elixir_binary_target(
+            decode_rule_attrs(&name, attrs, display_name)?,
+            workspace_root,
+            package,
+            display_name,
+        ),
+        "elixir.test" => elixir_target(
+            "elixir_test",
             decode_rule_attrs(&name, attrs, display_name)?,
             workspace_root,
             package,

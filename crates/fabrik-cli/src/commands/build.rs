@@ -129,6 +129,8 @@ fn build_plan(
         .ok_or_else(|| anyhow::anyhow!("no target matches `{target_id}`"))?;
     if fabrik_apple::supports_kind(&target.kind) {
         Ok(fabrik_apple::build_plan(targets, target_id, workspace)?)
+    } else if fabrik_elixir::supports_kind(&target.kind) {
+        Ok(fabrik_elixir::build_plan(targets, target_id, workspace)?)
     } else {
         Ok(fabrik_rust::build_plan(targets, target_id, workspace)?)
     }

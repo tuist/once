@@ -34,6 +34,55 @@ copy_examples() {
   cp -R "$REPO_ROOT/examples/." "$WORKSPACE/examples/"
 }
 
+fake_elixir_tools() {
+  # Minimal `elixirc` shim that writes one fake .beam per source into
+  # the `-o` directory. Enough to exercise the cache contract and
+  # output-capture path without pulling Elixir/OTP into the test env.
+  mkdir -p "$WORKSPACE/bin"
+  cat > "$WORKSPACE/bin/elixirc" <<'EOF'
+#!/bin/sh
+set -eu
+out=""
+srcs=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o)
+      shift
+      out="$1"
+      ;;
+    -pa)
+      shift
+      ;;
+    -*)
+      ;;
+    *.ex|*.exs)
+      srcs="$srcs $1"
+      ;;
+  esac
+  shift
+done
+if [ -z "$out" ]; then
+  echo "fake elixirc: missing -o" >&2
+  exit 2
+fi
+mkdir -p "$out"
+for src in $srcs; do
+  base="$(basename "$src" .ex)"
+  base="$(basename "$base" .exs)"
+  module="$(printf '%s' "$base" | awk '{
+    n = split($0, parts, /_/);
+    out = "";
+    for (i = 1; i <= n; i++) {
+      out = out toupper(substr(parts[i],1,1)) substr(parts[i],2);
+    }
+    print out;
+  }')"
+  printf 'fake beam:%s\n' "$module" > "$out/Elixir.$module.beam"
+done
+EOF
+  chmod +x "$WORKSPACE/bin/elixirc"
+}
+
 fake_apple_tools() {
   mkdir -p "$WORKSPACE/bin"
   cat > "$WORKSPACE/bin/xcrun" <<'EOF'
