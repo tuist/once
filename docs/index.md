@@ -23,14 +23,8 @@ features:
     linkText: Browse targets
   - title: Content-addressed cache
     details: Every action has an explicit input digest, declared outputs, and a deterministic environment. Local hits and remote reuse work from the same contract.
-    link: /guide/cache-and-execution
-    linkText: How caching works
   - title: Built for coding agents
     details: Structured diagnostics, causality APIs, debug capsules, and repair flows make builds inspectable and editable by agents and humans alike.
-    link: /guide/agent-native
-    linkText: Agent-native features
   - title: Governed together
     details: Fabrik pairs open governance with first-party rules authored and maintained by us, so quality is not pushed onto the community alone.
-    link: /reference/rules
-    linkText: Rules reference
 ---

@@ -29,8 +29,6 @@ Fabrik projects are made of `fabrik.toml` files placed next to the code they des
 
 Fabrik lowers that graph into content-addressed actions with declared inputs, declared outputs, resource needs, and runtime semantics. The same project definition can run on a laptop, a remote worker, or a future execution backend because the graph describes what needs to happen, not where it must happen.
 
-See [Project layout](./project-layout.md) for how build files, directory scopes, targets, and target IDs fit together. See [Cache and execution](./cache-and-execution.md) for the execution model.
-
 ## What makes Fabrik different
 
 - **Structured declarations:** build files are data, so tools can inspect, validate, and rewrite them safely.
@@ -38,7 +36,3 @@ See [Project layout](./project-layout.md) for how build files, directory scopes,
 - **Rules with shared ownership:** important ecosystems can have first-party rules maintained with the core while governance stays open.
 - **Agent-readable diagnostics:** the graph exposes causality, cache decisions, and repair context as APIs.
 - **Portable compute:** the graph definition is separate from the place where the work executes.
-
-## Where Fabrik is going
-
-Fabrik is moving toward a build graph that acts as shared infrastructure for humans, agents, and elastic compute. The [design](../reference/design.md), [roadmap](../reference/roadmap.md), [rules](../reference/rules.md), and [runtime target](../reference/runtime.md) references describe the longer-term direction.

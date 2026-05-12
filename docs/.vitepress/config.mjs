@@ -26,7 +26,6 @@ export default defineConfig({
     nav: [
       { text: "Guide", link: "/guide/what-is-fabrik" },
       { text: "Targets", link: "/targets/rust" },
-      { text: "Reference", link: "/reference/design" },
       {
         text: "Links",
         items: [
@@ -49,15 +48,6 @@ export default defineConfig({
             { text: "What is Fabrik", link: "/guide/what-is-fabrik" },
           ],
         },
-        {
-          text: "Concepts",
-          items: [
-            { text: "Project layout", link: "/guide/project-layout" },
-            { text: "Target IDs", link: "/guide/target-ids" },
-            { text: "Cache and execution", link: "/guide/cache-and-execution" },
-            { text: "Agent-native features", link: "/guide/agent-native" },
-          ],
-        },
       ],
       "/targets/": [
         {
@@ -66,17 +56,6 @@ export default defineConfig({
             { text: "Rust", link: "/targets/rust" },
             { text: "Apple and Swift", link: "/targets/apple" },
             { text: "Tasks", link: "/targets/tasks" },
-          ],
-        },
-      ],
-      "/reference/": [
-        {
-          text: "Reference",
-          items: [
-            { text: "Rules and targets", link: "/reference/rules" },
-            { text: "Runtime targets", link: "/reference/runtime" },
-            { text: "Design", link: "/reference/design" },
-            { text: "Roadmap", link: "/reference/roadmap" },
           ],
         },
       ],
