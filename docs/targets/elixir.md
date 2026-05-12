@@ -102,6 +102,24 @@ The daemon is opt-in: without it, builds still work via the direct
 `elixirc` fallback. Run it when you want to amortize BEAM startup across
 many actions, especially on cold builds and in CI.
 
+### Concurrency
+
+The daemon socket is per-user, not per-workspace, so any concurrent
+`fabrik build` (or `fabrik elixir-compile`) on the same host talks to
+the same long-running BEAM. Each connection runs in its own Erlang
+process for I/O, but `Code.compile_file/1` and `Code.prepend_path/1`
+mutate VM-global state. Letting two compiles overlap there would race
+the code path and the loaded-modules table and silently corrupt either
+job.
+
+Every compile therefore funnels through one `Fabrik.CompileWorker`
+GenServer that processes a single job at a time. Concurrent clients
+queue and observe a consistent VM, never each other's `-pa` paths. The
+serialization is intentional for v1: the daemon's value prop is
+amortizing BEAM startup, not parallel compilation; a future revision
+can fan out across `:peer` nodes if benchmarks show queue contention
+dominates wall time.
+
 ## Notes
 
 The launcher script embeds workspace-relative `-pa` paths and locates
