@@ -123,6 +123,10 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
             .await
             .map(|()| ExitCode::SUCCESS),
         Cmd::Vendor => commands::vendor::vendor(&workspace, format).await,
+        #[cfg(unix)]
+        Cmd::ElixirCompile(args) => commands::elixir_compile::run(&workspace, &args),
+        #[cfg(unix)]
+        Cmd::ElixirDaemon { cmd } => commands::elixir_daemon::run(&workspace, cmd),
     }
 }
 

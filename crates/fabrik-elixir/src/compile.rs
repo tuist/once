@@ -76,8 +76,13 @@ pub fn compile_target(
     }
 
     let ebin = ebin_dir(&target.package, &target.name);
-    let elixirc =
-        workspace_tool(workspace_root, "elixirc").map_err(|source| CompileError::Toolchain {
+    // Resolve the `fabrik` binary the same way we resolve any other
+    // workspace tool. The wrapper subcommand (`fabrik elixir-compile`)
+    // routes the actual compile through the daemon when one is
+    // running and otherwise falls back to direct `elixirc`. Putting
+    // `fabrik` in argv[0] makes daemon presence invisible to the cache.
+    let fabrik_bin =
+        workspace_tool(workspace_root, "fabrik").map_err(|source| CompileError::Toolchain {
             label: target.id(),
             source,
         })?;
@@ -108,7 +113,7 @@ pub fn compile_target(
         ElixirKind::Library | ElixirKind::Test => build_compile_action(
             target,
             workspace_root,
-            &elixirc,
+            &fabrik_bin,
             &ebin,
             &dep_ebins,
             &ws_srcs,
@@ -126,7 +131,7 @@ pub fn compile_target(
                 workspace_root,
                 dep_artifacts,
                 &BinaryActionSpec {
-                    elixirc: &elixirc,
+                    fabrik_bin: &fabrik_bin,
                     ebin: &ebin,
                     dep_ebins: &dep_ebins,
                     ws_srcs: &ws_srcs,
@@ -154,17 +159,20 @@ pub fn compile_target(
 fn build_compile_action(
     target: &Target,
     workspace_root: &Path,
-    elixirc: &str,
+    fabrik_bin: &str,
     ebin: &str,
     dep_ebins: &[String],
     ws_srcs: &[String],
     dep_artifacts: &BTreeMap<String, BeamArtifact>,
 ) -> Result<Action, CompileError> {
-    let mut argv: Vec<String> = vec![elixirc.to_string()];
-    argv.push("-o".into());
-    argv.push(ebin.to_string());
+    let mut argv: Vec<String> = vec![
+        fabrik_bin.to_string(),
+        "elixir-compile".into(),
+        "--out".into(),
+        ebin.to_string(),
+    ];
     for dep in dep_ebins {
-        argv.push("-pa".into());
+        argv.push("--pa".into());
         argv.push(dep.clone());
     }
     for src in ws_srcs {
@@ -192,7 +200,7 @@ fn build_compile_action(
 /// one struct so the helper stays under the argument-count threshold
 /// and the call site reads as a labelled record.
 struct BinaryActionSpec<'a> {
-    elixirc: &'a str,
+    fabrik_bin: &'a str,
     ebin: &'a str,
     dep_ebins: &'a [String],
     ws_srcs: &'a [String],
@@ -207,7 +215,7 @@ fn build_binary_action(
     spec: &BinaryActionSpec<'_>,
 ) -> Result<Action, CompileError> {
     let BinaryActionSpec {
-        elixirc,
+        fabrik_bin,
         ebin,
         dep_ebins,
         ws_srcs,
@@ -215,19 +223,19 @@ fn build_binary_action(
         launcher,
     } = *spec;
 
-    // Single shell action: compile the modules, then write a launcher
-    // that resolves the workspace root at run time (by walking up to
-    // the nearest `.fabrik/` directory) and execs `elixir` with the
-    // right code path and entry point.
+    // Single shell action: compile the modules via the fabrik wrapper
+    // (which routes through the daemon when available), then write a
+    // launcher script that resolves the workspace root at run time and
+    // execs `elixir` with the right code path and entry point.
     let ebin_q = shell_quote(ebin);
-    let elixirc_q = shell_quote(elixirc);
+    let fabrik_q = shell_quote(fabrik_bin);
     let mut script = String::from("set -eu\n");
     let _ = writeln!(script, "mkdir -p {ebin_q}");
-    script.push_str(&elixirc_q);
-    script.push_str(" -o ");
+    script.push_str(&fabrik_q);
+    script.push_str(" elixir-compile --out ");
     script.push_str(&ebin_q);
     for dep in dep_ebins {
-        script.push_str(" -pa ");
+        script.push_str(" --pa ");
         script.push_str(&shell_quote(dep));
     }
     for src in ws_srcs {
@@ -366,8 +374,21 @@ fn build_input_digest(
 fn tool_env(workspace_root: &Path) -> Result<BTreeMap<String, String>, fabrik_core::ToolEnvError> {
     workspace_tool_env(
         workspace_root,
-        &["elixirc", "elixir"],
-        &["ELIXIR_VERSION", "ERL_LIBS", "MIX_ENV", "LANG", "LC_ALL"],
+        // `fabrik` is the wrapper that the action invokes; `elixirc`
+        // and `elixir` are what the wrapper exec()s on the fallback
+        // path. PATH must contain all three for both modes to work.
+        &["fabrik", "elixirc", "elixir"],
+        &[
+            "ELIXIR_VERSION",
+            "ERL_LIBS",
+            "MIX_ENV",
+            "LANG",
+            "LC_ALL",
+            // Lets the wrapper find a daemon socket parked at a
+            // non-default path. Declared here so it's part of the
+            // action's env contract.
+            "FABRIK_ELIXIR_DAEMON_SOCKET",
+        ],
     )
 }
 
@@ -409,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn library_emits_elixirc_with_ebin_dir() {
+    fn library_action_invokes_fabrik_elixir_compile_wrapper() {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
@@ -419,9 +440,12 @@ mod tests {
         let target = lib("apps/greeter", "greeter", &["lib/greeter.ex"], &[]);
         let (node, artifact) = compile_target(&target, tmp.path(), &BTreeMap::new()).unwrap();
         let Action::RunCommand { argv, outputs, .. } = &node.action;
-        assert_eq!(argv[0], "elixirc");
-        let dash_o = argv.iter().position(|a| a == "-o").unwrap();
-        assert_eq!(argv[dash_o + 1], ".fabrik/out/apps/greeter/greeter.ebin");
+        // Actions go through the `fabrik elixir-compile` wrapper so the
+        // daemon (when running) is transparent to the cache.
+        assert_eq!(argv[0], "fabrik");
+        assert_eq!(argv[1], "elixir-compile");
+        let dash_out = argv.iter().position(|a| a == "--out").unwrap();
+        assert_eq!(argv[dash_out + 1], ".fabrik/out/apps/greeter/greeter.ebin");
         assert!(argv.iter().any(|a| a == "apps/greeter/lib/greeter.ex"));
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].as_str(), ".fabrik/out/apps/greeter/greeter.ebin");
@@ -445,7 +469,7 @@ mod tests {
         let app = lib("apps/app", "app", &["lib/app.ex"], &["apps/util/util"]);
         let (node, _) = compile_target(&app, tmp.path(), &deps).unwrap();
         let Action::RunCommand { argv, .. } = &node.action;
-        let pa = argv.iter().position(|a| a == "-pa").unwrap();
+        let pa = argv.iter().position(|a| a == "--pa").unwrap();
         assert_eq!(argv[pa + 1], ".fabrik/out/apps/util/util.ebin");
     }
 
@@ -462,8 +486,10 @@ mod tests {
         let Action::RunCommand { argv, outputs, .. } = &node.action;
         assert_eq!(argv[0], "/bin/sh");
         assert_eq!(argv[1], "-c");
-        // The launcher must reference the entry module, the workspace
-        // root marker, and the self ebin path.
+        // The shell pipeline must compile via the wrapper and write a
+        // launcher that references the entry module and workspace-root
+        // marker.
+        assert!(argv[2].contains("elixir-compile"));
         assert!(argv[2].contains("Cli.main(System.argv())"));
         assert!(argv[2].contains(".fabrik"));
         assert!(argv[2].contains("cli.ebin"));

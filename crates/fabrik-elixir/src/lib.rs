@@ -19,7 +19,10 @@
 
 mod artifact;
 mod compile;
+#[cfg(unix)]
+pub mod daemon;
 mod plan;
+pub mod protocol;
 
 pub use artifact::{ebin_dir, escript_path, BeamArtifact, ElixirKind};
 pub use compile::{compile_target, CompileError};

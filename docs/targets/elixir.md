@@ -51,6 +51,33 @@ Run the produced launcher:
 - The `.ebin` directory is restored from the CAS on a cache hit just
   like any other declared output.
 
+## Compile daemon
+
+Each elixir target's action runs through a `fabrik elixir-compile`
+wrapper that talks to a long-lived compile daemon when one is reachable
+and falls back to spawning `elixirc` directly otherwise. The wrapper's
+argv is identical in both modes, so daemon presence is invisible to the
+cache. Outputs must therefore be byte-identical across backends, which
+they are: the daemon uses `Code.compile_file/2` against the same
+sources, dep paths, and Elixir version.
+
+Start the daemon in a separate terminal (or under a process supervisor)
+before kicking off a build:
+
+```sh
+fabrik elixir-daemon start          # listens on .fabrik/elixir-daemon.sock
+fabrik elixir-daemon status         # probe whether a daemon is reachable
+```
+
+Override the socket path with `--socket /custom/path.sock` or by setting
+`FABRIK_ELIXIR_DAEMON_SOCKET` in the environment. The latter is declared
+on every elixir action's env, so per-shell overrides flow into the
+spawned wrappers.
+
+The daemon is opt-in: without it, builds still work via the direct
+`elixirc` fallback. Run it when you want to amortize BEAM startup across
+many actions, especially on cold builds and in CI.
+
 ## Notes
 
 The launcher script embeds workspace-relative `-pa` paths and locates

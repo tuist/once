@@ -35,10 +35,14 @@ copy_examples() {
 }
 
 fake_elixir_tools() {
-  # Minimal `elixirc` shim that writes one fake .beam per source into
-  # the `-o` directory. Enough to exercise the cache contract and
-  # output-capture path without pulling Elixir/OTP into the test env.
+  # Minimal `elixirc` shim plus a `fabrik` symlink. Elixir build actions
+  # invoke `fabrik elixir-compile` (the daemon-aware wrapper); with no
+  # daemon running, the wrapper exec()s `elixirc` directly. Both binaries
+  # need to be on PATH for the action chain to work, but no real Elixir
+  # toolchain is required.
   mkdir -p "$WORKSPACE/bin"
+  # Symlink the test fabrik binary so the wrapper subcommand resolves.
+  ln -sf "$FABRIK_BIN" "$WORKSPACE/bin/fabrik"
   cat > "$WORKSPACE/bin/elixirc" <<'EOF'
 #!/bin/sh
 set -eu

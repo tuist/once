@@ -179,6 +179,21 @@ pub enum Cmd {
     /// sanity-checking that build files evaluate before more expensive
     /// commands consume them.
     Targets,
+
+    /// Compile elixir sources via the daemon, or direct elixirc as
+    /// fallback. Invoked by elixir build actions; not typically run by
+    /// users.
+    #[cfg(unix)]
+    #[command(name = "elixir-compile")]
+    ElixirCompile(crate::commands::elixir_compile::ElixirCompileArgs),
+
+    /// Long-lived compile daemon for elixir targets.
+    #[cfg(unix)]
+    #[command(name = "elixir-daemon")]
+    ElixirDaemon {
+        #[command(subcommand)]
+        cmd: crate::commands::elixir_daemon::ElixirDaemonCmd,
+    },
 }
 
 #[derive(Subcommand)]

@@ -4,6 +4,10 @@
 
 pub mod build;
 pub mod cache;
+#[cfg(unix)]
+pub mod elixir_compile;
+#[cfg(unix)]
+pub mod elixir_daemon;
 pub mod exec;
 pub mod run;
 pub mod runtime;
