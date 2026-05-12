@@ -106,5 +106,7 @@ directory. That keeps the cached launcher byte-identical across
 machines with different absolute paths.
 
 A real Elixir toolchain (`elixirc` and `elixir`) is required to build
-and run Elixir targets. Add it to your `mise.toml` to pin the version
-used for cache keys.
+and run Elixir targets. The repo's own `mise.toml` pins
+`elixir = "1.19.5-otp-28"` and `erlang = "28.5"` so the shellspec
+suite exercises real compilation; pin the same versions in your
+project's `mise.toml` to keep cache keys honest across machines.
