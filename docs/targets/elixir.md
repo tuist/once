@@ -51,6 +51,26 @@ Run the produced launcher:
 - The `.ebin` directory is restored from the CAS on a cache hit just
   like any other declared output.
 
+## XDG state layout
+
+Fabrik routes state through XDG Base Directory variables so the same
+binary stays well behaved on shared hosts, CI runners, and inside
+sandboxes. The split:
+
+- `<workspace>/.fabrik/out/...` - build outputs and runtime sessions.
+  Per-project, lives in your checkout, consumed locally.
+- `$XDG_CACHE_HOME/fabrik/cas` - content-addressed blobs and action
+  results. Shared across projects on the same host so identical
+  actions hit.
+- `$XDG_RUNTIME_DIR/fabrik` - daemon sockets and other ephemeral
+  runtime files. Falls back to a uid-keyed tempdir on hosts where
+  `XDG_RUNTIME_DIR` is unset (macOS by default).
+- `$XDG_DATA_HOME/fabrik` - long-lived materialized assets like the
+  embedded elixir compile daemon script.
+
+Override any of these by setting the corresponding env var. Tests do
+this per case via the shellspec helper to keep each run hermetic.
+
 ## Compile daemon
 
 Each elixir target's action runs through a `fabrik elixir-compile`

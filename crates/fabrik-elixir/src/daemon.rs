@@ -22,6 +22,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use fabrik_core::Xdg;
+
 use crate::protocol::{CompileRequest, CompileResponse, PROTOCOL_VERSION};
 
 /// The Elixir program that implements the daemon. Embedded here so the
@@ -37,16 +39,21 @@ pub const DAEMON_SCRIPT_FILENAME: &str = "fabrik_compiler.exs";
 /// that socket instead of falling back to a direct `elixirc` spawn.
 pub const SOCKET_ENV_VAR: &str = "FABRIK_ELIXIR_DAEMON_SOCKET";
 
-/// Default workspace-relative location for the daemon's socket and
-/// materialized script. Kept under `.fabrik/` so it's covered by the
-/// existing gitignore for build outputs.
-pub fn default_socket_path(workspace_root: &Path) -> PathBuf {
-    workspace_root.join(".fabrik").join("elixir-daemon.sock")
+/// Default location for the daemon's socket: `$XDG_RUNTIME_DIR/fabrik`
+/// when set, otherwise a tempdir-rooted per-user directory. The
+/// workspace argument is unused for the default path but kept in the
+/// signature so callers don't have to special-case overrides.
+pub fn default_socket_path(_workspace_root: &Path) -> PathBuf {
+    Xdg::from_env().fabrik_runtime().join("elixir-daemon.sock")
 }
 
-pub fn default_script_path(workspace_root: &Path) -> PathBuf {
-    workspace_root
-        .join(".fabrik")
+/// Default location for the materialized daemon script:
+/// `$XDG_DATA_HOME/fabrik/daemon/`. Shared across workspaces; the
+/// script content is identical because it's embedded in the fabrik
+/// binary via [`DAEMON_SCRIPT`].
+pub fn default_script_path(_workspace_root: &Path) -> PathBuf {
+    Xdg::from_env()
+        .fabrik_data()
         .join("daemon")
         .join(DAEMON_SCRIPT_FILENAME)
 }
@@ -193,17 +200,38 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn default_socket_path_lands_under_dotfabrik() {
+    fn default_socket_path_resolves_through_xdg_runtime() {
         let tmp = TempDir::new().unwrap();
+        let runtime = tmp.path().join("runtime");
+        // Snapshot and restore the env so we don't leak overrides
+        // into other tests in the same process.
+        let prior = std::env::var_os("XDG_RUNTIME_DIR");
+        std::env::set_var("XDG_RUNTIME_DIR", &runtime);
         let p = default_socket_path(tmp.path());
-        assert!(p.ends_with(".fabrik/elixir-daemon.sock"));
+        assert_eq!(p, runtime.join("fabrik").join("elixir-daemon.sock"));
+        match prior {
+            Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
+            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
     }
 
     #[test]
-    fn default_script_path_lands_under_dotfabrik_daemon() {
+    fn default_script_path_resolves_through_xdg_data() {
         let tmp = TempDir::new().unwrap();
+        let data = tmp.path().join("data");
+        let prior = std::env::var_os("XDG_DATA_HOME");
+        std::env::set_var("XDG_DATA_HOME", &data);
         let p = default_script_path(tmp.path());
-        assert!(p.ends_with(".fabrik/daemon/fabrik_compiler.exs"));
+        assert_eq!(
+            p,
+            data.join("fabrik")
+                .join("daemon")
+                .join(DAEMON_SCRIPT_FILENAME)
+        );
+        match prior {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
     }
 
     #[test]

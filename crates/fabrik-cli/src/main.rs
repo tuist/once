@@ -12,9 +12,10 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::Parser;
 use fabrik_cas::Cas;
+use fabrik_core::Xdg;
 use tracing_subscriber::{fmt, EnvFilter};
 
-use cli::{Cli, Cmd, Format, CACHE_DIR};
+use cli::{Cli, Cmd, Format};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -49,7 +50,21 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
         Some(d) => fabrik_frontend::absolutize(d).context("resolving workspace root")?,
         None => env::current_dir().context("resolving workspace root")?,
     };
-    let cas = Cas::open(workspace.join(CACHE_DIR));
+    // A typo'd `-C` filename used to surface as a CAS write failure
+    // because the CAS lived under `<workspace>/.fabrik`. With the CAS
+    // moved to `$XDG_CACHE_HOME/fabrik/cas`, the bogus path would
+    // silently run; explicit validation here keeps the loud error.
+    if !workspace.is_dir() {
+        anyhow::bail!(
+            "fabrik: workspace `{}` is not a directory",
+            workspace.display()
+        );
+    }
+    // CAS lives outside the workspace under `$XDG_CACHE_HOME/fabrik/cas`
+    // so identical actions hit across projects on the same host.
+    // Workspace-local `.fabrik/out` still holds build outputs that
+    // users consume from their checkout.
+    let cas = Cas::open(Xdg::from_env().fabrik_cas());
     let format: Format = cli.format;
 
     match cli.command {

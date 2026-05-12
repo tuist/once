@@ -79,9 +79,9 @@ Describe 'fabrik exec'
     The stderr should include 'exit=0'
   End
 
-  It 'creates the .fabrik directory inside the workspace'
+  It 'creates the CAS directory under the XDG cache home'
     fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true' >/dev/null 2>&1
-    When call test -d "$WORKSPACE/.fabrik/cas"
+    When call test -d "$XDG_CACHE_HOME/fabrik/cas"
     The status should be success
   End
 

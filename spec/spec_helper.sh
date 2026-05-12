@@ -15,7 +15,17 @@ spec_helper_loaded() { :; }
 
 setup_workspace() {
   WORKSPACE="$(mktemp -d -t fabrik-spec.XXXXXX)"
-  export WORKSPACE
+  # Per-test XDG roots so fabrik's CAS, runtime sockets, and
+  # materialized data land under the test's tempdir instead of the
+  # user's real home. Keeping them as siblings under $WORKSPACE means
+  # the existing cleanup (`rm -rf $WORKSPACE`) wipes them automatically.
+  XDG_CACHE_HOME="$WORKSPACE/.xdg/cache"
+  XDG_STATE_HOME="$WORKSPACE/.xdg/state"
+  XDG_DATA_HOME="$WORKSPACE/.xdg/data"
+  XDG_CONFIG_HOME="$WORKSPACE/.xdg/config"
+  XDG_RUNTIME_DIR="$WORKSPACE/.xdg/runtime"
+  mkdir -p "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR"
+  export WORKSPACE XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR
 }
 
 cleanup_workspace() {
@@ -23,6 +33,7 @@ cleanup_workspace() {
     rm -rf "$WORKSPACE"
     unset WORKSPACE
   fi
+  unset XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR
 }
 
 fabrik() {

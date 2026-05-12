@@ -87,14 +87,18 @@ Describe 'fabrik exec output'
   # for null-bearing output across shells.
 End
 
-Describe 'fabrik cache stats with -C'
-  It 'reports stats from a workspace it never wrote to'
-    fresh="$(mktemp -d -t fabrik-stats.XXXXXX)"
-    When call "$FABRIK_BIN" -C "$fresh" cache stats
+Describe 'fabrik cache stats with a fresh XDG cache'
+  # The CAS lives under `$XDG_CACHE_HOME/fabrik/cas`, so emptiness now
+  # depends on the configured cache home rather than the workspace.
+  # Point both at fresh tempdirs to assert the "no writes yet" state.
+  It 'reports zero blobs and zero actions before anything has run'
+    fresh_ws="$(mktemp -d -t fabrik-stats-ws.XXXXXX)"
+    fresh_cache="$(mktemp -d -t fabrik-stats-cache.XXXXXX)"
+    When call env XDG_CACHE_HOME="$fresh_cache" "$FABRIK_BIN" -C "$fresh_ws" cache stats
     The status should be success
     The stdout should include 'blobs:   0'
     The stdout should include 'actions: 0'
-    rm -rf "$fresh"
+    rm -rf "$fresh_ws" "$fresh_cache"
   End
 End
 

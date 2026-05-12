@@ -22,6 +22,7 @@ mod input_digest;
 mod path;
 mod plan;
 mod resources;
+mod xdg;
 
 pub use env::{
     select_tool_env, tool_env, workspace_tool, workspace_tool_env, workspace_tool_var, ToolEnvError,
@@ -30,6 +31,7 @@ pub use input_digest::InputDigestBuilder;
 pub use path::{WorkspacePath, WorkspacePathError};
 pub use plan::{BuiltPlan, NodeInfo, Plan, PlanError, PlanNode, PlanOutcome};
 pub use resources::{ResourceLimits, ResourcePool, ResourceRequest};
+pub use xdg::Xdg;
 
 /// Domain-separation prefix for action digests. Bump the version when
 /// the canonical encoding (or the [`Action`] schema) changes in a way
