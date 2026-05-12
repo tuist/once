@@ -8,7 +8,6 @@ use fabrik_cas::Digest;
 pub enum ElixirKind {
     Library,
     Binary,
-    Test,
 }
 
 impl ElixirKind {
@@ -16,7 +15,6 @@ impl ElixirKind {
         match s {
             "elixir_library" => Some(Self::Library),
             "elixir_binary" => Some(Self::Binary),
-            "elixir_test" => Some(Self::Test),
             _ => None,
         }
     }
@@ -25,7 +23,6 @@ impl ElixirKind {
         match self {
             Self::Library => "elixir_library",
             Self::Binary => "elixir_binary",
-            Self::Test => "elixir_test",
         }
     }
 }
@@ -86,7 +83,7 @@ mod tests {
             Some(ElixirKind::Library)
         );
         assert_eq!(ElixirKind::parse("elixir_binary"), Some(ElixirKind::Binary));
-        assert_eq!(ElixirKind::parse("elixir_test"), Some(ElixirKind::Test));
+        assert_eq!(ElixirKind::parse("elixir_test"), None);
         assert_eq!(ElixirKind::parse("python_library"), None);
         assert_eq!(ElixirKind::Library.as_str(), "elixir_library");
     }

@@ -52,7 +52,6 @@ struct AppleSection {
 struct ElixirSection {
     library: Vec<ElixirTarget>,
     binary: Vec<ElixirBinaryTarget>,
-    test: Vec<ElixirTarget>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -411,15 +410,6 @@ fn push_elixir_targets(
     for t in elixir.binary {
         targets.push(elixir_binary_target(t, workspace_root, package, name)?);
     }
-    for t in elixir.test {
-        targets.push(elixir_target(
-            "elixir_test",
-            t,
-            workspace_root,
-            package,
-            name,
-        )?);
-    }
     Ok(())
 }
 
@@ -743,13 +733,6 @@ fn builtin_rule_target(
             display_name,
         ),
         "elixir.binary" => elixir_binary_target(
-            decode_rule_attrs(&name, attrs, display_name)?,
-            workspace_root,
-            package,
-            display_name,
-        ),
-        "elixir.test" => elixir_target(
-            "elixir_test",
             decode_rule_attrs(&name, attrs, display_name)?,
             workspace_root,
             package,

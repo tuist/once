@@ -110,7 +110,7 @@ pub fn compile_target(
     dep_ebins.dedup();
 
     let action = match kind {
-        ElixirKind::Library | ElixirKind::Test => build_compile_action(
+        ElixirKind::Library => build_compile_action(
             target,
             workspace_root,
             &fabrik_bin,

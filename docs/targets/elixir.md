@@ -37,9 +37,13 @@ Run the produced launcher:
   walks up to the workspace root at run time and execs `elixir` with
   the right `-pa` path and entry module. Requires an `entry` attribute
   naming a module with `main/1`.
-- `elixir.test`: compiles like `elixir.library`. The ExUnit-based test
-  runner is not yet wired up; the target compiles cleanly today and a
-  future iteration will run it through `fabrik test`.
+
+ExUnit-based test targets are not in scope today. `use ExUnit.Case`
+registers test modules inside the BEAM that subsequently runs the
+suite, so splitting compile and run into separate cached actions
+needs a same-VM design pass. A future iteration will add the right
+shape once that's clear; for now, run tests through `mix test` from
+within your project.
 
 ## Cache Behavior
 

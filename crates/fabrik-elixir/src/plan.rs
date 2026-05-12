@@ -270,7 +270,7 @@ mod tests {
     fn supports_kind_recognises_elixir_kinds_only() {
         assert!(supports_kind("elixir_library"));
         assert!(supports_kind("elixir_binary"));
-        assert!(supports_kind("elixir_test"));
+        assert!(!supports_kind("elixir_test"));
         assert!(!supports_kind("rust_library"));
         assert!(!supports_kind("apple_ios_app"));
     }
