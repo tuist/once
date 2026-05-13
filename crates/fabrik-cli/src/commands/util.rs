@@ -7,7 +7,8 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use fabrik_core::CacheState;
+use fabrik_cas::Cas;
+use fabrik_core::{CacheState, ResourceLimits, RunOpts, Runner};
 use fabrik_frontend::Target;
 
 /// Load every target declared in the workspace and pick the one whose
@@ -32,4 +33,21 @@ pub fn cache_tag(cache: CacheState) -> &'static str {
         CacheState::Hit => "hit",
         CacheState::Miss => "miss",
     }
+}
+
+/// Construct the runner every CLI verb uses, with the named-slot
+/// pools each language plugin publishes pre-registered. Keeping the
+/// wiring in one place ensures the daemon-bounded `ELIXIR_COMPILE_SLOT`
+/// and any future plugin slots stay aligned across `build`, `run`, and
+/// `test` instead of one verb forgetting to populate them.
+pub fn runner(cas: &Cas, workspace: &Path) -> Runner {
+    Runner::new(cas.clone(), workspace.to_path_buf(), RunOpts::default())
+        .with_resource_limits(plugin_resource_limits())
+}
+
+fn plugin_resource_limits() -> ResourceLimits {
+    ResourceLimits::default().with_slot_limit(
+        fabrik_elixir::ELIXIR_COMPILE_SLOT,
+        fabrik_elixir::default_compile_slot_limit(),
+    )
 }

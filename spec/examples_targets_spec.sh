@@ -5,7 +5,7 @@ Describe 'examples target listing'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
-  It 'lists checked-in Rust and Apple examples'
+  It 'lists checked-in Rust, Apple, and Elixir examples'
     copy_examples
     When call fabrik targets
     The status should be success
@@ -16,5 +16,7 @@ Describe 'examples target listing'
     The stdout should include 'examples/apple/macos/cli/hello'
     The stdout should include 'examples/apple/macos/tuist-shaped-swift/tuist'
     The stdout should include 'examples/apple/ios/simulator-app/Demo'
+    The stdout should include 'examples/elixir/granular/basic-app/greeting'
+    The stdout should include 'examples/elixir/granular/basic-app/hello'
   End
 End

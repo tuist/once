@@ -55,6 +55,7 @@ export default defineConfig({
           items: [
             { text: "Rust", link: "/targets/rust" },
             { text: "Apple and Swift", link: "/targets/apple" },
+            { text: "Elixir", link: "/targets/elixir" },
             { text: "Tasks", link: "/targets/tasks" },
           ],
         },

@@ -233,6 +233,7 @@ dependencies = [
  "fabrik-apple",
  "fabrik-cas",
  "fabrik-core",
+ "fabrik-elixir",
  "fabrik-frontend",
  "fabrik-rust",
  "serde",
@@ -257,6 +258,21 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "fabrik-elixir"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "fabrik-cas",
+ "fabrik-core",
+ "fabrik-frontend",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

@@ -52,22 +52,24 @@ Describe 'fabrik exec -e'
 End
 
 Describe 'fabrik -C <directory>'
-  It 'creates the .fabrik tree under a previously empty directory'
-    fresh="$(mktemp -d -t fabrik-cli-fresh.XXXXXX)"
-    "$FABRIK_BIN" -C "$fresh" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true' >/dev/null 2>&1
-    rc=$?
-    test -d "$fresh/.fabrik/cas" && test -d "$fresh/.fabrik/actions"
-    When call test $rc -eq 0
+  BeforeEach 'setup_workspace'
+  AfterEach 'cleanup_workspace'
+
+  It 'populates the CAS under XDG_CACHE_HOME on first use'
+    fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true' >/dev/null 2>&1
+    When call test -d "$XDG_CACHE_HOME/fabrik/cas"
     The status should be success
-    rm -rf "$fresh"
   End
 
   It 'errors clearly when given a non-directory path'
-    file="$(mktemp -t fabrik-cli-notdir.XXXXXX)"
+    # `setup_workspace` ensures any incidental writes still land under
+    # the per-test XDG roots even though the dispatch check bails
+    # before the CAS is opened.
+    file="$WORKSPACE/not-a-directory"
+    : > "$file"
     When call "$FABRIK_BIN" -C "$file" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
     The status should not equal 0
     The stderr should include 'fabrik:'
-    rm -f "$file"
   End
 End
 
@@ -87,14 +89,18 @@ Describe 'fabrik exec output'
   # for null-bearing output across shells.
 End
 
-Describe 'fabrik cache stats with -C'
-  It 'reports stats from a workspace it never wrote to'
-    fresh="$(mktemp -d -t fabrik-stats.XXXXXX)"
-    When call "$FABRIK_BIN" -C "$fresh" cache stats
+Describe 'fabrik cache stats with a fresh XDG cache'
+  BeforeEach 'setup_workspace'
+  AfterEach 'cleanup_workspace'
+
+  # `setup_workspace` provisions a fresh `$XDG_CACHE_HOME` per test, so
+  # the CAS starts empty and `cache stats` reports zero across the
+  # board regardless of any cache state on the developer's machine.
+  It 'reports zero blobs and zero actions before anything has run'
+    When call fabrik cache stats
     The status should be success
     The stdout should include 'blobs:   0'
     The stdout should include 'actions: 0'
-    rm -rf "$fresh"
   End
 End
 

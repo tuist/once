@@ -15,7 +15,17 @@ spec_helper_loaded() { :; }
 
 setup_workspace() {
   WORKSPACE="$(mktemp -d -t fabrik-spec.XXXXXX)"
-  export WORKSPACE
+  # Per-test XDG roots so fabrik's CAS, runtime sockets, and
+  # materialized data land under the test's tempdir instead of the
+  # user's real home. Keeping them as siblings under $WORKSPACE means
+  # the existing cleanup (`rm -rf $WORKSPACE`) wipes them automatically.
+  XDG_CACHE_HOME="$WORKSPACE/.xdg/cache"
+  XDG_STATE_HOME="$WORKSPACE/.xdg/state"
+  XDG_DATA_HOME="$WORKSPACE/.xdg/data"
+  XDG_CONFIG_HOME="$WORKSPACE/.xdg/config"
+  XDG_RUNTIME_DIR="$WORKSPACE/.xdg/runtime"
+  mkdir -p "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR"
+  export WORKSPACE XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR
 }
 
 cleanup_workspace() {
@@ -23,6 +33,7 @@ cleanup_workspace() {
     rm -rf "$WORKSPACE"
     unset WORKSPACE
   fi
+  unset XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR
 }
 
 fabrik() {
@@ -34,74 +45,26 @@ copy_examples() {
   cp -R "$REPO_ROOT/examples/." "$WORKSPACE/examples/"
 }
 
-fake_apple_tools() {
+stage_elixir_workspace_bin() {
+  # Elixir build actions resolve `fabrik` via `workspace_tool`, which
+  # falls back to PATH when the workspace has no mise.toml. Drop a
+  # symlink to the release binary into a bin dir the test caller
+  # prepends to PATH; the real `elixirc` and `elixir` come from the
+  # outer mise environment.
   mkdir -p "$WORKSPACE/bin"
-  cat > "$WORKSPACE/bin/xcrun" <<'EOF'
-#!/bin/sh
-if [ "$1" = "--sdk" ] && [ "$3" = "--show-sdk-path" ]; then
-  echo "/tmp/fake-$2.sdk"
-  exit 0
-fi
-if [ "$1" = "--sdk" ] && [ "$3" = "swiftc" ]; then
-  shift 3
-  exec swiftc "$@"
-fi
-if [ "$1" = "ar" ] && [ "$2" = "crs" ]; then
-  out="$3"
-  mkdir -p "$(dirname "$out")"
-  printf 'fake swift archive' > "$out"
-  exit 0
-fi
-if [ "$1" = "simctl" ]; then
-  echo "$*" >> simctl.log
-  exit 0
-fi
-echo "unexpected xcrun invocation: $*" >&2
-exit 2
-EOF
-  cat > "$WORKSPACE/bin/swiftc" <<'EOF'
-#!/bin/sh
-echo "swiftc $*" >> swiftc.log
-out=""
-module=""
-emit_object=0
-srcs=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-o" ]; then
-    shift
-    out="$1"
-  elif [ "$1" = "-emit-module-path" ]; then
-    shift
-    module="$1"
-  elif [ "$1" = "-emit-object" ]; then
-    emit_object=1
-  fi
-  case "$1" in
-    *.swift) srcs="$srcs $1" ;;
-  esac
-  shift
-done
-if [ -n "$out" ]; then
-  mkdir -p "$(dirname "$out")"
-  printf 'fake swift binary' > "$out"
-fi
-if [ "$emit_object" = 1 ]; then
-  for src in $srcs; do
-    object="$(basename "$src" .swift).o"
-    printf 'fake swift object' > "$object"
-  done
-fi
-if [ -n "$module" ]; then
-  mkdir -p "$(dirname "$module")"
-  printf 'fake swift module' > "$module"
-fi
-EOF
-  cat > "$WORKSPACE/bin/codesign" <<'EOF'
-#!/bin/sh
-for last do :; done
-app="$last"
-mkdir -p "$app/_CodeSignature"
-printf 'signed' > "$app/_CodeSignature/CodeResources"
-EOF
-  chmod +x "$WORKSPACE/bin/xcrun" "$WORKSPACE/bin/swiftc" "$WORKSPACE/bin/codesign"
+  ln -sf "$FABRIK_BIN" "$WORKSPACE/bin/fabrik"
+}
+
+# Predicates used by `Skip if` in the apple spec. Each returns 0 when
+# the surrounding case should be skipped: non-Darwin host, missing
+# xcrun, or no booted iOS simulator. shellspec's `Skip` directive is a
+# DSL keyword that doesn't survive being called from a regular shell
+# function, hence the predicate-via-exit-code pattern.
+apple_toolchain_unavailable() {
+  [ "$(uname -s)" != "Darwin" ] || ! command -v xcrun >/dev/null 2>&1
+}
+
+no_booted_ios_simulator() {
+  apple_toolchain_unavailable && return 0
+  ! xcrun simctl list devices booted 2>/dev/null | grep -q "(Booted)"
 }
