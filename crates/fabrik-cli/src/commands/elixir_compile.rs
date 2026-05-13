@@ -49,6 +49,11 @@ pub fn run(workspace: &Path, args: &ElixirCompileArgs) -> Result<ExitCode> {
     match daemon::submit(&socket, &req) {
         Ok(resp) if resp.ok => Ok(ExitCode::SUCCESS),
         Ok(resp) => {
+            // `resp.ok == false` with `retryable == false` is a real
+            // compile failure the daemon evaluated on the merits;
+            // surface it and exit non-zero rather than masking it
+            // with a fallback that would just rerun the same broken
+            // compile through `elixirc`.
             eprintln!(
                 "fabrik elixir-compile: daemon at {} reported failure",
                 socket.display()
@@ -58,7 +63,17 @@ pub fn run(workspace: &Path, args: &ElixirCompileArgs) -> Result<ExitCode> {
             }
             Ok(ExitCode::from(1))
         }
-        Err(ClientError::NotRunning { .. }) => fall_back_to_elixirc(workspace, args),
+        Err(err) if err.is_transient() => {
+            // No daemon, daemon refused for backpressure, or transport
+            // dropped mid-request - all "daemon unavailable for this
+            // action," so spawn elixirc directly to keep the build
+            // moving instead of failing the action.
+            fall_back_to_elixirc(workspace, args)
+        }
+        Err(ClientError::Compile { message, .. }) => {
+            eprintln!("fabrik elixir-compile: {message}");
+            Ok(ExitCode::from(1))
+        }
         Err(other) => {
             eprintln!("fabrik elixir-compile: {other}");
             eprintln!(

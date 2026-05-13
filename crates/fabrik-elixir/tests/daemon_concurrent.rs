@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fabrik_elixir::daemon::{submit, DAEMON_SCRIPT};
+use fabrik_elixir::daemon::{submit, ClientError, DAEMON_SCRIPT};
 use fabrik_elixir::protocol::CompileRequest;
 use tempfile::TempDir;
 
@@ -55,9 +55,16 @@ impl Drop for DaemonGuard {
 }
 
 fn start_daemon(script: &Path, socket: &Path) -> DaemonGuard {
-    let child = Command::new("elixir")
-        .arg(script)
-        .arg(socket)
+    start_daemon_with_env(script, socket, &[])
+}
+
+fn start_daemon_with_env(script: &Path, socket: &Path, env: &[(&str, &str)]) -> DaemonGuard {
+    let mut cmd = Command::new("elixir");
+    cmd.arg(script).arg(socket);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let child = cmd
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -226,4 +233,92 @@ fn daemon_compiles_a_dep_chain_through_pa() {
 
     assert!(workspace.join("app/out.ebin/Elixir.App.beam").exists());
     assert!(workspace.join("dep/out.ebin/Elixir.Dep.beam").exists());
+}
+
+#[test]
+fn daemon_returns_busy_when_queue_cap_is_exceeded() {
+    // Pins the backpressure contract: with `MAX_QUEUE=1` the daemon
+    // can only accept one job at a time, so flooding it with N>>1
+    // concurrent compiles must surface at least one `ClientError::Busy`
+    // back to the client. Catching that variant is what triggers the
+    // wrapper's fallback to direct elixirc in production.
+    // Use enough fan-out that the kernel almost always has more
+    // pending connects than the cap allows. Sixteen with cap=1 is
+    // overkill on purpose.
+    const N: usize = 16;
+
+    if !elixir_available() {
+        println!(
+            "skipping {}: elixir not on PATH (run via `mise exec --`)",
+            module_path!()
+        );
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().to_path_buf();
+    let socket = workspace.join("daemon.sock");
+    let script = workspace.join("fabrik_compiler.exs");
+    std::fs::write(&script, DAEMON_SCRIPT).unwrap();
+
+    for i in 0..N {
+        let src_dir = workspace.join(format!("pkg{i}"));
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(
+            src_dir.join("mod.ex"),
+            format!("defmodule Busy{i} do\n  def n, do: {i}\nend\n"),
+        )
+        .unwrap();
+    }
+
+    let _daemon =
+        start_daemon_with_env(&script, &socket, &[("FABRIK_ELIXIR_DAEMON_MAX_QUEUE", "1")]);
+    wait_for_socket(&socket);
+
+    let socket = Arc::new(socket);
+    let workspace_arc = Arc::new(workspace.clone());
+
+    let handles: Vec<_> = (0..N)
+        .map(|i| {
+            let socket = Arc::clone(&socket);
+            let ws = Arc::clone(&workspace_arc);
+            thread::spawn(move || {
+                let req = CompileRequest::new(
+                    i as u64 + 1,
+                    ws.to_string_lossy().into_owned(),
+                    format!("pkg{i}/out.ebin"),
+                    Vec::new(),
+                    vec![format!("pkg{i}/mod.ex")],
+                );
+                submit(&socket, &req)
+            })
+        })
+        .collect();
+
+    let mut ok = 0usize;
+    let mut busy = 0usize;
+    for (i, handle) in handles.into_iter().enumerate() {
+        match handle
+            .join()
+            .unwrap_or_else(|_| panic!("worker thread {i} panicked"))
+        {
+            Ok(resp) if resp.ok => ok += 1,
+            Err(ClientError::Busy { .. }) => busy += 1,
+            other => panic!("job {i} produced unexpected outcome: {other:?}"),
+        }
+    }
+
+    assert_eq!(
+        ok + busy,
+        N,
+        "every job should land as either ok or busy (got {ok} ok, {busy} busy)"
+    );
+    assert!(
+        busy >= 1,
+        "expected at least one busy response with max_queue=1 and {N} concurrent clients; got {busy}"
+    );
+    assert!(
+        ok >= 1,
+        "expected at least one job to make it through; got {ok}"
+    );
 }

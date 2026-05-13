@@ -34,6 +34,22 @@ pub struct CompileResponse {
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// True when the daemon refused the job for a transient,
+    /// non-correctness reason (queue saturation, overload). Compile
+    /// failures keep this `false` because re-running them won't help.
+    /// Clients that see this should fall back to direct `elixirc`
+    /// rather than retry blindly against the same saturated daemon.
+    #[serde(default, skip_serializing_if = "is_default_bool")]
+    pub retryable: bool,
+}
+
+// Serde's `skip_serializing_if` requires `fn(&T) -> bool`, so this
+// signature is fixed even though `bool` is `Copy` and would be cheaper
+// to pass by value. Clippy's `trivially_copy_pass_by_ref` doesn't know
+// about that contract, so we silence it locally.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_bool(b: &bool) -> bool {
+    !*b
 }
 
 impl CompileRequest {
@@ -74,9 +90,11 @@ mod tests {
             id: 1,
             ok: true,
             error: None,
+            retryable: false,
         };
         let line = serde_json::to_string(&r).unwrap();
         assert!(!line.contains("error"));
+        assert!(!line.contains("retryable"));
     }
 
     #[test]
@@ -86,9 +104,25 @@ mod tests {
             id: 1,
             ok: false,
             error: Some("** (CompileError) ...".into()),
+            retryable: false,
         };
         let line = serde_json::to_string(&r).unwrap();
         assert!(line.contains("\"error\":"));
+    }
+
+    #[test]
+    fn busy_response_carries_retryable_flag() {
+        let r = CompileResponse {
+            v: 1,
+            id: 9,
+            ok: false,
+            error: Some("queue full".into()),
+            retryable: true,
+        };
+        let line = serde_json::to_string(&r).unwrap();
+        assert!(line.contains("\"retryable\":true"));
+        let parsed: CompileResponse = serde_json::from_str(&line).unwrap();
+        assert!(parsed.retryable);
     }
 
     #[test]

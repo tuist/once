@@ -120,6 +120,29 @@ amortizing BEAM startup, not parallel compilation; a future revision
 can fan out across `:peer` nodes if benchmarks show queue contention
 dominates wall time.
 
+### Backpressure
+
+Pending plus in-flight jobs are capped at a bounded queue (default
+`4 × erlang:system_info(schedulers_online)`, overridable via
+`FABRIK_ELIXIR_DAEMON_MAX_QUEUE` when starting the daemon). Submissions
+beyond the cap get an immediate `{"ok": false, "retryable": true}`
+response instead of growing the queue. The `fabrik elixir-compile`
+wrapper treats that signal exactly like "no daemon listening" and
+falls back to spawning `elixirc` directly for that one action, so a
+saturated daemon never blocks progress.
+
+The cap is informed by, but not yet directly wired into, fabrik's
+`ResourcePool`. Each elixir action still declares a default
+`ResourceRequest`, and the runner's CPU-slot pool already gates how
+many compiles fabrik launches in parallel within a single build. The
+daemon's queue adds a second, cross-build bound for the case where
+several concurrent `fabrik build` invocations on the same host
+multiplex through the same per-user daemon. A tighter integration
+that treats the daemon as a first-class shared resource is a
+follow-up; today's split (intra-build limit in fabrik, cross-build
+limit in the daemon) is enough to keep the system bounded under
+pathological load.
+
 ## Notes
 
 The launcher script embeds workspace-relative `-pa` paths and locates

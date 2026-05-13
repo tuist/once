@@ -7,23 +7,29 @@
 #   Request:  {"v":1,"id":N,"cwd":ABS,"out":REL,"pa":[REL...],"srcs":[REL...]}
 #   Response: {"v":1,"id":N,"ok":true}
 #         or  {"v":1,"id":N,"ok":false,"error":STRING}
+#         or  {"v":1,"id":N,"ok":false,"error":STRING,"retryable":true}
 #
 # `cwd` is the absolute workspace root; every other path is workspace
 # relative. The daemon resolves paths against `cwd` so it doesn't depend
 # on its own working directory.
 #
-# Concurrency model: many fabrik invocations can hit the same daemon at
-# the same time (it's a per-user resource, shared across workspaces).
-# Each TCP connection runs in its own Erlang process so I/O is fully
-# concurrent, but `Code.compile_file/1` and `Code.prepend_path/1`
-# mutate VM-global state (the BEAM code path and the loaded-modules
-# table). Letting two compiles overlap would race those structures and
-# silently corrupt either compile. Everything therefore funnels through
-# `Fabrik.CompileWorker`, a single GenServer that processes one job at
-# a time. The serialization is intentional and the right call for v1:
-# the amortized BEAM startup is the value the daemon delivers, not
-# parallel compilation. A future iteration can fan out across `:peer`
-# nodes if benchmarks show contention.
+# Concurrency + backpressure: many fabrik invocations can hit the same
+# daemon simultaneously (the socket is a per-user resource shared
+# across workspaces). I/O for each connection runs in its own Erlang
+# process, but `Code.compile_file/1` and `Code.prepend_path/1` mutate
+# VM-global state; letting two compiles overlap would race the code
+# path and the loaded-modules table. Every job therefore funnels
+# through `Fabrik.CompileWorker`, a single GenServer that processes
+# one request at a time.
+#
+# To keep that queue bounded under runaway concurrency, an atomic
+# counter caps the number of in-flight + pending jobs. When the cap
+# is exceeded the daemon replies with `retryable: true` immediately
+# and the client (`fabrik elixir-compile`) falls back to spawning
+# `elixirc` directly for that one action. The cap defaults to
+# 4 × the BEAM scheduler count so a single fabrik build never trips
+# it on its own; overrides come from the `FABRIK_ELIXIR_DAEMON_MAX_QUEUE`
+# env variable, set at daemon-start time.
 
 defmodule Fabrik.CompileWorker do
   @moduledoc false
@@ -53,10 +59,46 @@ end
 defmodule Fabrik.Compiler do
   @moduledoc false
 
+  # The counters table is created with size 1 in main/1 and shared
+  # across all serve processes via `:persistent_term`. Atomic increments
+  # make the cap check thread-safe without serializing the I/O paths.
+  @counter_key {__MODULE__, :inflight}
+  @max_key {__MODULE__, :max_queue}
+
+  def init_throttle(max_queue) do
+    counters = :counters.new(1, [:atomics])
+    :persistent_term.put(@counter_key, counters)
+    :persistent_term.put(@max_key, max_queue)
+  end
+
+  defp counters_ref, do: :persistent_term.get(@counter_key)
+  defp max_queue, do: :persistent_term.get(@max_key)
+
+  # Returns :ok when the slot was acquired, {:busy, current} otherwise.
+  # Either way the caller must call `release/0` if (and only if) it
+  # got :ok, mirroring the standard try-acquire pattern.
+  defp acquire do
+    ref = counters_ref()
+    :counters.add(ref, 1, 1)
+    current = :counters.get(ref, 1)
+
+    if current > max_queue() do
+      :counters.sub(ref, 1, 1)
+      {:busy, current - 1}
+    else
+      :ok
+    end
+  end
+
+  defp release do
+    :counters.sub(counters_ref(), 1, 1)
+  end
+
   # One per-connection process per TCP accept. It buffers bytes,
-  # decodes line-delimited JSON requests, and forwards each to the
-  # serializing worker. The actual compile happens inside the worker
-  # so multiple connections never race on the global code path.
+  # decodes line-delimited JSON requests, applies backpressure, and
+  # forwards admitted jobs to the serializing worker. The actual
+  # compile happens inside the worker so multiple connections never
+  # race on the global code path.
   def serve(socket, buf \\ "") do
     case :binary.match(buf, "\n") do
       {pos, _} ->
@@ -76,7 +118,7 @@ defmodule Fabrik.Compiler do
   defp dispatch(line) do
     try do
       request = :json.decode(line)
-      Fabrik.CompileWorker.compile(request)
+      run_with_backpressure(request)
     catch
       kind, reason ->
         encode(%{
@@ -84,6 +126,28 @@ defmodule Fabrik.Compiler do
           "id" => 0,
           "ok" => false,
           "error" => Exception.format(kind, reason, __STACKTRACE__)
+        })
+    end
+  end
+
+  defp run_with_backpressure(request) do
+    case acquire() do
+      :ok ->
+        try do
+          Fabrik.CompileWorker.compile(request)
+        after
+          release()
+        end
+
+      {:busy, current} ->
+        encode(%{
+          "v" => 1,
+          "id" => Map.get(request, "id", 0),
+          "ok" => false,
+          "error" =>
+            "fabrik elixir-daemon at capacity (#{current}/#{max_queue()} in-flight jobs); " <>
+              "client should fall back to direct elixirc spawn for this action",
+          "retryable" => true
         })
     end
   end
@@ -143,6 +207,13 @@ defmodule Fabrik.CompilerServer do
     _ = File.rm(socket_path)
     _ = File.mkdir_p(Path.dirname(socket_path))
 
+    # Cap pending+in-flight jobs to a multiple of scheduler count so
+    # one host saturating the daemon doesn't ripple into FD exhaustion
+    # or unbounded mailbox growth. Configurable via env for cases that
+    # legitimately want more headroom.
+    max_queue = read_max_queue()
+    Fabrik.Compiler.init_throttle(max_queue)
+
     # Start the serializing worker before we accept any traffic so
     # the first request never races a half-initialized GenServer.
     # Linking it to this process means a worker crash takes the
@@ -156,7 +227,7 @@ defmodule Fabrik.CompilerServer do
     # ECONNREFUSED. 128 matches the usual SOMAXCONN on Linux/macOS and
     # is more than any realistic build's fan-out.
     :ok = :socket.listen(listen, 128)
-    IO.puts(:stderr, "fabrik elixir-daemon: listening on #{socket_path}")
+    IO.puts(:stderr, "fabrik elixir-daemon: listening on #{socket_path} (max_queue=#{max_queue})")
     accept_loop(listen)
   end
 
@@ -170,6 +241,19 @@ defmodule Fabrik.CompilerServer do
 
       {:error, _} ->
         :ok
+    end
+  end
+
+  defp read_max_queue do
+    case System.get_env("FABRIK_ELIXIR_DAEMON_MAX_QUEUE") do
+      nil ->
+        :erlang.system_info(:schedulers_online) * 4
+
+      value ->
+        case Integer.parse(value) do
+          {n, _} when n > 0 -> n
+          _ -> :erlang.system_info(:schedulers_online) * 4
+        end
     end
   end
 end

@@ -59,13 +59,16 @@ pub fn default_script_path(_workspace_root: &Path) -> PathBuf {
 }
 
 /// Errors a client can hit. Distinguishes "no daemon listening" (cheap
-/// fallback signal) from real protocol or compile failures so callers
-/// can decide whether to retry, fall back to direct `elixirc`, or
-/// surface the error.
+/// fallback signal) and "daemon refused for capacity" (transient,
+/// fall back) from real protocol or compile failures so callers can
+/// decide whether to retry, fall back to direct `elixirc`, or surface
+/// the error.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
     #[error("no daemon listening at `{path}`")]
     NotRunning { path: PathBuf },
+    #[error("daemon at `{path}` refused the job for backpressure: {message}")]
+    Busy { path: PathBuf, message: String },
     #[error("socket I/O error talking to daemon at `{path}`: {source}")]
     Io {
         path: PathBuf,
@@ -88,6 +91,21 @@ pub enum ClientError {
     },
     #[error("daemon at `{path}` reported compile failure: {message}")]
     Compile { path: PathBuf, message: String },
+}
+
+impl ClientError {
+    /// Whether the caller should fall back to spawning `elixirc`
+    /// directly instead of surfacing this error to the user. Captures
+    /// the "daemon unavailable for this action" signals (no socket,
+    /// queue full, transport hiccup) but excludes compile failures
+    /// the daemon evaluated on the merits.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::NotRunning { .. } | Self::Busy { .. } | Self::UnexpectedEof { .. }
+        )
+    }
 }
 
 /// Send one compile request and read one response.
@@ -125,6 +143,15 @@ pub fn submit(socket: &Path, request: &CompileRequest) -> Result<CompileResponse
             path: socket.to_path_buf(),
             expected: PROTOCOL_VERSION,
             got: response.v,
+        });
+    }
+    // A `retryable` response is a structured "daemon is overloaded"
+    // signal that maps directly to the Busy variant so callers handle
+    // it with the same fallback path they already use for NotRunning.
+    if !response.ok && response.retryable {
+        return Err(ClientError::Busy {
+            path: socket.to_path_buf(),
+            message: response.error.unwrap_or_default(),
         });
     }
     Ok(response)
@@ -288,6 +315,7 @@ mod tests {
                 id: req.id,
                 ok: true,
                 error: None,
+                retryable: false,
             };
             let mut out = serde_json::to_string(&resp).unwrap();
             out.push('\n');
