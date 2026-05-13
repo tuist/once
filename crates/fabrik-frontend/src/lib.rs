@@ -11,6 +11,7 @@
 //! - [`target_ref`]: target id normalization for CLI args and build-file deps.
 //! - [`workspace`]: disk-side loaders ([`load_file`], [`load_workspace`]).
 
+mod dependency;
 mod error;
 mod manifest;
 mod target;
@@ -22,11 +23,12 @@ pub const TOML_BUILD_FILE_NAME: &str = "fabrik.toml";
 
 pub const BUILD_FILE_NAME: &str = TOML_BUILD_FILE_NAME;
 
+pub use dependency::{DependencyEcosystem, DependencyEntry};
 pub use error::{Error, Result};
-pub use manifest::load_toml_str;
+pub use manifest::{load_dependency_entries_toml_str, load_toml_str};
 pub use target::Target;
 pub use target_ref::{
     absolutize, normalize_build_dep, normalize_cli_target, normalize_cli_target_from, target_id,
     validate_target_name, TargetIdError,
 };
-pub use workspace::{load_file, load_workspace};
+pub use workspace::{load_dependency_entries, load_file, load_workspace};

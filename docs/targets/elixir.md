@@ -55,6 +55,31 @@ within your project.
 - The `.ebin` directory is restored from the CAS on a cache hit just
   like any other declared output.
 
+## Dependency Sync
+
+Declare Elixir dependencies in the root `fabrik.toml` and point the
+lockfile at the Mix lockfile.
+
+```toml
+[[deps]]
+name = "elixir_deps"
+ecosystem = "elixir"
+manifest = "mix.exs"
+lockfile = "mix.lock"
+output = "vendor/fabrik.elixir.lock.json"
+```
+
+Run it:
+
+```sh
+fabrik deps sync elixir_deps
+```
+
+The Elixir sync step reads the declared `mix.lock` file and emits a lock
+graph JSON file with Hex packages, git packages, versions, checksums,
+repositories, and dependency edges available in the lockfile. Mix still
+owns dependency resolution; Fabrik consumes the resolved lockfile.
+
 ## XDG state layout
 
 Fabrik routes state through XDG Base Directory variables so the same

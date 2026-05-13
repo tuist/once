@@ -5,6 +5,7 @@ use std::path::Path;
 
 use serde::{de::DeserializeOwned, Deserialize};
 
+use crate::dependency::{into_entries, DependencyEntry, DependencyEntryToml};
 use crate::error::{Error, Result};
 use crate::target::Target;
 use crate::target_ref::{normalize_build_dep, validate_target_name};
@@ -16,6 +17,7 @@ struct Manifest {
     cargo: CargoSection,
     apple: AppleSection,
     elixir: ElixirSection,
+    deps: Vec<DependencyEntryToml>,
     task: Vec<TaskTarget>,
     target: Vec<RuleTarget>,
 }
@@ -252,6 +254,10 @@ pub fn load_toml_str(name: &str, src: &str) -> Result<Vec<Target>> {
     load_toml_with(name, src, Path::new("."), "")
 }
 
+pub fn load_dependency_entries_toml_str(name: &str, src: &str) -> Result<Vec<DependencyEntry>> {
+    load_dependency_entries_toml_with(name, src, "")
+}
+
 pub(crate) fn load_toml_with(
     name: &str,
     src: &str,
@@ -276,6 +282,18 @@ pub(crate) fn load_toml_with(
     }
 
     Ok(targets)
+}
+
+pub(crate) fn load_dependency_entries_toml_with(
+    name: &str,
+    src: &str,
+    package: &str,
+) -> Result<Vec<DependencyEntry>> {
+    let manifest: Manifest = toml::from_str(src).map_err(|e| Error::Parse {
+        path: name.to_owned(),
+        message: e.to_string(),
+    })?;
+    Ok(into_entries(manifest.deps, package))
 }
 
 fn push_rust_targets(
@@ -1036,6 +1054,30 @@ edition = "2021"
         assert_eq!(targets[0].srcs, vec!["src/lib.rs".to_string()]);
         assert_eq!(targets[1].kind, "rust_binary");
         assert_eq!(targets[1].deps, vec!["core".to_string()]);
+    }
+
+    #[test]
+    fn loads_dependency_entries_from_toml() {
+        let entries = load_dependency_entries_toml_str(
+            "fabrik.toml",
+            r#"
+[[deps]]
+name = "rust_deps"
+ecosystem = "rust"
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+output = "vendor/fabrik.rust.lock.json"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "rust_deps");
+        assert_eq!(
+            entries[0].ecosystem,
+            crate::dependency::DependencyEcosystem::Rust
+        );
+        assert_eq!(entries[0].lockfile.as_deref(), Some("Cargo.lock"));
     }
 
     #[test]

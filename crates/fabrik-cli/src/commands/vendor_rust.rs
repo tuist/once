@@ -1,35 +1,19 @@
-//! `fabrik vendor` - generate per-crate `fabrik.toml` declarations
-//! from a project's `Cargo.lock` so the granular pipeline can
-//! compile third-party deps directly with rustc.
-//!
-//! What this verb does:
-//! - Runs `cargo metadata --format-version 1` to resolve the dep
-//!   graph (resolution, features, source locations).
-//! - Walks every crates.io package in the resolve and emits a Rust
-//!   target declaration into `vendor/fabrik.toml`.
-//! - Emits commented-out stubs for crates that have a `build.rs` or
-//!   that pull a build script in via build-deps. Those need
-//!   primitives the granular pipeline does not yet thread end to
-//!   end (see AGENTS.md, "Build script support").
-//!
-//! What this verb does **not** do:
-//! - Vendor sources into the project. The generated declarations
-//!   keep empty `srcs` placeholders until source copying exists.
-//! - Resolve features per-target. The generator emits the global
-//!   feature set; a richer model picks features per dependent.
+//! Rust implementation for `fabrik deps sync`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
 use fabrik_core::{workspace_tool, workspace_tool_env};
+use fabrik_frontend::DependencyEntry;
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::cli::Format;
+use super::deps::{entry_path, graph_output_path, SyncReport};
+use super::vendor_graph::{
+    write_graph_to, Ecosystem, ResolvedDependency, ResolvedGraph, ResolvedPackage, ResolvedSource,
+};
 
 #[derive(Deserialize)]
 struct CargoMetadata {
@@ -44,11 +28,8 @@ struct MetadataPackage {
     version: String,
     id: String,
     manifest_path: String,
-    /// `null` for path/git deps, `"registry+https://..."` for crates.io.
     source: Option<String>,
     targets: Vec<MetadataTarget>,
-    /// Cargo flags this when the manifest declares a build script,
-    /// including the implicit one via `build = "build.rs"`.
     #[serde(default)]
     build_dependencies: Vec<MetadataDependency>,
 }
@@ -83,19 +64,17 @@ struct MetadataResolveNode {
 struct MetadataResolveDep {
     name: String,
     pkg: String,
-    /// Per-edge `dep_kinds`; an empty `kind` means "normal" dep.
     dep_kinds: Vec<MetadataDepKind>,
 }
 
 #[derive(Deserialize)]
 struct MetadataDepKind {
-    /// One of: `null` (normal), `"dev"`, `"build"`.
     #[serde(default)]
     kind: Option<String>,
 }
 
-pub async fn vendor(workspace: &Path, format: Format) -> Result<ExitCode> {
-    let metadata = run_cargo_metadata(workspace).await?;
+pub(super) async fn sync(workspace: &Path, entry: &DependencyEntry) -> Result<SyncReport> {
+    let metadata = run_cargo_metadata(workspace, entry).await?;
     let report = plan_vendor(&metadata)?;
 
     let vendor_dir = workspace.join("vendor");
@@ -106,45 +85,40 @@ pub async fn vendor(workspace: &Path, format: Format) -> Result<ExitCode> {
     tokio::fs::write(&manifest, &report.manifest_body)
         .await
         .with_context(|| format!("writing {}", manifest.display()))?;
+    let lockfile = graph_output_path(workspace, entry, report.graph.ecosystem.lockfile_name());
+    write_graph_to(&lockfile, &report.graph)
+        .await
+        .context("writing rust dependency graph")?;
 
-    match format {
-        Format::Human => {
-            let mut err = tokio::io::stderr();
-            let summary = format!(
-                "fabrik: vendor wrote {path} ({declared} declared, {skipped} skipped)\n  declared: pure-rust libs and proc-macros without build scripts\n  skipped:  crates with build.rs (need cargo.build_script wiring)\n  cargo.binary remains the production path until the third-party graph is feature-complete\n",
-                path = manifest.display(),
-                declared = report.declared,
-                skipped = report.skipped,
-            );
-            err.write_all(summary.as_bytes()).await?;
-            err.flush().await?;
-        }
-        Format::Json | Format::Toon => {
-            let mut out = tokio::io::stdout();
-            let payload = serde_json::json!({
-                "manifest": manifest.display().to_string(),
-                "declared": report.declared,
-                "skipped": report.skipped,
-                "skipped_crates": report.skipped_names,
-            });
-            let body = serde_json::to_string(&payload)? + "\n";
-            out.write_all(body.as_bytes()).await?;
-            out.flush().await?;
-        }
-    }
-
-    Ok(ExitCode::SUCCESS)
+    Ok(SyncReport {
+        name: entry.name.clone(),
+        ecosystem: entry.ecosystem,
+        lockfile,
+        manifest: Some(manifest),
+        packages: report.graph.packages.len(),
+        declared: Some(report.declared),
+        skipped: Some(report.skipped),
+        skipped_names: report.skipped_names,
+    })
 }
 
-async fn run_cargo_metadata(workspace: &Path) -> Result<CargoMetadata> {
+async fn run_cargo_metadata(workspace: &Path, entry: &DependencyEntry) -> Result<CargoMetadata> {
     let cargo = workspace_tool(workspace, "cargo")?;
+    let manifest = entry_path(workspace, entry, &entry.manifest);
     let env = workspace_tool_env(
         workspace,
         &["cargo", "rustc"],
         &["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"],
     )?;
     let output = Command::new(cargo)
-        .args(["metadata", "--format-version", "1", "--locked"])
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--locked",
+            "--manifest-path",
+        ])
+        .arg(manifest)
         .env_clear()
         .envs(env)
         .current_dir(workspace)
@@ -163,6 +137,7 @@ async fn run_cargo_metadata(workspace: &Path) -> Result<CargoMetadata> {
 
 struct VendorReport {
     manifest_body: String,
+    graph: ResolvedGraph,
     declared: usize,
     skipped: usize,
     skipped_names: Vec<String>,
@@ -177,7 +152,7 @@ fn plan_vendor(metadata: &CargoMetadata) -> Result<VendorReport> {
 
     let mut body = String::new();
     body.push_str(
-        "# Generated by `fabrik vendor`. Edit at your peril; re-run the\n\
+        "# Generated by `fabrik deps sync`. Edit at your peril; re-run the\n\
          # command instead. Source copying is not implemented yet, so\n\
          # declarations keep empty srcs placeholders.\n\
          #\n\
@@ -244,10 +219,100 @@ fn plan_vendor(metadata: &CargoMetadata) -> Result<VendorReport> {
 
     Ok(VendorReport {
         manifest_body: body,
+        graph: resolved_graph_from_cargo(metadata),
         declared,
         skipped,
         skipped_names,
     })
+}
+
+fn resolved_graph_from_cargo(metadata: &CargoMetadata) -> ResolvedGraph {
+    let deps_by_id = resolve_deps(metadata);
+    let packages = metadata
+        .packages
+        .iter()
+        .map(|pkg| {
+            let version = Some(pkg.version.clone());
+            let id = pkg.id.clone();
+            let source = cargo_source(pkg);
+            let dependencies = deps_by_id.get(&pkg.id).cloned().unwrap_or_default();
+            let mut metadata = BTreeMap::new();
+            metadata.insert(
+                "cargo_package_id".to_string(),
+                serde_json::Value::String(pkg.id.clone()),
+            );
+            metadata.insert(
+                "manifest_path".to_string(),
+                serde_json::Value::String(pkg.manifest_path.clone()),
+            );
+            ResolvedPackage {
+                id,
+                name: pkg.name.clone(),
+                version,
+                source,
+                checksum: None,
+                dependencies,
+                metadata,
+            }
+        })
+        .collect();
+    ResolvedGraph::new(Ecosystem::Rust, packages)
+}
+
+fn cargo_source(pkg: &MetadataPackage) -> ResolvedSource {
+    let Some(source) = pkg.source.as_deref() else {
+        return manifest_dir_of(pkg).map_or(ResolvedSource::Unknown, |path| ResolvedSource::Path {
+            path,
+        });
+    };
+    if let Some(registry) = source.strip_prefix("registry+") {
+        ResolvedSource::Registry {
+            registry: Some(registry.to_string()),
+        }
+    } else if let Some(git) = source.strip_prefix("git+") {
+        let (url, revision) = git
+            .rsplit_once('#')
+            .map_or((git.to_string(), None), |(url, revision)| {
+                (url.to_string(), Some(revision.to_string()))
+            });
+        ResolvedSource::Git { url, revision }
+    } else {
+        ResolvedSource::Unknown
+    }
+}
+
+fn resolve_deps(metadata: &CargoMetadata) -> BTreeMap<String, Vec<ResolvedDependency>> {
+    let Some(resolve) = &metadata.resolve else {
+        return BTreeMap::new();
+    };
+    resolve
+        .nodes
+        .iter()
+        .map(|node| {
+            let mut deps = BTreeSet::new();
+            for dep in &node.deps {
+                if dep.dep_kinds.is_empty() {
+                    deps.insert(ResolvedDependency {
+                        id: dep.pkg.clone(),
+                        name: dep.name.clone(),
+                        kind: "normal".to_string(),
+                    });
+                    continue;
+                }
+                for dep_kind in &dep.dep_kinds {
+                    deps.insert(ResolvedDependency {
+                        id: dep.pkg.clone(),
+                        name: dep.name.clone(),
+                        kind: dep_kind
+                            .kind
+                            .clone()
+                            .unwrap_or_else(|| "normal".to_string()),
+                    });
+                }
+            }
+            (node.id.clone(), deps.into_iter().collect())
+        })
+        .collect()
 }
 
 fn resolve_normal_deps(metadata: &CargoMetadata) -> BTreeMap<String, Vec<String>> {
@@ -258,8 +323,6 @@ fn resolve_normal_deps(metadata: &CargoMetadata) -> BTreeMap<String, Vec<String>
         .nodes
         .iter()
         .map(|node| {
-            // We discard the dep's local rename (d.name) and only
-            // record the pkg id; the consumer looks up the pkg by id.
             let edges: Vec<String> = node
                 .deps
                 .iter()
@@ -396,4 +459,62 @@ fn toml_array(values: &[String]) -> String {
     }
     out.push(']');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rust_graph_dependency_ids_match_package_ids() {
+        let dep_id = "registry+https://github.com/rust-lang/crates.io-index#dep@1.0.0";
+        let app_id = "path+file:///repo#app@0.1.0";
+        let metadata = CargoMetadata {
+            packages: vec![
+                package("app", "0.1.0", app_id, None),
+                package(
+                    "dep",
+                    "1.0.0",
+                    dep_id,
+                    Some("registry+https://github.com/rust-lang/crates.io-index"),
+                ),
+            ],
+            resolve: Some(MetadataResolve {
+                nodes: vec![MetadataResolveNode {
+                    id: app_id.to_string(),
+                    deps: vec![MetadataResolveDep {
+                        name: "dep".to_string(),
+                        pkg: dep_id.to_string(),
+                        dep_kinds: vec![MetadataDepKind { kind: None }],
+                    }],
+                }],
+            }),
+            workspace_members: vec![app_id.to_string()],
+        };
+
+        let graph = resolved_graph_from_cargo(&metadata);
+        let app = graph
+            .packages
+            .iter()
+            .find(|package| package.id == app_id)
+            .unwrap();
+        assert_eq!(app.dependencies[0].id, dep_id);
+    }
+
+    fn package(name: &str, version: &str, id: &str, source: Option<&str>) -> MetadataPackage {
+        MetadataPackage {
+            name: name.to_string(),
+            version: version.to_string(),
+            id: id.to_string(),
+            manifest_path: format!("/repo/{name}/Cargo.toml"),
+            source: source.map(str::to_string),
+            targets: vec![MetadataTarget {
+                name: name.to_string(),
+                kind: vec!["lib".to_string()],
+                src_path: format!("/repo/{name}/src/lib.rs"),
+                edition: "2021".to_string(),
+            }],
+            build_dependencies: Vec::new(),
+        }
+    }
 }

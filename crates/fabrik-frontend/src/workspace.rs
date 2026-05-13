@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
+use crate::dependency::DependencyEntry;
 use crate::error::{Error, Result};
-use crate::manifest::load_toml_with;
+use crate::manifest::{load_dependency_entries_toml_with, load_toml_with};
 use crate::target::Target;
 use crate::TOML_BUILD_FILE_NAME;
 
@@ -83,6 +84,16 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
         all.extend(targets);
     }
     Ok(all)
+}
+
+/// Load workspace-level dependency entries from the root `fabrik.toml`.
+pub fn load_dependency_entries(root: &Path) -> Result<Vec<DependencyEntry>> {
+    let path = root.join(TOML_BUILD_FILE_NAME);
+    let src = std::fs::read_to_string(&path).map_err(|source| Error::Read {
+        path: path.display().to_string(),
+        source,
+    })?;
+    load_dependency_entries_toml_with(TOML_BUILD_FILE_NAME, &src, "")
 }
 
 fn is_build_file(name: Option<&str>) -> bool {

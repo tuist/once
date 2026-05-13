@@ -65,6 +65,33 @@ Run it:
 fabrik run fabrik
 ```
 
+## Dependency Sync
+
+Declare Rust dependencies in the root `fabrik.toml` and run
+`fabrik deps sync` to refresh generated dependency artifacts.
+
+```toml
+[[deps]]
+name = "rust_deps"
+ecosystem = "rust"
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+output = "vendor/fabrik.rust.lock.json"
+```
+
+Run it:
+
+```sh
+fabrik deps sync rust_deps
+```
+
+The Rust sync step shells out to `cargo metadata --locked` for the
+declared manifest. It emits a lock graph JSON file and regenerates
+`vendor/fabrik.toml` with one granular Rust declaration per dependency
+that Fabrik can model today. Crates with `build.rs` are left commented
+out in the generated manifest until build-script wiring is complete for
+third-party graphs.
+
 ## Cache Behavior
 
 - `rust.library`, `rust.binary`, `rust.test`, and `rust.proc_macro` build actions are cacheable.

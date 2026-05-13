@@ -93,12 +93,36 @@ FABRIK_IOS_SIMULATOR=<udid> fabrik run examples/apple/ios/simulator-app/Demo
 - `fabrik run` first reuses the cacheable app build, then runs an uncached install and launch action.
 - Simulator boot, install, and launch are runtime side effects and are intentionally not cached.
 
+## Dependency Sync
+
+Declare Swift dependencies in the root `fabrik.toml` and run
+`fabrik deps sync` to refresh the generated Swift dependency graph.
+
+```toml
+[[deps]]
+name = "swift_deps"
+ecosystem = "swift"
+manifest = "Package.swift"
+lockfile = "Package.resolved"
+output = "vendor/fabrik.swift.lock.json"
+```
+
+Run it:
+
+```sh
+fabrik deps sync swift_deps
+```
+
+The Swift sync step reads the declared `Package.resolved` file and emits
+a lock graph JSON file. It records package identity, version, revision,
+checksum, and git or registry source data where SwiftPM includes it.
+It does not yet generate granular Swift targets from SwiftPM packages.
+
 ## Current Limits
 
 - Swift support currently targets host-architecture macOS builds.
-- SwiftPM package resolution/import is not wired yet. The intended shape
-  is to use `Package.swift` for external package resolution while keeping
-  the local build graph declared with Fabrik's lower-level TOML targets.
+- SwiftPM package graph sync records resolved dependencies, but it
+  does not yet lower packages into buildable Fabrik targets.
 - Simulator app dependencies are not wired yet.
 - Apple resource processing, asset catalogs, entitlements, and signing
   beyond simulator ad hoc signing are still future work.

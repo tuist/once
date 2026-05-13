@@ -137,7 +137,10 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
         Cmd::Targets => commands::targets::print_targets(&workspace, format)
             .await
             .map(|()| ExitCode::SUCCESS),
-        Cmd::Vendor => commands::vendor::vendor(&workspace, format).await,
+        Cmd::Deps {
+            cmd: cli::DepsCmd::Sync { name },
+        } => commands::deps::sync(&workspace, format, name.as_deref()).await,
+        Cmd::Vendor => commands::deps::sync(&workspace, format, None).await,
         #[cfg(unix)]
         Cmd::ElixirCompile(args) => commands::elixir_compile::run(&workspace, &args),
         #[cfg(unix)]
