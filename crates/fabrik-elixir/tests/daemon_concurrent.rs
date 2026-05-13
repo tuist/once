@@ -116,7 +116,18 @@ fn daemon_serves_many_concurrent_compile_requests() {
         .unwrap();
     }
 
-    let _daemon = start_daemon(&script, &socket);
+    // Pin the daemon's queue cap above `PARALLEL_JOBS` so this case
+    // isolates the "many concurrent compiles still all succeed"
+    // contract from the backpressure path. Without the override, CI
+    // runners with a low scheduler count would hit the default cap
+    // (== scheduler count) and start rejecting jobs with `Busy`. The
+    // dedicated `daemon_returns_busy_when_queue_cap_is_exceeded` case
+    // covers that path separately.
+    let _daemon = start_daemon_with_env(
+        &script,
+        &socket,
+        &[("FABRIK_ELIXIR_DAEMON_MAX_QUEUE", "64")],
+    );
     wait_for_socket(&socket);
 
     let socket = Arc::new(socket);
