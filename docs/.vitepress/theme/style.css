@@ -475,6 +475,56 @@ body:has(.VPHome)::before {
   color: var(--vp-c-brand-1);
 }
 
+.sidebar-target-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sidebar-target-icon {
+  display: block;
+  flex: 0 0 16px;
+  background: var(--sidebar-target-icon-color);
+  width: 16px;
+  height: 16px;
+  -webkit-mask: var(--sidebar-target-icon) center / contain no-repeat;
+  mask: var(--sidebar-target-icon) center / contain no-repeat;
+}
+
+.sidebar-target-link-rust {
+  --sidebar-target-icon: url("/icons/rust.svg");
+  --sidebar-target-icon-color: var(--vp-c-text-1);
+}
+
+.sidebar-target-link-swift {
+  --sidebar-target-icon: url("/icons/swift.svg");
+  --sidebar-target-icon-color: var(--fabrik-orange-600);
+}
+
+.sidebar-target-link-go {
+  --sidebar-target-icon: url("/icons/go.svg");
+  --sidebar-target-icon-color: var(--fabrik-azure-500);
+}
+
+.sidebar-target-link-elixir {
+  --sidebar-target-icon: url("/icons/elixir.svg");
+  --sidebar-target-icon-color: var(--fabrik-purple-500);
+}
+
+.sidebar-target-link-tasks {
+  --sidebar-target-icon: url("/icons/tasks.svg");
+  --sidebar-target-icon-color: var(--vp-c-text-2);
+}
+
+.VPDocFooter .sidebar-target-link {
+  display: inline;
+}
+
+.VPDocFooter .sidebar-target-icon {
+  display: none;
+}
+
 .VPFooter {
   border-top: 1px solid var(--vp-c-divider);
   background: color-mix(in oklch, var(--vp-c-bg-soft) 72%, transparent);

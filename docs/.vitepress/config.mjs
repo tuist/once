@@ -1,5 +1,8 @@
 import { defineConfig } from "vitepress";
 
+const targetText = (label, icon) =>
+  `<span class="sidebar-target-link sidebar-target-link-${icon}"><span class="sidebar-target-icon" aria-hidden="true"></span><span>${label}</span></span>`;
+
 export default defineConfig({
   title: "Fabrik",
   titleTemplate: ":title | Fabrik",
@@ -53,11 +56,14 @@ export default defineConfig({
         {
           text: "Targets",
           items: [
-            { text: "Rust", link: "/targets/rust" },
-            { text: "Apple and Swift", link: "/targets/apple" },
-            { text: "Go", link: "/targets/go" },
-            { text: "Elixir", link: "/targets/elixir" },
-            { text: "Tasks", link: "/targets/tasks" },
+            { text: targetText("Rust", "rust"), link: "/targets/rust" },
+            {
+              text: targetText("Apple and Swift", "swift"),
+              link: "/targets/apple",
+            },
+            { text: targetText("Go", "go"), link: "/targets/go" },
+            { text: targetText("Elixir", "elixir"), link: "/targets/elixir" },
+            { text: targetText("Tasks", "tasks"), link: "/targets/tasks" },
           ],
         },
       ],
