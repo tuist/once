@@ -2,9 +2,15 @@
 # End-to-end specs for checked-in Apple examples.
 #
 # These specs require a real macOS toolchain (xcrun, swiftc, codesign).
-# Each case starts with `Skip if "..." apple_toolchain_unavailable` so
-# the suite stays green on non-Darwin runners without faking Xcode; the
-# simulator-launch case additionally requires a booted simulator.
+# Each case opens with `Skip if "..." apple_toolchain_unavailable` so
+# the suite stays green on non-Darwin runners without faking Xcode.
+#
+# `Skip if` only marks the example as skipped and doesn't halt the
+# shell body, so warm-up `fabrik build` invocations that need Xcode
+# would still run on a Linux runner and trip shellspec's set-e abort.
+# The cache-reuse cases therefore fold the warm-up into the `When
+# call` itself - shellspec gates the whole call when an example is
+# skipped, so the warm-up never executes on hosts that can't run it.
 
 Describe 'Apple examples'
   BeforeEach 'setup_workspace'
@@ -26,8 +32,8 @@ Describe 'Apple examples'
   It 'reuses the cache for the checked-in macOS Swift example build'
     Skip if "no apple toolchain" apple_toolchain_unavailable
     copy_examples
-    fabrik build examples/apple/macos/cli/hello >/dev/null 2>&1
-    When call fabrik build examples/apple/macos/cli/hello
+    target="examples/apple/macos/cli/hello"
+    When call sh -c "$FABRIK_BIN -C $WORKSPACE build $target >/dev/null 2>&1; $FABRIK_BIN -C $WORKSPACE build $target"
     The status should be success
     The stderr should include '3 nodes, 3 hit, 0 miss'
   End
@@ -48,8 +54,8 @@ Describe 'Apple examples'
   It 'reuses the cache for the Tuist-shaped Swift module graph'
     Skip if "no apple toolchain" apple_toolchain_unavailable
     copy_examples
-    fabrik build examples/apple/macos/tuist-shaped-swift/tuist >/dev/null 2>&1
-    When call fabrik build examples/apple/macos/tuist-shaped-swift/tuist
+    target="examples/apple/macos/tuist-shaped-swift/tuist"
+    When call sh -c "$FABRIK_BIN -C $WORKSPACE build $target >/dev/null 2>&1; $FABRIK_BIN -C $WORKSPACE build $target"
     The status should be success
     The stderr should include '13 nodes, 13 hit, 0 miss'
   End
@@ -68,8 +74,8 @@ Describe 'Apple examples'
   It 'reuses the cache for the checked-in iOS example build'
     Skip if "no apple toolchain" apple_toolchain_unavailable
     copy_examples
-    fabrik build examples/apple/ios/simulator-app/Demo >/dev/null 2>&1
-    When call fabrik build examples/apple/ios/simulator-app/Demo
+    target="examples/apple/ios/simulator-app/Demo"
+    When call sh -c "$FABRIK_BIN -C $WORKSPACE build $target >/dev/null 2>&1; $FABRIK_BIN -C $WORKSPACE build $target"
     The status should be success
     The stderr should include '1 nodes, 1 hit, 0 miss'
   End
