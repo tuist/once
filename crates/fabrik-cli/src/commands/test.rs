@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use fabrik_cas::Cas;
-use fabrik_core::{workspace_tool_env, Action, CacheState, ResourceRequest, RunOpts, Runner};
+use fabrik_core::{workspace_tool_env, Action, CacheState, ResourceRequest};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -44,7 +44,7 @@ pub async fn test(
 
     let built =
         fabrik_rust::build_plan(&targets, target_id, workspace).context("building test plan")?;
-    let runner = Runner::new(cas.clone(), workspace.to_path_buf(), RunOpts::default());
+    let runner = crate::commands::util::runner(cas, workspace);
     let build_outcomes = runner
         .run_plan(&built.plan)
         .await

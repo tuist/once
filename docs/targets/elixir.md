@@ -131,17 +131,31 @@ wrapper treats that signal exactly like "no daemon listening" and
 falls back to spawning `elixirc` directly for that one action, so a
 saturated daemon never blocks progress.
 
-The cap is informed by, but not yet directly wired into, fabrik's
-`ResourcePool`. Each elixir action still declares a default
-`ResourceRequest`, and the runner's CPU-slot pool already gates how
-many compiles fabrik launches in parallel within a single build. The
-daemon's queue adds a second, cross-build bound for the case where
-several concurrent `fabrik build` invocations on the same host
-multiplex through the same per-user daemon. A tighter integration
-that treats the daemon as a first-class shared resource is a
-follow-up; today's split (intra-build limit in fabrik, cross-build
-limit in the daemon) is enough to keep the system bounded under
-pathological load.
+The cap is wired into fabrik's `ResourcePool` via a named-slot axis.
+The elixir plugin publishes a `"elixir_compile"` slot whose pool size
+defaults to the host's CPU count (see `fabrik_elixir::ELIXIR_COMPILE_SLOT`
+and `default_compile_slot_limit`); every elixir action declares a
+`ResourceRequest` that reserves one of those slots for the duration
+of its run. The CLI passes the published pool size into every Runner
+it constructs, so `fabrik build`, `fabrik run`, and `fabrik test` all
+gate elixir-action concurrency on the same bound.
+
+The daemon's own `MAX_QUEUE` default uses the same scheduler-count
+formula, so the runner and the daemon agree on how many in-flight
+compiles the host should absorb. When several `fabrik build`
+invocations on the same host share the per-user daemon, the daemon's
+bounded queue is the cross-process backstop and the wrapper's busy
+fallback keeps individual actions moving even when the queue is
+saturated.
+
+Tuning notes for advanced operators:
+
+- Override the daemon's cap with `FABRIK_ELIXIR_DAEMON_MAX_QUEUE` at
+  daemon-start time.
+- The fabrik-side pool size is currently set from the CLI; future
+  work could lift it into `fabrik.toml` so projects can tune it
+  without rebuilding fabrik. Keep the two values aligned to avoid
+  the runner admitting more actions than the daemon will accept.
 
 ## Notes
 

@@ -128,7 +128,7 @@ impl Action {
 
     pub fn resource_request(&self) -> ResourceRequest {
         match self {
-            Action::RunCommand { resources, .. } => *resources,
+            Action::RunCommand { resources, .. } => resources.clone(),
         }
     }
 }

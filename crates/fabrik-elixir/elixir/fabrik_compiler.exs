@@ -26,10 +26,13 @@
 # counter caps the number of in-flight + pending jobs. When the cap
 # is exceeded the daemon replies with `retryable: true` immediately
 # and the client (`fabrik elixir-compile`) falls back to spawning
-# `elixirc` directly for that one action. The cap defaults to
-# 4 × the BEAM scheduler count so a single fabrik build never trips
-# it on its own; overrides come from the `FABRIK_ELIXIR_DAEMON_MAX_QUEUE`
-# env variable, set at daemon-start time.
+# `elixirc` directly for that one action. The cap defaults to the
+# BEAM scheduler count - the same value fabrik's runner uses for its
+# `ELIXIR_COMPILE_SLOT` pool - so the daemon and the scheduler agree
+# on how many concurrent compiles the host can absorb. Overrides come
+# from the `FABRIK_ELIXIR_DAEMON_MAX_QUEUE` env variable, set at
+# daemon-start time, and should be matched on the fabrik side with the
+# equivalent `with_slot_limit` if you tune one.
 
 defmodule Fabrik.CompileWorker do
   @moduledoc false
@@ -245,14 +248,16 @@ defmodule Fabrik.CompilerServer do
   end
 
   defp read_max_queue do
+    default = :erlang.system_info(:schedulers_online)
+
     case System.get_env("FABRIK_ELIXIR_DAEMON_MAX_QUEUE") do
       nil ->
-        :erlang.system_info(:schedulers_online) * 4
+        default
 
       value ->
         case Integer.parse(value) do
           {n, _} when n > 0 -> n
-          _ -> :erlang.system_info(:schedulers_online) * 4
+          _ -> default
         end
     end
   end

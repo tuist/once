@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use fabrik_cas::Cas;
-use fabrik_core::{RunOpts, Runner};
+use fabrik_core::RunOpts;
 
 use self::action::action_for;
 use self::apple_runtime::is_apple_simulator_app;
@@ -67,7 +67,7 @@ async fn run_apple_ios_app(
 ) -> Result<ExitCode> {
     let built =
         fabrik_apple::build_plan(targets, target_id, workspace).context("building app plan")?;
-    let runner = Runner::new(cas.clone(), workspace.to_path_buf(), RunOpts::default());
+    let runner = crate::commands::util::runner(cas, workspace);
     let _build_outcomes = runner
         .run_plan(&built.plan)
         .await

@@ -191,9 +191,17 @@ fn build_compile_action(
         cwd: None,
         input_digest: Some(input_digest),
         outputs,
-        resources: ResourceRequest::default(),
+        resources: elixir_resources(),
         timeout_ms: Some(300_000),
     })
+}
+
+/// Resource request shape for every elixir compile action. Reserves
+/// one CPU slot plus one [`crate::ELIXIR_COMPILE_SLOT`] so the runner
+/// bounds elixir-action fan-out by the size of the dedicated pool the
+/// CLI publishes - which matches the daemon's own bounded queue.
+fn elixir_resources() -> ResourceRequest {
+    ResourceRequest::default().with_slot(crate::ELIXIR_COMPILE_SLOT, 1)
 }
 
 /// Inputs needed to assemble an `elixir.binary` action. Grouped into
@@ -286,7 +294,7 @@ fn build_binary_action(
         cwd: None,
         input_digest: Some(input_digest),
         outputs,
-        resources: ResourceRequest::default(),
+        resources: elixir_resources(),
         timeout_ms: Some(300_000),
     })
 }
@@ -427,6 +435,26 @@ mod tests {
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
             attrs,
         }
+    }
+
+    #[test]
+    fn library_action_declares_the_elixir_compile_slot() {
+        // The runner gates elixir actions by a dedicated named-slot
+        // pool so the scheduler never admits more compiles than the
+        // daemon (or fallback elixirc parallelism) can absorb. The
+        // action's ResourceRequest is the publishing side of that
+        // contract; if this assertion drifts, the runner will silently
+        // permit unbounded fan-out again.
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "apps/greeter/lib/greeter.ex",
+            "defmodule Greeter do\nend\n",
+        );
+        let target = lib("apps/greeter", "greeter", &["lib/greeter.ex"], &[]);
+        let (node, _) = compile_target(&target, tmp.path(), &BTreeMap::new()).unwrap();
+        let Action::RunCommand { resources, .. } = &node.action;
+        assert_eq!(resources.slots.get(crate::ELIXIR_COMPILE_SLOT), Some(&1));
     }
 
     #[test]

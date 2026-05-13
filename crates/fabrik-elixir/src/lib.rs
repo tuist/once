@@ -27,3 +27,24 @@ pub mod protocol;
 pub use artifact::{ebin_dir, escript_path, BeamArtifact, ElixirKind};
 pub use compile::{compile_target, CompileError};
 pub use plan::{build_plan, supports_kind, PlanBuildError};
+
+/// Name of the shared `ResourcePool` slot that elixir compile actions
+/// consume. Published by the CLI when constructing the runner so the
+/// scheduler caps how many elixir actions can run concurrently in
+/// step with the daemon's own bounded queue. Keeping the key here
+/// rather than in fabrik-core avoids forcing the core to know about
+/// individual plugins; the CLI's plugin-wiring helper imports it.
+pub const ELIXIR_COMPILE_SLOT: &str = "elixir_compile";
+
+/// Default size of the elixir compile slot pool. Aligns with the
+/// daemon's default bounded queue so the scheduler never admits more
+/// elixir actions than the daemon would accept in one batch. Plugins
+/// that want headroom can override via the CLI; the daemon's
+/// `FABRIK_ELIXIR_DAEMON_MAX_QUEUE` env var should be set in lock
+/// step to keep the two limits aligned.
+#[must_use]
+pub fn default_compile_slot_limit() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(4)
+}
