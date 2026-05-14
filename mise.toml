@@ -14,4 +14,8 @@ erlang = "28.5"
 elixir = "1.19.5-otp-28"
 
 [env]
+CARGO_TERM_COLOR = "always"
+CARGO_INCREMENTAL = "0"
+CARGO_PROFILE_DEV_DEBUG = "line-tables-only"
+CARGO_PROFILE_TEST_DEBUG = "line-tables-only"
 RUST_BACKTRACE = "1"

@@ -10,13 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
-  CARGO_PROFILE_DEV_DEBUG: line-tables-only
-  CARGO_PROFILE_TEST_DEBUG: line-tables-only
   CARGO_NET_RETRY: "10"
   RUSTUP_MAX_RETRIES: "10"
-  RUST_BACKTRACE: "1"
 
 jobs:
   fmt:
@@ -32,7 +27,7 @@ jobs:
           cache: true
 
       - name: install rustfmt
-        run: rustup component add rustfmt
+        run: mise exec -- rustup component add rustfmt
 
       - name: cargo fmt
         run: mise exec -- cargo fmt --all -- --check
@@ -50,7 +45,7 @@ jobs:
           cache: true
 
       - name: install clippy
-        run: rustup component add clippy
+        run: mise exec -- rustup component add clippy
 
       - name: cache cargo registry, git db, and target
         uses: Swatinem/rust-cache@v2
@@ -226,7 +221,8 @@ jobs:
         run: chmod +x target/release/fabrik
 
       - name: shellspec
-        run: mise exec -- shellspec
+        run: |
+          mise exec -- bash -lc 'export PATH="$(dirname "$(mise which rustc)"):$PATH"; shellspec'
 
   windows-build:
     name: windows build
@@ -245,7 +241,6 @@ jobs:
         with:
           shared-key: windows-build
           cache-on-failure: true
-          cache-bin: true
 
       - name: cargo build
         run: cargo build --workspace --all-targets
@@ -267,7 +262,6 @@ jobs:
         with:
           shared-key: windows-cas-test
           cache-on-failure: true
-          cache-bin: true
 
       - name: cargo test
         run: cargo test -p fabrik-cas
