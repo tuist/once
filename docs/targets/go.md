@@ -25,7 +25,9 @@ fabrik deps sync go
 
 The Go sync step runs `go list -m -json all` from the directory that
 contains the declared `go.mod`. It emits a lock graph JSON file with
-module paths, versions, sums, replacements, and local path sources.
+module paths, versions, sums, replacements, and local path sources. The
+`go list` resolution action is cached from the module files in the
+workspace.
 
 ## Build Targets
 

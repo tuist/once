@@ -1,15 +1,29 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
-use fabrik_core::{workspace_tool, workspace_tool_env};
+use anyhow::{Context, Result};
+use fabrik_cas::Cas;
+use fabrik_core::{
+    workspace_tool, workspace_tool_env, Action, CacheState, ResourceRequest, WorkspacePath,
+};
+use fabrik_frontend::DependencyEntry;
 use serde::Deserialize;
-use tokio::process::Command;
 
+use super::deps::{entry_path, resolution_input_digest, run_cached_resolution, CachedResolution};
 use super::vendor_graph::{Ecosystem, ResolvedGraph, ResolvedPackage, ResolvedSource};
 
-pub(super) async fn load_graph(workspace: &Path, manifest: &Path) -> Result<ResolvedGraph> {
+pub(super) struct CachedGraph {
+    pub(super) graph: ResolvedGraph,
+    pub(super) cache: CacheState,
+}
+
+pub(super) async fn load_graph(
+    workspace: &Path,
+    cas: &Cas,
+    entry: &DependencyEntry,
+) -> Result<CachedGraph> {
     let go = workspace_tool(workspace, "go")?;
+    let manifest = entry_path(workspace, entry, &entry.manifest);
     let manifest_dir = manifest.parent().unwrap_or(workspace);
     let env = workspace_tool_env(
         workspace,
@@ -24,22 +38,46 @@ pub(super) async fn load_graph(workspace: &Path, manifest: &Path) -> Result<Reso
             "GOSUMDB",
         ],
     )?;
-    let output = Command::new(go)
-        .args(["list", "-m", "-json", "all"])
-        .env_clear()
-        .envs(env)
-        .current_dir(manifest_dir)
-        .output()
-        .await
-        .context("spawning go list")?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "go list failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    let cwd = workspace_cwd(workspace, manifest_dir)?;
+    let input_digest = resolution_input_digest(
+        workspace,
+        entry,
+        &["go.mod", "go.sum", "go.work", "go.work.sum"],
+    )?;
+    let action = Action::RunCommand {
+        argv: vec![
+            go,
+            "list".to_string(),
+            "-m".to_string(),
+            "-json".to_string(),
+            "all".to_string(),
+        ],
+        env,
+        cwd,
+        input_digest: Some(input_digest),
+        outputs: Vec::new(),
+        resources: ResourceRequest::new(1, 0),
+        timeout_ms: Some(300_000),
+    };
+    let CachedResolution { stdout, cache } =
+        run_cached_resolution(workspace, cas, action, "go list").await?;
+    Ok(CachedGraph {
+        graph: parse_go_list_modules(&stdout)?,
+        cache,
+    })
+}
+
+fn workspace_cwd(workspace: &Path, dir: &Path) -> Result<Option<WorkspacePath>> {
+    let rel = dir
+        .strip_prefix(workspace)
+        .with_context(|| format!("resolving {} against workspace", dir.display()))?;
+    if rel.as_os_str().is_empty() {
+        return Ok(None);
     }
-    parse_go_list_modules(&output.stdout)
+    let rel = rel
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    WorkspacePath::try_from(rel).map(Some).map_err(Into::into)
 }
 
 fn parse_go_list_modules(body: &[u8]) -> Result<ResolvedGraph> {

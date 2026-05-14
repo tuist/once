@@ -48,6 +48,32 @@ EOF
     The contents of file "$WORKSPACE/vendor/fabrik.rust.lock.json" should include '"kind": "path"'
   End
 
+  It 'reuses cached Rust dependency resolution'
+    mkdir -p "$WORKSPACE/src"
+    cat > "$WORKSPACE/Cargo.toml" <<'EOF'
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+EOF
+    cat > "$WORKSPACE/src/lib.rs" <<'EOF'
+pub fn app() -> &'static str { "app" }
+EOF
+    cargo generate-lockfile --manifest-path "$WORKSPACE/Cargo.toml" >/dev/null 2>&1
+    cat > "$WORKSPACE/fabrik.toml" <<'EOF'
+[[deps]]
+name = "rust_deps"
+ecosystem = "rust"
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+EOF
+
+    "$FABRIK_BIN" -C "$WORKSPACE" deps sync rust_deps >/dev/null 2>&1
+    When call "$FABRIK_BIN" -C "$WORKSPACE" deps sync rust_deps
+    The status should be success
+    The stderr should include 'resolution hit'
+  End
+
   It 'writes a declared Swift Package.resolved graph'
     cat > "$WORKSPACE/fabrik.toml" <<'EOF'
 [[deps]]
@@ -115,6 +141,39 @@ EOF
     The path "$WORKSPACE/vendor/fabrik.go.lock.json" should be file
     The contents of file "$WORKSPACE/vendor/fabrik.go.lock.json" should include '"name": "example.com/lib"'
     The contents of file "$WORKSPACE/vendor/fabrik.go.lock.json" should include '"replace"'
+  End
+
+  It 'reuses cached Go dependency resolution'
+    go_missing() { ! command -v go >/dev/null 2>&1; }
+    Skip if 'go is not installed' go_missing
+    go_missing && return 0
+
+    mkdir -p "$WORKSPACE/app" "$WORKSPACE/lib"
+    cat > "$WORKSPACE/app/go.mod" <<'EOF'
+module example.com/app
+
+go 1.22
+
+require example.com/lib v0.0.0
+
+replace example.com/lib => ../lib
+EOF
+    cat > "$WORKSPACE/lib/go.mod" <<'EOF'
+module example.com/lib
+
+go 1.22
+EOF
+    cat > "$WORKSPACE/fabrik.toml" <<'EOF'
+[[deps]]
+name = "go_deps"
+ecosystem = "go"
+manifest = "app/go.mod"
+EOF
+
+    "$FABRIK_BIN" -C "$WORKSPACE" deps sync go_deps >/dev/null 2>&1
+    When call "$FABRIK_BIN" -C "$WORKSPACE" deps sync go_deps
+    The status should be success
+    The stderr should include 'resolution hit'
   End
 
   It 'writes a declared Elixir mix.lock graph'

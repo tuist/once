@@ -5,12 +5,14 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use fabrik_core::{workspace_tool, workspace_tool_env};
+use fabrik_cas::Cas;
+use fabrik_core::{workspace_tool, workspace_tool_env, Action, CacheState, ResourceRequest};
 use fabrik_frontend::DependencyEntry;
 use serde::Deserialize;
-use tokio::process::Command;
 
-use super::deps::{entry_path, graph_output_path, SyncReport};
+use super::deps::{
+    entry_path, graph_output_path, resolution_input_digest, run_cached_resolution, SyncReport,
+};
 use super::vendor_graph::{
     write_graph_to, Ecosystem, ResolvedDependency, ResolvedGraph, ResolvedPackage, ResolvedSource,
 };
@@ -73,8 +75,12 @@ struct MetadataDepKind {
     kind: Option<String>,
 }
 
-pub(super) async fn sync(workspace: &Path, entry: &DependencyEntry) -> Result<SyncReport> {
-    let metadata = run_cargo_metadata(workspace, entry).await?;
+pub(super) async fn sync(
+    workspace: &Path,
+    cas: &Cas,
+    entry: &DependencyEntry,
+) -> Result<SyncReport> {
+    let (metadata, resolution_cache) = run_cargo_metadata(workspace, cas, entry).await?;
     let report = plan_vendor(&metadata)?;
 
     let vendor_dir = workspace.join("vendor").join(&entry.name);
@@ -99,40 +105,49 @@ pub(super) async fn sync(workspace: &Path, entry: &DependencyEntry) -> Result<Sy
         declared: Some(report.declared),
         skipped: Some(report.skipped),
         skipped_names: report.skipped_names,
+        resolution_cache: Some(resolution_cache),
     })
 }
 
-async fn run_cargo_metadata(workspace: &Path, entry: &DependencyEntry) -> Result<CargoMetadata> {
+async fn run_cargo_metadata(
+    workspace: &Path,
+    cas: &Cas,
+    entry: &DependencyEntry,
+) -> Result<(CargoMetadata, CacheState)> {
     let cargo = workspace_tool(workspace, "cargo")?;
     let manifest = entry_path(workspace, entry, &entry.manifest);
+    let manifest_arg = manifest
+        .strip_prefix(workspace)
+        .unwrap_or(&manifest)
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
     let env = workspace_tool_env(
         workspace,
         &["cargo", "rustc"],
         &["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"],
     )?;
-    let output = Command::new(cargo)
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--locked",
-            "--manifest-path",
-        ])
-        .arg(manifest)
-        .env_clear()
-        .envs(env)
-        .current_dir(workspace)
-        .output()
-        .await
-        .context("spawning cargo metadata")?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "cargo metadata failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    serde_json::from_slice(&output.stdout).context("parsing cargo metadata JSON")
+    let input_digest = resolution_input_digest(workspace, entry, &["Cargo.toml", "Cargo.lock"])?;
+    let action = Action::RunCommand {
+        argv: vec![
+            cargo,
+            "metadata".to_string(),
+            "--format-version".to_string(),
+            "1".to_string(),
+            "--locked".to_string(),
+            "--manifest-path".to_string(),
+            manifest_arg,
+        ],
+        env,
+        cwd: None,
+        input_digest: Some(input_digest),
+        outputs: Vec::new(),
+        resources: ResourceRequest::new(1, 0),
+        timeout_ms: Some(300_000),
+    };
+    let resolved = run_cached_resolution(workspace, cas, action, "cargo metadata").await?;
+    let metadata =
+        serde_json::from_slice(&resolved.stdout).context("parsing cargo metadata JSON")?;
+    Ok((metadata, resolved.cache))
 }
 
 struct VendorReport {
