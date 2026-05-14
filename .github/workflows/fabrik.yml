@@ -241,6 +241,7 @@ jobs:
         with:
           shared-key: windows-build
           cache-on-failure: true
+          cache-bin: false
 
       - name: cargo build
         run: cargo build --workspace --all-targets
@@ -262,6 +263,7 @@ jobs:
         with:
           shared-key: windows-cas-test
           cache-on-failure: true
+          cache-bin: false
 
       - name: cargo test
         run: cargo test -p fabrik-cas
