@@ -72,24 +72,36 @@ Declare Rust dependencies in the root `fabrik.toml` and run
 
 ```toml
 [[deps]]
-name = "rust_deps"
+name = "cargo"
 ecosystem = "rust"
 manifest = "Cargo.toml"
 lockfile = "Cargo.lock"
 output = "vendor/fabrik.rust.lock.json"
+
+[[rust.binary]]
+name = "server"
+srcs = ["src/main.rs"]
+deps = [
+  "crates/core/core",
+  { cargo = "serde" },
+  { cargo = "anyhow" },
+]
 ```
 
 Run it:
 
 ```sh
-fabrik deps sync rust_deps
+fabrik deps sync cargo
 ```
 
 The Rust sync step shells out to `cargo metadata --locked` for the
 declared manifest. It emits a lock graph JSON file and regenerates
-`vendor/fabrik.toml` with one granular Rust declaration per dependency
-that Fabrik can model today. Crates with `build.rs` are left commented
-out in the generated manifest until build-script wiring is complete for
+`vendor/cargo/fabrik.toml` with one granular Rust declaration per
+dependency that Fabrik can model today. The inline table entries in
+`deps` are external dependency edges: the key points to the named
+`[[deps]]` graph, and the value is the Cargo crate name consumed by
+the Rust target. Crates with `build.rs` are left commented out in the
+generated manifest until build-script wiring is complete for
 third-party graphs.
 
 ## Cache Behavior

@@ -43,7 +43,7 @@ EOF
     The stdout should include '"name":"rust_deps"'
     The stdout should include '"ecosystem":"rust"'
     The path "$WORKSPACE/vendor/fabrik.rust.lock.json" should be file
-    The path "$WORKSPACE/vendor/fabrik.toml" should be file
+    The path "$WORKSPACE/vendor/rust_deps/fabrik.toml" should be file
     The contents of file "$WORKSPACE/vendor/fabrik.rust.lock.json" should include '"name": "dep"'
     The contents of file "$WORKSPACE/vendor/fabrik.rust.lock.json" should include '"kind": "path"'
   End

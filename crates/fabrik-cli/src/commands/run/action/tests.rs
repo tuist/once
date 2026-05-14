@@ -10,6 +10,7 @@ fn target(package: &str, kind: &str, srcs: &[&str]) -> Target {
         name: "demo".into(),
         srcs: srcs.iter().map(|s| (*s).into()).collect(),
         deps: vec![],
+        external_deps: Vec::new(),
         attrs: BTreeMap::new(),
     }
 }

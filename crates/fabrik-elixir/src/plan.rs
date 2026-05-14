@@ -28,6 +28,8 @@ pub enum PlanBuildError {
         dep: String,
         kind: String,
     },
+    #[error("external deps on target {label} are not wired into elixir build actions yet")]
+    UnsupportedExternalDeps { label: String },
 }
 
 /// Quick check used by the CLI dispatcher to pick between language
@@ -70,6 +72,9 @@ pub fn build_plan(
 
     for target_idx in &order {
         let target = &targets[*target_idx];
+        if !target.external_deps.is_empty() {
+            return Err(PlanBuildError::UnsupportedExternalDeps { label: target.id() });
+        }
 
         for dep in &target.deps {
             let dep_target_idx =
@@ -180,6 +185,7 @@ mod tests {
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
     }
@@ -193,6 +199,7 @@ mod tests {
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs,
         }
     }

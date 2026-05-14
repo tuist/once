@@ -62,23 +62,41 @@ lockfile at the Mix lockfile.
 
 ```toml
 [[deps]]
-name = "elixir_deps"
+name = "mix"
 ecosystem = "elixir"
 manifest = "mix.exs"
 lockfile = "mix.lock"
 output = "vendor/fabrik.elixir.lock.json"
+
+[[elixir.library]]
+name = "web"
+srcs = ["lib/web.ex"]
+deps = [
+  { mix = "jason" },
+]
 ```
 
 Run it:
 
 ```sh
-fabrik deps sync elixir_deps
+fabrik deps sync mix
 ```
 
 The Elixir sync step reads the declared `mix.lock` file and emits a lock
 graph JSON file with Hex packages, git packages, versions, checksums,
 repositories, and dependency edges available in the lockfile. Mix still
-owns dependency resolution; Fabrik consumes the resolved lockfile.
+owns dependency resolution; Fabrik consumes the resolved lockfile. The
+inline table entries in `deps` are external dependency edges: the key
+points to the named `[[deps]]` graph, and the value is interpreted by
+the Mix adapter as the dependency consumed by the target.
+
+## Current Limits
+
+- Elixir dependency sync records graph metadata and target declarations
+  preserve `{ mix = ... }` external dependency edges.
+- Granular Elixir build actions do not yet compile Hex or git
+  dependencies into `.ebin` inputs for downstream `elixirc` actions.
+- Mix remains responsible for dependency resolution.
 
 ## XDG state layout
 

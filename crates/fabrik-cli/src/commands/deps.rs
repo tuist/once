@@ -47,7 +47,24 @@ fn selected_entries(workspace: &Path, name: Option<&str>) -> Result<Vec<Dependen
             None => Err(anyhow!("no [[deps]] declarations in fabrik.toml")),
         };
     }
+    for entry in &selected {
+        validate_entry_name(entry)?;
+    }
     Ok(selected)
+}
+
+fn validate_entry_name(entry: &DependencyEntry) -> Result<()> {
+    if entry.name.is_empty()
+        || entry.name == "."
+        || entry.name == ".."
+        || entry.name.contains(['/', '\\', ':'])
+    {
+        return Err(anyhow!(
+            "dependency entry name `{}` must be a single path segment",
+            entry.name
+        ));
+    }
+    Ok(())
 }
 
 async fn sync_entry(workspace: &Path, entry: &DependencyEntry) -> Result<SyncReport> {
@@ -101,7 +118,12 @@ pub(super) fn graph_output_path(
     default_name: &str,
 ) -> PathBuf {
     entry.output.as_ref().map_or_else(
-        || workspace.join("vendor").join(default_name),
+        || {
+            workspace
+                .join("vendor")
+                .join(&entry.name)
+                .join(default_name)
+        },
         |output| entry_path(workspace, entry, output),
     )
 }

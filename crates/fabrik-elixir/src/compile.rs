@@ -420,6 +420,7 @@ mod tests {
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
     }
@@ -433,6 +434,7 @@ mod tests {
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs,
         }
     }
@@ -546,6 +548,7 @@ mod tests {
             name: "x".into(),
             srcs: vec!["x.rb".into()],
             deps: vec![],
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         };
         let err = compile_target(&target, Path::new("/tmp"), &BTreeMap::new()).unwrap_err();

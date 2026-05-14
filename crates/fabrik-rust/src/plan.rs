@@ -29,6 +29,8 @@ pub enum PlanBuildError {
         dep: String,
         kind: String,
     },
+    #[error("external dep `{graph}` of target {label} must use a string crate name")]
+    InvalidExternalDepSpec { label: String, graph: String },
 }
 
 /// Build a plan for `root_id` from a flat target list.
@@ -78,6 +80,7 @@ pub fn build_plan(
 
     for target_idx in &order {
         let target = &targets[*target_idx];
+        let dep_ids = target_dep_ids(target)?;
 
         // cargo_build_script targets compile via a different handler
         // and have no rustc-style outputs that dependents can --extern
@@ -85,8 +88,7 @@ pub fn build_plan(
         // artifact. Treat them specially before the rust dispatch.
         if target.kind == "cargo_build_script" {
             let mut node = compile_build_script(target, workspace_root)?;
-            node.deps = target
-                .deps
+            node.deps = dep_ids
                 .iter()
                 .filter_map(|d| id_to_plan_idx.get(d).copied())
                 .collect();
@@ -122,7 +124,7 @@ pub fn build_plan(
         // Walk the target's deps; missing deps and non-rust deps
         // produce typed errors here rather than failing inside
         // compile_target.
-        for dep in &target.deps {
+        for dep in &dep_ids {
             let dep_target_idx =
                 target_index
                     .get(dep)
@@ -139,11 +141,14 @@ pub fn build_plan(
                 });
             }
         }
-        let (mut node, artifact) = compile_target(target, workspace_root, &dep_artifacts)?;
+        let mut target_for_compile = target.clone();
+        target_for_compile.deps = dep_ids.clone();
+        target_for_compile.external_deps = Vec::new();
+        let (mut node, artifact) =
+            compile_target(&target_for_compile, workspace_root, &dep_artifacts)?;
 
         // Attach plan-node deps now that we know their indices.
-        node.deps = target
-            .deps
+        node.deps = dep_ids
             .iter()
             .filter_map(|d| id_to_plan_idx.get(d).copied())
             .collect();
@@ -169,6 +174,20 @@ pub fn build_plan(
         output,
         nodes: node_info,
     })
+}
+
+fn target_dep_ids(target: &Target) -> Result<Vec<String>, PlanBuildError> {
+    let mut deps = target.deps.clone();
+    for dep in &target.external_deps {
+        let Some(crate_name) = dep.spec.as_str() else {
+            return Err(PlanBuildError::InvalidExternalDepSpec {
+                label: target.id(),
+                graph: dep.graph.clone(),
+            });
+        };
+        deps.push(format!("vendor/{}/{crate_name}", dep.graph));
+    }
+    Ok(deps)
 }
 
 /// First declared output of the root node, or empty if the plugin's
@@ -199,9 +218,9 @@ fn dfs(
         return Err(PlanBuildError::Cycle(targets[idx].id()));
     }
     on_stack.insert(idx);
-    for dep in &targets[idx].deps {
+    for dep in target_dep_ids(&targets[idx])? {
         let dep_idx = target_index
-            .get(dep)
+            .get(&dep)
             .ok_or_else(|| PlanBuildError::MissingDep {
                 label: targets[idx].id(),
                 dep: dep.clone(),
@@ -239,6 +258,7 @@ mod tests {
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
     }
@@ -250,6 +270,7 @@ mod tests {
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
     }
@@ -310,6 +331,28 @@ mod tests {
     }
 
     #[test]
+    fn external_crate_dep_lowers_to_generated_vendor_target() {
+        let tmp = TempDir::new().unwrap();
+        write(tmp.path(), "app/src/main.rs", "fn main() {}");
+        write(tmp.path(), "vendor/cargo/serde/src/lib.rs", "pub fn x() {}");
+        let mut app = bin("app", "app", &["src/main.rs"], &[]);
+        app.external_deps.push(fabrik_frontend::ExternalDependency {
+            graph: "cargo".to_string(),
+            spec: serde_json::Value::String("serde".to_string()),
+        });
+        let targets = vec![
+            lib("vendor/cargo", "serde", &["serde/src/lib.rs"], &[]),
+            app,
+        ];
+
+        let built = build_plan(&targets, "app/app", tmp.path()).unwrap();
+
+        assert_eq!(built.plan.nodes.len(), 2);
+        assert_eq!(built.nodes[0].label, "vendor/cargo/serde");
+        assert_eq!(built.plan.nodes[built.root_index].deps, vec![0]);
+    }
+
+    #[test]
     fn cargo_build_script_target_becomes_a_plan_node() {
         let tmp = TempDir::new().unwrap();
         write(tmp.path(), "pkg/build.rs", "fn main() {}");
@@ -319,6 +362,7 @@ mod tests {
             name: "build".into(),
             srcs: vec!["build.rs".into()],
             deps: vec![],
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         };
         let built = build_plan(&[target], "pkg/build", tmp.path()).unwrap();

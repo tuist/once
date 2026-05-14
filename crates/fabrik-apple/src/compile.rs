@@ -365,6 +365,7 @@ mod tests {
             name: "Demo".to_string(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: Vec::new(),
+            external_deps: Vec::new(),
             attrs,
         }
     }

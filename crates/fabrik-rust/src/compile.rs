@@ -424,6 +424,7 @@ mod tests {
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
     }
@@ -435,6 +436,7 @@ mod tests {
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
     }
@@ -496,6 +498,7 @@ mod tests {
             name: "x".into(),
             srcs: vec!["X.java".into()],
             deps: vec![],
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         };
         let err = compile_target(&target, Path::new("/tmp"), &BTreeMap::new()).unwrap_err();
@@ -531,6 +534,7 @@ mod tests {
             name: "macros".into(),
             srcs: vec!["src/lib.rs".into()],
             deps: vec![],
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         };
         let (_, pm_art) = compile_target(&pm, tmp.path(), &BTreeMap::new()).unwrap();

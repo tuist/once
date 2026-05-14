@@ -26,7 +26,7 @@ pub const BUILD_FILE_NAME: &str = TOML_BUILD_FILE_NAME;
 pub use dependency::{DependencyEcosystem, DependencyEntry};
 pub use error::{Error, Result};
 pub use manifest::{load_dependency_entries_toml_str, load_toml_str};
-pub use target::Target;
+pub use target::{ExternalDependency, Target};
 pub use target_ref::{
     absolutize, normalize_build_dep, normalize_cli_target, normalize_cli_target_from, target_id,
     validate_target_name, TargetIdError,

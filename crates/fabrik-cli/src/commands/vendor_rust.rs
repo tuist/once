@@ -77,7 +77,7 @@ pub(super) async fn sync(workspace: &Path, entry: &DependencyEntry) -> Result<Sy
     let metadata = run_cargo_metadata(workspace, entry).await?;
     let report = plan_vendor(&metadata)?;
 
-    let vendor_dir = workspace.join("vendor");
+    let vendor_dir = workspace.join("vendor").join(&entry.name);
     tokio::fs::create_dir_all(&vendor_dir)
         .await
         .with_context(|| format!("creating {}", vendor_dir.display()))?;

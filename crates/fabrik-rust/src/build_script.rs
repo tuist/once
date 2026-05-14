@@ -250,6 +250,7 @@ cargo::warning=ignored unknown directive
             name: "build".into(),
             srcs: vec!["src/lib.rs".into()],
             deps: vec![],
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         };
         let err = compile_build_script(&target, Path::new("/tmp")).unwrap_err();

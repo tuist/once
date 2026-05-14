@@ -100,29 +100,42 @@ Declare Swift dependencies in the root `fabrik.toml` and run
 
 ```toml
 [[deps]]
-name = "swift_deps"
+name = "swiftpm"
 ecosystem = "swift"
 manifest = "Package.swift"
 lockfile = "Package.resolved"
 output = "vendor/fabrik.swift.lock.json"
+
+[[apple.swift_library]]
+name = "CLI"
+srcs = ["Sources/CLI.swift"]
+deps = [
+  { swiftpm = { product = "ArgumentParser", package = "swift-argument-parser" } },
+]
 ```
 
 Run it:
 
 ```sh
-fabrik deps sync swift_deps
+fabrik deps sync swiftpm
 ```
 
 The Swift sync step reads the declared `Package.resolved` file and emits
 a lock graph JSON file. It records package identity, version, revision,
 checksum, and git or registry source data where SwiftPM includes it.
-It does not yet generate granular Swift targets from SwiftPM packages.
+The inline table entries in `deps` are external dependency edges: the
+key points to the named `[[deps]]` graph, and the value is interpreted
+by the SwiftPM adapter. Swift does not yet generate granular Swift
+targets from SwiftPM packages.
 
 ## Current Limits
 
 - Swift support currently targets host-architecture macOS builds.
 - SwiftPM package graph sync records resolved dependencies, but it
   does not yet lower packages into buildable Fabrik targets.
+- Swift target declarations preserve `{ swiftpm = ... }` external
+  dependency edges, but build actions do not yet compile SwiftPM
+  products into module or link inputs.
 - Simulator app dependencies are not wired yet.
 - Apple resource processing, asset catalogs, entitlements, and signing
   beyond simulator ad hoc signing are still future work.

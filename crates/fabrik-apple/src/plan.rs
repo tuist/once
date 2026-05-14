@@ -24,6 +24,8 @@ pub enum PlanBuildError {
         dep: String,
         kind: String,
     },
+    #[error("external deps on target {label} are not wired into Apple build actions yet")]
+    UnsupportedExternalDeps { label: String },
     #[error(transparent)]
     Apple(#[from] AppleError),
     #[error(transparent)]
@@ -82,6 +84,9 @@ pub fn build_plan(
 
     for target_idx in &order {
         let target = &targets[*target_idx];
+        if !target.external_deps.is_empty() {
+            return Err(PlanBuildError::UnsupportedExternalDeps { label: target.id() });
+        }
         validate_swift_deps(target, targets, &target_index)?;
         let (plan_idx, import_idx, artifact) = push_swift_target(
             &mut plan,
@@ -116,6 +121,9 @@ fn build_ios_plan(
     root_id: &str,
     workspace_root: &Path,
 ) -> Result<BuiltPlan, PlanBuildError> {
+    if !target.external_deps.is_empty() {
+        return Err(PlanBuildError::UnsupportedExternalDeps { label: target.id() });
+    }
     if !target.deps.is_empty() {
         return Err(PlanBuildError::UnsupportedDeps { label: target.id() });
     }
@@ -282,6 +290,7 @@ mod tests {
             name: "Demo".to_string(),
             srcs: vec!["App.swift".to_string()],
             deps: Vec::new(),
+            external_deps: Vec::new(),
             attrs,
         };
         let built = build_plan(&[target], "App/Demo", tmp.path()).unwrap();
@@ -296,6 +305,7 @@ mod tests {
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
     }

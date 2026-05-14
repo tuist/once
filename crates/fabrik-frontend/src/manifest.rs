@@ -7,7 +7,7 @@ use serde::{de::DeserializeOwned, Deserialize};
 
 use crate::dependency::{into_entries, DependencyEntry, DependencyEntryToml};
 use crate::error::{Error, Result};
-use crate::target::Target;
+use crate::target::{ExternalDependency, Target};
 use crate::target_ref::{normalize_build_dep, validate_target_name};
 
 #[derive(Debug, Default, Deserialize)]
@@ -65,7 +65,7 @@ struct ElixirTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,7 +78,7 @@ struct ElixirBinaryTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,7 +134,7 @@ struct RustTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     edition: Option<String>,
     crate_name: Option<String>,
     crate_root: Option<String>,
@@ -150,7 +150,7 @@ struct CargoBinaryTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     bin: Option<String>,
 }
 
@@ -163,7 +163,7 @@ struct CargoBuildScriptTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     crate_dir: Option<String>,
 }
 
@@ -177,7 +177,7 @@ struct AppleIosAppTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     executable_name: Option<String>,
     minimum_os: Option<String>,
     simulator: Option<String>,
@@ -194,7 +194,7 @@ struct AppleSimulatorAppTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     executable_name: Option<String>,
     minimum_os: Option<String>,
     simulator: Option<String>,
@@ -209,7 +209,7 @@ struct AppleSwiftTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     module_name: Option<String>,
     minimum_os: Option<String>,
     #[serde(default)]
@@ -225,7 +225,7 @@ struct AppleFrameworkTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     module_name: Option<String>,
     minimum_os: Option<String>,
     bundle_id: Option<String>,
@@ -247,7 +247,19 @@ struct RuleTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ManifestDep {
+    Target(String),
+    External(BTreeMap<String, toml::Value>),
+}
+
+struct NormalizedDeps {
+    local: Vec<String>,
+    external: Vec<ExternalDependency>,
 }
 
 pub fn load_toml_str(name: &str, src: &str) -> Result<Vec<Target>> {
@@ -438,12 +450,14 @@ fn elixir_target(
     package: &str,
     display_name: &str,
 ) -> Result<Target> {
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs: BTreeMap::new(),
     })
 }
@@ -456,12 +470,14 @@ fn elixir_binary_target(
 ) -> Result<Target> {
     let mut attrs = BTreeMap::new();
     attrs.insert("entry".to_string(), t.entry);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
         kind: "elixir_binary".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -477,12 +493,14 @@ fn rust_target(
     insert_opt(&mut attrs, "edition", t.edition);
     insert_opt(&mut attrs, "crate_name", t.crate_name);
     insert_opt(&mut attrs, "crate_root", t.crate_root);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -496,12 +514,14 @@ fn cargo_binary_target(
     let mut attrs = BTreeMap::new();
     attrs.insert("cargo_package".to_string(), t.cargo_package);
     insert_opt(&mut attrs, "bin", t.bin);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
         kind: "cargo_binary".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -514,12 +534,14 @@ fn cargo_build_script_target(
 ) -> Result<Target> {
     let mut attrs = BTreeMap::new();
     insert_opt(&mut attrs, "crate_dir", t.crate_dir);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
         kind: "cargo_build_script".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -536,12 +558,14 @@ fn apple_ios_app_target(
     insert_opt(&mut attrs, "minimum_os", t.minimum_os);
     insert_opt(&mut attrs, "simulator", t.simulator);
     attrs.insert("platform".to_string(), "ios".to_string());
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
         kind: "apple_ios_app".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -567,12 +591,14 @@ fn apple_simulator_app_target(
     insert_opt(&mut attrs, "executable_name", t.executable_name);
     insert_opt(&mut attrs, "minimum_os", t.minimum_os);
     insert_opt(&mut attrs, "simulator", t.simulator);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
         kind: "apple_simulator_app".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -588,12 +614,14 @@ fn apple_swift_target(
     insert_opt(&mut attrs, "module_name", t.module_name);
     insert_opt(&mut attrs, "minimum_os", t.minimum_os);
     insert_json_vec(&mut attrs, "swiftc_flags_json", &t.swiftc_flags);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -610,12 +638,14 @@ fn apple_framework_target(
     insert_opt(&mut attrs, "minimum_os", t.minimum_os);
     insert_opt(&mut attrs, "bundle_id", t.bundle_id);
     insert_json_vec(&mut attrs, "swiftc_flags_json", &t.swiftc_flags);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -769,12 +799,14 @@ fn legacy_generic_target(
     package: &str,
     display_name: &str,
 ) -> Result<Target> {
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
         kind: t.kind.expect("legacy target kind was checked"),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs: string_attrs(t.attrs, display_name)?,
     })
 }
@@ -834,6 +866,7 @@ fn task_target(
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
         deps: Vec::new(),
+        external_deps: Vec::new(),
         attrs,
     })
 }
@@ -922,15 +955,58 @@ fn checked_name(name: String, display_name: &str) -> Result<String> {
     Ok(name)
 }
 
-fn normalize_deps(deps: Vec<String>, package: &str, display_name: &str) -> Result<Vec<String>> {
-    deps.into_iter()
-        .map(|dep| {
-            normalize_build_dep(package, &dep).map_err(|e| Error::Eval {
-                path: display_name.to_string(),
-                message: e.to_string(),
-            })
-        })
-        .collect()
+fn normalize_deps(
+    deps: Vec<ManifestDep>,
+    package: &str,
+    display_name: &str,
+) -> Result<NormalizedDeps> {
+    let mut local = Vec::new();
+    let mut external = Vec::new();
+    for dep in deps {
+        match dep {
+            ManifestDep::Target(dep) => {
+                local.push(normalize_build_dep(package, &dep).map_err(|e| Error::Eval {
+                    path: display_name.to_string(),
+                    message: e.to_string(),
+                })?);
+            }
+            ManifestDep::External(dep) => {
+                let mut entries = dep.into_iter();
+                let Some((graph, spec)) = entries.next() else {
+                    return Err(Error::Eval {
+                        path: display_name.to_string(),
+                        message: "external dependency entry must name one dependency graph"
+                            .to_string(),
+                    });
+                };
+                if entries.next().is_some() {
+                    return Err(Error::Eval {
+                        path: display_name.to_string(),
+                        message: format!(
+                            "external dependency entry for `{graph}` must name only one dependency graph"
+                        ),
+                    });
+                }
+                if !is_dependency_graph_name(&graph) {
+                    return Err(Error::Eval {
+                        path: display_name.to_string(),
+                        message: format!(
+                            "external dependency graph name `{graph}` must be a single path segment"
+                        ),
+                    });
+                }
+                external.push(ExternalDependency {
+                    graph,
+                    spec: serde_json::to_value(spec).expect("TOML values are serializable"),
+                });
+            }
+        }
+    }
+    Ok(NormalizedDeps { local, external })
+}
+
+fn is_dependency_graph_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':'])
 }
 
 const fn default_true() -> bool {
@@ -1054,6 +1130,58 @@ edition = "2021"
         assert_eq!(targets[0].srcs, vec!["src/lib.rs".to_string()]);
         assert_eq!(targets[1].kind, "rust_binary");
         assert_eq!(targets[1].deps, vec!["core".to_string()]);
+    }
+
+    #[test]
+    fn loads_external_dependency_edges_from_toml() {
+        let targets = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[rust.binary]]
+name = "cli"
+srcs = ["src/main.rs"]
+deps = [
+  "core",
+  { cargo = "serde" },
+  { swiftpm = { product = "ArgumentParser", package = "swift-argument-parser" } },
+]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(targets[0].deps, vec!["core".to_string()]);
+        assert_eq!(targets[0].external_deps.len(), 2);
+        assert_eq!(targets[0].external_deps[0].graph, "cargo");
+        assert_eq!(
+            targets[0].external_deps[0].spec,
+            serde_json::Value::String("serde".to_string())
+        );
+        assert_eq!(targets[0].external_deps[1].graph, "swiftpm");
+        assert_eq!(
+            targets[0].external_deps[1].spec["product"],
+            serde_json::Value::String("ArgumentParser".to_string())
+        );
+        assert_eq!(
+            targets[0].external_deps[1].spec["package"],
+            serde_json::Value::String("swift-argument-parser".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_external_dependency_edges_with_multiple_graphs() {
+        let err = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[rust.binary]]
+name = "cli"
+srcs = ["src/main.rs"]
+deps = [{ cargo = "serde", pnpm = "react" }]
+"#,
+        )
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("must name only one dependency graph"));
     }
 
     #[test]
