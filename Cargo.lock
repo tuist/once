@@ -235,6 +235,7 @@ dependencies = [
  "fabrik-core",
  "fabrik-elixir",
  "fabrik-frontend",
+ "fabrik-go",
  "fabrik-rust",
  "serde",
  "serde_json",
@@ -287,6 +288,18 @@ dependencies = [
  "thiserror",
  "toml",
  "walkdir",
+]
+
+[[package]]
+name = "fabrik-go"
+version = "0.0.0"
+dependencies = [
+ "fabrik-cas",
+ "fabrik-core",
+ "fabrik-frontend",
+ "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

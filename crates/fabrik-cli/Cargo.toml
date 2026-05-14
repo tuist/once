@@ -16,6 +16,7 @@ fabrik-apple.workspace = true
 fabrik-core.workspace = true
 fabrik-elixir.workspace = true
 fabrik-frontend.workspace = true
+fabrik-go.workspace = true
 fabrik-rust.workspace = true
 
 anyhow.workspace = true

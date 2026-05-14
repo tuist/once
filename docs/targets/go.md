@@ -1,7 +1,8 @@
 # Go
 
-Fabrik does not have granular Go build targets yet. The current Go
-support is dependency graph sync through `fabrik deps sync`.
+Fabrik supports dependency graph sync through `fabrik deps sync` and a
+cacheable `go.binary` rule that delegates module resolution to the Go
+toolchain.
 
 ## Dependency Sync
 
@@ -25,25 +26,28 @@ fabrik deps sync go
 The Go sync step runs `go list -m -json all` from the directory that
 contains the declared `go.mod`. It emits a lock graph JSON file with
 module paths, versions, sums, replacements, and local path sources.
-Future Go targets will use the same target-side dependency edge shape
-as other ecosystems:
+
+## Build Targets
+
+Use `go.binary` for command packages. The action runs `go build` from
+the directory containing the target's `fabrik.toml`, so `go.mod`,
+`go.sum`, `replace`, and workspace behavior stay native to Go.
 
 ```toml
-deps = [
-  "libs/common/common",
-  { go = "github.com/acme/lib/subpkg" },
-]
+[[go.binary]]
+name = "server"
+srcs = ["go.mod", "go.sum", "main.go"]
+deps = [{ go = "github.com/acme/lib/subpkg" }]
 ```
 
 The inline table key points to the named `[[deps]]` graph. The value is
 interpreted by the Go adapter as the module package imported by the
-target.
+target, and is included in the action cache key. The actual module
+selection remains owned by `go build`.
 
 ## Current Limits
 
-- Go dependency sync only produces dependency graph metadata today.
-- Go target declarations can preserve `{ go = ... }` external
-  dependency edges once Go rules exist.
-- Fabrik does not yet generate Go build targets or invoke the Go
-  compiler through cacheable granular actions.
+- `go.binary` delegates the full package graph to `go build`; Fabrik
+  does not split Go packages into separate granular actions yet.
+- Local Fabrik target deps on `go.binary` are not wired yet.
 - Go module resolution remains owned by the Go toolchain.

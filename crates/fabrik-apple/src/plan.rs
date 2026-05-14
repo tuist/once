@@ -24,8 +24,10 @@ pub enum PlanBuildError {
         dep: String,
         kind: String,
     },
-    #[error("external deps on target {label} are not wired into Apple build actions yet")]
-    UnsupportedExternalDeps { label: String },
+    #[error(
+        "external dep `{graph}` of target {label} must use a string product name or product object"
+    )]
+    InvalidExternalDepSpec { label: String, graph: String },
     #[error(transparent)]
     Apple(#[from] AppleError),
     #[error(transparent)]
@@ -84,14 +86,15 @@ pub fn build_plan(
 
     for target_idx in &order {
         let target = &targets[*target_idx];
-        if !target.external_deps.is_empty() {
-            return Err(PlanBuildError::UnsupportedExternalDeps { label: target.id() });
-        }
-        validate_swift_deps(target, targets, &target_index)?;
+        let dep_ids = target_dep_ids(target)?;
+        validate_swift_deps(target, &dep_ids, targets, &target_index)?;
+        let mut target_for_compile = target.clone();
+        target_for_compile.deps = dep_ids;
+        target_for_compile.external_deps = Vec::new();
         let (plan_idx, import_idx, artifact) = push_swift_target(
             &mut plan,
             &mut nodes,
-            target,
+            &target_for_compile,
             workspace_root,
             &dep_artifacts,
             &id_to_plan_idx,
@@ -121,10 +124,8 @@ fn build_ios_plan(
     root_id: &str,
     workspace_root: &Path,
 ) -> Result<BuiltPlan, PlanBuildError> {
-    if !target.external_deps.is_empty() {
-        return Err(PlanBuildError::UnsupportedExternalDeps { label: target.id() });
-    }
-    if !target.deps.is_empty() {
+    let dep_ids = target_dep_ids(target)?;
+    if !dep_ids.is_empty() {
         return Err(PlanBuildError::UnsupportedDeps { label: target.id() });
     }
     let node = compile_ios_app(target, workspace_root)?;
@@ -145,10 +146,11 @@ fn build_ios_plan(
 
 fn validate_swift_deps(
     target: &Target,
+    dep_ids: &[String],
     targets: &[Target],
     target_index: &HashMap<String, usize>,
 ) -> Result<(), PlanBuildError> {
-    for dep in &target.deps {
+    for dep in dep_ids {
         let dep_target_idx = target_index
             .get(dep)
             .ok_or_else(|| PlanBuildError::MissingDep {
@@ -165,6 +167,25 @@ fn validate_swift_deps(
         }
     }
     Ok(())
+}
+
+fn target_dep_ids(target: &Target) -> Result<Vec<String>, PlanBuildError> {
+    let mut deps = target.deps.clone();
+    for dep in &target.external_deps {
+        let Some(product_name) = swift_product_name(&dep.spec) else {
+            return Err(PlanBuildError::InvalidExternalDepSpec {
+                label: target.id(),
+                graph: dep.graph.clone(),
+            });
+        };
+        deps.push(format!("vendor/{}/{product_name}", dep.graph));
+    }
+    Ok(deps)
+}
+
+fn swift_product_name(spec: &serde_json::Value) -> Option<&str> {
+    spec.as_str()
+        .or_else(|| spec.get("product").and_then(serde_json::Value::as_str))
 }
 
 fn push_swift_target(
@@ -248,9 +269,9 @@ fn dfs(
         return Err(PlanBuildError::Cycle(targets[idx].id()));
     }
     on_stack.insert(idx);
-    for dep in &targets[idx].deps {
+    for dep in target_dep_ids(&targets[idx])? {
         let dep_idx = target_index
-            .get(dep)
+            .get(&dep)
             .ok_or_else(|| PlanBuildError::MissingDep {
                 label: targets[idx].id(),
                 dep: dep.clone(),
@@ -350,5 +371,46 @@ mod tests {
         assert_eq!(built.nodes[3].label, "Mid/Mid#archive");
         assert_eq!(built.nodes[3].kind, "swift_archive");
         assert_eq!(built.nodes[4].kind, "macos_command_line_application");
+    }
+
+    #[test]
+    fn external_swiftpm_dep_lowers_to_generated_vendor_target() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("App")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("vendor/swiftpm")).unwrap();
+        std::fs::write(tmp.path().join("App/main.swift"), "import ArgumentParser").unwrap();
+        std::fs::write(
+            tmp.path().join("vendor/swiftpm/ArgumentParser.swift"),
+            "public struct Parser {}",
+        )
+        .unwrap();
+        let vendor = swift_target(
+            "vendor/swiftpm",
+            "swift_library",
+            "ArgumentParser",
+            &["ArgumentParser.swift"],
+            &[],
+        );
+        let mut app = swift_target(
+            "App",
+            "macos_command_line_application",
+            "app",
+            &["main.swift"],
+            &[],
+        );
+        app.external_deps.push(fabrik_frontend::ExternalDependency {
+            graph: "swiftpm".to_string(),
+            spec: serde_json::json!({
+                "package": "swift-argument-parser",
+                "product": "ArgumentParser",
+            }),
+        });
+        let built = build_plan(&[vendor, app], "App/app", tmp.path()).unwrap();
+
+        assert_eq!(
+            built.nodes[0].label,
+            "vendor/swiftpm/ArgumentParser#compile"
+        );
+        assert_eq!(built.plan.nodes[built.root_index].deps, vec![1]);
     }
 }

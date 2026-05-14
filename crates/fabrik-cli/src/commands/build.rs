@@ -131,6 +131,8 @@ fn build_plan(
         Ok(fabrik_apple::build_plan(targets, target_id, workspace)?)
     } else if fabrik_elixir::supports_kind(&target.kind) {
         Ok(fabrik_elixir::build_plan(targets, target_id, workspace)?)
+    } else if fabrik_go::supports_kind(&target.kind) {
+        Ok(fabrik_go::build_plan(targets, target_id, workspace)?)
     } else {
         Ok(fabrik_rust::build_plan(targets, target_id, workspace)?)
     }

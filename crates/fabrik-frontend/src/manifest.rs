@@ -15,6 +15,7 @@ use crate::target_ref::{normalize_build_dep, validate_target_name};
 struct Manifest {
     rust: RustSection,
     cargo: CargoSection,
+    go: GoSection,
     apple: AppleSection,
     elixir: ElixirSection,
     deps: Vec<DependencyEntryToml>,
@@ -36,6 +37,12 @@ struct RustSection {
 struct CargoSection {
     binary: Vec<CargoBinaryTarget>,
     build_script: Vec<CargoBuildScriptTarget>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct GoSection {
+    binary: Vec<GoTarget>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -169,6 +176,19 @@ struct CargoBuildScriptTarget {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct GoTarget {
+    name: String,
+    #[serde(default)]
+    srcs: Vec<String>,
+    #[serde(default)]
+    src_globs: Vec<String>,
+    #[serde(default)]
+    deps: Vec<ManifestDep>,
+    package: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AppleIosAppTarget {
     name: String,
     bundle_id: String,
@@ -284,6 +304,7 @@ pub(crate) fn load_toml_with(
 
     push_rust_targets(&mut targets, manifest.rust, workspace_root, package, name)?;
     push_cargo_targets(&mut targets, manifest.cargo, workspace_root, package, name)?;
+    push_go_targets(&mut targets, manifest.go, workspace_root, package, name)?;
     push_apple_targets(&mut targets, manifest.apple, workspace_root, package, name)?;
     push_elixir_targets(&mut targets, manifest.elixir, workspace_root, package, name)?;
     for t in manifest.task {
@@ -360,6 +381,19 @@ fn push_cargo_targets(
     }
     for t in cargo.build_script {
         targets.push(cargo_build_script_target(t, workspace_root, package, name)?);
+    }
+    Ok(())
+}
+
+fn push_go_targets(
+    targets: &mut Vec<Target>,
+    go: GoSection,
+    workspace_root: &Path,
+    package: &str,
+    name: &str,
+) -> Result<()> {
+    for t in go.binary {
+        targets.push(go_binary_target(t, workspace_root, package, name)?);
     }
     Ok(())
 }
@@ -538,6 +572,26 @@ fn cargo_build_script_target(
     Ok(Target {
         package: package.to_string(),
         kind: "cargo_build_script".to_string(),
+        name: checked_name(t.name, display_name)?,
+        srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
+        attrs,
+    })
+}
+
+fn go_binary_target(
+    t: GoTarget,
+    workspace_root: &Path,
+    package: &str,
+    display_name: &str,
+) -> Result<Target> {
+    let mut attrs = BTreeMap::new();
+    insert_opt(&mut attrs, "package", t.package);
+    let deps = normalize_deps(t.deps, package, display_name)?;
+    Ok(Target {
+        package: package.to_string(),
+        kind: "go_binary".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
         deps: deps.local,
@@ -728,6 +782,12 @@ fn builtin_rule_target(
             display_name,
         ),
         "cargo.build_script" => cargo_build_script_target(
+            decode_rule_attrs(&name, attrs, display_name)?,
+            workspace_root,
+            package,
+            display_name,
+        ),
+        "go.binary" => go_binary_target(
             decode_rule_attrs(&name, attrs, display_name)?,
             workspace_root,
             package,
@@ -1165,6 +1225,30 @@ deps = [
             targets[0].external_deps[1].spec["package"],
             serde_json::Value::String("swift-argument-parser".to_string())
         );
+    }
+
+    #[test]
+    fn loads_go_binary_target() {
+        let targets = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[go.binary]]
+name = "server"
+package = "./cmd/server"
+srcs = ["go.mod", "cmd/server/main.go"]
+deps = [{ go = "github.com/acme/lib" }]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].kind, "go_binary");
+        assert_eq!(targets[0].attrs["package"], "./cmd/server");
+        assert_eq!(
+            targets[0].srcs,
+            vec!["cmd/server/main.go".to_string(), "go.mod".to_string()]
+        );
+        assert_eq!(targets[0].external_deps[0].graph, "go");
     }
 
     #[test]

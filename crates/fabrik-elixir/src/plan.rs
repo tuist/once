@@ -28,8 +28,8 @@ pub enum PlanBuildError {
         dep: String,
         kind: String,
     },
-    #[error("external deps on target {label} are not wired into elixir build actions yet")]
-    UnsupportedExternalDeps { label: String },
+    #[error("external dep `{graph}` of target {label} must use a string package name")]
+    InvalidExternalDepSpec { label: String, graph: String },
 }
 
 /// Quick check used by the CLI dispatcher to pick between language
@@ -72,11 +72,9 @@ pub fn build_plan(
 
     for target_idx in &order {
         let target = &targets[*target_idx];
-        if !target.external_deps.is_empty() {
-            return Err(PlanBuildError::UnsupportedExternalDeps { label: target.id() });
-        }
+        let dep_ids = target_dep_ids(target)?;
 
-        for dep in &target.deps {
+        for dep in &dep_ids {
             let dep_target_idx =
                 target_index
                     .get(dep)
@@ -94,9 +92,12 @@ pub fn build_plan(
             }
         }
 
-        let (mut node, artifact) = compile_target(target, workspace_root, &dep_artifacts)?;
-        node.deps = target
-            .deps
+        let mut target_for_compile = target.clone();
+        target_for_compile.deps.clone_from(&dep_ids);
+        target_for_compile.external_deps = Vec::new();
+        let (mut node, artifact) =
+            compile_target(&target_for_compile, workspace_root, &dep_artifacts)?;
+        node.deps = dep_ids
             .iter()
             .filter_map(|d| id_to_plan_idx.get(d).copied())
             .collect();
@@ -133,6 +134,20 @@ fn root_output_path(node: &fabrik_core::PlanNode) -> String {
     }
 }
 
+fn target_dep_ids(target: &Target) -> Result<Vec<String>, PlanBuildError> {
+    let mut deps = target.deps.clone();
+    for dep in &target.external_deps {
+        let Some(package_name) = dep.spec.as_str() else {
+            return Err(PlanBuildError::InvalidExternalDepSpec {
+                label: target.id(),
+                graph: dep.graph.clone(),
+            });
+        };
+        deps.push(format!("vendor/{}/{package_name}", dep.graph));
+    }
+    Ok(deps)
+}
+
 fn dfs(
     idx: usize,
     targets: &[Target],
@@ -148,9 +163,9 @@ fn dfs(
         return Err(PlanBuildError::Cycle(targets[idx].id()));
     }
     on_stack.insert(idx);
-    for dep in &targets[idx].deps {
+    for dep in target_dep_ids(&targets[idx])? {
         let dep_idx = target_index
-            .get(dep)
+            .get(&dep)
             .ok_or_else(|| PlanBuildError::MissingDep {
                 label: targets[idx].id(),
                 dep: dep.clone(),
@@ -271,6 +286,32 @@ mod tests {
         let built = build_plan(&targets, "a/a", tmp.path()).unwrap();
         assert_eq!(built.plan.nodes.len(), 1);
         assert_eq!(built.plan.nodes[0].label, "a/a");
+    }
+
+    #[test]
+    fn external_mix_dep_lowers_to_generated_vendor_target() {
+        let tmp = TempDir::new().unwrap();
+        write(tmp.path(), "app/lib/app.ex", "defmodule App do\nend\n");
+        write(
+            tmp.path(),
+            "vendor/mix/decimal/lib/decimal.ex",
+            "defmodule Decimal do\nend\n",
+        );
+        let mut app = lib("app", "app", &["lib/app.ex"], &[]);
+        app.external_deps.push(fabrik_frontend::ExternalDependency {
+            graph: "mix".to_string(),
+            spec: serde_json::Value::String("decimal".to_string()),
+        });
+        let targets = vec![
+            lib("vendor/mix", "decimal", &["decimal/lib/decimal.ex"], &[]),
+            app,
+        ];
+
+        let built = build_plan(&targets, "app/app", tmp.path()).unwrap();
+
+        assert_eq!(built.plan.nodes.len(), 2);
+        assert_eq!(built.nodes[0].label, "vendor/mix/decimal");
+        assert_eq!(built.plan.nodes[built.root_index].deps, vec![0]);
     }
 
     #[test]

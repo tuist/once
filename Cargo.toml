@@ -7,6 +7,7 @@ members = [
     "crates/fabrik-apple",
     "crates/fabrik-elixir",
     "crates/fabrik-frontend",
+    "crates/fabrik-go",
     "crates/fabrik-rust",
 ]
 
@@ -23,6 +24,7 @@ fabrik-cas = { path = "crates/fabrik-cas" }
 fabrik-apple = { path = "crates/fabrik-apple" }
 fabrik-elixir = { path = "crates/fabrik-elixir" }
 fabrik-frontend = { path = "crates/fabrik-frontend" }
+fabrik-go = { path = "crates/fabrik-go" }
 fabrik-rust = { path = "crates/fabrik-rust" }
 
 anyhow = "1"
