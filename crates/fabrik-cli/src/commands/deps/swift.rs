@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use super::vendor_graph::{Ecosystem, ResolvedGraph, ResolvedPackage, ResolvedSource};
+use super::graph::{Ecosystem, ResolvedGraph, ResolvedPackage, ResolvedSource};
 
 pub(super) async fn load_graph(lockfile: &Path) -> Result<ResolvedGraph> {
     let body = tokio::fs::read_to_string(lockfile)

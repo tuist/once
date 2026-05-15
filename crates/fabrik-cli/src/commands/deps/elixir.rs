@@ -3,9 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::vendor_graph::{
-    Ecosystem, ResolvedDependency, ResolvedGraph, ResolvedPackage, ResolvedSource,
-};
+use super::graph::{Ecosystem, ResolvedDependency, ResolvedGraph, ResolvedPackage, ResolvedSource};
 
 pub(super) async fn load_graph(lockfile: &Path) -> Result<ResolvedGraph> {
     let body = tokio::fs::read_to_string(lockfile)

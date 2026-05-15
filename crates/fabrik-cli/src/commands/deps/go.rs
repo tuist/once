@@ -9,8 +9,8 @@ use fabrik_core::{
 use fabrik_frontend::DependencyEntry;
 use serde::Deserialize;
 
-use super::deps::{entry_path, resolution_input_digest, run_cached_resolution, CachedResolution};
-use super::vendor_graph::{Ecosystem, ResolvedGraph, ResolvedPackage, ResolvedSource};
+use super::graph::{Ecosystem, ResolvedGraph, ResolvedPackage, ResolvedSource};
+use super::{entry_path, resolution_input_digest, run_cached_resolution, CachedResolution};
 
 pub(super) struct CachedGraph {
     pub(super) graph: ResolvedGraph,

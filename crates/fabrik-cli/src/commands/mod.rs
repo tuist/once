@@ -16,8 +16,3 @@ pub mod targets;
 pub mod test;
 pub mod toolchain;
 pub mod util;
-mod vendor_elixir;
-mod vendor_go;
-mod vendor_graph;
-mod vendor_rust;
-mod vendor_swift;

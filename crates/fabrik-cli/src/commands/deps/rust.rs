@@ -10,11 +10,11 @@ use fabrik_core::{workspace_tool, workspace_tool_env, Action, CacheState, Resour
 use fabrik_frontend::DependencyEntry;
 use serde::Deserialize;
 
-use super::deps::{
-    entry_path, graph_output_path, resolution_input_digest, run_cached_resolution, SyncReport,
-};
-use super::vendor_graph::{
+use super::graph::{
     write_graph_to, Ecosystem, ResolvedDependency, ResolvedGraph, ResolvedPackage, ResolvedSource,
+};
+use super::{
+    entry_path, graph_output_path, resolution_input_digest, run_cached_resolution, SyncReport,
 };
 
 #[derive(Deserialize)]
