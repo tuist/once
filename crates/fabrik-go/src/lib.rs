@@ -22,8 +22,12 @@ pub enum PlanBuildError {
     UnsupportedKind { label: String, kind: String },
     #[error("go_binary target {label} does not support local Fabrik deps yet")]
     UnsupportedLocalDeps { label: String },
-    #[error("external dep `{graph}` of target {label} must use a string module path")]
-    InvalidExternalDepSpec { label: String, graph: String },
+    #[error("external dep `{graph}` of target {label} must use a string module path, got {spec}")]
+    InvalidExternalDepSpec {
+        label: String,
+        graph: String,
+        spec: String,
+    },
     #[error(transparent)]
     Compile(#[from] CompileError),
 }
@@ -97,6 +101,7 @@ fn validate_external_deps(target: &Target) -> Result<(), PlanBuildError> {
             return Err(PlanBuildError::InvalidExternalDepSpec {
                 label: target.id(),
                 graph: dep.graph.clone(),
+                spec: dep.spec.to_string(),
             });
         }
     }
@@ -312,8 +317,10 @@ mod tests {
         let err = build_plan(&[target], "cmd/app/app", tmp.path()).unwrap_err();
         assert!(matches!(
             err,
-            PlanBuildError::InvalidExternalDepSpec { label, graph }
-                if label == "cmd/app/app" && graph == "go"
+            PlanBuildError::InvalidExternalDepSpec { label, graph, spec }
+                if label == "cmd/app/app"
+                    && graph == "go"
+                    && spec == r#"{"module":"github.com/acme/lib"}"#
         ));
     }
 

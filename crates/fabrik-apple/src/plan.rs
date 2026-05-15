@@ -63,6 +63,7 @@ pub fn build_plan(
     if kind == AppleKind::SimulatorApp {
         return build_ios_plan(target, root_id, workspace_root);
     }
+    let deps_by_target = target_dep_ids(targets)?;
 
     let mut order = Vec::new();
     let mut on_stack = BTreeSet::new();
@@ -70,6 +71,7 @@ pub fn build_plan(
     dfs(
         root_target_idx,
         targets,
+        &deps_by_target,
         &target_index,
         &mut visited,
         &mut on_stack,
@@ -86,10 +88,10 @@ pub fn build_plan(
 
     for target_idx in &order {
         let target = &targets[*target_idx];
-        let dep_ids = target_dep_ids(target)?;
-        validate_swift_deps(target, &dep_ids, targets, &target_index)?;
+        let deps = &deps_by_target[*target_idx];
+        validate_swift_deps(target, deps, targets, &target_index)?;
         let mut target_for_compile = target.clone();
-        target_for_compile.deps = dep_ids;
+        target_for_compile.deps.clone_from(deps);
         target_for_compile.external_deps = Vec::new();
         let (plan_idx, import_idx, artifact) = push_swift_target(
             &mut plan,
@@ -124,7 +126,7 @@ fn build_ios_plan(
     root_id: &str,
     workspace_root: &Path,
 ) -> Result<BuiltPlan, PlanBuildError> {
-    let dep_ids = target_dep_ids(target)?;
+    let dep_ids = target_dep_id(target)?;
     if !dep_ids.is_empty() {
         return Err(PlanBuildError::UnsupportedDeps { label: target.id() });
     }
@@ -169,7 +171,11 @@ fn validate_swift_deps(
     Ok(())
 }
 
-fn target_dep_ids(target: &Target) -> Result<Vec<String>, PlanBuildError> {
+fn target_dep_ids(targets: &[Target]) -> Result<Vec<Vec<String>>, PlanBuildError> {
+    targets.iter().map(target_dep_id).collect()
+}
+
+fn target_dep_id(target: &Target) -> Result<Vec<String>, PlanBuildError> {
     let mut deps = target.deps.clone();
     for dep in &target.external_deps {
         let Some(product_name) = swift_product_name(&dep.spec) else {
@@ -257,6 +263,7 @@ fn push_swift_target(
 fn dfs(
     idx: usize,
     targets: &[Target],
+    deps_by_target: &[Vec<String>],
     target_index: &HashMap<String, usize>,
     visited: &mut BTreeSet<usize>,
     on_stack: &mut BTreeSet<usize>,
@@ -269,16 +276,24 @@ fn dfs(
         return Err(PlanBuildError::Cycle(targets[idx].id()));
     }
     on_stack.insert(idx);
-    for dep in target_dep_ids(&targets[idx])? {
+    for dep in &deps_by_target[idx] {
         let dep_idx = target_index
-            .get(&dep)
+            .get(dep)
             .ok_or_else(|| PlanBuildError::MissingDep {
                 label: targets[idx].id(),
                 dep: dep.clone(),
             })?;
         let dep_kind = &targets[*dep_idx].kind;
         if supports_kind(dep_kind) && !is_simulator_app_kind(dep_kind) {
-            dfs(*dep_idx, targets, target_index, visited, on_stack, order)?;
+            dfs(
+                *dep_idx,
+                targets,
+                deps_by_target,
+                target_index,
+                visited,
+                on_stack,
+                order,
+            )?;
         }
     }
     on_stack.remove(&idx);

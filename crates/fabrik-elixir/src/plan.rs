@@ -51,6 +51,7 @@ pub fn build_plan(
     let root_target_idx = *target_index
         .get(root_id)
         .ok_or_else(|| PlanBuildError::UnknownRoot(root_id.to_string()))?;
+    let deps_by_target = target_dep_ids(targets)?;
 
     let mut order: Vec<usize> = Vec::new();
     let mut on_stack: BTreeSet<usize> = BTreeSet::new();
@@ -58,6 +59,7 @@ pub fn build_plan(
     dfs(
         root_target_idx,
         targets,
+        &deps_by_target,
         &target_index,
         &mut visited,
         &mut on_stack,
@@ -72,9 +74,9 @@ pub fn build_plan(
 
     for target_idx in &order {
         let target = &targets[*target_idx];
-        let dep_ids = target_dep_ids(target)?;
+        let deps = &deps_by_target[*target_idx];
 
-        for dep in &dep_ids {
+        for dep in deps {
             let dep_target_idx =
                 target_index
                     .get(dep)
@@ -93,11 +95,11 @@ pub fn build_plan(
         }
 
         let mut target_for_compile = target.clone();
-        target_for_compile.deps.clone_from(&dep_ids);
+        target_for_compile.deps.clone_from(deps);
         target_for_compile.external_deps = Vec::new();
         let (mut node, artifact) =
             compile_target(&target_for_compile, workspace_root, &dep_artifacts)?;
-        node.deps = dep_ids
+        node.deps = deps
             .iter()
             .filter_map(|d| id_to_plan_idx.get(d).copied())
             .collect();
@@ -134,7 +136,11 @@ fn root_output_path(node: &fabrik_core::PlanNode) -> String {
     }
 }
 
-fn target_dep_ids(target: &Target) -> Result<Vec<String>, PlanBuildError> {
+fn target_dep_ids(targets: &[Target]) -> Result<Vec<Vec<String>>, PlanBuildError> {
+    targets.iter().map(target_dep_id).collect()
+}
+
+fn target_dep_id(target: &Target) -> Result<Vec<String>, PlanBuildError> {
     let mut deps = target.deps.clone();
     for dep in &target.external_deps {
         let Some(package_name) = dep.spec.as_str() else {
@@ -151,6 +157,7 @@ fn target_dep_ids(target: &Target) -> Result<Vec<String>, PlanBuildError> {
 fn dfs(
     idx: usize,
     targets: &[Target],
+    deps_by_target: &[Vec<String>],
     target_index: &HashMap<String, usize>,
     visited: &mut BTreeSet<usize>,
     on_stack: &mut BTreeSet<usize>,
@@ -163,16 +170,24 @@ fn dfs(
         return Err(PlanBuildError::Cycle(targets[idx].id()));
     }
     on_stack.insert(idx);
-    for dep in target_dep_ids(&targets[idx])? {
+    for dep in &deps_by_target[idx] {
         let dep_idx = target_index
-            .get(&dep)
+            .get(dep)
             .ok_or_else(|| PlanBuildError::MissingDep {
                 label: targets[idx].id(),
                 dep: dep.clone(),
             })?;
         let dep_kind = &targets[*dep_idx].kind;
         if ElixirKind::parse(dep_kind).is_some() {
-            dfs(*dep_idx, targets, target_index, visited, on_stack, order)?;
+            dfs(
+                *dep_idx,
+                targets,
+                deps_by_target,
+                target_index,
+                visited,
+                on_stack,
+                order,
+            )?;
         }
     }
     on_stack.remove(&idx);
