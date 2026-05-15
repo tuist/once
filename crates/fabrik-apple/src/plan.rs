@@ -331,6 +331,14 @@ mod tests {
         }
     }
 
+    fn dependency_labels(built: &BuiltPlan, node_index: usize) -> Vec<&str> {
+        built.plan.nodes[node_index]
+            .deps
+            .iter()
+            .map(|index| built.nodes[*index].label.as_str())
+            .collect()
+    }
+
     #[test]
     fn builds_swift_dependency_graph() {
         let tmp = TempDir::new().unwrap();
@@ -374,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn external_swiftpm_dep_lowers_to_generated_vendor_target() {
+    fn external_swiftpm_product_depends_on_generated_vendor_target() {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("App")).unwrap();
         std::fs::create_dir_all(tmp.path().join("vendor/swiftpm")).unwrap();
@@ -408,9 +416,20 @@ mod tests {
         let built = build_plan(&[vendor, app], "App/app", tmp.path()).unwrap();
 
         assert_eq!(
-            built.nodes[0].label,
-            "vendor/swiftpm/ArgumentParser#compile"
+            built
+                .nodes
+                .iter()
+                .map(|node| node.label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "vendor/swiftpm/ArgumentParser#compile",
+                "vendor/swiftpm/ArgumentParser#archive",
+                "App/app",
+            ]
         );
-        assert_eq!(built.plan.nodes[built.root_index].deps, vec![1]);
+        assert_eq!(
+            dependency_labels(&built, built.root_index),
+            vec!["vendor/swiftpm/ArgumentParser#archive"]
+        );
     }
 }
