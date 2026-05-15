@@ -65,7 +65,7 @@ Run it:
 fabrik run fabrik
 ```
 
-## Dependency Sync
+## External Dependencies
 
 Declare Rust dependencies in the root `fabrik.toml` and run
 `fabrik deps sync` to refresh generated dependency artifacts.

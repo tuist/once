@@ -93,7 +93,7 @@ FABRIK_IOS_SIMULATOR=<udid> fabrik run examples/apple/ios/simulator-app/Demo
 - `fabrik run` first reuses the cacheable app build, then runs an uncached install and launch action.
 - Simulator boot, install, and launch are runtime side effects and are intentionally not cached.
 
-## Dependency Sync
+## External Dependencies
 
 Declare Swift dependencies in the root `fabrik.toml` and run
 `fabrik deps sync` to refresh the generated Swift dependency graph.

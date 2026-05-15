@@ -55,7 +55,7 @@ within your project.
 - The `.ebin` directory is restored from the CAS on a cache hit just
   like any other declared output.
 
-## Dependency Sync
+## External Dependencies
 
 Declare Elixir dependencies in the root `fabrik.toml` and point the
 lockfile at the Mix lockfile.
@@ -92,7 +92,7 @@ the Mix adapter as the dependency consumed by the target.
 
 ## Current Limits
 
-- Elixir dependency sync records graph metadata and target declarations
+- Elixir external dependency support records graph metadata and target declarations
   preserve `{ mix = ... }` external dependency edges.
 - Granular Elixir build actions do not yet compile Hex or git
   dependencies into `.ebin` inputs for downstream `elixirc` actions.

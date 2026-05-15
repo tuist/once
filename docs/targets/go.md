@@ -4,7 +4,7 @@ Fabrik supports dependency graph sync through `fabrik deps sync` and a
 cacheable `go.binary` rule that delegates module resolution to the Go
 toolchain.
 
-## Dependency Sync
+## External Dependencies
 
 Declare Go dependencies in the root `fabrik.toml` and point the manifest
 at the module's `go.mod`.
