@@ -86,7 +86,7 @@ jobs:
           cache-bin: true
 
       - name: cargo test
-        run: cargo test --workspace --all-targets
+        run: mise exec -- cargo test --workspace --all-targets
 
   release-build:
     name: release build (${{ matrix.os }})
