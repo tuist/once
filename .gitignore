@@ -1,5 +1,6 @@
 /target
 /.fabrik
+/.blick/runs/
 /vendor
 *.swp
 .DS_Store
