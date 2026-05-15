@@ -35,7 +35,7 @@ jobs:
         run: rustup component add rustfmt
 
       - name: cargo fmt
-        run: cargo fmt --all -- --check
+        run: mise exec -- cargo fmt --all -- --check
 
   clippy:
     name: clippy
@@ -60,7 +60,7 @@ jobs:
           cache-bin: true
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: mise exec -- cargo clippy --workspace --all-targets -- -D warnings
 
   unit-tests:
     name: unit tests (${{ matrix.os }})
@@ -112,7 +112,7 @@ jobs:
           cache-bin: true
 
       - name: cargo build
-        run: cargo build --release
+        run: mise exec -- cargo build --release
 
       - name: upload fabrik binary
         uses: actions/upload-artifact@v4
