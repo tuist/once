@@ -34,23 +34,12 @@ jobs:
         uses: jdx/mise-action@v4.0.1
         with:
           version: ${{ env.MISE_VERSION }}
-          install_args: "node"
-
-      - name: install blick and opencode
-        run: |
-          mise use -g github:tuist/blick
-          mise use -g npm:opencode-ai
+          install_args: "node github:tuist/blick npm:opencode-ai"
 
       - name: run blick review
         env:
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
-        shell: bash
         run: |
-          set -euo pipefail
-          if [ -z "${FIREWORKS_API_KEY:-}" ]; then
-            echo "FIREWORKS_API_KEY is not set; add it to repo secrets so opencode can authenticate against Fireworks." >&2
-            exit 1
-          fi
           blick review \
             --base "origin/${{ github.event.pull_request.base.ref }}" \
             --json --stream
