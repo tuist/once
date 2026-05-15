@@ -27,10 +27,10 @@ jobs:
           cache: true
 
       - name: install rustfmt
-        run: mise exec -- rustup component add rustfmt
+        run: rustup component add rustfmt
 
       - name: cargo fmt
-        run: mise exec -- cargo fmt --all -- --check
+        run: cargo fmt --all -- --check
 
   clippy:
     name: clippy
@@ -45,17 +45,18 @@ jobs:
           cache: true
 
       - name: install clippy
-        run: mise exec -- rustup component add clippy
+        run: rustup component add clippy
 
       - name: cache cargo registry, git db, and target
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: clippy
           cache-on-failure: true
+          # Keep Cargo and rustup binaries owned by mise.
           cache-bin: false
 
       - name: cargo clippy
-        run: mise exec -- cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   unit-tests:
     name: unit tests (${{ matrix.os }})
@@ -81,7 +82,7 @@ jobs:
           cache-bin: false
 
       - name: cargo test
-        run: mise exec -- cargo test --workspace --all-targets
+        run: cargo test --workspace --all-targets
 
   release-build:
     name: release build (${{ matrix.os }})
@@ -107,7 +108,7 @@ jobs:
           cache-bin: false
 
       - name: cargo build
-        run: mise exec -- cargo build --release
+        run: cargo build --release
 
       - name: upload fabrik binary
         uses: actions/upload-artifact@v4
@@ -185,7 +186,7 @@ jobs:
         run: chmod +x target/release/fabrik
 
       - name: fabrik run
-        run: mise exec -- target/release/fabrik run fabrik
+        run: target/release/fabrik run fabrik
 
   shellspec:
     name: shellspec (${{ matrix.os }})
@@ -221,8 +222,7 @@ jobs:
         run: chmod +x target/release/fabrik
 
       - name: shellspec
-        run: |
-          mise exec -- bash -lc 'export PATH="$(dirname "$(mise which rustc)"):$PATH"; shellspec'
+        run: shellspec
 
   windows-build:
     name: windows build

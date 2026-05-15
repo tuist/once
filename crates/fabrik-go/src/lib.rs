@@ -259,6 +259,19 @@ fn tool_env(workspace_root: &Path) -> Result<BTreeMap<String, String>, fabrik_co
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn go_target(name: &str, srcs: &[&str]) -> Target {
+        Target {
+            package: "cmd/app".to_string(),
+            kind: "go_binary".to_string(),
+            name: name.to_string(),
+            srcs: srcs.iter().map(|src| (*src).to_string()).collect(),
+            deps: Vec::new(),
+            external_deps: Vec::new(),
+            attrs: BTreeMap::new(),
+        }
+    }
 
     #[test]
     fn package_relative_output_walks_back_to_workspace_root() {
@@ -270,5 +283,50 @@ mod tests {
             path_from_package_to_workspace_path("", ".fabrik/out/app"),
             ".fabrik/out/app"
         );
+    }
+
+    #[test]
+    fn rejects_local_fabrik_deps() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut target = go_target("app", &[]);
+        target.deps.push("lib/lib".to_string());
+
+        let err = build_plan(&[target], "cmd/app/app", tmp.path()).unwrap_err();
+        assert!(matches!(
+            err,
+            PlanBuildError::UnsupportedLocalDeps { label } if label == "cmd/app/app"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_string_external_deps() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut target = go_target("app", &[]);
+        target
+            .external_deps
+            .push(fabrik_frontend::ExternalDependency {
+                graph: "go".to_string(),
+                spec: json!({ "module": "github.com/acme/lib" }),
+            });
+
+        let err = build_plan(&[target], "cmd/app/app", tmp.path()).unwrap_err();
+        assert!(matches!(
+            err,
+            PlanBuildError::InvalidExternalDepSpec { label, graph }
+                if label == "cmd/app/app" && graph == "go"
+        ));
+    }
+
+    #[test]
+    fn rejects_source_paths_that_escape_the_package() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = go_target("app", &["../go.mod"]);
+
+        let err = build_plan(&[target], "cmd/app/app", tmp.path()).unwrap_err();
+        assert!(matches!(
+            err,
+            PlanBuildError::Compile(CompileError::InvalidPath { label, path, .. })
+                if label == "cmd/app/app" && path == "../go.mod"
+        ));
     }
 }

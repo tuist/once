@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::{
+    de::{DeserializeOwned, Error as DeError},
+    Deserialize, Deserializer,
+};
 
 use crate::dependency::{into_entries, DependencyEntry, DependencyEntryToml};
 use crate::error::{Error, Result};
@@ -270,11 +273,26 @@ struct RuleTarget {
     deps: Vec<ManifestDep>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum ManifestDep {
     Target(String),
-    External(BTreeMap<String, toml::Value>),
+    External(toml::Table),
+}
+
+impl<'de> Deserialize<'de> for ManifestDep {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match toml::Value::deserialize(deserializer)? {
+            toml::Value::String(dep) => Ok(Self::Target(dep)),
+            toml::Value::Table(dep) => Ok(Self::External(dep)),
+            other => Err(D::Error::custom(format!(
+                "dependency entry must be a string local target or an inline table external dependency, got {}",
+                toml_value_kind(&other)
+            ))),
+        }
+    }
 }
 
 struct NormalizedDeps {
@@ -1055,14 +1073,29 @@ fn normalize_deps(
                         ),
                     });
                 }
-                external.push(ExternalDependency {
-                    graph,
-                    spec: serde_json::to_value(spec).expect("TOML values are serializable"),
-                });
+                let spec = serde_json::to_value(spec).map_err(|source| Error::Eval {
+                    path: display_name.to_string(),
+                    message: format!(
+                        "external dependency entry for `{graph}` could not be converted to JSON: {source}"
+                    ),
+                })?;
+                external.push(ExternalDependency { graph, spec });
             }
         }
     }
     Ok(NormalizedDeps { local, external })
+}
+
+fn toml_value_kind(value: &toml::Value) -> &'static str {
+    match value {
+        toml::Value::String(_) => "string",
+        toml::Value::Integer(_) => "integer",
+        toml::Value::Float(_) => "float",
+        toml::Value::Boolean(_) => "boolean",
+        toml::Value::Datetime(_) => "datetime",
+        toml::Value::Array(_) => "array",
+        toml::Value::Table(_) => "table",
+    }
 }
 
 fn is_dependency_graph_name(name: &str) -> bool {
@@ -1266,6 +1299,23 @@ deps = [{ cargo = "serde", pnpm = "react" }]
         assert!(err
             .to_string()
             .contains("must name only one dependency graph"));
+    }
+
+    #[test]
+    fn rejects_dependency_entries_with_clear_type_error() {
+        let err = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[rust.binary]]
+name = "cli"
+srcs = ["src/main.rs"]
+deps = [1]
+"#,
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("dependency entry must be a string local target"));
+        assert!(message.contains("got integer"));
     }
 
     #[test]

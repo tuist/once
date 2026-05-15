@@ -74,6 +74,32 @@ EOF
     The stderr should include 'resolution hit'
   End
 
+  It 'warns when the deprecated vendor alias is used'
+    mkdir -p "$WORKSPACE/src"
+    cat > "$WORKSPACE/Cargo.toml" <<'EOF'
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+EOF
+    cat > "$WORKSPACE/src/lib.rs" <<'EOF'
+pub fn app() -> &'static str { "app" }
+EOF
+    cargo generate-lockfile --manifest-path "$WORKSPACE/Cargo.toml" >/dev/null 2>&1
+    cat > "$WORKSPACE/fabrik.toml" <<'EOF'
+[[deps]]
+name = "rust_deps"
+ecosystem = "rust"
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+EOF
+
+    When call "$FABRIK_BIN" -C "$WORKSPACE" vendor
+    The status should be success
+    The stderr should include '`fabrik vendor` is deprecated'
+    The stderr should include 'fabrik deps sync'
+  End
+
   It 'writes a declared Swift Package.resolved graph'
     cat > "$WORKSPACE/fabrik.toml" <<'EOF'
 [[deps]]
