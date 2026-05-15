@@ -97,6 +97,7 @@ EOF
     When call "$FABRIK_BIN" -C "$WORKSPACE" vendor
     The status should be success
     The stderr should include '`fabrik vendor` is deprecated'
+    The stderr should include 'removed after the next release'
     The stderr should include 'fabrik deps sync'
   End
 
