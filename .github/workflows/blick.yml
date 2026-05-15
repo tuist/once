@@ -31,7 +31,7 @@ jobs:
           fetch-depth: 0
 
       - name: install mise toolchain
-        uses: jdx/mise-action@v4.0.1
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "node github:tuist/blick npm:opencode-ai"

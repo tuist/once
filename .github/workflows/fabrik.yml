@@ -57,7 +57,7 @@ jobs:
         with:
           shared-key: clippy
           cache-on-failure: true
-          cache-bin: true
+          cache-bin: false
 
       - name: cargo clippy
         run: mise exec -- cargo clippy --workspace --all-targets -- -D warnings
@@ -83,7 +83,7 @@ jobs:
         with:
           shared-key: unit-tests-${{ matrix.os }}
           cache-on-failure: true
-          cache-bin: true
+          cache-bin: false
 
       - name: cargo test
         run: mise exec -- cargo test --workspace --all-targets
@@ -109,7 +109,7 @@ jobs:
         with:
           shared-key: release-build-${{ matrix.os }}
           cache-on-failure: true
-          cache-bin: true
+          cache-bin: false
 
       - name: cargo build
         run: mise exec -- cargo build --release
@@ -142,7 +142,7 @@ jobs:
         with:
           shared-key: targets-${{ matrix.os }}
           cache-on-failure: true
-          cache-bin: true
+          cache-bin: false
 
       - name: download fabrik binary
         uses: actions/download-artifact@v4
@@ -178,7 +178,7 @@ jobs:
         with:
           shared-key: dogfood-${{ matrix.os }}
           cache-on-failure: true
-          cache-bin: true
+          cache-bin: false
 
       - name: download fabrik binary
         uses: actions/download-artifact@v4
@@ -214,7 +214,7 @@ jobs:
         with:
           shared-key: shellspec-${{ matrix.os }}
           cache-on-failure: true
-          cache-bin: true
+          cache-bin: false
 
       - name: download fabrik binary
         uses: actions/download-artifact@v4
