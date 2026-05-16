@@ -19,14 +19,19 @@ pub struct DependencyEntry {
     pub output: Option<String>,
 }
 
-pub const SYNTHETIC_EXTERNAL_PACKAGE_ROOT: &str = "__fabrik__/external";
+pub const EXTERNAL_PACKAGE_CACHE_ROOT: &str = ".fabrik/external";
+pub const EXTERNAL_TARGET_PREFIX: &str = "external:";
 
-pub fn synthetic_external_dep_package(graph: &str) -> String {
-    format!("{SYNTHETIC_EXTERNAL_PACKAGE_ROOT}/{graph}")
+pub fn external_dep_package(graph: &str) -> String {
+    format!("{EXTERNAL_PACKAGE_CACHE_ROOT}/{graph}")
 }
 
-pub fn synthetic_external_dep_id(graph: &str, name: &str) -> String {
-    format!("{}/{name}", synthetic_external_dep_package(graph))
+pub fn external_dep_id(graph: &str, name: &str) -> String {
+    format!("{EXTERNAL_TARGET_PREFIX}{graph}/{name}")
+}
+
+pub fn external_target_id(external_package: &str, name: &str) -> String {
+    format!("{EXTERNAL_TARGET_PREFIX}{external_package}/{name}")
 }
 
 pub(crate) fn into_entries(

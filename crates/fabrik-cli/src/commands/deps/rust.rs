@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use fabrik_cas::Cas;
 use fabrik_core::{workspace_tool, workspace_tool_env, Action, CacheState, ResourceRequest};
-use fabrik_frontend::{synthetic_external_dep_package, DependencyEntry};
+use fabrik_frontend::{external_dep_package, DependencyEntry};
 use serde::Deserialize;
 
 use super::graph::{
@@ -83,7 +83,7 @@ pub(super) async fn sync(
     let (metadata, resolution_cache) = run_cargo_metadata(workspace, cas, entry).await?;
     let report = plan_external_packages(&metadata)?;
 
-    let generated_dir = workspace.join(synthetic_external_dep_package(&entry.name));
+    let generated_dir = workspace.join(external_dep_package(&entry.name));
     tokio::fs::create_dir_all(&generated_dir)
         .await
         .with_context(|| format!("creating {}", generated_dir.display()))?;

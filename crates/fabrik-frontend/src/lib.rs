@@ -24,8 +24,8 @@ pub const TOML_BUILD_FILE_NAME: &str = "fabrik.toml";
 pub const BUILD_FILE_NAME: &str = TOML_BUILD_FILE_NAME;
 
 pub use dependency::{
-    synthetic_external_dep_id, synthetic_external_dep_package, DependencyEcosystem,
-    DependencyEntry, SYNTHETIC_EXTERNAL_PACKAGE_ROOT,
+    external_dep_id, external_dep_package, external_target_id, DependencyEcosystem,
+    DependencyEntry, EXTERNAL_PACKAGE_CACHE_ROOT, EXTERNAL_TARGET_PREFIX,
 };
 pub use error::{Error, Result};
 pub use manifest::{load_dependency_entries_toml_str, load_toml_str};

@@ -55,7 +55,7 @@ within your project.
 - The `.ebin` directory is restored from the CAS on a cache hit just
   like any other declared output.
 
-## External Dependencies
+## External dependencies
 
 Declare Elixir dependencies in the root `fabrik.toml` and point the
 lockfile at the Mix lockfile.
@@ -66,7 +66,7 @@ name = "mix"
 ecosystem = "elixir"
 manifest = "mix.exs"
 lockfile = "mix.lock"
-output = "__fabrik__/deps/mix/fabrik.elixir.lock.json"
+output = ".fabrik/deps/mix/fabrik.elixir.lock.json"
 
 [[elixir.library]]
 name = "web"
@@ -88,9 +88,10 @@ repositories, and dependency edges available in the lockfile. Mix still
 owns dependency resolution; Fabrik consumes the resolved lockfile. The
 inline table entries in `deps` are external dependency edges: the key
 points to the named `[[deps]]` graph, and the value is interpreted by
-the Mix adapter. When generated targets exist, Fabrik uses the reserved
-`__fabrik__/external` package namespace for synthetic external
-dependency targets.
+the Mix adapter. When generated targets exist, Fabrik loads them from
+`.fabrik/external/<graph>` with external ids such as
+`external:mix/jason`, so they do not occupy the workspace target
+namespace.
 
 ## Current Limits
 

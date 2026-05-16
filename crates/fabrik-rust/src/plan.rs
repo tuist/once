@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use fabrik_core::{Action, BuiltPlan, NodeInfo, Plan};
-use fabrik_frontend::{synthetic_external_dep_id, Target};
+use fabrik_frontend::{external_dep_id, Target};
 
 use crate::artifact::{DepArtifact, RustKind};
 use crate::build_script::{compile_build_script, output_path as build_script_output_path};
@@ -112,7 +112,7 @@ pub fn build_plan(
                     action_digest,
                     kind: RustKind::BuildScript,
                     build_script_outputs: Some(build_script_output_path(
-                        &target.package,
+                        target.output_package().as_ref(),
                         &target.name,
                     )),
                 },
@@ -191,7 +191,7 @@ fn target_dep_id(target: &Target) -> Result<Vec<String>, PlanBuildError> {
                 graph: dep.graph.clone(),
             });
         };
-        deps.push(synthetic_external_dep_id(&dep.graph, crate_name));
+        deps.push(external_dep_id(&dep.graph, crate_name));
     }
     Ok(deps)
 }
@@ -269,6 +269,7 @@ mod tests {
     fn lib(pkg: &str, name: &str, srcs: &[&str], deps: &[&str]) -> Target {
         Target {
             package: pkg.into(),
+            external_package: None,
             kind: "rust_library".into(),
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
@@ -281,6 +282,7 @@ mod tests {
     fn bin(pkg: &str, name: &str, srcs: &[&str], deps: &[&str]) -> Target {
         Target {
             package: pkg.into(),
+            external_package: None,
             kind: "rust_binary".into(),
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
@@ -346,12 +348,12 @@ mod tests {
     }
 
     #[test]
-    fn external_crate_dep_lowers_to_synthetic_external_target() {
+    fn external_crate_dep_lowers_to_external_target() {
         let tmp = TempDir::new().unwrap();
         write(tmp.path(), "app/src/main.rs", "fn main() {}");
         write(
             tmp.path(),
-            "__fabrik__/external/cargo/serde/src/lib.rs",
+            ".fabrik/external/cargo/serde/src/lib.rs",
             "pub fn x() {}",
         );
         let mut app = bin("app", "app", &["src/main.rs"], &[]);
@@ -359,20 +361,19 @@ mod tests {
             graph: "cargo".to_string(),
             spec: serde_json::Value::String("serde".to_string()),
         });
-        let targets = vec![
-            lib(
-                "__fabrik__/external/cargo",
-                "serde",
-                &["serde/src/lib.rs"],
-                &[],
-            ),
-            app,
-        ];
+        let mut serde = lib(
+            ".fabrik/external/cargo",
+            "serde",
+            &["serde/src/lib.rs"],
+            &[],
+        );
+        serde.external_package = Some("cargo".to_string());
+        let targets = vec![serde, app];
 
         let built = build_plan(&targets, "app/app", tmp.path()).unwrap();
 
         assert_eq!(built.plan.nodes.len(), 2);
-        assert_eq!(built.nodes[0].label, "__fabrik__/external/cargo/serde");
+        assert_eq!(built.nodes[0].label, "external:cargo/serde");
         assert_eq!(built.plan.nodes[built.root_index].deps, vec![0]);
     }
 
@@ -382,6 +383,7 @@ mod tests {
         write(tmp.path(), "pkg/build.rs", "fn main() {}");
         let target = Target {
             package: "pkg".into(),
+            external_package: None,
             kind: "cargo_build_script".into(),
             name: "build".into(),
             srcs: vec!["build.rs".into()],

@@ -4,7 +4,7 @@ Fabrik supports dependency graph sync through `fabrik deps sync` and a
 cacheable `go.binary` rule that delegates module resolution to the Go
 toolchain.
 
-## External Dependencies
+## External dependencies
 
 Declare Go dependencies in the root `fabrik.toml` and point the manifest
 at the module's `go.mod`.
@@ -14,7 +14,7 @@ at the module's `go.mod`.
 name = "go"
 ecosystem = "go"
 manifest = "go.mod"
-output = "__fabrik__/deps/go/fabrik.go.lock.json"
+output = ".fabrik/deps/go/fabrik.go.lock.json"
 ```
 
 Run it:

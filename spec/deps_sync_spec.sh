@@ -35,17 +35,17 @@ name = "rust_deps"
 ecosystem = "rust"
 manifest = "Cargo.toml"
 lockfile = "Cargo.lock"
-output = "__fabrik__/deps/rust_deps/fabrik.rust.lock.json"
+output = ".fabrik/deps/rust_deps/fabrik.rust.lock.json"
 EOF
 
     When call "$FABRIK_BIN" --format json -C "$WORKSPACE" deps sync rust_deps
     The status should be success
     The stdout should include '"name":"rust_deps"'
     The stdout should include '"ecosystem":"rust"'
-    The path "$WORKSPACE/__fabrik__/deps/rust_deps/fabrik.rust.lock.json" should be file
-    The path "$WORKSPACE/__fabrik__/external/rust_deps/fabrik.toml" should be file
-    The contents of file "$WORKSPACE/__fabrik__/deps/rust_deps/fabrik.rust.lock.json" should include '"name": "dep"'
-    The contents of file "$WORKSPACE/__fabrik__/deps/rust_deps/fabrik.rust.lock.json" should include '"kind": "path"'
+    The path "$WORKSPACE/.fabrik/deps/rust_deps/fabrik.rust.lock.json" should be file
+    The path "$WORKSPACE/.fabrik/external/rust_deps/fabrik.toml" should be file
+    The contents of file "$WORKSPACE/.fabrik/deps/rust_deps/fabrik.rust.lock.json" should include '"name": "dep"'
+    The contents of file "$WORKSPACE/.fabrik/deps/rust_deps/fabrik.rust.lock.json" should include '"kind": "path"'
   End
 
   It 'reuses cached Rust dependency resolution'
@@ -108,7 +108,7 @@ name = "swift_deps"
 ecosystem = "swift"
 manifest = "Package.swift"
 lockfile = "Package.resolved"
-output = "__fabrik__/deps/swiftpm/fabrik.swift.lock.json"
+output = ".fabrik/deps/swiftpm/fabrik.swift.lock.json"
 EOF
     cat > "$WORKSPACE/Package.resolved" <<'EOF'
 {
@@ -130,9 +130,9 @@ EOF
     When call "$FABRIK_BIN" --format json -C "$WORKSPACE" deps sync swift_deps
     The status should be success
     The stdout should include '"ecosystem":"swift"'
-    The path "$WORKSPACE/__fabrik__/deps/swiftpm/fabrik.swift.lock.json" should be file
-    The contents of file "$WORKSPACE/__fabrik__/deps/swiftpm/fabrik.swift.lock.json" should include '"name": "swift-log"'
-    The contents of file "$WORKSPACE/__fabrik__/deps/swiftpm/fabrik.swift.lock.json" should include '"revision": "abc123"'
+    The path "$WORKSPACE/.fabrik/deps/swiftpm/fabrik.swift.lock.json" should be file
+    The contents of file "$WORKSPACE/.fabrik/deps/swiftpm/fabrik.swift.lock.json" should include '"name": "swift-log"'
+    The contents of file "$WORKSPACE/.fabrik/deps/swiftpm/fabrik.swift.lock.json" should include '"revision": "abc123"'
   End
 
   It 'writes a declared Go module graph'
@@ -159,15 +159,15 @@ EOF
 name = "go_deps"
 ecosystem = "go"
 manifest = "app/go.mod"
-output = "__fabrik__/deps/go/fabrik.go.lock.json"
+output = ".fabrik/deps/go/fabrik.go.lock.json"
 EOF
 
     When call "$FABRIK_BIN" --format json -C "$WORKSPACE" deps sync go_deps
     The status should be success
     The stdout should include '"ecosystem":"go"'
-    The path "$WORKSPACE/__fabrik__/deps/go/fabrik.go.lock.json" should be file
-    The contents of file "$WORKSPACE/__fabrik__/deps/go/fabrik.go.lock.json" should include '"name": "example.com/lib"'
-    The contents of file "$WORKSPACE/__fabrik__/deps/go/fabrik.go.lock.json" should include '"replace"'
+    The path "$WORKSPACE/.fabrik/deps/go/fabrik.go.lock.json" should be file
+    The contents of file "$WORKSPACE/.fabrik/deps/go/fabrik.go.lock.json" should include '"name": "example.com/lib"'
+    The contents of file "$WORKSPACE/.fabrik/deps/go/fabrik.go.lock.json" should include '"replace"'
   End
 
   It 'reuses cached Go dependency resolution'
@@ -210,7 +210,7 @@ name = "elixir_deps"
 ecosystem = "elixir"
 manifest = "mix.exs"
 lockfile = "mix.lock"
-output = "__fabrik__/deps/mix/fabrik.elixir.lock.json"
+output = ".fabrik/deps/mix/fabrik.elixir.lock.json"
 EOF
     cat > "$WORKSPACE/mix.lock" <<'EOF'
 %{
@@ -222,8 +222,8 @@ EOF
     When call "$FABRIK_BIN" --format json -C "$WORKSPACE" deps sync elixir_deps
     The status should be success
     The stdout should include '"ecosystem":"elixir"'
-    The path "$WORKSPACE/__fabrik__/deps/mix/fabrik.elixir.lock.json" should be file
-    The contents of file "$WORKSPACE/__fabrik__/deps/mix/fabrik.elixir.lock.json" should include '"name": "jason"'
-    The contents of file "$WORKSPACE/__fabrik__/deps/mix/fabrik.elixir.lock.json" should include '"name": "decimal"'
+    The path "$WORKSPACE/.fabrik/deps/mix/fabrik.elixir.lock.json" should be file
+    The contents of file "$WORKSPACE/.fabrik/deps/mix/fabrik.elixir.lock.json" should include '"name": "jason"'
+    The contents of file "$WORKSPACE/.fabrik/deps/mix/fabrik.elixir.lock.json" should include '"name": "decimal"'
   End
 End

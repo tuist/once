@@ -86,6 +86,7 @@ mod tests {
     fn go_target(name: &str, srcs: &[&str]) -> Target {
         Target {
             package: "cmd/app".to_string(),
+            external_package: None,
             kind: "go_binary".to_string(),
             name: name.to_string(),
             srcs: srcs.iter().map(|src| (*src).to_string()).collect(),

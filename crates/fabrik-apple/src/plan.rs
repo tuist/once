@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use fabrik_core::{BuiltPlan, NodeInfo, Plan};
-use fabrik_frontend::{synthetic_external_dep_id, Target};
+use fabrik_frontend::{external_dep_id, Target};
 
 use crate::artifact::{AppleKind, SwiftArtifact};
 use crate::compile::{compile_ios_app, AppleError};
@@ -131,7 +131,8 @@ fn build_ios_plan(
         return Err(PlanBuildError::UnsupportedDeps { label: target.id() });
     }
     let node = compile_ios_app(target, workspace_root)?;
-    let output = crate::app_bundle_path(&target.package, &target.name);
+    let output_package = target.output_package();
+    let output = crate::app_bundle_path(output_package.as_ref(), &target.name);
     let mut plan = Plan::new();
     let root_index = plan.push(node);
     Ok(BuiltPlan {
@@ -184,7 +185,7 @@ fn target_dep_id(target: &Target) -> Result<Vec<String>, PlanBuildError> {
                 graph: dep.graph.clone(),
             });
         };
-        deps.push(synthetic_external_dep_id(&dep.graph, product_name));
+        deps.push(external_dep_id(&dep.graph, product_name));
     }
     Ok(deps)
 }
@@ -322,6 +323,7 @@ mod tests {
         attrs.insert("bundle_id".to_string(), "dev.fabrik.demo".to_string());
         let target = Target {
             package: "App".to_string(),
+            external_package: None,
             kind: "apple_simulator_app".to_string(),
             name: "Demo".to_string(),
             srcs: vec!["App.swift".to_string()],
@@ -337,6 +339,7 @@ mod tests {
     #[derive(Clone, Copy)]
     struct SwiftTargetFixture<'a> {
         package: &'a str,
+        external_package: Option<&'a str>,
         kind: &'a str,
         name: &'a str,
         srcs: &'a [&'a str],
@@ -346,6 +349,7 @@ mod tests {
     fn swift_target(fixture: SwiftTargetFixture<'_>) -> Target {
         Target {
             package: fixture.package.into(),
+            external_package: fixture.external_package.map(str::to_string),
             kind: fixture.kind.into(),
             name: fixture.name.into(),
             srcs: fixture.srcs.iter().map(|s| (*s).to_string()).collect(),
@@ -379,6 +383,7 @@ mod tests {
         let targets = vec![
             swift_target(SwiftTargetFixture {
                 package: "Lib",
+                external_package: None,
                 kind: "swift_library",
                 name: "Lib",
                 srcs: &["Lib.swift"],
@@ -386,6 +391,7 @@ mod tests {
             }),
             swift_target(SwiftTargetFixture {
                 package: "Mid",
+                external_package: None,
                 kind: "swift_library",
                 name: "Mid",
                 srcs: &["Mid.swift"],
@@ -393,6 +399,7 @@ mod tests {
             }),
             swift_target(SwiftTargetFixture {
                 package: "App",
+                external_package: None,
                 kind: "macos_command_line_application",
                 name: "hello",
                 srcs: &["main.swift"],
@@ -418,19 +425,20 @@ mod tests {
     }
 
     #[test]
-    fn external_swiftpm_product_depends_on_synthetic_external_target() {
+    fn external_swiftpm_product_depends_on_external_target() {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("App")).unwrap();
-        std::fs::create_dir_all(tmp.path().join("__fabrik__/external/swiftpm")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".fabrik/external/swiftpm")).unwrap();
         std::fs::write(tmp.path().join("App/main.swift"), "import ArgumentParser").unwrap();
         std::fs::write(
             tmp.path()
-                .join("__fabrik__/external/swiftpm/ArgumentParser.swift"),
+                .join(".fabrik/external/swiftpm/ArgumentParser.swift"),
             "public struct Parser {}",
         )
         .unwrap();
-        let synthetic_dep = swift_target(SwiftTargetFixture {
-            package: "__fabrik__/external/swiftpm",
+        let external_dep = swift_target(SwiftTargetFixture {
+            package: ".fabrik/external/swiftpm",
+            external_package: Some("swiftpm"),
             kind: "swift_library",
             name: "ArgumentParser",
             srcs: &["ArgumentParser.swift"],
@@ -438,6 +446,7 @@ mod tests {
         });
         let mut app = swift_target(SwiftTargetFixture {
             package: "App",
+            external_package: None,
             kind: "macos_command_line_application",
             name: "app",
             srcs: &["main.swift"],
@@ -450,7 +459,7 @@ mod tests {
                 "product": "ArgumentParser",
             }),
         });
-        let built = build_plan(&[synthetic_dep, app], "App/app", tmp.path()).unwrap();
+        let built = build_plan(&[external_dep, app], "App/app", tmp.path()).unwrap();
 
         assert_eq!(
             built
@@ -459,14 +468,14 @@ mod tests {
                 .map(|node| node.label.as_str())
                 .collect::<Vec<_>>(),
             vec![
-                "__fabrik__/external/swiftpm/ArgumentParser#compile",
-                "__fabrik__/external/swiftpm/ArgumentParser#archive",
+                "external:swiftpm/ArgumentParser#compile",
+                "external:swiftpm/ArgumentParser#archive",
                 "App/app",
             ]
         );
         assert_eq!(
             dependency_labels(&built, built.root_index),
-            vec!["__fabrik__/external/swiftpm/ArgumentParser#archive"]
+            vec!["external:swiftpm/ArgumentParser#archive"]
         );
     }
 }

@@ -39,7 +39,8 @@ pub(crate) fn compile_binary(
     target: &Target,
     workspace_root: &Path,
 ) -> Result<(PlanNode, String), CompileError> {
-    let output = executable_path(&target.package, &target.name);
+    let output_package = target.output_package();
+    let output = executable_path(output_package.as_ref(), &target.name);
     let build_package = target
         .attrs
         .get("package")
@@ -202,6 +203,7 @@ mod tests {
     fn go_target(name: &str, srcs: &[&str]) -> Target {
         Target {
             package: "cmd/app".to_string(),
+            external_package: None,
             kind: "go_binary".to_string(),
             name: name.to_string(),
             srcs: srcs.iter().map(|src| (*src).to_string()).collect(),

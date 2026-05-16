@@ -505,6 +505,7 @@ fn elixir_target(
     let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -525,6 +526,7 @@ fn elixir_binary_target(
     let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: "elixir_binary".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -548,6 +550,7 @@ fn rust_target(
     let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -569,6 +572,7 @@ fn cargo_binary_target(
     let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: "cargo_binary".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -589,6 +593,7 @@ fn cargo_build_script_target(
     let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: "cargo_build_script".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -609,6 +614,7 @@ fn go_binary_target(
     let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: "go_binary".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -633,6 +639,7 @@ fn apple_ios_app_target(
     let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: "apple_ios_app".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -666,6 +673,7 @@ fn apple_simulator_app_target(
     let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: "apple_simulator_app".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -689,6 +697,7 @@ fn apple_swift_target(
     let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -713,6 +722,7 @@ fn apple_framework_target(
     let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -880,6 +890,7 @@ fn legacy_generic_target(
     let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: t.kind.expect("legacy target kind was checked"),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -940,6 +951,7 @@ fn task_target(
     }
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: if has_runtime { "runtime_task" } else { "task" }.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
@@ -1328,7 +1340,7 @@ name = "rust_deps"
 ecosystem = "rust"
 manifest = "Cargo.toml"
 lockfile = "Cargo.lock"
-output = "__fabrik__/deps/rust_deps/fabrik.rust.lock.json"
+output = ".fabrik/deps/rust_deps/fabrik.rust.lock.json"
 "#,
         )
         .unwrap();

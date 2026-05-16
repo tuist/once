@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use fabrik_core::{Action, BuiltPlan, NodeInfo, Plan};
-use fabrik_frontend::{synthetic_external_dep_id, Target};
+use fabrik_frontend::{external_dep_id, Target};
 
 use crate::artifact::{BeamArtifact, ElixirKind};
 use crate::compile::{compile_target, CompileError};
@@ -149,7 +149,7 @@ fn target_dep_id(target: &Target) -> Result<Vec<String>, PlanBuildError> {
                 graph: dep.graph.clone(),
             });
         };
-        deps.push(synthetic_external_dep_id(&dep.graph, package_name));
+        deps.push(external_dep_id(&dep.graph, package_name));
     }
     Ok(deps)
 }
@@ -211,6 +211,7 @@ mod tests {
     fn lib(pkg: &str, name: &str, srcs: &[&str], deps: &[&str]) -> Target {
         Target {
             package: pkg.into(),
+            external_package: None,
             kind: "elixir_library".into(),
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
@@ -225,6 +226,7 @@ mod tests {
         attrs.insert("entry".into(), entry.into());
         Target {
             package: pkg.into(),
+            external_package: None,
             kind: "elixir_binary".into(),
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
@@ -304,12 +306,12 @@ mod tests {
     }
 
     #[test]
-    fn external_mix_dep_lowers_to_synthetic_external_target() {
+    fn external_mix_dep_lowers_to_external_target() {
         let tmp = TempDir::new().unwrap();
         write(tmp.path(), "app/lib/app.ex", "defmodule App do\nend\n");
         write(
             tmp.path(),
-            "__fabrik__/external/mix/decimal/lib/decimal.ex",
+            ".fabrik/external/mix/decimal/lib/decimal.ex",
             "defmodule Decimal do\nend\n",
         );
         let mut app = lib("app", "app", &["lib/app.ex"], &[]);
@@ -317,20 +319,19 @@ mod tests {
             graph: "mix".to_string(),
             spec: serde_json::Value::String("decimal".to_string()),
         });
-        let targets = vec![
-            lib(
-                "__fabrik__/external/mix",
-                "decimal",
-                &["decimal/lib/decimal.ex"],
-                &[],
-            ),
-            app,
-        ];
+        let mut decimal = lib(
+            ".fabrik/external/mix",
+            "decimal",
+            &["decimal/lib/decimal.ex"],
+            &[],
+        );
+        decimal.external_package = Some("mix".to_string());
+        let targets = vec![decimal, app];
 
         let built = build_plan(&targets, "app/app", tmp.path()).unwrap();
 
         assert_eq!(built.plan.nodes.len(), 2);
-        assert_eq!(built.nodes[0].label, "__fabrik__/external/mix/decimal");
+        assert_eq!(built.nodes[0].label, "external:mix/decimal");
         assert_eq!(built.plan.nodes[built.root_index].deps, vec![0]);
     }
 

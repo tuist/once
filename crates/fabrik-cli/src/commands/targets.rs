@@ -18,6 +18,8 @@ use crate::render;
 struct TargetView<'a> {
     id: String,
     package: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    external_package: Option<&'a str>,
     kind: &'a str,
     name: &'a str,
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
@@ -33,6 +35,8 @@ struct TargetView<'a> {
 #[derive(Serialize)]
 struct TargetFields<'a> {
     package: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    external_package: Option<&'a str>,
     kind: &'a str,
     name: &'a str,
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
@@ -61,6 +65,7 @@ pub async fn print_targets(workspace: &Path, format: Format) -> Result<()> {
                         t.id(),
                         TargetFields {
                             package: &t.package,
+                            external_package: t.external_package.as_deref(),
                             kind: &t.kind,
                             name: &t.name,
                             srcs: &t.srcs,
@@ -87,6 +92,7 @@ pub async fn print_targets(workspace: &Path, format: Format) -> Result<()> {
                 let view = TargetView {
                     id: t.id(),
                     package: &t.package,
+                    external_package: t.external_package.as_deref(),
                     kind: &t.kind,
                     name: &t.name,
                     srcs: &t.srcs,
