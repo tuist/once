@@ -1328,7 +1328,7 @@ name = "rust_deps"
 ecosystem = "rust"
 manifest = "Cargo.toml"
 lockfile = "Cargo.lock"
-output = "vendor/fabrik.rust.lock.json"
+output = "__fabrik__/deps/rust_deps/fabrik.rust.lock.json"
 "#,
         )
         .unwrap();

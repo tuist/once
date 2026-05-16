@@ -104,7 +104,7 @@ name = "swiftpm"
 ecosystem = "swift"
 manifest = "Package.swift"
 lockfile = "Package.resolved"
-output = "vendor/fabrik.swift.lock.json"
+output = "__fabrik__/deps/swiftpm/fabrik.swift.lock.json"
 
 [[apple.swift_library]]
 name = "CLI"
@@ -126,7 +126,9 @@ checksum, and git or registry source data where SwiftPM includes it.
 The inline table entries in `deps` are external dependency edges: the
 key points to the named `[[deps]]` graph, and the value is interpreted
 by the SwiftPM adapter. Swift does not yet generate granular Swift
-targets from SwiftPM packages.
+targets from SwiftPM packages. When generated targets exist, Fabrik uses
+the reserved `__fabrik__/external` package namespace for synthetic
+external dependency targets.
 
 ## Current Limits
 

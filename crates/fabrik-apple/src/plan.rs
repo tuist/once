@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use fabrik_core::{BuiltPlan, NodeInfo, Plan};
-use fabrik_frontend::Target;
+use fabrik_frontend::{synthetic_external_dep_id, Target};
 
 use crate::artifact::{AppleKind, SwiftArtifact};
 use crate::compile::{compile_ios_app, AppleError};
@@ -184,7 +184,7 @@ fn target_dep_id(target: &Target) -> Result<Vec<String>, PlanBuildError> {
                 graph: dep.graph.clone(),
             });
         };
-        deps.push(format!("vendor/{}/{product_name}", dep.graph));
+        deps.push(synthetic_external_dep_id(&dep.graph, product_name));
     }
     Ok(deps)
 }
@@ -397,18 +397,19 @@ mod tests {
     }
 
     #[test]
-    fn external_swiftpm_product_depends_on_generated_vendor_target() {
+    fn external_swiftpm_product_depends_on_synthetic_external_target() {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("App")).unwrap();
-        std::fs::create_dir_all(tmp.path().join("vendor/swiftpm")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("__fabrik__/external/swiftpm")).unwrap();
         std::fs::write(tmp.path().join("App/main.swift"), "import ArgumentParser").unwrap();
         std::fs::write(
-            tmp.path().join("vendor/swiftpm/ArgumentParser.swift"),
+            tmp.path()
+                .join("__fabrik__/external/swiftpm/ArgumentParser.swift"),
             "public struct Parser {}",
         )
         .unwrap();
-        let vendor = swift_target(
-            "vendor/swiftpm",
+        let synthetic_dep = swift_target(
+            "__fabrik__/external/swiftpm",
             "swift_library",
             "ArgumentParser",
             &["ArgumentParser.swift"],
@@ -428,7 +429,7 @@ mod tests {
                 "product": "ArgumentParser",
             }),
         });
-        let built = build_plan(&[vendor, app], "App/app", tmp.path()).unwrap();
+        let built = build_plan(&[synthetic_dep, app], "App/app", tmp.path()).unwrap();
 
         assert_eq!(
             built
@@ -437,14 +438,14 @@ mod tests {
                 .map(|node| node.label.as_str())
                 .collect::<Vec<_>>(),
             vec![
-                "vendor/swiftpm/ArgumentParser#compile",
-                "vendor/swiftpm/ArgumentParser#archive",
+                "__fabrik__/external/swiftpm/ArgumentParser#compile",
+                "__fabrik__/external/swiftpm/ArgumentParser#archive",
                 "App/app",
             ]
         );
         assert_eq!(
             dependency_labels(&built, built.root_index),
-            vec!["vendor/swiftpm/ArgumentParser#archive"]
+            vec!["__fabrik__/external/swiftpm/ArgumentParser#archive"]
         );
     }
 }

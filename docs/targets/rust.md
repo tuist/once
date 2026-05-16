@@ -76,7 +76,7 @@ name = "cargo"
 ecosystem = "rust"
 manifest = "Cargo.toml"
 lockfile = "Cargo.lock"
-output = "vendor/fabrik.rust.lock.json"
+output = "__fabrik__/deps/cargo/fabrik.rust.lock.json"
 
 [[rust.binary]]
 name = "server"
@@ -97,8 +97,10 @@ fabrik deps sync cargo
 The Rust sync step shells out to `cargo metadata --locked` for the
 declared manifest. That resolution action is cached from the manifest,
 lockfile, and workspace Cargo manifests. It emits a lock graph JSON
-file and regenerates `vendor/cargo/fabrik.toml` with one granular Rust
-declaration per dependency that Fabrik can model today. The inline
+file and regenerates `__fabrik__/external/cargo/fabrik.toml` with one
+granular Rust declaration per dependency that Fabrik can model today.
+The `__fabrik__/external` package namespace is generated and reserved
+for synthetic external dependency targets. The inline
 table entries in `deps` are external dependency edges: the key points
 to the named `[[deps]]` graph, and the value is the Cargo crate name
 consumed by the Rust target. Crates with `build.rs` are left commented out in the

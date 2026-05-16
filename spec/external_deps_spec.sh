@@ -10,7 +10,7 @@ Describe 'external dependency consumption'
   AfterEach 'cleanup_workspace'
 
   It 'lets a Rust binary import and consume a cargo graph dependency'
-    mkdir -p "$WORKSPACE/app/src" "$WORKSPACE/vendor/cargo/dep_message/src"
+    mkdir -p "$WORKSPACE/app/src" "$WORKSPACE/__fabrik__/external/cargo/dep_message/src"
     cat > "$WORKSPACE/fabrik.toml" <<'EOF'
 [[deps]]
 name = "cargo"
@@ -29,12 +29,12 @@ fn main() {
     println!("{}", dep_message::message());
 }
 EOF
-    cat > "$WORKSPACE/vendor/cargo/fabrik.toml" <<'EOF'
+    cat > "$WORKSPACE/__fabrik__/external/cargo/fabrik.toml" <<'EOF'
 [[rust.library]]
 name = "dep_message"
 srcs = ["dep_message/src/lib.rs"]
 EOF
-    cat > "$WORKSPACE/vendor/cargo/dep_message/src/lib.rs" <<'EOF'
+    cat > "$WORKSPACE/__fabrik__/external/cargo/dep_message/src/lib.rs" <<'EOF'
 pub fn message() -> &'static str {
     "rust dependency consumed"
 }
@@ -52,7 +52,7 @@ EOF
     Skip if 'elixir is not installed' elixir_missing
     elixir_missing && return 0
 
-    mkdir -p "$WORKSPACE/app/lib" "$WORKSPACE/vendor/mix/external_dep/lib"
+    mkdir -p "$WORKSPACE/app/lib" "$WORKSPACE/__fabrik__/external/mix/external_dep/lib"
     stage_elixir_workspace_bin
     cat > "$WORKSPACE/fabrik.toml" <<'EOF'
 [[deps]]
@@ -75,12 +75,12 @@ defmodule App do
   def main(_args), do: IO.puts(ExternalDep.message())
 end
 EOF
-    cat > "$WORKSPACE/vendor/mix/fabrik.toml" <<'EOF'
+    cat > "$WORKSPACE/__fabrik__/external/mix/fabrik.toml" <<'EOF'
 [[elixir.library]]
 name = "external_dep"
 srcs = ["external_dep/lib/external_dep.ex"]
 EOF
-    cat > "$WORKSPACE/vendor/mix/external_dep/lib/external_dep.ex" <<'EOF'
+    cat > "$WORKSPACE/__fabrik__/external/mix/external_dep/lib/external_dep.ex" <<'EOF'
 defmodule ExternalDep do
   defmacro message do
     quote do
@@ -101,7 +101,7 @@ EOF
     Skip if 'apple toolchain is not available' apple_toolchain_unavailable
     apple_toolchain_unavailable && return 0
 
-    mkdir -p "$WORKSPACE/app" "$WORKSPACE/vendor/swiftpm"
+    mkdir -p "$WORKSPACE/app" "$WORKSPACE/__fabrik__/external/swiftpm"
     cat > "$WORKSPACE/fabrik.toml" <<'EOF'
 [[deps]]
 name = "swiftpm"
@@ -122,14 +122,14 @@ import ExternalKit
 
 print(externalMessage())
 EOF
-    cat > "$WORKSPACE/vendor/swiftpm/fabrik.toml" <<'EOF'
+    cat > "$WORKSPACE/__fabrik__/external/swiftpm/fabrik.toml" <<'EOF'
 [[apple.swift_library]]
 name = "ExternalKit"
 module_name = "ExternalKit"
 minimum_os = "13.0"
 srcs = ["ExternalKit.swift"]
 EOF
-    cat > "$WORKSPACE/vendor/swiftpm/ExternalKit.swift" <<'EOF'
+    cat > "$WORKSPACE/__fabrik__/external/swiftpm/ExternalKit.swift" <<'EOF'
 public func externalMessage() -> String {
     "swift dependency consumed"
 }

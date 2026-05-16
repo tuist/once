@@ -90,7 +90,7 @@ fn collect_resolution_files(
             let name = name.to_string_lossy();
             if matches!(
                 name.as_ref(),
-                ".fabrik" | ".git" | "node_modules" | "target" | "vendor"
+                ".fabrik" | ".git" | "__fabrik__" | "node_modules" | "target" | "vendor"
             ) {
                 continue;
             }

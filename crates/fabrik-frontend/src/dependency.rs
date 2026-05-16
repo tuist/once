@@ -19,6 +19,16 @@ pub struct DependencyEntry {
     pub output: Option<String>,
 }
 
+pub const SYNTHETIC_EXTERNAL_PACKAGE_ROOT: &str = "__fabrik__/external";
+
+pub fn synthetic_external_dep_package(graph: &str) -> String {
+    format!("{SYNTHETIC_EXTERNAL_PACKAGE_ROOT}/{graph}")
+}
+
+pub fn synthetic_external_dep_id(graph: &str, name: &str) -> String {
+    format!("{}/{name}", synthetic_external_dep_package(graph))
+}
+
 pub(crate) fn into_entries(
     entries: Vec<DependencyEntryToml>,
     package: &str,

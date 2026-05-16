@@ -21,7 +21,8 @@ pub(in crate::commands::deps) fn graph_output_path(
     entry.output.as_ref().map_or_else(
         || {
             workspace
-                .join("vendor")
+                .join("__fabrik__")
+                .join("deps")
                 .join(&entry.name)
                 .join(default_name)
         },

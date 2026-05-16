@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use fabrik_core::{Action, BuiltPlan, NodeInfo, Plan};
-use fabrik_frontend::Target;
+use fabrik_frontend::{synthetic_external_dep_id, Target};
 
 use crate::artifact::{DepArtifact, RustKind};
 use crate::build_script::{compile_build_script, output_path as build_script_output_path};
@@ -191,7 +191,7 @@ fn target_dep_id(target: &Target) -> Result<Vec<String>, PlanBuildError> {
                 graph: dep.graph.clone(),
             });
         };
-        deps.push(format!("vendor/{}/{crate_name}", dep.graph));
+        deps.push(synthetic_external_dep_id(&dep.graph, crate_name));
     }
     Ok(deps)
 }
@@ -346,24 +346,33 @@ mod tests {
     }
 
     #[test]
-    fn external_crate_dep_lowers_to_generated_vendor_target() {
+    fn external_crate_dep_lowers_to_synthetic_external_target() {
         let tmp = TempDir::new().unwrap();
         write(tmp.path(), "app/src/main.rs", "fn main() {}");
-        write(tmp.path(), "vendor/cargo/serde/src/lib.rs", "pub fn x() {}");
+        write(
+            tmp.path(),
+            "__fabrik__/external/cargo/serde/src/lib.rs",
+            "pub fn x() {}",
+        );
         let mut app = bin("app", "app", &["src/main.rs"], &[]);
         app.external_deps.push(fabrik_frontend::ExternalDependency {
             graph: "cargo".to_string(),
             spec: serde_json::Value::String("serde".to_string()),
         });
         let targets = vec![
-            lib("vendor/cargo", "serde", &["serde/src/lib.rs"], &[]),
+            lib(
+                "__fabrik__/external/cargo",
+                "serde",
+                &["serde/src/lib.rs"],
+                &[],
+            ),
             app,
         ];
 
         let built = build_plan(&targets, "app/app", tmp.path()).unwrap();
 
         assert_eq!(built.plan.nodes.len(), 2);
-        assert_eq!(built.nodes[0].label, "vendor/cargo/serde");
+        assert_eq!(built.nodes[0].label, "__fabrik__/external/cargo/serde");
         assert_eq!(built.plan.nodes[built.root_index].deps, vec![0]);
     }
 

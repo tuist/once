@@ -14,7 +14,7 @@ at the module's `go.mod`.
 name = "go"
 ecosystem = "go"
 manifest = "go.mod"
-output = "vendor/fabrik.go.lock.json"
+output = "__fabrik__/deps/go/fabrik.go.lock.json"
 ```
 
 Run it:

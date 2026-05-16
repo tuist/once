@@ -66,7 +66,7 @@ name = "mix"
 ecosystem = "elixir"
 manifest = "mix.exs"
 lockfile = "mix.lock"
-output = "vendor/fabrik.elixir.lock.json"
+output = "__fabrik__/deps/mix/fabrik.elixir.lock.json"
 
 [[elixir.library]]
 name = "web"
@@ -88,7 +88,9 @@ repositories, and dependency edges available in the lockfile. Mix still
 owns dependency resolution; Fabrik consumes the resolved lockfile. The
 inline table entries in `deps` are external dependency edges: the key
 points to the named `[[deps]]` graph, and the value is interpreted by
-the Mix adapter as the dependency consumed by the target.
+the Mix adapter. When generated targets exist, Fabrik uses the reserved
+`__fabrik__/external` package namespace for synthetic external
+dependency targets.
 
 ## Current Limits
 

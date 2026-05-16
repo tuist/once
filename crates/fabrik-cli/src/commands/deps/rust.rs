@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use fabrik_cas::Cas;
 use fabrik_core::{workspace_tool, workspace_tool_env, Action, CacheState, ResourceRequest};
-use fabrik_frontend::DependencyEntry;
+use fabrik_frontend::{synthetic_external_dep_package, DependencyEntry};
 use serde::Deserialize;
 
 use super::graph::{
@@ -81,13 +81,13 @@ pub(super) async fn sync(
     entry: &DependencyEntry,
 ) -> Result<SyncReport> {
     let (metadata, resolution_cache) = run_cargo_metadata(workspace, cas, entry).await?;
-    let report = plan_vendor(&metadata)?;
+    let report = plan_external_packages(&metadata)?;
 
-    let vendor_dir = workspace.join("vendor").join(&entry.name);
-    tokio::fs::create_dir_all(&vendor_dir)
+    let generated_dir = workspace.join(synthetic_external_dep_package(&entry.name));
+    tokio::fs::create_dir_all(&generated_dir)
         .await
-        .with_context(|| format!("creating {}", vendor_dir.display()))?;
-    let manifest = vendor_dir.join("fabrik.toml");
+        .with_context(|| format!("creating {}", generated_dir.display()))?;
+    let manifest = generated_dir.join("fabrik.toml");
     tokio::fs::write(&manifest, &report.manifest_body)
         .await
         .with_context(|| format!("writing {}", manifest.display()))?;
@@ -150,7 +150,7 @@ async fn run_cargo_metadata(
     Ok((metadata, resolved.cache))
 }
 
-struct VendorReport {
+struct ExternalPackagesReport {
     manifest_body: String,
     graph: ResolvedGraph,
     declared: usize,
@@ -158,7 +158,7 @@ struct VendorReport {
     skipped_names: Vec<String>,
 }
 
-fn plan_vendor(metadata: &CargoMetadata) -> Result<VendorReport> {
+fn plan_external_packages(metadata: &CargoMetadata) -> Result<ExternalPackagesReport> {
     let pkg_by_id: BTreeMap<&String, &MetadataPackage> =
         metadata.packages.iter().map(|p| (&p.id, p)).collect();
     let workspace_ids: BTreeSet<&String> = metadata.workspace_members.iter().collect();
@@ -232,7 +232,7 @@ fn plan_vendor(metadata: &CargoMetadata) -> Result<VendorReport> {
         }
     }
 
-    Ok(VendorReport {
+    Ok(ExternalPackagesReport {
         manifest_body: body,
         graph: resolved_graph_from_cargo(metadata),
         declared,
@@ -397,7 +397,9 @@ fn write_declared(
     let _ = writeln!(out, "crate_name = {crate_name:?}");
     let _ = writeln!(out, "edition = {edition:?}");
     let _ = writeln!(out, "crate_root = {src_root:?}");
-    out.push_str("srcs = [] # add src_globs once sources are copied into vendor/\n");
+    out.push_str(
+        "srcs = [] # add src_globs once sources are copied into the generated external package\n",
+    );
     let _ = writeln!(out, "deps = {}", toml_array(deps));
     out.push('\n');
 }
@@ -425,7 +427,9 @@ fn write_skipped(
     let _ = writeln!(out, "# crate_name = {crate_name:?}");
     let _ = writeln!(out, "# edition = {edition:?}");
     let _ = writeln!(out, "# crate_root = {src_root:?}");
-    out.push_str("# srcs = [] # populate after vendoring sources\n");
+    out.push_str(
+        "# srcs = [] # populate after copying sources into the generated external package\n",
+    );
     let _ = writeln!(out, "# deps = {}", toml_array(deps));
     out.push('\n');
 }
