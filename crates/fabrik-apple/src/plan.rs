@@ -334,13 +334,22 @@ mod tests {
         assert_eq!(built.output, ".fabrik/out/App/Demo.app");
     }
 
-    fn swift_target(pkg: &str, kind: &str, name: &str, srcs: &[&str], deps: &[&str]) -> Target {
+    #[derive(Clone, Copy)]
+    struct SwiftTargetFixture<'a> {
+        package: &'a str,
+        kind: &'a str,
+        name: &'a str,
+        srcs: &'a [&'a str],
+        deps: &'a [&'a str],
+    }
+
+    fn swift_target(fixture: SwiftTargetFixture<'_>) -> Target {
         Target {
-            package: pkg.into(),
-            kind: kind.into(),
-            name: name.into(),
-            srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
-            deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            package: fixture.package.into(),
+            kind: fixture.kind.into(),
+            name: fixture.name.into(),
+            srcs: fixture.srcs.iter().map(|s| (*s).to_string()).collect(),
+            deps: fixture.deps.iter().map(|s| (*s).to_string()).collect(),
             external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
@@ -368,15 +377,27 @@ mod tests {
         std::fs::write(tmp.path().join("Mid/Mid.swift"), "import Lib").unwrap();
         std::fs::write(tmp.path().join("App/main.swift"), "import Mid").unwrap();
         let targets = vec![
-            swift_target("Lib", "swift_library", "Lib", &["Lib.swift"], &[]),
-            swift_target("Mid", "swift_library", "Mid", &["Mid.swift"], &["Lib/Lib"]),
-            swift_target(
-                "App",
-                "macos_command_line_application",
-                "hello",
-                &["main.swift"],
-                &["Mid/Mid"],
-            ),
+            swift_target(SwiftTargetFixture {
+                package: "Lib",
+                kind: "swift_library",
+                name: "Lib",
+                srcs: &["Lib.swift"],
+                deps: &[],
+            }),
+            swift_target(SwiftTargetFixture {
+                package: "Mid",
+                kind: "swift_library",
+                name: "Mid",
+                srcs: &["Mid.swift"],
+                deps: &["Lib/Lib"],
+            }),
+            swift_target(SwiftTargetFixture {
+                package: "App",
+                kind: "macos_command_line_application",
+                name: "hello",
+                srcs: &["main.swift"],
+                deps: &["Mid/Mid"],
+            }),
         ];
         let built = build_plan(&targets, "App/hello", tmp.path()).unwrap();
         assert_eq!(built.plan.nodes.len(), 5);
@@ -408,20 +429,20 @@ mod tests {
             "public struct Parser {}",
         )
         .unwrap();
-        let synthetic_dep = swift_target(
-            "__fabrik__/external/swiftpm",
-            "swift_library",
-            "ArgumentParser",
-            &["ArgumentParser.swift"],
-            &[],
-        );
-        let mut app = swift_target(
-            "App",
-            "macos_command_line_application",
-            "app",
-            &["main.swift"],
-            &[],
-        );
+        let synthetic_dep = swift_target(SwiftTargetFixture {
+            package: "__fabrik__/external/swiftpm",
+            kind: "swift_library",
+            name: "ArgumentParser",
+            srcs: &["ArgumentParser.swift"],
+            deps: &[],
+        });
+        let mut app = swift_target(SwiftTargetFixture {
+            package: "App",
+            kind: "macos_command_line_application",
+            name: "app",
+            srcs: &["main.swift"],
+            deps: &[],
+        });
         app.external_deps.push(fabrik_frontend::ExternalDependency {
             graph: "swiftpm".to_string(),
             spec: serde_json::json!({
