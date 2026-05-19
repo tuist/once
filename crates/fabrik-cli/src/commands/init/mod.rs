@@ -110,26 +110,23 @@ pub async fn run(workspace: &Path, args: InitArgs, format: Format) -> Result<Exi
         && !args.no_input
         && std::io::stdin().is_terminal()
         && std::io::stderr().is_terminal();
-    let template = match select_template(&templates, args.template.as_deref(), interactive)? {
-        Some(template) => template,
-        None => {
-            let human_body = format!(
-                "{}Run `fabrik init <template-id>` or rerun in an interactive terminal.\n",
-                human::render_catalog(&templates)
-            );
-            write_response(
-                format,
-                human_body,
-                &InitResponse::SelectTemplate {
-                    templates: templates
-                        .iter()
-                        .map(|template| template_view(template, None))
-                        .collect(),
-                },
-            )
-            .await?;
-            return Ok(ExitCode::from(1));
-        }
+    let Some(template) = select_template(&templates, args.template.as_deref(), interactive)? else {
+        let human_body = format!(
+            "{}Run `fabrik init <template-id>` or rerun in an interactive terminal.\n",
+            human::render_catalog(&templates)
+        );
+        write_response(
+            format,
+            human_body,
+            &InitResponse::SelectTemplate {
+                templates: templates
+                    .iter()
+                    .map(|template| template_view(template, None))
+                    .collect(),
+            },
+        )
+        .await?;
+        return Ok(ExitCode::from(1));
     };
 
     let mut values = collect_assignments(args.values);
@@ -298,7 +295,7 @@ fn template_view(template: &Template, defaults: Option<&BTreeMap<String, String>
 fn prompt_view(prompt: &Prompt, default: Option<String>) -> PromptView {
     PromptView {
         name: prompt.name.clone(),
-        prompt: prompt.prompt.clone(),
+        prompt: prompt.question.clone(),
         description: prompt.description.clone(),
         default,
         validation: prompt.validation,

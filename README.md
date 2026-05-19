@@ -23,6 +23,8 @@ fabrik init --templates
 fabrik init rust-app --path hello
 ```
 
+Use the canonical template ids printed by `fabrik init --templates`, for example `rust-app`.
+
 ## Documentation
 
 Read the documentation at [fabrik.run](https://fabrik.run).

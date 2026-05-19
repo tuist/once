@@ -18,13 +18,14 @@ pub(super) fn render_catalog(templates: &[Template]) -> String {
                 body.push('\n');
             }
             current_toolchain = Some(template.toolchain());
-            body.push_str(&format!("{}\n", stdout_group(template.toolchain())));
+            body.push_str(&stdout_group(template.toolchain()));
+            body.push('\n');
         }
-        body.push_str(&format!(
-            "  {}  {}\n",
-            stdout_id(template.id()),
-            template.description()
-        ));
+        body.push_str("  ");
+        body.push_str(&stdout_id(template.id()));
+        body.push_str("  ");
+        body.push_str(template.description());
+        body.push('\n');
     }
     body
 }
@@ -40,16 +41,19 @@ pub(super) fn render_missing_inputs(
         stderr_id(template.id())
     );
     for prompt in missing {
-        body.push_str(&format!(
-            "  {} {}",
-            stderr_key(&prompt.prompt.name),
-            prompt.prompt.prompt
-        ));
+        body.push_str("  ");
+        body.push_str(&stderr_key(&prompt.prompt.name));
+        body.push(' ');
+        body.push_str(&prompt.prompt.question);
         if let Some(description) = &prompt.prompt.description {
-            body.push_str(&format!(" ({description})"));
+            body.push_str(" (");
+            body.push_str(description);
+            body.push(')');
         }
         if let Some(default) = &prompt.default {
-            body.push_str(&format!(" [default: {default}]"));
+            body.push_str(" [default: ");
+            body.push_str(default);
+            body.push(']');
         }
         body.push('\n');
     }
@@ -79,9 +83,12 @@ pub(super) fn render_created(
         stdout_path(&destination.display().to_string())
     );
     if !next_steps.is_empty() {
-        body.push_str(&format!("{}\n", stdout_heading("Next steps")));
+        body.push_str(&stdout_heading("Next steps"));
+        body.push('\n');
         for step in next_steps {
-            body.push_str(&format!("  {}\n", stdout_command(step)));
+            body.push_str("  ");
+            body.push_str(&stdout_command(step));
+            body.push('\n');
         }
     }
     body
@@ -151,7 +158,7 @@ pub(super) fn collect_values<R: BufRead, W: Write>(
             if let Some(description) = &prompt.description {
                 writeln!(output, "{}", stderr_dim(description))?;
             }
-            write!(output, "{}", stderr_prompt(&prompt.prompt))?;
+            write!(output, "{}", stderr_prompt(&prompt.question))?;
             if let Some(default) = &default {
                 write!(output, " {}", stderr_dim(&format!("[default: {default}]")))?;
             }

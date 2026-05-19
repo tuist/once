@@ -63,7 +63,8 @@ struct Manifest {
 #[serde(deny_unknown_fields)]
 pub(super) struct Prompt {
     pub name: String,
-    pub prompt: String,
+    #[serde(rename = "prompt")]
+    pub question: String,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
@@ -467,6 +468,39 @@ mod tests {
     #[test]
     fn parent_dirs_are_not_allowed_in_rendered_paths() {
         let err = validate_relative_path("../escape").unwrap_err();
+        assert!(err.to_string().contains("destination directory"));
+    }
+
+    #[test]
+    fn rendered_paths_reject_parent_dirs_from_template_values() {
+        let source = BuiltinTemplateSource {
+            manifest: r#"
+id = "path-check"
+name = "Path Check"
+toolchain = "test"
+description = "tests rendered path validation"
+
+[[prompts]]
+name = "segment"
+prompt = "Segment"
+
+[[files]]
+path = "{{segment}}/main.txt"
+source = "main.txt.tmpl"
+"#,
+            assets: &[TemplateAssetSource {
+                path: "main.txt.tmpl",
+                contents: "hello",
+            }],
+        };
+        let template = Template::from_source(&source).unwrap();
+        let err = template
+            .render(&BTreeMap::from([(
+                "segment".to_string(),
+                "../escape".to_string(),
+            )]))
+            .unwrap_err();
+
         assert!(err.to_string().contains("destination directory"));
     }
 

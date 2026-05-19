@@ -21,6 +21,16 @@ Describe 'fabrik --help'
   End
 End
 
+Describe 'fabrik'
+  It 'prints root help when no command is provided'
+    When call "$FABRIK_BIN"
+    The status should equal 2
+    The stderr should include 'Usage: fabrik [OPTIONS] [COMMAND]'
+    The stderr should include 'init'
+    The stderr should include '--list'
+  End
+End
+
 Describe 'fabrik --list'
   It 'prints the whole command surface'
     When call "$FABRIK_BIN" --list

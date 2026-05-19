@@ -161,4 +161,10 @@ mod tests {
             .iter()
             .any(|command| command.name == "sync"));
     }
+
+    #[test]
+    fn unknown_path_returns_error() {
+        let err = load(&["does-not-exist"]).unwrap_err();
+        assert!(format!("{err:#}").contains("unknown command path segment `does-not-exist`"));
+    }
 }
