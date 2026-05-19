@@ -15,6 +15,15 @@ concurrency:
 env:
   MISE_VERSION: "2026.4.18"
   MISE_GITHUB_ATTESTATIONS: 0
+  # The release jobs install only the tool they need via the mise-action
+  # install_args (rust for builds, git-cliff for detect/publish). Without
+  # these, running a task or a mise shim makes mise reinstall the entire
+  # mise.toml toolset on every matrix platform, which fails on the tools
+  # that ship no Windows / x86_64-macOS asset (blick, aube, opencode-ai).
+  MISE_AUTO_INSTALL: "false"
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_NOT_FOUND_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
 
 jobs:
   detect:
