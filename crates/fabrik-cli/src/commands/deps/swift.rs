@@ -6,6 +6,16 @@ use serde::Deserialize;
 
 use super::graph::{Ecosystem, ResolvedGraph, ResolvedPackage, ResolvedSource};
 
+// `Package.resolved` pins every transitively-resolved package but does
+// not record the edges between them, so every package this parser emits
+// has an empty `dependencies` list and the resolved graph is flat.
+// Downstream that means a Swift external package looks like a graph
+// leaf: a change deep in its dependency chain will not invalidate a
+// dependent through the graph alone. Recovering the real edges needs
+// `swift package show-dependencies --format json` (a toolchain-driven
+// resolution like the Rust/Go paths), tracked separately; until then
+// this limitation is explicit here rather than silently flat.
+
 pub(super) async fn load_graph(lockfile: &Path) -> Result<ResolvedGraph> {
     let body = tokio::fs::read_to_string(lockfile)
         .await
