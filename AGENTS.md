@@ -71,6 +71,14 @@ commented out with a stub so the limitation is visible. The generator
 does not copy sources today, so declarations keep empty `srcs`
 placeholders until source copying exists.
 
+Generated `.fabrik/external/<graph>/fabrik.toml` files carry a
+`# fabrik:generated-external-format=<n>` stamp on the first line. The
+workspace loader refuses a stamp it does not recognize so a stale
+generated tree fails loudly instead of feeding a wrong graph into a
+build; a missing stamp stays loadable so hand-authored external
+packages keep working. Bump `GENERATED_EXTERNAL_FORMAT_VERSION` in
+`fabrik-frontend` whenever the generated shape changes.
+
 Build script support and per-target feature resolution are the open
 items needed for this verb to drive a full self-host of Fabrik via
 the granular pipeline.

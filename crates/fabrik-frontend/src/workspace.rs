@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
-use crate::dependency::{external_target_id, DependencyEntry, EXTERNAL_PACKAGE_CACHE_ROOT};
+use crate::dependency::{
+    external_target_id, parse_generated_external_format, DependencyEntry,
+    EXTERNAL_PACKAGE_CACHE_ROOT, GENERATED_EXTERNAL_FORMAT_VERSION,
+};
 use crate::error::{Error, Result};
 use crate::manifest::{load_dependency_entries_toml_with, load_toml_with};
 use crate::target::Target;
@@ -126,6 +129,20 @@ fn load_external_packages(root: &Path) -> Result<Vec<Target>> {
             path: path.display().to_string(),
             source,
         })?;
+        // A stamped file from a different generator is refused so a
+        // stale `.fabrik/external` tree fails loudly instead of feeding
+        // a silently wrong graph into the build. A missing stamp is
+        // tolerated: hand-authored and pre-versioning packages stay
+        // loadable.
+        if let Some(found) = parse_generated_external_format(&src) {
+            if found != GENERATED_EXTERNAL_FORMAT_VERSION {
+                return Err(Error::IncompatibleGeneratedFormat {
+                    path: path.display().to_string(),
+                    found,
+                    expected: GENERATED_EXTERNAL_FORMAT_VERSION,
+                });
+            }
+        }
         let display = format!("{source_package}/{TOML_BUILD_FILE_NAME}");
         let mut targets = load_toml_with(&display, &src, root, &source_package)?;
         for target in &mut targets {
@@ -278,6 +295,51 @@ srcs = ["helper/src/lib.rs"]
         assert_eq!(ids, vec!["external:cargo/dep", "external:cargo/helper"]);
         assert_eq!(targets[0].package, ".fabrik/external/cargo");
         assert_eq!(targets[0].deps, vec!["external:cargo/helper"]);
+    }
+
+    #[test]
+    fn a_correctly_stamped_external_package_loads() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join(".fabrik/external/cargo")).unwrap();
+        std::fs::write(
+            root.join(".fabrik/external/cargo/fabrik.toml"),
+            format!(
+                "{}\n[[rust.library]]\nname = \"dep\"\nsrcs = [\"dep/src/lib.rs\"]\n",
+                crate::generated_external_format_header()
+            ),
+        )
+        .unwrap();
+
+        let ids: Vec<_> = load_workspace(root)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id())
+            .collect();
+        assert_eq!(ids, vec!["external:cargo/dep"]);
+    }
+
+    #[test]
+    fn an_incompatibly_stamped_external_package_is_refused() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join(".fabrik/external/cargo")).unwrap();
+        let stale = GENERATED_EXTERNAL_FORMAT_VERSION + 1;
+        std::fs::write(
+            root.join(".fabrik/external/cargo/fabrik.toml"),
+            format!(
+                "# fabrik:generated-external-format={stale}\n[[rust.library]]\nname = \"dep\"\n"
+            ),
+        )
+        .unwrap();
+
+        let err = load_workspace(root).unwrap_err();
+        assert!(
+            matches!(err, Error::IncompatibleGeneratedFormat { found, expected, .. }
+                if found == stale && expected == GENERATED_EXTERNAL_FORMAT_VERSION),
+            "unexpected error: {err}"
+        );
+        assert!(err.to_string().contains("re-run `fabrik deps sync`"));
     }
 
     #[test]

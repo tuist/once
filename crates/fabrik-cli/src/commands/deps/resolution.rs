@@ -71,6 +71,16 @@ pub(in crate::commands::deps) fn resolution_input_digest(
     builder.push_bytes(format!("entry:{}", entry.name).as_bytes());
     builder.push_bytes(format!("ecosystem:{:?}", entry.ecosystem).as_bytes());
     builder.push_bytes(format!("workspace:{}", workspace.display()).as_bytes());
+    // Bumping the generated-external format must invalidate a cached
+    // resolution so the next `deps sync` rewrites the generated tree
+    // with the new shape rather than reusing the stale one.
+    builder.push_bytes(
+        format!(
+            "generated-external-format:{}",
+            fabrik_frontend::GENERATED_EXTERNAL_FORMAT_VERSION
+        )
+        .as_bytes(),
+    );
     Ok(builder.finish())
 }
 
