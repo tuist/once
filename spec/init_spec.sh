@@ -73,10 +73,12 @@ Describe 'fabrik init'
 
   It 'creates a Rust project that builds and tests'
     rust_project
+    fabrik build rust-app/hello >/dev/null 2>&1
     When call fabrik test rust-app/greeting_test
     The status should be success
     The stdout should include 'test result: ok'
     The stderr should include 'build 2 nodes'
+    The path "$WORKSPACE/.fabrik/out/rust-app/hello" should be file
   End
 
   It 'creates an Elixir project that builds and runs'
@@ -103,18 +105,27 @@ Describe 'fabrik init'
     The stdout should equal 'Hello from Fabrik'
   End
 
-  It 'creates a macOS Apple project with valid targets'
+  It 'creates a macOS Apple project that builds'
+    Skip if "no apple toolchain" apple_toolchain_unavailable
     apple_macos_project
-    When call fabrik targets
+    When call fabrik build macos-app/hello
     The status should be success
-    The stdout should include 'macos-app/Greeter'
-    The stdout should include 'macos-app/hello'
+    The stderr should include 'swift_compile'
+    The stderr should include 'swift_archive'
+    The stderr should include 'macos_command_line_application'
+    The path "$WORKSPACE/.fabrik/out/macos-app/Greeter/libGreeter.a" should be file
+    The path "$WORKSPACE/.fabrik/out/macos-app/Greeter/Greeter.swiftmodule" should be file
+    The path "$WORKSPACE/.fabrik/out/macos-app/hello" should be file
   End
 
-  It 'creates an iOS simulator Apple project with valid targets'
+  It 'creates an iOS Apple project that builds'
+    Skip if "no apple toolchain" apple_toolchain_unavailable
     apple_ios_project
-    When call fabrik targets
+    When call fabrik build ios-app/Demo
     The status should be success
-    The stdout should include 'apple_simulator_app ios-app/Demo'
+    The stderr should include 'apple_simulator_app'
+    The path "$WORKSPACE/.fabrik/out/ios-app/Demo.app" should be directory
+    The path "$WORKSPACE/.fabrik/out/ios-app/Demo.app/Info.plist" should be file
+    The path "$WORKSPACE/.fabrik/out/ios-app/Demo.app/Demo" should be file
   End
 End
