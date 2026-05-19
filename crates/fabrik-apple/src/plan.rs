@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
@@ -25,7 +26,7 @@ pub enum PlanBuildError {
         kind: String,
     },
     #[error(
-        "external dep `{graph}` of target {label} must use a string product name or product object"
+        "external dep `{graph}` of target {label} must use a string product name or product table"
     )]
     InvalidExternalDepSpec { label: String, graph: String },
     #[error(transparent)]
@@ -89,9 +90,9 @@ pub fn build_plan(
     for target_idx in &order {
         let target = &targets[*target_idx];
         let deps = &deps_by_target[*target_idx];
-        validate_swift_deps(target, deps, targets, &target_index)?;
+        validate_swift_deps(target, deps.as_ref(), targets, &target_index)?;
         let mut target_for_compile = target.clone();
-        target_for_compile.deps.clone_from(deps);
+        target_for_compile.deps = deps.iter().cloned().collect();
         target_for_compile.external_deps = Vec::new();
         let (plan_idx, import_idx, artifact) = push_swift_target(
             &mut plan,
@@ -172,11 +173,14 @@ fn validate_swift_deps(
     Ok(())
 }
 
-fn target_dep_ids(targets: &[Target]) -> Result<Vec<Vec<String>>, PlanBuildError> {
+fn target_dep_ids(targets: &[Target]) -> Result<Vec<Cow<'_, [String]>>, PlanBuildError> {
     targets.iter().map(target_dep_id).collect()
 }
 
-fn target_dep_id(target: &Target) -> Result<Vec<String>, PlanBuildError> {
+fn target_dep_id(target: &Target) -> Result<Cow<'_, [String]>, PlanBuildError> {
+    if target.external_deps.is_empty() {
+        return Ok(Cow::Borrowed(&target.deps));
+    }
     let mut deps = target.deps.clone();
     for dep in &target.external_deps {
         let Some(product_name) = swift_product_name(&dep.spec) else {
@@ -187,7 +191,7 @@ fn target_dep_id(target: &Target) -> Result<Vec<String>, PlanBuildError> {
         };
         deps.push(external_dep_id(&dep.graph, product_name));
     }
-    Ok(deps)
+    Ok(Cow::Owned(deps))
 }
 
 fn swift_product_name(spec: &serde_json::Value) -> Option<&str> {
@@ -264,7 +268,7 @@ fn push_swift_target(
 fn dfs(
     idx: usize,
     targets: &[Target],
-    deps_by_target: &[Vec<String>],
+    deps_by_target: &[Cow<'_, [String]>],
     target_index: &HashMap<String, usize>,
     visited: &mut BTreeSet<usize>,
     on_stack: &mut BTreeSet<usize>,
@@ -277,7 +281,7 @@ fn dfs(
         return Err(PlanBuildError::Cycle(targets[idx].id()));
     }
     on_stack.insert(idx);
-    for dep in &deps_by_target[idx] {
+    for dep in deps_by_target[idx].iter() {
         let dep_idx = target_index
             .get(dep)
             .ok_or_else(|| PlanBuildError::MissingDep {

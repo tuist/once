@@ -97,8 +97,34 @@ EOF
     When call "$FABRIK_BIN" -C "$WORKSPACE" vendor
     The status should be success
     The stderr should include '`fabrik vendor` is deprecated'
-    The stderr should include 'removed after the next release'
+    The stderr should include 'removed in v0.8.0'
     The stderr should include 'fabrik deps sync'
+  End
+
+  It 'rejects dependency entry names that escape the external namespace'
+    cat > "$WORKSPACE/fabrik.toml" <<'EOF'
+[[deps]]
+name = "../cargo"
+ecosystem = "rust"
+manifest = "Cargo.toml"
+EOF
+
+    When call "$FABRIK_BIN" -C "$WORKSPACE" deps sync
+    The status should not equal 0
+    The stderr should include 'must be a single path segment'
+  End
+
+  It 'reports missing lockfiles required by lockfile-backed ecosystems'
+    cat > "$WORKSPACE/fabrik.toml" <<'EOF'
+[[deps]]
+name = "swiftpm"
+ecosystem = "swift"
+manifest = "Package.swift"
+EOF
+
+    When call "$FABRIK_BIN" -C "$WORKSPACE" deps sync swiftpm
+    The status should not equal 0
+    The stderr should include 'must declare `lockfile`'
   End
 
   It 'writes a declared Swift Package.resolved graph'

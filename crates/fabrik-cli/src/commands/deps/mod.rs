@@ -117,3 +117,35 @@ async fn write_graph_entry(
         resolution_cache,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(name: &str) -> DependencyEntry {
+        DependencyEntry {
+            package: String::new(),
+            name: name.to_string(),
+            ecosystem: DependencyEcosystem::Rust,
+            manifest: "Cargo.toml".to_string(),
+            lockfile: None,
+            output: None,
+        }
+    }
+
+    #[test]
+    fn dependency_entry_name_must_be_a_single_path_segment() {
+        for name in ["", ".", "..", "nested/name", r"nested\name", "cargo:serde"] {
+            let err = validate_entry_name(&entry(name)).unwrap_err();
+            assert!(
+                err.to_string().contains("must be a single path segment"),
+                "unexpected error for {name:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn dependency_entry_name_accepts_simple_segment() {
+        validate_entry_name(&entry("cargo")).unwrap();
+    }
+}

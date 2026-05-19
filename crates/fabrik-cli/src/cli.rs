@@ -169,7 +169,7 @@ pub enum Cmd {
         cmd: DepsCmd,
     },
 
-    /// Deprecated alias for `fabrik deps sync`.
+    /// Deprecated alias for `fabrik deps sync`. Removed in v0.8.0.
     #[command(hide = true)]
     Vendor,
 

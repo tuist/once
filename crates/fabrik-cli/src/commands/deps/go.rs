@@ -102,6 +102,10 @@ fn package_from_module(module: GoModule) -> ResolvedPackage {
                 path,
             })
     } else if let Some(replace) = module.replace {
+        let original_id = module_id(&module.path, module.version.as_deref());
+        let original_path = module.path.clone();
+        let original_version = module.version.clone();
+        let original_sum = module.sum.clone();
         let replace_id = module_id(&replace.path, replace.version.as_deref());
         let replace_path = replace.path.clone();
         let replace_version = replace.version.clone();
@@ -109,6 +113,10 @@ fn package_from_module(module: GoModule) -> ResolvedPackage {
         metadata.insert(
             "replace".to_string(),
             serde_json::json!({
+                "original_id": original_id,
+                "original_path": original_path,
+                "original_version": original_version,
+                "original_sum": original_sum,
                 "id": replace_id,
                 "path": replace_path,
                 "version": replace_version,
@@ -174,11 +182,15 @@ mod tests {
     #[test]
     fn records_replacements_as_metadata() {
         let graph = parse_go_list_modules(
-            br#"{"Path":"example.com/dep","Version":"v1.2.3","Replace":{"Path":"../dep","Dir":"/repo/dep"}}"#,
+            br#"{"Path":"example.com/dep","Version":"v1.2.3","Sum":"h1:old","Replace":{"Path":"../dep","Dir":"/repo/dep"}}"#,
         )
         .unwrap();
 
-        assert!(graph.packages[0].metadata.contains_key("replace"));
+        let replace = &graph.packages[0].metadata["replace"];
+        assert_eq!(replace["original_id"], "example.com/dep@v1.2.3");
+        assert_eq!(replace["original_path"], "example.com/dep");
+        assert_eq!(replace["original_version"], "v1.2.3");
+        assert_eq!(replace["original_sum"], "h1:old");
         assert_eq!(
             graph.packages[0].source,
             ResolvedSource::Path {

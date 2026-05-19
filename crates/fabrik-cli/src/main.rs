@@ -142,7 +142,7 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
         } => commands::deps::sync(&workspace, &cas, format, name.as_deref()).await,
         Cmd::Vendor => {
             eprintln!(
-                "fabrik: `fabrik vendor` is deprecated and will be removed after the next release; use `fabrik deps sync` instead"
+                "fabrik: `fabrik vendor` is deprecated and will be removed in v0.8.0; use `fabrik deps sync` instead"
             );
             commands::deps::sync(&workspace, &cas, format, None).await
         }

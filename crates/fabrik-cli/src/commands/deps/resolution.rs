@@ -88,6 +88,9 @@ fn collect_resolution_files(
         if file_type.is_dir() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
+            // Exclude generated caches, VCS metadata, and dependency
+            // stores whose contents are derived from the manifests
+            // being hashed here.
             if matches!(
                 name.as_ref(),
                 ".fabrik" | ".git" | "node_modules" | "target" | "vendor"

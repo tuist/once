@@ -9,10 +9,10 @@ pub(super) async fn load_graph(lockfile: &Path) -> Result<ResolvedGraph> {
     let body = tokio::fs::read_to_string(lockfile)
         .await
         .with_context(|| format!("reading {}", lockfile.display()))?;
-    Ok(parse_mix_lock(&body))
+    parse_mix_lock(&body)
 }
 
-fn parse_mix_lock(body: &str) -> ResolvedGraph {
+fn parse_mix_lock(body: &str) -> Result<ResolvedGraph> {
     let mut packages = Vec::new();
     for entry in top_level_entries(body) {
         let Some((name, value)) = parse_entry(entry) else {
@@ -21,7 +21,7 @@ fn parse_mix_lock(body: &str) -> ResolvedGraph {
         let fields = tuple_fields(value);
         match fields.first().map(|field| field.trim()) {
             Some(":hex") if fields.len() >= 8 => {
-                packages.push(hex_package(name, &fields));
+                packages.push(hex_package(name, &fields)?);
             }
             Some(":git") if fields.len() >= 3 => {
                 packages.push(git_package(&name, &fields));
@@ -29,14 +29,15 @@ fn parse_mix_lock(body: &str) -> ResolvedGraph {
             _ => {}
         }
     }
-    ResolvedGraph::new(Ecosystem::Elixir, packages)
+    Ok(ResolvedGraph::new(Ecosystem::Elixir, packages))
 }
 
-fn hex_package(lock_key: String, fields: &[&str]) -> ResolvedPackage {
+fn hex_package(lock_key: String, fields: &[&str]) -> Result<ResolvedPackage> {
     let package_name = parse_atom(fields[1].trim()).unwrap_or_else(|| lock_key.clone());
     let version = parse_string(fields[2].trim());
     let inner_checksum = parse_string(fields[3].trim());
-    let dependencies = parse_dependency_list(fields[5].trim());
+    let dependencies = parse_dependency_list(fields[5].trim())
+        .with_context(|| format!("parsing dependency list for `{package_name}`"))?;
     let repo = parse_string(fields[6].trim());
     let outer_checksum = parse_string(fields[7].trim());
     let checksum = outer_checksum.or(inner_checksum);
@@ -46,7 +47,7 @@ fn hex_package(lock_key: String, fields: &[&str]) -> ResolvedPackage {
     );
     let metadata = package_metadata(package_name.as_str(), lock_key);
 
-    ResolvedPackage {
+    Ok(ResolvedPackage {
         id,
         name: package_name,
         version,
@@ -54,7 +55,7 @@ fn hex_package(lock_key: String, fields: &[&str]) -> ResolvedPackage {
         checksum,
         dependencies,
         metadata,
-    }
+    })
 }
 
 fn git_package(lock_key: &str, fields: &[&str]) -> ResolvedPackage {
@@ -114,12 +115,12 @@ fn tuple_fields(value: &str) -> Vec<&str> {
     split_top_level(inner, ',')
 }
 
-fn parse_dependency_list(value: &str) -> Vec<ResolvedDependency> {
+fn parse_dependency_list(value: &str) -> Result<Vec<ResolvedDependency>> {
     let value = value.trim();
     let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) else {
-        return Vec::new();
+        anyhow::bail!("expected dependency list in `[...]` format, got `{value}`");
     };
-    split_top_level(inner, ',')
+    Ok(split_top_level(inner, ',')
         .into_iter()
         .filter_map(|dep| {
             let dep = dep.trim();
@@ -132,7 +133,7 @@ fn parse_dependency_list(value: &str) -> Vec<ResolvedDependency> {
                 kind: "normal".to_string(),
             })
         })
-        .collect()
+        .collect())
 }
 
 fn split_top_level(input: &str, separator: char) -> Vec<&str> {
@@ -221,7 +222,8 @@ mod tests {
   "decimal": {:hex, :decimal, "2.1.1", "inner", [:mix], [], "hexpm", "outer"},
   "jason": {:hex, :jason, "1.4.1", "inner2", [:mix], [{:decimal, "~> 2.0", [hex: :decimal, repo: "hexpm", optional: true]}], "hexpm", "outer2"}
 }"#,
-        );
+        )
+        .unwrap();
 
         assert_eq!(graph.ecosystem, Ecosystem::Elixir);
         assert_eq!(graph.packages.len(), 2);
@@ -241,7 +243,8 @@ mod tests {
             r#"%{
   "plug" => {:hex, :plug, "1.16.1", "inner", [:mix], [], "hexpm", "outer"}
 }"#,
-        );
+        )
+        .unwrap();
 
         assert_eq!(graph.packages[0].name, "plug");
     }
@@ -252,7 +255,8 @@ mod tests {
             r#"%{
   "cowboy": {:git, "https://github.com/ninenines/cowboy.git", "abc123", [tag: "2.10.0"]}
 }"#,
-        );
+        )
+        .unwrap();
 
         assert_eq!(graph.packages[0].id, "cowboy#abc123");
         assert_eq!(
@@ -262,5 +266,19 @@ mod tests {
                 revision: Some("abc123".to_string())
             }
         );
+    }
+
+    #[test]
+    fn rejects_malformed_hex_dependency_lists() {
+        let err = parse_mix_lock(
+            r#"%{
+  "bad": {:hex, :bad, "1.0.0", "inner", [:mix], :not_a_list, "hexpm", "outer"}
+}"#,
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("parsing dependency list for `bad`"));
     }
 }
