@@ -3,7 +3,7 @@ name = "rust_deps"
 ecosystem = "rust"
 manifest = "Cargo.toml"
 lockfile = "Cargo.lock"
-output = "__fabrik__/deps/rust_deps/fabrik.rust.lock.json"
+output = ".fabrik/deps/rust_deps/fabrik.rust.lock.json"
 
 [[cargo.binary]]
 name = "fabrik"

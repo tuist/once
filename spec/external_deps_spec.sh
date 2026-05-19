@@ -44,6 +44,7 @@ EOF
     When call "$WORKSPACE/.fabrik/out/app/app"
     The status should be success
     The path "$WORKSPACE/.fabrik/out/app/app" should be file
+    The path "$WORKSPACE/.fabrik/out/external/cargo/libdep_message.rlib" should be file
     The stdout should equal 'rust dependency consumed'
   End
 
@@ -94,6 +95,7 @@ EOF
     When call "$WORKSPACE/.fabrik/out/app/app"
     The status should be success
     The path "$WORKSPACE/.fabrik/out/app/app" should be file
+    The path "$WORKSPACE/.fabrik/out/external/mix/external_dep.ebin/Elixir.ExternalDep.beam" should be file
     The stdout should equal 'elixir dependency consumed'
   End
 
@@ -139,6 +141,7 @@ EOF
     When call "$WORKSPACE/.fabrik/out/app/app"
     The status should be success
     The path "$WORKSPACE/.fabrik/out/app/app" should be file
+    The path "$WORKSPACE/.fabrik/out/external/swiftpm/ExternalKit/libExternalKit.a" should be file
     The stdout should equal 'swift dependency consumed'
   End
 
