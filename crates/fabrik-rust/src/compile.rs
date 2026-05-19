@@ -93,7 +93,8 @@ pub fn compile_target(
         format!("{}/{}", target.package, crate_root_pkg_rel)
     };
 
-    let out_dir = out_dir(&target.package, &target.name);
+    let output_package = target.output_package();
+    let out_dir = out_dir(output_package.as_ref(), &target.name);
     let rustc =
         workspace_tool(workspace_root, "rustc").map_err(|source| CompileError::Toolchain {
             label: target.id(),
@@ -420,10 +421,12 @@ mod tests {
     fn lib_target(pkg: &str, name: &str, srcs: &[&str], deps: &[&str]) -> Target {
         Target {
             package: pkg.into(),
+            external_package: None,
             kind: "rust_library".into(),
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
     }
@@ -431,10 +434,12 @@ mod tests {
     fn bin_target(pkg: &str, name: &str, srcs: &[&str], deps: &[&str]) -> Target {
         Target {
             package: pkg.into(),
+            external_package: None,
             kind: "rust_binary".into(),
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
     }
@@ -492,10 +497,12 @@ mod tests {
     fn unsupported_kind_is_a_clean_error() {
         let target = Target {
             package: String::new(),
+            external_package: None,
             kind: "java_library".into(),
             name: "x".into(),
             srcs: vec!["X.java".into()],
             deps: vec![],
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         };
         let err = compile_target(&target, Path::new("/tmp"), &BTreeMap::new()).unwrap_err();
@@ -527,10 +534,12 @@ mod tests {
         write(tmp.path(), "crates/user/src/lib.rs", "");
         let pm = Target {
             package: "crates/pm".into(),
+            external_package: None,
             kind: "rust_proc_macro".into(),
             name: "macros".into(),
             srcs: vec!["src/lib.rs".into()],
             deps: vec![],
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         };
         let (_, pm_art) = compile_target(&pm, tmp.path(), &BTreeMap::new()).unwrap();

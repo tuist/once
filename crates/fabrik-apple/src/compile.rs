@@ -59,7 +59,8 @@ pub fn launch_ios_app(target: &Target, _workspace_root: &Path) -> Result<AppleAc
     ensure_ios_simulator_app(target)?;
 
     let bundle_id = required_attr(target, "bundle_id")?;
-    let app_dir = app_bundle_path(&target.package, &target.name);
+    let output_package = target.output_package();
+    let app_dir = app_bundle_path(output_package.as_ref(), &target.name);
     let simulator = target
         .attrs
         .get("simulator")
@@ -101,7 +102,8 @@ fn build_ios_app_action(target: &Target, workspace_root: &Path) -> Result<AppleA
         .get("minimum_os")
         .cloned()
         .unwrap_or_else(|| "17.0".to_string());
-    let app_dir = app_bundle_path(&target.package, &target.name);
+    let output_package = target.output_package();
+    let app_dir = app_bundle_path(output_package.as_ref(), &target.name);
     let source_paths = source_paths(target)?;
     let source_args = source_paths
         .iter()
@@ -361,10 +363,12 @@ mod tests {
         attrs.insert("bundle_id".to_string(), "dev.fabrik.demo".to_string());
         Target {
             package: "App".to_string(),
+            external_package: None,
             kind: "apple_simulator_app".to_string(),
             name: "Demo".to_string(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: Vec::new(),
+            external_deps: Vec::new(),
             attrs,
         }
     }

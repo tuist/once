@@ -12,9 +12,59 @@ Describe 'fabrik --help'
     The stdout should include 'test'
     The stdout should include 'exec'
     The stdout should include 'cache'
+    The stdout should include 'deps'
     The stdout should include 'runtime'
     The stdout should include '--directory'
     The stdout should include 'toon'
+  End
+End
+
+Describe 'fabrik deps'
+  It 'prints deps help and exits 0'
+    When call "$FABRIK_BIN" deps --help
+    The status should be success
+    The stdout should include 'sync'
+    The stdout should include 'Dependency graph maintenance'
+  End
+
+  It 'prints deps sync help and documents the optional entry name'
+    When call "$FABRIK_BIN" deps sync --help
+    The status should be success
+    The stdout should include 'Sync one dependency entry by name'
+    The stdout should include '[NAME]'
+  End
+End
+
+Describe 'fabrik vendor'
+  BeforeEach 'setup_workspace'
+  AfterEach 'cleanup_workspace'
+
+  It 'warns with a removal version and delegates to deps sync'
+    mkdir -p "$WORKSPACE/src"
+    cat > "$WORKSPACE/Cargo.toml" <<'EOF'
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+EOF
+    cat > "$WORKSPACE/src/lib.rs" <<'EOF'
+pub fn app() -> &'static str { "app" }
+EOF
+    cargo generate-lockfile --manifest-path "$WORKSPACE/Cargo.toml" >/dev/null 2>&1
+    cat > "$WORKSPACE/fabrik.toml" <<'EOF'
+[[deps]]
+name = "rust_deps"
+ecosystem = "rust"
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+EOF
+
+    When call "$FABRIK_BIN" -C "$WORKSPACE" vendor
+    The status should be success
+    The stderr should include '`fabrik vendor` is deprecated'
+    The stderr should include 'removed in v0.8.0'
+    The stderr should include 'fabrik deps sync'
+    The path "$WORKSPACE/.fabrik/deps/rust_deps/fabrik.rust.lock.json" should be file
   End
 End
 

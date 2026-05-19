@@ -20,6 +20,16 @@ pub enum Error {
     Parse { path: String, message: String },
     #[error("evaluation error in {path}:\n{message}")]
     Eval { path: String, message: String },
+    #[error(
+        "generated external package {path} was produced by an incompatible \
+         `fabrik deps sync` (format {found}, expected {expected}); \
+         re-run `fabrik deps sync`"
+    )]
+    IncompatibleGeneratedFormat {
+        path: String,
+        found: u32,
+        expected: u32,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -107,6 +107,7 @@ EOF
 [[rust.binary]]
 name = "top"
 srcs = ["main.rs"]
+deps = [{ cargo = "serde" }]
 
 [[rust.library]]
 name = "lib"
@@ -116,6 +117,7 @@ EOF
     The status should be success
     The stdout should include '"id":"top"'
     The stdout should include '"kind":"rust_binary"'
+    The stdout should include '"external_deps":[{"graph":"cargo","spec":"serde"}]'
     The stdout should include '"id":"lib"'
     The stdout should include '"kind":"rust_library"'
   End

@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use fabrik_core::{BuiltPlan, NodeInfo, Plan};
-use fabrik_frontend::Target;
+use fabrik_frontend::{external_dep_id, Target};
 
 use crate::artifact::{AppleKind, SwiftArtifact};
 use crate::compile::{compile_ios_app, AppleError};
@@ -24,6 +25,10 @@ pub enum PlanBuildError {
         dep: String,
         kind: String,
     },
+    #[error(
+        "external dep `{graph}` of target {label} must use a string product name or product table"
+    )]
+    InvalidExternalDepSpec { label: String, graph: String },
     #[error(transparent)]
     Apple(#[from] AppleError),
     #[error(transparent)]
@@ -59,6 +64,7 @@ pub fn build_plan(
     if kind == AppleKind::SimulatorApp {
         return build_ios_plan(target, root_id, workspace_root);
     }
+    let deps_by_target = target_dep_ids(targets)?;
 
     let mut order = Vec::new();
     let mut on_stack = BTreeSet::new();
@@ -66,6 +72,7 @@ pub fn build_plan(
     dfs(
         root_target_idx,
         targets,
+        &deps_by_target,
         &target_index,
         &mut visited,
         &mut on_stack,
@@ -82,11 +89,15 @@ pub fn build_plan(
 
     for target_idx in &order {
         let target = &targets[*target_idx];
-        validate_swift_deps(target, targets, &target_index)?;
+        let deps = &deps_by_target[*target_idx];
+        validate_swift_deps(target, deps.as_ref(), targets, &target_index)?;
+        let mut target_for_compile = target.clone();
+        target_for_compile.deps = deps.iter().cloned().collect();
+        target_for_compile.external_deps = Vec::new();
         let (plan_idx, import_idx, artifact) = push_swift_target(
             &mut plan,
             &mut nodes,
-            target,
+            &target_for_compile,
             workspace_root,
             &dep_artifacts,
             &id_to_plan_idx,
@@ -116,11 +127,13 @@ fn build_ios_plan(
     root_id: &str,
     workspace_root: &Path,
 ) -> Result<BuiltPlan, PlanBuildError> {
-    if !target.deps.is_empty() {
+    let dep_ids = target_dep_id(target)?;
+    if !dep_ids.is_empty() {
         return Err(PlanBuildError::UnsupportedDeps { label: target.id() });
     }
     let node = compile_ios_app(target, workspace_root)?;
-    let output = crate::app_bundle_path(&target.package, &target.name);
+    let output_package = target.output_package();
+    let output = crate::app_bundle_path(output_package.as_ref(), &target.name);
     let mut plan = Plan::new();
     let root_index = plan.push(node);
     Ok(BuiltPlan {
@@ -137,10 +150,11 @@ fn build_ios_plan(
 
 fn validate_swift_deps(
     target: &Target,
+    dep_ids: &[String],
     targets: &[Target],
     target_index: &HashMap<String, usize>,
 ) -> Result<(), PlanBuildError> {
-    for dep in &target.deps {
+    for dep in dep_ids {
         let dep_target_idx = target_index
             .get(dep)
             .ok_or_else(|| PlanBuildError::MissingDep {
@@ -157,6 +171,32 @@ fn validate_swift_deps(
         }
     }
     Ok(())
+}
+
+fn target_dep_ids(targets: &[Target]) -> Result<Vec<Cow<'_, [String]>>, PlanBuildError> {
+    targets.iter().map(target_dep_id).collect()
+}
+
+fn target_dep_id(target: &Target) -> Result<Cow<'_, [String]>, PlanBuildError> {
+    if target.external_deps.is_empty() {
+        return Ok(Cow::Borrowed(&target.deps));
+    }
+    let mut deps = target.deps.clone();
+    for dep in &target.external_deps {
+        let Some(product_name) = swift_product_name(&dep.spec) else {
+            return Err(PlanBuildError::InvalidExternalDepSpec {
+                label: target.id(),
+                graph: dep.graph.clone(),
+            });
+        };
+        deps.push(external_dep_id(&dep.graph, product_name));
+    }
+    Ok(Cow::Owned(deps))
+}
+
+fn swift_product_name(spec: &serde_json::Value) -> Option<&str> {
+    spec.as_str()
+        .or_else(|| spec.get("product").and_then(serde_json::Value::as_str))
 }
 
 fn push_swift_target(
@@ -228,6 +268,7 @@ fn push_swift_target(
 fn dfs(
     idx: usize,
     targets: &[Target],
+    deps_by_target: &[Cow<'_, [String]>],
     target_index: &HashMap<String, usize>,
     visited: &mut BTreeSet<usize>,
     on_stack: &mut BTreeSet<usize>,
@@ -240,7 +281,7 @@ fn dfs(
         return Err(PlanBuildError::Cycle(targets[idx].id()));
     }
     on_stack.insert(idx);
-    for dep in &targets[idx].deps {
+    for dep in deps_by_target[idx].iter() {
         let dep_idx = target_index
             .get(dep)
             .ok_or_else(|| PlanBuildError::MissingDep {
@@ -249,7 +290,15 @@ fn dfs(
             })?;
         let dep_kind = &targets[*dep_idx].kind;
         if supports_kind(dep_kind) && !is_simulator_app_kind(dep_kind) {
-            dfs(*dep_idx, targets, target_index, visited, on_stack, order)?;
+            dfs(
+                *dep_idx,
+                targets,
+                deps_by_target,
+                target_index,
+                visited,
+                on_stack,
+                order,
+            )?;
         }
     }
     on_stack.remove(&idx);
@@ -278,10 +327,12 @@ mod tests {
         attrs.insert("bundle_id".to_string(), "dev.fabrik.demo".to_string());
         let target = Target {
             package: "App".to_string(),
+            external_package: None,
             kind: "apple_simulator_app".to_string(),
             name: "Demo".to_string(),
             srcs: vec!["App.swift".to_string()],
             deps: Vec::new(),
+            external_deps: Vec::new(),
             attrs,
         };
         let built = build_plan(&[target], "App/Demo", tmp.path()).unwrap();
@@ -289,15 +340,35 @@ mod tests {
         assert_eq!(built.output, ".fabrik/out/App/Demo.app");
     }
 
-    fn swift_target(pkg: &str, kind: &str, name: &str, srcs: &[&str], deps: &[&str]) -> Target {
+    #[derive(Clone, Copy)]
+    struct SwiftTargetFixture<'a> {
+        package: &'a str,
+        external_package: Option<&'a str>,
+        kind: &'a str,
+        name: &'a str,
+        srcs: &'a [&'a str],
+        deps: &'a [&'a str],
+    }
+
+    fn swift_target(fixture: SwiftTargetFixture<'_>) -> Target {
         Target {
-            package: pkg.into(),
-            kind: kind.into(),
-            name: name.into(),
-            srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
-            deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            package: fixture.package.into(),
+            external_package: fixture.external_package.map(str::to_string),
+            kind: fixture.kind.into(),
+            name: fixture.name.into(),
+            srcs: fixture.srcs.iter().map(|s| (*s).to_string()).collect(),
+            deps: fixture.deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
+    }
+
+    fn dependency_labels(built: &BuiltPlan, node_index: usize) -> Vec<&str> {
+        built.plan.nodes[node_index]
+            .deps
+            .iter()
+            .map(|index| built.nodes[*index].label.as_str())
+            .collect()
     }
 
     #[test]
@@ -314,15 +385,30 @@ mod tests {
         std::fs::write(tmp.path().join("Mid/Mid.swift"), "import Lib").unwrap();
         std::fs::write(tmp.path().join("App/main.swift"), "import Mid").unwrap();
         let targets = vec![
-            swift_target("Lib", "swift_library", "Lib", &["Lib.swift"], &[]),
-            swift_target("Mid", "swift_library", "Mid", &["Mid.swift"], &["Lib/Lib"]),
-            swift_target(
-                "App",
-                "macos_command_line_application",
-                "hello",
-                &["main.swift"],
-                &["Mid/Mid"],
-            ),
+            swift_target(SwiftTargetFixture {
+                package: "Lib",
+                external_package: None,
+                kind: "swift_library",
+                name: "Lib",
+                srcs: &["Lib.swift"],
+                deps: &[],
+            }),
+            swift_target(SwiftTargetFixture {
+                package: "Mid",
+                external_package: None,
+                kind: "swift_library",
+                name: "Mid",
+                srcs: &["Mid.swift"],
+                deps: &["Lib/Lib"],
+            }),
+            swift_target(SwiftTargetFixture {
+                package: "App",
+                external_package: None,
+                kind: "macos_command_line_application",
+                name: "hello",
+                srcs: &["main.swift"],
+                deps: &["Mid/Mid"],
+            }),
         ];
         let built = build_plan(&targets, "App/hello", tmp.path()).unwrap();
         assert_eq!(built.plan.nodes.len(), 5);
@@ -340,5 +426,60 @@ mod tests {
         assert_eq!(built.nodes[3].label, "Mid/Mid#archive");
         assert_eq!(built.nodes[3].kind, "swift_archive");
         assert_eq!(built.nodes[4].kind, "macos_command_line_application");
+    }
+
+    #[test]
+    fn external_swiftpm_product_depends_on_external_target() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("App")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".fabrik/external/swiftpm")).unwrap();
+        std::fs::write(tmp.path().join("App/main.swift"), "import ArgumentParser").unwrap();
+        std::fs::write(
+            tmp.path()
+                .join(".fabrik/external/swiftpm/ArgumentParser.swift"),
+            "public struct Parser {}",
+        )
+        .unwrap();
+        let external_dep = swift_target(SwiftTargetFixture {
+            package: ".fabrik/external/swiftpm",
+            external_package: Some("swiftpm"),
+            kind: "swift_library",
+            name: "ArgumentParser",
+            srcs: &["ArgumentParser.swift"],
+            deps: &[],
+        });
+        let mut app = swift_target(SwiftTargetFixture {
+            package: "App",
+            external_package: None,
+            kind: "macos_command_line_application",
+            name: "app",
+            srcs: &["main.swift"],
+            deps: &[],
+        });
+        app.external_deps.push(fabrik_frontend::ExternalDependency {
+            graph: "swiftpm".to_string(),
+            spec: serde_json::json!({
+                "package": "swift-argument-parser",
+                "product": "ArgumentParser",
+            }),
+        });
+        let built = build_plan(&[external_dep, app], "App/app", tmp.path()).unwrap();
+
+        assert_eq!(
+            built
+                .nodes
+                .iter()
+                .map(|node| node.label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "external:swiftpm/ArgumentParser#compile",
+                "external:swiftpm/ArgumentParser#archive",
+                "App/app",
+            ]
+        );
+        assert_eq!(
+            dependency_labels(&built, built.root_index),
+            vec!["external:swiftpm/ArgumentParser#archive"]
+        );
     }
 }

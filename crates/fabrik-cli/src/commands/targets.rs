@@ -18,12 +18,16 @@ use crate::render;
 struct TargetView<'a> {
     id: String,
     package: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    external_package: Option<&'a str>,
     kind: &'a str,
     name: &'a str,
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     srcs: &'a [String],
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     deps: &'a [String],
+    #[serde(skip_serializing_if = "<[fabrik_frontend::ExternalDependency]>::is_empty")]
+    external_deps: &'a [fabrik_frontend::ExternalDependency],
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     attrs: &'a BTreeMap<String, String>,
 }
@@ -31,12 +35,16 @@ struct TargetView<'a> {
 #[derive(Serialize)]
 struct TargetFields<'a> {
     package: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    external_package: Option<&'a str>,
     kind: &'a str,
     name: &'a str,
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     srcs: &'a [String],
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     deps: &'a [String],
+    #[serde(skip_serializing_if = "<[fabrik_frontend::ExternalDependency]>::is_empty")]
+    external_deps: &'a [fabrik_frontend::ExternalDependency],
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     attrs: &'a BTreeMap<String, String>,
 }
@@ -57,10 +65,12 @@ pub async fn print_targets(workspace: &Path, format: Format) -> Result<()> {
                         t.id(),
                         TargetFields {
                             package: &t.package,
+                            external_package: t.external_package.as_deref(),
                             kind: &t.kind,
                             name: &t.name,
                             srcs: &t.srcs,
                             deps: &t.deps,
+                            external_deps: &t.external_deps,
                             attrs: &t.attrs,
                         },
                     )
@@ -82,10 +92,12 @@ pub async fn print_targets(workspace: &Path, format: Format) -> Result<()> {
                 let view = TargetView {
                     id: t.id(),
                     package: &t.package,
+                    external_package: t.external_package.as_deref(),
                     kind: &t.kind,
                     name: &t.name,
                     srcs: &t.srcs,
                     deps: &t.deps,
+                    external_deps: &t.external_deps,
                     attrs: &t.attrs,
                 };
                 format!("{}\n", serde_json::to_string(&view)?)

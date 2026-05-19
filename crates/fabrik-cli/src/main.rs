@@ -137,7 +137,15 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
         Cmd::Targets => commands::targets::print_targets(&workspace, format)
             .await
             .map(|()| ExitCode::SUCCESS),
-        Cmd::Vendor => commands::vendor::vendor(&workspace, format).await,
+        Cmd::Deps {
+            cmd: cli::DepsCmd::Sync { name },
+        } => commands::deps::sync(&workspace, &cas, format, name.as_deref()).await,
+        Cmd::Vendor => {
+            eprintln!(
+                "fabrik: `fabrik vendor` is deprecated and will be removed in v0.8.0; use `fabrik deps sync` instead"
+            );
+            commands::deps::sync(&workspace, &cas, format, None).await
+        }
         #[cfg(unix)]
         Cmd::ElixirCompile(args) => commands::elixir_compile::run(&workspace, &args),
         #[cfg(unix)]

@@ -163,12 +163,14 @@ pub enum Cmd {
         cmd: RuntimeCmd,
     },
 
-    /// Generate `vendor/fabrik.toml` from the project's Cargo.lock.
-    ///
-    /// Reads `cargo metadata` for the resolve graph and emits one
-    /// granular Rust declaration per pure-rust dependency. Crates that
-    /// need a `build.rs` are commented out; use the `cargo.binary`
-    /// escape hatch until the third-party graph is feature-complete.
+    /// Dependency graph maintenance.
+    Deps {
+        #[command(subcommand)]
+        cmd: DepsCmd,
+    },
+
+    /// Deprecated alias for `fabrik deps sync`. Removed in v0.8.0.
+    #[command(hide = true)]
     Vendor,
 
     /// List targets declared across the project.
@@ -223,6 +225,15 @@ pub enum RuntimeCmd {
         /// Socket path. Defaults to `<session-dir>/control.sock`.
         #[arg(long)]
         socket: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DepsCmd {
+    /// Synchronize generated dependency artifacts from `fabrik.toml`.
+    Sync {
+        /// Sync one dependency entry by name. Defaults to all entries.
+        name: Option<String>,
     },
 }
 

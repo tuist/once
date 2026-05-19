@@ -62,7 +62,8 @@ pub fn compile_build_script(
         }
     });
 
-    let out_dir = out_dir(&target.package, &target.name);
+    let output_package = target.output_package();
+    let out_dir = out_dir(output_package.as_ref(), &target.name);
     let script_bin = format!("{out_dir}/{}_build_script_bin", target.name);
     let cargo_out = format!("{out_dir}/{}_cargo_out", target.name);
     let stdout_capture = build_script_outputs_path(&out_dir, &target.name);
@@ -246,10 +247,12 @@ cargo::warning=ignored unknown directive
     fn missing_build_rs_in_srcs_is_an_error() {
         let target = Target {
             package: "pkg".into(),
+            external_package: None,
             kind: "cargo_build_script".into(),
             name: "build".into(),
             srcs: vec!["src/lib.rs".into()],
             deps: vec![],
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         };
         let err = compile_build_script(&target, Path::new("/tmp")).unwrap_err();

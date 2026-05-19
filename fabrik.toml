@@ -1,3 +1,10 @@
+[[deps]]
+name = "rust_deps"
+ecosystem = "rust"
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+output = ".fabrik/deps/rust_deps/fabrik.rust.lock.json"
+
 [[cargo.binary]]
 name = "fabrik"
 cargo_package = "fabrik-cli"

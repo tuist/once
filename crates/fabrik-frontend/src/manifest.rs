@@ -3,10 +3,14 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::{
+    de::{DeserializeOwned, Error as DeError},
+    Deserialize, Deserializer,
+};
 
+use crate::dependency::{into_entries, DependencyEntry, DependencyEntryToml};
 use crate::error::{Error, Result};
-use crate::target::Target;
+use crate::target::{ExternalDependency, Target};
 use crate::target_ref::{normalize_build_dep, validate_target_name};
 
 #[derive(Debug, Default, Deserialize)]
@@ -14,8 +18,10 @@ use crate::target_ref::{normalize_build_dep, validate_target_name};
 struct Manifest {
     rust: RustSection,
     cargo: CargoSection,
+    go: GoSection,
     apple: AppleSection,
     elixir: ElixirSection,
+    deps: Vec<DependencyEntryToml>,
     task: Vec<TaskTarget>,
     target: Vec<RuleTarget>,
 }
@@ -34,6 +40,12 @@ struct RustSection {
 struct CargoSection {
     binary: Vec<CargoBinaryTarget>,
     build_script: Vec<CargoBuildScriptTarget>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct GoSection {
+    binary: Vec<GoTarget>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -63,7 +75,7 @@ struct ElixirTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,7 +88,7 @@ struct ElixirBinaryTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,7 +144,7 @@ struct RustTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     edition: Option<String>,
     crate_name: Option<String>,
     crate_root: Option<String>,
@@ -148,7 +160,7 @@ struct CargoBinaryTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     bin: Option<String>,
 }
 
@@ -161,8 +173,21 @@ struct CargoBuildScriptTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     crate_dir: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoTarget {
+    name: String,
+    #[serde(default)]
+    srcs: Vec<String>,
+    #[serde(default)]
+    src_globs: Vec<String>,
+    #[serde(default)]
+    deps: Vec<ManifestDep>,
+    package: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,7 +200,7 @@ struct AppleIosAppTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     executable_name: Option<String>,
     minimum_os: Option<String>,
     simulator: Option<String>,
@@ -192,7 +217,7 @@ struct AppleSimulatorAppTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     executable_name: Option<String>,
     minimum_os: Option<String>,
     simulator: Option<String>,
@@ -207,7 +232,7 @@ struct AppleSwiftTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     module_name: Option<String>,
     minimum_os: Option<String>,
     #[serde(default)]
@@ -223,7 +248,7 @@ struct AppleFrameworkTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
     module_name: Option<String>,
     minimum_os: Option<String>,
     bundle_id: Option<String>,
@@ -245,11 +270,42 @@ struct RuleTarget {
     #[serde(default)]
     src_globs: Vec<String>,
     #[serde(default)]
-    deps: Vec<String>,
+    deps: Vec<ManifestDep>,
+}
+
+#[derive(Debug)]
+enum ManifestDep {
+    Target(String),
+    External(toml::Table),
+}
+
+impl<'de> Deserialize<'de> for ManifestDep {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match toml::Value::deserialize(deserializer)? {
+            toml::Value::String(dep) => Ok(Self::Target(dep)),
+            toml::Value::Table(dep) => Ok(Self::External(dep)),
+            other => Err(D::Error::custom(format!(
+                "dependency entry must be a string local target or an inline table external dependency, got {}",
+                toml_value_kind(&other)
+            ))),
+        }
+    }
+}
+
+struct NormalizedDeps {
+    local: Vec<String>,
+    external: Vec<ExternalDependency>,
 }
 
 pub fn load_toml_str(name: &str, src: &str) -> Result<Vec<Target>> {
     load_toml_with(name, src, Path::new("."), "")
+}
+
+pub fn load_dependency_entries_toml_str(name: &str, src: &str) -> Result<Vec<DependencyEntry>> {
+    load_dependency_entries_toml_with(name, src, "")
 }
 
 pub(crate) fn load_toml_with(
@@ -266,6 +322,7 @@ pub(crate) fn load_toml_with(
 
     push_rust_targets(&mut targets, manifest.rust, workspace_root, package, name)?;
     push_cargo_targets(&mut targets, manifest.cargo, workspace_root, package, name)?;
+    push_go_targets(&mut targets, manifest.go, workspace_root, package, name)?;
     push_apple_targets(&mut targets, manifest.apple, workspace_root, package, name)?;
     push_elixir_targets(&mut targets, manifest.elixir, workspace_root, package, name)?;
     for t in manifest.task {
@@ -276,6 +333,18 @@ pub(crate) fn load_toml_with(
     }
 
     Ok(targets)
+}
+
+pub(crate) fn load_dependency_entries_toml_with(
+    name: &str,
+    src: &str,
+    package: &str,
+) -> Result<Vec<DependencyEntry>> {
+    let manifest: Manifest = toml::from_str(src).map_err(|e| Error::Parse {
+        path: name.to_owned(),
+        message: e.to_string(),
+    })?;
+    Ok(into_entries(manifest.deps, package))
 }
 
 fn push_rust_targets(
@@ -330,6 +399,19 @@ fn push_cargo_targets(
     }
     for t in cargo.build_script {
         targets.push(cargo_build_script_target(t, workspace_root, package, name)?);
+    }
+    Ok(())
+}
+
+fn push_go_targets(
+    targets: &mut Vec<Target>,
+    go: GoSection,
+    workspace_root: &Path,
+    package: &str,
+    name: &str,
+) -> Result<()> {
+    for t in go.binary {
+        targets.push(go_binary_target(t, workspace_root, package, name)?);
     }
     Ok(())
 }
@@ -420,12 +502,15 @@ fn elixir_target(
     package: &str,
     display_name: &str,
 ) -> Result<Target> {
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs: BTreeMap::new(),
     })
 }
@@ -438,12 +523,15 @@ fn elixir_binary_target(
 ) -> Result<Target> {
     let mut attrs = BTreeMap::new();
     attrs.insert("entry".to_string(), t.entry);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: "elixir_binary".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -459,12 +547,15 @@ fn rust_target(
     insert_opt(&mut attrs, "edition", t.edition);
     insert_opt(&mut attrs, "crate_name", t.crate_name);
     insert_opt(&mut attrs, "crate_root", t.crate_root);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -478,12 +569,15 @@ fn cargo_binary_target(
     let mut attrs = BTreeMap::new();
     attrs.insert("cargo_package".to_string(), t.cargo_package);
     insert_opt(&mut attrs, "bin", t.bin);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: "cargo_binary".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -496,12 +590,36 @@ fn cargo_build_script_target(
 ) -> Result<Target> {
     let mut attrs = BTreeMap::new();
     insert_opt(&mut attrs, "crate_dir", t.crate_dir);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: "cargo_build_script".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
+        attrs,
+    })
+}
+
+fn go_binary_target(
+    t: GoTarget,
+    workspace_root: &Path,
+    package: &str,
+    display_name: &str,
+) -> Result<Target> {
+    let mut attrs = BTreeMap::new();
+    insert_opt(&mut attrs, "package", t.package);
+    let deps = normalize_deps(t.deps, package, display_name)?;
+    Ok(Target {
+        package: package.to_string(),
+        external_package: None,
+        kind: "go_binary".to_string(),
+        name: checked_name(t.name, display_name)?,
+        srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -518,12 +636,15 @@ fn apple_ios_app_target(
     insert_opt(&mut attrs, "minimum_os", t.minimum_os);
     insert_opt(&mut attrs, "simulator", t.simulator);
     attrs.insert("platform".to_string(), "ios".to_string());
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: "apple_ios_app".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -549,12 +670,15 @@ fn apple_simulator_app_target(
     insert_opt(&mut attrs, "executable_name", t.executable_name);
     insert_opt(&mut attrs, "minimum_os", t.minimum_os);
     insert_opt(&mut attrs, "simulator", t.simulator);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: "apple_simulator_app".to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -570,12 +694,15 @@ fn apple_swift_target(
     insert_opt(&mut attrs, "module_name", t.module_name);
     insert_opt(&mut attrs, "minimum_os", t.minimum_os);
     insert_json_vec(&mut attrs, "swiftc_flags_json", &t.swiftc_flags);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -592,12 +719,15 @@ fn apple_framework_target(
     insert_opt(&mut attrs, "minimum_os", t.minimum_os);
     insert_opt(&mut attrs, "bundle_id", t.bundle_id);
     insert_json_vec(&mut attrs, "swiftc_flags_json", &t.swiftc_flags);
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: kind.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs,
     })
 }
@@ -685,6 +815,12 @@ fn builtin_rule_target(
             package,
             display_name,
         ),
+        "go.binary" => go_binary_target(
+            decode_rule_attrs(&name, attrs, display_name)?,
+            workspace_root,
+            package,
+            display_name,
+        ),
         "apple.simulator_app" => apple_simulator_app_target(
             decode_rule_attrs(&name, attrs, display_name)?,
             workspace_root,
@@ -751,12 +887,15 @@ fn legacy_generic_target(
     package: &str,
     display_name: &str,
 ) -> Result<Target> {
+    let deps = normalize_deps(t.deps, package, display_name)?;
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: t.kind.expect("legacy target kind was checked"),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
-        deps: normalize_deps(t.deps, package, display_name)?,
+        deps: deps.local,
+        external_deps: deps.external,
         attrs: string_attrs(t.attrs, display_name)?,
     })
 }
@@ -812,10 +951,12 @@ fn task_target(
     }
     Ok(Target {
         package: package.to_string(),
+        external_package: None,
         kind: if has_runtime { "runtime_task" } else { "task" }.to_string(),
         name: checked_name(t.name, display_name)?,
         srcs: resolve_srcs(t.srcs, t.src_globs, workspace_root, package, display_name)?,
         deps: Vec::new(),
+        external_deps: Vec::new(),
         attrs,
     })
 }
@@ -904,15 +1045,113 @@ fn checked_name(name: String, display_name: &str) -> Result<String> {
     Ok(name)
 }
 
-fn normalize_deps(deps: Vec<String>, package: &str, display_name: &str) -> Result<Vec<String>> {
-    deps.into_iter()
-        .map(|dep| {
-            normalize_build_dep(package, &dep).map_err(|e| Error::Eval {
-                path: display_name.to_string(),
-                message: e.to_string(),
-            })
-        })
-        .collect()
+fn normalize_deps(
+    deps: Vec<ManifestDep>,
+    package: &str,
+    display_name: &str,
+) -> Result<NormalizedDeps> {
+    let mut local = Vec::new();
+    let mut external = Vec::new();
+    for dep in deps {
+        match dep {
+            ManifestDep::Target(dep) => {
+                local.push(normalize_build_dep(package, &dep).map_err(|e| Error::Eval {
+                    path: display_name.to_string(),
+                    message: e.to_string(),
+                })?);
+            }
+            ManifestDep::External(dep) => {
+                let mut entries = dep.into_iter();
+                let Some((graph, spec)) = entries.next() else {
+                    return Err(Error::Eval {
+                        path: display_name.to_string(),
+                        message: "external dependency entry must name one dependency graph"
+                            .to_string(),
+                    });
+                };
+                if entries.next().is_some() {
+                    return Err(Error::Eval {
+                        path: display_name.to_string(),
+                        message: format!(
+                            "external dependency entry for `{graph}` must name only one dependency graph"
+                        ),
+                    });
+                }
+                if !is_dependency_graph_name(&graph) {
+                    return Err(Error::Eval {
+                        path: display_name.to_string(),
+                        message: format!(
+                            "external dependency graph name `{graph}` must be a single path segment"
+                        ),
+                    });
+                }
+                let spec = serde_json::to_value(spec).map_err(|source| Error::Eval {
+                    path: display_name.to_string(),
+                    message: format!(
+                        "external dependency entry for `{graph}` could not be converted to JSON: {source}"
+                    ),
+                })?;
+                validate_external_spec(&graph, &spec, display_name)?;
+                external.push(ExternalDependency { graph, spec });
+            }
+        }
+    }
+    Ok(NormalizedDeps { local, external })
+}
+
+/// Reject external dependency specs whose shape no plugin can ever
+/// accept, at load time, with the offending file in the error. The
+/// per-ecosystem shape (a bare crate name vs. a `{ product, package }`
+/// table) is still resolved by each plugin, which knows what its
+/// `graph` means; this only weeds out values (numbers, booleans,
+/// arrays, null, empty string/table) that are unusable everywhere, so
+/// the failure surfaces next to the build file instead of deep in a
+/// planner.
+fn validate_external_spec(graph: &str, spec: &serde_json::Value, display_name: &str) -> Result<()> {
+    let usable = match spec {
+        serde_json::Value::String(name) => !name.trim().is_empty(),
+        serde_json::Value::Object(table) => !table.is_empty(),
+        _ => false,
+    };
+    if usable {
+        return Ok(());
+    }
+    Err(Error::Eval {
+        path: display_name.to_string(),
+        message: format!(
+            "external dependency `{graph}` must be a non-empty name string \
+             (e.g. {{ {graph} = \"name\" }}) or a non-empty table \
+             (e.g. {{ {graph} = {{ product = \"Name\", package = \"pkg\" }} }}); got {}",
+            external_spec_kind(spec)
+        ),
+    })
+}
+
+fn external_spec_kind(spec: &serde_json::Value) -> &'static str {
+    match spec {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "an empty string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an empty table",
+    }
+}
+
+fn toml_value_kind(value: &toml::Value) -> &'static str {
+    match value {
+        toml::Value::String(_) => "string",
+        toml::Value::Integer(_) => "integer",
+        toml::Value::Float(_) => "float",
+        toml::Value::Boolean(_) => "boolean",
+        toml::Value::Datetime(_) => "datetime",
+        toml::Value::Array(_) => "array",
+        toml::Value::Table(_) => "table",
+    }
+}
+
+fn is_dependency_graph_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':'])
 }
 
 const fn default_true() -> bool {
@@ -1036,6 +1275,167 @@ edition = "2021"
         assert_eq!(targets[0].srcs, vec!["src/lib.rs".to_string()]);
         assert_eq!(targets[1].kind, "rust_binary");
         assert_eq!(targets[1].deps, vec!["core".to_string()]);
+    }
+
+    #[test]
+    fn loads_external_dependency_edges_from_toml() {
+        let targets = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[rust.binary]]
+name = "cli"
+srcs = ["src/main.rs"]
+deps = [
+  "core",
+  { cargo = "serde" },
+  { swiftpm = { product = "ArgumentParser", package = "swift-argument-parser" } },
+]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(targets[0].deps, vec!["core".to_string()]);
+        assert_eq!(targets[0].external_deps.len(), 2);
+        assert_eq!(targets[0].external_deps[0].graph, "cargo");
+        assert_eq!(
+            targets[0].external_deps[0].spec,
+            serde_json::Value::String("serde".to_string())
+        );
+        assert_eq!(targets[0].external_deps[1].graph, "swiftpm");
+        assert_eq!(
+            targets[0].external_deps[1].spec["product"],
+            serde_json::Value::String("ArgumentParser".to_string())
+        );
+        assert_eq!(
+            targets[0].external_deps[1].spec["package"],
+            serde_json::Value::String("swift-argument-parser".to_string())
+        );
+    }
+
+    #[test]
+    fn loads_go_binary_target() {
+        let targets = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[go.binary]]
+name = "server"
+package = "./cmd/server"
+srcs = ["go.mod", "cmd/server/main.go"]
+deps = [{ go = "github.com/acme/lib" }]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].kind, "go_binary");
+        assert_eq!(targets[0].attrs["package"], "./cmd/server");
+        assert_eq!(
+            targets[0].srcs,
+            vec!["cmd/server/main.go".to_string(), "go.mod".to_string()]
+        );
+        assert_eq!(targets[0].external_deps[0].graph, "go");
+    }
+
+    #[test]
+    fn rejects_external_dependency_edges_with_multiple_graphs() {
+        let err = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[rust.binary]]
+name = "cli"
+srcs = ["src/main.rs"]
+deps = [{ cargo = "serde", pnpm = "react" }]
+"#,
+        )
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("must name only one dependency graph"));
+    }
+
+    #[test]
+    fn rejects_unusable_external_dep_specs_at_load_time() {
+        // Each of these is valid TOML but no plugin can ever consume
+        // it; the failure must name the graph and the build file
+        // rather than surfacing deep in a planner.
+        for (spec, want_kind) in [
+            ("{ cargo = 1 }", "a number"),
+            ("{ cargo = true }", "a boolean"),
+            ("{ cargo = [] }", "an array"),
+            ("{ cargo = \"\" }", "an empty string"),
+            ("{ cargo = {} }", "an empty table"),
+        ] {
+            let src = format!(
+                "[[rust.binary]]\nname = \"cli\"\nsrcs = [\"src/main.rs\"]\ndeps = [{spec}]\n"
+            );
+            let err = load_toml_str("pkg/fabrik.toml", &src)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("external dependency `cargo`") && err.contains(want_kind),
+                "spec {spec} produced unexpected error: {err}"
+            );
+            assert!(err.contains("pkg/fabrik.toml"), "error lacks file: {err}");
+        }
+    }
+
+    #[test]
+    fn still_accepts_string_and_table_external_dep_specs() {
+        let targets = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[rust.binary]]
+name = "cli"
+srcs = ["src/main.rs"]
+deps = [
+  { cargo = "serde" },
+  { swiftpm = { product = "ArgumentParser", package = "swift-argument-parser" } },
+]
+"#,
+        )
+        .unwrap();
+        assert_eq!(targets[0].external_deps.len(), 2);
+    }
+
+    #[test]
+    fn rejects_dependency_entries_with_clear_type_error() {
+        let err = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[rust.binary]]
+name = "cli"
+srcs = ["src/main.rs"]
+deps = [1]
+"#,
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("dependency entry must be a string local target"));
+        assert!(message.contains("got integer"));
+    }
+
+    #[test]
+    fn loads_dependency_entries_from_toml() {
+        let entries = load_dependency_entries_toml_str(
+            "fabrik.toml",
+            r#"
+[[deps]]
+name = "rust_deps"
+ecosystem = "rust"
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+output = ".fabrik/deps/rust_deps/fabrik.rust.lock.json"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "rust_deps");
+        assert_eq!(
+            entries[0].ecosystem,
+            crate::dependency::DependencyEcosystem::Rust
+        );
+        assert_eq!(entries[0].lockfile.as_deref(), Some("Cargo.lock"));
     }
 
     #[test]

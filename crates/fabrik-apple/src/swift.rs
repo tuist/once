@@ -99,7 +99,8 @@ fn compile_swift_library(
     let module_segment = sh_single_segment(&module_name);
     let minimum_os = minimum_os(target);
     let target_triple = macos_target_triple(&minimum_os)?;
-    let out_dir = swift_out_dir(&target.package, &target.name);
+    let output_package = target.output_package();
+    let out_dir = swift_out_dir(output_package.as_ref(), &target.name);
     let static_library = swift_static_library_path(&out_dir, &module_name);
     let source_args = source_paths(target)?
         .iter()
@@ -208,7 +209,8 @@ fn compile_framework(
     let minimum_os = minimum_os(target);
     let target_triple = macos_target_triple(&minimum_os)?;
     let module_triple = macos_module_triple()?;
-    let framework = framework_path(&target.package, &target.name);
+    let output_package = target.output_package();
+    let framework = framework_path(output_package.as_ref(), &target.name);
     let parent = parent_dir(&framework);
     let binary = format!("{framework}/{module_name}");
     let source_args = source_paths(target)?
@@ -307,7 +309,8 @@ fn compile_command_line_application(
     let module_name = module_name(target);
     let minimum_os = minimum_os(target);
     let target_triple = macos_target_triple(&minimum_os)?;
-    let executable = executable_path(&target.package, &target.name);
+    let output_package = target.output_package();
+    let executable = executable_path(output_package.as_ref(), &target.name);
     let output_parent = parent_dir(&executable);
     let source_args = source_paths(target)?
         .iter()
@@ -815,10 +818,12 @@ mod tests {
     fn target(kind: &str, package: &str, name: &str, srcs: &[&str], deps: &[&str]) -> Target {
         Target {
             package: package.into(),
+            external_package: None,
             kind: kind.into(),
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
     }

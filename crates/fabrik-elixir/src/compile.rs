@@ -75,7 +75,8 @@ pub fn compile_target(
         return Err(CompileError::NoSources { label: target.id() });
     }
 
-    let ebin = ebin_dir(&target.package, &target.name);
+    let output_package = target.output_package();
+    let ebin = ebin_dir(output_package.as_ref(), &target.name);
     // Resolve the `fabrik` binary the same way we resolve any other
     // workspace tool. The wrapper subcommand (`fabrik elixir-compile`)
     // routes the actual compile through the daemon when one is
@@ -125,7 +126,7 @@ pub fn compile_target(
                 .get("entry")
                 .cloned()
                 .ok_or_else(|| CompileError::BinaryMissingEntry { label: target.id() })?;
-            let launcher = escript_path(&target.package, &target.name);
+            let launcher = escript_path(output_package.as_ref(), &target.name);
             build_binary_action(
                 target,
                 workspace_root,
@@ -416,10 +417,12 @@ mod tests {
     fn lib(pkg: &str, name: &str, srcs: &[&str], deps: &[&str]) -> Target {
         Target {
             package: pkg.into(),
+            external_package: None,
             kind: "elixir_library".into(),
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
     }
@@ -429,10 +432,12 @@ mod tests {
         attrs.insert("entry".into(), entry.into());
         Target {
             package: pkg.into(),
+            external_package: None,
             kind: "elixir_binary".into(),
             name: name.into(),
             srcs: srcs.iter().map(|s| (*s).to_string()).collect(),
             deps: deps.iter().map(|s| (*s).to_string()).collect(),
+            external_deps: Vec::new(),
             attrs,
         }
     }
@@ -542,10 +547,12 @@ mod tests {
     fn unsupported_kind_is_a_clean_error() {
         let target = Target {
             package: String::new(),
+            external_package: None,
             kind: "ruby_library".into(),
             name: "x".into(),
             srcs: vec!["x.rb".into()],
             deps: vec![],
+            external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         };
         let err = compile_target(&target, Path::new("/tmp"), &BTreeMap::new()).unwrap_err();

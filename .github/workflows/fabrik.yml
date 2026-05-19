@@ -10,13 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
-  CARGO_PROFILE_DEV_DEBUG: line-tables-only
-  CARGO_PROFILE_TEST_DEBUG: line-tables-only
   CARGO_NET_RETRY: "10"
   RUSTUP_MAX_RETRIES: "10"
-  RUST_BACKTRACE: "1"
 
 jobs:
   fmt:
@@ -57,6 +52,7 @@ jobs:
         with:
           shared-key: clippy
           cache-on-failure: true
+          # Keep Cargo and rustup binaries owned by mise.
           cache-bin: false
 
       - name: cargo clippy
@@ -245,7 +241,7 @@ jobs:
         with:
           shared-key: windows-build
           cache-on-failure: true
-          cache-bin: true
+          cache-bin: false
 
       - name: cargo build
         run: cargo build --workspace --all-targets
@@ -267,7 +263,7 @@ jobs:
         with:
           shared-key: windows-cas-test
           cache-on-failure: true
-          cache-bin: true
+          cache-bin: false
 
       - name: cargo test
         run: cargo test -p fabrik-cas

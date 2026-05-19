@@ -6,10 +6,12 @@ use tempfile::TempDir;
 fn target(package: &str, kind: &str, srcs: &[&str]) -> Target {
     Target {
         package: package.into(),
+        external_package: None,
         kind: kind.into(),
         name: "demo".into(),
         srcs: srcs.iter().map(|s| (*s).into()).collect(),
         deps: vec![],
+        external_deps: Vec::new(),
         attrs: BTreeMap::new(),
     }
 }

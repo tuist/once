@@ -65,6 +65,48 @@ Run it:
 fabrik run fabrik
 ```
 
+## External dependencies
+
+Declare Rust dependencies in the root `fabrik.toml` and run
+`fabrik deps sync` to refresh generated dependency artifacts.
+
+```toml
+[[deps]]
+name = "cargo"
+ecosystem = "rust"
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+output = ".fabrik/deps/cargo/fabrik.rust.lock.json"
+
+[[rust.binary]]
+name = "server"
+srcs = ["src/main.rs"]
+deps = [
+  "crates/core/core",
+  { cargo = "serde" },
+  { cargo = "anyhow" },
+]
+```
+
+Run it:
+
+```sh
+fabrik deps sync cargo
+```
+
+The Rust sync step shells out to `cargo metadata --locked` for the
+declared manifest. That resolution action is cached from the manifest,
+lockfile, and workspace Cargo manifests. It emits a lock graph JSON
+file and regenerates `.fabrik/external/cargo/fabrik.toml` with one
+granular Rust declaration per dependency that Fabrik can model today.
+Generated targets are loaded from `.fabrik/external/<graph>` with
+external ids such as `external:cargo/serde`, so they do not occupy the
+workspace target namespace. The inline table entries in `deps` are
+external dependency edges: the key points to the named `[[deps]]`
+graph, and the value is the Cargo crate name consumed by the Rust
+target. Crates with `build.rs` are left commented out in the generated
+manifest until build-script wiring is complete for third-party graphs.
+
 ## Cache Behavior
 
 - `rust.library`, `rust.binary`, `rust.test`, and `rust.proc_macro` build actions are cacheable.

@@ -55,6 +55,52 @@ within your project.
 - The `.ebin` directory is restored from the CAS on a cache hit just
   like any other declared output.
 
+## External dependencies
+
+Declare Elixir dependencies in the root `fabrik.toml` and point the
+lockfile at the Mix lockfile.
+
+```toml
+[[deps]]
+name = "mix"
+ecosystem = "elixir"
+manifest = "mix.exs"
+lockfile = "mix.lock"
+output = ".fabrik/deps/mix/fabrik.elixir.lock.json"
+
+[[elixir.library]]
+name = "web"
+srcs = ["lib/web.ex"]
+deps = [
+  { mix = "jason" },
+]
+```
+
+Run it:
+
+```sh
+fabrik deps sync mix
+```
+
+The Elixir sync step reads the declared `mix.lock` file and emits a lock
+graph JSON file with Hex packages, git packages, versions, checksums,
+repositories, and dependency edges available in the lockfile. Mix still
+owns dependency resolution; Fabrik consumes the resolved lockfile. The
+inline table entries in `deps` are external dependency edges: the key
+points to the named `[[deps]]` graph, and the value is interpreted by
+the Mix adapter. When generated targets exist, Fabrik loads them from
+`.fabrik/external/<graph>` with external ids such as
+`external:mix/jason`, so they do not occupy the workspace target
+namespace.
+
+## Current Limits
+
+- Elixir external dependency support records graph metadata and target declarations
+  preserve `{ mix = ... }` external dependency edges.
+- Granular Elixir build actions do not yet compile Hex or git
+  dependencies into `.ebin` inputs for downstream `elixirc` actions.
+- Mix remains responsible for dependency resolution.
+
 ## XDG state layout
 
 Fabrik routes state through XDG Base Directory variables so the same

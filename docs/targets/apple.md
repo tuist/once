@@ -93,12 +93,52 @@ FABRIK_IOS_SIMULATOR=<udid> fabrik run examples/apple/ios/simulator-app/Demo
 - `fabrik run` first reuses the cacheable app build, then runs an uncached install and launch action.
 - Simulator boot, install, and launch are runtime side effects and are intentionally not cached.
 
+## External dependencies
+
+Declare Swift dependencies in the root `fabrik.toml` and run
+`fabrik deps sync` to refresh the generated Swift dependency graph.
+
+```toml
+[[deps]]
+name = "swiftpm"
+ecosystem = "swift"
+manifest = "Package.swift"
+lockfile = "Package.resolved"
+output = ".fabrik/deps/swiftpm/fabrik.swift.lock.json"
+
+[[apple.swift_library]]
+name = "CLI"
+srcs = ["Sources/CLI.swift"]
+deps = [
+  { swiftpm = { product = "ArgumentParser", package = "swift-argument-parser" } },
+]
+```
+
+Run it:
+
+```sh
+fabrik deps sync swiftpm
+```
+
+The Swift sync step reads the declared `Package.resolved` file and emits
+a lock graph JSON file. It records package identity, version, revision,
+checksum, and git or registry source data where SwiftPM includes it.
+The inline table entries in `deps` are external dependency edges: the
+key points to the named `[[deps]]` graph, and the value is interpreted
+by the SwiftPM adapter. Swift does not yet generate granular Swift
+targets from SwiftPM packages. When generated targets exist, Fabrik
+loads them from `.fabrik/external/<graph>` with external ids such as
+`external:swiftpm/ArgumentParser`, so they do not occupy the workspace
+target namespace.
+
 ## Current Limits
 
 - Swift support currently targets host-architecture macOS builds.
-- SwiftPM package resolution/import is not wired yet. The intended shape
-  is to use `Package.swift` for external package resolution while keeping
-  the local build graph declared with Fabrik's lower-level TOML targets.
+- SwiftPM package graph sync records resolved dependencies, but it
+  does not yet lower packages into buildable Fabrik targets.
+- Swift target declarations preserve `{ swiftpm = ... }` external
+  dependency edges, but build actions do not yet compile SwiftPM
+  products into module or link inputs.
 - Simulator app dependencies are not wired yet.
 - Apple resource processing, asset catalogs, entitlements, and signing
   beyond simulator ad hoc signing are still future work.
