@@ -1091,11 +1091,51 @@ fn normalize_deps(
                         "external dependency entry for `{graph}` could not be converted to JSON: {source}"
                     ),
                 })?;
+                validate_external_spec(&graph, &spec, display_name)?;
                 external.push(ExternalDependency { graph, spec });
             }
         }
     }
     Ok(NormalizedDeps { local, external })
+}
+
+/// Reject external dependency specs whose shape no plugin can ever
+/// accept, at load time, with the offending file in the error. The
+/// per-ecosystem shape (a bare crate name vs. a `{ product, package }`
+/// table) is still resolved by each plugin, which knows what its
+/// `graph` means; this only weeds out values (numbers, booleans,
+/// arrays, null, empty string/table) that are unusable everywhere, so
+/// the failure surfaces next to the build file instead of deep in a
+/// planner.
+fn validate_external_spec(graph: &str, spec: &serde_json::Value, display_name: &str) -> Result<()> {
+    let usable = match spec {
+        serde_json::Value::String(name) => !name.trim().is_empty(),
+        serde_json::Value::Object(table) => !table.is_empty(),
+        _ => false,
+    };
+    if usable {
+        return Ok(());
+    }
+    Err(Error::Eval {
+        path: display_name.to_string(),
+        message: format!(
+            "external dependency `{graph}` must be a non-empty name string \
+             (e.g. {{ {graph} = \"name\" }}) or a non-empty table \
+             (e.g. {{ {graph} = {{ product = \"Name\", package = \"pkg\" }} }}); got {}",
+            external_spec_kind(spec)
+        ),
+    })
+}
+
+fn external_spec_kind(spec: &serde_json::Value) -> &'static str {
+    match spec {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "an empty string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an empty table",
+    }
 }
 
 fn toml_value_kind(value: &toml::Value) -> &'static str {
@@ -1311,6 +1351,50 @@ deps = [{ cargo = "serde", pnpm = "react" }]
         assert!(err
             .to_string()
             .contains("must name only one dependency graph"));
+    }
+
+    #[test]
+    fn rejects_unusable_external_dep_specs_at_load_time() {
+        // Each of these is valid TOML but no plugin can ever consume
+        // it; the failure must name the graph and the build file
+        // rather than surfacing deep in a planner.
+        for (spec, want_kind) in [
+            ("{ cargo = 1 }", "a number"),
+            ("{ cargo = true }", "a boolean"),
+            ("{ cargo = [] }", "an array"),
+            ("{ cargo = \"\" }", "an empty string"),
+            ("{ cargo = {} }", "an empty table"),
+        ] {
+            let src = format!(
+                "[[rust.binary]]\nname = \"cli\"\nsrcs = [\"src/main.rs\"]\ndeps = [{spec}]\n"
+            );
+            let err = load_toml_str("pkg/fabrik.toml", &src)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("external dependency `cargo`") && err.contains(want_kind),
+                "spec {spec} produced unexpected error: {err}"
+            );
+            assert!(err.contains("pkg/fabrik.toml"), "error lacks file: {err}");
+        }
+    }
+
+    #[test]
+    fn still_accepts_string_and_table_external_dep_specs() {
+        let targets = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[rust.binary]]
+name = "cli"
+srcs = ["src/main.rs"]
+deps = [
+  { cargo = "serde" },
+  { swiftpm = { product = "ArgumentParser", package = "swift-argument-parser" } },
+]
+"#,
+        )
+        .unwrap();
+        assert_eq!(targets[0].external_deps.len(), 2);
     }
 
     #[test]
