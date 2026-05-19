@@ -10,8 +10,10 @@ pub mod elixir_compile;
 #[cfg(unix)]
 pub mod elixir_daemon;
 pub mod exec;
+pub mod init;
 pub mod run;
 pub mod runtime;
+pub mod surface;
 pub mod targets;
 pub mod test;
 pub mod toolchain;

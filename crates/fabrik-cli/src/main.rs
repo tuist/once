@@ -46,6 +46,14 @@ fn init_tracing(verbose: u8) {
 }
 
 async fn dispatch(cli: Cli) -> Result<ExitCode> {
+    if cli.list {
+        return commands::surface::print(&cli.surface_path(), cli.format)
+            .await
+            .map(|()| ExitCode::SUCCESS);
+    }
+    let Some(command) = cli.command else {
+        return Ok(ExitCode::SUCCESS);
+    };
     let workspace = match cli.directory {
         Some(d) => fabrik_frontend::absolutize(d).context("resolving workspace root")?,
         None => env::current_dir().context("resolving workspace root")?,
@@ -67,12 +75,13 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
     let cas = Cas::open(Xdg::from_env().fabrik_cas());
     let format: Format = cli.format;
 
-    match cli.command {
+    match command {
         Cmd::Run {
             target,
             runtime_rpc,
             runtime_rpc_socket,
         } => {
+            let target = target.context("missing target")?;
             let target = resolve_target_arg(&workspace, &target)?;
             commands::run::run(
                 &workspace,
@@ -87,10 +96,12 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
             .await
         }
         Cmd::Build { target } => {
+            let target = target.context("missing target")?;
             let target = resolve_target_arg(&workspace, &target)?;
             commands::build::build(&workspace, &cas, &target, format).await
         }
         Cmd::Test { target, test_args } => {
+            let target = target.context("missing target")?;
             let target = resolve_target_arg(&workspace, &target)?;
             commands::test::test(&workspace, &cas, &target, test_args, format).await
         }
@@ -116,30 +127,35 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
             .await
         }
         Cmd::Cache {
-            cmd: cli::CacheCmd::Stats,
+            cmd: Some(cli::CacheCmd::Stats),
         } => commands::cache::print_stats(&cas, format)
             .await
             .map(|()| ExitCode::SUCCESS),
+        Cmd::Cache { cmd: None } => anyhow::bail!("cache subcommand required"),
         Cmd::Toolchain {
-            cmd: cli::ToolchainCmd::Inspect { platform },
+            cmd: Some(cli::ToolchainCmd::Inspect { platform }),
         } => commands::toolchain::inspect(&workspace, format, platform.as_deref())
             .await
             .map(|()| ExitCode::SUCCESS),
+        Cmd::Toolchain { cmd: None } => anyhow::bail!("toolchain subcommand required"),
         Cmd::Runtime {
             cmd:
-                cli::RuntimeCmd::Rpc {
+                Some(cli::RuntimeCmd::Rpc {
                     session_dir,
                     socket,
-                },
+                }),
         } => commands::runtime::rpc(&session_dir, socket.as_deref())
             .await
             .map(|()| ExitCode::SUCCESS),
+        Cmd::Runtime { cmd: None } => anyhow::bail!("runtime subcommand required"),
         Cmd::Targets => commands::targets::print_targets(&workspace, format)
             .await
             .map(|()| ExitCode::SUCCESS),
         Cmd::Deps {
-            cmd: cli::DepsCmd::Sync { name },
+            cmd: Some(cli::DepsCmd::Sync { name }),
         } => commands::deps::sync(&workspace, &cas, format, name.as_deref()).await,
+        Cmd::Deps { cmd: None } => anyhow::bail!("deps subcommand required"),
+        Cmd::Init(args) => commands::init::run(&workspace, args, format).await,
         Cmd::Vendor => {
             eprintln!(
                 "fabrik: `fabrik vendor` is deprecated and will be removed in v0.8.0; use `fabrik deps sync` instead"
@@ -149,7 +165,9 @@ async fn dispatch(cli: Cli) -> Result<ExitCode> {
         #[cfg(unix)]
         Cmd::ElixirCompile(args) => commands::elixir_compile::run(&workspace, &args),
         #[cfg(unix)]
-        Cmd::ElixirDaemon { cmd } => commands::elixir_daemon::run(&workspace, cmd),
+        Cmd::ElixirDaemon { cmd: Some(cmd) } => commands::elixir_daemon::run(&workspace, cmd),
+        #[cfg(unix)]
+        Cmd::ElixirDaemon { cmd: None } => anyhow::bail!("elixir-daemon subcommand required"),
     }
 }
 

@@ -1,0 +1,14 @@
+[[rust.library]]
+name = "{{library_name}}"
+srcs = ["src/lib.rs"]
+
+[[rust.binary]]
+name = "{{project_name}}"
+srcs = ["src/main.rs"]
+deps = ["{{library_name}}"]
+
+[[rust.test]]
+name = "{{test_name}}"
+srcs = ["tests/{{library_name}}.rs"]
+crate_root = "tests/{{library_name}}.rs"
+deps = ["{{library_name}}"]

@@ -1,0 +1,49 @@
+id = "go-app"
+name = "Go app"
+toolchain = "go"
+description = "Go command-line app backed by the native Go module toolchain."
+aliases = ["go-basic"]
+next_steps = [
+  "fabrik build {{target_name}}",
+  "./.fabrik/out/{{target_name}}",
+]
+
+[[prompts]]
+name = "target_name"
+prompt = "Binary target name"
+description = "Used as the generated go.binary target and output name."
+default = "app"
+validation = "kebab_case"
+
+[[prompts]]
+name = "module_path"
+prompt = "Go module path"
+description = "Written into go.mod."
+validation = "module_path"
+
+[[prompts]]
+name = "message"
+prompt = "Printed message"
+description = "Printed by the generated main package."
+default = "Hello from Fabrik"
+validation = "line_text"
+
+[[files]]
+path = "fabrik.toml"
+source = "fabrik.toml.tmpl"
+
+[[files]]
+path = "go.mod"
+source = "go.mod.tmpl"
+
+[[files]]
+path = "main.go"
+source = "main.go.tmpl"
+
+[[files]]
+path = "README.md"
+source = "README.md.tmpl"
+
+[[files]]
+path = "mise.toml"
+source = "mise.toml.tmpl"

@@ -17,7 +17,10 @@ Fabrik is a polyglot, agent-native build system. It uses content-addressed actio
 Install `fabrik`, then initialize a project:
 
 ```sh
+fabrik --list
 fabrik init
+fabrik init --templates
+fabrik init rust-app --path hello
 ```
 
 ## Documentation
