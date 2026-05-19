@@ -26,6 +26,21 @@ fn parse_mix_lock(body: &str) -> Result<ResolvedGraph> {
             Some(":git") if fields.len() >= 3 => {
                 packages.push(git_package(&name, &fields));
             }
+            // A recognized source kind with the wrong arity is a
+            // malformed lock entry, not an unknown future format. Fail
+            // loudly rather than silently dropping the dependency,
+            // which would leave a hole in the resolved graph.
+            Some(":hex") => anyhow::bail!(
+                "malformed `:hex` entry for `{name}`: expected at least 8 tuple fields, got {}",
+                fields.len()
+            ),
+            Some(":git") => anyhow::bail!(
+                "malformed `:git` entry for `{name}`: expected at least 3 tuple fields, got {}",
+                fields.len()
+            ),
+            // An unrecognized source kind (or a non-tuple value) is
+            // skipped so a newer mix.lock format does not hard-fail an
+            // older Fabrik.
             _ => {}
         }
     }
@@ -266,6 +281,37 @@ mod tests {
                 revision: Some("abc123".to_string())
             }
         );
+    }
+
+    #[test]
+    fn rejects_truncated_hex_entry_instead_of_dropping_it() {
+        // A `:hex` tuple with too few fields used to be silently
+        // skipped, leaving a hole in the resolved graph. It must now
+        // fail loudly and name the offending package.
+        let err = parse_mix_lock(
+            r#"%{
+  "decimal": {:hex, :decimal, "2.1.1"}
+}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("malformed `:hex` entry for `decimal`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_source_kinds_are_still_skipped_for_forward_compat() {
+        let graph = parse_mix_lock(
+            r#"%{
+  "future": {:something_new, "x"},
+  "decimal": {:hex, :decimal, "2.1.1", "inner", [:mix], [], "hexpm", "outer"}
+}"#,
+        )
+        .unwrap();
+        assert_eq!(graph.packages.len(), 1);
+        assert_eq!(graph.packages[0].name, "decimal");
     }
 
     #[test]
