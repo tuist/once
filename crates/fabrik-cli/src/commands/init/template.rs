@@ -226,10 +226,33 @@ impl Template {
                 );
             }
         }
+        // Defaults are rendered against the values resolved so far, so
+        // a `{{key}}` in a default can only resolve if `key` is an
+        // earlier prompt. Enforcing that here turns a reorder mistake
+        // into a clear manifest error instead of a "missing template
+        // value" failure at render time.
         let mut names = BTreeSet::new();
         for prompt in &self.manifest.prompts {
             if prompt.name.trim().is_empty() {
                 bail!("template `{}` has an empty prompt name", self.id());
+            }
+            if let Some(default) = &prompt.default {
+                for key in referenced_keys(default).with_context(|| {
+                    format!(
+                        "template `{}` prompt `{}` default",
+                        self.id(),
+                        prompt.name
+                    )
+                })? {
+                    if !names.contains(key.as_str()) {
+                        bail!(
+                            "template `{}` prompt `{}` default references `{key}`, which is not an \
+                             earlier prompt; defaults may only reference prompts declared before them",
+                            self.id(),
+                            prompt.name
+                        );
+                    }
+                }
             }
             if !names.insert(prompt.name.as_str()) {
                 bail!(
@@ -253,6 +276,10 @@ impl Template {
 }
 
 impl Prompt {
+    /// Render this prompt's default against the values resolved so far.
+    /// A default may only reference earlier prompts; manifest
+    /// validation enforces that, so a `{{key}}` here is guaranteed to
+    /// resolve once those prompts have values.
     pub(super) fn render_default(
         &self,
         values: &BTreeMap<String, String>,
@@ -311,6 +338,23 @@ fn render_text(input: &str, values: &BTreeMap<String, String>) -> Result<String>
     }
     output.push_str(rest);
     Ok(output)
+}
+
+/// Collect the `{{key}}` names referenced by `input`, in order. Used by
+/// manifest validation to reject defaults that reference a prompt which
+/// is not declared earlier.
+fn referenced_keys(input: &str) -> Result<Vec<String>> {
+    let mut keys = Vec::new();
+    let mut rest = input;
+    while let Some(start) = rest.find("{{") {
+        let tail = &rest[start + 2..];
+        let end = tail
+            .find("}}")
+            .context("found `{{` without a matching `}}`")?;
+        keys.push(tail[..end].trim().to_string());
+        rest = &tail[end + 2..];
+    }
+    Ok(keys)
 }
 
 fn validate_relative_path(path: &str) -> Result<()> {

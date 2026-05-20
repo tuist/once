@@ -144,7 +144,7 @@ pub async fn run(workspace: &Path, args: InitArgs, format: Format) -> Result<Exi
                 format,
                 human_body,
                 &InitResponse::NeedsInput {
-                    template: template_view(template, None),
+                    template: template_view(template, Some(&resolved.values)),
                     prompts: resolved
                         .missing
                         .iter()
