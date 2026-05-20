@@ -21,6 +21,7 @@ fabrik-rust.workspace = true
 
 anyhow.workspace = true
 clap.workspace = true
+console.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

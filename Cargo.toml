@@ -30,6 +30,7 @@ fabrik-rust = { path = "crates/fabrik-rust" }
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
+console = "0.15"
 glob = "0.3"
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }

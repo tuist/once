@@ -1,0 +1,12 @@
+[[apple.swift_library]]
+name = "{{library_name}}"
+srcs = ["Sources/{{library_name}}.swift"]
+module_name = "{{library_name}}"
+minimum_os = "{{minimum_os}}"
+
+[[apple.macos_command_line_application]]
+name = "{{binary_name}}"
+srcs = ["Sources/main.swift"]
+deps = ["{{library_name}}"]
+module_name = "{{module_name}}"
+minimum_os = "{{minimum_os}}"

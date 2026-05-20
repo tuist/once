@@ -34,7 +34,8 @@ pub const CLI_VERSION: &str = match option_env!("FABRIK_VERSION") {
 #[command(
     name = "fabrik",
     version = CLI_VERSION,
-    about = "Polyglot, agent-native build system"
+    about = "Polyglot, agent-native build system",
+    arg_required_else_help = true
 )]
 pub struct Cli {
     /// Project root. Defaults to the current directory; the cache
@@ -54,8 +55,12 @@ pub struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     pub verbose: u8,
 
+    /// Print the command surface at the current command depth.
+    #[arg(long, global = true)]
+    pub list: bool,
+
     #[command(subcommand)]
-    pub command: Cmd,
+    pub command: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -69,6 +74,7 @@ pub enum Cmd {
     /// action is `cargo build --locked --package <pkg> --bin <bin>`.
     /// The verb is uniform across target kinds: target-specific
     /// composition lives in build-file declarations, not in the CLI.
+    #[command(arg_required_else_help = true)]
     Run {
         /// Serve a local JSON-RPC runtime control socket for this run.
         #[arg(long)]
@@ -80,7 +86,8 @@ pub enum Cmd {
         runtime_rpc_socket: Option<PathBuf>,
 
         /// Target id, e.g. `examples/hello/hello` or `./hello`.
-        target: String,
+        #[arg(required_unless_present = "list")]
+        target: Option<String>,
     },
 
     /// Build a target via the granular per-crate action graph.
@@ -91,9 +98,11 @@ pub enum Cmd {
     /// edit to a leaf crate invalidates only the affected nodes.
     /// Use `fabrik run` instead for `cargo_binary` and other
     /// single-action targets.
+    #[command(arg_required_else_help = true)]
     Build {
         /// Target id, e.g. `crates/fabrik-cli/fabrik`.
-        target: String,
+        #[arg(required_unless_present = "list")]
+        target: Option<String>,
     },
 
     /// Build and execute a Rust test target.
@@ -102,9 +111,11 @@ pub enum Cmd {
     /// planner, then runs the produced test binary as its own cached
     /// action. Extra args after the target are passed to the Rust test
     /// harness, for example `fabrik test pkg/pkg_test -- --nocapture`.
+    #[command(arg_required_else_help = true)]
     Test {
         /// Rust test target id, e.g. `crates/foo/foo_test`.
-        target: String,
+        #[arg(required_unless_present = "list")]
+        target: Option<String>,
 
         /// Arguments passed to the compiled test binary.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -119,6 +130,7 @@ pub enum Cmd {
     /// second invocation with the same key reuses the captured stdout,
     /// stderr, and exit code. Most users want `fabrik run` against a
     /// declared target instead.
+    #[command(arg_required_else_help = true)]
     Exec {
         /// Pass an environment variable to the command. Repeatable.
         #[arg(short = 'e', value_parser = parse_env)]
@@ -141,33 +153,40 @@ pub enum Cmd {
         cache_failures: bool,
 
         /// Command and arguments. Use `--` to separate from fabrik flags.
-        #[arg(trailing_var_arg = true, required = true)]
+        #[arg(trailing_var_arg = true, required_unless_present = "list")]
         argv: Vec<String>,
     },
 
     /// Cache management.
+    #[command(arg_required_else_help = true)]
     Cache {
         #[command(subcommand)]
-        cmd: CacheCmd,
+        cmd: Option<CacheCmd>,
     },
 
     /// Inspect the project toolchain contract.
+    #[command(arg_required_else_help = true)]
     Toolchain {
         #[command(subcommand)]
-        cmd: ToolchainCmd,
+        cmd: Option<ToolchainCmd>,
     },
 
     /// Runtime session inspection and control.
+    #[command(arg_required_else_help = true)]
     Runtime {
         #[command(subcommand)]
-        cmd: RuntimeCmd,
+        cmd: Option<RuntimeCmd>,
     },
 
     /// Dependency graph maintenance.
+    #[command(arg_required_else_help = true)]
     Deps {
         #[command(subcommand)]
-        cmd: DepsCmd,
+        cmd: Option<DepsCmd>,
     },
+
+    /// Create a new Fabrik project from a vendored template.
+    Init(crate::commands::init::InitArgs),
 
     /// Deprecated alias for `fabrik deps sync`. Removed in v0.8.0.
     #[command(hide = true)]
@@ -194,7 +213,7 @@ pub enum Cmd {
     #[command(name = "elixir-daemon")]
     ElixirDaemon {
         #[command(subcommand)]
-        cmd: crate::commands::elixir_daemon::ElixirDaemonCmd,
+        cmd: Option<crate::commands::elixir_daemon::ElixirDaemonCmd>,
     },
 }
 
@@ -235,6 +254,108 @@ pub enum DepsCmd {
         /// Sync one dependency entry by name. Defaults to all entries.
         name: Option<String>,
     },
+}
+
+impl Cli {
+    pub fn surface_path(&self) -> Vec<&'static str> {
+        self.command
+            .as_ref()
+            .map_or_else(Vec::new, Cmd::surface_path)
+    }
+}
+
+impl Cmd {
+    pub fn surface_path(&self) -> Vec<&'static str> {
+        match self {
+            Self::Run { .. } => vec!["run"],
+            Self::Build { .. } => vec!["build"],
+            Self::Test { .. } => vec!["test"],
+            Self::Exec { .. } => vec!["exec"],
+            Self::Cache { cmd } => {
+                let mut path = vec!["cache"];
+                if let Some(cmd) = cmd {
+                    path.extend(cmd.surface_path());
+                }
+                path
+            }
+            Self::Toolchain { cmd } => {
+                let mut path = vec!["toolchain"];
+                if let Some(cmd) = cmd {
+                    path.extend(cmd.surface_path());
+                }
+                path
+            }
+            Self::Runtime { cmd } => {
+                let mut path = vec!["runtime"];
+                if let Some(cmd) = cmd {
+                    path.extend(cmd.surface_path());
+                }
+                path
+            }
+            Self::Deps { cmd } => {
+                let mut path = vec!["deps"];
+                if let Some(cmd) = cmd {
+                    path.extend(cmd.surface_path());
+                }
+                path
+            }
+            Self::Init(_) => vec!["init"],
+            Self::Vendor => vec!["vendor"],
+            Self::Targets => vec!["targets"],
+            #[cfg(unix)]
+            Self::ElixirCompile(_) => vec!["elixir-compile"],
+            #[cfg(unix)]
+            Self::ElixirDaemon { cmd } => {
+                let mut path = vec!["elixir-daemon"];
+                if let Some(cmd) = cmd {
+                    path.extend(cmd.surface_path());
+                }
+                path
+            }
+        }
+    }
+}
+
+impl CacheCmd {
+    fn surface_path(&self) -> Vec<&'static str> {
+        match self {
+            Self::Stats => vec!["stats"],
+        }
+    }
+}
+
+impl ToolchainCmd {
+    fn surface_path(&self) -> Vec<&'static str> {
+        match self {
+            Self::Inspect { .. } => vec!["inspect"],
+        }
+    }
+}
+
+impl RuntimeCmd {
+    fn surface_path(&self) -> Vec<&'static str> {
+        match self {
+            Self::Rpc { .. } => vec!["rpc"],
+        }
+    }
+}
+
+impl DepsCmd {
+    fn surface_path(&self) -> Vec<&'static str> {
+        match self {
+            Self::Sync { .. } => vec!["sync"],
+        }
+    }
+}
+
+#[cfg(unix)]
+impl crate::commands::elixir_daemon::ElixirDaemonCmd {
+    fn surface_path(&self) -> Vec<&'static str> {
+        match self {
+            Self::Start { .. } => vec!["start"],
+            Self::Status { .. } => vec!["status"],
+        }
+    }
 }
 
 fn parse_env(raw: &str) -> std::result::Result<(String, String), String> {

@@ -1,0 +1,64 @@
+id = "elixir-app"
+name = "Elixir app"
+toolchain = "elixir"
+description = "Elixir app with a library target and an executable entry module."
+aliases = ["elixir-basic"]
+next_steps = [
+  "fabrik build {{binary_name}}",
+  "./.fabrik/out/{{binary_name}}",
+]
+
+[[prompts]]
+name = "binary_name"
+prompt = "Binary target name"
+description = "Used as the runnable elixir.binary target and the entry file name."
+default = "hello"
+validation = "snake_case"
+
+[[prompts]]
+name = "library_name"
+prompt = "Library target name"
+description = "Used as the elixir.library target and helper file name."
+default = "greeting"
+validation = "snake_case"
+
+[[prompts]]
+name = "entry_module"
+prompt = "Entry module"
+description = "Module name for main/1 and the binary entry attribute."
+default = "Hello"
+validation = "pascal_case"
+
+[[prompts]]
+name = "library_module"
+prompt = "Library module"
+description = "Module that owns the generated message/1 helper."
+default = "Greeting"
+validation = "pascal_case"
+
+[[prompts]]
+name = "greeting_subject"
+prompt = "Greeting subject"
+description = "Inserted into the generated greeting output."
+default = "Elixir"
+validation = "line_text"
+
+[[files]]
+path = "fabrik.toml"
+source = "fabrik.toml.tmpl"
+
+[[files]]
+path = "lib/{{binary_name}}.ex"
+source = "lib/entry.ex.tmpl"
+
+[[files]]
+path = "lib/{{library_name}}.ex"
+source = "lib/library.ex.tmpl"
+
+[[files]]
+path = "README.md"
+source = "README.md.tmpl"
+
+[[files]]
+path = "mise.toml"
+source = "mise.toml.tmpl"

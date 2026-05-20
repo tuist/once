@@ -13,9 +13,49 @@ Describe 'fabrik --help'
     The stdout should include 'exec'
     The stdout should include 'cache'
     The stdout should include 'deps'
+    The stdout should include 'init'
     The stdout should include 'runtime'
     The stdout should include '--directory'
+    The stdout should include '--list'
     The stdout should include 'toon'
+  End
+End
+
+Describe 'fabrik'
+  It 'prints root help when no command is provided'
+    When call "$FABRIK_BIN"
+    The status should equal 2
+    The stderr should include 'Usage: fabrik [OPTIONS] [COMMAND]'
+    The stderr should include 'init'
+    The stderr should include '--list'
+  End
+End
+
+Describe 'fabrik --list'
+  It 'prints the whole command surface'
+    When call "$FABRIK_BIN" --list
+    The status should be success
+    The stdout should include 'fabrik'
+    The stdout should include 'run'
+    The stdout should include 'deps'
+    The stdout should include 'init'
+    The stdout should include '--list'
+  End
+
+  It 'prints a subtree when run under a namespace command'
+    When call "$FABRIK_BIN" deps --list
+    The status should be success
+    The stdout should include 'deps'
+    The stdout should include 'sync'
+  End
+
+  It 'emits structured output for agents'
+    When call "$FABRIK_BIN" --format json --list
+    The status should be success
+    The stdout should include '"name":"fabrik"'
+    The stdout should include '"subcommands":'
+    The stdout should include '"name":"init"'
+    The stdout should include '"syntax":"--list"'
   End
 End
 

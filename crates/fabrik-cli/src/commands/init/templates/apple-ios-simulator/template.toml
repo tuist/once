@@ -1,0 +1,49 @@
+id = "ios-app"
+name = "iOS app"
+toolchain = "apple"
+description = "iOS SwiftUI app."
+aliases = ["apple-ios-simulator"]
+next_steps = [
+  "fabrik build {{app_name}}",
+  "fabrik run {{app_name}}",
+]
+
+[[prompts]]
+name = "app_name"
+prompt = "App target name"
+description = "Used as the simulator_app target name and SwiftUI app type."
+default = "Demo"
+validation = "pascal_case"
+
+[[prompts]]
+name = "bundle_id"
+prompt = "Bundle identifier"
+description = "Written into the generated apple.simulator_app target."
+default = "dev.fabrik.demo"
+validation = "bundle_id"
+
+[[prompts]]
+name = "minimum_os"
+prompt = "Minimum iOS version"
+description = "Passed through to the generated simulator app target."
+default = "17.0"
+validation = "version"
+
+[[prompts]]
+name = "greeting_message"
+prompt = "Greeting message"
+description = "Shown in the SwiftUI window."
+default = "Hello from Fabrik"
+validation = "line_text"
+
+[[files]]
+path = "fabrik.toml"
+source = "fabrik.toml.tmpl"
+
+[[files]]
+path = "Sources/App.swift"
+source = "Sources/App.swift.tmpl"
+
+[[files]]
+path = "README.md"
+source = "README.md.tmpl"

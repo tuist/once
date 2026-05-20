@@ -1,0 +1,61 @@
+id = "rust-app"
+name = "Rust app"
+toolchain = "rust"
+description = "Rust command-line app with a library and test target."
+aliases = ["rust-granular"]
+next_steps = [
+  "fabrik build {{project_name}}",
+  "fabrik test {{test_name}}",
+]
+
+[[prompts]]
+name = "project_name"
+prompt = "Binary target name"
+description = "Used as the runnable rust.binary target."
+default = "hello"
+validation = "kebab_case"
+
+[[prompts]]
+name = "library_name"
+prompt = "Library target name"
+description = "Rust library crate name imported by main.rs and the test."
+default = "greeting"
+validation = "snake_case"
+
+[[prompts]]
+name = "test_name"
+prompt = "Test target name"
+description = "Target name for the generated rust.test entry."
+default = "{{library_name}}_test"
+validation = "snake_case"
+
+[[prompts]]
+name = "greeting_subject"
+prompt = "Greeting subject"
+description = "Inserted into the generated greeting output."
+default = "Rust"
+validation = "line_text"
+
+[[files]]
+path = "fabrik.toml"
+source = "fabrik.toml.tmpl"
+
+[[files]]
+path = "src/main.rs"
+source = "src/main.rs.tmpl"
+
+[[files]]
+path = "src/lib.rs"
+source = "src/lib.rs.tmpl"
+
+[[files]]
+path = "tests/{{library_name}}.rs"
+source = "tests/library.rs.tmpl"
+
+[[files]]
+path = "README.md"
+source = "README.md.tmpl"
+
+[[files]]
+path = "mise.toml"
+source = "mise.toml.tmpl"
