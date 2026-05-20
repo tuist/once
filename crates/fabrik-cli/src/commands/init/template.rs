@@ -27,7 +27,6 @@ pub(super) struct ResolvedValues<'a> {
 
 pub(super) struct MissingPrompt<'a> {
     pub prompt: &'a Prompt,
-    pub default: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,10 +172,7 @@ impl Template {
                 values.insert(prompt.name.clone(), default);
                 continue;
             }
-            missing.push(MissingPrompt {
-                prompt,
-                default: None,
-            });
+            missing.push(MissingPrompt { prompt });
         }
         Ok(ResolvedValues { values, missing })
     }

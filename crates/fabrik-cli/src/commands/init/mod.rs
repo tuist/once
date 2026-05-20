@@ -148,7 +148,7 @@ pub async fn run(workspace: &Path, args: InitArgs, format: Format) -> Result<Exi
                     prompts: resolved
                         .missing
                         .iter()
-                        .map(|prompt| prompt_view(prompt.prompt, prompt.default.clone()))
+                        .map(|prompt| prompt_view(prompt.prompt, None))
                         .collect(),
                     provided: resolved.values,
                 },
