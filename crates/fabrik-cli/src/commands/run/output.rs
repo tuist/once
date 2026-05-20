@@ -48,9 +48,7 @@ pub(super) async fn render(
 ) -> Result<()> {
     match output.format {
         Format::Human => render_human(output, stdout_blob, stderr_blob, record).await,
-        Format::Json | Format::Toon => {
-            render_structured(output.format, stderr_blob, record).await
-        }
+        Format::Json | Format::Toon => render_structured(output.format, stderr_blob, record).await,
     }
 }
 
