@@ -1,11 +1,9 @@
 use std::collections::BTreeMap;
-use std::env;
-use std::io::{stderr, stdout, IsTerminal};
 use std::io::{BufRead, Write};
 use std::path::Path;
 
 use anyhow::{bail, Result};
-use console::style;
+use console::Style;
 
 use super::template::{MissingPrompt, Template};
 
@@ -37,12 +35,12 @@ pub(super) fn render_missing_inputs(
 ) -> String {
     let mut body = format!(
         "{} {}\n",
-        stderr_warning("Template requires more input:"),
-        stderr_id(template.id())
+        stdout_warning("Template requires more input:"),
+        stdout_id(template.id())
     );
     for prompt in missing {
         body.push_str("  ");
-        body.push_str(&stderr_key(&prompt.prompt.name));
+        body.push_str(&stdout_key(&prompt.prompt.name));
         body.push(' ');
         body.push_str(&prompt.prompt.question);
         if let Some(description) = &prompt.prompt.description {
@@ -50,22 +48,17 @@ pub(super) fn render_missing_inputs(
             body.push_str(description);
             body.push(')');
         }
-        if let Some(default) = &prompt.default {
-            body.push_str(" [default: ");
-            body.push_str(default);
-            body.push(']');
-        }
         body.push('\n');
     }
     if interactive_hint {
         body.push_str("Run ");
-        body.push_str(&stderr_command(&format!("fabrik init {}", template.id())));
+        body.push_str(&stdout_command(&format!("fabrik init {}", template.id())));
         body.push_str(" in an interactive terminal, or pass answers with ");
-        body.push_str(&stderr_command("--set key=value"));
+        body.push_str(&stdout_command("--set key=value"));
         body.push_str(".\n");
     } else {
         body.push_str("Pass answers with ");
-        body.push_str(&stderr_command("--set key=value"));
+        body.push_str(&stdout_command("--set key=value"));
         body.push_str(".\n");
     }
     body
@@ -183,142 +176,77 @@ pub(super) fn collect_values<R: BufRead, W: Write>(
     Ok(())
 }
 
-fn color_enabled(stderr_stream: bool) -> bool {
-    let no_color = env::var("NO_COLOR").is_ok_and(|value| !value.is_empty());
-    if no_color {
-        return false;
-    }
-    if env::var("CLICOLOR_FORCE").is_ok_and(|value| value != "0") {
-        return true;
-    }
-    if env::var("CLICOLOR").is_ok_and(|value| value == "0") {
-        return false;
-    }
-    if stderr_stream {
-        stderr().is_terminal()
+// `console` already honors `NO_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`,
+// and tty detection, gating stdout and stderr independently. These
+// helpers only pick the stream and the palette; `stdout_*` is for text
+// written to stdout, `stderr_*` for the interactive prompt stream.
+fn paint(value: &str, for_stderr: bool, style: impl FnOnce(Style) -> Style) -> String {
+    let base = if for_stderr {
+        Style::new().for_stderr()
     } else {
-        stdout().is_terminal()
-    }
+        Style::new()
+    };
+    style(base).apply_to(value).to_string()
 }
 
 fn stdout_heading(value: &str) -> String {
-    if color_enabled(false) {
-        style(value).bold().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, false, Style::bold)
 }
 
 fn stdout_group(value: &str) -> String {
-    if color_enabled(false) {
-        style(title_case(value)).cyan().bold().to_string()
-    } else {
-        title_case(value)
-    }
+    paint(&title_case(value), false, |s| s.cyan().bold())
 }
 
 fn stdout_id(value: &str) -> String {
-    if color_enabled(false) {
-        style(value).green().bold().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, false, |s| s.green().bold())
 }
 
 fn stdout_name(value: &str) -> String {
-    if color_enabled(false) {
-        style(value).bold().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, false, Style::bold)
 }
 
 fn stdout_path(value: &str) -> String {
-    if color_enabled(false) {
-        style(value).cyan().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, false, Style::cyan)
 }
 
 fn stdout_success(value: &str) -> String {
-    if color_enabled(false) {
-        style(value).green().bold().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, false, |s| s.green().bold())
 }
 
 fn stdout_command(value: &str) -> String {
-    if color_enabled(false) {
-        style(value).yellow().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, false, Style::yellow)
+}
+
+fn stdout_warning(value: &str) -> String {
+    paint(value, false, |s| s.yellow().bold())
+}
+
+fn stdout_key(value: &str) -> String {
+    paint(value, false, Style::bold)
 }
 
 fn stderr_heading(value: &str) -> String {
-    if color_enabled(true) {
-        style(value).bold().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, true, Style::bold)
 }
 
 fn stderr_prompt(value: &str) -> String {
-    if color_enabled(true) {
-        style(value).cyan().bold().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, true, |s| s.cyan().bold())
 }
 
 fn stderr_warning(value: &str) -> String {
-    if color_enabled(true) {
-        style(value).yellow().bold().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, true, |s| s.yellow().bold())
 }
 
 fn stderr_error(value: &str) -> String {
-    if color_enabled(true) {
-        style(value).red().bold().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, true, |s| s.red().bold())
 }
 
 fn stderr_id(value: &str) -> String {
-    if color_enabled(true) {
-        style(value).green().bold().to_string()
-    } else {
-        value.to_string()
-    }
-}
-
-fn stderr_key(value: &str) -> String {
-    if color_enabled(true) {
-        style(value).bold().to_string()
-    } else {
-        value.to_string()
-    }
-}
-
-fn stderr_command(value: &str) -> String {
-    if color_enabled(true) {
-        style(value).yellow().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, true, |s| s.green().bold())
 }
 
 fn stderr_dim(value: &str) -> String {
-    if color_enabled(true) {
-        style(value).dim().to_string()
-    } else {
-        value.to_string()
-    }
+    paint(value, true, Style::dim)
 }
 
 fn title_case(value: &str) -> String {
