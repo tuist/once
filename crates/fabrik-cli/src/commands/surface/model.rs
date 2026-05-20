@@ -167,4 +167,36 @@ mod tests {
         let err = load(&["does-not-exist"]).unwrap_err();
         assert!(format!("{err:#}").contains("unknown command path segment `does-not-exist`"));
     }
+
+    #[test]
+    fn every_subcommand_surface_path_resolves() {
+        use clap::Parser;
+
+        // Guards against drift between `Cmd::surface_path` and the
+        // clap `#[command(name = ...)]` strings. A mismatch otherwise
+        // only surfaces at runtime as "unknown command path segment"
+        // when `<subcommand> --list` is invoked.
+        let invocations: &[&[&str]] = &[
+            &["fabrik", "run", "t"],
+            &["fabrik", "build", "t"],
+            &["fabrik", "test", "t"],
+            &["fabrik", "exec", "true"],
+            &["fabrik", "cache", "stats"],
+            &["fabrik", "toolchain", "inspect"],
+            &["fabrik", "runtime", "rpc", "/tmp/session"],
+            &["fabrik", "deps", "sync"],
+            &["fabrik", "init"],
+            &["fabrik", "targets"],
+        ];
+        for argv in invocations {
+            let cli = crate::cli::Cli::try_parse_from(*argv)
+                .unwrap_or_else(|e| panic!("parsing {argv:?}: {e}"));
+            let path = cli.surface_path();
+            let surface = load(&path).unwrap_or_else(|e| {
+                panic!("resolving surface for {argv:?} (path {path:?}): {e:#}")
+            });
+            let expected = path.last().copied().unwrap_or("fabrik");
+            assert_eq!(surface.name, expected, "argv {argv:?} path {path:?}");
+        }
+    }
 }
