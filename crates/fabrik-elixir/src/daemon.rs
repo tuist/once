@@ -44,7 +44,7 @@ pub const SOCKET_ENV_VAR: &str = "FABRIK_ELIXIR_DAEMON_SOCKET";
 /// workspace argument is unused for the default path but kept in the
 /// signature so callers don't have to special-case overrides.
 pub fn default_socket_path(_workspace_root: &Path) -> PathBuf {
-    Xdg::from_env().fabrik_runtime().join("elixir-daemon.sock")
+    socket_path_in(&Xdg::from_env())
 }
 
 /// Default location for the materialized daemon script:
@@ -52,8 +52,20 @@ pub fn default_socket_path(_workspace_root: &Path) -> PathBuf {
 /// script content is identical because it's embedded in the fabrik
 /// binary via [`DAEMON_SCRIPT`].
 pub fn default_script_path(_workspace_root: &Path) -> PathBuf {
-    Xdg::from_env()
-        .fabrik_data()
+    script_path_in(&Xdg::from_env())
+}
+
+/// Same as [`default_socket_path`] but resolves against an explicit
+/// [`Xdg`] value instead of reading the process environment. Lets tests
+/// exercise the layout without touching process-global env vars.
+pub fn socket_path_in(xdg: &Xdg) -> PathBuf {
+    xdg.fabrik_runtime().join("elixir-daemon.sock")
+}
+
+/// Same as [`default_script_path`] but resolves against an explicit
+/// [`Xdg`] value. See [`socket_path_in`].
+pub fn script_path_in(xdg: &Xdg) -> PathBuf {
+    xdg.fabrik_data()
         .join("daemon")
         .join(DAEMON_SCRIPT_FILENAME)
 }
@@ -226,39 +238,41 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[test]
-    fn default_socket_path_resolves_through_xdg_runtime() {
-        let tmp = TempDir::new().unwrap();
-        let runtime = tmp.path().join("runtime");
-        // Snapshot and restore the env so we don't leak overrides
-        // into other tests in the same process.
-        let prior = std::env::var_os("XDG_RUNTIME_DIR");
-        std::env::set_var("XDG_RUNTIME_DIR", &runtime);
-        let p = default_socket_path(tmp.path());
-        assert_eq!(p, runtime.join("fabrik").join("elixir-daemon.sock"));
-        match prior {
-            Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
-            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+    fn xdg_under(root: &Path) -> Xdg {
+        Xdg {
+            cache_home: root.join("cache"),
+            state_home: root.join("state"),
+            data_home: root.join("data"),
+            config_home: root.join("config"),
+            runtime_dir: root.join("runtime"),
         }
     }
 
     #[test]
-    fn default_script_path_resolves_through_xdg_data() {
+    fn socket_path_resolves_through_xdg_runtime() {
         let tmp = TempDir::new().unwrap();
-        let data = tmp.path().join("data");
-        let prior = std::env::var_os("XDG_DATA_HOME");
-        std::env::set_var("XDG_DATA_HOME", &data);
-        let p = default_script_path(tmp.path());
+        let xdg = xdg_under(tmp.path());
         assert_eq!(
-            p,
-            data.join("fabrik")
+            socket_path_in(&xdg),
+            tmp.path()
+                .join("runtime")
+                .join("fabrik")
+                .join("elixir-daemon.sock")
+        );
+    }
+
+    #[test]
+    fn script_path_resolves_through_xdg_data() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        assert_eq!(
+            script_path_in(&xdg),
+            tmp.path()
+                .join("data")
+                .join("fabrik")
                 .join("daemon")
                 .join(DAEMON_SCRIPT_FILENAME)
         );
-        match prior {
-            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
-            None => std::env::remove_var("XDG_DATA_HOME"),
-        }
     }
 
     #[test]
