@@ -6,12 +6,13 @@ use anyhow::{Context, Result};
 use fabrik_cas::Cas;
 use fabrik_core::Xdg;
 
-use crate::cli::{self, Cli, Cmd, Format};
+use crate::cli::{self, Cli, Cmd, Output};
 use crate::commands;
 
 pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
+    let output = Output::new(cli.format, cli.quiet);
     if cli.list {
-        return commands::surface::print(&cli.surface_path(), cli.format)
+        return commands::surface::print(&cli.surface_path(), output)
             .await
             .map(|()| ExitCode::SUCCESS);
     }
@@ -22,7 +23,7 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
 
     let workspace = resolve_workspace(cli.directory)?;
     let cas = Cas::open(Xdg::from_env().fabrik_cas());
-    run_command(&workspace, &cas, cli.format, command).await
+    run_command(&workspace, &cas, output, command).await
 }
 
 fn resolve_workspace(directory: Option<PathBuf>) -> Result<PathBuf> {
@@ -49,7 +50,7 @@ fn resolve_workspace(directory: Option<PathBuf>) -> Result<PathBuf> {
 async fn run_command(
     workspace: &Path,
     cas: &Cas,
-    format: Format,
+    output: Output,
     command: Cmd,
 ) -> Result<ExitCode> {
     match command {
@@ -61,16 +62,16 @@ async fn run_command(
             run_target_command(
                 workspace,
                 cas,
-                format,
+                output,
                 target,
                 runtime_rpc,
                 runtime_rpc_socket,
             )
             .await
         }
-        Cmd::Build { target } => build_target_command(workspace, cas, format, target).await,
+        Cmd::Build { target } => build_target_command(workspace, cas, output, target).await,
         Cmd::Test { target, test_args } => {
-            test_target_command(workspace, cas, format, target, test_args).await
+            test_target_command(workspace, cas, output, target, test_args).await
         }
         Cmd::Exec {
             env,
@@ -89,19 +90,19 @@ async fn run_command(
                     cache_failures,
                     argv,
                 },
-                format,
+                output,
             )
             .await
         }
         Cmd::Cache {
             cmd: Some(cli::CacheCmd::Stats),
-        } => commands::cache::print_stats(cas, format)
+        } => commands::cache::print_stats(cas, output)
             .await
             .map(|()| ExitCode::SUCCESS),
         Cmd::Cache { cmd: None } => anyhow::bail!("cache subcommand required"),
         Cmd::Toolchain {
             cmd: Some(cli::ToolchainCmd::Inspect { platform }),
-        } => commands::toolchain::inspect(workspace, format, platform.as_deref())
+        } => commands::toolchain::inspect(workspace, output, platform.as_deref())
             .await
             .map(|()| ExitCode::SUCCESS),
         Cmd::Toolchain { cmd: None } => anyhow::bail!("toolchain subcommand required"),
@@ -115,19 +116,19 @@ async fn run_command(
             .await
             .map(|()| ExitCode::SUCCESS),
         Cmd::Runtime { cmd: None } => anyhow::bail!("runtime subcommand required"),
-        Cmd::Targets => commands::targets::print_targets(workspace, format)
+        Cmd::Targets => commands::targets::print_targets(workspace, output)
             .await
             .map(|()| ExitCode::SUCCESS),
         Cmd::Deps {
             cmd: Some(cli::DepsCmd::Sync { name }),
-        } => commands::deps::sync(workspace, cas, format, name.as_deref()).await,
+        } => commands::deps::sync(workspace, cas, output, name.as_deref()).await,
         Cmd::Deps { cmd: None } => anyhow::bail!("deps subcommand required"),
-        Cmd::Init(args) => commands::init::run(workspace, args, format).await,
+        Cmd::Init(args) => commands::init::run(workspace, args, output).await,
         Cmd::Vendor => {
             eprintln!(
                 "fabrik: `fabrik vendor` is deprecated and will be removed in v0.8.0; use `fabrik deps sync` instead"
             );
-            commands::deps::sync(workspace, cas, format, None).await
+            commands::deps::sync(workspace, cas, output, None).await
         }
         #[cfg(unix)]
         Cmd::ElixirCompile(args) => commands::elixir_compile::run(workspace, &args),
@@ -141,7 +142,7 @@ async fn run_command(
 async fn run_target_command(
     workspace: &Path,
     cas: &Cas,
-    format: Format,
+    output: Output,
     target: Option<String>,
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
@@ -152,7 +153,7 @@ async fn run_target_command(
         cas,
         &target,
         commands::run::RunArgs {
-            format,
+            output,
             runtime_rpc,
             runtime_rpc_socket,
         },
@@ -163,22 +164,22 @@ async fn run_target_command(
 async fn build_target_command(
     workspace: &Path,
     cas: &Cas,
-    format: Format,
+    output: Output,
     target: Option<String>,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
-    commands::build::build(workspace, cas, &target, format).await
+    commands::build::build(workspace, cas, &target, output).await
 }
 
 async fn test_target_command(
     workspace: &Path,
     cas: &Cas,
-    format: Format,
+    output: Output,
     target: Option<String>,
     test_args: Vec<String>,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
-    commands::test::test(workspace, cas, &target, test_args, format).await
+    commands::test::test(workspace, cas, &target, test_args, output).await
 }
 
 fn resolve_required_target(workspace: &Path, target: Option<String>) -> Result<String> {

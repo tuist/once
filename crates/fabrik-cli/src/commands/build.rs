@@ -17,7 +17,7 @@ use fabrik_core::CacheState;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-use crate::cli::Format;
+use crate::cli::{Format, Output};
 use crate::commands::util::cache_tag;
 use crate::planner::plan_for_target;
 use crate::render;
@@ -39,7 +39,7 @@ struct NodeRecord<'a> {
     action_digest: String,
 }
 
-pub async fn build(workspace: &Path, cas: &Cas, target: &str, format: Format) -> Result<ExitCode> {
+pub async fn build(workspace: &Path, cas: &Cas, target: &str, output: Output) -> Result<ExitCode> {
     let targets = fabrik_frontend::load_workspace(workspace).context("loading workspace")?;
     let built = plan_for_target(&targets, target, workspace).context("building plan")?;
     let runner = crate::commands::util::runner(cas, workspace);
@@ -57,32 +57,34 @@ pub async fn build(workspace: &Path, cas: &Cas, target: &str, format: Format) ->
 
     let output_path = built.output.clone();
 
-    match format {
+    match output.format {
         Format::Human => {
-            let mut err = tokio::io::stderr();
-            for o in &outcomes {
-                let info = &built.nodes[o.index];
-                // Right-pad single-letter "hit" so columns line up.
-                let tag = match o.outcome.cache {
-                    CacheState::Hit => "hit ",
-                    CacheState::Miss => "miss",
-                };
-                let line = format!(
-                    "fabrik: [{tag}] {kind:<16} {label}\n",
-                    kind = info.kind,
-                    label = o.label,
+            if output.show_human_trailers() {
+                let mut err = tokio::io::stderr();
+                for o in &outcomes {
+                    let info = &built.nodes[o.index];
+                    // Right-pad single-letter "hit" so columns line up.
+                    let tag = match o.outcome.cache {
+                        CacheState::Hit => "hit ",
+                        CacheState::Miss => "miss",
+                    };
+                    let line = format!(
+                        "fabrik: [{tag}] {kind:<16} {label}\n",
+                        kind = info.kind,
+                        label = o.label,
+                    );
+                    err.write_all(line.as_bytes()).await?;
+                }
+                let trailer = format!(
+                    "fabrik: built {target} ({n} nodes, {hits} hit, {miss} miss) -> {out}\n",
+                    n = outcomes.len(),
+                    hits = cache_hits,
+                    miss = cache_misses,
+                    out = output_path,
                 );
-                err.write_all(line.as_bytes()).await?;
+                err.write_all(trailer.as_bytes()).await?;
+                err.flush().await?;
             }
-            let trailer = format!(
-                "fabrik: built {target} ({n} nodes, {hits} hit, {miss} miss) -> {out}\n",
-                n = outcomes.len(),
-                hits = cache_hits,
-                miss = cache_misses,
-                out = output_path,
-            );
-            err.write_all(trailer.as_bytes()).await?;
-            err.flush().await?;
         }
         Format::Json | Format::Toon => {
             let mut err = tokio::io::stderr();
@@ -106,7 +108,7 @@ pub async fn build(workspace: &Path, cas: &Cas, target: &str, format: Format) ->
                 output: output_path,
             };
             let mut out = tokio::io::stdout();
-            out.write_all(render::structured(format, &summary)?.as_bytes())
+            out.write_all(render::structured(output.format, &summary)?.as_bytes())
                 .await?;
             out.flush().await?;
         }

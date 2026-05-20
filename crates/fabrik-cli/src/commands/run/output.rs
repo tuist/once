@@ -4,7 +4,7 @@ use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use super::runtime_descriptor::RuntimeDescriptor;
-use crate::cli::Format;
+use crate::cli::{Format, Output};
 use crate::render;
 
 #[derive(Serialize)]
@@ -41,18 +41,21 @@ impl<'a> RunRecord<'a> {
 }
 
 pub(super) async fn render(
-    format: Format,
+    output: Output,
     stdout_blob: &[u8],
     stderr_blob: &[u8],
     record: &RunRecord<'_>,
 ) -> Result<()> {
-    match format {
-        Format::Human => render_human(stdout_blob, stderr_blob, record).await,
-        Format::Json | Format::Toon => render_structured(format, stderr_blob, record).await,
+    match output.format {
+        Format::Human => render_human(output, stdout_blob, stderr_blob, record).await,
+        Format::Json | Format::Toon => {
+            render_structured(output.format, stderr_blob, record).await
+        }
     }
 }
 
 async fn render_human(
+    output: Output,
     stdout_blob: &[u8],
     stderr_blob: &[u8],
     record: &RunRecord<'_>,
@@ -63,16 +66,18 @@ async fn render_human(
 
     let mut err = tokio::io::stderr();
     err.write_all(stderr_blob).await?;
-    err.write_all(
-        format!(
-            "fabrik: ran {} (cache {}, exit={})\n",
-            record.target, record.cache, record.exit_code
+    if output.show_human_trailers() {
+        err.write_all(
+            format!(
+                "fabrik: ran {} (cache {}, exit={})\n",
+                record.target, record.cache, record.exit_code
+            )
+            .as_bytes(),
         )
-        .as_bytes(),
-    )
-    .await?;
-    if let Some(runtime) = &record.runtime {
-        err.write_all(runtime_trailer(runtime).as_bytes()).await?;
+        .await?;
+        if let Some(runtime) = &record.runtime {
+            err.write_all(runtime_trailer(runtime).as_bytes()).await?;
+        }
     }
     err.flush().await?;
     Ok(())

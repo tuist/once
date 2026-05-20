@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-use crate::cli::Format;
+use crate::cli::{Format, Output};
 use crate::render;
 
 /// JSON view of a [`fabrik_frontend::Target`] that includes the
@@ -54,8 +54,9 @@ struct TargetsToonView<'a> {
     targets: BTreeMap<String, TargetFields<'a>>,
 }
 
-pub async fn print_targets(workspace: &Path, format: Format) -> Result<()> {
+pub async fn print_targets(workspace: &Path, output: Output) -> Result<()> {
     let targets = fabrik_frontend::load_workspace(workspace).context("loading workspace")?;
+    let format = output.format;
     if format == Format::Toon {
         let targets = TargetsToonView {
             targets: targets

@@ -22,6 +22,35 @@ pub enum Format {
     Toon,
 }
 
+/// Output policy passed to command handlers. Bundles the chosen
+/// [`Format`] with the global `--quiet` flag so commands have one
+/// argument to consult instead of two. Cheap to copy; future flags
+/// that affect rendering (e.g. `--no-color`) drop in here.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Output {
+    pub format: Format,
+    /// When true, suppress human-mode success and progress trailers
+    /// (e.g. "fabrik: built ..." lines). Errors and the structured
+    /// envelope of `--format json`/`toon` are never suppressed.
+    pub quiet: bool,
+}
+
+impl Output {
+    #[must_use]
+    pub fn new(format: Format, quiet: bool) -> Self {
+        Self { format, quiet }
+    }
+
+    /// Whether human-mode progress and success trailers should print.
+    /// Always false in non-human formats, since those don't produce
+    /// trailers in the first place; combining the checks here keeps
+    /// call sites readable.
+    #[must_use]
+    pub fn show_human_trailers(self) -> bool {
+        self.format == Format::Human && !self.quiet
+    }
+}
+
 /// Release pipeline sets `FABRIK_VERSION` at build time so the binary
 /// reports the actual release tag rather than the pre-1.0 root package
 /// version. Falls back to the Cargo version for local dev builds.
@@ -54,6 +83,13 @@ pub struct Cli {
     /// -vvv: trace). Overridden by `RUST_LOG`.
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     pub verbose: u8,
+
+    /// Suppress human-mode success and progress trailers ("fabrik:
+    /// built ...", per-node hit/miss lines). Errors and the structured
+    /// envelope of `--format json`/`toon` still print. Mirrors the
+    /// `-q` flag of common build tools.
+    #[arg(short = 'q', long, global = true)]
+    pub quiet: bool,
 
     /// Print the command surface at the current command depth.
     #[arg(long, global = true)]
@@ -381,4 +417,20 @@ fn parse_workspace_path(raw: &str) -> std::result::Result<WorkspacePath, String>
 pub fn exit_from(code: i32) -> ExitCode {
     let clamped = u8::try_from(code & 0xff).unwrap_or(1);
     ExitCode::from(clamped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_show_human_trailers_only_when_human_and_not_quiet() {
+        assert!(Output::new(Format::Human, false).show_human_trailers());
+        assert!(!Output::new(Format::Human, true).show_human_trailers());
+        // Structured formats never emit human trailers, so quiet has no
+        // effect on the predicate either way.
+        assert!(!Output::new(Format::Json, false).show_human_trailers());
+        assert!(!Output::new(Format::Json, true).show_human_trailers());
+        assert!(!Output::new(Format::Toon, false).show_human_trailers());
+    }
 }
