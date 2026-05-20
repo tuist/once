@@ -6,7 +6,7 @@ use fabrik_cas::Cas;
 use fabrik_core::CacheState;
 use fabrik_frontend::{DependencyEcosystem, DependencyEntry};
 
-use crate::cli::Format;
+use crate::cli::Output;
 
 mod elixir;
 mod go;
@@ -30,7 +30,7 @@ use graph::{write_graph_to, ResolvedGraph};
 pub async fn sync(
     workspace: &Path,
     cas: &Cas,
-    format: Format,
+    output: Output,
     name: Option<&str>,
 ) -> Result<ExitCode> {
     let entries = selected_entries(workspace, name)?;
@@ -38,7 +38,7 @@ pub async fn sync(
     for entry in entries {
         reports.push(sync_entry(workspace, cas, &entry).await?);
     }
-    write_sync_report(format, &reports).await?;
+    write_sync_report(output, &reports).await?;
     Ok(ExitCode::SUCCESS)
 }
 

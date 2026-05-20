@@ -5,7 +5,7 @@ use fabrik_cas::Cas;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-use crate::cli::Format;
+use crate::cli::{Format, Output};
 use crate::render;
 
 #[derive(Serialize)]
@@ -20,7 +20,7 @@ struct CacheStats {
     actions: CacheEntry,
 }
 
-pub async fn print_stats(cas: &Cas, format: Format) -> Result<()> {
+pub async fn print_stats(cas: &Cas, output: Output) -> Result<()> {
     let s = cas.stats().await?;
     let stats = CacheStats {
         blobs: CacheEntry {
@@ -32,12 +32,12 @@ pub async fn print_stats(cas: &Cas, format: Format) -> Result<()> {
             bytes: s.action_bytes,
         },
     };
-    let body = match format {
+    let body = match output.format {
         Format::Human => format!(
             "blobs:   {} ({} bytes)\nactions: {} ({} bytes)\n",
             s.blob_count, s.blob_bytes, s.action_count, s.action_bytes,
         ),
-        Format::Json | Format::Toon => render::structured(format, &stats)?,
+        Format::Json | Format::Toon => render::structured(output.format, &stats)?,
     };
     let mut out = tokio::io::stdout();
     out.write_all(body.as_bytes()).await?;

@@ -7,7 +7,7 @@ use fabrik_frontend::DependencyEcosystem;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-use crate::cli::Format;
+use crate::cli::{Format, Output};
 use crate::render;
 
 pub(in crate::commands::deps) struct SyncReport {
@@ -23,11 +23,14 @@ pub(in crate::commands::deps) struct SyncReport {
 }
 
 pub(in crate::commands::deps) async fn write_sync_report(
-    format: Format,
+    output: Output,
     reports: &[SyncReport],
 ) -> Result<()> {
-    match format {
+    match output.format {
         Format::Human => {
+            if !output.show_human_trailers() {
+                return Ok(());
+            }
             let mut err = tokio::io::stderr();
             for report in reports {
                 let mut line = format!(
@@ -54,7 +57,7 @@ pub(in crate::commands::deps) async fn write_sync_report(
         Format::Json | Format::Toon => {
             let mut out = tokio::io::stdout();
             let payload: Vec<_> = reports.iter().map(SyncReportPayload::from).collect();
-            let body = render::structured(format, &payload)?;
+            let body = render::structured(output.format, &payload)?;
             out.write_all(body.as_bytes()).await?;
             out.flush().await?;
         }

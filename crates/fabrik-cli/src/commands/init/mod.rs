@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-use crate::cli::Format;
+use crate::cli::{Format, Output};
 use crate::render;
 
 use self::template::{Prompt, RenderedTemplate, Template, Validation};
@@ -89,11 +89,12 @@ struct PromptView {
     validation: Validation,
 }
 
-pub async fn run(workspace: &Path, args: InitArgs, format: Format) -> Result<ExitCode> {
+pub async fn run(workspace: &Path, args: InitArgs, output: Output) -> Result<ExitCode> {
+    let format = output.format;
     let templates = catalog::load().context("loading init templates")?;
     if args.templates {
         write_response(
-            format,
+            output,
             human::render_catalog(&templates),
             &InitResponse::Catalog {
                 templates: templates
@@ -116,7 +117,7 @@ pub async fn run(workspace: &Path, args: InitArgs, format: Format) -> Result<Exi
             human::render_catalog(&templates)
         );
         write_response(
-            format,
+            output,
             human_body,
             &InitResponse::SelectTemplate {
                 templates: templates
@@ -141,7 +142,7 @@ pub async fn run(workspace: &Path, args: InitArgs, format: Format) -> Result<Exi
         if !resolved.missing.is_empty() {
             let human_body = human::render_missing_inputs(template, &resolved.missing, true);
             write_response(
-                format,
+                output,
                 human_body,
                 &InitResponse::NeedsInput {
                     template: template_view(template, Some(&resolved.values)),
@@ -164,7 +165,7 @@ pub async fn run(workspace: &Path, args: InitArgs, format: Format) -> Result<Exi
     write_rendered(&destination, &rendered, args.force)?;
     let next_steps = display_next_steps(workspace, &destination, &rendered.next_steps);
     write_response(
-        format,
+        output,
         human::render_created(template, &destination, &next_steps),
         &InitResponse::Created {
             template: template_view(template, None),
@@ -261,10 +262,13 @@ fn write_rendered(destination: &Path, rendered: &RenderedTemplate, force: bool) 
     Ok(())
 }
 
-async fn write_response(format: Format, human_body: String, response: &InitResponse) -> Result<()> {
-    let body = match format {
+async fn write_response(output: Output, human_body: String, response: &InitResponse) -> Result<()> {
+    let body = match output.format {
+        // `fabrik init` is interactive; --quiet shouldn't swallow the
+        // user's only confirmation that something was created. Keep
+        // human output unconditional here.
         Format::Human => human_body,
-        Format::Json | Format::Toon => render::structured(format, response)?,
+        Format::Json | Format::Toon => render::structured(output.format, response)?,
     };
     let mut out = tokio::io::stdout();
     out.write_all(body.as_bytes()).await?;

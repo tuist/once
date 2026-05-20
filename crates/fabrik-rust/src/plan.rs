@@ -3,11 +3,11 @@
 //! [`fabrik_core::Plan`] whose node ordering and edges respect every
 //! declared dependency.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use fabrik_core::{Action, BuiltPlan, NodeInfo, Plan};
-use fabrik_frontend::{external_dep_id, Target};
+use fabrik_frontend::{external_dep_id, PlanGraphError, Target};
 
 use crate::artifact::{DepArtifact, RustKind};
 use crate::build_script::{compile_build_script, output_path as build_script_output_path};
@@ -33,6 +33,16 @@ pub enum PlanBuildError {
     InvalidExternalDepSpec { label: String, graph: String },
 }
 
+impl From<PlanGraphError> for PlanBuildError {
+    fn from(err: PlanGraphError) -> Self {
+        match err {
+            PlanGraphError::UnknownRoot(id) => Self::UnknownRoot(id),
+            PlanGraphError::Cycle(id) => Self::Cycle(id),
+            PlanGraphError::MissingDep { label, dep } => Self::MissingDep { label, dep },
+        }
+    }
+}
+
 /// Build a plan for `root_id` from a flat target list.
 ///
 /// `targets` is the workspace-wide vector returned by
@@ -46,30 +56,16 @@ pub fn build_plan(
     root_id: &str,
     workspace_root: &Path,
 ) -> Result<BuiltPlan, PlanBuildError> {
-    let target_index: HashMap<String, usize> = targets
-        .iter()
-        .enumerate()
-        .map(|(i, t)| (t.id(), i))
-        .collect();
-    let root_target_idx = *target_index
-        .get(root_id)
-        .ok_or_else(|| PlanBuildError::UnknownRoot(root_id.to_string()))?;
+    let target_index = fabrik_frontend::target_index(targets);
+    let root_target_idx = fabrik_frontend::resolve_root(&target_index, root_id)?;
     let deps_by_target = target_dep_ids(targets)?;
 
-    // DFS to collect every target reachable from root, returning a
-    // reverse-postorder traversal that's already a valid topological
-    // sort.
-    let mut order: Vec<usize> = Vec::new();
-    let mut on_stack: BTreeSet<usize> = BTreeSet::new();
-    let mut visited: BTreeSet<usize> = BTreeSet::new();
-    dfs(
-        root_target_idx,
+    let order = fabrik_frontend::topological_sort(
         targets,
         &deps_by_target,
         &target_index,
-        &mut visited,
-        &mut on_stack,
-        &mut order,
+        root_target_idx,
+        |kind| RustKind::parse(kind).is_some(),
     )?;
 
     // Compile in topological order so each target's deps are already
@@ -207,51 +203,6 @@ fn root_output_path(node: &fabrik_core::PlanNode) -> String {
             .map(|p| p.as_str().to_string())
             .unwrap_or_default(),
     }
-}
-
-fn dfs(
-    idx: usize,
-    targets: &[Target],
-    deps_by_target: &[Vec<String>],
-    target_index: &HashMap<String, usize>,
-    visited: &mut BTreeSet<usize>,
-    on_stack: &mut BTreeSet<usize>,
-    order: &mut Vec<usize>,
-) -> Result<(), PlanBuildError> {
-    if visited.contains(&idx) {
-        return Ok(());
-    }
-    if on_stack.contains(&idx) {
-        return Err(PlanBuildError::Cycle(targets[idx].id()));
-    }
-    on_stack.insert(idx);
-    for dep in &deps_by_target[idx] {
-        let dep_idx = target_index
-            .get(dep)
-            .ok_or_else(|| PlanBuildError::MissingDep {
-                label: targets[idx].id(),
-                dep: dep.clone(),
-            })?;
-        // Non-rust deps would fail at compile time too; we only walk
-        // them here when they are rust-shaped targets so the cycle
-        // detector does not misreport a rust -> non-rust edge.
-        let dep_kind = &targets[*dep_idx].kind;
-        if RustKind::parse(dep_kind).is_some() {
-            dfs(
-                *dep_idx,
-                targets,
-                deps_by_target,
-                target_index,
-                visited,
-                on_stack,
-                order,
-            )?;
-        }
-    }
-    on_stack.remove(&idx);
-    visited.insert(idx);
-    order.push(idx);
-    Ok(())
 }
 
 #[cfg(test)]

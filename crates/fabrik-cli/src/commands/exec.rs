@@ -21,7 +21,7 @@ use fabrik_core::{Action, ResourceRequest, RunOpts, WorkspacePath};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-use crate::cli::{exit_from, Format};
+use crate::cli::{exit_from, Format, Output};
 use crate::commands::util::cache_tag;
 use crate::render;
 
@@ -43,7 +43,7 @@ pub struct ExecArgs {
     pub argv: Vec<String>,
 }
 
-pub async fn exec(workspace: &Path, cas: &Cas, args: ExecArgs, format: Format) -> Result<ExitCode> {
+pub async fn exec(workspace: &Path, cas: &Cas, args: ExecArgs, output: Output) -> Result<ExitCode> {
     let ExecArgs {
         env,
         cwd,
@@ -83,14 +83,22 @@ pub async fn exec(workspace: &Path, cas: &Cas, args: ExecArgs, format: Format) -
         cache: tag,
         exit_code: outcome.result.exit_code,
     };
-    let trailer = match format {
-        Format::Human => format!(
-            "fabrik: cache {tag} action={} exit={}\n",
-            outcome.action, outcome.result.exit_code
-        ),
-        Format::Json | Format::Toon => render::structured(format, &trailer)?,
+    let trailer = match output.format {
+        Format::Human => {
+            if output.quiet {
+                String::new()
+            } else {
+                format!(
+                    "fabrik: cache {tag} action={} exit={}\n",
+                    outcome.action, outcome.result.exit_code
+                )
+            }
+        }
+        Format::Json | Format::Toon => render::structured(output.format, &trailer)?,
     };
-    err.write_all(trailer.as_bytes()).await?;
+    if !trailer.is_empty() {
+        err.write_all(trailer.as_bytes()).await?;
+    }
     err.flush().await?;
 
     Ok(exit_from(outcome.result.exit_code))

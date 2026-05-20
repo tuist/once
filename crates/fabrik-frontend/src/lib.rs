@@ -14,6 +14,7 @@
 mod dependency;
 mod error;
 mod manifest;
+mod plan_builder;
 mod target;
 mod target_ref;
 mod workspace;
@@ -30,6 +31,10 @@ pub use dependency::{
 };
 pub use error::{Error, Result};
 pub use manifest::{load_dependency_entries_toml_str, load_toml_str};
+pub use plan_builder::{
+    resolve_root, target_index, topological_sort, workspace_output_dir,
+    BuildError as PlanGraphError,
+};
 pub use target::{ExternalDependency, Target};
 pub use target_ref::{
     absolutize, normalize_build_dep, normalize_cli_target, normalize_cli_target_from, target_id,

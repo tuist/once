@@ -10,7 +10,7 @@ use fabrik_core::{workspace_tool_env, Action, CacheState, ResourceRequest};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-use crate::cli::{exit_from, Format};
+use crate::cli::{exit_from, Format, Output};
 use crate::commands::util::{cache_tag, find_target};
 use crate::render;
 
@@ -31,13 +31,13 @@ pub async fn test(
     cas: &Cas,
     target_id: &str,
     test_args: Vec<String>,
-    format: Format,
+    output: Output,
 ) -> Result<ExitCode> {
     let (targets, idx) = find_target(workspace, target_id)?;
     let target = &targets[idx];
     if target.kind != "rust_test" {
         anyhow::bail!(
-            "target {target_id} has kind `{}`; expected rust_test",
+            "target {target_id} has kind `{}`; expected rust_test. Run `fabrik targets` to list rust_test targets",
             target.kind
         );
     }
@@ -80,7 +80,7 @@ pub async fn test(
         test_action_digest: test_outcome.action.to_string(),
     };
 
-    render_output(cas, &test_outcome, &summary, format).await?;
+    render_output(cas, &test_outcome, &summary, output).await?;
     Ok(exit_from(test_outcome.result.exit_code))
 }
 
@@ -118,29 +118,31 @@ async fn render_output(
     cas: &Cas,
     outcome: &fabrik_core::Outcome,
     summary: &TestSummary<'_>,
-    format: Format,
+    output: Output,
 ) -> Result<()> {
     let stdout = cas.get_blob(&outcome.result.stdout).await?;
     let stderr = cas.get_blob(&outcome.result.stderr).await?;
 
-    match format {
+    match output.format {
         Format::Human => {
             let mut out = tokio::io::stdout();
             out.write_all(&stdout).await?;
             out.flush().await?;
             let mut err = tokio::io::stderr();
             err.write_all(&stderr).await?;
-            let trailer = format!(
-                "fabrik: tested {label} (build {nodes} nodes, {hits} hit, {misses} miss; test cache {test_cache}, exit={exit}) -> {binary}\n",
-                label = summary.target,
-                nodes = summary.build_nodes,
-                hits = summary.build_cache_hits,
-                misses = summary.build_cache_misses,
-                test_cache = summary.test_cache,
-                exit = summary.exit_code,
-                binary = summary.binary,
-            );
-            err.write_all(trailer.as_bytes()).await?;
+            if output.show_human_trailers() {
+                let trailer = format!(
+                    "fabrik: tested {label} (build {nodes} nodes, {hits} hit, {misses} miss; test cache {test_cache}, exit={exit}) -> {binary}\n",
+                    label = summary.target,
+                    nodes = summary.build_nodes,
+                    hits = summary.build_cache_hits,
+                    misses = summary.build_cache_misses,
+                    test_cache = summary.test_cache,
+                    exit = summary.exit_code,
+                    binary = summary.binary,
+                );
+                err.write_all(trailer.as_bytes()).await?;
+            }
             err.flush().await?;
         }
         Format::Json | Format::Toon => {
@@ -149,7 +151,7 @@ async fn render_output(
             err.write_all(&stderr).await?;
             err.flush().await?;
             let mut out = tokio::io::stdout();
-            out.write_all(render::structured(format, summary)?.as_bytes())
+            out.write_all(render::structured(output.format, summary)?.as_bytes())
                 .await?;
             out.flush().await?;
         }

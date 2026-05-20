@@ -16,11 +16,11 @@ use fabrik_core::RunOpts;
 use self::action::action_for;
 use self::apple_runtime::is_apple_simulator_app;
 use self::runtime_descriptor::runtime_descriptor;
-use crate::cli::{exit_from, Format};
+use crate::cli::{exit_from, Output};
 use crate::commands::util::{cache_tag, find_target};
 
 pub struct RunArgs {
-    pub format: Format,
+    pub output: Output,
     pub runtime_rpc: bool,
     pub runtime_rpc_socket: Option<PathBuf>,
 }
@@ -97,11 +97,11 @@ async fn finish_run(
     outcome: &fabrik_core::Outcome,
     target_id: &str,
     target: &fabrik_frontend::Target,
-    output: &str,
+    output_path: &str,
     args: RunArgs,
 ) -> Result<()> {
     let RunArgs {
-        format,
+        output,
         runtime_rpc,
         runtime_rpc_socket,
     } = args;
@@ -129,10 +129,10 @@ async fn finish_run(
         &target.kind,
         outcome,
         tag,
-        output.to_string(),
+        output_path.to_string(),
         runtime,
     );
-    output::render(format, &stdout_blob, &stderr_blob, &record).await?;
+    output::render(output, &stdout_blob, &stderr_blob, &record).await?;
 
     if let Some(session) = session {
         crate::commands::runtime::rpc(&session.dir, Some(&session.socket)).await?;

@@ -1,9 +1,8 @@
 pub fn app_bundle_path(package: &str, name: &str) -> String {
-    if package.is_empty() {
-        format!(".fabrik/out/{name}.app")
-    } else {
-        format!(".fabrik/out/{package}/{name}.app")
-    }
+    format!(
+        "{}.app",
+        fabrik_frontend::workspace_output_dir(package, name)
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,11 +115,7 @@ impl SwiftLinkInput {
 }
 
 pub fn swift_out_dir(package: &str, name: &str) -> String {
-    if package.is_empty() {
-        format!(".fabrik/out/{name}")
-    } else {
-        format!(".fabrik/out/{package}/{name}")
-    }
+    fabrik_frontend::workspace_output_dir(package, name)
 }
 
 pub fn swift_static_library_path(out_dir: &str, module_name: &str) -> String {
@@ -128,22 +123,18 @@ pub fn swift_static_library_path(out_dir: &str, module_name: &str) -> String {
 }
 
 pub fn executable_path(package: &str, name: &str) -> String {
-    if package.is_empty() {
-        format!(".fabrik/out/{name}{}", std::env::consts::EXE_SUFFIX)
-    } else {
-        format!(
-            ".fabrik/out/{package}/{name}{}",
-            std::env::consts::EXE_SUFFIX
-        )
-    }
+    format!(
+        "{}{}",
+        fabrik_frontend::workspace_output_dir(package, name),
+        std::env::consts::EXE_SUFFIX
+    )
 }
 
 pub fn framework_path(package: &str, name: &str) -> String {
-    if package.is_empty() {
-        format!(".fabrik/out/{name}.framework")
-    } else {
-        format!(".fabrik/out/{package}/{name}.framework")
-    }
+    format!(
+        "{}.framework",
+        fabrik_frontend::workspace_output_dir(package, name)
+    )
 }
 
 pub fn parent_dir(path: &str) -> String {

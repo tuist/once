@@ -142,6 +142,44 @@ Describe 'fabrik exec'
     End
   End
 
+  Describe '--quiet'
+    It 'suppresses the human trailer on stderr but keeps subprocess stdout'
+      When call "$FABRIK_BIN" --quiet -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
+      The status should be success
+      # Wrapped program stdout still passes through untouched.
+      The stdout should equal 'hello'
+      # The "fabrik: cache ..." trailer must not appear under --quiet.
+      The stderr should not include 'cache miss'
+      The stderr should not include 'fabrik:'
+    End
+
+    It 'still emits the structured trailer when --quiet is combined with --format json'
+      # --quiet only gates human trailers; machine consumers asked
+      # for json get json regardless. Stdout remains the wrapped
+      # program's bytes so existing pipelines stay parseable.
+      When call "$FABRIK_BIN" --quiet --format json -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
+      The status should be success
+      The stdout should equal 'hello'
+      The stderr should include '"cache":"miss"'
+      The stderr should include '"exit_code":0'
+    End
+
+    It 'still surfaces errors when --quiet is set'
+      # Errors travel to stderr through a different code path than the
+      # success trailer; --quiet must not swallow them.
+      When call "$FABRIK_BIN" --quiet -C /nonexistent exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
+      The status should not equal 0
+      The stderr should include 'fabrik:'
+    End
+
+    It 'accepts the short -q alias'
+      When call "$FABRIK_BIN" -q -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hi'
+      The status should be success
+      The stdout should equal 'hi'
+      The stderr should not include 'cache miss'
+    End
+  End
+
   Describe '--format toon'
     It 'emits a TOON trailer on stderr; stdout stays the wrapped program transparent'
       When call "$FABRIK_BIN" --format toon -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'

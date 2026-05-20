@@ -20,7 +20,11 @@ pub fn find_target(workspace: &Path, target_id: &str) -> Result<(Vec<Target>, us
     let idx = targets
         .iter()
         .position(|t| t.id() == target_id)
-        .ok_or_else(|| anyhow!("no target matches `{target_id}`"))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "no target matches `{target_id}`. Run `fabrik targets` to list declared targets"
+            )
+        })?;
     Ok((targets, idx))
 }
 
