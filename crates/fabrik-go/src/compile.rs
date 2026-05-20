@@ -135,11 +135,7 @@ fn build_input_digest(
 }
 
 fn executable_path(package: &str, name: &str) -> String {
-    if package.is_empty() {
-        format!(".fabrik/out/{name}")
-    } else {
-        format!(".fabrik/out/{package}/{name}")
-    }
+    fabrik_frontend::workspace_output_dir(package, name)
 }
 
 fn parent_dir(path: &str) -> String {

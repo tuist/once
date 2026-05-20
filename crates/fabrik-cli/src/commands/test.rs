@@ -37,7 +37,7 @@ pub async fn test(
     let target = &targets[idx];
     if target.kind != "rust_test" {
         anyhow::bail!(
-            "target {target_id} has kind `{}`; expected rust_test",
+            "target {target_id} has kind `{}`; expected rust_test. Run `fabrik targets` to list rust_test targets",
             target.kind
         );
     }

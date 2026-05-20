@@ -111,6 +111,18 @@ impl fmt::Display for WorkspacePath {
     }
 }
 
+impl AsRef<str> for WorkspacePath {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for WorkspacePath {
+    fn as_ref(&self) -> &Path {
+        Path::new(&self.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -13,12 +13,13 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use fabrik_cas::Cas;
-use fabrik_core::{BuiltPlan, CacheState};
+use fabrik_core::CacheState;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::Format;
 use crate::commands::util::cache_tag;
+use crate::planner::plan_for_target;
 use crate::render;
 
 #[derive(Serialize)]
@@ -40,7 +41,7 @@ struct NodeRecord<'a> {
 
 pub async fn build(workspace: &Path, cas: &Cas, target: &str, format: Format) -> Result<ExitCode> {
     let targets = fabrik_frontend::load_workspace(workspace).context("loading workspace")?;
-    let built = build_plan(&targets, target, workspace).context("building plan")?;
+    let built = plan_for_target(&targets, target, workspace).context("building plan")?;
     let runner = crate::commands::util::runner(cas, workspace);
 
     let outcomes = runner
@@ -112,28 +113,4 @@ pub async fn build(workspace: &Path, cas: &Cas, target: &str, format: Format) ->
     }
 
     Ok(ExitCode::SUCCESS)
-}
-
-/// Dispatch to the matching plugin's planner. Adding a new plugin is
-/// one extra arm here; the CLI rendering and execution paths above
-/// stay plugin-agnostic because every plugin returns the unified
-/// [`BuiltPlan`] shape.
-fn build_plan(
-    targets: &[fabrik_frontend::Target],
-    target_id: &str,
-    workspace: &Path,
-) -> Result<BuiltPlan> {
-    let target = targets
-        .iter()
-        .find(|t| t.id() == target_id)
-        .ok_or_else(|| anyhow::anyhow!("no target matches `{target_id}`"))?;
-    if fabrik_apple::supports_kind(&target.kind) {
-        Ok(fabrik_apple::build_plan(targets, target_id, workspace)?)
-    } else if fabrik_elixir::supports_kind(&target.kind) {
-        Ok(fabrik_elixir::build_plan(targets, target_id, workspace)?)
-    } else if fabrik_go::supports_kind(&target.kind) {
-        Ok(fabrik_go::build_plan(targets, target_id, workspace)?)
-    } else {
-        Ok(fabrik_rust::build_plan(targets, target_id, workspace)?)
-    }
 }

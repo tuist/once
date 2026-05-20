@@ -43,21 +43,16 @@ pub struct BeamArtifact {
 /// per-application `ebin/` convention so the layout stays familiar to
 /// anyone reading the cache contents on disk.
 pub fn ebin_dir(package: &str, name: &str) -> String {
-    if package.is_empty() {
-        format!(".fabrik/out/{name}.ebin")
-    } else {
-        format!(".fabrik/out/{package}/{name}.ebin")
-    }
+    format!(
+        "{}.ebin",
+        fabrik_frontend::workspace_output_dir(package, name)
+    )
 }
 
 /// Workspace-relative path to the launcher escript that an
 /// `elixir.binary` produces.
 pub fn escript_path(package: &str, name: &str) -> String {
-    if package.is_empty() {
-        format!(".fabrik/out/{name}")
-    } else {
-        format!(".fabrik/out/{package}/{name}")
-    }
+    fabrik_frontend::workspace_output_dir(package, name)
 }
 
 #[cfg(test)]

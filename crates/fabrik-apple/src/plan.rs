@@ -1,9 +1,8 @@
-use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use fabrik_core::{BuiltPlan, NodeInfo, Plan};
-use fabrik_frontend::{external_dep_id, Target};
+use fabrik_frontend::{external_dep_id, PlanGraphError, Target};
 
 use crate::artifact::{AppleKind, SwiftArtifact};
 use crate::compile::{compile_ios_app, AppleError};
@@ -35,6 +34,16 @@ pub enum PlanBuildError {
     Swift(#[from] SwiftError),
 }
 
+impl From<PlanGraphError> for PlanBuildError {
+    fn from(err: PlanGraphError) -> Self {
+        match err {
+            PlanGraphError::UnknownRoot(id) => Self::UnknownRoot(id),
+            PlanGraphError::Cycle(id) => Self::Cycle(id),
+            PlanGraphError::MissingDep { label, dep } => Self::MissingDep { label, dep },
+        }
+    }
+}
+
 pub fn supports_kind(kind: &str) -> bool {
     AppleKind::parse(kind).is_some()
 }
@@ -44,18 +53,9 @@ pub fn build_plan(
     root_id: &str,
     workspace_root: &Path,
 ) -> Result<BuiltPlan, PlanBuildError> {
-    let target_index: HashMap<String, usize> = targets
-        .iter()
-        .enumerate()
-        .map(|(i, t)| (t.id(), i))
-        .collect();
-    let root_target_idx = *target_index
-        .get(root_id)
-        .ok_or_else(|| PlanBuildError::UnknownRoot(root_id.to_string()))?;
-    let target = targets
-        .iter()
-        .find(|t| t.id() == root_id)
-        .ok_or_else(|| PlanBuildError::UnknownRoot(root_id.to_string()))?;
+    let target_index = fabrik_frontend::target_index(targets);
+    let root_target_idx = fabrik_frontend::resolve_root(&target_index, root_id)?;
+    let target = &targets[root_target_idx];
     let kind = AppleKind::parse(&target.kind).ok_or_else(|| PlanBuildError::NonAppleDep {
         label: target.id(),
         dep: root_id.to_string(),
@@ -66,17 +66,12 @@ pub fn build_plan(
     }
     let deps_by_target = target_dep_ids(targets)?;
 
-    let mut order = Vec::new();
-    let mut on_stack = BTreeSet::new();
-    let mut visited = BTreeSet::new();
-    dfs(
-        root_target_idx,
+    let order = fabrik_frontend::topological_sort(
         targets,
         &deps_by_target,
         &target_index,
-        &mut visited,
-        &mut on_stack,
-        &mut order,
+        root_target_idx,
+        |kind| supports_kind(kind) && !is_simulator_app_kind(kind),
     )?;
 
     let mut plan = Plan::new();
@@ -92,7 +87,7 @@ pub fn build_plan(
         let deps = &deps_by_target[*target_idx];
         validate_swift_deps(target, deps.as_ref(), targets, &target_index)?;
         let mut target_for_compile = target.clone();
-        target_for_compile.deps = deps.iter().cloned().collect();
+        target_for_compile.deps.clone_from(deps);
         target_for_compile.external_deps = Vec::new();
         let (plan_idx, import_idx, artifact) = push_swift_target(
             &mut plan,
@@ -173,14 +168,11 @@ fn validate_swift_deps(
     Ok(())
 }
 
-fn target_dep_ids(targets: &[Target]) -> Result<Vec<Cow<'_, [String]>>, PlanBuildError> {
+fn target_dep_ids(targets: &[Target]) -> Result<Vec<Vec<String>>, PlanBuildError> {
     targets.iter().map(target_dep_id).collect()
 }
 
-fn target_dep_id(target: &Target) -> Result<Cow<'_, [String]>, PlanBuildError> {
-    if target.external_deps.is_empty() {
-        return Ok(Cow::Borrowed(&target.deps));
-    }
+fn target_dep_id(target: &Target) -> Result<Vec<String>, PlanBuildError> {
     let mut deps = target.deps.clone();
     for dep in &target.external_deps {
         let Some(product_name) = swift_product_name(&dep.spec) else {
@@ -191,7 +183,7 @@ fn target_dep_id(target: &Target) -> Result<Cow<'_, [String]>, PlanBuildError> {
         };
         deps.push(external_dep_id(&dep.graph, product_name));
     }
-    Ok(Cow::Owned(deps))
+    Ok(deps)
 }
 
 fn swift_product_name(spec: &serde_json::Value) -> Option<&str> {
@@ -263,48 +255,6 @@ fn push_swift_target(
         import_index,
         swift_plan.artifact,
     ))
-}
-
-fn dfs(
-    idx: usize,
-    targets: &[Target],
-    deps_by_target: &[Cow<'_, [String]>],
-    target_index: &HashMap<String, usize>,
-    visited: &mut BTreeSet<usize>,
-    on_stack: &mut BTreeSet<usize>,
-    order: &mut Vec<usize>,
-) -> Result<(), PlanBuildError> {
-    if visited.contains(&idx) {
-        return Ok(());
-    }
-    if on_stack.contains(&idx) {
-        return Err(PlanBuildError::Cycle(targets[idx].id()));
-    }
-    on_stack.insert(idx);
-    for dep in deps_by_target[idx].iter() {
-        let dep_idx = target_index
-            .get(dep)
-            .ok_or_else(|| PlanBuildError::MissingDep {
-                label: targets[idx].id(),
-                dep: dep.clone(),
-            })?;
-        let dep_kind = &targets[*dep_idx].kind;
-        if supports_kind(dep_kind) && !is_simulator_app_kind(dep_kind) {
-            dfs(
-                *dep_idx,
-                targets,
-                deps_by_target,
-                target_index,
-                visited,
-                on_stack,
-                order,
-            )?;
-        }
-    }
-    on_stack.remove(&idx);
-    visited.insert(idx);
-    order.push(idx);
-    Ok(())
 }
 
 fn is_simulator_app_kind(kind: &str) -> bool {

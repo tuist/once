@@ -5,6 +5,7 @@
 mod cli;
 mod commands;
 mod dispatch;
+mod planner;
 mod render;
 
 use std::process::ExitCode;
