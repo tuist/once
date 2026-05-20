@@ -238,11 +238,7 @@ impl Template {
             }
             if let Some(default) = &prompt.default {
                 for key in referenced_keys(default).with_context(|| {
-                    format!(
-                        "template `{}` prompt `{}` default",
-                        self.id(),
-                        prompt.name
-                    )
+                    format!("template `{}` prompt `{}` default", self.id(), prompt.name)
                 })? {
                     if !names.contains(key.as_str()) {
                         bail!(
