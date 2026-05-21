@@ -252,6 +252,7 @@ fn uncached_script_digest_with_nonce(target: &fabrik_frontend::Target, nonce: u1
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fabrik_cas::Digest;
     use tempfile::TempDir;
 
     fn script_target(package: &str) -> fabrik_frontend::Target {
@@ -265,6 +266,13 @@ mod tests {
             external_deps: Vec::new(),
             attrs: BTreeMap::new(),
         }
+    }
+
+    fn test_nonce(seed: &str) -> u128 {
+        let digest = Digest::of_bytes(seed.as_bytes());
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest.as_bytes()[..16]);
+        u128::from_le_bytes(bytes)
     }
 
     #[test]
@@ -371,8 +379,9 @@ mod tests {
     #[test]
     fn uncached_script_digest_is_stable_for_the_same_nonce() {
         let target = script_target("pkg");
-        let digest_a = uncached_script_digest_with_nonce(&target, 7);
-        let digest_b = uncached_script_digest_with_nonce(&target, 7);
+        let nonce = test_nonce("same");
+        let digest_a = uncached_script_digest_with_nonce(&target, nonce);
+        let digest_b = uncached_script_digest_with_nonce(&target, nonce);
 
         assert_eq!(digest_a, digest_b);
     }
@@ -380,8 +389,8 @@ mod tests {
     #[test]
     fn uncached_script_digest_changes_when_the_nonce_changes() {
         let target = script_target("pkg");
-        let digest_a = uncached_script_digest_with_nonce(&target, 7);
-        let digest_b = uncached_script_digest_with_nonce(&target, 8);
+        let digest_a = uncached_script_digest_with_nonce(&target, test_nonce("first"));
+        let digest_b = uncached_script_digest_with_nonce(&target, test_nonce("second"));
 
         assert_ne!(digest_a, digest_b);
     }
