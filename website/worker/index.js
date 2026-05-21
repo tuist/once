@@ -13,6 +13,8 @@ const mdUrlFor = (urlString) => {
   return url;
 };
 
+const CONTENT_SIGNAL = "search=yes, ai-input=yes, ai-train=yes";
+
 const linkHeader = (request) => {
   const url = new URL(request.url);
   const md = mdUrlFor(request.url).toString();
@@ -20,6 +22,7 @@ const linkHeader = (request) => {
     `<${md}>; rel="alternate"; type="text/markdown"`,
     `<${url.origin}/sitemap.xml>; rel="sitemap"; type="application/xml"`,
     `<${url.origin}/llms.txt>; rel="describedby"; type="text/plain"`,
+    `<${url.origin}/.well-known/agent-skills/index.json>; rel="https://cloudflare.com/rel/agent-skills"; type="application/json"`,
   ].join(", ");
 };
 
@@ -28,11 +31,13 @@ const isHtmlPath = (pathname) =>
   pathname.endsWith(".html") ||
   !/\.[a-z0-9]+$/i.test(pathname);
 
-const withLinkHeader = (response, request) => {
-  if (!isHtmlPath(new URL(request.url).pathname)) return response;
+const withDiscoveryHeaders = (response, request) => {
   const headers = new Headers(response.headers);
-  headers.set("Link", linkHeader(request));
-  headers.set("Vary", "Accept");
+  headers.set("Content-Signal", CONTENT_SIGNAL);
+  if (isHtmlPath(new URL(request.url).pathname)) {
+    headers.set("Link", linkHeader(request));
+    headers.set("Vary", "Accept");
+  }
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -53,6 +58,7 @@ export default {
         const headers = new Headers(mdResp.headers);
         headers.set("Content-Type", "text/markdown; charset=utf-8");
         headers.set("Vary", "Accept");
+        headers.set("Content-Signal", CONTENT_SIGNAL);
         return new Response(mdResp.body, {
           status: mdResp.status,
           statusText: mdResp.statusText,
@@ -62,6 +68,6 @@ export default {
     }
 
     const response = await env.ASSETS.fetch(request);
-    return withLinkHeader(response, request);
+    return withDiscoveryHeaders(response, request);
   },
 };

@@ -27,3 +27,11 @@ eleventyExcludeFromCollections: true
 - [Atom]({{ site.url }}/feed.xml)
 - [RSS]({{ site.url }}/rss.xml)
 - [Markdown index]({{ site.url }}/llms-full.txt)
+
+## Agent surfaces
+
+- [Agent Skills]({{ site.url }}/.well-known/agent-skills/index.json): Machine-readable index of skills agents can perform against the site.
+- [Sitemap]({{ site.url }}/sitemap.xml): Every indexed page.
+- [robots.txt]({{ site.url }}/robots.txt): Crawl rules and Content Signals (search=yes, ai-input=yes, ai-train=yes).
+
+This site supports Markdown content negotiation: any HTML page also responds with Markdown when the request sends `Accept: text/markdown`.

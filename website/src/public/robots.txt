@@ -1,4 +1,7 @@
+# Fabrik is open source. We want our content indexed for search, used to
+# ground AI answers, and used for training models. yes/yes/yes.
 User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
 Allow: /
 
 User-agent: GPTBot
