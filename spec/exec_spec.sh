@@ -86,6 +86,23 @@ EOF
     The stderr should include 'cache miss'
   End
 
+  It 'executes an annotated script file through fabrik exec with --script'
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/scripts/build.sh" <<'EOF'
+#!/usr/bin/env bash
+# FABRIK input "../input.txt"
+# FABRIK cwd ".."
+cat input.txt
+EOF
+    cat > "$WORKSPACE/input.txt" <<'EOF'
+hello through fabrik exec --script
+EOF
+    When call fabrik exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    The status should be success
+    The stdout should equal 'hello through fabrik exec --script'
+    The stderr should include 'cache miss'
+  End
+
   It 'propagates the underlying exit code'
     When call fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 7'
     The status should equal 7

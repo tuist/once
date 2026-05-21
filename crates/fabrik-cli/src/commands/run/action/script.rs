@@ -1,3 +1,9 @@
+//! Lower script targets into concrete command actions.
+//!
+//! File-backed scripts carry their execution contract in FABRIK
+//! headers inside the script file. Manifest-backed scripts carry the
+//! same contract in the target attrs. Both lower to `RunCommand`.
+
 use std::collections::BTreeMap;
 use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,6 +15,7 @@ use fabrik_core::{
 };
 
 use super::{input_digest, parse_attr, ActionPlan};
+use crate::commands::util::relative_path;
 
 pub(super) fn script_action(
     workspace: &std::path::Path,
@@ -223,45 +230,17 @@ fn host_script_path(script_path: &str, cwd: Option<&WorkspacePath>) -> Result<St
     Ok(relative_path(cwd.as_str(), script.as_str()))
 }
 
-fn relative_path(from: &str, to: &str) -> String {
-    if from.is_empty() {
-        return to.to_string();
-    }
-    let from_parts = from
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    let to_parts = to
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    let mut shared = 0;
-    while shared < from_parts.len()
-        && shared < to_parts.len()
-        && from_parts[shared] == to_parts[shared]
-    {
-        shared += 1;
-    }
-
-    let mut parts = Vec::new();
-    for _ in shared..from_parts.len() {
-        parts.push("..".to_string());
-    }
-    for part in &to_parts[shared..] {
-        parts.push((*part).to_string());
-    }
-    if parts.is_empty() {
-        ".".to_string()
-    } else {
-        parts.join("/")
-    }
+fn uncached_script_digest(target: &fabrik_frontend::Target) -> Digest {
+    uncached_script_digest_with_nonce(
+        target,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+    )
 }
 
-fn uncached_script_digest(target: &fabrik_frontend::Target) -> Digest {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
+fn uncached_script_digest_with_nonce(target: &fabrik_frontend::Target, nonce: u128) -> Digest {
     let mut buf = Vec::new();
     buf.extend_from_slice(b"fabrik.script.uncached.v1\0");
     buf.extend_from_slice(target.id().as_bytes());
@@ -387,5 +366,23 @@ mod tests {
                 assert!(input_digest.is_some());
             }
         }
+    }
+
+    #[test]
+    fn uncached_script_digest_is_stable_for_the_same_nonce() {
+        let target = script_target("pkg");
+        let digest_a = uncached_script_digest_with_nonce(&target, 7);
+        let digest_b = uncached_script_digest_with_nonce(&target, 7);
+
+        assert_eq!(digest_a, digest_b);
+    }
+
+    #[test]
+    fn uncached_script_digest_changes_when_the_nonce_changes() {
+        let target = script_target("pkg");
+        let digest_a = uncached_script_digest_with_nonce(&target, 7);
+        let digest_b = uncached_script_digest_with_nonce(&target, 8);
+
+        assert_ne!(digest_a, digest_b);
     }
 }

@@ -29,8 +29,10 @@ use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::{exit_from, Format, Output};
-use crate::commands::util::cache_tag;
+use crate::commands::util::{cache_tag, relative_path};
 use crate::render;
+
+const MAX_SCRIPT_GLOB_MATCHES: usize = 1_000;
 
 #[derive(Serialize)]
 struct ExecTrailer<'a> {
@@ -104,6 +106,8 @@ pub async fn exec(workspace: &Path, cas: &Cas, args: ExecArgs, output: Output) -
     let stderr = cas.get_blob(&outcome.result.stderr).await?;
     let mut out = tokio::io::stdout();
     out.write_all(&stdout).await?;
+    // Flush explicitly so the wrapped stdout is visible before the
+    // Fabrik stderr trailer, even under macOS CI timing pressure.
     out.flush().await?;
     let mut err = tokio::io::stderr();
     err.write_all(&stderr).await?;
@@ -217,10 +221,12 @@ fn script_invocation(
     let script_path = workspace_path_for_file(&workspace, &script_abs)?;
     if annotations.runtime != runtime {
         anyhow::bail!(
-            "script `{}` declares runtime `{}` in its shebang, but `fabrik exec --script` was invoked with `{}`",
+            "script `{}` declares runtime `{}` in its shebang, but the command used `{}`; invoke it with the shebang runtime, for example `fabrik exec -- {} {}`, or update the shebang",
             script_path,
             annotations.runtime,
-            runtime
+            runtime,
+            annotations.runtime,
+            script_path
         );
     }
     let merged_runtime_args = merge_runtime_args(&annotations.runtime_args, runtime_args);
@@ -265,34 +271,47 @@ fn parse_script_exec_argv<'a>(
     if rest.is_empty() {
         anyhow::bail!("`fabrik exec --script` expects `<runtime> <script> [args...]`");
     }
-    let script_idx = rest
-        .iter()
-        .position(|value| script_file_candidate(workspace, value).is_file())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "`fabrik exec --script` could not find a script file in `<runtime> <script> [args...]`"
-            )
-        })?;
+    let mut script_idx = None;
+    let mut candidate_error = None;
+    for (index, value) in rest.iter().enumerate() {
+        match script_file_candidate(workspace, value) {
+            Ok(candidate) if candidate.is_file() => {
+                script_idx = Some(index);
+                break;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                candidate_error.get_or_insert(err);
+            }
+        }
+    }
+    let Some(script_idx) = script_idx else {
+        if let Some(err) = candidate_error {
+            return Err(err);
+        }
+        anyhow::bail!(
+            "`fabrik exec --script` could not find a script file in `<runtime> <script> [args...]`"
+        );
+    };
     let script_arg = rest[script_idx].as_str();
     let runtime_args = &rest[..script_idx];
     let script_args = rest[script_idx + 1..].to_vec();
     Ok((runtime.clone(), runtime_args, script_arg, script_args))
 }
 
-fn script_file_candidate(workspace: &Path, value: &str) -> PathBuf {
+fn script_file_candidate(workspace: &Path, value: &str) -> Result<PathBuf> {
     if Path::new(value).is_absolute() {
-        PathBuf::from(value)
+        Ok(PathBuf::from(value))
     } else {
-        workspace.join(value)
+        let ws_path = WorkspacePath::try_from(value).with_context(|| {
+            format!("script path `{value}` must stay within the selected workspace")
+        })?;
+        Ok(ws_path.resolve(workspace))
     }
 }
 
 fn resolve_script_abs(workspace: &Path, script_arg: &str) -> Result<PathBuf> {
-    let candidate = if Path::new(script_arg).is_absolute() {
-        PathBuf::from(script_arg)
-    } else {
-        workspace.join(script_arg)
-    };
+    let candidate = script_file_candidate(workspace, script_arg)?;
     std::fs::canonicalize(&candidate)
         .with_context(|| format!("resolving script path `{script_arg}`"))
 }
@@ -485,6 +504,15 @@ fn expand_script_globs(
     script_dir: &WorkspacePath,
     pattern: &str,
 ) -> Result<Vec<WorkspacePath>> {
+    expand_script_globs_with_limit(workspace, script_dir, pattern, MAX_SCRIPT_GLOB_MATCHES)
+}
+
+fn expand_script_globs_with_limit(
+    workspace: &Path,
+    script_dir: &WorkspacePath,
+    pattern: &str,
+    limit: usize,
+) -> Result<Vec<WorkspacePath>> {
     let abs_pattern = script_dir.resolve(workspace).join(pattern);
     let pattern_str = abs_pattern
         .to_str()
@@ -501,6 +529,11 @@ fn expand_script_globs(
             workspace,
             &std::fs::canonicalize(&path)?,
         )?);
+        if out.len() > limit {
+            anyhow::bail!(
+                "glob `{pattern}` matched more than {limit} files; narrow the pattern before running it through `fabrik exec`"
+            );
+        }
     }
     out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     out.dedup();
@@ -576,40 +609,6 @@ fn host_script_path(script_path: &str, cwd: Option<&WorkspacePath>) -> Result<St
         return Ok(script.as_str().to_string());
     };
     Ok(relative_path(cwd.as_str(), script.as_str()))
-}
-
-fn relative_path(from: &str, to: &str) -> String {
-    if from.is_empty() {
-        return to.to_string();
-    }
-    let from_parts = from
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    let to_parts = to
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    let mut shared = 0;
-    while shared < from_parts.len()
-        && shared < to_parts.len()
-        && from_parts[shared] == to_parts[shared]
-    {
-        shared += 1;
-    }
-
-    let mut parts = Vec::new();
-    for _ in shared..from_parts.len() {
-        parts.push("..".to_string());
-    }
-    for part in &to_parts[shared..] {
-        parts.push((*part).to_string());
-    }
-    if parts.is_empty() {
-        ".".to_string()
-    } else {
-        parts.join("/")
-    }
 }
 
 #[cfg(test)]
@@ -701,6 +700,38 @@ mod tests {
                 assert!(input_digest.is_some());
             }
         }
+    }
+
+    #[test]
+    fn rejects_relative_script_paths_that_escape_the_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let outside = tmp.path().parent().unwrap().join("outside.sh");
+        fs::write(&outside, "#!/bin/bash\n").unwrap();
+
+        let err = parse_script_exec_argv(
+            tmp.path(),
+            &["bash".to_string(), "../outside.sh".to_string()],
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("must stay within the selected workspace"));
+    }
+
+    #[test]
+    fn rejects_globs_that_match_too_many_files() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("scripts")).unwrap();
+        fs::create_dir_all(tmp.path().join("scripts/src")).unwrap();
+        fs::write(tmp.path().join("scripts/src/one.txt"), "1\n").unwrap();
+        fs::write(tmp.path().join("scripts/src/two.txt"), "2\n").unwrap();
+
+        let script_dir = WorkspacePath::try_from("scripts").unwrap();
+        let err =
+            expand_script_globs_with_limit(tmp.path(), &script_dir, "src/*.txt", 1).unwrap_err();
+
+        assert!(err.to_string().contains("matched more than 1 files"));
     }
 
     #[test]
