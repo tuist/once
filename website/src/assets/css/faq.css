@@ -1,0 +1,58 @@
+.fabrik-faq {
+  max-width: 720px;
+  margin: var(--fabrik-spacing-8) auto 0;
+  border-block: 1px solid var(--fabrik-summer-4);
+
+  & > details {
+    padding-block: var(--fabrik-spacing-5);
+    border-bottom: 1px solid var(--fabrik-summer-4);
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    & > summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--fabrik-spacing-4);
+      font-size: var(--fabrik-text-lg);
+      font-weight: var(--fabrik-weight-medium);
+      color: var(--fabrik-summer-12);
+
+      &::-webkit-details-marker {
+        display: none;
+      }
+
+      & > [data-part="icon"] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: var(--fabrik-summer-3);
+        color: var(--fabrik-summer-12);
+        flex-shrink: 0;
+        transition: transform 200ms var(--fabrik-ease);
+
+        & svg {
+          width: 14px;
+          height: 14px;
+        }
+      }
+    }
+
+    &[open] > summary > [data-part="icon"] {
+      transform: rotate(45deg);
+    }
+
+    & > [data-part="answer"] {
+      margin-top: var(--fabrik-spacing-3);
+      color: var(--fabrik-summer-11);
+      line-height: 1.6;
+    }
+  }
+}

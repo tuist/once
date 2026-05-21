@@ -1,0 +1,33 @@
+<footer class="fabrik-footer">
+  <div class="fabrik-container">
+    <div data-part="columns">
+      <div data-part="brand">
+        <a href="/" data-part="logo">
+          <img src="/logo.png" alt="" />
+          <span>{{ copy.nav.brand }}</span>
+        </a>
+        <p>{{ copy.footer.tagline }}</p>
+      </div>
+
+      {% for column in copy.footer.columns %}
+        <div data-part="column">
+          <h4>{{ column.title }}</h4>
+          <ul>
+            {% for link in column.links %}
+              <li><a href="{{ link.href }}">{{ link.text }}</a></li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div data-part="meta">
+    <div class="fabrik-container">
+      <div data-part="meta-inner">
+        <span>© {{ site.currentYear }} {{ copy.footer.legalSuffix }}</span>
+        <span>{{ copy.footer.builtWith }}</span>
+      </div>
+    </div>
+  </div>
+</footer>

@@ -1,0 +1,134 @@
+.fabrik-prose {
+  color: var(--fabrik-summer-11);
+  font-size: var(--fabrik-text-lg);
+  line-height: 1.65;
+  width: 100%;
+
+  & > * + * {
+    margin-top: var(--fabrik-spacing-5);
+  }
+
+  & h1,
+  & h2,
+  & h3,
+  & h4 {
+    font-family: var(--fabrik-font-serif);
+    font-weight: var(--fabrik-weight-extrabold);
+    letter-spacing: -0.02em;
+    color: var(--fabrik-summer-12);
+    line-height: 1.2;
+    margin-top: var(--fabrik-spacing-8);
+  }
+
+  & h2 {
+    font-size: var(--fabrik-text-3xl);
+  }
+  & h3 {
+    font-size: var(--fabrik-text-2xl);
+  }
+  & h4 {
+    font-size: var(--fabrik-text-xl);
+  }
+
+  & a {
+    color: var(--fabrik-thread-11);
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  & strong {
+    color: var(--fabrik-summer-12);
+    font-weight: var(--fabrik-weight-semibold);
+  }
+
+  & code {
+    background: var(--fabrik-summer-3);
+    color: var(--fabrik-summer-12);
+    padding: 2px 6px;
+    border-radius: var(--fabrik-radius-1);
+    font-size: 0.9em;
+  }
+
+  & pre {
+    background: var(--fabrik-summer-1);
+    border: 1px solid var(--fabrik-summer-4);
+    border-radius: var(--fabrik-radius-3);
+    padding: var(--fabrik-spacing-5);
+    overflow-x: auto;
+    font-size: var(--fabrik-text-sm);
+
+    & code {
+      background: transparent;
+      padding: 0;
+      color: var(--fabrik-summer-12);
+    }
+  }
+
+  & blockquote {
+    border-left: 3px solid var(--fabrik-thread-9);
+    padding-left: var(--fabrik-spacing-4);
+    color: var(--fabrik-summer-11);
+    font-style: italic;
+  }
+
+  & ul,
+  & ol {
+    padding-left: var(--fabrik-spacing-5);
+  }
+
+  & li + li {
+    margin-top: var(--fabrik-spacing-2);
+  }
+
+  & hr {
+    border: 0;
+    border-top: 1px solid var(--fabrik-summer-4);
+  }
+
+  & img {
+    border-radius: var(--fabrik-radius-3);
+  }
+}
+
+.fabrik-post-header {
+  width: 100%;
+  text-align: left;
+  padding-bottom: var(--fabrik-spacing-8);
+
+  & > time {
+    font-size: var(--fabrik-text-sm);
+    color: var(--fabrik-summer-10);
+  }
+
+  & > h1 {
+    margin-top: var(--fabrik-spacing-2);
+    font-family: var(--fabrik-font-serif);
+    font-weight: var(--fabrik-weight-extrabold);
+    letter-spacing: -0.025em;
+    line-height: 1.1;
+    font-size: clamp(
+      var(--fabrik-text-3xl),
+      2vw + 1.5rem,
+      var(--fabrik-text-5xl)
+    );
+    color: var(--fabrik-summer-12);
+  }
+
+  & > [data-part="description"] {
+    margin-top: var(--fabrik-spacing-4);
+    color: var(--fabrik-summer-11);
+    font-size: var(--fabrik-text-lg);
+  }
+
+  & > [data-part="byline"] {
+    margin-top: var(--fabrik-spacing-5);
+    font-size: var(--fabrik-text-sm);
+    color: var(--fabrik-summer-11);
+  }
+}
+
+.fabrik-post-body {
+  width: 100%;
+}

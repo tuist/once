@@ -1,0 +1,41 @@
+{
+  "$schema": "https://static.cloudflare.com/schemas/agent-skills/v1.json",
+  "version": "1.0",
+  "skills": [
+    {
+      "name": "fabrik-overview",
+      "title": "Read the Fabrik overview",
+      "description": "Get a concise, structured overview of what Fabrik is, what it runs today, and where it is going. Useful when an agent first encounters the project.",
+      "uris": [
+        "https://fabrik.run/llms.txt",
+        "https://fabrik.run/index.md"
+      ]
+    },
+    {
+      "name": "fabrik-full-context",
+      "title": "Read the full Fabrik site as Markdown",
+      "description": "Returns the homepage, design rationale, target documentation, and every blog post concatenated into a single Markdown document. Useful for building an in-context index of the project.",
+      "uris": [
+        "https://fabrik.run/llms-full.txt"
+      ]
+    },
+    {
+      "name": "fabrik-blog",
+      "title": "Read the Fabrik blog",
+      "description": "List and read release notes, design decisions, and field notes from the Fabrik project.",
+      "uris": [
+        "https://fabrik.run/blog/index.md",
+        "https://fabrik.run/feed.xml",
+        "https://fabrik.run/rss.xml"
+      ]
+    },
+    {
+      "name": "fabrik-source",
+      "title": "Inspect the Fabrik source code",
+      "description": "Browse the implementation, file issues, and open pull requests against the canonical Fabrik repository.",
+      "uris": [
+        "https://github.com/tuist/fabrik"
+      ]
+    }
+  ]
+}

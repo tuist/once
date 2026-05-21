@@ -47,9 +47,9 @@ The build script is a normal cacheable node. Its captured directives
 are restored from the CAS on cache hits before dependent `rustc`
 actions run.
 
-## Cargo Escape Hatch
+## The cooperative path
 
-Use `cargo.binary` when the Cargo graph needs features that the granular path does not support yet, such as Cargo workspace import or per-target feature resolution.
+Use `cargo.binary` to run Cargo in the cooperative model: Fabrik wraps the full Cargo toolchain as one cached action. Reach for it when your Cargo graph needs features the granular path does not support yet, such as Cargo workspace import or per-target feature resolution.
 
 ```toml
 [[cargo.binary]]

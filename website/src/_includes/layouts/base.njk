@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    {% if homepage or not title %}{% set pageTitle = site.title %}{% else %}{% set pageTitle = title + " · " + site.name %}{% endif %}
+    {% set pageDesc = description or site.description %}
+    {% set pageUrl = site.url + page.url %}
+    {% set pageMdUrl = pageUrl | mdAlternate %}
+    {% set pageSocialImage = socialImage or (site.url + "/assets/social/default.png") %}
+    {% set pageSocialImageAlt = socialImageAlt or (site.name + " · polyglot automation kernel") %}
+    {% set isArticle = page.url.startsWith("/blog/") and page.url != "/blog/" %}
+    <title>{{ pageTitle }}</title>
+    <meta name="description" content="{{ pageDesc }}" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="{{ pageUrl }}" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.bunny.net" crossorigin />
+    <link
+      href="https://fonts.bunny.net/css?family=geist:400,500,600,700|petrona:400,500,700,800,900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/css/index.css" />
+    <link rel="alternate" type="application/atom+xml" title="{{ site.name }} (Atom)" href="/feed.xml" />
+    <link rel="alternate" type="application/rss+xml" title="{{ site.name }} (RSS)" href="/rss.xml" />
+    <link rel="alternate" type="text/markdown" href="{{ pageMdUrl }}" />
+
+    <meta property="og:type" content="{% if isArticle %}article{% else %}website{% endif %}" />
+    <meta property="og:site_name" content="{{ site.name }}" />
+    <meta property="og:title" content="{{ pageTitle }}" />
+    <meta property="og:description" content="{{ pageDesc }}" />
+    <meta property="og:url" content="{{ pageUrl }}" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:image" content="{{ pageSocialImage }}" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="{{ pageSocialImageAlt }}" />
+    {% if isArticle %}
+    <meta property="article:published_time" content="{{ page.date | isoDate }}" />
+    {% if author %}<meta property="article:author" content="{{ author }}" />{% endif %}
+    {% endif %}
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="{{ pageTitle }}" />
+    <meta name="twitter:description" content="{{ pageDesc }}" />
+    <meta name="twitter:image" content="{{ pageSocialImage }}" />
+    <meta name="twitter:image:alt" content="{{ pageSocialImageAlt }}" />
+
+    <script type="application/ld+json">
+    {% if isArticle %}
+    {
+      "@context": "https://schema.org",
+      "@type": "Article",
+      "headline": {{ title | dump | safe }},
+      "description": {{ pageDesc | dump | safe }},
+      "image": {{ pageSocialImage | dump | safe }},
+      "datePublished": {{ page.date | isoDate | dump | safe }},
+      "author": { "@type": "Organization", "name": {{ (author or site.name) | dump | safe }} },
+      "publisher": { "@type": "Organization", "name": {{ site.name | dump | safe }}, "logo": { "@type": "ImageObject", "url": {{ (site.url + "/logo.png") | dump | safe }} } },
+      "mainEntityOfPage": {{ pageUrl | dump | safe }}
+    }
+    {% else %}
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": {{ site.name | dump | safe }},
+      "url": {{ site.url | dump | safe }},
+      "description": {{ site.description | dump | safe }}
+    }
+    {% endif %}
+    </script>
+  </head>
+  <body>
+    {% include "partials/nav.njk" %}
+    <main>{{ content | safe }}</main>
+    {% include "partials/footer.njk" %}
+  </body>
+</html>

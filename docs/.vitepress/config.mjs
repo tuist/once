@@ -7,7 +7,7 @@ export default defineConfig({
   title: "Fabrik",
   titleTemplate: ":title | Fabrik",
   description:
-    "A polyglot, agent-native build system with content-addressed actions, structured declarations, and explicit runtime semantics.",
+    "A polyglot automation kernel for humans and agents. Content-addressed actions, structured declarations, and explicit runtime semantics.",
   cleanUrls: true,
   lastUpdated: true,
   sitemap: {

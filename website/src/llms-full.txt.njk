@@ -1,0 +1,22 @@
+---
+permalink: "/llms-full.txt"
+eleventyExcludeFromCollections: true
+---
+{% include "markdown/home.njk" %}
+
+# Blog
+
+> {{ copy.blog.lede }}
+
+{% for post in collections.posts | reverse %}
+
+---
+
+## {{ post.data.title }}
+
+{{ post.date | readableDate }}{% if post.data.author %} · {{ copy.blog.authorPrefix }} {{ post.data.author }}{% endif %}
+
+{% if post.data.description %}> {{ post.data.description }}{% endif %}
+
+{{ post | rawMarkdown }}
+{% endfor %}

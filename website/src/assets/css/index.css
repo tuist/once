@@ -1,0 +1,22 @@
+@import "./tokens.css";
+@import "./base.css";
+@import "./layout.css";
+@import "./button.css";
+@import "./badge.css";
+@import "./byline.css";
+@import "./nav.css";
+@import "./hero.css";
+@import "./terminal.css";
+@import "./card.css";
+@import "./split.css";
+@import "./narrative.css";
+@import "./faq.css";
+@import "./cta-panel.css";
+@import "./footer.css";
+@import "./blog.css";
+@import "./prose.css";
+
+.fabrik-page {
+  padding-top: calc(var(--fabrik-spacing-12) + var(--fabrik-spacing-7));
+  padding-bottom: var(--fabrik-spacing-11);
+}

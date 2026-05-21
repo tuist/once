@@ -10,7 +10,7 @@
 
 # Fabrik
 
-Fabrik is a polyglot, agent-native build system. It uses content-addressed actions, structured declarations, and explicit runtime semantics so humans and coding agents can build, run, test, and debug the same graph.
+Fabrik is a polyglot automation kernel for humans and agents. It sits between your team, their coding agents, and the execution infrastructure beneath them: local cache, remote runners, and the toolchains they invoke. Content-addressed actions, structured declarations, and explicit runtime semantics give humans and coding agents one graph to build, run, test, and debug.
 
 ## Quick Start
 

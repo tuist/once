@@ -1,0 +1,51 @@
+.fabrik-cta-panel {
+  margin-block: var(--fabrik-spacing-10);
+  padding: var(--fabrik-spacing-9) var(--fabrik-spacing-6);
+  border-radius: var(--fabrik-radius-5);
+  background: var(--fabrik-summer-12);
+  color: var(--fabrik-summer-2);
+  text-align: center;
+
+  & > [data-part="title"] {
+    font-family: var(--fabrik-font-serif);
+    font-weight: var(--fabrik-weight-extrabold);
+    letter-spacing: -0.025em;
+    font-size: clamp(
+      var(--fabrik-text-3xl),
+      2vw + 1.5rem,
+      var(--fabrik-text-5xl)
+    );
+    line-height: 1.1;
+    color: var(--fabrik-summer-2);
+    max-width: 640px;
+    margin-inline: auto;
+  }
+
+  & > [data-part="lede"] {
+    margin-top: var(--fabrik-spacing-4);
+    color: var(--fabrik-summer-8);
+    font-size: var(--fabrik-text-lg);
+    max-width: 560px;
+    margin-inline: auto;
+  }
+
+  & code {
+    background: color-mix(in srgb, var(--fabrik-summer-11) 40%, transparent);
+    color: var(--fabrik-summer-2);
+    padding: 2px 8px;
+    border-radius: var(--fabrik-radius-1);
+    font-size: 0.9em;
+  }
+
+  & > [data-part="actions"] {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--fabrik-spacing-3);
+    justify-content: center;
+    margin-top: var(--fabrik-spacing-7);
+  }
+
+  @media (min-width: 768px) {
+    padding: var(--fabrik-spacing-11) var(--fabrik-spacing-9);
+  }
+}
