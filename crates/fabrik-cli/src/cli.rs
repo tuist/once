@@ -172,8 +172,9 @@ pub enum Cmd {
     Exec {
         /// Interpret argv as `<runtime> <script> [args...]` and apply
         /// `FABRIK` headers from the script file. Useful as the
-        /// explicit form, and for directly executable scripts via a
-        /// shebang such as `#!/usr/bin/env -S fabrik exec -- bash`.
+        /// explicit form, for example `fabrik exec --script bash
+        /// scripts/build.sh`, and for directly executable scripts via
+        /// a shebang such as `#!/usr/bin/env -S fabrik exec -- bash`.
         #[arg(long)]
         script: bool,
 

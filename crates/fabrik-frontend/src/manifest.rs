@@ -14,6 +14,8 @@ use crate::script::parse_script_annotations;
 use crate::target::{ExternalDependency, Target};
 use crate::target_ref::{normalize_build_dep, validate_target_name};
 
+const MAX_SCRIPT_GLOB_MATCHES: usize = 1_000;
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Manifest {
@@ -1397,6 +1399,14 @@ fn expand_script_globs(
             .to_string_lossy()
             .replace(std::path::MAIN_SEPARATOR, "/");
         out.push(normalize_relative_path(&rel, "package", display_name)?);
+        if out.len() > MAX_SCRIPT_GLOB_MATCHES {
+            return Err(Error::Eval {
+                path: display_name.to_string(),
+                message: format!(
+                    "glob `{pattern}` matched more than {MAX_SCRIPT_GLOB_MATCHES} files; narrow the pattern before using it in a script target"
+                ),
+            });
+        }
     }
     out.sort();
     out.dedup();
@@ -1957,6 +1967,47 @@ path = "scripts/build.sh"
             targets[0].attrs["outputs_json"],
             "[\"pkg/dist\"]".to_string()
         );
+    }
+
+    #[test]
+    fn rejects_script_input_globs_that_match_too_many_files() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("pkg/scripts")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("pkg/src")).unwrap();
+        std::fs::write(
+            tmp.path().join("pkg/scripts/build.sh"),
+            r#"#!/usr/bin/env bash
+# FABRIK input "../src/*.ts"
+echo hi
+"#,
+        )
+        .unwrap();
+        for index in 0..=MAX_SCRIPT_GLOB_MATCHES {
+            std::fs::write(
+                tmp.path().join("pkg/src").join(format!("file-{index}.ts")),
+                "console.log('hi')\n",
+            )
+            .unwrap();
+        }
+
+        let err = load_toml_with(
+            "pkg/fabrik.toml",
+            r#"
+[[target]]
+name = "build"
+rule = "script"
+
+[target.script]
+path = "scripts/build.sh"
+"#,
+            tmp.path(),
+            "pkg",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains(&format!(
+            "matched more than {MAX_SCRIPT_GLOB_MATCHES} files"
+        )));
     }
 
     #[test]

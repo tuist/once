@@ -231,13 +231,11 @@ fn host_script_path(script_path: &str, cwd: Option<&WorkspacePath>) -> Result<St
 }
 
 fn uncached_script_digest(target: &fabrik_frontend::Target) -> Digest {
-    uncached_script_digest_with_nonce(
-        target,
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos(),
-    )
+    let nonce = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos(),
+        Err(err) => err.duration().as_nanos(),
+    };
+    uncached_script_digest_with_nonce(target, nonce)
 }
 
 fn uncached_script_digest_with_nonce(target: &fabrik_frontend::Target, nonce: u128) -> Digest {
