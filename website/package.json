@@ -1,0 +1,24 @@
+{
+  "name": "@fabrik/website",
+  "version": "0.1.0",
+  "description": "Marketing site and blog for Fabrik",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "eleventy --serve --quiet",
+    "build": "eleventy",
+    "clean": "rm -rf _site",
+    "social:images": "node scripts/generate-social-images.mjs"
+  },
+  "devDependencies": {
+    "@11ty/eleventy": "^3.0.0",
+    "@11ty/eleventy-plugin-rss": "^2.0.2",
+    "gray-matter": "^4.0.3",
+    "sharp": "^0.34.5"
+  },
+  "aube": {
+    "allowBuilds": {
+      "sharp": true
+    }
+  }
+}

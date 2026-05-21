@@ -1,0 +1,66 @@
+.fabrik-byline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fabrik-spacing-2);
+  width: fit-content;
+  padding: var(--fabrik-spacing-1) var(--fabrik-spacing-3);
+  border-radius: var(--fabrik-radius-full);
+  background: var(--fabrik-tuist-3);
+  color: var(--fabrik-tuist-11);
+  font-size: var(--fabrik-text-xs);
+  font-weight: var(--fabrik-weight-medium);
+  text-decoration: none;
+  box-shadow: var(--fabrik-shadow-sm);
+  transition:
+    background-color 150ms var(--fabrik-ease),
+    color 150ms var(--fabrik-ease);
+
+  & > [data-part="mark"] {
+    width: 14px;
+    height: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--fabrik-tuist-11);
+
+    & svg {
+      width: 100%;
+      height: 100%;
+    }
+  }
+
+  & > [data-part="arrow"] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+    transition: transform 150ms var(--fabrik-ease);
+
+    & svg {
+      width: 100%;
+      height: 100%;
+    }
+  }
+
+  &:hover {
+    background: color-mix(in srgb, var(--fabrik-tuist-3) 60%, var(--fabrik-tuist-11) 12%);
+    color: var(--fabrik-tuist-12);
+
+    & > [data-part="mark"] {
+      color: var(--fabrik-tuist-12);
+    }
+
+    & > [data-part="arrow"] {
+      transform: translateX(2px);
+    }
+  }
+}
+
+.fabrik-hero [data-part="badges"] {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--fabrik-spacing-2);
+}

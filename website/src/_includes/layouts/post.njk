@@ -1,0 +1,31 @@
+---
+layout: layouts/base.njk
+---
+
+{% from "partials/icons.njk" import icon %}
+
+<article class="fabrik-page">
+  <div class="fabrik-container">
+    <div class="fabrik-post-body">
+      <a href="/blog/" class="fabrik-back-link">
+        {{ icon("arrow-left", 14) }}
+        All posts
+      </a>
+
+      <header class="fabrik-post-header">
+        <time datetime="{{ page.date | isoDate }}">{{ page.date | readableDate }}</time>
+        <h1>{{ title }}</h1>
+        {% if description %}
+          <p data-part="description">{{ description }}</p>
+        {% endif %}
+        {% if author %}
+          <p data-part="byline">By {{ author }}</p>
+        {% endif %}
+      </header>
+
+      <div class="fabrik-prose">
+        {{ content | safe }}
+      </div>
+    </div>
+  </div>
+</article>

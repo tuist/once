@@ -1,0 +1,63 @@
+.fabrik-nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: color-mix(in srgb, var(--fabrik-summer-2) 80%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--fabrik-summer-4);
+
+  & [data-part="inner"] {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--fabrik-spacing-4);
+    width: 100%;
+    padding-block: var(--fabrik-spacing-3);
+  }
+
+  & [data-part="brand"] {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--fabrik-spacing-2);
+    font-family: var(--fabrik-font-serif);
+    font-weight: var(--fabrik-weight-extrabold);
+    font-size: var(--fabrik-text-lg);
+    color: var(--fabrik-summer-12);
+
+    & img {
+      height: 28px;
+      width: auto;
+    }
+  }
+
+  & [data-part="links"] {
+    display: none;
+    align-items: center;
+    gap: var(--fabrik-spacing-5);
+    font-size: var(--fabrik-text-sm);
+    font-weight: var(--fabrik-weight-medium);
+    color: var(--fabrik-summer-11);
+
+    & a {
+      transition: color 150ms var(--fabrik-ease);
+
+      &:hover,
+      &[aria-current="page"] {
+        color: var(--fabrik-summer-12);
+      }
+    }
+
+    @media (min-width: 768px) {
+      display: inline-flex;
+    }
+  }
+
+  & [data-part="actions"] {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--fabrik-spacing-2);
+  }
+}

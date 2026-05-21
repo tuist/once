@@ -1,0 +1,30 @@
+.fabrik-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fabrik-spacing-2);
+  width: fit-content;
+  padding: var(--fabrik-spacing-1) var(--fabrik-spacing-3);
+  border-radius: var(--fabrik-radius-full);
+  font-size: var(--fabrik-text-xs);
+  font-weight: var(--fabrik-weight-medium);
+  background: var(--fabrik-summer-12);
+  color: var(--fabrik-summer-2);
+  box-shadow: var(--fabrik-shadow-sm);
+
+  & > [data-part="dot"] {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--fabrik-thread-9);
+  }
+
+  & > [data-part="icon"] {
+    width: 12px;
+    height: 12px;
+  }
+
+  &[data-variant="soft"] {
+    background: var(--fabrik-thread-3);
+    color: var(--fabrik-thread-11);
+  }
+}

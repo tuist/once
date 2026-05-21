@@ -1,0 +1,55 @@
+.fabrik-terminal {
+  border-radius: var(--fabrik-radius-4);
+  border: 1px solid var(--fabrik-summer-5);
+  background: var(--fabrik-summer-1);
+  box-shadow: var(--fabrik-shadow-lg);
+  overflow: hidden;
+
+  & > [data-part="header"] {
+    display: flex;
+    align-items: center;
+    gap: var(--fabrik-spacing-2);
+    padding: var(--fabrik-spacing-2) var(--fabrik-spacing-4);
+    border-bottom: 1px solid var(--fabrik-summer-4);
+    background: var(--fabrik-summer-2);
+
+    & > [data-part="dots"] {
+      display: inline-flex;
+      gap: 6px;
+
+      & > span {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--fabrik-summer-5);
+      }
+    }
+
+    & > [data-part="title"] {
+      margin-left: var(--fabrik-spacing-3);
+      font-family: var(--fabrik-font-mono);
+      font-size: var(--fabrik-text-xs);
+      color: var(--fabrik-summer-10);
+    }
+  }
+
+  & > [data-part="body"] {
+    margin: 0;
+    padding: var(--fabrik-spacing-4) var(--fabrik-spacing-5);
+    font-family: var(--fabrik-font-mono);
+    font-size: var(--fabrik-text-sm);
+    color: var(--fabrik-summer-12);
+    overflow-x: auto;
+    line-height: 1.65;
+    white-space: pre;
+
+    & [data-part="prompt"],
+    & [data-part="muted"] {
+      color: var(--fabrik-summer-10);
+    }
+
+    & [data-part="value"] {
+      color: var(--fabrik-thread-11);
+    }
+  }
+}

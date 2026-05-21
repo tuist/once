@@ -1,0 +1,60 @@
+.fabrik-narrative {
+  max-width: 720px;
+  margin-inline: auto;
+
+  & > [data-part="header"] {
+    text-align: center;
+    margin-bottom: var(--fabrik-spacing-9);
+
+    & [data-part="eyebrow"] {
+      display: inline-block;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: var(--fabrik-text-xs);
+      font-weight: var(--fabrik-weight-semibold);
+      color: var(--fabrik-thread-11);
+    }
+
+    & [data-part="title"] {
+      margin-top: var(--fabrik-spacing-3);
+      font-family: var(--fabrik-font-serif);
+      font-weight: var(--fabrik-weight-extrabold);
+      letter-spacing: -0.025em;
+      line-height: 1.1;
+      font-size: clamp(
+        var(--fabrik-text-3xl),
+        2.5vw + 1.5rem,
+        var(--fabrik-text-5xl)
+      );
+      color: var(--fabrik-summer-12);
+    }
+  }
+
+  & > [data-part="beat"] {
+    margin-top: var(--fabrik-spacing-8);
+
+    &:first-of-type {
+      margin-top: 0;
+    }
+
+    & > h3 {
+      font-family: var(--fabrik-font-serif);
+      font-weight: var(--fabrik-weight-extrabold);
+      letter-spacing: -0.02em;
+      font-size: var(--fabrik-text-2xl);
+      line-height: 1.2;
+      color: var(--fabrik-summer-12);
+    }
+
+    & > p {
+      margin-top: var(--fabrik-spacing-3);
+      color: var(--fabrik-summer-11);
+      font-size: var(--fabrik-text-lg);
+      line-height: 1.7;
+    }
+
+    & > p + p {
+      margin-top: var(--fabrik-spacing-4);
+    }
+  }
+}

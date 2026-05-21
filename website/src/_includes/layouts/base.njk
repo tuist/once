@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    {% if homepage or not title %}{% set pageTitle = site.title %}{% else %}{% set pageTitle = title + " · " + site.name %}{% endif %}
+    {% set pageDesc = description or site.description %}
+    {% set pageUrl = site.url + page.url %}
+    {% set pageSocialImage = socialImage or (site.url + "/assets/social/default.png") %}
+    {% set pageSocialImageAlt = socialImageAlt or (site.name + " · polyglot automation kernel") %}
+    <title>{{ pageTitle }}</title>
+    <meta name="description" content="{{ pageDesc }}" />
+    <link rel="canonical" href="{{ pageUrl }}" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.bunny.net" crossorigin />
+    <link
+      href="https://fonts.bunny.net/css?family=geist:400,500,600,700|petrona:400,500,700,800,900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/css/index.css" />
+    <link rel="alternate" type="application/atom+xml" title="{{ site.name }} blog" href="/feed.xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="{{ site.name }}" />
+    <meta property="og:title" content="{{ pageTitle }}" />
+    <meta property="og:description" content="{{ pageDesc }}" />
+    <meta property="og:url" content="{{ pageUrl }}" />
+    <meta property="og:image" content="{{ pageSocialImage }}" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="{{ pageSocialImageAlt }}" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="{{ pageTitle }}" />
+    <meta name="twitter:description" content="{{ pageDesc }}" />
+    <meta name="twitter:image" content="{{ pageSocialImage }}" />
+    <meta name="twitter:image:alt" content="{{ pageSocialImageAlt }}" />
+  </head>
+  <body>
+    {% include "partials/nav.njk" %}
+    <main>{{ content | safe }}</main>
+    {% include "partials/footer.njk" %}
+  </body>
+</html>

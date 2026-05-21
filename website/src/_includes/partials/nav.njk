@@ -1,0 +1,26 @@
+{% from "partials/icons.njk" import icon %}
+
+<header class="fabrik-nav">
+  <div class="fabrik-container">
+    <div data-part="inner">
+      <a href="/" data-part="brand">
+        <img src="/logo.png" alt="" />
+        <span>Fabrik</span>
+      </a>
+
+      <nav data-part="links" aria-label="Primary">
+        {% for item in site.nav %}
+          <a href="{{ item.href }}">{{ item.text }}</a>
+        {% endfor %}
+      </nav>
+
+      <div data-part="actions">
+        <a href="{{ site.docs }}" class="fabrik-button" data-variant="secondary">Read the docs</a>
+        <a href="{{ site.github }}" class="fabrik-button" data-variant="primary">
+          {{ icon("github", 14) }}
+          Star on GitHub
+        </a>
+      </div>
+    </div>
+  </div>
+</header>
