@@ -1,6 +1,6 @@
 # What is Fabrik
 
-Fabrik is a polyglot, agent-native build system. It uses content-addressed actions, structured declarations, and explicit runtime semantics so humans and coding agents can build, run, test, and debug the same graph.
+Fabrik is a polyglot automation kernel for humans and agents. It sits between your team, their coding agents, and the execution infrastructure beneath them: local cache, remote runners, and the toolchains they invoke. Content-addressed actions, structured declarations, and explicit runtime semantics give humans and coding agents one graph to build, run, test, and debug.
 
 ::: warning Beta
 Fabrik is beta software. The CLI, local cache, and current target model are usable, but target schemas and plugin behavior can still change.
@@ -8,20 +8,20 @@ Fabrik is beta software. The CLI, local cache, and current target model are usab
 
 ## Why Fabrik
 
-Build systems are becoming shared infrastructure for humans, coding agents, and remote compute. That creates a chance to rethink three old boundaries at once: who governs the build system, who can understand it, and where the graph is allowed to run.
+An automation kernel for a repo is shared infrastructure for humans, coding agents, and remote compute. That creates a chance to rethink three old boundaries at once: who governs the system, who can understand it, and where the graph is allowed to run.
 
-Fabrik is designed as a community-governed build system where the core and first-party rules evolve together. Rules for important ecosystems should be authored, tested, and maintained with the same care as the scheduler, cache, CLI, and diagnostics. The community should shape the system, not inherit the maintenance burden after the core decisions are made.
+Fabrik is designed as community-governed infrastructure where the core and first-party rules evolve together. Rules for important ecosystems should be authored, tested, and maintained with the same care as the scheduler, cache, CLI, and diagnostics. The community should shape the system, not inherit the maintenance burden after the core decisions are made.
 
-Fabrik is also designed to make the build graph accessible to both people and agents. Declarations should be structured enough for tools to edit safely, diagnostics should explain causality instead of dumping logs, and every target should be inspectable through stable APIs:
+Fabrik is also designed to make the graph accessible to both people and agents. Declarations should be structured enough for tools to edit safely, diagnostics should explain causality instead of dumping logs, and every target should be inspectable through stable APIs:
 
 - Why did this action run?
 - Why was this not a cache hit?
-- What changed since the last green build?
+- What changed since the last green run?
 - What is the minimal reproduction of this failure?
 
 Fabrik treats those questions as first-class APIs, not log-scraping exercises.
 
-The graph definition should also be separate from where the graph executes. A project should describe what needs to happen once, then let local machines, remote workers, and future compute substrates execute the same graph without rewriting the build. That separation is how build systems break through the ceiling of a single workstation.
+The graph definition should also be separate from where the graph executes. A project should describe what needs to happen once, then let local machines, remote workers, and future compute substrates execute the same graph without rewriting it. That separation is how an automation kernel breaks through the ceiling of a single workstation.
 
 ## The graph
 
@@ -31,7 +31,7 @@ Fabrik lowers that graph into content-addressed actions with declared inputs, de
 
 ## What makes Fabrik different
 
-- **Structured declarations:** build files are data, so tools can inspect, validate, and rewrite them safely.
+- **Structured declarations:** Fabrik files are data, so tools can inspect, validate, and rewrite them safely.
 - **Content-addressed execution:** actions are keyed from declared inputs and restore declared outputs from the cache.
 - **Rules with shared ownership:** important ecosystems can have first-party rules maintained with the core while governance stays open.
 - **Agent-readable diagnostics:** the graph exposes causality, cache decisions, and repair context as APIs.

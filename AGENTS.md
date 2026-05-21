@@ -34,7 +34,7 @@ inside each module file. Cross-module integration tests go under
   `.fabrik/deps/` and generated external dependency packages under
   `.fabrik/external/`.
 
-## Granular vs adopted Rust targets
+## Granular vs cooperative Rust targets
 
 Two paths into the build:
 
@@ -48,7 +48,7 @@ Two paths into the build:
   hand-written `fabrik.toml` files (or generator output) and does not
   yet thread build-script outputs into dependent rustc invocations.
 
-- **Adopted** (`cargo_binary`): wraps `cargo build` as a single
+- **Cooperative** (`cargo_binary`): wraps `cargo build` as a single
   cached action. Use this when you need to build code whose third-party
   dependency graph contains build scripts or otherwise outpaces what
   the granular path supports. Cache granularity matches Cargo's, not

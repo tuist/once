@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: "Fabrik"
-  text: "A build system for humans and agents."
-  tagline: Polyglot, agent-native, content-addressed. One graph that humans and coding agents can build, run, test, and debug.
+  text: "A polyglot automation kernel for humans and agents."
+  tagline: Builds, tests, scripts, generators. Fabrik decides what runs, where, and whether it is already done. Content-addressed cache, remote execution, deterministic outputs.
   image:
     src: /logo.png
     alt: Fabrik
