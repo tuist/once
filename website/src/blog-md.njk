@@ -1,0 +1,15 @@
+---
+permalink: "/blog/index.md"
+eleventyExcludeFromCollections: true
+---
+# {{ copy.blog.headline }}
+
+> {{ copy.blog.lede }}
+
+{% for post in collections.posts %}## [{{ post.data.title }}]({{ post.url }})
+
+{{ post.date | readableDate }}{% if post.data.author %} · {{ copy.blog.authorPrefix }} {{ post.data.author }}{% endif %}
+
+{% if post.data.description %}{{ post.data.description }}{% endif %}
+
+{% endfor %}

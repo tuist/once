@@ -1,3 +1,7 @@
+import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import rssPlugin from "@11ty/eleventy-plugin-rss";
 import yaml from "js-yaml";
 
@@ -15,6 +19,17 @@ export default function (eleventyConfig) {
 
   eleventyConfig.on("eleventy.before", async () => {
     await generateSocialImages();
+  });
+
+  eleventyConfig.on("eleventy.after", async ({ dir, results }) => {
+    const postsRoot = path.resolve(dir.input, "blog", "posts");
+    for (const result of results) {
+      const inputPath = path.resolve(result.inputPath);
+      if (!inputPath.startsWith(postsRoot)) continue;
+      const raw = await fs.readFile(inputPath, "utf8");
+      const outDir = path.dirname(result.outputPath);
+      await fs.writeFile(path.join(outDir, "index.md"), raw, "utf8");
+    }
   });
 
   eleventyConfig.addCollection("posts", (collections) =>
@@ -48,6 +63,17 @@ export default function (eleventyConfig) {
   eleventyConfig.addFilter("stripMd", (value) => {
     if (typeof value !== "string") return value;
     return value.replace(/`([^`]+)`/g, "$1").replace(/<[^>]+>/g, "");
+  });
+
+  eleventyConfig.addFilter("rawMarkdown", (postOrPath) => {
+    const inputPath =
+      typeof postOrPath === "string"
+        ? postOrPath
+        : postOrPath?.inputPath ?? postOrPath?.page?.inputPath;
+    if (!inputPath) return "";
+    const raw = readFileSync(inputPath, "utf8");
+    const match = raw.match(/^---[\s\S]*?\n---\n([\s\S]*)$/);
+    return match ? match[1].trimStart() : raw;
   });
 
   eleventyConfig.addFilter("terminalHtml", (text) => {
