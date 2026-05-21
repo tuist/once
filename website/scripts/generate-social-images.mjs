@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import matter from "gray-matter";
 import sharp from "sharp";
+import yaml from "js-yaml";
 
 const WIDTH = 1200;
 const HEIGHT = 630;
@@ -148,14 +149,34 @@ async function renderPostImage(postPath, logoBuffer) {
   return `${slug}.png`;
 }
 
-async function renderHomepageImage(logoBuffer) {
-  const svg = renderSvg({
-    title: "A polyglot automation kernel for humans and agents.",
-    kicker: "FABRIK",
-  });
-  const outputPath = path.join(outputDir, "default.png");
-  await renderImage(svg, logoBuffer, outputPath);
-  return "default.png";
+async function loadCopy() {
+  const locale = process.env.SITE_LOCALE || "en";
+  const file = path.join(rootDir, "src", "_content", `${locale}.yaml`);
+  return yaml.load(await fs.readFile(file, "utf8"));
+}
+
+async function renderStaticPageImages(logoBuffer, copy) {
+  const pages = [
+    {
+      slug: "default",
+      title: copy?.home?.hero?.title || "A polyglot automation kernel for humans and agents.",
+      kicker: "FABRIK",
+    },
+    {
+      slug: "blog",
+      title: copy?.blog?.headline || "Updates from the workshop.",
+      kicker: "FABRIK · BLOG",
+    },
+  ];
+
+  const results = [];
+  for (const page of pages) {
+    const svg = renderSvg(page);
+    const outputPath = path.join(outputDir, `${page.slug}.png`);
+    await renderImage(svg, logoBuffer, outputPath);
+    results.push(`${page.slug}.png`);
+  }
+  return results;
 }
 
 export async function generateSocialImages() {
@@ -166,8 +187,11 @@ export async function generateSocialImages() {
     .png()
     .toBuffer();
 
+  const copy = await loadCopy();
   const expected = new Set();
-  expected.add(await renderHomepageImage(logoBuffer));
+  for (const name of await renderStaticPageImages(logoBuffer, copy)) {
+    expected.add(name);
+  }
 
   const posts = (await fs.readdir(postsDir))
     .filter((file) => file.endsWith(".md"))
