@@ -353,10 +353,9 @@ mod tests {
             "script_argv_json".into(),
             r#"["/bin/sh","-c","printf \"$INLINE_FROM_HOST\""]"#.into(),
         );
-        target.attrs.insert(
-            "script_env_json".into(),
-            r#"["INLINE_FROM_HOST"]"#.into(),
-        );
+        target
+            .attrs
+            .insert("script_env_json".into(), r#"["INLINE_FROM_HOST"]"#.into());
         target.attrs.insert("cwd".into(), "pkg".into());
         std::env::set_var("INLINE_FROM_HOST", "present");
 

@@ -68,7 +68,7 @@ fn parse_shebang(line: &str, display_name: &str, path: &Path) -> Result<(String,
     if first.ends_with("/env") || first == "env" {
         let mut runtime = None;
         let mut runtime_args = Vec::new();
-        while let Some(part) = parts.next() {
+        for part in parts.by_ref() {
             if runtime.is_none() && part.starts_with('-') {
                 continue;
             }

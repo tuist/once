@@ -129,6 +129,15 @@ struct ScriptTarget {
     output: Vec<String>,
 }
 
+struct ManifestScriptSpec {
+    name: String,
+    argv: Vec<String>,
+    env: Vec<String>,
+    cwd: Option<String>,
+    input: Vec<String>,
+    output: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RustTarget {
@@ -773,13 +782,9 @@ fn builtin_rule_target(
     }
     match rule {
         "script" => {
-            let script_attrs = script_rule_table(&name, attrs, script, display_name)?;
-            let script = decode_rule_table::<ScriptTarget>(
-                &name,
-                script_attrs,
-                "script",
-                display_name,
-            )?;
+            let script_attrs = script_rule_table(&name, !attrs.is_empty(), script, display_name)?;
+            let script =
+                decode_rule_table::<ScriptTarget>(&name, script_attrs, "script", display_name)?;
             script_target(script, workspace_root, package, display_name, runtime)
         }
         "rust.library" => rust_target(
@@ -943,25 +948,19 @@ where
 
 fn script_rule_table(
     name: &str,
-    attrs: toml::Table,
+    has_attrs: bool,
     script: toml::Table,
     display_name: &str,
 ) -> Result<toml::Table> {
-    match (attrs.is_empty(), script.is_empty()) {
-        (false, false) => Err(Error::Eval {
+    match (has_attrs, script.is_empty()) {
+        (true, _) => Err(Error::Eval {
             path: display_name.to_string(),
             message: format!(
                 "script target `{name}` must declare rule fields in `[target.script]`, not `[target.attrs]`"
             ),
         }),
-        (false, true) => Err(Error::Eval {
-            path: display_name.to_string(),
-            message: format!(
-                "script target `{name}` must declare rule fields in `[target.script]`, not `[target.attrs]`"
-            ),
-        }),
-        (true, false) => Ok(script),
-        (true, true) => Ok(toml::Table::new()),
+        (false, false) => Ok(script),
+        (false, true) => Ok(toml::Table::new()),
     }
 }
 
@@ -995,10 +994,7 @@ fn script_target(
         output,
     } = t;
     if path.is_some()
-        && (!env.is_empty()
-            || cwd.is_some()
-            || !input.is_empty()
-            || !output.is_empty())
+        && (!env.is_empty() || cwd.is_some() || !input.is_empty() || !output.is_empty())
     {
         return Err(Error::Eval {
             path: display_name.to_string(),
@@ -1009,21 +1005,18 @@ fn script_target(
     }
 
     match (path, argv.is_empty()) {
-        (Some(path), true) => file_script_target(
-            name,
-            &path,
-            workspace_root,
-            package,
-            display_name,
-            runtime,
-        ),
+        (Some(path), true) => {
+            file_script_target(name, &path, workspace_root, package, display_name, runtime)
+        }
         (None, false) => manifest_script_target(
-            name,
-            argv,
-            env,
-            cwd,
-            input,
-            output,
+            ManifestScriptSpec {
+                name,
+                argv,
+                env,
+                cwd,
+                input,
+                output,
+            },
             runtime,
             workspace_root,
             package,
@@ -1031,15 +1024,11 @@ fn script_target(
         ),
         (Some(_), false) => Err(Error::Eval {
             path: display_name.to_string(),
-            message: format!(
-                "script target `{name}` must set either `path` or `argv`, not both"
-            ),
+            message: format!("script target `{name}` must set either `path` or `argv`, not both"),
         }),
         (None, true) => Err(Error::Eval {
             path: display_name.to_string(),
-            message: format!(
-                "script target `{name}` must set one of `path` or `argv`"
-            ),
+            message: format!("script target `{name}` must set one of `path` or `argv`"),
         }),
     }
 }
@@ -1129,17 +1118,20 @@ fn file_script_target(
 }
 
 fn manifest_script_target(
-    name: String,
-    argv: Vec<String>,
-    env: Vec<String>,
-    cwd: Option<String>,
-    input: Vec<String>,
-    output: Vec<String>,
+    spec: ManifestScriptSpec,
     runtime: Option<RuntimeTask>,
     workspace_root: &Path,
     package: &str,
     display_name: &str,
 ) -> Result<Target> {
+    let ManifestScriptSpec {
+        name,
+        argv,
+        env,
+        cwd,
+        input,
+        output,
+    } = spec;
     let mut attrs = BTreeMap::new();
     insert_manifest_script_attrs(&mut attrs, &argv, &env, &output);
     insert_opt(&mut attrs, "cwd", cwd);
@@ -1329,7 +1321,7 @@ fn resolve_script_inputs(
                     .strip_prefix(&package_root)
                     .map_err(|_| Error::Eval {
                         path: display_name.to_string(),
-                        message: format!("input `{}` resolved outside the package", input),
+                        message: format!("input `{input}` resolved outside the package"),
                     })?
                     .to_string_lossy()
                     .replace(std::path::MAIN_SEPARATOR, "/");
@@ -1922,7 +1914,10 @@ path = "scripts/build.sh"
         assert_eq!(targets[0].attrs["script_path"], "pkg/scripts/build.sh");
         assert_eq!(targets[0].attrs["script_runtime"], "bash");
         assert_eq!(targets[0].attrs["cwd"], "pkg");
-        assert_eq!(targets[0].attrs["script_env_json"], "[\"NODE_ENV\"]".to_string());
+        assert_eq!(
+            targets[0].attrs["script_env_json"],
+            "[\"NODE_ENV\"]".to_string()
+        );
         assert_eq!(
             targets[0].attrs["outputs_json"],
             "[\"pkg/dist\"]".to_string()
@@ -2041,5 +2036,4 @@ deps = ["Greeter"]
         assert_eq!(targets[1].kind, "macos_command_line_application");
         assert_eq!(targets[1].deps, vec!["Greeter".to_string()]);
     }
-
 }

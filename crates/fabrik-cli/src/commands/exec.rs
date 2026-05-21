@@ -75,14 +75,10 @@ pub async fn exec(workspace: &Path, cas: &Cas, args: ExecArgs, output: Output) -
     } = args;
 
     let (workspace, action) = if script {
-        script_action(workspace, env, cwd, timeout_ms, argv)?
-    } else if let Some(plan) = autodetected_script_action(
-        workspace,
-        env.clone(),
-        cwd.clone(),
-        timeout_ms,
-        argv.clone(),
-    )? {
+        script_action(workspace, env, cwd, timeout_ms, &argv)?
+    } else if let Some(plan) =
+        autodetected_script_action(workspace, env.clone(), cwd.clone(), timeout_ms, &argv)?
+    {
         plan
     } else {
         (
@@ -144,7 +140,7 @@ fn script_action(
     explicit_env: Vec<(String, String)>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    argv: Vec<String>,
+    argv: &[String],
 ) -> Result<(PathBuf, Action)> {
     let invocation = script_invocation(
         workspace,
@@ -181,9 +177,9 @@ fn autodetected_script_action(
     explicit_env: Vec<(String, String)>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    argv: Vec<String>,
+    argv: &[String],
 ) -> Result<Option<(PathBuf, Action)>> {
-    let Ok((_, _, script_arg, _)) = parse_script_exec_argv(workspace, &argv) else {
+    let Ok((_, _, script_arg, _)) = parse_script_exec_argv(workspace, argv) else {
         return Ok(None);
     };
     let Ok(script_abs) = resolve_script_abs(workspace, script_arg) else {
@@ -195,7 +191,14 @@ fn autodetected_script_action(
     if !has_fabrik_annotations(&annotations) {
         return Ok(None);
     }
-    script_action(workspace, explicit_env, cwd_override, timeout_ms_override, argv).map(Some)
+    script_action(
+        workspace,
+        explicit_env,
+        cwd_override,
+        timeout_ms_override,
+        argv,
+    )
+    .map(Some)
 }
 
 fn script_invocation(
@@ -203,14 +206,14 @@ fn script_invocation(
     explicit_env: BTreeMap<String, String>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    argv: Vec<String>,
+    argv: &[String],
 ) -> Result<ScriptInvocation> {
-    let (runtime, runtime_args, script_arg, script_args) =
-        parse_script_exec_argv(workspace, &argv)?;
+    let (runtime, runtime_args, script_arg, script_args) = parse_script_exec_argv(workspace, argv)?;
     let script_abs = resolve_script_abs(workspace, script_arg)?;
     let annotations = parse_script_annotations(&script_abs, script_arg)
         .with_context(|| format!("parsing FABRIK headers for `{script_arg}`"))?;
-    let workspace = resolve_script_workspace(workspace, &script_abs, &annotations, cwd_override.as_ref())?;
+    let workspace =
+        resolve_script_workspace(workspace, &script_abs, &annotations, cwd_override.as_ref())?;
     let script_path = workspace_path_for_file(&workspace, &script_abs)?;
     if annotations.runtime != runtime {
         anyhow::bail!(
@@ -316,23 +319,23 @@ fn resolve_script_workspace(
 }
 
 fn infer_script_workspace(script_abs: &Path, annotations: &ScriptAnnotations) -> Result<PathBuf> {
-    let script_dir = script_abs
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("script `{}` has no parent directory", script_abs.display()))?;
+    let script_dir = script_abs.parent().ok_or_else(|| {
+        anyhow::anyhow!("script `{}` has no parent directory", script_abs.display())
+    })?;
     let mut ancestor = lexical_normalize(script_dir);
     for raw in &annotations.inputs {
-        ancestor = shared_ancestor(ancestor, &annotation_anchor(script_dir, raw)?)?;
+        ancestor = shared_ancestor(ancestor, &annotation_anchor(script_dir, raw))?;
     }
     for raw in &annotations.outputs {
-        ancestor = shared_ancestor(ancestor, &annotation_anchor(script_dir, raw)?)?;
+        ancestor = shared_ancestor(ancestor, &annotation_anchor(script_dir, raw))?;
     }
     if let Some(raw) = annotations.cwd.as_deref() {
-        ancestor = shared_ancestor(ancestor, &annotation_anchor(script_dir, raw)?)?;
+        ancestor = shared_ancestor(ancestor, &annotation_anchor(script_dir, raw))?;
     }
     Ok(ancestor)
 }
 
-fn annotation_anchor(script_dir: &Path, raw: &str) -> Result<PathBuf> {
+fn annotation_anchor(script_dir: &Path, raw: &str) -> PathBuf {
     let mut anchor = PathBuf::from(script_dir);
     let mut saw_component = false;
     for component in Path::new(raw).components() {
@@ -344,9 +347,9 @@ fn annotation_anchor(script_dir: &Path, raw: &str) -> Result<PathBuf> {
         anchor.push(component.as_os_str());
     }
     if !saw_component {
-        return Ok(lexical_normalize(script_dir));
+        return lexical_normalize(script_dir);
     }
-    Ok(lexical_normalize(&anchor))
+    lexical_normalize(&anchor)
 }
 
 fn lexical_normalize(path: &Path) -> PathBuf {
@@ -487,14 +490,17 @@ fn expand_script_globs(
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("non-utf8 glob pattern: {}", abs_pattern.display()))?;
     let mut out = Vec::new();
-    for entry in glob::glob(pattern_str)
-        .with_context(|| format!("invalid glob pattern `{pattern}`"))?
+    for entry in
+        glob::glob(pattern_str).with_context(|| format!("invalid glob pattern `{pattern}`"))?
     {
         let path = entry.with_context(|| format!("glob walk failed for `{pattern}`"))?;
         if !path.is_file() {
             continue;
         }
-        out.push(workspace_path_for_file(workspace, &std::fs::canonicalize(&path)?)?);
+        out.push(workspace_path_for_file(
+            workspace,
+            &std::fs::canonicalize(&path)?,
+        )?);
     }
     out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     out.dedup();
@@ -559,7 +565,8 @@ fn resolve_runtime(workspace: &Path, runtime: &str) -> Result<String> {
     if runtime.contains('/') {
         return Ok(runtime.to_string());
     }
-    workspace_tool(workspace, runtime).with_context(|| format!("resolving script runtime `{runtime}`"))
+    workspace_tool(workspace, runtime)
+        .with_context(|| format!("resolving script runtime `{runtime}`"))
 }
 
 fn host_script_path(script_path: &str, cwd: Option<&WorkspacePath>) -> Result<String> {
@@ -639,7 +646,10 @@ mod tests {
     #[test]
     fn computes_relative_paths_from_cwd_to_script() {
         assert_eq!(relative_path("scripts", "scripts/build.sh"), "build.sh");
-        assert_eq!(relative_path("tools/gen", "scripts/build.sh"), "../../scripts/build.sh");
+        assert_eq!(
+            relative_path("tools/gen", "scripts/build.sh"),
+            "../../scripts/build.sh"
+        );
         assert_eq!(relative_path("", "scripts/build.sh"), "scripts/build.sh");
     }
 
@@ -674,7 +684,7 @@ mod tests {
             Vec::new(),
             None,
             None,
-            vec!["/bin/bash".to_string(), "scripts/build.sh".to_string()],
+            &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
         .unwrap()
         .expect("annotated script should be autodetected");
@@ -705,7 +715,7 @@ mod tests {
             Vec::new(),
             None,
             None,
-            vec!["/bin/bash".to_string(), "scripts/build.sh".to_string()],
+            &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
         .unwrap();
 
