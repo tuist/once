@@ -33,6 +33,11 @@ export default function (eleventyConfig) {
     new Date(date).toISOString(),
   );
 
+  eleventyConfig.addFilter("mdAlternate", (url) => {
+    if (!url || typeof url !== "string") return url;
+    return url.endsWith("/") ? `${url}index.md` : `${url}.md`;
+  });
+
   return {
     dir: {
       input: "src",
