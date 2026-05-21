@@ -32,6 +32,60 @@ Describe 'fabrik exec'
     The path "$sentinel" should not be exist
   End
 
+  It 'executes an annotated script file directly through a Fabrik shebang'
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/scripts/build.sh" <<EOF
+#!/usr/bin/env -S $FABRIK_BIN exec -- bash
+# FABRIK input "../input.txt"
+# FABRIK cwd ".."
+cat input.txt
+EOF
+    chmod +x "$WORKSPACE/scripts/build.sh"
+    cat > "$WORKSPACE/input.txt" <<'EOF'
+hello direct script
+EOF
+    When call env PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
+    The status should be success
+    The stdout should equal 'hello direct script'
+    The stderr should include 'cache miss'
+  End
+
+  It 'returns a cache hit when an annotated script file is re-executed directly'
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/scripts/build.sh" <<EOF
+#!/usr/bin/env -S $FABRIK_BIN exec -- bash
+# FABRIK input "../input.txt"
+# FABRIK cwd ".."
+cat input.txt
+EOF
+    chmod +x "$WORKSPACE/scripts/build.sh"
+    cat > "$WORKSPACE/input.txt" <<'EOF'
+cached direct script
+EOF
+    env PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh" >/dev/null 2>&1
+    When call env PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
+    The status should be success
+    The stdout should equal 'cached direct script'
+    The stderr should include 'cache hit'
+  End
+
+  It 'executes an annotated script file through fabrik exec without --script'
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/scripts/build.sh" <<'EOF'
+#!/usr/bin/env bash
+# FABRIK input "../input.txt"
+# FABRIK cwd ".."
+cat input.txt
+EOF
+    cat > "$WORKSPACE/input.txt" <<'EOF'
+hello through fabrik exec
+EOF
+    When call fabrik exec -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    The status should be success
+    The stdout should equal 'hello through fabrik exec'
+    The stderr should include 'cache miss'
+  End
+
   It 'propagates the underlying exit code'
     When call fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 7'
     The status should equal 7

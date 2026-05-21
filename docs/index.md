@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: "Fabrik"
-  text: "A polyglot automation kernel for humans and agents."
-  tagline: Builds, tests, scripts, generators. Fabrik decides what runs, where, and whether it is already done. Content-addressed cache, remote execution, deterministic outputs.
+  text: "Optimize software operations."
+  tagline: Fabrik gives developers and agents one execution layer that maps software operations onto cache and compute infrastructure.
   image:
     src: /logo.png
     alt: Fabrik
@@ -13,18 +13,22 @@ hero:
       text: What is Fabrik
       link: /guide/what-is-fabrik
     - theme: alt
+      text: Scripts
+      link: /guide/cacheable-scripts
+    - theme: alt
       text: View on GitHub
       link: https://github.com/tuist/fabrik
-
 features:
-  - title: Polyglot targets
-    details: Different languages and platforms share one declaration model. Extend the graph through plugins without fragmenting the build.
-    link: /targets/rust
-    linkText: Browse targets
-  - title: Content-addressed cache
-    details: Every action has an explicit input digest, declared outputs, and a deterministic environment. Local hits and remote reuse work from the same contract.
-  - title: Built for coding agents
-    details: Structured diagnostics, causality APIs, debug capsules, and repair flows make builds inspectable and editable by agents and humans alike.
-  - title: Governed together
-    details: Fabrik pairs open governance with first-party rules authored and maintained by us, so quality is not pushed onto the community alone.
+  - title: One surface for developers and agents
+    details: Describe software operations once. Fabrik keeps the graph inspectable, editable, and debuggable instead of scattering work across wrappers and tool-specific glue.
+    link: /guide/what-is-fabrik
+    linkText: Read the definition
+  - title: A real cache contract
+    details: Actions carry explicit inputs, outputs, environment dependencies, and runtime semantics, so reuse is deterministic instead of accidental.
+  - title: A portable compute contract
+    details: The same operational definition can stay on the host today and map onto other execution backends as the infrastructure evolves.
+  - title: Scripts without rewrites
+    details: Checked-in scripts do not need to become bespoke rules. Fabrik can learn just enough about them to cache, inspect, and schedule them safely.
+    link: /guide/cacheable-scripts
+    linkText: Learn about scripts
 ---

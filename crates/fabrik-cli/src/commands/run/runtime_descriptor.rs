@@ -46,7 +46,10 @@ pub(super) fn runtime_descriptor(
     target_id: &str,
     target: &fabrik_frontend::Target,
 ) -> Result<Option<RuntimeDescriptor>> {
-    if target.kind == "runtime_task" || target.kind == "runner_task" {
+    if target.kind == "runtime_task"
+        || target.kind == "runner_task"
+        || target.kind == "runtime_script"
+    {
         return runtime_task_descriptor(target_id, target).map(Some);
     }
 

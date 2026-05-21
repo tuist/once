@@ -91,64 +91,93 @@ EOF
     The path "$WORKSPACE/target/debug/app" should be exist
   End
 
-  It 'runs a legacy task target declared in fabrik.toml'
-    mkdir -p "$WORKSPACE/tasks"
-    cat > "$WORKSPACE/tasks/input.txt" <<'EOF'
-hello task
+  It 'runs a manifest-backed script target declared in fabrik.toml'
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/scripts/input.txt" <<'EOF'
+hello inline script
 EOF
-    cat > "$WORKSPACE/tasks/fabrik.toml" <<'EOF'
-[[task]]
+    cat > "$WORKSPACE/scripts/fabrik.toml" <<'EOF'
+[[target]]
 name = "print"
-argv = ["/bin/sh", "-c", "cat tasks/input.txt"]
-srcs = ["input.txt"]
+rule = "script"
+
+[target.script]
+argv = ["/bin/sh", "-c", "cat input.txt"]
+input = ["input.txt"]
+cwd = "scripts"
 EOF
-    When call fabrik run tasks/print
+    When call fabrik run scripts/print
     The status should be success
-    The stdout should equal 'hello task'
+    The stdout should equal 'hello inline script'
     The stderr should include 'cache miss'
   End
 
-  It 'reuses the cache for a cacheable legacy task target'
-    mkdir -p "$WORKSPACE/tasks"
-    cat > "$WORKSPACE/tasks/input.txt" <<'EOF'
-cached task
+  It 'runs a script target and restores its declared output'
+    mkdir -p "$WORKSPACE/scripts/scripts"
+    cat > "$WORKSPACE/scripts/scripts/build.sh" <<'EOF'
+#!/bin/sh
+# FABRIK input "../input.txt"
+# FABRIK output "../out.txt"
+# FABRIK cwd ".."
+printf '%s' "$(cat input.txt)" > out.txt
+printf '%s' "$(cat out.txt)"
 EOF
-    cat > "$WORKSPACE/tasks/fabrik.toml" <<'EOF'
-[[task]]
-name = "print"
-argv = ["/bin/sh", "-c", "cat tasks/input.txt"]
-srcs = ["input.txt"]
+    chmod +x "$WORKSPACE/scripts/scripts/build.sh"
+    cat > "$WORKSPACE/scripts/input.txt" <<'EOF'
+hello script
 EOF
-    fabrik run tasks/print >/dev/null 2>&1
-    When call fabrik run tasks/print
+    cat > "$WORKSPACE/scripts/fabrik.toml" <<'EOF'
+[[target]]
+name = "build"
+rule = "script"
+
+[target.script]
+path = "scripts/build.sh"
+EOF
+    When call fabrik run scripts/build
     The status should be success
-    The stdout should equal 'cached task'
+    The stdout should equal 'hello script'
+    The stderr should include 'cache miss'
+    The contents of file "$WORKSPACE/scripts/out.txt" should equal 'hello script'
+  End
+
+  It 'reuses the cache for a script target'
+    mkdir -p "$WORKSPACE/scripts/scripts"
+    cat > "$WORKSPACE/scripts/scripts/build.sh" <<'EOF'
+#!/bin/sh
+# FABRIK input "../input.txt"
+# FABRIK output "../out.txt"
+# FABRIK cwd ".."
+printf '%s' "$(cat input.txt)" > out.txt
+printf '%s' "$(cat out.txt)"
+EOF
+    chmod +x "$WORKSPACE/scripts/scripts/build.sh"
+    cat > "$WORKSPACE/scripts/input.txt" <<'EOF'
+cached script
+EOF
+    cat > "$WORKSPACE/scripts/fabrik.toml" <<'EOF'
+[[target]]
+name = "build"
+rule = "script"
+
+[target.script]
+path = "scripts/build.sh"
+EOF
+    fabrik run scripts/build >/dev/null 2>&1
+    When call fabrik run scripts/build
+    The status should be success
+    The stdout should equal 'cached script'
     The stderr should include 'cache hit'
   End
 
-  It 'runs an uncached legacy task target every time'
-    mkdir -p "$WORKSPACE/tasks"
-    cat > "$WORKSPACE/tasks/fabrik.toml" <<'EOF'
-[[task]]
-name = "counter"
-argv = ["/bin/sh", "-c", "n=0; [ -f tasks/count ] && n=$(cat tasks/count); n=$((n + 1)); printf \"$n\" > tasks/count; printf \"$n\""]
-cache = false
-EOF
-    fabrik run tasks/counter >/dev/null 2>&1
-    When call fabrik run tasks/counter
-    The status should be success
-    The stdout should equal '2'
-    The stderr should include 'cache miss'
-  End
-
-  It 'runs a runtime command target and emits its runtime interfaces'
+  It 'runs a runtime script target and emits its runtime interfaces'
     mkdir -p "$WORKSPACE/tasks"
     cat > "$WORKSPACE/tasks/fabrik.toml" <<'EOF'
 [[target]]
 name = "launch"
-rule = "command"
+rule = "script"
 
-[target.attrs]
+[target.script]
 argv = ["/bin/sh", "-c", "printf launched"]
 
 [target.runtime]
@@ -163,7 +192,7 @@ description = "Stream simulator logs"
 EOF
     When call "$FABRIK_BIN" --format json -C "$WORKSPACE" run tasks/launch
     The status should be success
-    The stdout should include '"kind":"runtime_task"'
+    The stdout should include '"kind":"runtime_script"'
     The stdout should include '"runtime":{"kind":"ios_simulator"'
     The stdout should include '"capabilities":["logs","ui_tree","ui_action"]'
     The stdout should include '"name":"logs"'
