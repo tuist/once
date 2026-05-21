@@ -76,6 +76,24 @@ export default function (eleventyConfig) {
     return match ? match[1].trimStart() : raw;
   });
 
+  eleventyConfig.addFilter("tomlHighlight", (text) => {
+    if (typeof text !== "string") return text;
+    const escape = (s) =>
+      s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    return escape(text)
+      .replace(
+        /"([^"\n]*)"/g,
+        '<span data-part="value">"$1"</span>',
+      )
+      .replace(
+        /^(\[\[[^\]\n]+\]\]|\[[^\]\n]+\])$/gm,
+        '<span data-part="muted">$1</span>',
+      );
+  });
+
   eleventyConfig.addFilter("terminalHtml", (text) => {
     if (typeof text !== "string") return text;
     const valueSpan = (line) =>

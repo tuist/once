@@ -143,7 +143,7 @@ homepage: true
           <span data-part="dots"><span></span><span></span><span></span></span>
           <span data-part="title">{{ copy.home.howItWorks.snippet.filename }}</span>
         </div>
-        <pre data-part="body">{{ copy.home.howItWorks.snippet.body | trim | safe }}</pre>
+        <pre data-part="body">{{ copy.home.howItWorks.snippet.body | trim | tomlHighlight | safe }}</pre>
       </div>
     </div>
   </div>

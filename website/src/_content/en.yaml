@@ -10,16 +10,16 @@ nav:
     label: "Primary"
     items:
       - text: Docs
-        href: "/guide/what-is-fabrik"
+        href: "https://fabrik.run/guide/what-is-fabrik"
       - text: Targets
-        href: "/targets/rust"
+        href: "https://fabrik.run/targets/rust"
       - text: Blog
         href: "/blog/"
       - text: GitHub
         href: "https://github.com/tuist/fabrik"
   ctaSecondary:
     text: "Read the docs"
-    href: "/"
+    href: "https://fabrik.run"
   ctaPrimary:
     text: "Star on GitHub"
     href: "https://github.com/tuist/fabrik"
@@ -30,7 +30,7 @@ footer:
     - title: Project
       links:
         - text: Documentation
-          href: "/"
+          href: "https://fabrik.run"
         - text: Blog
           href: "/blog/"
         - text: Releases
@@ -66,7 +66,7 @@ home:
     subtitle: "Fabrik sits between your team, their agents, and the infrastructure that runs their code. Cache hits, remote runners, toolchains, all behind one graph."
     actions:
       - text: "Read the docs"
-        href: "/guide/what-is-fabrik"
+        href: "https://fabrik.run/guide/what-is-fabrik"
         variant: primary
         icon: "arrow-right"
       - text: "View on GitHub"
@@ -169,7 +169,7 @@ home:
     lede: "Install with mise, run `fabrik init`, and start declaring targets."
     actions:
       - text: "Read the docs"
-        href: "/guide/what-is-fabrik"
+        href: "https://fabrik.run/guide/what-is-fabrik"
         variant: invert
         icon: "arrow-right"
       - text: "Star on GitHub"
