@@ -1,16 +1,24 @@
-export default {
-  currentYear: new Date().getFullYear(),
-  name: "Fabrik",
-  title: "Fabrik: a polyglot automation kernel for humans and agents",
-  description:
-    "Fabrik is a polyglot automation kernel. It sits between your team, their agents, and the infrastructure that runs their code: cache hits, remote runners, and toolchains, all behind one graph.",
-  url: "https://fabrik.run",
-  github: "https://github.com/tuist/fabrik",
-  docs: "https://fabrik.run",
-  nav: [
-    { text: "Docs", href: "https://fabrik.run/guide/what-is-fabrik" },
-    { text: "Targets", href: "https://fabrik.run/targets/rust" },
-    { text: "Blog", href: "/blog/" },
-    { text: "GitHub", href: "https://github.com/tuist/fabrik" },
-  ],
-};
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import yaml from "js-yaml";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export default function () {
+  const locale = process.env.SITE_LOCALE || "en";
+  const file = path.join(__dirname, "..", "_content", `${locale}.yaml`);
+  const content = yaml.load(fs.readFileSync(file, "utf8"));
+  return {
+    locale,
+    currentYear: new Date().getFullYear(),
+    url: "https://fabrik.run",
+    github: "https://github.com/tuist/fabrik",
+    docs: "https://fabrik.run",
+    name: content.site.name,
+    title: content.site.title,
+    description: content.site.description,
+    ogAlt: content.site.ogAlt,
+  };
+}

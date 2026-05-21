@@ -9,7 +9,7 @@ layout: layouts/base.njk
     <div class="fabrik-post-body">
       <a href="/blog/" class="fabrik-back-link">
         {{ icon("arrow-left", 14) }}
-        All posts
+        {{ copy.blog.backToAll }}
       </a>
 
       <header class="fabrik-post-header">
@@ -19,7 +19,7 @@ layout: layouts/base.njk
           <p data-part="description">{{ description }}</p>
         {% endif %}
         {% if author %}
-          <p data-part="byline">By {{ author }}</p>
+          <p data-part="byline">{{ copy.blog.authorPrefix }} {{ author }}</p>
         {% endif %}
       </header>
 

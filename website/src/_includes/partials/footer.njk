@@ -4,44 +4,29 @@
       <div data-part="brand">
         <a href="/" data-part="logo">
           <img src="/logo.png" alt="" />
-          <span>Fabrik</span>
+          <span>{{ copy.nav.brand }}</span>
         </a>
-        <p>A polyglot automation kernel for humans and agents. One graph, one cache, one runtime contract.</p>
+        <p>{{ copy.footer.tagline }}</p>
       </div>
 
-      <div data-part="column">
-        <h4>Project</h4>
-        <ul>
-          <li><a href="{{ site.docs }}">Documentation</a></li>
-          <li><a href="/blog/">Blog</a></li>
-          <li><a href="{{ site.github }}/releases">Releases</a></li>
-        </ul>
-      </div>
-
-      <div data-part="column">
-        <h4>Community</h4>
-        <ul>
-          <li><a href="{{ site.github }}">GitHub</a></li>
-          <li><a href="{{ site.github }}/issues">Issues</a></li>
-          <li><a href="{{ site.github }}/discussions">Discussions</a></li>
-        </ul>
-      </div>
-
-      <div data-part="column">
-        <h4>More</h4>
-        <ul>
-          <li><a href="https://tuist.dev">Tuist</a></li>
-          <li><a href="/feed.xml">RSS</a></li>
-        </ul>
-      </div>
+      {% for column in copy.footer.columns %}
+        <div data-part="column">
+          <h4>{{ column.title }}</h4>
+          <ul>
+            {% for link in column.links %}
+              <li><a href="{{ link.href }}">{{ link.text }}</a></li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endfor %}
     </div>
   </div>
 
   <div data-part="meta">
     <div class="fabrik-container">
       <div data-part="meta-inner">
-        <span>© {{ site.currentYear }} Tuist GmbH. MIT licensed.</span>
-        <span>Built with Eleventy.</span>
+        <span>© {{ site.currentYear }} {{ copy.footer.legalSuffix }}</span>
+        <span>{{ copy.footer.builtWith }}</span>
       </div>
     </div>
   </div>

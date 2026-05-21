@@ -5,20 +5,20 @@
     <div data-part="inner">
       <a href="/" data-part="brand">
         <img src="/logo.png" alt="" />
-        <span>Fabrik</span>
+        <span>{{ copy.nav.brand }}</span>
       </a>
 
-      <nav data-part="links" aria-label="Primary">
-        {% for item in site.nav %}
+      <nav data-part="links" aria-label="{{ copy.nav.primary.label }}">
+        {% for item in copy.nav.primary.items %}
           <a href="{{ item.href }}">{{ item.text }}</a>
         {% endfor %}
       </nav>
 
       <div data-part="actions">
-        <a href="{{ site.docs }}" class="fabrik-button" data-variant="secondary">Read the docs</a>
-        <a href="{{ site.github }}" class="fabrik-button" data-variant="primary">
+        <a href="{{ copy.nav.ctaSecondary.href }}" class="fabrik-button" data-variant="secondary">{{ copy.nav.ctaSecondary.text }}</a>
+        <a href="{{ copy.nav.ctaPrimary.href }}" class="fabrik-button" data-variant="primary">
           {{ icon("github", 14) }}
-          Star on GitHub
+          {{ copy.nav.ctaPrimary.text }}
         </a>
       </div>
     </div>

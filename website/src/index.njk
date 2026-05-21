@@ -15,9 +15,9 @@ homepage: true
         <div data-part="badges">
           <span class="fabrik-badge">
             <span data-part="dot"></span>
-            Open source · MIT licensed
+            {{ copy.home.hero.badge }}
           </span>
-          <a href="https://tuist.dev" class="fabrik-byline" rel="noopener">
+          <a href="{{ copy.home.hero.bylineHref }}" class="fabrik-byline" rel="noopener">
             <span data-part="mark">
               <svg width="14" height="14" viewBox="0 0 512 512" aria-hidden="true">
                 <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
@@ -30,25 +30,20 @@ homepage: true
                 </g>
               </svg>
             </span>
-            Built by the Tuist team
+            {{ copy.home.hero.byline }}
             <span data-part="arrow">{{ icon("arrow-right", 12) }}</span>
           </a>
         </div>
-        <h1 data-part="title">A polyglot automation kernel for humans and agents.</h1>
-        <p data-part="subtitle">
-          Fabrik sits between your team, their agents, and the infrastructure
-          that runs their code. Cache hits, remote runners, toolchains, all
-          behind one graph.
-        </p>
+        <h1 data-part="title">{{ copy.home.hero.title }}</h1>
+        <p data-part="subtitle">{{ copy.home.hero.subtitle }}</p>
         <div data-part="actions">
-          <a href="{{ site.docs }}/guide/what-is-fabrik" class="fabrik-button" data-variant="primary" data-size="large">
-            Read the docs
-            {{ icon("arrow-right", 16) }}
-          </a>
-          <a href="{{ site.github }}" class="fabrik-button" data-variant="secondary" data-size="large">
-            {{ icon("github", 16) }}
-            View on GitHub
-          </a>
+          {% for action in copy.home.hero.actions %}
+            <a href="{{ action.href }}" class="fabrik-button" data-variant="{{ action.variant }}" data-size="large">
+              {% if action.icon == "github" %}{{ icon("github", 16) }}{% endif %}
+              {{ action.text }}
+              {% if action.icon == "arrow-right" %}{{ icon("arrow-right", 16) }}{% endif %}
+            </a>
+          {% endfor %}
         </div>
       </div>
 
@@ -56,14 +51,9 @@ homepage: true
         <div class="fabrik-terminal">
           <div data-part="header">
             <span data-part="dots"><span></span><span></span><span></span></span>
-            <span data-part="title">~/your-project</span>
+            <span data-part="title">{{ copy.home.hero.terminal.title }}</span>
           </div>
-          <pre data-part="body"><span data-part="prompt">$</span> fabrik init
-<span data-part="muted">→</span> wrote <span data-part="value">fabrik.toml</span>
-
-<span data-part="prompt">$</span> fabrik build app/hello
-<span data-part="muted">→</span> cache hit · 2 of 3 actions restored
-<span data-part="muted">→</span> built <span data-part="value">app/hello</span> in 84ms</pre>
+          <pre data-part="body">{{ copy.home.hero.terminal.body | trim | terminalHtml | safe }}</pre>
         </div>
       </div>
     </div>
@@ -74,73 +64,18 @@ homepage: true
   <div class="fabrik-container">
     <div class="fabrik-narrative">
       <header data-part="header">
-        <span data-part="eyebrow">Why Fabrik</span>
-        <h2 data-part="title">Why we built Fabrik.</h2>
+        <span data-part="eyebrow">{{ copy.home.why.eyebrow }}</span>
+        <h2 data-part="title">{{ copy.home.why.title }}</h2>
       </header>
 
-      <div data-part="beat">
-        <h3>The world we built for</h3>
-        <p>
-          The tools most teams reach for to build, test, and run their code
-          grew up around one particular user: a human developer at a terminal,
-          running a command a few dozen times a day, skimming the output, and
-          forming a mental model of the project from what scrolls past. Every
-          choice these tools make is calibrated for that user. Verbose logs.
-          Approximate errors. Implicit toolchains. Ergonomics tuned for one
-          language at a time.
-        </p>
-      </div>
-
-      <div data-part="beat">
-        <h3>What changed</h3>
-        <p>
-          The shape of the work has shifted. Coding agents now sit alongside
-          humans in the same repo. They iterate faster, run many attempts in
-          parallel, and unlike humans, they cannot skim. A two-gigabyte log is
-          not signal to an agent; it is a wall. They need the system that
-          runs their work to talk back in structures they can query, not
-          paragraphs they have to parse.
-        </p>
-        <p>
-          The economics shift too. One developer running their build, test,
-          and dev commands forty times a day is comfortable on a local cache.
-          The same developer with two agents working alongside is not. Cache
-          hit rates that felt fine for one person collapse the moment several
-          attempts share most of their inputs but each re-run from scratch.
-          Shared, content-addressed caching and the ability to offload work
-          to remote runners stop being optimizations and become the price of
-          doing the work at all.
-        </p>
-      </div>
-
-      <div data-part="beat">
-        <h3>Where the seams show</h3>
-        <p>
-          Today's tools were not built with this in mind, and the seams show.
-          Diagnostics are written for a human reader, not a machine consumer.
-          The dependency graph is implicit, locked inside the tool's head,
-          instead of something you can ask questions of. Reproducibility is
-          best-effort, which is fine when you trust your own laptop and
-          uncomfortable when an agent claims a run passed on a machine you
-          cannot see. Per-language tools fragment exactly when cross-language
-          pull requests are getting more common, not less.
-        </p>
-      </div>
-
-      <div data-part="beat">
-        <h3>What Fabrik does differently</h3>
-        <p>
-          Fabrik is an automation kernel. It sits between humans, coding
-          agents, and the execution infrastructure beneath them: local cache,
-          remote runners, and the toolchains they invoke. Every action is
-          content-addressed, with a declared input digest and a deterministic
-          environment, so a cache hit on your laptop, in CI, and on a remote
-          runner all mean the same thing. Diagnostics are structured. The
-          graph is queryable. Targets across languages share one declaration
-          model. The result is a substrate that gets out of a developer's way
-          and gives an agent something to reason about.
-        </p>
-      </div>
+      {% for beat in copy.home.why.beats %}
+        <div data-part="beat">
+          <h3>{{ beat.heading }}</h3>
+          {% for p in beat.paragraphs %}
+            <p>{{ p }}</p>
+          {% endfor %}
+        </div>
+      {% endfor %}
     </div>
   </div>
 </section>
@@ -148,36 +83,13 @@ homepage: true
 <section class="fabrik-section" data-tone="muted">
   <div class="fabrik-container">
     <header class="fabrik-section-header">
-      <span data-part="eyebrow">What Fabrik runs</span>
-      <h2 data-part="title">One graph for every kind of work.</h2>
-      <p data-part="lede">
-        Languages with first-class targets, custom commands, and a cooperative path for existing toolchains all share the same content-addressed graph.
-      </p>
+      <span data-part="eyebrow">{{ copy.home.what.eyebrow }}</span>
+      <h2 data-part="title">{{ copy.home.what.title }}</h2>
+      <p data-part="lede">{{ copy.home.what.lede }}</p>
     </header>
 
-    {% set languages = [
-      {
-        name: "Rust",
-        mark: "rust",
-        body: "Per-crate targets for binaries, libraries, tests, and proc macros. Dependency resolution, compilation, and tests, all cached.",
-        tags: ["Resolve", "Build", "Test"]
-      },
-      {
-        name: "Swift",
-        mark: "swift",
-        body: "Apple platform targets for iOS and macOS, including simulator-aware runtimes for agents to launch, log, and inspect apps.",
-        tags: ["Resolve", "Build", "Test"]
-      },
-      {
-        name: "Elixir",
-        mark: "elixir",
-        body: "First-class Elixir and Erlang on a pinned OTP pair. Mix-free per-module compilation under one cached graph.",
-        tags: ["Resolve", "Build", "Test"]
-      }
-    ] %}
-
     <div class="fabrik-grid" data-columns="4">
-      {% for lang in languages %}
+      {% for lang in copy.home.what.languages %}
         <article class="fabrik-card" data-variant="language">
           <span data-part="mark">{{ langMark(lang.mark, 40) }}</span>
           <h3 data-part="title">{{ lang.name }}</h3>
@@ -191,27 +103,14 @@ homepage: true
       {% endfor %}
       <a class="fabrik-card" data-variant="language" data-ghost href="{{ site.github }}" rel="noopener">
         <span data-part="mark">{{ icon("plus") }}</span>
-        <h3 data-part="title">Add a language</h3>
-        <p data-part="body">The target model is open. Propose or contribute a new language frontend on GitHub.</p>
-        <span data-part="cta">Contribute on GitHub &rarr;</span>
+        <h3 data-part="title">{{ copy.home.what.addLanguage.title }}</h3>
+        <p data-part="body">{{ copy.home.what.addLanguage.body }}</p>
+        <span data-part="cta">{{ copy.home.what.addLanguage.cta }}</span>
       </a>
     </div>
 
-    {% set extras = [
-      {
-        title: "Tasks",
-        body: "Any shell command becomes a content-addressed target. Declare argv, inputs, outputs, env, and resource needs; replays are cache hits.",
-        icon: "terminal"
-      },
-      {
-        title: "The cooperative model",
-        body: "Fabrik coexists with your existing native toolchain configuration, cached as one action. Move to granular targets at your own pace. No rewrite to start.",
-        icon: "plug"
-      }
-    ] %}
-
     <div class="fabrik-grid" data-columns="2">
-      {% for ex in extras %}
+      {% for ex in copy.home.what.extras %}
         <article class="fabrik-card">
           <span data-part="icon">{{ icon(ex.icon) }}</span>
           <h3 data-part="title">{{ ex.title }}</h3>
@@ -226,48 +125,25 @@ homepage: true
   <div class="fabrik-container">
     <div class="fabrik-split">
       <div>
-        <span data-part="eyebrow">How it works</span>
-        <h2 data-part="title">Declare targets, build the graph.</h2>
-        <p data-part="lede">
-          A fabrik.toml file declares targets in plain, structured form. Fabrik
-          turns them into a content-addressed action graph that both humans and
-          agents can inspect.
-        </p>
+        <span data-part="eyebrow">{{ copy.home.howItWorks.eyebrow }}</span>
+        <h2 data-part="title">{{ copy.home.howItWorks.title }}</h2>
+        <p data-part="lede">{{ copy.home.howItWorks.lede }}</p>
         <ul data-part="bullets">
-          <li>
-            {{ icon("check") }}
-            <span>Per-package <code>fabrik.toml</code>, one per directory.</span>
-          </li>
-          <li>
-            {{ icon("check") }}
-            <span>Cache lives in <code>.fabrik/</code> at the workspace root. Gitignored.</span>
-          </li>
-          <li>
-            {{ icon("check") }}
-            <span>A one-line edit in a leaf crate invalidates only that crate and its reverse deps.</span>
-          </li>
+          {% for bullet in copy.home.howItWorks.bullets %}
+            <li>
+              {{ icon("check") }}
+              <span>{{ bullet | inlineMd | safe }}</span>
+            </li>
+          {% endfor %}
         </ul>
       </div>
 
       <div class="fabrik-terminal">
         <div data-part="header">
           <span data-part="dots"><span></span><span></span><span></span></span>
-          <span data-part="title">app/fabrik.toml</span>
+          <span data-part="title">{{ copy.home.howItWorks.snippet.filename }}</span>
         </div>
-        <pre data-part="body"><span data-part="muted">[[rust.library]]</span>
-name = <span data-part="value">"greeter"</span>
-srcs = [<span data-part="value">"src/lib.rs"</span>]
-
-<span data-part="muted">[[rust.binary]]</span>
-name = <span data-part="value">"hello"</span>
-srcs = [<span data-part="value">"src/main.rs"</span>]
-deps = [<span data-part="value">"greeter"</span>]
-
-<span data-part="muted">[[rust.test]]</span>
-name = <span data-part="value">"greeter_test"</span>
-srcs = [<span data-part="value">"tests/greeter.rs"</span>]
-crate_root = <span data-part="value">"tests/greeter.rs"</span>
-deps = [<span data-part="value">"greeter"</span>]</pre>
+        <pre data-part="body">{{ copy.home.howItWorks.snippet.body | trim | safe }}</pre>
       </div>
     </div>
   </div>
@@ -276,19 +152,12 @@ deps = [<span data-part="value">"greeter"</span>]</pre>
 <section class="fabrik-section">
   <div class="fabrik-container">
     <header class="fabrik-section-header">
-      <span data-part="eyebrow">FAQ</span>
-      <h2 data-part="title">Questions, answered.</h2>
+      <span data-part="eyebrow">{{ copy.home.faq.eyebrow }}</span>
+      <h2 data-part="title">{{ copy.home.faq.title }}</h2>
     </header>
 
-    {% set faqs = [
-      { q: "Is Fabrik production-ready?", a: "Fabrik builds Fabrik. The cargo_binary cooperative path is the production route today; granular targets are wiring up build-script support and per-target feature resolution." },
-      { q: "Does it replace your native toolchain?", a: "No. You can run your native toolchain configuration in the cooperative model as a cached action, or use granular per-language targets where they exist. Most teams start cooperative and migrate to granular incrementally." },
-      { q: "Why is this agent-native?", a: "Agents get the same APIs humans get: structured diagnostics, causality queries, and inspectable cache. The build is no longer a black box for the tool writing your code." },
-      { q: "How is caching different?", a: "Every action is keyed by a content-addressed digest of its inputs and environment. The same digest hits locally, in CI, or on a remote build farm." }
-    ] %}
-
     <div class="fabrik-faq">
-      {% for faq in faqs %}
+      {% for faq in copy.home.faq.items %}
         <details>
           <summary>
             <span>{{ faq.q }}</span>
@@ -304,19 +173,16 @@ deps = [<span data-part="value">"greeter"</span>]</pre>
 <section class="fabrik-section">
   <div class="fabrik-container">
     <div class="fabrik-cta-panel">
-      <h2 data-part="title">Ready to try Fabrik?</h2>
-      <p data-part="lede">
-        Install with mise, run <code>fabrik init</code>, and start declaring targets.
-      </p>
+      <h2 data-part="title">{{ copy.home.cta.title }}</h2>
+      <p data-part="lede">{{ copy.home.cta.lede | inlineMd | safe }}</p>
       <div data-part="actions">
-        <a href="{{ site.docs }}/guide/what-is-fabrik" class="fabrik-button" data-variant="invert" data-size="large">
-          Read the docs
-          {{ icon("arrow-right", 16) }}
-        </a>
-        <a href="{{ site.github }}" class="fabrik-button" data-variant="invert-outline" data-size="large">
-          {{ icon("github", 16) }}
-          Star on GitHub
-        </a>
+        {% for action in copy.home.cta.actions %}
+          <a href="{{ action.href }}" class="fabrik-button" data-variant="{{ action.variant }}" data-size="large">
+            {% if action.icon == "github" %}{{ icon("github", 16) }}{% endif %}
+            {{ action.text }}
+            {% if action.icon == "arrow-right" %}{{ icon("arrow-right", 16) }}{% endif %}
+          </a>
+        {% endfor %}
       </div>
     </div>
   </div>
