@@ -8,6 +8,7 @@
     "dev": "eleventy --serve --quiet",
     "build": "eleventy",
     "clean": "rm -rf _site",
+    "deploy": "wrangler deploy",
     "social:images": "node scripts/generate-social-images.mjs"
   },
   "devDependencies": {
@@ -15,11 +16,14 @@
     "@11ty/eleventy-plugin-rss": "^2.0.2",
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.1",
-    "sharp": "^0.34.5"
+    "sharp": "^0.34.5",
+    "wrangler": "4.90.1"
   },
   "aube": {
     "allowBuilds": {
-      "sharp": true
+      "sharp": true,
+      "esbuild": true,
+      "workerd": true
     }
   }
 }

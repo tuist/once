@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "fabrik-website",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-05-12",
+  "workers_dev": true,
+  "preview_urls": true,
+  // Route is intentionally omitted until the docs/website URL split is decided.
+  // See PR discussion for current deploy routing options.
+  "assets": {
+    "directory": "./_site",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
