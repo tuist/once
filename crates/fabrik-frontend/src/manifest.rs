@@ -319,10 +319,7 @@ pub(crate) fn load_toml_with(
     workspace_root: &Path,
     package: &str,
 ) -> Result<Vec<Target>> {
-    let manifest: Manifest = toml::from_str(src).map_err(|e| Error::Parse {
-        path: name.to_owned(),
-        message: e.to_string(),
-    })?;
+    let manifest = parse_manifest(name, src)?;
     let mut targets = Vec::new();
 
     push_rust_targets(&mut targets, manifest.rust, workspace_root, package, name)?;
@@ -342,11 +339,28 @@ pub(crate) fn load_dependency_entries_toml_with(
     src: &str,
     package: &str,
 ) -> Result<Vec<DependencyEntry>> {
-    let manifest: Manifest = toml::from_str(src).map_err(|e| Error::Parse {
+    let manifest = parse_manifest(name, src)?;
+    Ok(into_entries(manifest.deps, package))
+}
+
+fn parse_manifest(name: &str, src: &str) -> Result<Manifest> {
+    let manifest_value: toml::Value = toml::from_str(src).map_err(|e| Error::Parse {
         path: name.to_owned(),
         message: e.to_string(),
     })?;
-    Ok(into_entries(manifest.deps, package))
+    if manifest_value
+        .as_table()
+        .is_some_and(|table| table.contains_key("task"))
+    {
+        return Err(Error::Parse {
+            path: name.to_owned(),
+            message: "`[[task]]` has been removed; rewrite it as `[[target]]` with `rule = \"script\"` and `[target.script]`, and rename `srcs` / `src_globs` to `input` plus `outputs` to `output`".to_string(),
+        });
+    }
+    manifest_value.try_into().map_err(|e| Error::Parse {
+        path: name.to_owned(),
+        message: e.to_string(),
+    })
 }
 
 fn push_rust_targets(
@@ -1833,6 +1847,27 @@ argv = ["tail", "-f", ".fabrik/runtime/dev/stdout.log"]
         assert_eq!(targets[0].attrs["cache"], "false");
         assert_eq!(targets[0].attrs["runtime"], "web_server");
         assert!(targets[0].attrs["runtime_capabilities_json"].contains("http"));
+    }
+
+    #[test]
+    fn rejects_legacy_task_with_migration_message() {
+        let err = load_toml_str(
+            "fabrik.toml",
+            r#"
+[[task]]
+name = "lint"
+argv = ["pnpm", "eslint", "src/"]
+src_globs = ["src/**/*.ts"]
+outputs = [".fabrik/out/eslint.json"]
+"#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("`[[task]]` has been removed"));
+        assert!(err.contains("`[[target]]` with `rule = \"script\"`"));
+        assert!(err.contains("`srcs` / `src_globs` to `input`"));
+        assert!(err.contains("`outputs` to `output`"));
     }
 
     #[test]

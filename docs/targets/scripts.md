@@ -58,3 +58,30 @@ headers: tracked `input`, declared `output`, forwarded `env`, and `cwd`.
 | `output` | Declares output files or directories that Fabrik should restore on cache hits. |
 | `env` | Forwards selected environment variables from the host and includes them in the cache key. |
 | `cwd` | Chooses the working directory for the script. |
+
+## Migrating From `[[task]]`
+
+Older manifests used `[[task]]` for the same kind of operational work.
+Rewrite those entries as `[[target]]` with `rule = "script"` and
+`[target.script]`.
+
+```toml
+[[task]]
+name = "lint"
+argv = ["pnpm", "eslint", "src/"]
+src_globs = ["src/**/*.ts"]
+outputs = [".fabrik/out/eslint.json"]
+```
+
+becomes:
+
+```toml
+[[target]]
+name = "lint"
+rule = "script"
+
+[target.script]
+argv = ["pnpm", "eslint", "src/"]
+input = ["src/**/*.ts"]
+output = [".fabrik/out/eslint.json"]
+```

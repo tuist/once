@@ -39,7 +39,7 @@ pub use xdg::Xdg;
 /// Domain-separation prefix for action digests. Bump the version when
 /// the canonical encoding (or the [`Action`] schema) changes in a way
 /// that should invalidate the cache.
-const ACTION_DIGEST_DOMAIN: &[u8] = b"fabrik.action.v4\0";
+const ACTION_DIGEST_DOMAIN: &[u8] = b"fabrik.action.v2\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
