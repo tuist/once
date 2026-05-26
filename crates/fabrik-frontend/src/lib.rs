@@ -11,6 +11,7 @@
 //! - [`target_ref`]: target id normalization for CLI args and build-file deps.
 //! - [`workspace`]: disk-side loaders ([`load_file`], [`load_workspace`]).
 
+mod cache_provider;
 mod dependency;
 mod error;
 mod manifest;
@@ -24,6 +25,10 @@ pub const TOML_BUILD_FILE_NAME: &str = "fabrik.toml";
 
 pub const BUILD_FILE_NAME: &str = TOML_BUILD_FILE_NAME;
 
+pub use cache_provider::{
+    CacheProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig,
+    DEFAULT_TUIST_TOKEN_ENV, DEFAULT_TUIST_URL,
+};
 pub use dependency::{
     external_dep_id, external_dep_package, external_target_id, generated_external_format_header,
     parse_generated_external_format, DependencyEcosystem, DependencyEntry,
@@ -40,4 +45,7 @@ pub use target_ref::{
     absolutize, normalize_build_dep, normalize_cli_target, normalize_cli_target_from, target_id,
     validate_target_name, TargetIdError,
 };
-pub use workspace::{load_dependency_entries, load_file, load_workspace};
+pub use workspace::{
+    load_cache_provider, load_cache_provider_override, load_dependency_entries, load_file,
+    load_workspace,
+};

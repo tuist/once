@@ -1,7 +1,7 @@
 //! Action types and cache-aware execution.
 //!
 //! Currently exposes one action kind ([`Action::RunCommand`]) and an
-//! async executor ([`Runner`]) that consults a [`Cas`] for memoization
+//! async executor ([`Runner`]) that consults a cache provider
 //! before spawning a subprocess. All filesystem and process I/O is
 //! async; subprocess output is streamed through the CAS rather than
 //! buffered, so a multi-GB linker log doesn't OOM the executor.
@@ -12,7 +12,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use fabrik_cas::{ActionResult, Cas, Digest};
+use fabrik_cas::{ActionResult, CacheProvider, Cas, Digest};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tracing::{debug, instrument};
@@ -167,7 +167,7 @@ pub struct RunOpts {
 /// [`Runner::with_resource_limits`].
 #[derive(Clone)]
 pub struct Runner {
-    cas: Cas,
+    cache: CacheProvider,
     workspace_root: PathBuf,
     opts: RunOpts,
     resources: Arc<ResourcePool>,
@@ -176,7 +176,20 @@ pub struct Runner {
 impl Runner {
     pub fn new(cas: Cas, workspace_root: impl Into<PathBuf>, opts: RunOpts) -> Self {
         Self {
-            cas,
+            cache: CacheProvider::Local(cas),
+            workspace_root: workspace_root.into(),
+            opts,
+            resources: Arc::new(ResourcePool::new(ResourceLimits::default())),
+        }
+    }
+
+    pub fn with_cache(
+        cache: CacheProvider,
+        workspace_root: impl Into<PathBuf>,
+        opts: RunOpts,
+    ) -> Self {
+        Self {
+            cache,
             workspace_root: workspace_root.into(),
             opts,
             resources: Arc::new(ResourcePool::new(ResourceLimits::default())),
@@ -201,8 +214,8 @@ impl Runner {
         self
     }
 
-    pub fn cas(&self) -> &Cas {
-        &self.cas
+    pub fn cache(&self) -> &CacheProvider {
+        &self.cache
     }
 
     pub fn workspace_root(&self) -> &Path {
@@ -211,7 +224,7 @@ impl Runner {
 
     pub async fn run(&self, action: &Action) -> Result<Outcome> {
         let key = action.digest();
-        if let Some(hit) = lookup_cached(&self.cas, &self.workspace_root, &key).await? {
+        if let Some(hit) = lookup_cached(&self.cache, &self.workspace_root, &key).await? {
             return Ok(hit);
         }
         // Permits guard real subprocess execution, not cache lookups.
@@ -223,10 +236,10 @@ impl Runner {
             .await;
         // Re-check under the permit: another runner may have produced
         // the entry while we were queued.
-        if let Some(hit) = lookup_cached(&self.cas, &self.workspace_root, &key).await? {
+        if let Some(hit) = lookup_cached(&self.cache, &self.workspace_root, &key).await? {
             return Ok(hit);
         }
-        produce(action, &self.workspace_root, &self.cas, self.opts, key).await
+        produce(action, &self.workspace_root, &self.cache, self.opts, key).await
     }
 }
 
@@ -239,21 +252,40 @@ pub async fn run(
     cas: &Cas,
     opts: RunOpts,
 ) -> Result<Outcome> {
-    let key = action.digest();
-    if let Some(hit) = lookup_cached(cas, workspace_root, &key).await? {
-        return Ok(hit);
-    }
-    produce(action, workspace_root, cas, opts, key).await
+    run_with_cache(
+        action,
+        workspace_root,
+        &CacheProvider::Local(cas.clone()),
+        opts,
+    )
+    .await
 }
 
-#[instrument(skip(cas), fields(action_digest = %key))]
-async fn lookup_cached(cas: &Cas, workspace_root: &Path, key: &Digest) -> Result<Option<Outcome>> {
-    if let Some(result) = cas.get_action_result(key).await? {
+pub async fn run_with_cache(
+    action: &Action,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    opts: RunOpts,
+) -> Result<Outcome> {
+    let key = action.digest();
+    if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
+        return Ok(hit);
+    }
+    produce(action, workspace_root, cache, opts, key).await
+}
+
+#[instrument(skip(cache), fields(action_digest = %key))]
+async fn lookup_cached(
+    cache: &CacheProvider,
+    workspace_root: &Path,
+    key: &Digest,
+) -> Result<Option<Outcome>> {
+    if let Some(result) = cache.get_action_result(key).await? {
         debug!("cache hit");
         // A cache hit must materialize the action's declared outputs to
         // disk; downstream actions see real files even though the
         // upstream action did not actually run on this machine.
-        restore_outputs(&result, workspace_root, cas).await?;
+        restore_outputs(&result, workspace_root, cache).await?;
         return Ok(Some(Outcome {
             action: *key,
             result,
@@ -263,18 +295,18 @@ async fn lookup_cached(cas: &Cas, workspace_root: &Path, key: &Digest) -> Result
     Ok(None)
 }
 
-#[instrument(skip(action, cas), fields(action_digest = %key))]
+#[instrument(skip(action, cache), fields(action_digest = %key))]
 async fn produce(
     action: &Action,
     workspace_root: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     opts: RunOpts,
     key: Digest,
 ) -> Result<Outcome> {
-    let result = execute(action, workspace_root, cas).await?;
+    let result = execute(action, workspace_root, cache).await?;
     let cacheable = result.exit_code == 0 || opts.cache_failures;
     if cacheable {
-        cas.put_action_result(&key, &result).await?;
+        cache.put_action_result(&key, &result).await?;
     } else {
         debug!(
             exit_code = result.exit_code,
@@ -291,11 +323,15 @@ async fn produce(
 /// Materialize every cached output blob to its declared workspace path.
 /// On cache hit this is what makes a downstream action see a file the
 /// upstream action did not actually run on this machine.
-async fn restore_outputs(result: &ActionResult, workspace_root: &Path, cas: &Cas) -> Result<()> {
+async fn restore_outputs(
+    result: &ActionResult,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+) -> Result<()> {
     use tokio::io::AsyncWriteExt;
     for (rel, digest) in &result.outputs {
         let abs = workspace_root.join(rel);
-        let bytes = cas.get_blob(digest).await?;
+        let bytes = cache.get_blob(digest).await?;
         if bytes.starts_with(DIRECTORY_BLOB_MAGIC) {
             restore_directory_blob(rel, &abs, &bytes)?;
             continue;
@@ -346,8 +382,12 @@ async fn restore_outputs(result: &ActionResult, workspace_root: &Path, cas: &Cas
     Ok(())
 }
 
-#[instrument(skip(action, cas), fields(program))]
-async fn execute(action: &Action, workspace_root: &Path, cas: &Cas) -> Result<ActionResult> {
+#[instrument(skip(action, cache), fields(program))]
+async fn execute(
+    action: &Action,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+) -> Result<ActionResult> {
     match action {
         Action::RunCommand {
             argv,
@@ -359,14 +399,14 @@ async fn execute(action: &Action, workspace_root: &Path, cas: &Cas) -> Result<Ac
             timeout_ms,
         } => {
             let mut result =
-                execute_run_command(argv, env, cwd.as_ref(), *timeout_ms, workspace_root, cas)
+                execute_run_command(argv, env, cwd.as_ref(), *timeout_ms, workspace_root, cache)
                     .await?;
             // Failed actions don't have to produce their declared
             // outputs; the caller (`produce`) decides whether to cache
             // the failure at all. When the action succeeded, every
             // declared output must exist or it's a contract violation.
             if result.exit_code == 0 {
-                result.outputs = capture_outputs(outputs, workspace_root, cas).await?;
+                result.outputs = capture_outputs(outputs, workspace_root, cache).await?;
             }
             Ok(result)
         }
@@ -378,7 +418,7 @@ async fn execute(action: &Action, workspace_root: &Path, cas: &Cas) -> Result<Ac
 async fn capture_outputs(
     outputs: &[WorkspacePath],
     workspace_root: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
 ) -> Result<BTreeMap<String, Digest>> {
     let mut captured = BTreeMap::new();
     for rel in outputs {
@@ -410,7 +450,7 @@ async fn capture_outputs(
                     source,
                 })?
         };
-        let digest = cas.put_blob(&bytes).await?;
+        let digest = cache.put_blob(&bytes).await?;
         captured.insert(rel.as_str().to_string(), digest);
     }
     Ok(captured)
@@ -422,7 +462,7 @@ async fn execute_run_command(
     cwd: Option<&WorkspacePath>,
     timeout_ms: Option<u64>,
     workspace_root: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
 ) -> Result<ActionResult> {
     let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
     tracing::Span::current().record("program", tracing::field::display(program));
@@ -459,7 +499,7 @@ async fn execute_run_command(
     // memory does not grow with output size.
     let work = async {
         let (stdout, stderr) =
-            tokio::try_join!(cas.put_stream(stdout_pipe), cas.put_stream(stderr_pipe))?;
+            tokio::try_join!(cache.put_stream(stdout_pipe), cache.put_stream(stderr_pipe))?;
         let status = child.wait().await.map_err(|source| Error::Wait {
             program: program.clone(),
             source,
@@ -994,7 +1034,11 @@ mod tests {
         };
         let outcome = runner.run(&action).await.unwrap();
         assert_eq!(outcome.result.exit_code, 0);
-        let stdout = runner.cas().get_blob(&outcome.result.stdout).await.unwrap();
+        let stdout = runner
+            .cache()
+            .get_blob(&outcome.result.stdout)
+            .await
+            .unwrap();
         assert_eq!(stdout, b"ok");
     }
 

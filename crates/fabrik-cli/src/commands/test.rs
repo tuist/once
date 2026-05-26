@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use fabrik_cas::Cas;
+use fabrik_cas::CacheProvider;
 use fabrik_core::{workspace_tool_env, Action, CacheState, ResourceRequest};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -28,7 +28,7 @@ struct TestSummary<'a> {
 
 pub async fn test(
     workspace: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     target_id: &str,
     test_args: Vec<String>,
     output: Output,
@@ -44,7 +44,7 @@ pub async fn test(
 
     let built =
         fabrik_rust::build_plan(&targets, target_id, workspace).context("building test plan")?;
-    let runner = crate::commands::util::runner(cas, workspace);
+    let runner = crate::commands::util::runner(cache, workspace);
     let build_outcomes = runner
         .run_plan(&built.plan)
         .await
@@ -80,7 +80,7 @@ pub async fn test(
         test_action_digest: test_outcome.action.to_string(),
     };
 
-    render_output(cas, &test_outcome, &summary, output).await?;
+    render_output(cache, &test_outcome, &summary, output).await?;
     Ok(exit_from(test_outcome.result.exit_code))
 }
 
@@ -115,13 +115,13 @@ fn test_action(
 }
 
 async fn render_output(
-    cas: &Cas,
+    cache: &CacheProvider,
     outcome: &fabrik_core::Outcome,
     summary: &TestSummary<'_>,
     output: Output,
 ) -> Result<()> {
-    let stdout = cas.get_blob(&outcome.result.stdout).await?;
-    let stderr = cas.get_blob(&outcome.result.stderr).await?;
+    let stdout = cache.get_blob(&outcome.result.stdout).await?;
+    let stderr = cache.get_blob(&outcome.result.stderr).await?;
 
     match output.format {
         Format::Human => {

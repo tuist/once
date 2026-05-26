@@ -20,8 +20,15 @@ use tokio::fs::{self, File};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 mod digest;
+mod provider;
+mod tuist;
 
 pub use digest::Digest;
+pub use provider::CacheProvider;
+pub use tuist::{
+    TuistAuth, TuistAuthPrompt, TuistCacheConfig, TUIST_APP_OAUTH_CLIENT_ID,
+    TUIST_OAUTH_CLIENT_ID_ENV,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -35,6 +42,17 @@ pub enum Error {
     Corrupt(PathBuf, serde_json::Error),
     #[error("blob not found: {0}")]
     BlobNotFound(Digest),
+    #[error("cache provider `{provider}` is misconfigured: {message}")]
+    InvalidConfig {
+        provider: &'static str,
+        message: String,
+    },
+    #[error("cache provider `{provider}` failed during `{operation}`: {message}")]
+    Remote {
+        provider: &'static str,
+        operation: &'static str,
+        message: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

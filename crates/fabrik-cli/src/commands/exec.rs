@@ -16,7 +16,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use fabrik_cas::Cas;
+use fabrik_cas::CacheProvider;
 use fabrik_core::{Action, ResourceRequest, RunOpts, WorkspacePath};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -43,7 +43,12 @@ pub struct ExecArgs {
     pub argv: Vec<String>,
 }
 
-pub async fn exec(workspace: &Path, cas: &Cas, args: ExecArgs, output: Output) -> Result<ExitCode> {
+pub async fn exec(
+    workspace: &Path,
+    cache: &CacheProvider,
+    args: ExecArgs,
+    output: Output,
+) -> Result<ExitCode> {
     let ExecArgs {
         env,
         cwd,
@@ -61,12 +66,12 @@ pub async fn exec(workspace: &Path, cas: &Cas, args: ExecArgs, output: Output) -
         timeout_ms,
     };
     let opts = RunOpts { cache_failures };
-    let outcome = fabrik_core::run(&action, workspace, cas, opts)
+    let outcome = fabrik_core::run_with_cache(&action, workspace, cache, opts)
         .await
         .context("executing action")?;
 
-    let stdout = cas.get_blob(&outcome.result.stdout).await?;
-    let stderr = cas.get_blob(&outcome.result.stderr).await?;
+    let stdout = cache.get_blob(&outcome.result.stdout).await?;
+    let stderr = cache.get_blob(&outcome.result.stderr).await?;
     // tokio::io::stdout/stderr are line-buffered. Flush explicitly so
     // the bytes reach the pipe before the process exits; without this,
     // captured output is empty under timing pressure (we observed this

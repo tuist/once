@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use fabrik_cas::Cas;
+use fabrik_cas::CacheProvider;
 use fabrik_core::{
     workspace_tool, workspace_tool_env, Action, CacheState, ResourceRequest, WorkspacePath,
 };
@@ -19,7 +19,7 @@ pub(super) struct CachedGraph {
 
 pub(super) async fn load_graph(
     workspace: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     entry: &DependencyEntry,
 ) -> Result<CachedGraph> {
     let go = workspace_tool(workspace, "go")?;
@@ -60,7 +60,7 @@ pub(super) async fn load_graph(
         timeout_ms: Some(300_000),
     };
     let CachedResolution { stdout, cache } =
-        run_cached_resolution(workspace, cas, action, "go list").await?;
+        run_cached_resolution(workspace, cache, action, "go list").await?;
     Ok(CachedGraph {
         graph: parse_go_list_modules(&stdout)?,
         cache,

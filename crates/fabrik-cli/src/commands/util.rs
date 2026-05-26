@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use fabrik_cas::Cas;
+use fabrik_cas::CacheProvider;
 use fabrik_core::{CacheState, ResourceLimits, RunOpts, Runner};
 use fabrik_frontend::Target;
 
@@ -44,8 +44,8 @@ pub fn cache_tag(cache: CacheState) -> &'static str {
 /// wiring in one place ensures the daemon-bounded `ELIXIR_COMPILE_SLOT`
 /// and any future plugin slots stay aligned across `build`, `run`, and
 /// `test` instead of one verb forgetting to populate them.
-pub fn runner(cas: &Cas, workspace: &Path) -> Runner {
-    Runner::new(cas.clone(), workspace.to_path_buf(), RunOpts::default())
+pub fn runner(cache: &CacheProvider, workspace: &Path) -> Runner {
+    Runner::with_cache(cache.clone(), workspace.to_path_buf(), RunOpts::default())
         .with_resource_limits(plugin_resource_limits())
 }
 

@@ -8,6 +8,7 @@ use serde::{
     Deserialize, Deserializer,
 };
 
+use crate::cache_provider::CacheProviderToml;
 use crate::dependency::{into_entries, DependencyEntry, DependencyEntryToml};
 use crate::error::{Error, Result};
 use crate::target::{ExternalDependency, Target};
@@ -16,6 +17,7 @@ use crate::target_ref::{normalize_build_dep, validate_target_name};
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Manifest {
+    cache_provider: Option<CacheProviderToml>,
     rust: RustSection,
     cargo: CargoSection,
     go: GoSection,

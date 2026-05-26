@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use fabrik_cas::Cas;
+use fabrik_cas::CacheProvider;
 use fabrik_core::Xdg;
 
 use crate::cli::{self, Cli, Cmd, Output};
@@ -22,8 +22,8 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
     };
 
     let workspace = resolve_workspace(cli.directory)?;
-    let cas = Cas::open(Xdg::from_env().fabrik_cas());
-    run_command(&workspace, &cas, output, command).await
+    let xdg = Xdg::from_env();
+    run_command(&workspace, &xdg, output, command).await
 }
 
 fn resolve_workspace(directory: Option<PathBuf>) -> Result<PathBuf> {
@@ -49,19 +49,20 @@ fn resolve_workspace(directory: Option<PathBuf>) -> Result<PathBuf> {
 
 async fn run_command(
     workspace: &Path,
-    cas: &Cas,
+    xdg: &Xdg,
     output: Output,
     command: Cmd,
 ) -> Result<ExitCode> {
     match command {
+        Cmd::Auth { cmd } => run_auth_command(workspace, xdg, output, cmd).await,
         Cmd::Run {
             target,
             runtime_rpc,
             runtime_rpc_socket,
         } => {
-            run_target_command(
+            dispatch_run(
                 workspace,
-                cas,
+                xdg,
                 output,
                 target,
                 runtime_rpc,
@@ -69,9 +70,9 @@ async fn run_command(
             )
             .await
         }
-        Cmd::Build { target } => build_target_command(workspace, cas, output, target).await,
+        Cmd::Build { target } => dispatch_build(workspace, xdg, output, target).await,
         Cmd::Test { target, test_args } => {
-            test_target_command(workspace, cas, output, target, test_args).await
+            dispatch_test(workspace, xdg, output, target, test_args).await
         }
         Cmd::Exec {
             env,
@@ -80,9 +81,10 @@ async fn run_command(
             cache_failures,
             argv,
         } => {
-            commands::exec::exec(
+            dispatch_exec(
                 workspace,
-                cas,
+                xdg,
+                output,
                 commands::exec::ExecArgs {
                     env,
                     cwd,
@@ -90,16 +92,10 @@ async fn run_command(
                     cache_failures,
                     argv,
                 },
-                output,
             )
             .await
         }
-        Cmd::Cache {
-            cmd: Some(cli::CacheCmd::Stats),
-        } => commands::cache::print_stats(cas, output)
-            .await
-            .map(|()| ExitCode::SUCCESS),
-        Cmd::Cache { cmd: None } => anyhow::bail!("cache subcommand required"),
+        Cmd::Cache { cmd } => run_cache_command(workspace, xdg, output, cmd).await,
         Cmd::Toolchain {
             cmd: Some(cli::ToolchainCmd::Inspect { platform }),
         } => commands::toolchain::inspect(workspace, output, platform.as_deref())
@@ -119,17 +115,9 @@ async fn run_command(
         Cmd::Targets => commands::targets::print_targets(workspace, output)
             .await
             .map(|()| ExitCode::SUCCESS),
-        Cmd::Deps {
-            cmd: Some(cli::DepsCmd::Sync { name }),
-        } => commands::deps::sync(workspace, cas, output, name.as_deref()).await,
-        Cmd::Deps { cmd: None } => anyhow::bail!("deps subcommand required"),
+        Cmd::Deps { cmd } => run_deps_command(workspace, xdg, output, cmd).await,
         Cmd::Init(args) => commands::init::run(workspace, args, output).await,
-        Cmd::Vendor => {
-            eprintln!(
-                "fabrik: `fabrik vendor` is deprecated and will be removed in v0.8.0; use `fabrik deps sync` instead"
-            );
-            commands::deps::sync(workspace, cas, output, None).await
-        }
+        Cmd::Vendor => dispatch_vendor(workspace, xdg, output).await,
         #[cfg(unix)]
         Cmd::ElixirCompile(args) => commands::elixir_compile::run(workspace, &args),
         #[cfg(unix)]
@@ -139,9 +127,122 @@ async fn run_command(
     }
 }
 
+async fn run_auth_command(
+    workspace: &Path,
+    xdg: &Xdg,
+    output: Output,
+    command: Option<cli::AuthCmd>,
+) -> Result<ExitCode> {
+    match command {
+        Some(cli::AuthCmd::Login {
+            provider,
+            no_browser,
+        }) => commands::auth::login(workspace, xdg, &provider, !no_browser, output)
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Some(cli::AuthCmd::Logout { provider }) => {
+            commands::auth::logout(workspace, xdg, &provider, output)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        None => anyhow::bail!("auth subcommand required"),
+    }
+}
+
+async fn run_cache_command(
+    workspace: &Path,
+    xdg: &Xdg,
+    output: Output,
+    command: Option<cli::CacheCmd>,
+) -> Result<ExitCode> {
+    match command {
+        Some(cli::CacheCmd::Stats) => {
+            let cache = crate::cache_provider::resolve(workspace, xdg)?;
+            commands::cache::print_stats(&cache, output)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        None => anyhow::bail!("cache subcommand required"),
+    }
+}
+
+async fn run_deps_command(
+    workspace: &Path,
+    xdg: &Xdg,
+    output: Output,
+    command: Option<cli::DepsCmd>,
+) -> Result<ExitCode> {
+    match command {
+        Some(cli::DepsCmd::Sync { name }) => {
+            let cache = crate::cache_provider::resolve(workspace, xdg)?;
+            commands::deps::sync(workspace, &cache, output, name.as_deref()).await
+        }
+        None => anyhow::bail!("deps subcommand required"),
+    }
+}
+
+async fn dispatch_run(
+    workspace: &Path,
+    xdg: &Xdg,
+    output: Output,
+    target: Option<String>,
+    runtime_rpc: bool,
+    runtime_rpc_socket: Option<PathBuf>,
+) -> Result<ExitCode> {
+    let cache = crate::cache_provider::resolve(workspace, xdg)?;
+    run_target_command(
+        workspace,
+        &cache,
+        output,
+        target,
+        runtime_rpc,
+        runtime_rpc_socket,
+    )
+    .await
+}
+
+async fn dispatch_build(
+    workspace: &Path,
+    xdg: &Xdg,
+    output: Output,
+    target: Option<String>,
+) -> Result<ExitCode> {
+    let cache = crate::cache_provider::resolve(workspace, xdg)?;
+    build_target_command(workspace, &cache, output, target).await
+}
+
+async fn dispatch_test(
+    workspace: &Path,
+    xdg: &Xdg,
+    output: Output,
+    target: Option<String>,
+    test_args: Vec<String>,
+) -> Result<ExitCode> {
+    let cache = crate::cache_provider::resolve(workspace, xdg)?;
+    test_target_command(workspace, &cache, output, target, test_args).await
+}
+
+async fn dispatch_exec(
+    workspace: &Path,
+    xdg: &Xdg,
+    output: Output,
+    args: commands::exec::ExecArgs,
+) -> Result<ExitCode> {
+    let cache = crate::cache_provider::resolve(workspace, xdg)?;
+    commands::exec::exec(workspace, &cache, args, output).await
+}
+
+async fn dispatch_vendor(workspace: &Path, xdg: &Xdg, output: Output) -> Result<ExitCode> {
+    eprintln!(
+        "fabrik: `fabrik vendor` is deprecated and will be removed in v0.8.0; use `fabrik deps sync` instead"
+    );
+    let cache = crate::cache_provider::resolve(workspace, xdg)?;
+    commands::deps::sync(workspace, &cache, output, None).await
+}
+
 async fn run_target_command(
     workspace: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     output: Output,
     target: Option<String>,
     runtime_rpc: bool,
@@ -150,7 +251,7 @@ async fn run_target_command(
     let target = resolve_required_target(workspace, target)?;
     commands::run::run(
         workspace,
-        cas,
+        cache,
         &target,
         commands::run::RunArgs {
             output,
@@ -163,23 +264,23 @@ async fn run_target_command(
 
 async fn build_target_command(
     workspace: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     output: Output,
     target: Option<String>,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
-    commands::build::build(workspace, cas, &target, output).await
+    commands::build::build(workspace, cache, &target, output).await
 }
 
 async fn test_target_command(
     workspace: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     output: Output,
     target: Option<String>,
     test_args: Vec<String>,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
-    commands::test::test(workspace, cas, &target, test_args, output).await
+    commands::test::test(workspace, cache, &target, test_args, output).await
 }
 
 fn resolve_required_target(workspace: &Path, target: Option<String>) -> Result<String> {

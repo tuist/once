@@ -92,11 +92,11 @@ async fn cache_keys_partition_by_workspace_path() {
     let b = runner.run(&mk("b")).await.unwrap();
     assert_ne!(a.action, b.action);
     assert_eq!(
-        runner.cas().get_blob(&a.result.stdout).await.unwrap(),
+        runner.cache().get_blob(&a.result.stdout).await.unwrap(),
         b"AAA"
     );
     assert_eq!(
-        runner.cas().get_blob(&b.result.stdout).await.unwrap(),
+        runner.cache().get_blob(&b.result.stdout).await.unwrap(),
         b"BBB"
     );
 }

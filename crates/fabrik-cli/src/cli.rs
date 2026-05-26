@@ -200,6 +200,13 @@ pub enum Cmd {
         cmd: Option<CacheCmd>,
     },
 
+    /// Authenticate with a configured provider.
+    #[command(arg_required_else_help = true)]
+    Auth {
+        #[command(subcommand)]
+        cmd: Option<AuthCmd>,
+    },
+
     /// Inspect the project toolchain contract.
     #[command(arg_required_else_help = true)]
     Toolchain {
@@ -260,6 +267,27 @@ pub enum CacheCmd {
 }
 
 #[derive(Subcommand)]
+pub enum AuthCmd {
+    /// Sign in to a provider so Fabrik can reuse its cache session.
+    Login {
+        /// Provider reference. Use `workspace` for the effective workspace provider.
+        #[arg(long)]
+        provider: String,
+
+        /// Print the authorization URL instead of opening the browser automatically.
+        #[arg(long)]
+        no_browser: bool,
+    },
+
+    /// Remove the stored session for a provider.
+    Logout {
+        /// Provider reference. Use `workspace` for the effective workspace provider.
+        #[arg(long)]
+        provider: String,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum ToolchainCmd {
     /// Print the toolchain contract derived from mise.toml.
     Inspect {
@@ -314,6 +342,13 @@ impl Cmd {
                 }
                 path
             }
+            Self::Auth { cmd } => {
+                let mut path = vec!["auth"];
+                if let Some(cmd) = cmd {
+                    path.extend(cmd.surface_path());
+                }
+                path
+            }
             Self::Toolchain { cmd } => {
                 let mut path = vec!["toolchain"];
                 if let Some(cmd) = cmd {
@@ -356,6 +391,15 @@ impl CacheCmd {
     fn surface_path(&self) -> Vec<&'static str> {
         match self {
             Self::Stats => vec!["stats"],
+        }
+    }
+}
+
+impl AuthCmd {
+    fn surface_path(&self) -> Vec<&'static str> {
+        match self {
+            Self::Login { .. } => vec!["login"],
+            Self::Logout { .. } => vec!["logout"],
         }
     }
 }

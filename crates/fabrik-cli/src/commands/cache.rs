@@ -1,7 +1,7 @@
 //! `fabrik cache stats` - print blob/action counts for a workspace.
 
 use anyhow::Result;
-use fabrik_cas::Cas;
+use fabrik_cas::CacheProvider;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -20,8 +20,8 @@ struct CacheStats {
     actions: CacheEntry,
 }
 
-pub async fn print_stats(cas: &Cas, output: Output) -> Result<()> {
-    let s = cas.stats().await?;
+pub async fn print_stats(cache: &CacheProvider, output: Output) -> Result<()> {
+    let s = cache.stats().await?;
     let stats = CacheStats {
         blobs: CacheEntry {
             count: s.blob_count,

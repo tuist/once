@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use fabrik_cas::Cas;
+use fabrik_cas::CacheProvider;
 use fabrik_core::{workspace_tool, workspace_tool_env, Action, CacheState, ResourceRequest};
 use fabrik_frontend::{external_dep_package, generated_external_format_header, DependencyEntry};
 use serde::Deserialize;
@@ -77,10 +77,10 @@ struct MetadataDepKind {
 
 pub(super) async fn sync(
     workspace: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     entry: &DependencyEntry,
 ) -> Result<SyncReport> {
-    let (metadata, resolution_cache) = run_cargo_metadata(workspace, cas, entry).await?;
+    let (metadata, resolution_cache) = run_cargo_metadata(workspace, cache, entry).await?;
     let report = plan_external_packages(&metadata)?;
 
     let generated_dir = workspace.join(external_dep_package(&entry.name));
@@ -111,7 +111,7 @@ pub(super) async fn sync(
 
 async fn run_cargo_metadata(
     workspace: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     entry: &DependencyEntry,
 ) -> Result<(CargoMetadata, CacheState)> {
     let cargo = workspace_tool(workspace, "cargo")?;
@@ -144,7 +144,7 @@ async fn run_cargo_metadata(
         resources: ResourceRequest::new(1, 0),
         timeout_ms: Some(300_000),
     };
-    let resolved = run_cached_resolution(workspace, cas, action, "cargo metadata").await?;
+    let resolved = run_cached_resolution(workspace, cache, action, "cargo metadata").await?;
     let metadata =
         serde_json::from_slice(&resolved.stdout).context("parsing cargo metadata JSON")?;
     Ok((metadata, resolved.cache))

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use fabrik_cas::Cas;
+use fabrik_cas::CacheProvider;
 use fabrik_core::RunOpts;
 
 use self::action::action_for;
@@ -25,12 +25,17 @@ pub struct RunArgs {
     pub runtime_rpc_socket: Option<PathBuf>,
 }
 
-pub async fn run(workspace: &Path, cas: &Cas, target_id: &str, args: RunArgs) -> Result<ExitCode> {
+pub async fn run(
+    workspace: &Path,
+    cache: &CacheProvider,
+    target_id: &str,
+    args: RunArgs,
+) -> Result<ExitCode> {
     let (targets, idx) = find_target(workspace, target_id)?;
     let target = &targets[idx];
 
     if is_apple_simulator_app(target) {
-        return run_apple_ios_app(workspace, cas, target_id, &targets, target, args).await;
+        return run_apple_ios_app(workspace, cache, target_id, &targets, target, args).await;
     }
 
     let plan = action_for(workspace, target)?;
@@ -40,13 +45,13 @@ pub async fn run(workspace: &Path, cas: &Cas, target_id: &str, args: RunArgs) ->
             .with_context(|| format!("creating output directory {}", out_dir.display()))?;
     }
 
-    let outcome = fabrik_core::run(&plan.action, workspace, cas, RunOpts::default())
+    let outcome = fabrik_core::run_with_cache(&plan.action, workspace, cache, RunOpts::default())
         .await
         .context("executing action")?;
 
     finish_run(
         workspace,
-        cas,
+        cache,
         &outcome,
         target_id,
         target,
@@ -59,7 +64,7 @@ pub async fn run(workspace: &Path, cas: &Cas, target_id: &str, args: RunArgs) ->
 
 async fn run_apple_ios_app(
     workspace: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     target_id: &str,
     targets: &[fabrik_frontend::Target],
     target: &fabrik_frontend::Target,
@@ -67,7 +72,7 @@ async fn run_apple_ios_app(
 ) -> Result<ExitCode> {
     let built =
         fabrik_apple::build_plan(targets, target_id, workspace).context("building app plan")?;
-    let runner = crate::commands::util::runner(cas, workspace);
+    let runner = crate::commands::util::runner(cache, workspace);
     let _build_outcomes = runner
         .run_plan(&built.plan)
         .await
@@ -80,7 +85,7 @@ async fn run_apple_ios_app(
 
     finish_run(
         workspace,
-        cas,
+        cache,
         &outcome,
         target_id,
         target,
@@ -93,7 +98,7 @@ async fn run_apple_ios_app(
 
 async fn finish_run(
     workspace: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     outcome: &fabrik_core::Outcome,
     target_id: &str,
     target: &fabrik_frontend::Target,
@@ -105,8 +110,8 @@ async fn finish_run(
         runtime_rpc,
         runtime_rpc_socket,
     } = args;
-    let stdout_blob = cas.get_blob(&outcome.result.stdout).await?;
-    let stderr_blob = cas.get_blob(&outcome.result.stderr).await?;
+    let stdout_blob = cache.get_blob(&outcome.result.stdout).await?;
+    let stderr_blob = cache.get_blob(&outcome.result.stderr).await?;
     let tag = cache_tag(outcome.cache);
     let mut runtime = runtime_descriptor(target_id, target)?;
     let session = match (&mut runtime, runtime_rpc) {
