@@ -120,6 +120,15 @@ impl Cas {
         Self::shard_path(&self.blobs_dir(), digest, "")
     }
 
+    pub(crate) async fn blob_size(&self, digest: &Digest) -> Result<u64> {
+        let path = self.blob_path(digest);
+        match fs::metadata(&path).await {
+            Ok(metadata) => Ok(metadata.len()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Err(Error::BlobNotFound(*digest)),
+            Err(source) => Err(Error::Io { path, source }),
+        }
+    }
+
     fn action_path(&self, digest: &Digest) -> PathBuf {
         Self::shard_path(&self.actions_dir(), digest, ".json")
     }

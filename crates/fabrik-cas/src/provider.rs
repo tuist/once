@@ -5,6 +5,8 @@ use tokio::io::AsyncRead;
 use crate::tuist::{TuistCache, TuistCacheConfig};
 use crate::{ActionResult, Cas, Digest, Result, Stats};
 
+const TUIST_STREAM_REMOTE_UPLOAD_LIMIT: u64 = 8 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub enum CacheProvider {
     Local(Cas),
@@ -47,8 +49,10 @@ impl CacheProvider {
             Self::Local(cas) => cas.put_stream(reader).await,
             Self::Tuist(cache) => {
                 let digest = cache.local().put_stream(reader).await?;
-                let bytes = cache.local().get_blob(&digest).await?;
-                let _ = cache.put_blob(&bytes).await?;
+                if cache.local().blob_size(&digest).await? <= TUIST_STREAM_REMOTE_UPLOAD_LIMIT {
+                    let bytes = cache.local().get_blob(&digest).await?;
+                    let _ = cache.put_blob(&bytes).await?;
+                }
                 Ok(digest)
             }
         }

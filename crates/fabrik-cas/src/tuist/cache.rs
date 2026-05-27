@@ -13,6 +13,8 @@ use super::{
 };
 use crate::{ActionResult, Cas, Digest, Error, Result};
 
+const ENDPOINT_HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Debug, Clone)]
 pub struct TuistCache {
     local: Cas,
@@ -330,7 +332,7 @@ impl TuistCache {
                 let start = Instant::now();
                 let outcome = client
                     .get(health)
-                    .timeout(Duration::from_secs(5))
+                    .timeout(ENDPOINT_HEALTH_TIMEOUT)
                     .send()
                     .await;
                 match outcome {

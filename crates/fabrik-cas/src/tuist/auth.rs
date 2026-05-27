@@ -41,7 +41,11 @@ impl TuistAuth {
     }
 
     pub fn token(&self) -> Result<String> {
-        if let Some(token) = env_token(TUIST_TOKEN_ENV) {
+        self.token_with_env(env_token(TUIST_TOKEN_ENV))
+    }
+
+    fn token_with_env(&self, env_token: Option<String>) -> Result<String> {
+        if let Some(token) = env_token {
             return Ok(token);
         }
 
@@ -421,12 +425,9 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::sync::Mutex;
     use std::thread;
 
     use tempfile::TempDir;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn static_config(url: String) -> TuistCacheConfig {
         TuistCacheConfig {
@@ -549,14 +550,11 @@ mod tests {
 
     #[test]
     fn env_token_takes_precedence_over_storage() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
         let auth = TuistAuth::new(temp.path(), &static_config("https://tuist.dev".to_string()));
-        std::env::set_var("TUIST_TOKEN", "env-token");
 
-        let token = auth.token().unwrap();
+        let token = auth.token_with_env(Some("env-token".to_string())).unwrap();
 
-        std::env::remove_var("TUIST_TOKEN");
         assert_eq!(token, "env-token");
     }
 
