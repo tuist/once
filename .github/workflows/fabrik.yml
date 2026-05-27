@@ -44,6 +44,9 @@ jobs:
           experimental: true
           cache: true
 
+      - name: install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+
       - name: install clippy
         run: rustup component add clippy
 
@@ -74,6 +77,10 @@ jobs:
           experimental: true
           cache: true
 
+      - name: install system dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+
       - name: cache cargo registry, git db, and target
         uses: Swatinem/rust-cache@v2
         with:
@@ -99,6 +106,10 @@ jobs:
         with:
           experimental: true
           cache: true
+
+      - name: install system dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
 
       - name: cache cargo registry, git db, and target
         uses: Swatinem/rust-cache@v2
@@ -168,6 +179,10 @@ jobs:
         with:
           experimental: true
           cache: true
+
+      - name: install system dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
 
       - name: cache cargo registry, git db, and target
         uses: Swatinem/rust-cache@v2
