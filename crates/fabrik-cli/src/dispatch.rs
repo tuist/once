@@ -75,6 +75,7 @@ async fn run_command(
             dispatch_test(workspace, xdg, output, target, test_args).await
         }
         Cmd::Exec {
+            script,
             env,
             cwd,
             timeout_ms,
@@ -86,6 +87,7 @@ async fn run_command(
                 xdg,
                 output,
                 commands::exec::ExecArgs {
+                    script,
                     env,
                     cwd,
                     timeout_ms,

@@ -1,3 +1,4 @@
+mod script;
 mod task;
 #[cfg(test)]
 mod tests;
@@ -23,6 +24,7 @@ pub(super) fn action_for(workspace: &Path, target: &fabrik_frontend::Target) -> 
     match target.kind.as_str() {
         "rust_binary" => rust_binary_action(workspace, target),
         "cargo_binary" => cargo_binary_action(workspace, target),
+        "script" | "runtime_script" => script::script_action(workspace, target),
         "task" | "runtime_task" | "runner_task" => task::task_action(workspace, target),
         other => anyhow::bail!("running `{other}` targets is not yet supported"),
     }

@@ -39,6 +39,41 @@ pub fn cache_tag(cache: CacheState) -> &'static str {
     }
 }
 
+#[must_use]
+pub fn relative_path(from: &str, to: &str) -> String {
+    if from.is_empty() {
+        return to.to_string();
+    }
+    let from_parts = from
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let to_parts = to
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let mut shared = 0;
+    while shared < from_parts.len()
+        && shared < to_parts.len()
+        && from_parts[shared] == to_parts[shared]
+    {
+        shared += 1;
+    }
+
+    let mut parts = Vec::new();
+    for _ in shared..from_parts.len() {
+        parts.push("..".to_string());
+    }
+    for part in &to_parts[shared..] {
+        parts.push((*part).to_string());
+    }
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
+}
+
 /// Construct the runner every CLI verb uses, with the named-slot
 /// pools each language plugin publishes pre-registered. Keeping the
 /// wiring in one place ensures the daemon-bounded `ELIXIR_COMPILE_SLOT`

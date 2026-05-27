@@ -16,6 +16,7 @@ mod dependency;
 mod error;
 mod manifest;
 mod plan_builder;
+mod script;
 mod target;
 mod target_ref;
 mod workspace;
@@ -40,6 +41,7 @@ pub use plan_builder::{
     resolve_root, target_index, topological_sort, workspace_output_dir,
     BuildError as PlanGraphError,
 };
+pub use script::{parse_script_annotations, ScriptAnnotations};
 pub use target::{ExternalDependency, Target};
 pub use target_ref::{
     absolutize, normalize_build_dep, normalize_cli_target, normalize_cli_target_from, target_id,

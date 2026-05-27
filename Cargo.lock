@@ -379,6 +379,7 @@ dependencies = [
  "fabrik-frontend",
  "fabrik-go",
  "fabrik-rust",
+ "glob",
  "serde",
  "serde_json",
  "tempfile",
@@ -387,6 +388,7 @@ dependencies = [
  "toon-rust",
  "tracing",
  "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]

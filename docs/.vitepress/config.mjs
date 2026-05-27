@@ -7,7 +7,7 @@ export default defineConfig({
   title: "Fabrik",
   titleTemplate: ":title | Fabrik",
   description:
-    "A polyglot automation kernel for humans and agents. Content-addressed actions, structured declarations, and explicit runtime semantics.",
+    "Fabrik gives developers and agents one execution layer that maps software operations onto cache and compute infrastructure.",
   cleanUrls: true,
   lastUpdated: true,
   sitemap: {
@@ -27,8 +27,7 @@ export default defineConfig({
       text: "Edit this page on GitHub",
     },
     nav: [
-      { text: "Guide", link: "/guide/what-is-fabrik" },
-      { text: "Targets", link: "/targets/rust" },
+      { text: "Docs", link: "/guide/what-is-fabrik" },
       {
         text: "Links",
         items: [
@@ -44,26 +43,42 @@ export default defineConfig({
       },
     ],
     sidebar: {
-      "/guide/": [
+      "/": [
         {
-          text: "Introduction",
+          text: "Documentation",
           items: [
-            { text: "What is Fabrik", link: "/guide/what-is-fabrik" },
-          ],
-        },
-      ],
-      "/targets/": [
-        {
-          text: "Targets",
-          items: [
-            { text: targetText("Rust", "rust"), link: "/targets/rust" },
             {
-              text: targetText("Apple and Swift", "swift"),
-              link: "/targets/apple",
+              text: "Introduction",
+              items: [
+                { text: "What is Fabrik", link: "/guide/what-is-fabrik" },
+              ],
             },
-            { text: targetText("Go", "go"), link: "/targets/go" },
-            { text: targetText("Elixir", "elixir"), link: "/targets/elixir" },
-            { text: targetText("Tasks", "tasks"), link: "/targets/tasks" },
+            {
+              text: "Native Rules",
+              items: [
+                { text: targetText("Rust", "rust"), link: "/targets/rust" },
+                {
+                  text: targetText("Apple and Swift", "swift"),
+                  link: "/targets/apple",
+                },
+                { text: targetText("Go", "go"), link: "/targets/go" },
+                {
+                  text: targetText("Elixir", "elixir"),
+                  link: "/targets/elixir",
+                },
+              ],
+            },
+            {
+              text: "Scripts",
+              items: [
+                { text: "Overview", link: "/targets/actions" },
+                {
+                  text: "Script Files",
+                  link: "/guide/cacheable-scripts",
+                },
+                { text: "Script Rules", link: "/targets/scripts" },
+              ],
+            },
           ],
         },
       ],

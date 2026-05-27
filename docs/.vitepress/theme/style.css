@@ -243,6 +243,17 @@ body:has(.VPHome)::before {
   max-width: 1184px;
 }
 
+.VPHomeFeatures .items {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.VPHomeFeatures .item {
+  padding: 0 !important;
+  width: auto !important;
+}
+
 .VPFeature {
   position: relative;
   box-shadow: var(--fabrik-shadow-border);
@@ -547,6 +558,11 @@ body:has(.VPHome)::before {
   .VPHero .image-src {
     padding: 30px;
   }
+
+  .VPHomeFeatures .items {
+    grid-template-columns: 1fr;
+  }
+
 }
 
 @media (max-width: 640px) {
