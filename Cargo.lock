@@ -397,6 +397,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "fabrik-cas",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

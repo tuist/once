@@ -62,6 +62,14 @@ pub enum Error {
     UnsupportedRemoteProvider { provider: String },
     #[error("remote provider `{provider}` is not configured: {message}")]
     RemoteProviderConfig { provider: String, message: String },
+    #[error("remote provider `{provider}` request failed: {source}")]
+    RemoteProviderHttp {
+        provider: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("remote provider `{provider}` returned an error: {message}")]
+    RemoteProviderApi { provider: String, message: String },
     #[error("action requires a non-empty argv")]
     EmptyArgv,
     #[error("action exceeded its timeout of {0:?}")]
@@ -689,34 +697,7 @@ async fn execute_remote_command(
             .await
         }
         "daytona" => {
-            let daytona = resolve_provider_program("daytona").unwrap_or_else(|| "daytona".into());
-            let sandbox = daytona_sandbox()?;
-            let remote_cwd = daytona_workdir(cwd);
-            let mut remote_argv = vec![
-                daytona,
-                "exec".to_string(),
-                sandbox,
-                "--cwd".to_string(),
-                remote_cwd,
-            ];
-            if let Some(timeout_ms) = timeout_ms {
-                remote_argv.push("--timeout".to_string());
-                remote_argv.push(timeout_secs(timeout_ms).to_string());
-            }
-            remote_argv.push("--".to_string());
-            append_env_command(&mut remote_argv, env);
-            remote_argv.extend(argv.iter().cloned());
-            execute_child_streaming(
-                &remote_argv,
-                &BTreeMap::new(),
-                None,
-                timeout_ms,
-                workspace_root,
-                cache,
-                stream_to_parent,
-                true,
-            )
-            .await
+            execute_daytona_command(argv, env, cwd, timeout_ms, cache, stream_to_parent).await
         }
         provider => Err(Error::UnsupportedRemoteProvider {
             provider: provider.to_string(),
@@ -724,19 +705,177 @@ async fn execute_remote_command(
     }
 }
 
-fn daytona_sandbox() -> Result<String> {
-    let sandbox =
-        std::env::var("FABRIK_DAYTONA_SANDBOX").map_err(|_| Error::RemoteProviderConfig {
+#[derive(Debug)]
+struct DaytonaConfig {
+    sandbox: String,
+    api_url: String,
+    api_key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DaytonaExecuteRequest {
+    command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaytonaExecuteResponse {
+    #[serde(default, alias = "exitCode")]
+    exit_code: Option<i32>,
+    #[serde(default)]
+    result: Option<String>,
+    #[serde(default)]
+    stdout: Option<String>,
+    #[serde(default)]
+    stderr: Option<String>,
+    #[serde(default)]
+    artifacts: Option<DaytonaArtifacts>,
+}
+
+#[derive(Deserialize)]
+struct DaytonaArtifacts {
+    #[serde(default)]
+    stdout: Option<String>,
+    #[serde(default)]
+    stderr: Option<String>,
+}
+
+async fn execute_daytona_command(
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: Option<&WorkspacePath>,
+    timeout_ms: Option<u64>,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    let config = daytona_config()?;
+    let request = DaytonaExecuteRequest {
+        command: daytona_command(argv, env)?,
+        cwd: Some(daytona_workdir(cwd)),
+        timeout: timeout_ms.map(timeout_secs),
+    };
+    let url = format!(
+        "{}/toolbox/{}/process/execute",
+        config.api_url.trim_end_matches('/'),
+        config.sandbox
+    );
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(config.api_key)
+        .json(&request)
+        .send()
+        .await
+        .map_err(|source| Error::RemoteProviderHttp {
             provider: "daytona".to_string(),
-            message: "set FABRIK_DAYTONA_SANDBOX to the sandbox id or name".to_string(),
+            source,
         })?;
-    if sandbox.trim().is_empty() {
-        return Err(Error::RemoteProviderConfig {
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_else(|_| String::new());
+        return Err(Error::RemoteProviderApi {
             provider: "daytona".to_string(),
-            message: "FABRIK_DAYTONA_SANDBOX cannot be empty".to_string(),
+            message: format!("HTTP {status}: {body}"),
         });
     }
-    Ok(sandbox)
+    let response = response
+        .json::<DaytonaExecuteResponse>()
+        .await
+        .map_err(|source| Error::RemoteProviderHttp {
+            provider: "daytona".to_string(),
+            source,
+        })?;
+    let stdout = response
+        .artifacts
+        .as_ref()
+        .and_then(|artifacts| artifacts.stdout.clone())
+        .or(response.stdout)
+        .or(response.result)
+        .unwrap_or_default()
+        .into_bytes();
+    let stderr = response
+        .artifacts
+        .and_then(|artifacts| artifacts.stderr)
+        .or(response.stderr)
+        .unwrap_or_default()
+        .into_bytes();
+    if stream_to_parent {
+        let mut out = tokio::io::stdout();
+        out.write_all(&stdout).await.map_err(|source| Error::Wait {
+            program: "stdout".to_string(),
+            source,
+        })?;
+        out.flush().await.map_err(|source| Error::Wait {
+            program: "stdout".to_string(),
+            source,
+        })?;
+        let mut err = tokio::io::stderr();
+        err.write_all(&stderr).await.map_err(|source| Error::Wait {
+            program: "stderr".to_string(),
+            source,
+        })?;
+        err.flush().await.map_err(|source| Error::Wait {
+            program: "stderr".to_string(),
+            source,
+        })?;
+    }
+    let stdout = cache.put_blob(&stdout).await?;
+    let stderr = cache.put_blob(&stderr).await?;
+    Ok(ActionResult {
+        exit_code: response.exit_code.unwrap_or(0),
+        stdout,
+        stderr,
+        outputs: BTreeMap::new(),
+    })
+}
+
+fn daytona_config() -> Result<DaytonaConfig> {
+    Ok(DaytonaConfig {
+        sandbox: daytona_env("FABRIK_DAYTONA_SANDBOX", "the sandbox id or name")?,
+        api_url: std::env::var("FABRIK_DAYTONA_API_URL")
+            .unwrap_or_else(|_| "https://proxy.app.daytona.io".to_string()),
+        api_key: std::env::var("FABRIK_DAYTONA_API_KEY")
+            .or_else(|_| std::env::var("DAYTONA_API_KEY"))
+            .map_err(|_| Error::RemoteProviderConfig {
+                provider: "daytona".to_string(),
+                message: "set FABRIK_DAYTONA_API_KEY or DAYTONA_API_KEY".to_string(),
+            })?,
+    })
+}
+
+fn daytona_env(name: &str, description: &str) -> Result<String> {
+    let value = std::env::var(name).map_err(|_| Error::RemoteProviderConfig {
+        provider: "daytona".to_string(),
+        message: format!("set {name} to {description}"),
+    })?;
+    if value.trim().is_empty() {
+        return Err(Error::RemoteProviderConfig {
+            provider: "daytona".to_string(),
+            message: format!("{name} cannot be empty"),
+        });
+    }
+    Ok(value)
+}
+
+fn daytona_command(argv: &[String], env: &BTreeMap<String, String>) -> Result<String> {
+    if argv.is_empty() {
+        return Err(Error::EmptyArgv);
+    }
+    let mut parts = Vec::new();
+    if !env.is_empty() {
+        parts.push("env".to_string());
+        parts.push("-i".to_string());
+        parts.extend(
+            env.iter()
+                .map(|(key, value)| shell_quote(&format!("{key}={value}"))),
+        );
+    }
+    parts.extend(argv.iter().map(|arg| shell_quote(arg)));
+    Ok(parts.join(" "))
 }
 
 fn daytona_workdir(cwd: Option<&WorkspacePath>) -> String {
@@ -759,13 +898,20 @@ fn timeout_secs(timeout_ms: u64) -> u64 {
     timeout_ms.div_ceil(1000).max(1)
 }
 
-fn append_env_command(argv: &mut Vec<String>, env: &BTreeMap<String, String>) {
-    if env.is_empty() {
-        return;
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
     }
-    argv.push("env".to_string());
-    argv.push("-i".to_string());
-    argv.extend(env.iter().map(|(key, value)| format!("{key}={value}")));
+    if value.bytes().all(|b| {
+        b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'_' | b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-'
+            )
+    }) {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn resolve_provider_program(program: &str) -> Option<String> {
