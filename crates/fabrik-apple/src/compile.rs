@@ -80,6 +80,7 @@ pub fn launch_ios_app(target: &Target, _workspace_root: &Path) -> Result<AppleAc
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(600_000),
+            remote: None,
         },
         output: app_dir,
     })
@@ -136,6 +137,7 @@ fn build_ios_app_action(target: &Target, workspace_root: &Path) -> Result<AppleA
             outputs: vec![output],
             resources: ResourceRequest::new(2, 0),
             timeout_ms: Some(300_000),
+            remote: None,
         },
         output: app_dir,
     })

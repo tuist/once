@@ -137,6 +137,7 @@ mkdir -p "$OUT_DIR"
         outputs: vec![output],
         resources: ResourceRequest::new(2, 0),
         timeout_ms: Some(300_000),
+        remote: None,
     };
     let compile_digest = compile_action.digest();
     let archive_script = format!(
@@ -160,6 +161,7 @@ xcrun ar crs "$STATIC_LIBRARY" "$OUT_DIR"/*.o
         outputs: vec![archive_output],
         resources: ResourceRequest::default(),
         timeout_ms: Some(120_000),
+        remote: None,
     };
     let archive_digest = archive_action.digest();
     let own_import = SwiftImportSearch::ModuleDir(out_dir.clone());
@@ -260,6 +262,7 @@ SDKROOT="$SDK" xcrun --sdk macosx swiftc -sdk "$SDK" -target {target_triple} {ca
         outputs: vec![output],
         resources: ResourceRequest::new(2, 0),
         timeout_ms: Some(300_000),
+        remote: None,
     };
     let action_digest = action.digest();
     let own_link = match kind {
@@ -374,6 +377,7 @@ SDKROOT="$SDK" xcrun --sdk macosx swiftc -sdk "$SDK" -target {target_triple} {ca
         outputs: vec![output],
         resources: ResourceRequest::new(2, 0),
         timeout_ms: Some(300_000),
+        remote: None,
     };
     let action_digest = action.digest();
     let own_import = SwiftImportSearch::ModuleDir(output_parent);

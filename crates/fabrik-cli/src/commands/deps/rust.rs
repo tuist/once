@@ -143,6 +143,7 @@ async fn run_cargo_metadata(
         outputs: Vec::new(),
         resources: ResourceRequest::new(1, 0),
         timeout_ms: Some(300_000),
+        remote: None,
     };
     let resolved = run_cached_resolution(workspace, cache, action, "cargo metadata").await?;
     let metadata =

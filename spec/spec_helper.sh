@@ -68,3 +68,7 @@ no_booted_ios_simulator() {
   apple_toolchain_unavailable && return 0
   ! xcrun simctl list devices booted 2>/dev/null | grep -q "(Booted)"
 }
+
+microsandbox_specs_disabled() {
+  [ "${FABRIK_RUN_MICROSANDBOX_SPECS:-}" != "1" ]
+}

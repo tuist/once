@@ -73,6 +73,7 @@ pub(crate) fn compile_binary(
         outputs,
         resources: fabrik_core::ResourceRequest::new(2, 0),
         timeout_ms: Some(300_000),
+        remote: None,
     };
     Ok((
         PlanNode {

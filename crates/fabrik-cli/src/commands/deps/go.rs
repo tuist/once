@@ -58,6 +58,7 @@ pub(super) async fn load_graph(
         outputs: Vec::new(),
         resources: ResourceRequest::new(1, 0),
         timeout_ms: Some(300_000),
+        remote: None,
     };
     let CachedResolution { stdout, cache } =
         run_cached_resolution(workspace, cache, action, "go list").await?;

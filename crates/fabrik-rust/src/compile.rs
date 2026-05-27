@@ -199,6 +199,7 @@ pub fn compile_target(
         outputs,
         resources: ResourceRequest::default(),
         timeout_ms: Some(120_000),
+        remote: None,
     };
     let action_digest = action.digest();
 

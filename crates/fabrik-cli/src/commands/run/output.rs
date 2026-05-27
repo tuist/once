@@ -45,9 +45,10 @@ pub(super) async fn render(
     stdout_blob: &[u8],
     stderr_blob: &[u8],
     record: &RunRecord<'_>,
+    streams_live: bool,
 ) -> Result<()> {
     match output.format {
-        Format::Human => render_human(output, stdout_blob, stderr_blob, record).await,
+        Format::Human => render_human(output, stdout_blob, stderr_blob, record, streams_live).await,
         Format::Json | Format::Toon => render_structured(output.format, stderr_blob, record).await,
     }
 }
@@ -57,13 +58,18 @@ async fn render_human(
     stdout_blob: &[u8],
     stderr_blob: &[u8],
     record: &RunRecord<'_>,
+    streams_live: bool,
 ) -> Result<()> {
     let mut out = tokio::io::stdout();
-    out.write_all(stdout_blob).await?;
+    if !streams_live {
+        out.write_all(stdout_blob).await?;
+    }
     out.flush().await?;
 
     let mut err = tokio::io::stderr();
-    err.write_all(stderr_blob).await?;
+    if !streams_live {
+        err.write_all(stderr_blob).await?;
+    }
     if output.show_human_trailers() {
         err.write_all(
             format!(

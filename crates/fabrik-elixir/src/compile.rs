@@ -194,6 +194,7 @@ fn build_compile_action(
         outputs,
         resources: elixir_resources(),
         timeout_ms: Some(300_000),
+        remote: None,
     })
 }
 
@@ -297,6 +298,7 @@ fn build_binary_action(
         outputs,
         resources: elixir_resources(),
         timeout_ms: Some(300_000),
+        remote: None,
     })
 }
 

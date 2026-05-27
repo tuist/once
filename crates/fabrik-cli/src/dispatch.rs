@@ -23,7 +23,7 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
 
     let workspace = resolve_workspace(cli.directory)?;
     let xdg = Xdg::from_env();
-    run_command(&workspace, &xdg, output, command).await
+    Box::pin(run_command(&workspace, &xdg, output, command)).await
 }
 
 fn resolve_workspace(directory: Option<PathBuf>) -> Result<PathBuf> {
@@ -59,6 +59,8 @@ async fn run_command(
             target,
             runtime_rpc,
             runtime_rpc_socket,
+            remote,
+            compute,
         } => {
             dispatch_run(
                 workspace,
@@ -67,6 +69,7 @@ async fn run_command(
                 target,
                 runtime_rpc,
                 runtime_rpc_socket,
+                remote.then_some(compute),
             )
             .await
         }
@@ -80,6 +83,8 @@ async fn run_command(
             cwd,
             timeout_ms,
             cache_failures,
+            remote,
+            compute,
             argv,
         } => {
             dispatch_exec(
@@ -92,6 +97,7 @@ async fn run_command(
                     cwd,
                     timeout_ms,
                     cache_failures,
+                    remote: remote.then_some(compute),
                     argv,
                 },
             )
@@ -117,7 +123,7 @@ async fn run_command(
         Cmd::Targets => commands::targets::print_targets(workspace, output)
             .await
             .map(|()| ExitCode::SUCCESS),
-        Cmd::Deps { cmd } => run_deps_command(workspace, xdg, output, cmd).await,
+        Cmd::Deps { cmd } => Box::pin(run_deps_command(workspace, xdg, output, cmd)).await,
         Cmd::Init(args) => commands::init::run(workspace, args, output).await,
         Cmd::Vendor => dispatch_vendor(workspace, xdg, output).await,
         #[cfg(unix)]
@@ -190,6 +196,7 @@ async fn dispatch_run(
     target: Option<String>,
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
+    remote: Option<String>,
 ) -> Result<ExitCode> {
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     run_target_command(
@@ -199,6 +206,7 @@ async fn dispatch_run(
         target,
         runtime_rpc,
         runtime_rpc_socket,
+        remote,
     )
     .await
 }
@@ -249,6 +257,7 @@ async fn run_target_command(
     target: Option<String>,
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
+    remote: Option<String>,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
     commands::run::run(
@@ -259,6 +268,7 @@ async fn run_target_command(
             output,
             runtime_rpc,
             runtime_rpc_socket,
+            remote,
         },
     )
     .await

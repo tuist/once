@@ -170,6 +170,87 @@ EOF
     The stderr should include 'cache hit'
   End
 
+  It 'runs a script target through the microsandbox compute provider'
+    Skip if 'microsandbox specs are opt-in' microsandbox_specs_disabled
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/scripts/fabrik.toml" <<'EOF'
+[[target]]
+name = "remote"
+rule = "script"
+
+[target.script]
+argv = ["/bin/sh", "-c", "printf remote-output"]
+remote = "microsandbox"
+EOF
+    When call "$FABRIK_BIN" -C "$WORKSPACE" run scripts/remote
+    The status should be success
+    The stdout should equal 'remote-output'
+    The stderr should include 'cache miss'
+  End
+
+  It 'runs a script target through the daytona compute provider'
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/daytona_api.py" <<'PY'
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+import subprocess
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_POST(self):
+        if self.path != "/toolbox/sandbox-1/process/execute":
+            self.send_error(404)
+            return
+        if self.headers.get("Authorization") != "Bearer token-1":
+            self.send_error(401)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        request = json.loads(self.rfile.read(length))
+        proc = subprocess.run(
+            request["command"],
+            shell=True,
+            cwd=request["cwd"],
+            capture_output=True,
+            text=True,
+        )
+        body = json.dumps({
+            "exitCode": proc.returncode,
+            "artifacts": {
+                "stdout": proc.stdout,
+                "stderr": "daytona provider stderr\n" + proc.stderr,
+            },
+        }).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+print(server.server_port, flush=True)
+server.handle_request()
+PY
+    python3 "$WORKSPACE/daytona_api.py" > "$WORKSPACE/daytona_port" &
+    while [ ! -s "$WORKSPACE/daytona_port" ]; do sleep 0.05; done
+    port="$(cat "$WORKSPACE/daytona_port")"
+    cat > "$WORKSPACE/scripts/fabrik.toml" <<'EOF'
+[[target]]
+name = "daytona"
+rule = "script"
+
+[target.script]
+argv = ["/bin/sh", "-c", "printf daytona-target"]
+remote = "daytona"
+EOF
+    When call env FABRIK_DAYTONA_SANDBOX=sandbox-1 FABRIK_DAYTONA_API_URL="http://127.0.0.1:$port" FABRIK_DAYTONA_API_KEY=token-1 FABRIK_DAYTONA_WORKDIR="$WORKSPACE" "$FABRIK_BIN" -C "$WORKSPACE" run scripts/daytona
+    The status should be success
+    The stdout should equal 'daytona-target'
+    The stderr should include 'daytona provider stderr'
+    The stderr should include 'cache miss'
+  End
+
   It 'runs a runtime script target and emits its runtime interfaces'
     mkdir -p "$WORKSPACE/tasks"
     cat > "$WORKSPACE/tasks/fabrik.toml" <<'EOF'

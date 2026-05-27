@@ -11,7 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use fabrik_cas::Digest;
 use fabrik_core::{
-    tool_env, workspace_tool, workspace_tool_env, Action, ResourceRequest, WorkspacePath,
+    tool_env, workspace_tool, workspace_tool_env, Action, RemoteExecution, ResourceRequest,
+    WorkspacePath,
 };
 
 use super::{input_digest, parse_attr, ActionPlan};
@@ -36,6 +37,7 @@ pub(super) fn script_action(
     let outputs = outputs(target)?;
     let cwd = cwd(target)?;
     let resources = resources(target)?;
+    let remote = remote(target);
 
     if target.attrs.contains_key("script_path") {
         return file_script_action(
@@ -46,12 +48,22 @@ pub(super) fn script_action(
             cwd,
             resources,
             timeout_ms,
+            remote,
         );
     }
 
-    manifest_script_action(target, input_digest, outputs, cwd, resources, timeout_ms)
+    manifest_script_action(
+        target,
+        input_digest,
+        outputs,
+        cwd,
+        resources,
+        timeout_ms,
+        remote,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn file_script_action(
     workspace: &std::path::Path,
     target: &fabrik_frontend::Target,
@@ -60,6 +72,7 @@ fn file_script_action(
     cwd: Option<WorkspacePath>,
     resources: ResourceRequest,
     timeout_ms: Option<u64>,
+    remote: Option<RemoteExecution>,
 ) -> Result<ActionPlan> {
     let runtime = target
         .attrs
@@ -87,6 +100,7 @@ fn file_script_action(
             outputs,
             resources,
             timeout_ms,
+            remote,
         },
         output: String::new(),
         output_dir: None,
@@ -100,6 +114,7 @@ fn manifest_script_action(
     cwd: Option<WorkspacePath>,
     resources: ResourceRequest,
     timeout_ms: Option<u64>,
+    remote: Option<RemoteExecution>,
 ) -> Result<ActionPlan> {
     let argv = manifest_script_argv(target)?;
 
@@ -112,10 +127,20 @@ fn manifest_script_action(
             outputs,
             resources,
             timeout_ms,
+            remote,
         },
         output: String::new(),
         output_dir: None,
     })
+}
+
+fn remote(target: &fabrik_frontend::Target) -> Option<RemoteExecution> {
+    target
+        .attrs
+        .get("remote_provider")
+        .map(|provider| RemoteExecution {
+            provider: provider.to_string(),
+        })
 }
 
 fn runtime_args(target: &fabrik_frontend::Target) -> Result<Vec<String>> {

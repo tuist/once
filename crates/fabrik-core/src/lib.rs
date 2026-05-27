@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use fabrik_cas::{ActionResult, CacheProvider, Cas, Digest};
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::{debug, instrument};
 
@@ -39,7 +40,7 @@ pub use xdg::Xdg;
 /// Domain-separation prefix for action digests. Bump the version when
 /// the canonical encoding (or the [`Action`] schema) changes in a way
 /// that should invalidate the cache.
-const ACTION_DIGEST_DOMAIN: &[u8] = b"fabrik.action.v2\0";
+const ACTION_DIGEST_DOMAIN: &[u8] = b"fabrik.action.v3\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -57,6 +58,18 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+    #[error("remote provider `{provider}` is not supported yet")]
+    UnsupportedRemoteProvider { provider: String },
+    #[error("remote provider `{provider}` is not configured: {message}")]
+    RemoteProviderConfig { provider: String, message: String },
+    #[error("remote provider `{provider}` request failed: {source}")]
+    RemoteProviderHttp {
+        provider: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("remote provider `{provider}` returned an error: {message}")]
+    RemoteProviderApi { provider: String, message: String },
     #[error("action requires a non-empty argv")]
     EmptyArgv,
     #[error("action exceeded its timeout of {0:?}")]
@@ -111,6 +124,11 @@ pub enum Action {
         /// Per-action timeout in milliseconds. None = no timeout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
+        /// Optional compute provider for remote execution. This is
+        /// part of the action key so local and remote runs never share
+        /// a cache slot by accident.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote: Option<RemoteExecution>,
     },
 }
 
@@ -133,6 +151,12 @@ impl Action {
             Action::RunCommand { resources, .. } => resources,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct RemoteExecution {
+    pub provider: String,
 }
 
 /// Whether a result came from cache or fresh execution.
@@ -397,14 +421,102 @@ async fn execute(
             outputs,
             resources: _,
             timeout_ms,
+            remote,
         } => {
-            let mut result =
+            let mut result = if let Some(remote) = remote {
+                execute_remote_command(
+                    remote,
+                    argv,
+                    env,
+                    cwd.as_ref(),
+                    *timeout_ms,
+                    workspace_root,
+                    cache,
+                    false,
+                )
+                .await?
+            } else {
                 execute_run_command(argv, env, cwd.as_ref(), *timeout_ms, workspace_root, cache)
-                    .await?;
+                    .await?
+            };
             // Failed actions don't have to produce their declared
             // outputs; the caller (`produce`) decides whether to cache
             // the failure at all. When the action succeeded, every
             // declared output must exist or it's a contract violation.
+            if result.exit_code == 0 {
+                result.outputs = capture_outputs(outputs, workspace_root, cache).await?;
+            }
+            Ok(result)
+        }
+    }
+}
+
+pub async fn run_with_cache_streaming(
+    action: &Action,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    opts: RunOpts,
+) -> Result<Outcome> {
+    let key = action.digest();
+    if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
+        return Ok(hit);
+    }
+    let result = execute_streaming(action, workspace_root, cache).await?;
+    let cacheable = result.exit_code == 0 || opts.cache_failures;
+    if cacheable {
+        cache.put_action_result(&key, &result).await?;
+    } else {
+        debug!(
+            exit_code = result.exit_code,
+            "skipping cache write for failure"
+        );
+    }
+    Ok(Outcome {
+        action: key,
+        result,
+        cache: CacheState::Miss,
+    })
+}
+
+async fn execute_streaming(
+    action: &Action,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+) -> Result<ActionResult> {
+    match action {
+        Action::RunCommand {
+            argv,
+            env,
+            cwd,
+            input_digest: _,
+            outputs,
+            resources: _,
+            timeout_ms,
+            remote,
+        } => {
+            let mut result = if let Some(remote) = remote {
+                execute_remote_command(
+                    remote,
+                    argv,
+                    env,
+                    cwd.as_ref(),
+                    *timeout_ms,
+                    workspace_root,
+                    cache,
+                    true,
+                )
+                .await?
+            } else {
+                execute_run_command_streaming(
+                    argv,
+                    env,
+                    cwd.as_ref(),
+                    *timeout_ms,
+                    workspace_root,
+                    cache,
+                )
+                .await?
+            };
             if result.exit_code == 0 {
                 result.outputs = capture_outputs(outputs, workspace_root, cache).await?;
             }
@@ -524,6 +636,606 @@ async fn execute_run_command(
     }
 }
 
+async fn execute_run_command_streaming(
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: Option<&WorkspacePath>,
+    timeout_ms: Option<u64>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+) -> Result<ActionResult> {
+    execute_child_streaming(
+        argv,
+        env,
+        cwd,
+        timeout_ms,
+        workspace_root,
+        cache,
+        true,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_remote_command(
+    remote: &RemoteExecution,
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: Option<&WorkspacePath>,
+    timeout_ms: Option<u64>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    match remote.provider.as_str() {
+        "microsandbox" => {
+            microsandbox_remote_command(
+                argv,
+                env,
+                cwd,
+                timeout_ms,
+                workspace_root,
+                cache,
+                stream_to_parent,
+            )
+            .await
+        }
+        "daytona" => {
+            execute_daytona_command(argv, env, cwd, timeout_ms, cache, stream_to_parent).await
+        }
+        provider => Err(Error::UnsupportedRemoteProvider {
+            provider: provider.to_string(),
+        }),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(unix)]
+async fn microsandbox_remote_command(
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: Option<&WorkspacePath>,
+    timeout_ms: Option<u64>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    execute_microsandbox_command(
+        argv,
+        env,
+        cwd,
+        timeout_ms,
+        workspace_root,
+        cache,
+        stream_to_parent,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(not(unix))]
+async fn microsandbox_remote_command(
+    _argv: &[String],
+    _env: &BTreeMap<String, String>,
+    _cwd: Option<&WorkspacePath>,
+    _timeout_ms: Option<u64>,
+    _workspace_root: &Path,
+    _cache: &CacheProvider,
+    _stream_to_parent: bool,
+) -> Result<ActionResult> {
+    Err(Error::RemoteProviderConfig {
+        provider: "microsandbox".to_string(),
+        message: "the embedded Microsandbox provider is only available on Unix platforms"
+            .to_string(),
+    })
+}
+
+#[cfg(unix)]
+async fn execute_microsandbox_command(
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: Option<&WorkspacePath>,
+    timeout_ms: Option<u64>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
+    let image = std::env::var("FABRIK_MICROSANDBOX_IMAGE").unwrap_or_else(|_| "alpine".to_string());
+    let guest_root =
+        std::env::var("FABRIK_MICROSANDBOX_WORKDIR").unwrap_or_else(|_| "/workspace".to_string());
+    let guest_cwd = cwd.map_or_else(
+        || guest_root.clone(),
+        |cwd| join_remote_path(&guest_root, cwd.as_str()),
+    );
+    let sandbox_name = microsandbox_name();
+    let sandbox = microsandbox::Sandbox::builder(&sandbox_name)
+        .image(image)
+        .workdir(&guest_cwd)
+        .volume(&guest_root, |mount| mount.bind(workspace_root))
+        .create()
+        .await
+        .map_err(|source| microsandbox_error(&source))?;
+
+    let work = async {
+        let mut handle = sandbox
+            .exec_stream_with(program, |exec| {
+                let exec = exec.args(rest.iter().cloned()).cwd(&guest_cwd);
+                env.iter()
+                    .fold(exec, |exec, (key, value)| exec.env(key, value))
+            })
+            .await
+            .map_err(|source| microsandbox_error(&source))?;
+        collect_microsandbox_output(&mut handle, cache, stream_to_parent).await
+    };
+
+    let result = match timeout_ms {
+        Some(ms) => {
+            let dur = Duration::from_millis(ms);
+            match tokio::time::timeout(dur, work).await {
+                Ok(result) => result,
+                Err(_) => Err(Error::Timeout(dur)),
+            }
+        }
+        None => work.await,
+    };
+
+    let cleanup = async {
+        let stop_result = sandbox
+            .stop_and_wait()
+            .await
+            .map_err(|source| microsandbox_error(&source));
+        let remove_result = sandbox
+            .remove_persisted()
+            .await
+            .map_err(|source| microsandbox_error(&source));
+        stop_result.and(remove_result)
+    }
+    .await;
+
+    match (result, cleanup) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Ok(_), Err(err)) | (Err(err), _) => Err(err),
+    }
+}
+
+#[cfg(unix)]
+async fn collect_microsandbox_output(
+    handle: &mut microsandbox::ExecHandle,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut exit_code = None;
+    while let Some(event) = handle.recv().await {
+        match event {
+            microsandbox::ExecEvent::Started { .. } => {}
+            microsandbox::ExecEvent::Stdout(data) => {
+                write_stream_bytes(&data, StreamDestination::Stdout, stream_to_parent).await?;
+                stdout.extend_from_slice(&data);
+            }
+            microsandbox::ExecEvent::Stderr(data) => {
+                write_stream_bytes(&data, StreamDestination::Stderr, stream_to_parent).await?;
+                stderr.extend_from_slice(&data);
+            }
+            microsandbox::ExecEvent::Exited { code } => {
+                exit_code = Some(code);
+                break;
+            }
+            microsandbox::ExecEvent::Failed(payload) => {
+                return Err(Error::RemoteProviderApi {
+                    provider: "microsandbox".to_string(),
+                    message: format!("{payload:?}"),
+                });
+            }
+            microsandbox::ExecEvent::StdinError(payload) => {
+                return Err(Error::RemoteProviderApi {
+                    provider: "microsandbox".to_string(),
+                    message: format!("{payload:?}"),
+                });
+            }
+        }
+    }
+    let stdout = cache.put_blob(&stdout).await?;
+    let stderr = cache.put_blob(&stderr).await?;
+    Ok(ActionResult {
+        exit_code: exit_code.unwrap_or(-1),
+        stdout,
+        stderr,
+        outputs: BTreeMap::new(),
+    })
+}
+
+async fn write_stream_bytes(
+    bytes: &[u8],
+    destination: StreamDestination,
+    stream_to_parent: bool,
+) -> Result<()> {
+    if !stream_to_parent {
+        return Ok(());
+    }
+    match destination {
+        StreamDestination::Stdout => {
+            let mut out = tokio::io::stdout();
+            out.write_all(bytes).await.map_err(|source| Error::Wait {
+                program: "stdout".to_string(),
+                source,
+            })?;
+            out.flush().await.map_err(|source| Error::Wait {
+                program: "stdout".to_string(),
+                source,
+            })?;
+        }
+        StreamDestination::Stderr => {
+            let mut err = tokio::io::stderr();
+            err.write_all(bytes).await.map_err(|source| Error::Wait {
+                program: "stderr".to_string(),
+                source,
+            })?;
+            err.flush().await.map_err(|source| Error::Wait {
+                program: "stderr".to_string(),
+                source,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn microsandbox_error(source: &microsandbox::MicrosandboxError) -> Error {
+    Error::RemoteProviderApi {
+        provider: "microsandbox".to_string(),
+        message: source.to_string(),
+    }
+}
+
+#[cfg(unix)]
+fn microsandbox_name() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    format!("fabrik-{}-{nanos}", std::process::id())
+}
+
+#[derive(Debug)]
+struct DaytonaConfig {
+    sandbox: String,
+    api_url: String,
+    api_key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DaytonaExecuteRequest {
+    command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaytonaExecuteResponse {
+    #[serde(default, alias = "exitCode")]
+    exit_code: Option<i32>,
+    #[serde(default)]
+    result: Option<String>,
+    #[serde(default)]
+    stdout: Option<String>,
+    #[serde(default)]
+    stderr: Option<String>,
+    #[serde(default)]
+    artifacts: Option<DaytonaArtifacts>,
+}
+
+#[derive(Deserialize)]
+struct DaytonaArtifacts {
+    #[serde(default)]
+    stdout: Option<String>,
+    #[serde(default)]
+    stderr: Option<String>,
+}
+
+async fn execute_daytona_command(
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: Option<&WorkspacePath>,
+    timeout_ms: Option<u64>,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    let config = daytona_config()?;
+    let request = DaytonaExecuteRequest {
+        command: daytona_command(argv, env)?,
+        cwd: Some(daytona_workdir(cwd)),
+        timeout: timeout_ms.map(timeout_secs),
+    };
+    let url = format!(
+        "{}/toolbox/{}/process/execute",
+        config.api_url.trim_end_matches('/'),
+        config.sandbox
+    );
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(config.api_key)
+        .json(&request)
+        .send()
+        .await
+        .map_err(|source| Error::RemoteProviderHttp {
+            provider: "daytona".to_string(),
+            source,
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_else(|_| String::new());
+        return Err(Error::RemoteProviderApi {
+            provider: "daytona".to_string(),
+            message: format!("HTTP {status}: {body}"),
+        });
+    }
+    let response = response
+        .json::<DaytonaExecuteResponse>()
+        .await
+        .map_err(|source| Error::RemoteProviderHttp {
+            provider: "daytona".to_string(),
+            source,
+        })?;
+    let stdout = response
+        .artifacts
+        .as_ref()
+        .and_then(|artifacts| artifacts.stdout.clone())
+        .or(response.stdout)
+        .or(response.result)
+        .unwrap_or_default()
+        .into_bytes();
+    let stderr = response
+        .artifacts
+        .and_then(|artifacts| artifacts.stderr)
+        .or(response.stderr)
+        .unwrap_or_default()
+        .into_bytes();
+    if stream_to_parent {
+        let mut out = tokio::io::stdout();
+        out.write_all(&stdout).await.map_err(|source| Error::Wait {
+            program: "stdout".to_string(),
+            source,
+        })?;
+        out.flush().await.map_err(|source| Error::Wait {
+            program: "stdout".to_string(),
+            source,
+        })?;
+        let mut err = tokio::io::stderr();
+        err.write_all(&stderr).await.map_err(|source| Error::Wait {
+            program: "stderr".to_string(),
+            source,
+        })?;
+        err.flush().await.map_err(|source| Error::Wait {
+            program: "stderr".to_string(),
+            source,
+        })?;
+    }
+    let stdout = cache.put_blob(&stdout).await?;
+    let stderr = cache.put_blob(&stderr).await?;
+    Ok(ActionResult {
+        exit_code: response.exit_code.unwrap_or(0),
+        stdout,
+        stderr,
+        outputs: BTreeMap::new(),
+    })
+}
+
+fn daytona_config() -> Result<DaytonaConfig> {
+    Ok(DaytonaConfig {
+        sandbox: daytona_env("FABRIK_DAYTONA_SANDBOX", "the sandbox id or name")?,
+        api_url: std::env::var("FABRIK_DAYTONA_API_URL")
+            .unwrap_or_else(|_| "https://proxy.app.daytona.io".to_string()),
+        api_key: std::env::var("FABRIK_DAYTONA_API_KEY")
+            .or_else(|_| std::env::var("DAYTONA_API_KEY"))
+            .map_err(|_| Error::RemoteProviderConfig {
+                provider: "daytona".to_string(),
+                message: "set FABRIK_DAYTONA_API_KEY or DAYTONA_API_KEY".to_string(),
+            })?,
+    })
+}
+
+fn daytona_env(name: &str, description: &str) -> Result<String> {
+    let value = std::env::var(name).map_err(|_| Error::RemoteProviderConfig {
+        provider: "daytona".to_string(),
+        message: format!("set {name} to {description}"),
+    })?;
+    if value.trim().is_empty() {
+        return Err(Error::RemoteProviderConfig {
+            provider: "daytona".to_string(),
+            message: format!("{name} cannot be empty"),
+        });
+    }
+    Ok(value)
+}
+
+fn daytona_command(argv: &[String], env: &BTreeMap<String, String>) -> Result<String> {
+    if argv.is_empty() {
+        return Err(Error::EmptyArgv);
+    }
+    let mut parts = Vec::new();
+    if !env.is_empty() {
+        parts.push("env".to_string());
+        parts.push("-i".to_string());
+        parts.extend(
+            env.iter()
+                .map(|(key, value)| shell_quote(&format!("{key}={value}"))),
+        );
+    }
+    parts.extend(argv.iter().map(|arg| shell_quote(arg)));
+    Ok(parts.join(" "))
+}
+
+fn daytona_workdir(cwd: Option<&WorkspacePath>) -> String {
+    let root = std::env::var("FABRIK_DAYTONA_WORKDIR").unwrap_or_else(|_| "/workspace".to_string());
+    match cwd {
+        Some(cwd) => join_remote_path(&root, cwd.as_str()),
+        None => root,
+    }
+}
+
+fn join_remote_path(root: &str, rel: &str) -> String {
+    if root.ends_with('/') {
+        format!("{root}{rel}")
+    } else {
+        format!("{root}/{rel}")
+    }
+}
+
+fn timeout_secs(timeout_ms: u64) -> u64 {
+    timeout_ms.div_ceil(1000).max(1)
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    if value.bytes().all(|b| {
+        b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'_' | b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-'
+            )
+    }) {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_child_streaming(
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: Option<&WorkspacePath>,
+    timeout_ms: Option<u64>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+    inherit_parent_env: bool,
+) -> Result<ActionResult> {
+    let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
+    tracing::Span::current().record("program", tracing::field::display(program));
+
+    let mut command = Command::new(program);
+    command.args(rest);
+    if !inherit_parent_env {
+        command.env_clear();
+    }
+    for (k, v) in env {
+        command.env(k, v);
+    }
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    command.current_dir(cwd.map_or_else(
+        || workspace_root.to_path_buf(),
+        |c| c.resolve(workspace_root),
+    ));
+    command.kill_on_drop(true);
+
+    let mut child = command.spawn().map_err(|source| Error::Spawn {
+        program: program.clone(),
+        source,
+    })?;
+    let stdout_pipe = child.stdout.take().expect("stdout was piped");
+    let stderr_pipe = child.stderr.take().expect("stderr was piped");
+
+    let work = async {
+        let (stdout_bytes, stderr_bytes) = tokio::try_join!(
+            capture_stream(stdout_pipe, StreamDestination::Stdout, stream_to_parent),
+            capture_stream(stderr_pipe, StreamDestination::Stderr, stream_to_parent)
+        )?;
+        let status = child.wait().await.map_err(|source| Error::Wait {
+            program: program.clone(),
+            source,
+        })?;
+        let stdout = cache.put_blob(&stdout_bytes).await?;
+        let stderr = cache.put_blob(&stderr_bytes).await?;
+        Ok::<_, Error>(ActionResult {
+            exit_code: status.code().unwrap_or(-1),
+            stdout,
+            stderr,
+            outputs: BTreeMap::new(),
+        })
+    };
+
+    match timeout_ms {
+        Some(ms) => {
+            let dur = Duration::from_millis(ms);
+            match tokio::time::timeout(dur, work).await {
+                Ok(res) => res,
+                Err(_) => Err(Error::Timeout(dur)),
+            }
+        }
+        None => work.await,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum StreamDestination {
+    Stdout,
+    Stderr,
+}
+
+async fn capture_stream<R>(
+    mut reader: R,
+    destination: StreamDestination,
+    stream_to_parent: bool,
+) -> Result<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut bytes = Vec::new();
+    let mut buf = [0_u8; 4 * 1024];
+    loop {
+        let n = reader.read(&mut buf).await.map_err(|source| Error::Wait {
+            program: "stream".to_string(),
+            source,
+        })?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buf[..n]);
+        if stream_to_parent {
+            match destination {
+                StreamDestination::Stdout => {
+                    let mut out = tokio::io::stdout();
+                    out.write_all(&buf[..n])
+                        .await
+                        .map_err(|source| Error::Wait {
+                            program: "stdout".to_string(),
+                            source,
+                        })?;
+                    out.flush().await.map_err(|source| Error::Wait {
+                        program: "stdout".to_string(),
+                        source,
+                    })?;
+                }
+                StreamDestination::Stderr => {
+                    let mut err = tokio::io::stderr();
+                    err.write_all(&buf[..n])
+                        .await
+                        .map_err(|source| Error::Wait {
+                            program: "stderr".to_string(),
+                            source,
+                        })?;
+                    err.flush().await.map_err(|source| Error::Wait {
+                        program: "stderr".to_string(),
+                        source,
+                    })?;
+                }
+            }
+        }
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +1256,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: None,
+            remote: None,
         }
     }
 
@@ -592,6 +1305,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: None,
+            remote: None,
         };
         let b = Action::RunCommand {
             argv,
@@ -601,6 +1315,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: None,
+            remote: None,
         };
         assert_ne!(a.digest(), b.digest());
     }
@@ -616,6 +1331,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: None,
+            remote: None,
         };
         let first = run(&action, tmp.path(), &cas, RunOpts::default())
             .await
@@ -639,6 +1355,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: None,
+            remote: None,
         };
         let opts = RunOpts {
             cache_failures: true,
@@ -661,6 +1378,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(100),
+            remote: None,
         };
         let err = run(&action, tmp.path(), &cas, RunOpts::default())
             .await
@@ -682,6 +1400,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: None,
+            remote: None,
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
             .await
@@ -708,6 +1427,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
+            remote: None,
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
             .await
@@ -735,6 +1455,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(10_000),
+            remote: None,
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
             .await
@@ -764,6 +1485,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
+            remote: None,
         };
         let started = std::time::Instant::now();
         let action_a = mk("a");
@@ -795,6 +1517,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::new(2, 0),
             timeout_ms: Some(5_000),
+            remote: None,
         };
 
         let started = std::time::Instant::now();
@@ -823,6 +1546,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: None,
+            remote: None,
         };
         let expected = {
             let body = serde_json::to_vec(&action).unwrap();
@@ -844,6 +1568,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: t,
+            remote: None,
         };
         // None vs Some are distinct slots; differing Some values are too.
         assert_ne!(mk(None).digest(), mk(Some(1000)).digest());
@@ -860,6 +1585,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: None,
+            remote: None,
         };
         let a = mk(None);
         let b = mk(Some(WorkspacePath::try_from("a").unwrap()));
@@ -878,6 +1604,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: None,
+            remote: None,
         };
         let a = mk(Some(Digest::of_bytes(b"a")));
         let b = mk(Some(Digest::of_bytes(b"b")));
@@ -926,6 +1653,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: None,
+            remote: None,
         };
         let err = run(&action, tmp.path(), &cas, RunOpts::default())
             .await
@@ -944,6 +1672,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: None,
+            remote: None,
         };
         let err = run(&action, tmp.path(), &cas, RunOpts::default())
             .await
@@ -964,6 +1693,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(2_000),
+            remote: None,
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
             .await
@@ -993,6 +1723,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
+            remote: None,
         };
         let action_b = Action::RunCommand {
             argv: vec!["/bin/sh".into(), "-c".into(), "sleep 0.2; printf b".into()],
@@ -1002,6 +1733,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
+            remote: None,
         };
         let started = std::time::Instant::now();
         let (a, b) = tokio::join!(runner.run(&action_a), runner2.run(&action_b));
@@ -1031,6 +1763,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
+            remote: None,
         };
         let outcome = runner.run(&action).await.unwrap();
         assert_eq!(outcome.result.exit_code, 0);
@@ -1093,6 +1826,7 @@ mod tests {
             outputs: vec![WorkspacePath::try_from("Demo.app").unwrap()],
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
+            remote: None,
         };
 
         let first = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -1130,6 +1864,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(50),
+            remote: None,
         };
         let _ = run(&action, tmp.path(), &cas, RunOpts::default()).await;
         // Nothing was cached: the action's slot is empty.

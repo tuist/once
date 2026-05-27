@@ -27,6 +27,7 @@ fn cmd(script: &str) -> Action {
         outputs: vec![],
         resources: ResourceRequest::default(),
         timeout_ms: Some(10_000),
+        remote: None,
     }
 }
 
@@ -87,6 +88,7 @@ async fn cache_keys_partition_by_workspace_path() {
         outputs: vec![],
         resources: ResourceRequest::default(),
         timeout_ms: Some(5_000),
+        remote: None,
     };
     let a = runner.run(&mk("a")).await.unwrap();
     let b = runner.run(&mk("b")).await.unwrap();
@@ -123,6 +125,7 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         outputs: vec![],
         resources: ResourceRequest::default(),
         timeout_ms: Some(5_000),
+        remote: None,
     };
     let outcome = runner_fail.run(&bad).await.unwrap();
     assert_eq!(outcome.result.exit_code, 1);
@@ -137,6 +140,7 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         outputs: vec![],
         resources: ResourceRequest::default(),
         timeout_ms: Some(5_000),
+        remote: None,
     };
     let outcome = runner_fail.run(&good).await.unwrap();
     assert_eq!(outcome.result.exit_code, 0);

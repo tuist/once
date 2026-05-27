@@ -21,6 +21,7 @@ example:
 # FABRIK input "../src/**/*.ts"
 # FABRIK output "../dist/"
 # FABRIK env "NODE_ENV"
+# FABRIK remote "microsandbox"
 
 npm run build
 ```
@@ -129,6 +130,40 @@ implementation and the cache contract in one place.
 | `output` | Declares output files or directories that Fabrik should restore on cache hits. |
 | `env` | Forwards selected environment variables from the host and includes them in the cache key. |
 | `cwd` | Chooses the working directory for the script. |
+| `remote` | Runs cache misses on a compute provider such as `microsandbox` or `daytona`. |
+
+## Remote Execution
+
+Cacheable scripts and remotely executable scripts share the same
+contract. Inputs, outputs, environment, and working directory stay in
+the script header. Adding `FABRIK remote "microsandbox"` or
+`FABRIK remote "daytona"` tells Fabrik that cache misses should run
+through the compute provider instead of on the local host.
+
+You can also force a remote run from the CLI:
+
+```sh
+fabrik exec --remote --compute microsandbox -- bash scripts/build.sh
+FABRIK_DAYTONA_SANDBOX=my-sandbox FABRIK_DAYTONA_API_KEY=... fabrik exec --remote --compute daytona -- bash scripts/build.sh
+```
+
+Remote runs stream stdout and stderr as they arrive. On a cache hit,
+Fabrik replays the cached output and restores declared outputs without
+calling the provider.
+
+The Microsandbox adapter is embedded in the Fabrik binary. It creates a
+fresh local microVM for the cache miss, mounts the repository at
+`/workspace`, runs the command, then stops and removes the sandbox state
+before returning. Set `FABRIK_MICROSANDBOX_IMAGE` to choose a different
+image, or `FABRIK_MICROSANDBOX_WORKDIR` to use a different guest mount
+point.
+
+The Daytona adapter uses the Daytona API directly. Set
+`FABRIK_DAYTONA_SANDBOX` to the sandbox id or name, and set
+`FABRIK_DAYTONA_API_KEY` or `DAYTONA_API_KEY` for authentication. Set
+`FABRIK_DAYTONA_WORKDIR` when the repository root inside the sandbox is
+not `/workspace`. Set `FABRIK_DAYTONA_API_URL` for self-hosted or
+proxied deployments.
 
 The script file itself is always part of the cache key, even when no
 `input` directives are present.
