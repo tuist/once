@@ -123,7 +123,7 @@ async fn run_command(
         Cmd::Targets => commands::targets::print_targets(workspace, output)
             .await
             .map(|()| ExitCode::SUCCESS),
-        Cmd::Deps { cmd } => run_deps_command(workspace, xdg, output, cmd).await,
+        Cmd::Deps { cmd } => Box::pin(run_deps_command(workspace, xdg, output, cmd)).await,
         Cmd::Init(args) => commands::init::run(workspace, args, output).await,
         Cmd::Vendor => dispatch_vendor(workspace, xdg, output).await,
         #[cfg(unix)]
