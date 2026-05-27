@@ -323,28 +323,41 @@ impl TuistCache {
     }
 
     async fn pick_fastest_endpoint(&self, endpoints: &[String]) -> Result<String> {
+        let probes = endpoints
+            .iter()
+            .map(|endpoint| Self::health_url(endpoint).map(|url| (endpoint.clone(), url)))
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut set = tokio::task::JoinSet::new();
+        for (endpoint, health) in probes {
+            let client = self.client.clone();
+            set.spawn(async move {
+                let start = Instant::now();
+                let outcome = client
+                    .get(health)
+                    .timeout(Duration::from_secs(5))
+                    .send()
+                    .await;
+                match outcome {
+                    Ok(response) if response.status().is_success() => {
+                        Some((start.elapsed(), endpoint))
+                    }
+                    _ => None,
+                }
+            });
+        }
+
         let mut best: Option<(Duration, String)> = None;
-        for endpoint in endpoints {
-            let health = Self::health_url(endpoint)?;
-            let start = Instant::now();
-            let outcome = self
-                .client
-                .get(health)
-                .timeout(Duration::from_secs(5))
-                .send()
-                .await;
-            let Ok(response) = outcome else {
+        while let Some(joined) = set.join_next().await {
+            let Ok(Some((elapsed, endpoint))) = joined else {
                 continue;
             };
-            if !response.status().is_success() {
-                continue;
-            }
-            let elapsed = start.elapsed();
             match &best {
                 Some((best_elapsed, _)) if *best_elapsed <= elapsed => {}
-                _ => best = Some((elapsed, endpoint.clone())),
+                _ => best = Some((elapsed, endpoint)),
             }
         }
+
         best.map(|(_, endpoint)| endpoint)
             .ok_or_else(|| Error::Remote {
                 provider: PROVIDER_NAME,
