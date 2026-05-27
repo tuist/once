@@ -21,7 +21,7 @@
   & [data-part="brand"] {
     display: inline-flex;
     align-items: center;
-    gap: var(--fabrik-spacing-2);
+    gap: var(--fabrik-spacing-1);
     font-family: var(--fabrik-font-serif);
     font-weight: var(--fabrik-weight-extrabold);
     font-size: var(--fabrik-text-lg);
