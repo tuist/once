@@ -64,6 +64,24 @@
       padding: 0;
       color: var(--fabrik-summer-12);
     }
+
+    & .syntax-comment {
+      color: var(--fabrik-summer-10);
+    }
+
+    & .syntax-section {
+      color: var(--fabrik-thread-11);
+      font-weight: var(--fabrik-weight-semibold);
+    }
+
+    & .syntax-key,
+    & .syntax-keyword {
+      color: var(--fabrik-thread-11);
+    }
+
+    & .syntax-string {
+      color: var(--fabrik-tuist-11);
+    }
   }
 
   & blockquote {
