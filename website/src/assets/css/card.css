@@ -54,6 +54,7 @@
 
   &[data-variant="language"] {
     padding: var(--fabrik-spacing-7);
+    min-height: 360px;
 
     & > [data-part="mark"] {
       display: inline-flex;
@@ -77,14 +78,39 @@
       }
     }
 
-    & > [data-part="title"] {
+    & > [data-part="title"],
+    & > [data-part="title-row"] > [data-part="title"] {
+      font-family: var(--fabrik-font-serif);
+      font-weight: var(--fabrik-weight-extrabold);
       font-size: var(--fabrik-text-2xl);
+      color: var(--fabrik-summer-12);
+      letter-spacing: -0.015em;
+    }
+
+    & > [data-part="title-row"] {
+      display: flex;
+      align-items: center;
+      gap: var(--fabrik-spacing-2);
+      min-height: 2rem;
+    }
+
+    & > [data-part="title-row"] > [data-part="status"] {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px var(--fabrik-spacing-2);
+      border-radius: var(--fabrik-radius-full);
+      background: var(--fabrik-summer-3);
+      color: var(--fabrik-summer-10);
+      font-size: var(--fabrik-text-xs);
+      font-weight: var(--fabrik-weight-semibold);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
     }
 
     & > [data-part="tags"] {
       list-style: none;
       padding: 0;
-      margin: var(--fabrik-spacing-2) 0 0;
+      margin: auto 0 0;
       display: flex;
       flex-wrap: wrap;
       gap: var(--fabrik-spacing-1);

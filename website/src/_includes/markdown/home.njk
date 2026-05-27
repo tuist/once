@@ -21,15 +21,15 @@
 
 {{ copy.home.what.lede }}
 
-### Languages
-
-{% for lang in copy.home.what.languages %}- **{{ lang.name }}** ({{ lang.tags | join(", ") }}): {{ lang.body }}
-{% endfor %}- **{{ copy.home.what.addLanguage.title }}**: {{ copy.home.what.addLanguage.body }} {{ copy.home.what.addLanguage.cta }}
-
-### Other targets
+### Scripts
 
 {% for ex in copy.home.what.extras %}- **{{ ex.title }}**: {{ ex.body }}
 {% endfor %}
+
+### Languages
+
+{% for lang in copy.home.what.languages %}- **{{ lang.name }}{% if lang.status %} · {{ lang.status }}{% endif %}** ({{ lang.tags | join(", ") }}): {{ lang.body }}
+{% endfor %}- **{{ copy.home.what.addLanguage.title }}**: {{ copy.home.what.addLanguage.body }} {{ copy.home.what.addLanguage.cta }}
 
 ## {{ copy.home.howItWorks.title }}
 

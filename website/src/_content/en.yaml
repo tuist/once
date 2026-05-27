@@ -102,18 +102,21 @@ home:
   what:
     eyebrow: "What Fabrik runs"
     title: "One graph for every kind of work."
-    lede: "Languages with first-class targets, custom commands, and a cooperative path for existing toolchains all share the same content-addressed graph."
+    lede: "Scripts and first-class language targets share the same content-addressed graph, so useful work can be skipped or distributed without changing how teams describe it."
     languages:
       - name: Rust
         mark: rust
+        status: WIP
         body: "Per-crate targets for binaries, libraries, tests, and proc macros. Dependency resolution, compilation, and tests, all cached."
         tags: [Resolve, Build, Test]
       - name: Swift
         mark: swift
+        status: WIP
         body: "Apple platform targets for iOS and macOS, including simulator-aware runtimes for agents to launch, log, and inspect apps."
         tags: [Resolve, Build, Test]
       - name: Elixir
         mark: elixir
+        status: WIP
         body: "First-class Elixir and Erlang on a pinned OTP pair. Mix-free per-module compilation under one cached graph."
         tags: [Resolve, Build, Test]
     addLanguage:
@@ -121,12 +124,9 @@ home:
       body: "The target model is open. Propose or contribute a new language frontend on GitHub."
       cta: "Contribute on GitHub →"
     extras:
-      - title: Tasks
-        body: "Any shell command becomes a content-addressed target. Declare argv, inputs, outputs, env, and resource needs; replays are cache hits."
+      - title: Scripts
+        body: "Any shell command can become a content-addressed action. Declare argv, inputs, outputs, env, and resource needs; replays are cache hits."
         icon: terminal
-      - title: "The cooperative model"
-        body: "Fabrik coexists with your existing native toolchain configuration, cached as one action. Move to granular targets at your own pace. No rewrite to start."
-        icon: plug
   howItWorks:
     eyebrow: "How it works"
     title: "Declare targets, build the graph."
@@ -157,9 +157,9 @@ home:
     title: "Questions, answered."
     items:
       - q: "Is Fabrik production-ready?"
-        a: "Fabrik builds Fabrik. The cargo_binary cooperative path is the production route today; granular targets are wiring up build-script support and per-target feature resolution."
+        a: "Fabrik is early. The Rust support is active, scripts are becoming first-class cached actions, and the remaining work is mostly around build-script support and per-target feature resolution."
       - q: "Does it replace your native toolchain?"
-        a: "No. You can run your native toolchain configuration in the cooperative model as a cached action, or use granular per-language targets where they exist. Most teams start cooperative and migrate to granular incrementally."
+        a: "No. Fabrik gives existing automation a graph, cache, and execution contract. Teams can start with scripts, then move language-specific work into granular targets as the support they need lands."
       - q: "Why is this agent-native?"
         a: "Agents get the same APIs humans get: structured diagnostics, causality queries, and inspectable cache. The build is no longer a black box for the tool writing your code."
       - q: "How is caching different?"
