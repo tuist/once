@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
-use fabrik_cas::Cas;
+use fabrik_cas::CacheProvider;
 use fabrik_core::CacheState;
 use fabrik_frontend::{DependencyEcosystem, DependencyEntry};
 
@@ -29,14 +29,14 @@ use graph::{write_graph_to, ResolvedGraph};
 
 pub async fn sync(
     workspace: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     output: Output,
     name: Option<&str>,
 ) -> Result<ExitCode> {
     let entries = selected_entries(workspace, name)?;
     let mut reports = Vec::new();
     for entry in entries {
-        reports.push(sync_entry(workspace, cas, &entry).await?);
+        reports.push(sync_entry(workspace, cache, &entry).await?);
     }
     write_sync_report(output, &reports).await?;
     Ok(ExitCode::SUCCESS)
@@ -76,16 +76,20 @@ fn validate_entry_name(entry: &DependencyEntry) -> Result<()> {
     Ok(())
 }
 
-async fn sync_entry(workspace: &Path, cas: &Cas, entry: &DependencyEntry) -> Result<SyncReport> {
+async fn sync_entry(
+    workspace: &Path,
+    cache: &CacheProvider,
+    entry: &DependencyEntry,
+) -> Result<SyncReport> {
     match entry.ecosystem {
-        DependencyEcosystem::Rust => rust::sync(workspace, cas, entry).await,
+        DependencyEcosystem::Rust => rust::sync(workspace, cache, entry).await,
         DependencyEcosystem::Swift => {
             let lockfile = required_lockfile(workspace, entry)?;
             let graph = swift::load_graph(&lockfile).await?;
             write_graph_entry(workspace, entry, graph, None).await
         }
         DependencyEcosystem::Go => {
-            let resolved = go::load_graph(workspace, cas, entry).await?;
+            let resolved = go::load_graph(workspace, cache, entry).await?;
             write_graph_entry(workspace, entry, resolved.graph, Some(resolved.cache)).await
         }
         DependencyEcosystem::Elixir => {

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use fabrik_cas::{Cas, Digest};
+use fabrik_cas::{CacheProvider, Digest};
 use fabrik_core::{Action, CacheState, InputDigestBuilder, RunOpts, Runner};
 use fabrik_frontend::DependencyEntry;
 
@@ -14,16 +14,16 @@ pub(in crate::commands::deps) struct CachedResolution {
 
 pub(in crate::commands::deps) async fn run_cached_resolution(
     workspace: &Path,
-    cas: &Cas,
+    cache: &CacheProvider,
     action: Action,
     command_name: &str,
 ) -> Result<CachedResolution> {
-    let outcome = Runner::new(cas.clone(), workspace, RunOpts::default())
+    let outcome = Runner::with_cache(cache.clone(), workspace, RunOpts::default())
         .run(&action)
         .await
         .with_context(|| format!("executing {command_name}"))?;
     if outcome.result.exit_code != 0 {
-        let stderr = cas.get_blob(&outcome.result.stderr).await.map_or_else(
+        let stderr = cache.get_blob(&outcome.result.stderr).await.map_or_else(
             |_| "<stderr unavailable>".to_string(),
             |bytes| String::from_utf8_lossy(&bytes).trim().to_string(),
         );
@@ -32,7 +32,7 @@ pub(in crate::commands::deps) async fn run_cached_resolution(
             outcome.result.exit_code
         ));
     }
-    let stdout = cas
+    let stdout = cache
         .get_blob(&outcome.result.stdout)
         .await
         .with_context(|| format!("reading cached stdout for {command_name}"))?;

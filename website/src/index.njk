@@ -88,11 +88,26 @@ homepage: true
       <p data-part="lede">{{ copy.home.what.lede }}</p>
     </header>
 
+    <div class="fabrik-grid" data-columns="1">
+      {% for ex in copy.home.what.extras %}
+        <article class="fabrik-card">
+          <span data-part="icon">{{ icon(ex.icon) }}</span>
+          <h3 data-part="title">{{ ex.title }}</h3>
+          <p data-part="body">{{ ex.body }}</p>
+        </article>
+      {% endfor %}
+    </div>
+
     <div class="fabrik-grid" data-columns="4">
       {% for lang in copy.home.what.languages %}
         <article class="fabrik-card" data-variant="language">
           <span data-part="mark">{{ langMark(lang.mark, 40) }}</span>
-          <h3 data-part="title">{{ lang.name }}</h3>
+          <div data-part="title-row">
+            <h3 data-part="title">{{ lang.name }}</h3>
+            {% if lang.status %}
+              <span data-part="status">{{ lang.status }}</span>
+            {% endif %}
+          </div>
           <p data-part="body">{{ lang.body }}</p>
           <ul data-part="tags">
             {% for tag in lang.tags %}
@@ -107,16 +122,6 @@ homepage: true
         <p data-part="body">{{ copy.home.what.addLanguage.body }}</p>
         <span data-part="cta">{{ copy.home.what.addLanguage.cta }}</span>
       </a>
-    </div>
-
-    <div class="fabrik-grid" data-columns="2">
-      {% for ex in copy.home.what.extras %}
-        <article class="fabrik-card">
-          <span data-part="icon">{{ icon(ex.icon) }}</span>
-          <h3 data-part="title">{{ ex.title }}</h3>
-          <p data-part="body">{{ ex.body }}</p>
-        </article>
-      {% endfor %}
     </div>
   </div>
 </section>

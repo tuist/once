@@ -40,6 +40,8 @@ toon-rust = "0.1"
 tempfile = "3"
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+schlussel = { git = "https://github.com/tuist/schlussel.git", rev = "e90f561bfbe1f1c732ccc15ddc7e4780197dc609" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 walkdir = "2"

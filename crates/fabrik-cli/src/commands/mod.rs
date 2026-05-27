@@ -2,6 +2,7 @@
 //! dispatcher in [`crate::main`] routes parsed [`crate::cli::Cmd`] into
 //! these.
 
+pub mod auth;
 pub mod build;
 pub mod cache;
 pub mod deps;

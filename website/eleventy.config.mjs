@@ -7,6 +7,60 @@ import yaml from "js-yaml";
 
 import { generateSocialImages } from "./scripts/generate-social-images.mjs";
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function decodeHtml(value) {
+  return String(value)
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function highlightTomlLine(line) {
+  const escaped = escapeHtml(line);
+  if (escaped.trimStart().startsWith("#")) {
+    return `<span class="syntax-comment">${escaped}</span>`;
+  }
+  if (/^\s*\[/.test(escaped)) {
+    return escaped.replace(
+      /^(\s*)(\[\[[^\]]+\]\]|\[[^\]]+\])/,
+      '$1<span class="syntax-section">$2</span>',
+    );
+  }
+  return escaped
+    .replace(/^(\s*)([A-Za-z0-9_.-]+)(\s*=)/, '$1<span class="syntax-key">$2</span>$3')
+    .replace(/(&quot;[^&]*?&quot;)/g, '<span class="syntax-string">$1</span>');
+}
+
+function highlightShellLine(line) {
+  const escaped = escapeHtml(line);
+  if (escaped.trimStart().startsWith("#")) {
+    return `<span class="syntax-comment">${escaped}</span>`;
+  }
+  return escaped
+    .replace(/^(\s*)(export|chmod|fabrik|cat|tr)(\b)/, '$1<span class="syntax-keyword">$2</span>$3')
+    .replace(/(&quot;[^&]*?&quot;|'[^']*?')/g, '<span class="syntax-string">$1</span>');
+}
+
+function highlightCode(language, source) {
+  const decoded = decodeHtml(source);
+  const highlighter =
+    language === "toml"
+      ? highlightTomlLine
+      : ["sh", "shell", "bash"].includes(language)
+        ? highlightShellLine
+        : (line) => escapeHtml(line);
+  return decoded.split("\n").map(highlighter).join("\n");
+}
+
 export default function (eleventyConfig) {
   eleventyConfig.addPlugin(rssPlugin);
   eleventyConfig.addDataExtension("yaml,yml", (contents) => yaml.load(contents));
@@ -16,6 +70,15 @@ export default function (eleventyConfig) {
 
   eleventyConfig.addWatchTarget("./src/assets/");
   eleventyConfig.addWatchTarget("./src/blog/posts/");
+
+  eleventyConfig.addTransform("syntaxHighlight", (content, outputPath) => {
+    if (!outputPath?.endsWith(".html")) return content;
+    return content.replace(
+      /<pre><code class="language-([A-Za-z0-9_-]+)">([\s\S]*?)<\/code><\/pre>/g,
+      (_match, language, source) =>
+        `<pre data-language="${language}"><code class="language-${language} fabrik-code-highlight">${highlightCode(language, source)}</code></pre>`,
+    );
+  });
 
   eleventyConfig.on("eleventy.before", async () => {
     await generateSocialImages();

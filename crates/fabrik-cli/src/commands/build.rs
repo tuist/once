@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use fabrik_cas::Cas;
+use fabrik_cas::CacheProvider;
 use fabrik_core::CacheState;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -39,10 +39,15 @@ struct NodeRecord<'a> {
     action_digest: String,
 }
 
-pub async fn build(workspace: &Path, cas: &Cas, target: &str, output: Output) -> Result<ExitCode> {
+pub async fn build(
+    workspace: &Path,
+    cache: &CacheProvider,
+    target: &str,
+    output: Output,
+) -> Result<ExitCode> {
     let targets = fabrik_frontend::load_workspace(workspace).context("loading workspace")?;
     let built = plan_for_target(&targets, target, workspace).context("building plan")?;
-    let runner = crate::commands::util::runner(cas, workspace);
+    let runner = crate::commands::util::runner(cache, workspace);
 
     let outcomes = runner
         .run_plan(&built.plan)

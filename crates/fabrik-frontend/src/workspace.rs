@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
+use crate::cache_provider::{CacheProviderConfig, CacheProviderToml, InfrastructureToml};
 use crate::dependency::{
     external_target_id, parse_generated_external_format, DependencyEntry,
     EXTERNAL_PACKAGE_CACHE_ROOT, GENERATED_EXTERNAL_FORMAT_VERSION,
@@ -176,6 +177,67 @@ pub fn load_dependency_entries(root: &Path) -> Result<Vec<DependencyEntry>> {
         source,
     })?;
     load_dependency_entries_toml_with(TOML_BUILD_FILE_NAME, &src, "")
+}
+
+/// Load the workspace-level cache provider config from the root
+/// `fabrik.toml`.
+///
+/// Returns `Ok(None)` when the workspace does not specify a provider.
+/// That lets higher layers apply user defaults without conflating them
+/// with an explicit `kind = "local"` setting in the repo.
+pub fn load_cache_provider_override(root: &Path) -> Result<Option<CacheProviderConfig>> {
+    let path = root.join(TOML_BUILD_FILE_NAME);
+    let src = match std::fs::read_to_string(&path) {
+        Ok(src) => src,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
+        Err(source) => {
+            return Err(Error::Read {
+                path: path.display().to_string(),
+                source,
+            });
+        }
+    };
+    let value: toml::Value = toml::from_str(&src).map_err(|source| Error::Parse {
+        path: TOML_BUILD_FILE_NAME.to_string(),
+        message: source.to_string(),
+    })?;
+    let infrastructure = value
+        .get("infrastructure")
+        .cloned()
+        .map(toml::Value::try_into)
+        .transpose()
+        .map_err(|source| Error::Parse {
+            path: TOML_BUILD_FILE_NAME.to_string(),
+            message: source.to_string(),
+        })?;
+    let infrastructure: Option<InfrastructureToml> = infrastructure;
+    if let Some(raw) = infrastructure.and_then(|infrastructure| infrastructure.cache) {
+        return raw.into_config(TOML_BUILD_FILE_NAME).map(Some);
+    }
+
+    let raw = value
+        .get("cache_provider")
+        .cloned()
+        .map(toml::Value::try_into)
+        .transpose()
+        .map_err(|source| Error::Parse {
+            path: TOML_BUILD_FILE_NAME.to_string(),
+            message: source.to_string(),
+        })?;
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let raw: CacheProviderToml = raw;
+    raw.into_config(TOML_BUILD_FILE_NAME).map(Some)
+}
+
+/// Load the workspace-level cache provider config from the root
+/// `fabrik.toml`. Missing files or missing config default to the local
+/// on-disk provider.
+pub fn load_cache_provider(root: &Path) -> Result<CacheProviderConfig> {
+    Ok(load_cache_provider_override(root)?.unwrap_or(CacheProviderConfig::Local))
 }
 
 fn is_build_file(name: Option<&str>) -> bool {
@@ -387,5 +449,109 @@ src_globs = ["src/*.rs"]
         .unwrap();
         let targets = load_workspace(root).unwrap();
         assert_eq!(targets[0].srcs, Vec::<String>::new());
+    }
+
+    #[test]
+    fn load_cache_provider_defaults_to_local() {
+        let tmp = TempDir::new().unwrap();
+        let config = load_cache_provider(tmp.path()).unwrap();
+        assert_eq!(config, CacheProviderConfig::Local);
+    }
+
+    #[test]
+    fn load_cache_provider_override_is_none_when_unspecified() {
+        let tmp = TempDir::new().unwrap();
+        let config = load_cache_provider_override(tmp.path()).unwrap();
+        assert_eq!(config, None);
+    }
+
+    #[test]
+    fn load_cache_provider_reads_tuist_config() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("fabrik.toml"),
+            r#"
+[cache_provider]
+kind = "tuist"
+url = "https://cache.tuist.dev"
+account = "acme"
+"#,
+        )
+        .unwrap();
+
+        let config = load_cache_provider(tmp.path()).unwrap();
+        assert_eq!(
+            config,
+            CacheProviderConfig::Tuist(crate::TuistCacheProviderConfig {
+                url: "https://cache.tuist.dev".to_string(),
+                account: Some("acme".to_string()),
+                project: None,
+                oauth_client_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn load_cache_provider_reads_infrastructure_cache_config() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("fabrik.toml"),
+            r#"
+[infrastructure.cache]
+kind = "tuist"
+url = "https://cache.tuist.dev"
+account = "acme"
+"#,
+        )
+        .unwrap();
+
+        let config = load_cache_provider(tmp.path()).unwrap();
+        assert_eq!(
+            config,
+            CacheProviderConfig::Tuist(crate::TuistCacheProviderConfig {
+                url: "https://cache.tuist.dev".to_string(),
+                account: Some("acme".to_string()),
+                project: None,
+                oauth_client_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn workspace_manifest_tolerates_cache_provider_table() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join("fabrik.toml"),
+            r#"
+[cache_provider]
+kind = "local"
+
+[[rust.binary]]
+name = "cli"
+srcs = ["src/main.rs"]
+"#,
+        )
+        .unwrap();
+
+        let targets = load_workspace(root).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "cli");
+    }
+
+    #[test]
+    fn load_cache_provider_override_preserves_explicit_local() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("fabrik.toml"),
+            r#"
+[cache_provider]
+kind = "local"
+"#,
+        )
+        .unwrap();
+
+        let config = load_cache_provider_override(tmp.path()).unwrap();
+        assert_eq!(config, Some(CacheProviderConfig::Local));
     }
 }

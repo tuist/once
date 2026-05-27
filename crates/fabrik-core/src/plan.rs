@@ -465,7 +465,7 @@ mod tests {
         let outcomes = runner.run_plan(&plan).await.unwrap();
         assert_eq!(outcomes.len(), 2);
         let consumer_stdout = runner
-            .cas()
+            .cache()
             .get_blob(&outcomes[1].outcome.result.stdout)
             .await
             .unwrap();

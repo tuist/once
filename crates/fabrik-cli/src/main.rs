@@ -2,6 +2,7 @@
 //! to the verb modules under [`commands`], and propagates the
 //! resulting exit code.
 
+mod cache_provider;
 mod cli;
 mod commands;
 mod dispatch;
