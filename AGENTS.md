@@ -92,10 +92,21 @@ the granular pipeline.
 
 ## Toolchain
 
-The repo pins `rust = "1.86"` in `mise.toml` and the workspace
-`rust-version`. Bumping the toolchain affects the Windows CI job and
-the user-facing MSRV; do it deliberately, not as a side effect of
-adding a dependency.
+The repo pins `rust = "1.88"` in `mise.toml` and the workspace
+`rust-version`. Bumping the toolchain affects the user-facing MSRV;
+do it deliberately, not as a side effect of adding a dependency. The
+Windows CI job reads the workspace `rust-version` so it stays aligned
+with the same pin.
+
+## Native dependencies
+
+Linux builds need `libcap-ng-dev` because the embedded Microsandbox
+provider links through native KVM support. Install it before running
+workspace builds locally on Linux:
+
+```sh
+sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+```
 
 ## Style
 

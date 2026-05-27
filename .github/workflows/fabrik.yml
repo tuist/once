@@ -245,11 +245,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: install rust 1.88
+      - name: install pinned rust
         shell: bash
         run: |
-          rustup toolchain install 1.88 --profile minimal --no-self-update
-          rustup default 1.88
+          rust_version="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          rustup toolchain install "$rust_version" --profile minimal --no-self-update
+          rustup default "$rust_version"
 
       - name: cache cargo registry, git db, and target
         uses: Swatinem/rust-cache@v2
@@ -267,11 +268,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: install rust 1.88
+      - name: install pinned rust
         shell: bash
         run: |
-          rustup toolchain install 1.88 --profile minimal --no-self-update
-          rustup default 1.88
+          rust_version="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          rustup toolchain install "$rust_version" --profile minimal --no-self-update
+          rustup default "$rust_version"
 
       - name: cache cargo registry, git db, and target
         uses: Swatinem/rust-cache@v2
