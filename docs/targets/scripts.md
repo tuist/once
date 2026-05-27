@@ -28,6 +28,17 @@ the rule-side surface is intentionally small: `path` tells Fabrik which
 file to run, and the script file carries the inputs, outputs,
 environment dependencies, and working directory.
 
+Script files can also opt into remote execution:
+
+```sh
+#!/usr/bin/env bash
+# FABRIK input "../src/**/*.ts"
+# FABRIK output "../dist/"
+# FABRIK remote "microsandbox"
+
+npm run build
+```
+
 ## Inline Script Configuration
 
 Use `argv` when the action is easier to keep in `fabrik.toml`:
@@ -40,6 +51,7 @@ rule = "script"
 [target.script]
 argv = ["pnpm", "eslint", "src/"]
 input = ["src/**/*.ts"]
+remote = "microsandbox"
 ```
 
 This form is best when the action is compact and easier to review as
@@ -58,6 +70,59 @@ headers: tracked `input`, declared `output`, forwarded `env`, and `cwd`.
 | `output` | Declares output files or directories that Fabrik should restore on cache hits. |
 | `env` | Forwards selected environment variables from the host and includes them in the cache key. |
 | `cwd` | Chooses the working directory for the script. |
+| `remote` | Runs the script on a compute provider instead of the local host. |
+
+## Remotely Executable Scripts
+
+A remotely executable script is a script whose execution contract is
+local and whose compute placement is configurable. The script still
+declares the same `input`, `output`, `env`, and `cwd` surfaces. Fabrik
+uses those declarations to compute the action key and restore declared
+outputs from cache. The difference is that a cache miss can run on a
+compute provider.
+
+Today Fabrik recognizes `microsandbox` as the development provider and
+`daytona` as a remote workspace provider:
+
+```toml
+[[target]]
+name = "bundle"
+rule = "script"
+
+[target.script]
+argv = ["pnpm", "bundle"]
+input = ["src/**/*.ts"]
+output = ["dist/"]
+remote = "microsandbox"
+```
+
+You can also choose remote execution from the CLI without changing the
+manifest:
+
+```sh
+fabrik run --remote --compute microsandbox scripts/bundle
+fabrik exec --remote --compute microsandbox -- bash scripts/bundle.sh
+fabrik run --remote --compute daytona scripts/bundle
+```
+
+The Daytona adapter talks to the Daytona API directly. Set
+`FABRIK_DAYTONA_SANDBOX` to the sandbox id or name, and set
+`FABRIK_DAYTONA_API_KEY` or `DAYTONA_API_KEY` before running. Set
+`FABRIK_DAYTONA_WORKDIR` when the repository lives somewhere other than
+`/workspace` inside the sandbox. Self-hosted or proxied deployments can
+override the API endpoint with `FABRIK_DAYTONA_API_URL`:
+
+```sh
+export FABRIK_DAYTONA_SANDBOX=my-sandbox
+export FABRIK_DAYTONA_API_KEY=...
+export FABRIK_DAYTONA_WORKDIR=/workspace/fabrik
+fabrik run --remote --compute daytona scripts/bundle
+```
+
+When the action is a cache miss, stdout and stderr stream through
+Fabrik as the provider produces them, so the command behaves like a
+local run from the caller's point of view. Cache hits replay the cached
+stdout, stderr, exit code, and declared outputs.
 
 ## Migrating From `[[task]]`
 
