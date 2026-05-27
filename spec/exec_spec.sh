@@ -103,6 +103,81 @@ EOF
     The stderr should include 'cache miss'
   End
 
+  It 'runs a command through the microsandbox compute provider'
+    mkdir -p "$WORKSPACE/bin"
+    cat > "$WORKSPACE/bin/microsandbox" <<'EOF'
+#!/bin/sh
+test "$1" = "run" || exit 64
+shift
+workspace=""
+cwd=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --workspace)
+      shift
+      workspace="$1"
+      ;;
+    --cwd)
+      shift
+      cwd="$1"
+      ;;
+    --)
+      shift
+      break
+      ;;
+  esac
+  shift
+done
+printf 'remote stderr\n' >&2
+cd "$workspace/${cwd:-.}" || exit 1
+exec "$@"
+EOF
+    chmod +x "$WORKSPACE/bin/microsandbox"
+    When call env PATH="$WORKSPACE/bin:/usr/bin:/bin" "$FABRIK_BIN" -C "$WORKSPACE" exec --remote --compute microsandbox -- /bin/sh -c 'printf remote-output'
+    The status should be success
+    The stdout should equal 'remote-output'
+    The stderr should include 'remote stderr'
+    The stderr should include 'cache miss'
+  End
+
+  It 'runs a command through the daytona compute provider'
+    mkdir -p "$WORKSPACE/bin"
+    cat > "$WORKSPACE/bin/daytona" <<'EOF'
+#!/bin/sh
+test "$1" = "exec" || exit 64
+shift
+sandbox="$1"
+shift
+cwd=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --cwd)
+      shift
+      cwd="$1"
+      ;;
+    --timeout)
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+  esac
+  shift
+done
+test "$sandbox" = "sandbox-1" || exit 65
+printf 'daytona stderr\n' >&2
+cd "$cwd" || exit 1
+exec "$@"
+EOF
+    chmod +x "$WORKSPACE/bin/daytona"
+    When call env PATH="$WORKSPACE/bin:/usr/bin:/bin" FABRIK_DAYTONA_SANDBOX=sandbox-1 FABRIK_DAYTONA_WORKDIR="$WORKSPACE" "$FABRIK_BIN" -C "$WORKSPACE" exec --remote --compute daytona -e VALUE=output -- /bin/sh -c 'printf "daytona-$VALUE"'
+    The status should be success
+    The stdout should equal 'daytona-output'
+    The stderr should include 'daytona stderr'
+    The stderr should include 'cache miss'
+  End
+
   It 'propagates the underlying exit code'
     When call fabrik exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 7'
     The status should equal 7

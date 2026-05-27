@@ -304,6 +304,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(10_000),
+            remote: None,
         }
     }
 
@@ -358,6 +359,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
+            remote: None,
         };
         let mut plan = Plan::new();
         let a = plan.push(PlanNode {
@@ -441,6 +443,7 @@ mod tests {
             outputs: vec![WorkspacePath::try_from("out/produced.txt").unwrap()],
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
+            remote: None,
         };
         let consumer = Action::RunCommand {
             argv: vec!["/bin/sh".into(), "-c".into(), "cat out/produced.txt".into()],
@@ -450,6 +453,7 @@ mod tests {
             outputs: vec![],
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
+            remote: None,
         };
         let mut plan = Plan::new();
         let p = plan.push(PlanNode {

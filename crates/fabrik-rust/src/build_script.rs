@@ -123,6 +123,7 @@ TARGET="$HOST_TRIPLE" \
         outputs,
         resources: ResourceRequest::default(),
         timeout_ms: Some(300_000),
+        remote: None,
     };
 
     Ok(PlanNode {

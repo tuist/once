@@ -121,6 +121,14 @@ pub enum Cmd {
         #[arg(long)]
         runtime_rpc_socket: Option<PathBuf>,
 
+        /// Run the target's action on a compute provider.
+        #[arg(long)]
+        remote: bool,
+
+        /// Compute provider used with --remote.
+        #[arg(long, value_name = "PROVIDER", default_value = "microsandbox")]
+        compute: String,
+
         /// Target id, e.g. `examples/hello/hello` or `./hello`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
@@ -197,6 +205,14 @@ pub enum Cmd {
         /// cache.
         #[arg(long)]
         cache_failures: bool,
+
+        /// Run the command on a compute provider.
+        #[arg(long)]
+        remote: bool,
+
+        /// Compute provider used with --remote.
+        #[arg(long, value_name = "PROVIDER", default_value = "microsandbox")]
+        compute: String,
 
         /// Command and arguments. Use `--` to separate from fabrik flags.
         #[arg(trailing_var_arg = true, required_unless_present = "list")]

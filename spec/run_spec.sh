@@ -170,6 +170,99 @@ EOF
     The stderr should include 'cache hit'
   End
 
+  It 'runs a script target through the microsandbox compute provider'
+    mkdir -p "$WORKSPACE/bin" "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/bin/microsandbox" <<'EOF'
+#!/bin/sh
+test "$1" = "run" || exit 64
+shift
+workspace=""
+cwd=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --workspace)
+      shift
+      workspace="$1"
+      ;;
+    --cwd)
+      shift
+      cwd="$1"
+      ;;
+    --)
+      shift
+      break
+      ;;
+  esac
+  shift
+done
+printf 'provider stderr\n' >&2
+cd "$workspace/${cwd:-.}" || exit 1
+exec "$@"
+EOF
+    chmod +x "$WORKSPACE/bin/microsandbox"
+    cat > "$WORKSPACE/scripts/fabrik.toml" <<'EOF'
+[[target]]
+name = "remote"
+rule = "script"
+
+[target.script]
+argv = ["/bin/sh", "-c", "printf remote-output"]
+remote = "microsandbox"
+EOF
+    When call env PATH="$WORKSPACE/bin:/usr/bin:/bin" "$FABRIK_BIN" -C "$WORKSPACE" run scripts/remote
+    The status should be success
+    The stdout should equal 'remote-output'
+    The stderr should include 'provider stderr'
+    The stderr should include 'cache miss'
+  End
+
+  It 'runs a script target through the daytona compute provider'
+    mkdir -p "$WORKSPACE/bin" "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/bin/daytona" <<'EOF'
+#!/bin/sh
+test "$1" = "exec" || exit 64
+shift
+sandbox="$1"
+shift
+cwd=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --cwd)
+      shift
+      cwd="$1"
+      ;;
+    --timeout)
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+  esac
+  shift
+done
+test "$sandbox" = "sandbox-1" || exit 65
+printf 'daytona provider stderr\n' >&2
+cd "$cwd" || exit 1
+exec "$@"
+EOF
+    chmod +x "$WORKSPACE/bin/daytona"
+    cat > "$WORKSPACE/scripts/fabrik.toml" <<'EOF'
+[[target]]
+name = "daytona"
+rule = "script"
+
+[target.script]
+argv = ["/bin/sh", "-c", "printf daytona-target"]
+remote = "daytona"
+EOF
+    When call env PATH="$WORKSPACE/bin:/usr/bin:/bin" FABRIK_DAYTONA_SANDBOX=sandbox-1 FABRIK_DAYTONA_WORKDIR="$WORKSPACE" "$FABRIK_BIN" -C "$WORKSPACE" run scripts/daytona
+    The status should be success
+    The stdout should equal 'daytona-target'
+    The stderr should include 'daytona provider stderr'
+    The stderr should include 'cache miss'
+  End
+
   It 'runs a runtime script target and emits its runtime interfaces'
     mkdir -p "$WORKSPACE/tasks"
     cat > "$WORKSPACE/tasks/fabrik.toml" <<'EOF'

@@ -32,6 +32,7 @@ pub(super) fn task_action(
             outputs: task_outputs(target)?,
             resources: task_resources(target)?,
             timeout_ms: parse_attr::<u64>(target, "timeout_ms")?,
+            remote: None,
         },
         output: String::new(),
         output_dir: None,

@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use fabrik_cas::CacheProvider;
-use fabrik_core::RunOpts;
+use fabrik_core::{Action, CacheState, RemoteExecution, RunOpts};
 
 use self::action::action_for;
 use self::apple_runtime::is_apple_simulator_app;
@@ -23,6 +23,7 @@ pub struct RunArgs {
     pub output: Output,
     pub runtime_rpc: bool,
     pub runtime_rpc_socket: Option<PathBuf>,
+    pub remote: Option<String>,
 }
 
 pub async fn run(
@@ -38,16 +39,27 @@ pub async fn run(
         return run_apple_ios_app(workspace, cache, target_id, &targets, target, args).await;
     }
 
-    let plan = action_for(workspace, target)?;
+    let mut plan = action_for(workspace, target)?;
+    if let Some(provider) = args.remote.as_deref() {
+        set_remote(&mut plan.action, provider);
+    }
     if let Some(out_dir) = &plan.output_dir {
         tokio::fs::create_dir_all(out_dir)
             .await
             .with_context(|| format!("creating output directory {}", out_dir.display()))?;
     }
 
-    let outcome = fabrik_core::run_with_cache(&plan.action, workspace, cache, RunOpts::default())
-        .await
-        .context("executing action")?;
+    let streams_live =
+        action_remote(&plan.action).is_some() && args.output.format == crate::cli::Format::Human;
+    let outcome = if streams_live {
+        fabrik_core::run_with_cache_streaming(&plan.action, workspace, cache, RunOpts::default())
+            .await
+            .context("executing action")?
+    } else {
+        fabrik_core::run_with_cache(&plan.action, workspace, cache, RunOpts::default())
+            .await
+            .context("executing action")?
+    };
 
     finish_run(
         workspace,
@@ -57,6 +69,7 @@ pub async fn run(
         target,
         &plan.output,
         args,
+        streams_live && outcome.cache == CacheState::Miss,
     )
     .await?;
     Ok(exit_from(outcome.result.exit_code))
@@ -70,6 +83,9 @@ async fn run_apple_ios_app(
     target: &fabrik_frontend::Target,
     args: RunArgs,
 ) -> Result<ExitCode> {
+    if args.remote.is_some() {
+        anyhow::bail!("--remote is only supported for script-like targets today");
+    }
     let built =
         fabrik_apple::build_plan(targets, target_id, workspace).context("building app plan")?;
     let runner = crate::commands::util::runner(cache, workspace);
@@ -91,11 +107,13 @@ async fn run_apple_ios_app(
         target,
         &launch.output,
         args,
+        false,
     )
     .await?;
     Ok(exit_from(outcome.result.exit_code))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finish_run(
     workspace: &Path,
     cache: &CacheProvider,
@@ -104,11 +122,13 @@ async fn finish_run(
     target: &fabrik_frontend::Target,
     output_path: &str,
     args: RunArgs,
+    streams_live: bool,
 ) -> Result<()> {
     let RunArgs {
         output,
         runtime_rpc,
         runtime_rpc_socket,
+        remote: _,
     } = args;
     let stdout_blob = cache.get_blob(&outcome.result.stdout).await?;
     let stderr_blob = cache.get_blob(&outcome.result.stderr).await?;
@@ -137,11 +157,27 @@ async fn finish_run(
         output_path.to_string(),
         runtime,
     );
-    output::render(output, &stdout_blob, &stderr_blob, &record).await?;
+    output::render(output, &stdout_blob, &stderr_blob, &record, streams_live).await?;
 
     if let Some(session) = session {
         crate::commands::runtime::rpc(&session.dir, Some(&session.socket)).await?;
     }
 
     Ok(())
+}
+
+fn set_remote(action: &mut Action, provider: &str) {
+    match action {
+        Action::RunCommand { remote, .. } => {
+            *remote = Some(RemoteExecution {
+                provider: provider.to_string(),
+            });
+        }
+    }
+}
+
+fn action_remote(action: &Action) -> Option<&RemoteExecution> {
+    match action {
+        Action::RunCommand { remote, .. } => remote.as_ref(),
+    }
 }

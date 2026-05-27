@@ -21,8 +21,8 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use fabrik_cas::{CacheProvider, Digest};
 use fabrik_core::{
-    tool_env, workspace_tool, workspace_tool_env, Action, InputDigestBuilder, ResourceRequest,
-    RunOpts, WorkspacePath,
+    tool_env, workspace_tool, workspace_tool_env, Action, CacheState, InputDigestBuilder,
+    RemoteExecution, ResourceRequest, RunOpts, WorkspacePath,
 };
 use fabrik_frontend::{parse_script_annotations, ScriptAnnotations};
 use serde::Serialize;
@@ -50,6 +50,7 @@ pub struct ExecArgs {
     pub cwd: Option<WorkspacePath>,
     pub timeout_ms: Option<u64>,
     pub cache_failures: bool,
+    pub remote: Option<String>,
     pub argv: Vec<String>,
 }
 
@@ -64,6 +65,7 @@ struct ScriptInvocation {
     outputs: Vec<WorkspacePath>,
     input_digest: Option<Digest>,
     timeout_ms: Option<u64>,
+    remote: Option<RemoteExecution>,
 }
 
 pub async fn exec(
@@ -78,14 +80,20 @@ pub async fn exec(
         cwd,
         timeout_ms,
         cache_failures,
+        remote,
         argv,
     } = args;
 
     let (workspace, action) = if script {
-        script_action(workspace, env, cwd, timeout_ms, &argv)?
-    } else if let Some(plan) =
-        autodetected_script_action(workspace, env.clone(), cwd.clone(), timeout_ms, &argv)?
-    {
+        script_action(workspace, env, cwd, timeout_ms, remote.as_deref(), &argv)?
+    } else if let Some(plan) = autodetected_script_action(
+        workspace,
+        env.clone(),
+        cwd.clone(),
+        timeout_ms,
+        remote.as_deref(),
+        &argv,
+    )? {
         plan
     } else {
         (
@@ -98,14 +106,22 @@ pub async fn exec(
                 outputs: vec![],
                 resources: ResourceRequest::default(),
                 timeout_ms,
+                remote: remote_execution(remote.as_deref()),
             },
         )
     };
 
     let opts = RunOpts { cache_failures };
-    let outcome = fabrik_core::run_with_cache(&action, &workspace, cache, opts)
-        .await
-        .context("executing action")?;
+    let streams_live = action_remote(&action).is_some() && output.format == Format::Human;
+    let outcome = if streams_live {
+        fabrik_core::run_with_cache_streaming(&action, &workspace, cache, opts)
+            .await
+            .context("executing action")?
+    } else {
+        fabrik_core::run_with_cache(&action, &workspace, cache, opts)
+            .await
+            .context("executing action")?
+    };
 
     let stdout = cache.get_blob(&outcome.result.stdout).await?;
     let stderr = cache.get_blob(&outcome.result.stderr).await?;
@@ -114,12 +130,17 @@ pub async fn exec(
     // captured output is empty under timing pressure (we observed this
     // as flaky shellspec failures on macOS CI).
     let mut out = tokio::io::stdout();
-    out.write_all(&stdout).await?;
+    let streamed_now = streams_live && outcome.cache == CacheState::Miss;
+    if !streamed_now {
+        out.write_all(&stdout).await?;
+    }
     // Flush explicitly so the wrapped stdout is visible before the
     // Fabrik stderr trailer, even under macOS CI timing pressure.
     out.flush().await?;
     let mut err = tokio::io::stderr();
-    err.write_all(&stderr).await?;
+    if !streamed_now {
+        err.write_all(&stderr).await?;
+    }
 
     let tag = cache_tag(outcome.cache);
     let trailer = ExecTrailer {
@@ -153,6 +174,7 @@ fn script_action(
     explicit_env: Vec<(String, String)>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
+    remote_override: Option<&str>,
     argv: &[String],
 ) -> Result<(PathBuf, Action)> {
     let invocation = script_invocation(
@@ -160,6 +182,7 @@ fn script_action(
         explicit_env.into_iter().collect(),
         cwd_override,
         timeout_ms_override,
+        remote_override,
         argv,
     )?;
     let program = resolve_runtime(&invocation.workspace, &invocation.runtime)?;
@@ -181,8 +204,21 @@ fn script_action(
             outputs: invocation.outputs,
             resources: ResourceRequest::default(),
             timeout_ms: invocation.timeout_ms,
+            remote: invocation.remote,
         },
     ))
+}
+
+fn remote_execution(provider: Option<&str>) -> Option<RemoteExecution> {
+    provider.map(|provider| RemoteExecution {
+        provider: provider.to_string(),
+    })
+}
+
+fn action_remote(action: &Action) -> Option<&RemoteExecution> {
+    match action {
+        Action::RunCommand { remote, .. } => remote.as_ref(),
+    }
 }
 
 fn autodetected_script_action(
@@ -190,6 +226,7 @@ fn autodetected_script_action(
     explicit_env: Vec<(String, String)>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
+    remote_override: Option<&str>,
     argv: &[String],
 ) -> Result<Option<(PathBuf, Action)>> {
     let Ok((_, _, script_arg, _)) = parse_script_exec_argv(workspace, argv) else {
@@ -209,6 +246,7 @@ fn autodetected_script_action(
         explicit_env,
         cwd_override,
         timeout_ms_override,
+        remote_override,
         argv,
     )
     .map(Some)
@@ -219,6 +257,7 @@ fn script_invocation(
     explicit_env: BTreeMap<String, String>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
+    remote_override: Option<&str>,
     argv: &[String],
 ) -> Result<ScriptInvocation> {
     let (runtime, runtime_args, script_arg, script_args) = parse_script_exec_argv(workspace, argv)?;
@@ -255,6 +294,7 @@ fn script_invocation(
     let input_digest = Some(script_input_digest(&workspace, &inputs)?);
     let timeout_ms = timeout_ms_override;
     let env = script_env(&workspace, &runtime, &annotations.env_vars, explicit_env)?;
+    let remote = remote_execution(remote_override.or(annotations.remote.as_deref()));
 
     Ok(ScriptInvocation {
         workspace,
@@ -267,6 +307,7 @@ fn script_invocation(
         outputs,
         input_digest,
         timeout_ms,
+        remote,
     })
 }
 
@@ -558,6 +599,7 @@ fn has_fabrik_annotations(annotations: &ScriptAnnotations) -> bool {
         || !annotations.outputs.is_empty()
         || !annotations.env_vars.is_empty()
         || annotations.cwd.is_some()
+        || annotations.remote.is_some()
 }
 
 fn script_input_digest(workspace: &Path, inputs: &[WorkspacePath]) -> Result<Digest> {
@@ -692,6 +734,7 @@ mod tests {
             Vec::new(),
             None,
             None,
+            None,
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
         .unwrap()
@@ -753,6 +796,7 @@ mod tests {
         let detected = autodetected_script_action(
             tmp.path(),
             Vec::new(),
+            None,
             None,
             None,
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],

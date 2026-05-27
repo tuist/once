@@ -111,6 +111,7 @@ fn test_action(
         outputs: vec![],
         resources: ResourceRequest::default(),
         timeout_ms: Some(300_000),
+        remote: None,
     })
 }
 

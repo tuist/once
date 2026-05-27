@@ -11,6 +11,7 @@ pub struct ScriptAnnotations {
     pub outputs: Vec<String>,
     pub env_vars: Vec<String>,
     pub cwd: Option<String>,
+    pub remote: Option<String>,
 }
 
 pub fn parse_script_annotations(path: &Path, display_name: &str) -> Result<ScriptAnnotations> {
@@ -168,6 +169,10 @@ fn parse_annotation_line(
         annotations.cwd = Some(parse_quoted(raw, "cwd", display_name)?);
         return Ok(());
     }
+    if let Some(raw) = line.strip_prefix("remote ") {
+        annotations.remote = Some(parse_quoted(raw, "remote", display_name)?);
+        return Ok(());
+    }
     Err(Error::Eval {
         path: display_name.to_string(),
         message: format!("unknown FABRIK directive `{line}`"),
@@ -225,6 +230,24 @@ echo hi
         assert_eq!(annotations.outputs, vec!["dist/".to_string()]);
         assert_eq!(annotations.env_vars, vec!["NODE_ENV".to_string()]);
         assert_eq!(annotations.cwd.as_deref(), Some("."));
+    }
+
+    #[test]
+    fn parses_remote_script_annotation() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("build.sh");
+        fs::write(
+            &path,
+            r#"#!/usr/bin/env bash
+# FABRIK remote "microsandbox"
+
+echo hi
+"#,
+        )
+        .unwrap();
+
+        let annotations = parse_script_annotations(&path, "build.sh").unwrap();
+        assert_eq!(annotations.remote.as_deref(), Some("microsandbox"));
     }
 
     #[test]

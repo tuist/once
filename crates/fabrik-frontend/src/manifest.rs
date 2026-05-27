@@ -132,6 +132,7 @@ struct ScriptTarget {
     input: Vec<String>,
     #[serde(default)]
     output: Vec<String>,
+    remote: Option<String>,
 }
 
 struct ManifestScriptSpec {
@@ -141,6 +142,7 @@ struct ManifestScriptSpec {
     cwd: Option<String>,
     input: Vec<String>,
     output: Vec<String>,
+    remote: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1011,6 +1013,7 @@ fn script_target(
         cwd,
         input,
         output,
+        remote,
     } = t;
     if path.is_some()
         && (!env.is_empty() || cwd.is_some() || !input.is_empty() || !output.is_empty())
@@ -1024,9 +1027,15 @@ fn script_target(
     }
 
     match (path, argv.is_empty()) {
-        (Some(path), true) => {
-            file_script_target(name, &path, workspace_root, package, display_name, runtime)
-        }
+        (Some(path), true) => file_script_target(
+            name,
+            &path,
+            remote,
+            workspace_root,
+            package,
+            display_name,
+            runtime,
+        ),
         (None, false) => manifest_script_target(
             ManifestScriptSpec {
                 name,
@@ -1035,6 +1044,7 @@ fn script_target(
                 cwd,
                 input,
                 output,
+                remote,
             },
             runtime,
             workspace_root,
@@ -1055,6 +1065,7 @@ fn script_target(
 fn file_script_target(
     name: String,
     path: &str,
+    remote: Option<String>,
     workspace_root: &Path,
     package: &str,
     display_name: &str,
@@ -1077,6 +1088,7 @@ fn file_script_target(
                 .expect("script runtime args are serializable"),
         );
     }
+    insert_opt(&mut attrs, "remote_provider", remote.or(annotations.remote));
     insert_json_vec(&mut attrs, "script_env_json", &annotations.env_vars);
 
     let outputs =
@@ -1150,10 +1162,12 @@ fn manifest_script_target(
         cwd,
         input,
         output,
+        remote,
     } = spec;
     let mut attrs = BTreeMap::new();
     insert_manifest_script_attrs(&mut attrs, &argv, &env, &output);
     insert_opt(&mut attrs, "cwd", cwd);
+    insert_opt(&mut attrs, "remote_provider", remote);
     let has_runtime = runtime.is_some();
     attrs.insert("cache".to_string(), (!has_runtime).to_string());
     if let Some(runtime) = runtime {
