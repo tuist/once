@@ -670,7 +670,7 @@ async fn execute_remote_command(
 ) -> Result<ActionResult> {
     match remote.provider.as_str() {
         "microsandbox" => {
-            execute_microsandbox_command(
+            microsandbox_remote_command(
                 argv,
                 env,
                 cwd,
@@ -690,6 +690,48 @@ async fn execute_remote_command(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[cfg(unix)]
+async fn microsandbox_remote_command(
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: Option<&WorkspacePath>,
+    timeout_ms: Option<u64>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    execute_microsandbox_command(
+        argv,
+        env,
+        cwd,
+        timeout_ms,
+        workspace_root,
+        cache,
+        stream_to_parent,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(not(unix))]
+async fn microsandbox_remote_command(
+    _argv: &[String],
+    _env: &BTreeMap<String, String>,
+    _cwd: Option<&WorkspacePath>,
+    _timeout_ms: Option<u64>,
+    _workspace_root: &Path,
+    _cache: &CacheProvider,
+    _stream_to_parent: bool,
+) -> Result<ActionResult> {
+    Err(Error::RemoteProviderConfig {
+        provider: "microsandbox".to_string(),
+        message: "the embedded Microsandbox provider is only available on Unix platforms"
+            .to_string(),
+    })
+}
+
+#[cfg(unix)]
 async fn execute_microsandbox_command(
     argv: &[String],
     env: &BTreeMap<String, String>,
@@ -758,6 +800,7 @@ async fn execute_microsandbox_command(
     }
 }
 
+#[cfg(unix)]
 async fn collect_microsandbox_output(
     handle: &mut microsandbox::ExecHandle,
     cache: &CacheProvider,
@@ -840,6 +883,7 @@ async fn write_stream_bytes(
     Ok(())
 }
 
+#[cfg(unix)]
 fn microsandbox_error(source: &microsandbox::MicrosandboxError) -> Error {
     Error::RemoteProviderApi {
         provider: "microsandbox".to_string(),
@@ -847,6 +891,7 @@ fn microsandbox_error(source: &microsandbox::MicrosandboxError) -> Error {
     }
 }
 
+#[cfg(unix)]
 fn microsandbox_name() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

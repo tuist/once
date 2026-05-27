@@ -16,8 +16,10 @@ reqwest.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-microsandbox = { git = "https://github.com/superradcompany/microsandbox.git", rev = "975b62bfd331df7111b2de9abc1416fc87d7790b", version = "0.5.1", default-features = false, features = ["prebuilt"] }
 jsonwebtoken = { version = "10.2.0", default-features = false, features = ["rust_crypto"] }
+
+[target.'cfg(unix)'.dependencies]
+microsandbox = { git = "https://github.com/superradcompany/microsandbox.git", rev = "975b62bfd331df7111b2de9abc1416fc87d7790b", version = "0.5.1", default-features = false, features = ["prebuilt"] }
 
 [dev-dependencies]
 tempfile.workspace = true
