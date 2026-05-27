@@ -8,7 +8,7 @@ use serde::{
     Deserialize, Deserializer,
 };
 
-use crate::cache_provider::CacheProviderToml;
+use crate::cache_provider::{CacheProviderToml, InfrastructureToml};
 use crate::dependency::{into_entries, DependencyEntry, DependencyEntryToml};
 use crate::error::{Error, Result};
 use crate::script::parse_script_annotations;
@@ -20,6 +20,7 @@ const MAX_SCRIPT_GLOB_MATCHES: usize = 1_000;
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Manifest {
+    infrastructure: InfrastructureToml,
     cache_provider: Option<CacheProviderToml>,
     rust: RustSection,
     cargo: CargoSection,

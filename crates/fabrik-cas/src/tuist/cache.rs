@@ -30,17 +30,16 @@ impl TuistCache {
                 message: "cache provider `tuist` requires `account`".to_string(),
             });
         };
-        let Some(project) = config.project.as_deref() else {
+        if account.is_empty() {
             return Err(Error::InvalidConfig {
                 provider: PROVIDER_NAME,
-                message: "cache provider `tuist` requires `project`".to_string(),
+                message: "cache provider `tuist` requires non-empty `account`".to_string(),
             });
-        };
-        if account.is_empty() || project.is_empty() {
+        }
+        if matches!(config.project.as_deref(), Some("")) {
             return Err(Error::InvalidConfig {
                 provider: PROVIDER_NAME,
-                message: "cache provider `tuist` requires non-empty `account` and `project`"
-                    .to_string(),
+                message: "cache provider `tuist` requires non-empty `project` when set".to_string(),
             });
         }
         let client = reqwest::Client::builder()
@@ -269,10 +268,6 @@ impl TuistCache {
     }
 
     async fn data_plane_endpoint(&self) -> Result<String> {
-        if let Some(endpoint) = &self.config.endpoint {
-            return Ok(endpoint.clone());
-        }
-
         let mut cached = self.endpoint_cache.lock().await;
         if let Some(endpoint) = cached.as_ref() {
             return Ok(endpoint.clone());
@@ -380,13 +375,6 @@ impl TuistCache {
             .expect("validated at construction")
     }
 
-    fn project(&self) -> &str {
-        self.config
-            .project
-            .as_deref()
-            .expect("validated at construction")
-    }
-
     fn endpoints_url(&self) -> Result<Url> {
         let mut url = self.server_url(ENDPOINTS_PATH)?;
         url.query_pairs_mut()
@@ -417,9 +405,11 @@ impl TuistCache {
     }
 
     fn append_scope(&self, url: &mut Url) {
-        url.query_pairs_mut()
-            .append_pair("account_handle", self.account())
-            .append_pair("project_handle", self.project());
+        let mut query = url.query_pairs_mut();
+        query.append_pair("account_handle", self.account());
+        if let Some(project) = self.config.project.as_deref() {
+            query.append_pair("project_handle", project);
+        }
     }
 
     fn server_url(&self, path: &str) -> Result<Url> {

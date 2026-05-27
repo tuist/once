@@ -27,8 +27,7 @@ pub const TOML_BUILD_FILE_NAME: &str = "fabrik.toml";
 pub const BUILD_FILE_NAME: &str = TOML_BUILD_FILE_NAME;
 
 pub use cache_provider::{
-    CacheProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig,
-    DEFAULT_TUIST_TOKEN_ENV, DEFAULT_TUIST_URL,
+    CacheProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig, DEFAULT_TUIST_URL,
 };
 pub use dependency::{
     external_dep_id, external_dep_package, external_target_id, generated_external_format_header,

@@ -3,7 +3,6 @@ use serde::Deserialize;
 use crate::error::{Error, Result};
 
 pub const DEFAULT_TUIST_URL: &str = "https://tuist.dev";
-pub const DEFAULT_TUIST_TOKEN_ENV: &str = "TUIST_TOKEN";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CacheProviderConfig {
@@ -28,11 +27,15 @@ pub struct NamedCacheProviderConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TuistCacheProviderConfig {
     pub url: String,
-    pub endpoint: Option<String>,
     pub account: Option<String>,
     pub project: Option<String>,
-    pub token_env: String,
     pub oauth_client_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct InfrastructureToml {
+    pub cache: Option<CacheProviderToml>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,10 +59,8 @@ pub(crate) enum DirectCacheProviderToml {
     Local,
     Tuist {
         url: Option<String>,
-        endpoint: Option<String>,
         account: Option<String>,
         project: Option<String>,
-        token_env: Option<String>,
         oauth_client_id: Option<String>,
     },
 }
@@ -84,32 +85,15 @@ impl CacheProviderToml {
             Self::Direct(DirectCacheProviderToml::Local) => Ok(CacheProviderConfig::Local),
             Self::Direct(DirectCacheProviderToml::Tuist {
                 url,
-                endpoint,
                 account,
                 project,
-                token_env,
                 oauth_client_id,
             }) => {
                 let url = non_empty(url).unwrap_or_else(|| DEFAULT_TUIST_URL.to_string());
-                let token_env =
-                    non_empty(token_env).unwrap_or_else(|| DEFAULT_TUIST_TOKEN_ENV.to_string());
-                if !token_env
-                    .chars()
-                    .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
-                {
-                    return Err(Error::Eval {
-                        path: display_name.to_string(),
-                        message: format!(
-                            "cache_provider token_env `{token_env}` must be an uppercase env var name"
-                        ),
-                    });
-                }
                 Ok(CacheProviderConfig::Tuist(TuistCacheProviderConfig {
                     url,
-                    endpoint: non_empty(endpoint),
                     account: non_empty(account),
                     project: non_empty(project),
-                    token_env,
                     oauth_client_id: non_empty(oauth_client_id),
                 }))
             }
@@ -133,13 +117,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tuist_config_defaults_url_and_token_env() {
+    fn tuist_config_defaults_url() {
         let config = CacheProviderToml::Direct(DirectCacheProviderToml::Tuist {
             url: None,
-            endpoint: None,
             account: Some("acme".to_string()),
             project: Some("app".to_string()),
-            token_env: None,
             oauth_client_id: None,
         })
         .into_config("fabrik.toml")
@@ -149,28 +131,9 @@ mod tests {
             panic!("expected tuist config");
         };
         assert_eq!(config.url, DEFAULT_TUIST_URL);
-        assert_eq!(config.token_env, DEFAULT_TUIST_TOKEN_ENV);
         assert_eq!(config.oauth_client_id, None);
         assert_eq!(config.account.as_deref(), Some("acme"));
         assert_eq!(config.project.as_deref(), Some("app"));
-    }
-
-    #[test]
-    fn rejects_invalid_token_env_name() {
-        let err = CacheProviderToml::Direct(DirectCacheProviderToml::Tuist {
-            url: None,
-            endpoint: None,
-            account: None,
-            project: None,
-            token_env: Some("tuist-token".to_string()),
-            oauth_client_id: None,
-        })
-        .into_config("fabrik.toml")
-        .unwrap_err();
-
-        assert!(err
-            .to_string()
-            .contains("cache_provider token_env `tuist-token`"));
     }
 
     #[test]

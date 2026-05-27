@@ -5,8 +5,7 @@ use anyhow::{bail, Context, Result};
 use fabrik_cas::{CacheProvider, TuistCacheConfig, TUIST_OAUTH_CLIENT_ID_ENV};
 use fabrik_core::Xdg;
 use fabrik_frontend::{
-    CacheProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig,
-    DEFAULT_TUIST_TOKEN_ENV, DEFAULT_TUIST_URL,
+    CacheProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig, DEFAULT_TUIST_URL,
 };
 use serde::Deserialize;
 
@@ -34,7 +33,7 @@ pub(crate) fn resolve_auth_provider(
     }
 
     if let Some(config) = maybe_load_user_config(xdg)? {
-        if let Some(provider) = config.cache_providers.get(provider_name) {
+        if let Some(provider) = named_user_provider(&config, provider_name) {
             return Ok(resolve_named_provider(
                 provider_name.to_string(),
                 NamedCacheProviderConfig {
@@ -53,8 +52,6 @@ pub(crate) fn resolve_auth_provider(
             DEFAULT_TUIST_URL.to_string(),
             None,
             None,
-            None,
-            DEFAULT_TUIST_TOKEN_ENV.to_string(),
             None,
         )));
     }
@@ -99,9 +96,9 @@ fn resolve_provider_config(
         )),
         CacheProviderConfig::Named(binding) => {
             let config = load_user_config(xdg)?;
-            let provider = config.cache_providers.get(&binding.name).with_context(|| {
+            let provider = named_user_provider(&config, &binding.name).with_context(|| {
                 format!(
-                    "cache provider `{}` was not found in {}",
+                    "infrastructure `{}` was not found in {}",
                     binding.name,
                     user_config_path(xdg).display()
                 )
@@ -119,12 +116,17 @@ fn resolve_default_provider(xdg: &Xdg) -> Result<ResolvedCacheProviderConfig> {
     let Some(config) = maybe_load_user_config(xdg)? else {
         return Ok(ResolvedCacheProviderConfig::Local);
     };
-    let Some(binding) = config.cache_provider.clone() else {
+    let binding = config
+        .infrastructure
+        .as_ref()
+        .and_then(|infrastructure| infrastructure.cache.clone())
+        .or_else(|| config.cache_provider.clone());
+    let Some(binding) = binding else {
         return Ok(ResolvedCacheProviderConfig::Local);
     };
-    let provider = config.cache_providers.get(&binding.name).with_context(|| {
+    let provider = named_user_provider(&config, &binding.name).with_context(|| {
         format!(
-            "cache provider `{}` was not found in {}",
+            "infrastructure `{}` was not found in {}",
             binding.name,
             user_config_path(xdg).display()
         )
@@ -136,6 +138,13 @@ fn resolve_default_provider(xdg: &Xdg) -> Result<ResolvedCacheProviderConfig> {
     ))
 }
 
+fn named_user_provider<'a>(config: &'a UserConfig, name: &str) -> Option<&'a UserCacheProvider> {
+    config
+        .infrastructures
+        .get(name)
+        .or_else(|| config.cache_providers.get(name))
+}
+
 fn resolve_named_provider(
     provider_name: String,
     binding: NamedCacheProviderConfig,
@@ -144,20 +153,14 @@ fn resolve_named_provider(
     match provider {
         UserCacheProvider::Tuist {
             url,
-            endpoint,
-            token_env,
             oauth_client_id,
             account,
             project,
         } => ResolvedCacheProviderConfig::Tuist(default_tuist_config(
             provider_name,
             url.clone().unwrap_or_else(|| DEFAULT_TUIST_URL.to_string()),
-            endpoint.clone(),
             binding.account.or_else(|| account.clone()),
             binding.project.or_else(|| project.clone()),
-            token_env
-                .clone()
-                .unwrap_or_else(|| DEFAULT_TUIST_TOKEN_ENV.to_string()),
             oauth_client_id.clone(),
         )),
     }
@@ -167,10 +170,8 @@ fn direct_tuist_config(config: TuistCacheProviderConfig) -> TuistCacheConfig {
     default_tuist_config(
         "tuist".to_string(),
         config.url,
-        config.endpoint,
         config.account,
         config.project,
-        config.token_env,
         config.oauth_client_id,
     )
 }
@@ -178,18 +179,14 @@ fn direct_tuist_config(config: TuistCacheProviderConfig) -> TuistCacheConfig {
 fn default_tuist_config(
     provider_name: String,
     url: String,
-    endpoint: Option<String>,
     account: Option<String>,
     project: Option<String>,
-    token_env: String,
     oauth_client_id: Option<String>,
 ) -> TuistCacheConfig {
     TuistCacheConfig {
         url,
-        endpoint,
         account,
         project,
-        token_env,
         oauth_client_id: resolve_tuist_oauth_client_id(oauth_client_id),
         provider_name,
     }
@@ -203,8 +200,16 @@ fn resolve_tuist_oauth_client_id(config_value: Option<String>) -> Option<String>
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct UserConfig {
+    infrastructure: Option<UserInfrastructureConfig>,
+    infrastructures: BTreeMap<String, UserCacheProvider>,
     cache_provider: Option<UserCacheProviderBinding>,
     cache_providers: BTreeMap<String, UserCacheProvider>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct UserInfrastructureConfig {
+    cache: Option<UserCacheProviderBinding>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -230,8 +235,6 @@ impl UserCacheProviderBinding {
 enum UserCacheProvider {
     Tuist {
         url: Option<String>,
-        endpoint: Option<String>,
-        token_env: Option<String>,
         oauth_client_id: Option<String>,
         account: Option<String>,
         project: Option<String>,
@@ -262,17 +265,29 @@ fn maybe_load_user_config(xdg: &Xdg) -> Result<Option<UserConfig>> {
     let mut config: UserConfig = toml::from_str(&src)
         .with_context(|| format!("parsing user cache config {}", path.display()))?;
     if let Some(binding) = config.cache_provider.as_mut() {
-        binding.name = binding.name.trim().to_string();
-        if binding.name.is_empty() {
-            bail!(
-                "user cache config {} has an empty cache_provider name",
-                path.display()
-            );
-        }
-        binding.account = non_empty(binding.account.take());
-        binding.project = non_empty(binding.project.take());
+        normalize_binding(binding, &path)?;
+    }
+    if let Some(binding) = config
+        .infrastructure
+        .as_mut()
+        .and_then(|infrastructure| infrastructure.cache.as_mut())
+    {
+        normalize_binding(binding, &path)?;
     }
     Ok(Some(config))
+}
+
+fn normalize_binding(binding: &mut UserCacheProviderBinding, path: &Path) -> Result<()> {
+    binding.name = binding.name.trim().to_string();
+    if binding.name.is_empty() {
+        bail!(
+            "user cache config {} has an empty infrastructure name",
+            path.display()
+        );
+    }
+    binding.account = non_empty(binding.account.take());
+    binding.project = non_empty(binding.project.take());
+    Ok(())
 }
 
 fn user_config_path(xdg: &Xdg) -> PathBuf {
@@ -333,17 +348,17 @@ mod tests {
     }
 
     #[test]
-    fn resolve_uses_user_default_provider_when_workspace_is_unspecified() {
+    fn resolve_uses_user_default_infrastructure_when_workspace_is_unspecified() {
         let tmp = TempDir::new().unwrap();
         let xdg = xdg_under(tmp.path());
         write_user_config(
             &xdg,
             r#"
-[cache_provider]
+[infrastructure.cache]
 name = "tuist"
 project = "workspace-app"
 
-[cache_providers.tuist]
+[infrastructures.tuist]
 kind = "tuist"
 url = "https://cache.tuist.dev"
 account = "acme"
@@ -354,7 +369,6 @@ account = "acme"
         assert_eq!(config.url, "https://cache.tuist.dev");
         assert_eq!(config.account.as_deref(), Some("acme"));
         assert_eq!(config.project.as_deref(), Some("workspace-app"));
-        assert_eq!(config.token_env, DEFAULT_TUIST_TOKEN_ENV);
         assert_eq!(config.oauth_client_id, None);
         assert_eq!(config.provider_name, "tuist");
     }
@@ -376,10 +390,9 @@ kind = "local"
 [cache_provider]
 name = "tuist"
 
-[cache_providers.tuist]
+[infrastructures.tuist]
 kind = "tuist"
 account = "acme"
-project = "app"
 "#,
         );
 
@@ -406,7 +419,7 @@ project = "repo-app"
 name = "tuist"
 project = "default-app"
 
-[cache_providers.tuist]
+[infrastructures.tuist]
 kind = "tuist"
 url = "https://cache.tuist.dev"
 account = "acme"
@@ -429,7 +442,6 @@ account = "acme"
 kind = "tuist"
 url = "https://self-hosted.example.com"
 account = "acme"
-project = "app"
 "#,
         );
 
@@ -446,7 +458,7 @@ project = "app"
         write_user_config(
             &xdg,
             r#"
-[cache_providers.acme]
+[infrastructures.acme]
 kind = "tuist"
 url = "https://cache.acme.dev"
 account = "acme"

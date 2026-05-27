@@ -13,6 +13,7 @@ use crate::{Digest, Error, Result};
 
 pub const TUIST_APP_OAUTH_CLIENT_ID: &str = "b3298a92-3deb-4f5e-a526-b7ad324979b5";
 pub const TUIST_OAUTH_CLIENT_ID_ENV: &str = "TUIST_OAUTH_CLIENT_ID";
+const TUIST_TOKEN_ENV: &str = "TUIST_TOKEN";
 
 const REGISTRATION_PATH: &str = "oauth2/register";
 const TOKEN_PATH: &str = "oauth2/token";
@@ -40,7 +41,7 @@ impl TuistAuth {
     }
 
     pub fn token(&self) -> Result<String> {
-        if let Some(token) = env_token(&self.config.token_env) {
+        if let Some(token) = env_token(TUIST_TOKEN_ENV) {
             return Ok(token);
         }
 
@@ -369,7 +370,7 @@ impl TuistAuth {
     fn login_hint(&self) -> String {
         format!(
             "set {} or run `fabrik auth login --provider {}`",
-            self.config.token_env, self.config.provider_name
+            TUIST_TOKEN_ENV, self.config.provider_name
         )
     }
 
@@ -430,10 +431,8 @@ mod tests {
     fn static_config(url: String) -> TuistCacheConfig {
         TuistCacheConfig {
             url,
-            endpoint: None,
             account: Some("acme".to_string()),
             project: Some("demo".to_string()),
-            token_env: "TUIST_TOKEN".to_string(),
             oauth_client_id: Some(TUIST_APP_OAUTH_CLIENT_ID.to_string()),
             provider_name: "acme".to_string(),
         }

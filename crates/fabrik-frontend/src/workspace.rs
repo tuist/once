@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
-use crate::cache_provider::{CacheProviderConfig, CacheProviderToml};
+use crate::cache_provider::{CacheProviderConfig, CacheProviderToml, InfrastructureToml};
 use crate::dependency::{
     external_target_id, parse_generated_external_format, DependencyEntry,
     EXTERNAL_PACKAGE_CACHE_ROOT, GENERATED_EXTERNAL_FORMAT_VERSION,
@@ -203,7 +203,21 @@ pub fn load_cache_provider_override(root: &Path) -> Result<Option<CacheProviderC
         path: TOML_BUILD_FILE_NAME.to_string(),
         message: source.to_string(),
     })?;
-    let Some(raw) = value
+    let infrastructure = value
+        .get("infrastructure")
+        .cloned()
+        .map(toml::Value::try_into)
+        .transpose()
+        .map_err(|source| Error::Parse {
+            path: TOML_BUILD_FILE_NAME.to_string(),
+            message: source.to_string(),
+        })?;
+    let infrastructure: Option<InfrastructureToml> = infrastructure;
+    if let Some(raw) = infrastructure.and_then(|infrastructure| infrastructure.cache) {
+        return raw.into_config(TOML_BUILD_FILE_NAME).map(Some);
+    }
+
+    let raw = value
         .get("cache_provider")
         .cloned()
         .map(toml::Value::try_into)
@@ -211,8 +225,8 @@ pub fn load_cache_provider_override(root: &Path) -> Result<Option<CacheProviderC
         .map_err(|source| Error::Parse {
             path: TOML_BUILD_FILE_NAME.to_string(),
             message: source.to_string(),
-        })?
-    else {
+        })?;
+    let Some(raw) = raw else {
         return Ok(None);
     };
     let raw: CacheProviderToml = raw;
@@ -461,7 +475,6 @@ src_globs = ["src/*.rs"]
 kind = "tuist"
 url = "https://cache.tuist.dev"
 account = "acme"
-project = "app"
 "#,
         )
         .unwrap();
@@ -471,10 +484,34 @@ project = "app"
             config,
             CacheProviderConfig::Tuist(crate::TuistCacheProviderConfig {
                 url: "https://cache.tuist.dev".to_string(),
-                endpoint: None,
                 account: Some("acme".to_string()),
-                project: Some("app".to_string()),
-                token_env: crate::DEFAULT_TUIST_TOKEN_ENV.to_string(),
+                project: None,
+                oauth_client_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn load_cache_provider_reads_infrastructure_cache_config() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("fabrik.toml"),
+            r#"
+[infrastructure.cache]
+kind = "tuist"
+url = "https://cache.tuist.dev"
+account = "acme"
+"#,
+        )
+        .unwrap();
+
+        let config = load_cache_provider(tmp.path()).unwrap();
+        assert_eq!(
+            config,
+            CacheProviderConfig::Tuist(crate::TuistCacheProviderConfig {
+                url: "https://cache.tuist.dev".to_string(),
+                account: Some("acme".to_string()),
+                project: None,
                 oauth_client_id: None,
             })
         );

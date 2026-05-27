@@ -17,10 +17,8 @@ const KEY_VALUE_PATH: &str = "api/cache/keyvalue";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TuistCacheConfig {
     pub url: String,
-    pub endpoint: Option<String>,
     pub account: Option<String>,
     pub project: Option<String>,
-    pub token_env: String,
     pub oauth_client_id: Option<String>,
     pub provider_name: String,
 }
