@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::{env_token, join_url, TuistCacheConfig, PROVIDER_NAME};
 use crate::{Digest, Error, Result};
 
+/// Public OAuth client id for Fabrik's built-in Tuist app. This is not a secret.
 pub const TUIST_APP_OAUTH_CLIENT_ID: &str = "b3298a92-3deb-4f5e-a526-b7ad324979b5";
 pub const TUIST_OAUTH_CLIENT_ID_ENV: &str = "TUIST_OAUTH_CLIENT_ID";
 const TUIST_TOKEN_ENV: &str = "TUIST_TOKEN";
