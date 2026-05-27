@@ -670,29 +670,14 @@ async fn execute_remote_command(
 ) -> Result<ActionResult> {
     match remote.provider.as_str() {
         "microsandbox" => {
-            let microsandbox =
-                resolve_provider_program("microsandbox").unwrap_or_else(|| "microsandbox".into());
-            let mut remote_argv = vec![
-                microsandbox,
-                "run".to_string(),
-                "--workspace".to_string(),
-                workspace_root.to_string_lossy().into_owned(),
-            ];
-            if let Some(cwd) = cwd {
-                remote_argv.push("--cwd".to_string());
-                remote_argv.push(cwd.as_str().to_string());
-            }
-            remote_argv.push("--".to_string());
-            remote_argv.extend(argv.iter().cloned());
-            execute_child_streaming(
-                &remote_argv,
+            execute_microsandbox_command(
+                argv,
                 env,
-                None,
+                cwd,
                 timeout_ms,
                 workspace_root,
                 cache,
                 stream_to_parent,
-                false,
             )
             .await
         }
@@ -703,6 +688,170 @@ async fn execute_remote_command(
             provider: provider.to_string(),
         }),
     }
+}
+
+async fn execute_microsandbox_command(
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: Option<&WorkspacePath>,
+    timeout_ms: Option<u64>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
+    let image = std::env::var("FABRIK_MICROSANDBOX_IMAGE").unwrap_or_else(|_| "alpine".to_string());
+    let guest_root =
+        std::env::var("FABRIK_MICROSANDBOX_WORKDIR").unwrap_or_else(|_| "/workspace".to_string());
+    let guest_cwd = cwd.map_or_else(
+        || guest_root.clone(),
+        |cwd| join_remote_path(&guest_root, cwd.as_str()),
+    );
+    let sandbox_name = microsandbox_name();
+    let sandbox = microsandbox::Sandbox::builder(&sandbox_name)
+        .image(image)
+        .workdir(&guest_cwd)
+        .volume(&guest_root, |mount| mount.bind(workspace_root))
+        .create()
+        .await
+        .map_err(|source| microsandbox_error(&source))?;
+
+    let work = async {
+        let mut handle = sandbox
+            .exec_stream_with(program, |exec| {
+                let exec = exec.args(rest.iter().cloned()).cwd(&guest_cwd);
+                env.iter()
+                    .fold(exec, |exec, (key, value)| exec.env(key, value))
+            })
+            .await
+            .map_err(|source| microsandbox_error(&source))?;
+        collect_microsandbox_output(&mut handle, cache, stream_to_parent).await
+    };
+
+    let result = match timeout_ms {
+        Some(ms) => {
+            let dur = Duration::from_millis(ms);
+            match tokio::time::timeout(dur, work).await {
+                Ok(result) => result,
+                Err(_) => Err(Error::Timeout(dur)),
+            }
+        }
+        None => work.await,
+    };
+
+    let cleanup = async {
+        let stop_result = sandbox
+            .stop_and_wait()
+            .await
+            .map_err(|source| microsandbox_error(&source));
+        let remove_result = sandbox
+            .remove_persisted()
+            .await
+            .map_err(|source| microsandbox_error(&source));
+        stop_result.and(remove_result)
+    }
+    .await;
+
+    match (result, cleanup) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Ok(_), Err(err)) | (Err(err), _) => Err(err),
+    }
+}
+
+async fn collect_microsandbox_output(
+    handle: &mut microsandbox::ExecHandle,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut exit_code = None;
+    while let Some(event) = handle.recv().await {
+        match event {
+            microsandbox::ExecEvent::Started { .. } => {}
+            microsandbox::ExecEvent::Stdout(data) => {
+                write_stream_bytes(&data, StreamDestination::Stdout, stream_to_parent).await?;
+                stdout.extend_from_slice(&data);
+            }
+            microsandbox::ExecEvent::Stderr(data) => {
+                write_stream_bytes(&data, StreamDestination::Stderr, stream_to_parent).await?;
+                stderr.extend_from_slice(&data);
+            }
+            microsandbox::ExecEvent::Exited { code } => {
+                exit_code = Some(code);
+                break;
+            }
+            microsandbox::ExecEvent::Failed(payload) => {
+                return Err(Error::RemoteProviderApi {
+                    provider: "microsandbox".to_string(),
+                    message: format!("{payload:?}"),
+                });
+            }
+            microsandbox::ExecEvent::StdinError(payload) => {
+                return Err(Error::RemoteProviderApi {
+                    provider: "microsandbox".to_string(),
+                    message: format!("{payload:?}"),
+                });
+            }
+        }
+    }
+    let stdout = cache.put_blob(&stdout).await?;
+    let stderr = cache.put_blob(&stderr).await?;
+    Ok(ActionResult {
+        exit_code: exit_code.unwrap_or(-1),
+        stdout,
+        stderr,
+        outputs: BTreeMap::new(),
+    })
+}
+
+async fn write_stream_bytes(
+    bytes: &[u8],
+    destination: StreamDestination,
+    stream_to_parent: bool,
+) -> Result<()> {
+    if !stream_to_parent {
+        return Ok(());
+    }
+    match destination {
+        StreamDestination::Stdout => {
+            let mut out = tokio::io::stdout();
+            out.write_all(bytes).await.map_err(|source| Error::Wait {
+                program: "stdout".to_string(),
+                source,
+            })?;
+            out.flush().await.map_err(|source| Error::Wait {
+                program: "stdout".to_string(),
+                source,
+            })?;
+        }
+        StreamDestination::Stderr => {
+            let mut err = tokio::io::stderr();
+            err.write_all(bytes).await.map_err(|source| Error::Wait {
+                program: "stderr".to_string(),
+                source,
+            })?;
+            err.flush().await.map_err(|source| Error::Wait {
+                program: "stderr".to_string(),
+                source,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn microsandbox_error(source: &microsandbox::MicrosandboxError) -> Error {
+    Error::RemoteProviderApi {
+        provider: "microsandbox".to_string(),
+        message: source.to_string(),
+    }
+}
+
+fn microsandbox_name() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    format!("fabrik-{}-{nanos}", std::process::id())
 }
 
 #[derive(Debug)]
@@ -912,21 +1061,6 @@ fn shell_quote(value: &str) -> String {
         return value.to_string();
     }
     format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn resolve_provider_program(program: &str) -> Option<String> {
-    if program.contains('/') {
-        return Some(program.to_string());
-    }
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|dir| {
-        let candidate = dir.join(program);
-        if candidate.is_file() {
-            Some(candidate.to_string_lossy().into_owned())
-        } else {
-            None
-        }
-    })
 }
 
 #[allow(clippy::too_many_arguments)]

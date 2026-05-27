@@ -20,7 +20,7 @@ use cli::Cli;
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
-    match dispatch::dispatch(cli).await {
+    match Box::pin(dispatch::dispatch(cli)).await {
         Ok(code) => code,
         Err(e) => {
             eprintln!("fabrik: {e:#}");

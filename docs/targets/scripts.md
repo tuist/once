@@ -81,8 +81,8 @@ uses those declarations to compute the action key and restore declared
 outputs from cache. The difference is that a cache miss can run on a
 compute provider.
 
-Today Fabrik recognizes `microsandbox` as the development provider and
-`daytona` as a remote workspace provider:
+Today Fabrik recognizes `microsandbox` as the embedded development
+provider and `daytona` as a remote workspace provider:
 
 ```toml
 [[target]]
@@ -104,6 +104,13 @@ fabrik run --remote --compute microsandbox scripts/bundle
 fabrik exec --remote --compute microsandbox -- bash scripts/bundle.sh
 fabrik run --remote --compute daytona scripts/bundle
 ```
+
+The Microsandbox adapter is linked into the Fabrik binary. It creates a
+fresh local microVM, bind-mounts the workspace at `/workspace`, runs the
+command there, then stops and removes the sandbox state before returning.
+Set `FABRIK_MICROSANDBOX_IMAGE` to choose a different image, or
+`FABRIK_MICROSANDBOX_WORKDIR` to mount the repository somewhere other
+than `/workspace`.
 
 The Daytona adapter talks to the Daytona API directly. Set
 `FABRIK_DAYTONA_SANDBOX` to the sandbox id or name, and set

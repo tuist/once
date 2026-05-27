@@ -23,7 +23,7 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
 
     let workspace = resolve_workspace(cli.directory)?;
     let xdg = Xdg::from_env();
-    run_command(&workspace, &xdg, output, command).await
+    Box::pin(run_command(&workspace, &xdg, output, command)).await
 }
 
 fn resolve_workspace(directory: Option<PathBuf>) -> Result<PathBuf> {

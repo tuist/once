@@ -230,11 +230,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: install rust 1.86
+      - name: install rust 1.88
         shell: bash
         run: |
-          rustup toolchain install 1.86 --profile minimal --no-self-update
-          rustup default 1.86
+          rustup toolchain install 1.88 --profile minimal --no-self-update
+          rustup default 1.88
 
       - name: cache cargo registry, git db, and target
         uses: Swatinem/rust-cache@v2
@@ -252,11 +252,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: install rust 1.86
+      - name: install rust 1.88
         shell: bash
         run: |
-          rustup toolchain install 1.86 --profile minimal --no-self-update
-          rustup default 1.86
+          rustup toolchain install 1.88 --profile minimal --no-self-update
+          rustup default 1.88
 
       - name: cache cargo registry, git db, and target
         uses: Swatinem/rust-cache@v2

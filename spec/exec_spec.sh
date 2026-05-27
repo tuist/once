@@ -104,39 +104,10 @@ EOF
   End
 
   It 'runs a command through the microsandbox compute provider'
-    mkdir -p "$WORKSPACE/bin"
-    cat > "$WORKSPACE/bin/microsandbox" <<'EOF'
-#!/bin/sh
-test "$1" = "run" || exit 64
-shift
-workspace=""
-cwd=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --workspace)
-      shift
-      workspace="$1"
-      ;;
-    --cwd)
-      shift
-      cwd="$1"
-      ;;
-    --)
-      shift
-      break
-      ;;
-  esac
-  shift
-done
-printf 'remote stderr\n' >&2
-cd "$workspace/${cwd:-.}" || exit 1
-exec "$@"
-EOF
-    chmod +x "$WORKSPACE/bin/microsandbox"
-    When call env PATH="$WORKSPACE/bin:/usr/bin:/bin" "$FABRIK_BIN" -C "$WORKSPACE" exec --remote --compute microsandbox -- /bin/sh -c 'printf remote-output'
+    Skip if 'microsandbox specs are opt-in' microsandbox_specs_disabled
+    When call "$FABRIK_BIN" -C "$WORKSPACE" exec --remote --compute microsandbox -- /bin/sh -c 'printf remote-output'
     The status should be success
     The stdout should equal 'remote-output'
-    The stderr should include 'remote stderr'
     The stderr should include 'cache miss'
   End
 

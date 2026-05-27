@@ -151,6 +151,13 @@ Remote runs stream stdout and stderr as they arrive. On a cache hit,
 Fabrik replays the cached output and restores declared outputs without
 calling the provider.
 
+The Microsandbox adapter is embedded in the Fabrik binary. It creates a
+fresh local microVM for the cache miss, mounts the repository at
+`/workspace`, runs the command, then stops and removes the sandbox state
+before returning. Set `FABRIK_MICROSANDBOX_IMAGE` to choose a different
+image, or `FABRIK_MICROSANDBOX_WORKDIR` to use a different guest mount
+point.
+
 The Daytona adapter uses the Daytona API directly. Set
 `FABRIK_DAYTONA_SANDBOX` to the sandbox id or name, and set
 `FABRIK_DAYTONA_API_KEY` or `DAYTONA_API_KEY` for authentication. Set

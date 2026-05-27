@@ -66,7 +66,7 @@ The streaming detail matters. If output only arrives after the provider finishes
 
 This first release ships with two providers.
 
-[Microsandbox](https://github.com/superradcompany/microsandbox) is the one we use to exercise the whole flow end to end on a laptop. It does not bring much practical value beyond that. It runs locally in a microVM on your own machine, which is useful for testing the provider contract and the streaming pipeline, but it does not give you what remote execution actually offers, which is more compute somewhere else. We kept it in the box because the development workflow for Fabrik itself benefits from it.
+[Microsandbox](https://github.com/superradcompany/microsandbox) is the one we use to exercise the whole flow end to end on a laptop. It is embedded in the Fabrik binary rather than treated as another executable on the path. Fabrik creates the microVM, mounts the repository, streams the process output, and tears the sandbox down when the command finishes. It does not give you more compute somewhere else, but it gives us a real provider contract that can run during development without asking people to stand up remote infrastructure first.
 
 [Daytona](https://www.daytona.io) is the one we expect people to actually use. It gives you real remote workspaces with real horsepower, and it fits cleanly behind the same provider interface as Microsandbox. Point Fabrik at the sandbox, pass `--remote --compute daytona`, and the compile-and-test loop your agents are spawning ten times in a row stops being a fight against your laptop.
 

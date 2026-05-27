@@ -8,6 +8,7 @@ use crate::{ActionResult, Cas, Digest, Result, Stats};
 const TUIST_STREAM_REMOTE_UPLOAD_LIMIT: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum CacheProvider {
     Local(Cas),
     Tuist(TuistCache),
