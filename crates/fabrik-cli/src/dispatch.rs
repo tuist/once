@@ -170,6 +170,50 @@ async fn run_cache_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
+        Some(cli::CacheCmd::Blob { cmd }) => {
+            let cache = crate::cache_provider::resolve(workspace, xdg)?;
+            match cmd {
+                Some(cli::CacheBlobCmd::Put { path }) => {
+                    commands::cache::put_blob(&cache, path.as_deref(), output)
+                        .await
+                        .map(|()| ExitCode::SUCCESS)
+                }
+                Some(cli::CacheBlobCmd::Get {
+                    digest,
+                    output: output_path,
+                }) => commands::cache::get_blob(&cache, digest, output_path.as_deref(), output)
+                    .await
+                    .map(|()| ExitCode::SUCCESS),
+                None => anyhow::bail!("cache blob subcommand required"),
+            }
+        }
+        Some(cli::CacheCmd::Action { cmd }) => {
+            let cache = crate::cache_provider::resolve(workspace, xdg)?;
+            match cmd {
+                Some(cli::CacheActionCmd::Get { action }) => {
+                    commands::cache::get_action(&cache, action, output)
+                        .await
+                        .map(|()| ExitCode::SUCCESS)
+                }
+                Some(cli::CacheActionCmd::Put {
+                    action,
+                    exit_code,
+                    stdout,
+                    stderr,
+                    outputs,
+                }) => commands::cache::put_action(
+                    &cache, action, exit_code, stdout, stderr, outputs, output,
+                )
+                .await
+                .map(|()| ExitCode::SUCCESS),
+                Some(cli::CacheActionCmd::Forget { action }) => {
+                    commands::cache::forget_action(&cache, action, output)
+                        .await
+                        .map(|()| ExitCode::SUCCESS)
+                }
+                None => anyhow::bail!("cache action subcommand required"),
+            }
+        }
         None => anyhow::bail!("cache subcommand required"),
     }
 }
