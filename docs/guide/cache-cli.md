@@ -1,68 +1,116 @@
 # Cache CLI
 
+Most repositories have a long tail of scripts that exist next to the
+build: test runners, codegen, dependency installs, environment
+bootstraps. They are usually invisible to caching because they live
+outside the formal graph, and so they run from scratch every time, on
+every machine, even when their inputs have not changed.
+
+The cost of that adds up quickly. A test suite that takes ninety
+seconds runs ten times a day during a refactor. `npm install` re-runs
+on every CI job, even when the lockfile is identical. An agent
+operating across ten parallel worktrees redoes the same codegen step
+ten times because none of the workers know the others already paid
+for it.
+
 The `fabrik cache` CLI exposes Fabrik's content-addressed store
-directly to shell scripts. Use it when you have a workflow whose
-result is a function of a set of inputs, and you want to skip the
-work, or restore an artifact, when those inputs have not changed.
+directly to those scripts so they can stop. Hash the inputs that
+determine a result, ask the cache whether you have already produced
+that result, and either skip the work or restore the artifact. The
+script stays a script. The speedup comes for free from the same store
+that the build graph uses.
 
-This is the layer underneath [annotated script files](./cacheable-scripts.md).
-Annotated scripts declare inputs and outputs once and let Fabrik handle
-the cache around them. The Cache CLI is what you reach for when the
-script needs to make the cache decisions itself, or when the work
-being cached is not naturally an action.
-
-## Commands
-
-All commands live under `fabrik cache`.
-
-| Command | Purpose |
-| --- | --- |
-| `fabrik cache hash <path> [<path> ...]` | Print the BLAKE3 digest of a file, or of several files combined in order. |
-| `fabrik cache hash --combine <d1> <d2> ...` | Combine already-computed digests into one. |
-| `fabrik cache blob put [<path>]` | Store bytes from a file (or stdin) and print their content digest. |
-| `fabrik cache blob put --key <digest> [<path>]` | Store bytes under a caller-chosen digest in the keyed namespace. |
-| `fabrik cache blob get <digest>` | Fetch bytes from the content-addressed namespace. |
-| `fabrik cache blob get --key <digest>` | Fetch bytes from the keyed namespace. |
-| `fabrik cache blob exists <digest>` | Exit 0 if the blob is present in the content-addressed namespace, 1 if not. |
-| `fabrik cache blob exists --key <digest>` | Same, for the keyed namespace. |
-| `fabrik cache action get <digest>` | Look up a cached action result. |
-| `fabrik cache action put <digest> --exit-code <n> --stdout <d> --stderr <d> [--output path=digest ...]` | Record an action result. |
-| `fabrik cache action forget <digest>` | Drop a cached action result. |
-| `fabrik cache stats` | Print blob, keyed-blob, and action counts and on-disk size. |
+The surface is small. It has three caches and a hashing helper.
 
 All `--format json` and `--format toon` flags work as usual and return
 machine-parseable output for scripts and agent consumers.
 
-## Two blob namespaces
+## Hashing
 
-There are two blob namespaces, kept deliberately separate.
+`cache hash` computes BLAKE3 digests without storing anything. Use it
+to derive the keys you will then pass to the cache commands below.
 
-**Content-addressed blobs** (the default) are stored under the BLAKE3
-hash of their bytes. A `get` always returns bytes that hash back to the
-digest you asked for. The build graph and action results reference
-output blobs by their content hash, and this invariant is what makes
-caching safe.
+| Command | Purpose |
+| --- | --- |
+| `fabrik cache hash <path>` | Print the BLAKE3 of a file's bytes. |
+| `fabrik cache hash -` | Print the BLAKE3 of stdin. |
+| `fabrik cache hash <path1> <path2> ...` | Hash each file and combine the digests in order. |
+| `fabrik cache hash --combine <d1> <d2> ...` | Combine already-computed digests in order. |
 
-**Keyed blobs** are stored under a digest you choose, typically derived
-from a set of input files. The bytes are not required to hash to the
-key. This is what lets a script memoize an artifact under a digest
-derived from its inputs (for example, a `node_modules` tarball keyed by
-the hash of `package.json` and the lockfile).
+A few rules worth knowing:
 
-Keyed blobs are local-only today. Content-addressed blobs travel
-through whatever remote infrastructure your `fabrik.toml` configures
-(for example, [Tuist](https://tuist.dev)). Remote support for keyed
-blobs is on the roadmap.
+- Combination is order-sensitive: `combine(a, b) != combine(b, a)`.
+- `-` may appear at most once. A second `-` would read an
+  already-drained stdin and silently hash to empty, so it is rejected.
+- For directory inputs, pipe a deterministic `tar` stream:
+  `tar --sort=name -cf - src test | fabrik cache hash`.
 
-The two namespaces never overlap. `cache blob get <digest>` will never
-return a keyed blob, and `cache blob get --key <digest>` will never
-return a content-addressed blob. Passing `--key` is how you declare
-which namespace you mean.
+## Content-addressed cache
 
-## Skip a test run when inputs have not changed
+The default blob namespace. Blobs are stored under the BLAKE3 hash of
+their bytes. A `get` always returns bytes that hash back to the digest
+you asked for. The build graph and action results reference output
+blobs by their content hash, and this invariant is what makes caching
+safe.
 
-The action cache is the right primitive when what you want to remember
-is whether a *run* succeeded.
+| Command | Purpose |
+| --- | --- |
+| `fabrik cache blob put [<path>]` | Store bytes from a file (or stdin) and print their content digest. |
+| `fabrik cache blob get <digest>` | Fetch bytes by digest. |
+| `fabrik cache blob exists <digest>` | Exit 0 on hit, 1 on miss. With `--format json`/`toon`, always exit 0 and emit `{"digest":"...","present":true|false}`. |
+
+This namespace travels through whatever remote infrastructure your
+`fabrik.toml` configures (for example, [Tuist](https://tuist.dev)).
+`get` falls back to the remote on local miss; `exists` consults the
+remote too, so the two are symmetric.
+
+## Keyed cache
+
+Blobs stored under a digest you choose, typically derived from a set
+of input files. The bytes are not required to hash to the key. This
+is what lets a script memoize an artifact under a digest derived from
+its inputs (for example, a `node_modules` tarball keyed by the hash
+of `package.json` and the lockfile).
+
+| Command | Purpose |
+| --- | --- |
+| `fabrik cache blob put --key <digest> [<path>]` | Store bytes under the caller-chosen `<digest>`. |
+| `fabrik cache blob get --key <digest>` | Fetch bytes by key. |
+| `fabrik cache blob exists --key <digest>` | Exit 0 on hit, 1 on miss. |
+
+Keyed blobs are kept in a separate namespace from content-addressed
+blobs. `cache blob get <digest>` will never return a keyed blob, and
+`cache blob get --key <digest>` will never return a content-addressed
+blob. Passing `--key` is how you declare which namespace you mean. The
+split is deliberate: action results reference output blobs by their
+content hash, and we never want a keyed entry to be silently
+substituted for one of those.
+
+Keyed blobs are local-only today. Remote support is on the roadmap.
+
+## Action cache
+
+Maps an action digest to an `ActionResult`: the captured exit code,
+stdout and stderr digests, and any declared outputs (workspace path →
+blob digest). This is the right primitive when what you want to
+remember is whether a *run* succeeded, not an artifact you produced.
+The terminology mirrors the Bazel/REAPI action cache.
+
+| Command | Purpose |
+| --- | --- |
+| `fabrik cache action get <digest>` | Look up a cached action result. Always exits 0; parse `--format json` for `"hit": true\|false`. |
+| `fabrik cache action put <digest> --exit-code <n> --stdout <d> --stderr <d> [--output path=digest ...]` | Record an action result. |
+| `fabrik cache action forget <digest>` | Drop a cached action result. |
+
+## Inspecting
+
+| Command | Purpose |
+| --- | --- |
+| `fabrik cache stats` | Print counts and on-disk size for the content-addressed, keyed, and action caches. |
+
+## Examples
+
+### Skip a test run when inputs have not changed
 
 ```sh
 #!/usr/bin/env bash
@@ -95,11 +143,11 @@ The same shape works for any test runner, linter, type checker, or
 codegen step whose result is a deterministic function of a set of
 files.
 
-## Restore an artifact instead of regenerating it
+### Restore an artifact instead of regenerating it
 
-When what you want to remember is the *output* of a step (a tarball, a
-generated folder, a built binary), the keyed-blob primitive is a
-better fit. `npm install` is the canonical example.
+When what you want to remember is the *output* of a step (a tarball,
+a generated folder, a built binary), the keyed cache is a better fit.
+`npm install` is the canonical example.
 
 ```sh
 #!/usr/bin/env bash
@@ -126,37 +174,3 @@ probe, one to either pull or populate.
 The same pattern works for `pip install`, `bundle install`,
 `cargo fetch`, or any output a tool produces deterministically from a
 small set of input files.
-
-## Exit codes and structured output
-
-`cache blob exists` is designed to be used as a shell condition:
-
-- In human mode, it exits `0` on hit and `1` on miss, with no stdout.
-- In `--format json` or `--format toon`, it always exits `0` and emits
-  `{ "digest": "...", "present": true|false }`.
-
-`cache action get` always exits `0` whether the lookup hit or missed;
-parse the `"hit"` field from `--format json` to branch.
-
-`cache blob get` and `cache blob get --key` exit non-zero on miss with
-an error on stderr.
-
-## Hashing rules
-
-- `cache hash <file>` prints the BLAKE3 of the file's bytes.
-- `cache hash -` prints the BLAKE3 of stdin.
-- `cache hash <file1> <file2> ...` hashes each file and combines the
-  digests in order. This is shorthand for hashing each separately and
-  passing them to `--combine`.
-- `cache hash --combine <d1> <d2> ...` combines already-computed
-  digests. The combination is order-sensitive: `combine(a, b) != combine(b, a)`.
-- `-` may appear at most once. Passing `-` twice is rejected, since the
-  second occurrence would read an already-drained stdin and silently
-  hash to empty.
-
-For directory inputs, pipe a deterministic `tar` stream through
-`cache hash`:
-
-```sh
-tar --sort=name -cf - src test | fabrik cache hash
-```
