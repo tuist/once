@@ -4,10 +4,6 @@
   "compatibility_date": "2026-05-12",
   "workers_dev": false,
   "preview_urls": true,
-  "route": {
-    "pattern": "fabrik.run/*",
-    "zone_name": "fabrik.run"
-  },
   "assets": {
     "directory": "./.vitepress/dist",
     "html_handling": "auto-trailing-slash",
