@@ -79,6 +79,15 @@ export default defineConfig({
                 { text: "Script Rules", link: "/targets/scripts" },
               ],
             },
+            {
+              text: "Primitives",
+              items: [
+                {
+                  text: "Runtime Cache CLI",
+                  link: "/guide/runtime-cache-cli",
+                },
+              ],
+            },
           ],
         },
       ],
