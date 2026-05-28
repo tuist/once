@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::pin::Pin;
+use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use fabrik_cas::{ActionResult, CacheProvider, Digest};
@@ -20,6 +22,7 @@ struct CacheEntry {
 #[derive(Serialize)]
 struct CacheStats {
     blobs: CacheEntry,
+    keyed: CacheEntry,
     actions: CacheEntry,
 }
 
@@ -36,6 +39,12 @@ struct HashRecord {
 #[derive(Serialize)]
 struct BlobPutRecord {
     digest: Digest,
+}
+
+#[derive(Serialize)]
+struct BlobExistsRecord {
+    digest: Digest,
+    present: bool,
 }
 
 #[derive(Serialize)]
@@ -72,6 +81,10 @@ pub async fn print_stats(cache: &CacheProvider, output: Output) -> Result<()> {
             count: s.blob_count,
             bytes: s.blob_bytes,
         },
+        keyed: CacheEntry {
+            count: s.keyed_count,
+            bytes: s.keyed_bytes,
+        },
         actions: CacheEntry {
             count: s.action_count,
             bytes: s.action_bytes,
@@ -79,8 +92,13 @@ pub async fn print_stats(cache: &CacheProvider, output: Output) -> Result<()> {
     };
     let body = match output.format {
         Format::Human => format!(
-            "blobs:   {} ({} bytes)\nactions: {} ({} bytes)\n",
-            s.blob_count, s.blob_bytes, s.action_count, s.action_bytes,
+            "blobs:   {} ({} bytes)\nkeyed:   {} ({} bytes)\nactions: {} ({} bytes)\n",
+            s.blob_count,
+            s.blob_bytes,
+            s.keyed_count,
+            s.keyed_bytes,
+            s.action_count,
+            s.action_bytes,
         ),
         Format::Json | Format::Toon => render::structured(output.format, &stats)?,
     };
@@ -91,6 +109,11 @@ pub async fn print_stats(cache: &CacheProvider, output: Output) -> Result<()> {
 }
 
 pub async fn hash(inputs: Vec<String>, combine: bool, output: Output) -> Result<()> {
+    if !combine && inputs.iter().filter(|s| *s == "-").count() > 1 {
+        anyhow::bail!(
+            "cache hash: `-` (stdin) may appear at most once; later occurrences would silently hash to empty"
+        );
+    }
     let record = if combine {
         let parts = parse_digest_inputs(&inputs)?;
         let digest = combine_digests(&parts);
@@ -101,25 +124,39 @@ pub async fn hash(inputs: Vec<String>, combine: bool, output: Output) -> Result<
             parts: Some(parts.len()),
         }
     } else {
-        let input = match inputs.as_slice() {
-            [] => None,
-            [input] => Some(input.as_str()),
-            _ => anyhow::bail!("cache hash accepts at most one input path without --combine"),
-        };
-        let (digest, bytes) = match input {
-            Some(path) if path != "-" => {
-                let file = tokio::fs::File::open(path)
-                    .await
-                    .with_context(|| format!("opening hash input {path}"))?;
-                hash_reader(file).await?
+        match inputs.as_slice() {
+            [] => {
+                let (digest, bytes) = hash_reader(tokio::io::stdin()).await?;
+                HashRecord {
+                    digest,
+                    mode: "bytes",
+                    bytes: Some(bytes),
+                    parts: None,
+                }
             }
-            _ => hash_reader(tokio::io::stdin()).await?,
-        };
-        HashRecord {
-            digest,
-            mode: "bytes",
-            bytes: Some(bytes),
-            parts: None,
+            [input] => {
+                let (digest, bytes) = hash_input(input).await?;
+                HashRecord {
+                    digest,
+                    mode: "bytes",
+                    bytes: Some(bytes),
+                    parts: None,
+                }
+            }
+            many => {
+                let mut parts = Vec::with_capacity(many.len());
+                for input in many {
+                    let (digest, _) = hash_input(input).await?;
+                    parts.push(digest);
+                }
+                let digest = combine_digests(&parts);
+                HashRecord {
+                    digest,
+                    mode: "combine",
+                    bytes: None,
+                    parts: Some(parts.len()),
+                }
+            }
         }
     };
 
@@ -130,18 +167,19 @@ pub async fn hash(inputs: Vec<String>, combine: bool, output: Output) -> Result<
     write_stdout(body.as_bytes()).await
 }
 
-pub async fn put_blob(cache: &CacheProvider, path: Option<&Path>, output: Output) -> Result<()> {
-    let digest = match path {
-        Some(path) if path != Path::new("-") => {
-            let file = tokio::fs::File::open(path)
-                .await
-                .with_context(|| format!("opening blob input {}", path.display()))?;
-            cache.put_stream(file).await?
+pub async fn put_blob(
+    cache: &CacheProvider,
+    key: Option<Digest>,
+    path: Option<&Path>,
+    output: Output,
+) -> Result<()> {
+    let reader = open_blob_input(path).await?;
+    let digest = match key {
+        Some(key) => {
+            cache.put_keyed_stream(&key, reader).await?;
+            key
         }
-        _ => {
-            let stdin = tokio::io::stdin();
-            cache.put_stream(stdin).await?
-        }
+        None => cache.put_stream(reader).await?,
     };
     let record = BlobPutRecord { digest };
     let body = match output.format {
@@ -151,13 +189,60 @@ pub async fn put_blob(cache: &CacheProvider, path: Option<&Path>, output: Output
     write_stdout(body.as_bytes()).await
 }
 
+async fn open_blob_input(
+    path: Option<&Path>,
+) -> Result<Pin<Box<dyn AsyncRead + Send + Unpin>>> {
+    match path {
+        Some(path) if path != Path::new("-") => {
+            let file = tokio::fs::File::open(path)
+                .await
+                .with_context(|| format!("opening blob input {}", path.display()))?;
+            Ok(Box::pin(file))
+        }
+        _ => Ok(Box::pin(tokio::io::stdin())),
+    }
+}
+
+pub async fn exists_blob(
+    cache: &CacheProvider,
+    digest: Digest,
+    keyed: bool,
+    output: Output,
+) -> Result<ExitCode> {
+    let present = if keyed {
+        cache.has_keyed_blob(&digest).await?
+    } else {
+        cache.has_blob(&digest).await?
+    };
+    match output.format {
+        Format::Human => {
+            if present {
+                Ok(ExitCode::SUCCESS)
+            } else {
+                Ok(ExitCode::from(1))
+            }
+        }
+        Format::Json | Format::Toon => {
+            let record = BlobExistsRecord { digest, present };
+            let body = render::structured(output.format, &record)?;
+            write_stdout(body.as_bytes()).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
 pub async fn get_blob(
     cache: &CacheProvider,
     digest: Digest,
+    keyed: bool,
     output_path: Option<&Path>,
     output: Output,
 ) -> Result<()> {
-    let bytes = cache.get_blob(&digest).await?;
+    let bytes = if keyed {
+        cache.get_keyed_blob(&digest).await?
+    } else {
+        cache.get_blob(&digest).await?
+    };
     match output_path {
         Some(path) if path != Path::new("-") => {
             write_output_file(path, &bytes).await?;
@@ -263,6 +348,17 @@ fn combine_digests(parts: &[Digest]) -> Digest {
         hasher.update(part.as_bytes());
     }
     Digest::from_bytes(*hasher.finalize().as_bytes())
+}
+
+async fn hash_input(input: &str) -> Result<(Digest, u64)> {
+    if input == "-" {
+        hash_reader(tokio::io::stdin()).await
+    } else {
+        let file = tokio::fs::File::open(input)
+            .await
+            .with_context(|| format!("opening hash input {input}"))?;
+        hash_reader(file).await
+    }
 }
 
 async fn hash_reader<R: AsyncRead + Unpin>(mut reader: R) -> Result<(Digest, u64)> {

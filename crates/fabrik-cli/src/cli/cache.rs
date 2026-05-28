@@ -9,17 +9,24 @@ pub enum CacheCmd {
     Stats,
 
     /// Compute a digest without storing bytes in the cache.
+    ///
+    /// With one path (or stdin), prints the digest of those bytes.
+    /// With multiple paths, hashes each file and combines the digests
+    /// in order, producing a single key suitable for `cache blob` ops.
     Hash {
         /// Combine already-computed digests into one ordered digest.
         #[arg(long)]
         combine: bool,
 
-        /// File to hash, or digests to combine with --combine. Use `-`
-        /// or omit the path to hash stdin.
+        /// File(s) to hash, or digests to combine with --combine. Use
+        /// `-` or omit the path to hash stdin.
         inputs: Vec<String>,
     },
 
-    /// Read and write content-addressed blobs.
+    /// Read and write blobs. Defaults to the content-addressed
+    /// namespace; `put --key`, `get --key`, and `exists --key` operate
+    /// on the keyed namespace, which is local-only and stores bytes
+    /// under a caller-chosen digest.
     #[command(arg_required_else_help = true)]
     Blob {
         #[command(subcommand)]
@@ -36,21 +43,52 @@ pub enum CacheCmd {
 
 #[derive(Subcommand)]
 pub enum CacheBlobCmd {
-    /// Store bytes from a file or stdin and print the blob digest.
+    /// Store bytes from a file or stdin.
+    ///
+    /// Without `--key`, prints the BLAKE3 digest of the bytes (content
+    /// addressing). With `--key`, stores the bytes under the
+    /// caller-chosen digest so scripts can memoize artifacts under a
+    /// key derived from their inputs.
     Put {
+        /// Store under this digest instead of the content hash.
+        #[arg(long, value_parser = parse_digest)]
+        key: Option<Digest>,
+
         /// File to store. Use `-` or omit the path to read stdin.
         path: Option<PathBuf>,
     },
 
-    /// Fetch blob bytes by digest.
+    /// Fetch blob bytes by digest. Defaults to the content-addressed
+    /// namespace; pass `--key` to fetch from the keyed namespace
+    /// instead. The two are kept separate so a keyed blob cannot be
+    /// silently substituted for a content-addressed lookup.
     Get {
-        /// Blob digest to fetch.
+        /// Look up `digest` in the keyed namespace.
+        #[arg(long)]
+        key: bool,
+
+        /// Blob digest (or key) to fetch.
         #[arg(value_parser = parse_digest)]
         digest: Digest,
 
         /// File to write. Defaults to stdout; use `-` for stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+
+    /// Check whether a blob exists. Exits 0 on hit, 1 on miss; with
+    /// `--format json|toon`, always exits 0 and reports `present` in
+    /// the structured output. Defaults to the content-addressed
+    /// namespace; pass `--key` to probe the keyed namespace.
+    Exists {
+        /// Probe the keyed namespace instead of the content-addressed
+        /// one.
+        #[arg(long)]
+        key: bool,
+
+        /// Blob digest (or key) to probe.
+        #[arg(value_parser = parse_digest)]
+        digest: Digest,
     },
 }
 
@@ -122,6 +160,7 @@ impl CacheBlobCmd {
         match self {
             Self::Put { .. } => vec!["put"],
             Self::Get { .. } => vec!["get"],
+            Self::Exists { .. } => vec!["exists"],
         }
     }
 }

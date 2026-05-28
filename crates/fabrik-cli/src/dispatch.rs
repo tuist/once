@@ -178,17 +178,27 @@ async fn run_cache_command(
         Some(cli::CacheCmd::Blob { cmd }) => {
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
             match cmd {
-                Some(cli::CacheBlobCmd::Put { path }) => {
-                    commands::cache::put_blob(&cache, path.as_deref(), output)
+                Some(cli::CacheBlobCmd::Put { key, path }) => {
+                    commands::cache::put_blob(&cache, key, path.as_deref(), output)
                         .await
                         .map(|()| ExitCode::SUCCESS)
                 }
                 Some(cli::CacheBlobCmd::Get {
+                    key,
                     digest,
                     output: output_path,
-                }) => commands::cache::get_blob(&cache, digest, output_path.as_deref(), output)
-                    .await
-                    .map(|()| ExitCode::SUCCESS),
+                }) => commands::cache::get_blob(
+                    &cache,
+                    digest,
+                    key,
+                    output_path.as_deref(),
+                    output,
+                )
+                .await
+                .map(|()| ExitCode::SUCCESS),
+                Some(cli::CacheBlobCmd::Exists { key, digest }) => {
+                    commands::cache::exists_blob(&cache, digest, key, output).await
+                }
                 None => anyhow::bail!("cache blob subcommand required"),
             }
         }
