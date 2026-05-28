@@ -22,9 +22,6 @@ that the build graph uses.
 
 The surface is small. It has three caches and a hashing helper.
 
-All `--format json` and `--format toon` flags work as usual and return
-machine-parseable output for scripts and agent consumers.
-
 ## Hashing
 
 `cache hash` computes BLAKE3 digests without storing anything. Use it
