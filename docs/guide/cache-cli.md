@@ -1,15 +1,15 @@
-# Runtime Cache CLI
+# Cache CLI
 
-The runtime cache CLI exposes Fabrik's content-addressed store directly
-to shell scripts. Use it when you have a workflow whose result is a
-function of a set of inputs, and you want to skip the work, or restore
-an artifact, when those inputs have not changed.
+The `fabrik cache` CLI exposes Fabrik's content-addressed store
+directly to shell scripts. Use it when you have a workflow whose
+result is a function of a set of inputs, and you want to skip the
+work, or restore an artifact, when those inputs have not changed.
 
 This is the layer underneath [annotated script files](./cacheable-scripts.md).
 Annotated scripts declare inputs and outputs once and let Fabrik handle
-the cache around them. The runtime CLI is what you reach for when the
-script needs to make the cache decisions itself, or when the work being
-cached is not naturally an action.
+the cache around them. The Cache CLI is what you reach for when the
+script needs to make the cache decisions itself, or when the work
+being cached is not naturally an action.
 
 ## Commands
 

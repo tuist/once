@@ -83,8 +83,8 @@ export default defineConfig({
               text: "Primitives",
               items: [
                 {
-                  text: "Runtime Cache CLI",
-                  link: "/guide/runtime-cache-cli",
+                  text: "Cache CLI",
+                  link: "/guide/cache-cli",
                 },
               ],
             },
