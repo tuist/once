@@ -170,6 +170,11 @@ async fn run_cache_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
+        Some(cli::CacheCmd::Hash { inputs, combine }) => {
+            commands::cache::hash(inputs, combine, output)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
         Some(cli::CacheCmd::Blob { cmd }) => {
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
             match cmd {

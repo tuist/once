@@ -12,6 +12,41 @@ Describe 'fabrik cache runtime commands'
     The stdout should equal 'hello cache'
   End
 
+  It 'hashes bytes with the same digest as blob put'
+    hash_digest="$(printf 'hello cache' | fabrik cache hash)"
+    blob_digest="$(printf 'hello cache' | fabrik cache blob put)"
+
+    When call /bin/sh -c '[ "$1" = "$2" ]' -- "$hash_digest" "$blob_digest"
+    The status should be success
+  End
+
+  It 'does not store hashed bytes'
+    printf 'hello cache' | fabrik cache hash >/dev/null
+    When call fabrik cache stats
+    The status should be success
+    The stdout should include 'blobs:   0'
+  End
+
+  It 'combines digests in a stable ordered form'
+    one="$(printf 'one' | fabrik cache hash)"
+    two="$(printf 'two' | fabrik cache hash)"
+    combined="$(fabrik cache hash --combine "$one" "$two")"
+    same="$(fabrik cache hash --combine "$one" "$two")"
+    reverse="$(fabrik cache hash --combine "$two" "$one")"
+
+    When call /bin/sh -c '[ "$1" = "$2" ] && [ "$1" != "$3" ]' -- "$combined" "$same" "$reverse"
+    The status should be success
+  End
+
+  It 'emits structured hash metadata'
+    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" cache hash --combine \
+      3ef81072da29fe9d6c28c389fd497c20e8ffde86fd335b326c34a9d7a56f0dbc
+    The status should be success
+    The stdout should include '"mode":"combine"'
+    The stdout should include '"parts":1'
+    The stdout should include '"digest":'
+  End
+
   It 'stores a file blob and writes it back to an output path'
     printf 'file payload' > "$WORKSPACE/input.txt"
     digest="$(fabrik cache blob put "$WORKSPACE/input.txt")"

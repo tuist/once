@@ -182,6 +182,7 @@ mod tests {
             &["fabrik", "test", "t"],
             &["fabrik", "exec", "true"],
             &["fabrik", "cache", "stats"],
+            &["fabrik", "cache", "hash", "-"],
             &["fabrik", "cache", "blob", "put", "-"],
             &[
                 "fabrik",

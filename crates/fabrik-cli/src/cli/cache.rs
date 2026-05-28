@@ -8,6 +8,17 @@ pub enum CacheCmd {
     /// Print blob and action counts plus on-disk size.
     Stats,
 
+    /// Compute a digest without storing bytes in the cache.
+    Hash {
+        /// Combine already-computed digests into one ordered digest.
+        #[arg(long)]
+        combine: bool,
+
+        /// File to hash, or digests to combine with --combine. Use `-`
+        /// or omit the path to hash stdin.
+        inputs: Vec<String>,
+    },
+
     /// Read and write content-addressed blobs.
     #[command(arg_required_else_help = true)]
     Blob {
@@ -87,6 +98,7 @@ impl CacheCmd {
     pub(super) fn surface_path(&self) -> Vec<&'static str> {
         match self {
             Self::Stats => vec!["stats"],
+            Self::Hash { .. } => vec!["hash"],
             Self::Blob { cmd } => {
                 let mut path = vec!["blob"];
                 if let Some(cmd) = cmd {
