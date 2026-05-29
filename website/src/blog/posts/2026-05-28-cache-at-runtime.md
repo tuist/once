@@ -29,13 +29,11 @@ Two caches. The shape mirrors what Bazel and the [Remote Execution API](https://
 
 Most commands accept inputs that describe what determines a result. The grammar is small and the same everywhere it appears:
 
-| Spec | Meaning |
-| --- | --- |
-| `<path>` | A file or directory (directories walk sorted, content + relative path) |
-| `path:<path>` | Explicit path form for names that contain `:` |
-| `value:<str>` | A literal string |
-| `env:<NAME>` | An environment variable, hashed as `<NAME>\0<value>` so two variables sharing a value do not collide |
-| `-` | Standard input |
+- **`<path>`**: a file or directory (directories walk sorted, content plus relative path).
+- **`path:<path>`**: explicit path form for names that contain `:`.
+- **`value:<str>`**: a literal string.
+- **`env:<NAME>`**: an environment variable, hashed as `<NAME>\0<value>` so two variables sharing a value do not collide.
+- **`-`**: standard input.
 
 So when you write `--input src --input vitest.config.ts --input env:NODE_ENV`, Fabrik walks the `src/` tree sorted, hashes the config file's bytes, reads `NODE_ENV` from the environment, combines the three digests in order, and uses that as the action key. You never see a hash unless you ask for one.
 
