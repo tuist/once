@@ -1,7 +1,7 @@
 //! `fabrik cache` - inspect and mutate the configured cache provider.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::ExitCode;
 
@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use fabrik_cas::{ActionResult, CacheProvider, Digest};
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use walkdir::WalkDir;
 
 use crate::cli::{Format, Output};
 use crate::render;
@@ -22,18 +23,7 @@ struct CacheEntry {
 #[derive(Serialize)]
 struct CacheStats {
     blobs: CacheEntry,
-    keyed: CacheEntry,
     actions: CacheEntry,
-}
-
-#[derive(Serialize)]
-struct HashRecord {
-    digest: Digest,
-    mode: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bytes: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parts: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -74,16 +64,41 @@ struct ActionForgetRecord {
     removed: bool,
 }
 
+/// Parsed `cache hash` / `--input` argument.
+#[derive(Debug)]
+enum InputSpec {
+    /// A file or directory on disk.
+    Path(PathBuf),
+    /// A literal string.
+    Value(String),
+    /// An environment variable, hashed as `NAME\0value`.
+    EnvVar(String),
+    /// Standard input (allowed at most once across all inputs).
+    Stdin,
+}
+
+impl InputSpec {
+    fn parse(raw: &str) -> Self {
+        if raw == "-" {
+            Self::Stdin
+        } else if let Some(rest) = raw.strip_prefix("path:") {
+            Self::Path(PathBuf::from(rest))
+        } else if let Some(rest) = raw.strip_prefix("value:") {
+            Self::Value(rest.to_string())
+        } else if let Some(rest) = raw.strip_prefix("env:") {
+            Self::EnvVar(rest.to_string())
+        } else {
+            Self::Path(PathBuf::from(raw))
+        }
+    }
+}
+
 pub async fn print_stats(cache: &CacheProvider, output: Output) -> Result<()> {
     let s = cache.stats().await?;
     let stats = CacheStats {
         blobs: CacheEntry {
             count: s.blob_count,
             bytes: s.blob_bytes,
-        },
-        keyed: CacheEntry {
-            count: s.keyed_count,
-            bytes: s.keyed_bytes,
         },
         actions: CacheEntry {
             count: s.action_count,
@@ -92,13 +107,8 @@ pub async fn print_stats(cache: &CacheProvider, output: Output) -> Result<()> {
     };
     let body = match output.format {
         Format::Human => format!(
-            "blobs:   {} ({} bytes)\nkeyed:   {} ({} bytes)\nactions: {} ({} bytes)\n",
-            s.blob_count,
-            s.blob_bytes,
-            s.keyed_count,
-            s.keyed_bytes,
-            s.action_count,
-            s.action_bytes,
+            "blobs:   {} ({} bytes)\nactions: {} ({} bytes)\n",
+            s.blob_count, s.blob_bytes, s.action_count, s.action_bytes,
         ),
         Format::Json | Format::Toon => render::structured(output.format, &stats)?,
     };
@@ -108,79 +118,9 @@ pub async fn print_stats(cache: &CacheProvider, output: Output) -> Result<()> {
     Ok(())
 }
 
-pub async fn hash(inputs: Vec<String>, combine: bool, output: Output) -> Result<()> {
-    if !combine && inputs.iter().filter(|s| *s == "-").count() > 1 {
-        anyhow::bail!(
-            "cache hash: `-` (stdin) may appear at most once; later occurrences would silently hash to empty"
-        );
-    }
-    let record = if combine {
-        let parts = parse_digest_inputs(&inputs)?;
-        let digest = combine_digests(&parts);
-        HashRecord {
-            digest,
-            mode: "combine",
-            bytes: None,
-            parts: Some(parts.len()),
-        }
-    } else {
-        match inputs.as_slice() {
-            [] => {
-                let (digest, bytes) = hash_reader(tokio::io::stdin()).await?;
-                HashRecord {
-                    digest,
-                    mode: "bytes",
-                    bytes: Some(bytes),
-                    parts: None,
-                }
-            }
-            [input] => {
-                let (digest, bytes) = hash_input(input).await?;
-                HashRecord {
-                    digest,
-                    mode: "bytes",
-                    bytes: Some(bytes),
-                    parts: None,
-                }
-            }
-            many => {
-                let mut parts = Vec::with_capacity(many.len());
-                for input in many {
-                    let (digest, _) = hash_input(input).await?;
-                    parts.push(digest);
-                }
-                let digest = combine_digests(&parts);
-                HashRecord {
-                    digest,
-                    mode: "combine",
-                    bytes: None,
-                    parts: Some(parts.len()),
-                }
-            }
-        }
-    };
-
-    let body = match output.format {
-        Format::Human => format!("{}\n", record.digest),
-        Format::Json | Format::Toon => render::structured(output.format, &record)?,
-    };
-    write_stdout(body.as_bytes()).await
-}
-
-pub async fn put_blob(
-    cache: &CacheProvider,
-    key: Option<Digest>,
-    path: Option<&Path>,
-    output: Output,
-) -> Result<()> {
+pub async fn put_blob(cache: &CacheProvider, path: Option<&Path>, output: Output) -> Result<()> {
     let reader = open_blob_input(path).await?;
-    let digest = match key {
-        Some(key) => {
-            cache.put_keyed_stream(&key, reader).await?;
-            key
-        }
-        None => cache.put_stream(reader).await?,
-    };
+    let digest = cache.put_stream(reader).await?;
     let record = BlobPutRecord { digest };
     let body = match output.format {
         Format::Human => format!("{digest}\n"),
@@ -206,14 +146,9 @@ async fn open_blob_input(
 pub async fn exists_blob(
     cache: &CacheProvider,
     digest: Digest,
-    keyed: bool,
     output: Output,
 ) -> Result<ExitCode> {
-    let present = if keyed {
-        cache.has_keyed_blob(&digest).await?
-    } else {
-        cache.has_blob(&digest).await?
-    };
+    let present = cache.has_blob(&digest).await?;
     match output.format {
         Format::Human => {
             if present {
@@ -234,15 +169,10 @@ pub async fn exists_blob(
 pub async fn get_blob(
     cache: &CacheProvider,
     digest: Digest,
-    keyed: bool,
     output_path: Option<&Path>,
     output: Output,
 ) -> Result<()> {
-    let bytes = if keyed {
-        cache.get_keyed_blob(&digest).await?
-    } else {
-        cache.get_blob(&digest).await?
-    };
+    let bytes = cache.get_blob(&digest).await?;
     match output_path {
         Some(path) if path != Path::new("-") => {
             write_output_file(path, &bytes).await?;
@@ -265,8 +195,25 @@ pub async fn get_blob(
     }
 }
 
-pub async fn get_action(cache: &CacheProvider, action: Digest, output: Output) -> Result<()> {
+pub async fn get_action(
+    cache: &CacheProvider,
+    action: Option<Digest>,
+    inputs: Vec<String>,
+    if_success: bool,
+    output: Output,
+) -> Result<ExitCode> {
+    let action = resolve_action_digest(action, &inputs).await?;
     let result = cache.get_action_result(&action).await?;
+
+    if if_success {
+        let succeeded = matches!(&result, Some(r) if r.exit_code == 0);
+        return Ok(if succeeded {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        });
+    }
+
     let record = ActionGetRecord {
         action,
         hit: result.is_some(),
@@ -282,18 +229,22 @@ pub async fn get_action(cache: &CacheProvider, action: Digest, output: Output) -
         }
         Format::Json | Format::Toon => render::structured(output.format, &record)?,
     };
-    write_stdout(body.as_bytes()).await
+    write_stdout(body.as_bytes()).await?;
+    Ok(ExitCode::SUCCESS)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn put_action(
     cache: &CacheProvider,
-    action: Digest,
+    action: Option<Digest>,
+    inputs: Vec<String>,
     exit_code: i32,
-    stdout: Digest,
-    stderr: Digest,
+    stdout: Option<Digest>,
+    stderr: Option<Digest>,
     outputs: Vec<(String, Digest)>,
     output: Output,
 ) -> Result<()> {
+    let action = resolve_action_digest(action, &inputs).await?;
     let result = ActionResult {
         exit_code,
         stdout,
@@ -327,18 +278,138 @@ pub async fn forget_action(cache: &CacheProvider, action: Digest, output: Output
     write_stdout(body.as_bytes()).await
 }
 
-fn parse_digest_inputs(inputs: &[String]) -> Result<Vec<Digest>> {
-    if inputs.is_empty() {
-        anyhow::bail!("cache hash --combine requires at least one digest");
+/// Resolve an action digest from either a pre-computed value or a list
+/// of `--input` declarations. Clap's `ArgGroup` already enforces that
+/// exactly one of the two is provided, so this never sees both filled
+/// or both empty.
+async fn resolve_action_digest(action: Option<Digest>, inputs: &[String]) -> Result<Digest> {
+    if let Some(digest) = action {
+        return Ok(digest);
     }
-    inputs
+    let specs: Vec<InputSpec> = inputs.iter().map(|s| InputSpec::parse(s)).collect();
+    validate_stdin_uniqueness(&specs)?;
+    if specs.len() == 1 {
+        let (digest, _) = hash_spec(&specs[0]).await?;
+        return Ok(digest);
+    }
+    let mut parts = Vec::with_capacity(specs.len());
+    for spec in &specs {
+        let (digest, _) = hash_spec(spec).await?;
+        parts.push(digest);
+    }
+    Ok(combine_digests(&parts))
+}
+
+fn validate_stdin_uniqueness(specs: &[InputSpec]) -> Result<()> {
+    let stdin_count = specs
         .iter()
-        .map(|input| {
-            Digest::from_hex(input).with_context(|| {
-                format!("expected a 64-character lowercase BLAKE3 digest, got `{input}`")
-            })
-        })
-        .collect()
+        .filter(|s| matches!(s, InputSpec::Stdin))
+        .count();
+    if stdin_count > 1 {
+        anyhow::bail!(
+            "`-` (stdin) may appear at most once across inputs; later occurrences would silently hash to empty"
+        );
+    }
+    Ok(())
+}
+
+/// Hash a single input spec. Returns `(digest, byte_count)` where
+/// `byte_count` is the size of the hashed payload when meaningful
+/// (file content, value bytes, stdin), or `None` for synthetic inputs
+/// (directories and env vars, where "bytes hashed" is less useful as a
+/// progress signal).
+async fn hash_spec(spec: &InputSpec) -> Result<(Digest, Option<u64>)> {
+    match spec {
+        InputSpec::Stdin => {
+            let (digest, bytes) = hash_reader(tokio::io::stdin()).await?;
+            Ok((digest, Some(bytes)))
+        }
+        InputSpec::Path(path) => {
+            let metadata = tokio::fs::metadata(path)
+                .await
+                .with_context(|| format!("opening hash input {}", path.display()))?;
+            if metadata.is_dir() {
+                let digest = hash_directory(path).await?;
+                Ok((digest, None))
+            } else {
+                let file = tokio::fs::File::open(path)
+                    .await
+                    .with_context(|| format!("opening hash input {}", path.display()))?;
+                let (digest, bytes) = hash_reader(file).await?;
+                Ok((digest, Some(bytes)))
+            }
+        }
+        InputSpec::Value(s) => {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(s.as_bytes());
+            Ok((
+                Digest::from_bytes(*hasher.finalize().as_bytes()),
+                Some(s.len() as u64),
+            ))
+        }
+        InputSpec::EnvVar(name) => {
+            let value = std::env::var(name).unwrap_or_default();
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(name.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(value.as_bytes());
+            Ok((Digest::from_bytes(*hasher.finalize().as_bytes()), None))
+        }
+    }
+}
+
+/// Hash a directory tree deterministically. Walks every file under
+/// `root` sorted by its relative path, hashes `relpath\0content\0` per
+/// entry, and returns the combined BLAKE3.
+///
+/// Symlinks are followed; permissions are not part of the digest. Two
+/// directories with the same file paths and contents produce the same
+/// digest regardless of filesystem iteration order.
+async fn hash_directory(root: &Path) -> Result<Digest> {
+    let root = root.to_path_buf();
+    let entries = tokio::task::spawn_blocking(move || -> Result<Vec<(String, PathBuf)>> {
+        let mut entries = Vec::new();
+        for entry in WalkDir::new(&root).follow_links(true).sort_by_file_name() {
+            let entry =
+                entry.with_context(|| format!("walking directory {}", root.display()))?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel = entry
+                .path()
+                .strip_prefix(&root)
+                .expect("walkdir entries are under root")
+                .to_path_buf();
+            // Normalise the path separator so the digest is platform
+            // independent.
+            let rel_str = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            entries.push((rel_str, entry.path().to_path_buf()));
+        }
+        // sort_by_file_name walks in order, but a defensive sort guards
+        // against any directory entry that arrives out of order on
+        // exotic filesystems.
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(entries)
+    })
+    .await
+    .context("joining directory walk")??;
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"fabrik.hash.directory.v1\0");
+    for (rel, abs) in entries {
+        let bytes = tokio::fs::read(&abs)
+            .await
+            .with_context(|| format!("reading directory entry {}", abs.display()))?;
+        hasher.update(rel.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(&bytes);
+        hasher.update(b"\0");
+    }
+    Ok(Digest::from_bytes(*hasher.finalize().as_bytes()))
 }
 
 fn combine_digests(parts: &[Digest]) -> Digest {
@@ -348,17 +419,6 @@ fn combine_digests(parts: &[Digest]) -> Digest {
         hasher.update(part.as_bytes());
     }
     Digest::from_bytes(*hasher.finalize().as_bytes())
-}
-
-async fn hash_input(input: &str) -> Result<(Digest, u64)> {
-    if input == "-" {
-        hash_reader(tokio::io::stdin()).await
-    } else {
-        let file = tokio::fs::File::open(input)
-            .await
-            .with_context(|| format!("opening hash input {input}"))?;
-        hash_reader(file).await
-    }
 }
 
 async fn hash_reader<R: AsyncRead + Unpin>(mut reader: R) -> Result<(Digest, u64)> {
@@ -395,4 +455,129 @@ async fn write_output_file(path: &Path, bytes: &[u8]) -> Result<()> {
     tokio::fs::write(path, bytes)
         .await
         .with_context(|| format!("writing blob output {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn input_spec_parses_known_prefixes() {
+        assert!(matches!(InputSpec::parse("-"), InputSpec::Stdin));
+        assert!(matches!(
+            InputSpec::parse("path:a:b"),
+            InputSpec::Path(p) if p == PathBuf::from("a:b")
+        ));
+        assert!(matches!(
+            InputSpec::parse("value:hello"),
+            InputSpec::Value(s) if s == "hello"
+        ));
+        assert!(matches!(
+            InputSpec::parse("env:FOO"),
+            InputSpec::EnvVar(s) if s == "FOO"
+        ));
+        assert!(matches!(
+            InputSpec::parse("src/lib.rs"),
+            InputSpec::Path(p) if p == PathBuf::from("src/lib.rs")
+        ));
+    }
+
+    #[tokio::test]
+    async fn value_input_hashes_string_bytes() {
+        let (d1, _) = hash_spec(&InputSpec::Value("hello".into())).await.unwrap();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"hello");
+        let expected = Digest::from_bytes(*hasher.finalize().as_bytes());
+        assert_eq!(d1, expected);
+    }
+
+    #[tokio::test]
+    async fn env_input_includes_name_in_digest() {
+        std::env::set_var("FABRIK_TEST_ENV_INPUT_A", "shared-value");
+        std::env::set_var("FABRIK_TEST_ENV_INPUT_B", "shared-value");
+        let (a, _) = hash_spec(&InputSpec::EnvVar("FABRIK_TEST_ENV_INPUT_A".into()))
+            .await
+            .unwrap();
+        let (b, _) = hash_spec(&InputSpec::EnvVar("FABRIK_TEST_ENV_INPUT_B".into()))
+            .await
+            .unwrap();
+        assert_ne!(
+            a, b,
+            "different env var names with the same value must hash differently"
+        );
+    }
+
+    #[tokio::test]
+    async fn env_input_with_unset_variable_hashes_empty_value() {
+        // The variable must not exist; pick a name that's vanishingly
+        // unlikely to leak in from the parent environment.
+        std::env::remove_var("FABRIK_TEST_ENV_INPUT_DEFINITELY_UNSET");
+        let (unset, _) = hash_spec(&InputSpec::EnvVar(
+            "FABRIK_TEST_ENV_INPUT_DEFINITELY_UNSET".into(),
+        ))
+        .await
+        .unwrap();
+        std::env::set_var("FABRIK_TEST_ENV_INPUT_DEFINITELY_UNSET", "");
+        let (empty, _) = hash_spec(&InputSpec::EnvVar(
+            "FABRIK_TEST_ENV_INPUT_DEFINITELY_UNSET".into(),
+        ))
+        .await
+        .unwrap();
+        std::env::remove_var("FABRIK_TEST_ENV_INPUT_DEFINITELY_UNSET");
+        assert_eq!(unset, empty, "unset and empty must hash identically");
+    }
+
+    #[tokio::test]
+    async fn directory_hash_is_deterministic_across_iterations() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("tree");
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("a.txt"), b"alpha").unwrap();
+        std::fs::write(root.join("b.txt"), b"beta").unwrap();
+        std::fs::write(root.join("nested/c.txt"), b"gamma").unwrap();
+
+        let d1 = hash_directory(&root).await.unwrap();
+        let d2 = hash_directory(&root).await.unwrap();
+        assert_eq!(d1, d2);
+    }
+
+    #[tokio::test]
+    async fn directory_hash_changes_when_content_changes() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("tree");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), b"first").unwrap();
+        let before = hash_directory(&root).await.unwrap();
+
+        std::fs::write(root.join("a.txt"), b"second").unwrap();
+        let after = hash_directory(&root).await.unwrap();
+        assert_ne!(before, after);
+    }
+
+    #[tokio::test]
+    async fn directory_hash_changes_when_layout_changes() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("tree");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let before = hash_directory(&root).await.unwrap();
+
+        // Same content but at a different path - digest must differ.
+        std::fs::rename(root.join("a.txt"), root.join("b.txt")).unwrap();
+        let after = hash_directory(&root).await.unwrap();
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn stdin_uniqueness_rejects_duplicates() {
+        let specs = vec![InputSpec::Stdin, InputSpec::Stdin];
+        assert!(validate_stdin_uniqueness(&specs).is_err());
+    }
+
+    #[test]
+    fn stdin_uniqueness_allows_at_most_one() {
+        let specs = vec![InputSpec::Stdin, InputSpec::Value("x".into())];
+        assert!(validate_stdin_uniqueness(&specs).is_ok());
+    }
 }

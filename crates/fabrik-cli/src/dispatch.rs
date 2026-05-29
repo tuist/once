@@ -170,34 +170,22 @@ async fn run_cache_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
-        Some(cli::CacheCmd::Hash { inputs, combine }) => {
-            commands::cache::hash(inputs, combine, output)
-                .await
-                .map(|()| ExitCode::SUCCESS)
-        }
         Some(cli::CacheCmd::Blob { cmd }) => {
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
             match cmd {
-                Some(cli::CacheBlobCmd::Put { key, path }) => {
-                    commands::cache::put_blob(&cache, key, path.as_deref(), output)
+                Some(cli::CacheBlobCmd::Put { path }) => {
+                    commands::cache::put_blob(&cache, path.as_deref(), output)
                         .await
                         .map(|()| ExitCode::SUCCESS)
                 }
                 Some(cli::CacheBlobCmd::Get {
-                    key,
                     digest,
                     output: output_path,
-                }) => commands::cache::get_blob(
-                    &cache,
-                    digest,
-                    key,
-                    output_path.as_deref(),
-                    output,
-                )
-                .await
-                .map(|()| ExitCode::SUCCESS),
-                Some(cli::CacheBlobCmd::Exists { key, digest }) => {
-                    commands::cache::exists_blob(&cache, digest, key, output).await
+                }) => commands::cache::get_blob(&cache, digest, output_path.as_deref(), output)
+                    .await
+                    .map(|()| ExitCode::SUCCESS),
+                Some(cli::CacheBlobCmd::Exists { digest }) => {
+                    commands::cache::exists_blob(&cache, digest, output).await
                 }
                 None => anyhow::bail!("cache blob subcommand required"),
             }
@@ -205,19 +193,22 @@ async fn run_cache_command(
         Some(cli::CacheCmd::Action { cmd }) => {
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
             match cmd {
-                Some(cli::CacheActionCmd::Get { action }) => {
-                    commands::cache::get_action(&cache, action, output)
-                        .await
-                        .map(|()| ExitCode::SUCCESS)
+                Some(cli::CacheActionCmd::Get {
+                    action,
+                    inputs,
+                    if_success,
+                }) => {
+                    commands::cache::get_action(&cache, action, inputs, if_success, output).await
                 }
                 Some(cli::CacheActionCmd::Put {
                     action,
+                    inputs,
                     exit_code,
                     stdout,
                     stderr,
                     outputs,
                 }) => commands::cache::put_action(
-                    &cache, action, exit_code, stdout, stderr, outputs, output,
+                    &cache, action, inputs, exit_code, stdout, stderr, outputs, output,
                 )
                 .await
                 .map(|()| ExitCode::SUCCESS),

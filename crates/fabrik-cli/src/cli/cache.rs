@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::Subcommand;
+use clap::{ArgGroup, Subcommand};
 use fabrik_cas::Digest;
 
 #[derive(Subcommand)]
@@ -8,25 +8,7 @@ pub enum CacheCmd {
     /// Print blob and action counts plus on-disk size.
     Stats,
 
-    /// Compute a digest without storing bytes in the cache.
-    ///
-    /// With one path (or stdin), prints the digest of those bytes.
-    /// With multiple paths, hashes each file and combines the digests
-    /// in order, producing a single key suitable for `cache blob` ops.
-    Hash {
-        /// Combine already-computed digests into one ordered digest.
-        #[arg(long)]
-        combine: bool,
-
-        /// File(s) to hash, or digests to combine with --combine. Use
-        /// `-` or omit the path to hash stdin.
-        inputs: Vec<String>,
-    },
-
-    /// Read and write blobs. Defaults to the content-addressed
-    /// namespace; `put --key`, `get --key`, and `exists --key` operate
-    /// on the keyed namespace, which is local-only and stores bytes
-    /// under a caller-chosen digest.
+    /// Read and write content-addressed blobs.
     #[command(arg_required_else_help = true)]
     Blob {
         #[command(subcommand)]
@@ -43,31 +25,15 @@ pub enum CacheCmd {
 
 #[derive(Subcommand)]
 pub enum CacheBlobCmd {
-    /// Store bytes from a file or stdin.
-    ///
-    /// Without `--key`, prints the BLAKE3 digest of the bytes (content
-    /// addressing). With `--key`, stores the bytes under the
-    /// caller-chosen digest so scripts can memoize artifacts under a
-    /// key derived from their inputs.
+    /// Store bytes from a file or stdin and print their BLAKE3 digest.
     Put {
-        /// Store under this digest instead of the content hash.
-        #[arg(long, value_parser = parse_digest)]
-        key: Option<Digest>,
-
         /// File to store. Use `-` or omit the path to read stdin.
         path: Option<PathBuf>,
     },
 
-    /// Fetch blob bytes by digest. Defaults to the content-addressed
-    /// namespace; pass `--key` to fetch from the keyed namespace
-    /// instead. The two are kept separate so a keyed blob cannot be
-    /// silently substituted for a content-addressed lookup.
+    /// Fetch blob bytes by content digest.
     Get {
-        /// Look up `digest` in the keyed namespace.
-        #[arg(long)]
-        key: bool,
-
-        /// Blob digest (or key) to fetch.
+        /// Blob digest to fetch.
         #[arg(value_parser = parse_digest)]
         digest: Digest,
 
@@ -78,15 +44,9 @@ pub enum CacheBlobCmd {
 
     /// Check whether a blob exists. Exits 0 on hit, 1 on miss; with
     /// `--format json|toon`, always exits 0 and reports `present` in
-    /// the structured output. Defaults to the content-addressed
-    /// namespace; pass `--key` to probe the keyed namespace.
+    /// the structured output.
     Exists {
-        /// Probe the keyed namespace instead of the content-addressed
-        /// one.
-        #[arg(long)]
-        key: bool,
-
-        /// Blob digest (or key) to probe.
+        /// Blob digest to probe.
         #[arg(value_parser = parse_digest)]
         digest: Digest,
     },
@@ -94,30 +54,66 @@ pub enum CacheBlobCmd {
 
 #[derive(Subcommand)]
 pub enum CacheActionCmd {
-    /// Fetch an action result by action digest.
+    /// Fetch an action result.
+    ///
+    /// Identify the action either by passing its digest directly, or
+    /// by declaring its inputs with `--input`; the same declaration
+    /// must be used on `put` to write under the same key.
+    #[command(group(
+        ArgGroup::new("action_key")
+            .required(true)
+            .args(["action", "inputs"])
+            .multiple(false)
+    ))]
     Get {
-        /// Action digest to fetch.
+        /// Pre-computed action digest.
         #[arg(value_parser = parse_digest)]
-        action: Digest,
+        action: Option<Digest>,
+
+        /// Input spec (see `cache hash` for the grammar). Repeatable;
+        /// inputs are hashed in order and combined into the action
+        /// digest.
+        #[arg(long = "input", value_name = "SPEC")]
+        inputs: Vec<String>,
+
+        /// Exit 0 only when there is a hit AND the recorded exit code
+        /// is 0. On miss or on a cached failure, exit non-zero.
+        #[arg(long)]
+        if_success: bool,
     },
 
-    /// Store an action result for an action digest.
+    /// Store an action result.
+    ///
+    /// Identify the action either by passing its digest directly, or
+    /// by declaring its inputs with `--input`; the same declaration
+    /// can be used on `get` to read back the result.
+    #[command(group(
+        ArgGroup::new("action_key")
+            .required(true)
+            .args(["action", "inputs"])
+            .multiple(false)
+    ))]
     Put {
-        /// Action digest to store the result under.
+        /// Pre-computed action digest.
         #[arg(value_parser = parse_digest)]
-        action: Digest,
+        action: Option<Digest>,
 
-        /// Process exit code captured for the action.
-        #[arg(long)]
+        /// Input spec (see `cache hash` for the grammar). Repeatable.
+        #[arg(long = "input", value_name = "SPEC")]
+        inputs: Vec<String>,
+
+        /// Process exit code captured for the action. Defaults to 0
+        /// since the common case is recording a success.
+        #[arg(long, default_value_t = 0)]
         exit_code: i32,
 
-        /// Blob digest containing captured stdout.
+        /// Optional blob digest containing captured stdout.
         #[arg(long, value_parser = parse_digest)]
-        stdout: Digest,
+        stdout: Option<Digest>,
 
-        /// Blob digest containing captured stderr.
+        /// Optional blob digest containing captured stderr.
         #[arg(long, value_parser = parse_digest)]
-        stderr: Digest,
+        stderr: Option<Digest>,
 
         /// Declared output as `workspace/path=blob_digest`. Repeatable.
         #[arg(long = "output", value_parser = parse_output_digest)]
@@ -136,7 +132,6 @@ impl CacheCmd {
     pub(super) fn surface_path(&self) -> Vec<&'static str> {
         match self {
             Self::Stats => vec!["stats"],
-            Self::Hash { .. } => vec!["hash"],
             Self::Blob { cmd } => {
                 let mut path = vec!["blob"];
                 if let Some(cmd) = cmd {

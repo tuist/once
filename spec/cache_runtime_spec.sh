@@ -12,53 +12,6 @@ Describe 'fabrik cache runtime commands'
     The stdout should equal 'hello cache'
   End
 
-  It 'hashes bytes with the same digest as blob put'
-    hash_digest="$(printf 'hello cache' | fabrik cache hash)"
-    blob_digest="$(printf 'hello cache' | fabrik cache blob put)"
-
-    When call /bin/sh -c '[ "$1" = "$2" ]' -- "$hash_digest" "$blob_digest"
-    The status should be success
-  End
-
-  It 'does not store hashed bytes'
-    printf 'hello cache' | fabrik cache hash >/dev/null
-    When call fabrik cache stats
-    The status should be success
-    The stdout should include 'blobs:   0'
-  End
-
-  It 'combines digests in a stable ordered form'
-    one="$(printf 'one' | fabrik cache hash)"
-    two="$(printf 'two' | fabrik cache hash)"
-    combined="$(fabrik cache hash --combine "$one" "$two")"
-    same="$(fabrik cache hash --combine "$one" "$two")"
-    reverse="$(fabrik cache hash --combine "$two" "$one")"
-
-    When call /bin/sh -c '[ "$1" = "$2" ] && [ "$1" != "$3" ]' -- "$combined" "$same" "$reverse"
-    The status should be success
-  End
-
-  It 'hashes multiple files as if combined'
-    printf 'package' > "$WORKSPACE/pkg.json"
-    printf 'lock' > "$WORKSPACE/lock.json"
-    one="$(fabrik cache hash "$WORKSPACE/pkg.json")"
-    two="$(fabrik cache hash "$WORKSPACE/lock.json")"
-    expected="$(fabrik cache hash --combine "$one" "$two")"
-    multi="$(fabrik cache hash "$WORKSPACE/pkg.json" "$WORKSPACE/lock.json")"
-
-    When call /bin/sh -c '[ "$1" = "$2" ]' -- "$expected" "$multi"
-    The status should be success
-  End
-
-  It 'emits structured hash metadata'
-    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" cache hash --combine \
-      3ef81072da29fe9d6c28c389fd497c20e8ffde86fd335b326c34a9d7a56f0dbc
-    The status should be success
-    The stdout should include '"mode":"combine"'
-    The stdout should include '"parts":1'
-    The stdout should include '"digest":'
-  End
-
   It 'stores a file blob and writes it back to an output path'
     printf 'file payload' > "$WORKSPACE/input.txt"
     digest="$(fabrik cache blob put "$WORKSPACE/input.txt")"
@@ -68,7 +21,7 @@ Describe 'fabrik cache runtime commands'
     The contents of file "$WORKSPACE/out/nested.txt" should equal 'file payload'
   End
 
-  It 'stores and fetches an action result'
+  It 'stores and fetches an action result by positional digest'
     stdout_digest="$(printf 'out' | fabrik cache blob put)"
     stderr_digest="$(printf 'err' | fabrik cache blob put)"
     action_digest="$stdout_digest"
@@ -86,15 +39,107 @@ Describe 'fabrik cache runtime commands'
     The stdout should include '"bin/tool": "'$stdout_digest'"'
   End
 
-  It 'forgets an action result'
-    stdout_digest="$(printf 'out' | fabrik cache blob put)"
-    stderr_digest="$(printf 'err' | fabrik cache blob put)"
-    action_digest="$stdout_digest"
+  It 'puts and gets an action result by --input declaration'
+    printf 'src bytes' > "$WORKSPACE/src.txt"
 
-    fabrik cache action put "$action_digest" \
-      --exit-code 7 \
-      --stdout "$stdout_digest" \
-      --stderr "$stderr_digest" >/dev/null
+    fabrik cache action put \
+      --input "$WORKSPACE/src.txt" \
+      --input value:vitest \
+      --output bin/tool=0000000000000000000000000000000000000000000000000000000000000000 \
+      >/dev/null
+
+    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" cache action get \
+      --input "$WORKSPACE/src.txt" \
+      --input value:vitest
+    The status should be success
+    The stdout should include '"hit":true'
+    The stdout should include '"exit_code":0'
+  End
+
+  It 'derives different action keys from different env values'
+    FABRIK_TEST_KEY=alpha fabrik cache action put --input env:FABRIK_TEST_KEY >/dev/null
+
+    export FABRIK_TEST_KEY=beta
+    When call fabrik cache action get --input env:FABRIK_TEST_KEY --if-success
+    # alpha and beta must derive different action digests, so the
+    # lookup keyed on beta must miss the alpha record.
+    The status should be failure
+  End
+
+  It 'walks a directory deterministically when used as --input'
+    mkdir -p "$WORKSPACE/tree/nested"
+    printf 'alpha' > "$WORKSPACE/tree/a.txt"
+    printf 'beta'  > "$WORKSPACE/tree/b.txt"
+    printf 'gamma' > "$WORKSPACE/tree/nested/c.txt"
+
+    fabrik cache action put --input "$WORKSPACE/tree" >/dev/null
+    # Touching mtime without content change must not move the digest.
+    touch "$WORKSPACE/tree/a.txt"
+    When call fabrik cache action get --input "$WORKSPACE/tree" --if-success
+    The status should be success
+  End
+
+  It 'rederives an action key when a directory file changes'
+    mkdir -p "$WORKSPACE/tree"
+    printf 'first' > "$WORKSPACE/tree/a.txt"
+    fabrik cache action put --input "$WORKSPACE/tree" >/dev/null
+
+    printf 'second' > "$WORKSPACE/tree/a.txt"
+    When call fabrik cache action get --input "$WORKSPACE/tree" --if-success
+    The status should be failure
+  End
+
+  It 'defaults --exit-code to 0 on put'
+    fabrik cache action put --input value:silent-success >/dev/null
+
+    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" cache action get \
+      --input value:silent-success
+    The status should be success
+    The stdout should include '"exit_code":0'
+  End
+
+  It 'records an action result without stdout or stderr'
+    fabrik cache action put --input value:silent >/dev/null
+
+    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" cache action get \
+      --input value:silent
+    The status should be success
+    The stdout should include '"hit":true'
+    The stdout should include '"exit_code":0'
+    The stdout should not include '"stdout"'
+    The stdout should not include '"stderr"'
+  End
+
+  It 'restores an output blob recorded under an action declared by inputs'
+    payload_digest="$(printf 'tarball-bytes' | fabrik cache blob put)"
+    printf 'pkg' > "$WORKSPACE/pkg.json"
+    printf 'lock' > "$WORKSPACE/lock.json"
+
+    fabrik cache action put \
+      --input "$WORKSPACE/pkg.json" \
+      --input "$WORKSPACE/lock.json" \
+      --output node_modules.tar="$payload_digest" \
+      >/dev/null
+
+    "$FABRIK_BIN" --format json -C "$WORKSPACE" cache action get \
+      --input "$WORKSPACE/pkg.json" \
+      --input "$WORKSPACE/lock.json" \
+      > "$WORKSPACE/result.json"
+    output_digest="$(sed -nE 's/.*"node_modules\.tar":"([0-9a-f]+)".*/\1/p' "$WORKSPACE/result.json")"
+
+    When call fabrik cache blob get "$output_digest"
+    The status should be success
+    The stdout should equal 'tarball-bytes'
+  End
+
+  It 'forgets an action result'
+    fabrik cache action put --input value:to-forget >/dev/null
+
+    # Resolve the digest via a JSON get so we can pass it positionally
+    # to forget (which only takes a digest, not --input).
+    "$FABRIK_BIN" --format json -C "$WORKSPACE" cache action get \
+      --input value:to-forget > "$WORKSPACE/result.json"
+    action_digest="$(sed -nE 's/.*"action":"([0-9a-f]+)".*/\1/p' "$WORKSPACE/result.json")"
 
     When call fabrik cache action forget "$action_digest"
     The status should be success
@@ -102,12 +147,29 @@ Describe 'fabrik cache runtime commands'
   End
 
   It 'reports an action miss as JSON'
-    stdout_digest="$(printf 'out' | fabrik cache blob put)"
-    action_digest="$stdout_digest"
-
-    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" cache action get "$action_digest"
+    When call "$FABRIK_BIN" --format json -C "$WORKSPACE" cache action get \
+      --input value:never-recorded
     The status should be success
     The stdout should include '"hit":false'
+  End
+
+  It '--if-success exits 0 on a cached success'
+    fabrik cache action put --input value:ok-run >/dev/null
+
+    When call fabrik cache action get --input value:ok-run --if-success
+    The status should be success
+  End
+
+  It '--if-success exits non-zero on a cache miss'
+    When call fabrik cache action get --input value:never-recorded --if-success
+    The status should be failure
+  End
+
+  It '--if-success exits non-zero on a cached failure'
+    fabrik cache action put --input value:flaky-run --exit-code 1 >/dev/null
+
+    When call fabrik cache action get --input value:flaky-run --if-success
+    The status should be failure
   End
 
   It 'exits 0 when blob exists'
@@ -126,43 +188,5 @@ Describe 'fabrik cache runtime commands'
       0000000000000000000000000000000000000000000000000000000000000000
     The status should be success
     The stdout should include '"present":false'
-  End
-
-  It 'stores a blob under a caller-chosen key and retrieves it'
-    key="$(printf 'inputs' | fabrik cache hash)"
-    printf 'artifact bytes' | fabrik cache blob put --key "$key" >/dev/null
-    When call fabrik cache blob get --key "$key"
-    The status should be success
-    The stdout should equal 'artifact bytes'
-  End
-
-  It 'reports a keyed blob as present via exists --key'
-    key="$(printf 'inputs' | fabrik cache hash)"
-    printf 'artifact bytes' | fabrik cache blob put --key "$key" >/dev/null
-    When call fabrik cache blob exists --key "$key"
-    The status should be success
-  End
-
-  It 'does not expose keyed blobs via the content-addressed namespace'
-    key="$(printf 'inputs' | fabrik cache hash)"
-    printf 'artifact bytes' | fabrik cache blob put --key "$key" >/dev/null
-    When call fabrik cache blob exists "$key"
-    The status should be failure
-  End
-
-  It 'rejects duplicate `-` in cache hash'
-    When call fabrik cache hash - -
-    The status should be failure
-    The stderr should include 'may appear at most once'
-  End
-
-  It 'reports separate keyed counts in cache stats'
-    printf 'cas-bytes' | fabrik cache blob put >/dev/null
-    key="$(printf 'k' | fabrik cache hash)"
-    printf 'keyed-bytes' | fabrik cache blob put --key "$key" >/dev/null
-    When call fabrik cache stats
-    The status should be success
-    The stdout should include 'blobs:   1'
-    The stdout should include 'keyed:   1'
   End
 End
