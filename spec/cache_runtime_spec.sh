@@ -24,7 +24,10 @@ Describe 'fabrik cache runtime commands'
   It 'stores and fetches an action result by positional digest'
     stdout_digest="$(printf 'out' | fabrik cache blob put)"
     stderr_digest="$(printf 'err' | fabrik cache blob put)"
-    action_digest="$stdout_digest"
+    # Action digests and blob digests are both 64-hex but live in
+    # different conceptual namespaces; keep them visibly distinct so
+    # the test mirrors what real callers would write.
+    action_digest="$(printf 'action-key:by-digest-spec' | fabrik cache blob put)"
 
     fabrik cache action put "$action_digest" \
       --exit-code 7 \
@@ -188,5 +191,23 @@ Describe 'fabrik cache runtime commands'
       0000000000000000000000000000000000000000000000000000000000000000
     The status should be success
     The stdout should include '"present":false'
+  End
+
+  It 'fails with a clear message when fetching a missing blob'
+    When call fabrik cache blob get 0000000000000000000000000000000000000000000000000000000000000000
+    The status should be failure
+    The stderr should include 'blob not found'
+  End
+
+  It 'fails with a clear message when putting a non-existent file'
+    When call fabrik cache blob put "$WORKSPACE/does-not-exist"
+    The status should be failure
+    The stderr should include 'opening blob input'
+  End
+
+  It 'rejects a malformed digest argument'
+    When call fabrik cache blob get not-a-hex-digest
+    The status should be failure
+    The stderr should include 'BLAKE3'
   End
 End
