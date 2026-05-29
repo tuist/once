@@ -20,6 +20,7 @@ use tracing::{debug, instrument};
 
 mod directory_blob;
 mod env;
+mod gha_cache_bridge;
 mod input_digest;
 mod path;
 mod plan;
@@ -92,6 +93,8 @@ pub enum Error {
     },
     #[error("invalid cached directory output `{path}`: {message}")]
     InvalidDirectoryOutput { path: String, message: String },
+    #[error("github actions cache bridge failed: {message}")]
+    CacheBridge { message: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -247,7 +250,7 @@ impl Runner {
     }
 
     pub async fn run(&self, action: &Action) -> Result<Outcome> {
-        let key = action.digest();
+        let key = effective_action_digest(action);
         if let Some(hit) = lookup_cached(&self.cache, &self.workspace_root, &key).await? {
             return Ok(hit);
         }
@@ -291,7 +294,7 @@ pub async fn run_with_cache(
     cache: &CacheProvider,
     opts: RunOpts,
 ) -> Result<Outcome> {
-    let key = action.digest();
+    let key = effective_action_digest(action);
     if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
         return Ok(hit);
     }
@@ -457,7 +460,7 @@ pub async fn run_with_cache_streaming(
     cache: &CacheProvider,
     opts: RunOpts,
 ) -> Result<Outcome> {
-    let key = action.digest();
+    let key = effective_action_digest(action);
     if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
         return Ok(hit);
     }
@@ -476,6 +479,42 @@ pub async fn run_with_cache_streaming(
         result,
         cache: CacheState::Miss,
     })
+}
+
+fn effective_action_digest(action: &Action) -> Digest {
+    if !gha_cache_bridge::enabled() {
+        return action.digest();
+    }
+
+    match action {
+        Action::RunCommand {
+            argv,
+            env,
+            cwd,
+            input_digest,
+            outputs,
+            resources,
+            timeout_ms,
+            remote,
+        } => {
+            let mut env = env.clone();
+            env.insert(
+                "FABRIK_GITHUB_ACTIONS_CACHE_BRIDGE".to_string(),
+                "v1".to_string(),
+            );
+            Action::RunCommand {
+                argv: argv.clone(),
+                env,
+                cwd: cwd.clone(),
+                input_digest: *input_digest,
+                outputs: outputs.clone(),
+                resources: resources.clone(),
+                timeout_ms: *timeout_ms,
+                remote: remote.clone(),
+            }
+            .digest()
+        }
+    }
 }
 
 async fn execute_streaming(
@@ -578,13 +617,15 @@ async fn execute_run_command(
 ) -> Result<ActionResult> {
     let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
     tracing::Span::current().record("program", tracing::field::display(program));
+    let bridge = gha_cache_bridge::start(cache.clone()).await?;
+    let env = bridge_env(env, bridge.as_ref());
 
     let mut command = Command::new(program);
     command.args(rest);
     // Don't inherit the parent's env: actions must declare every
     // variable they depend on, or the cache key lies.
     command.env_clear();
-    for (k, v) in env {
+    for (k, v) in &env {
         command.env(k, v);
     }
     // Close stdin - actions never read from a parent terminal.
@@ -634,6 +675,26 @@ async fn execute_run_command(
         }
         None => work.await,
     }
+}
+
+fn bridge_env(
+    env: &BTreeMap<String, String>,
+    bridge: Option<&gha_cache_bridge::Bridge>,
+) -> BTreeMap<String, String> {
+    let mut env = env.clone();
+    if let Some(bridge) = bridge {
+        env.insert(
+            "ACTIONS_CACHE_URL".to_string(),
+            bridge.base_url().to_string(),
+        );
+        env.insert(
+            "ACTIONS_RUNTIME_TOKEN".to_string(),
+            gha_cache_bridge::Bridge::token().to_string(),
+        );
+        env.insert("ACTIONS_CACHE_SERVICE_V2".to_string(), String::new());
+        env.remove("ACTIONS_RESULTS_URL");
+    }
+    env
 }
 
 async fn execute_run_command_streaming(
@@ -1121,13 +1182,15 @@ async fn execute_child_streaming(
 ) -> Result<ActionResult> {
     let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
     tracing::Span::current().record("program", tracing::field::display(program));
+    let bridge = gha_cache_bridge::start(cache.clone()).await?;
+    let env = bridge_env(env, bridge.as_ref());
 
     let mut command = Command::new(program);
     command.args(rest);
     if !inherit_parent_env {
         command.env_clear();
     }
-    for (k, v) in env {
+    for (k, v) in &env {
         command.env(k, v);
     }
     command.stdin(Stdio::null());

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::env;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -8,6 +9,8 @@ use fabrik_frontend::{
     CacheProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig, DEFAULT_TUIST_URL,
 };
 use serde::Deserialize;
+
+pub(crate) const FABRIK_CACHE_DIR_ENV: &str = "FABRIK_CACHE_DIR";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedCacheProviderConfig {
@@ -76,13 +79,76 @@ fn resolve_config(workspace: &Path, xdg: &Xdg) -> Result<ResolvedCacheProviderCo
 }
 
 fn build_provider(xdg: &Xdg, config: ResolvedCacheProviderConfig) -> Result<CacheProvider> {
+    let local_root = local_cas_root(xdg);
     match config {
-        ResolvedCacheProviderConfig::Local => Ok(CacheProvider::open_local(xdg.fabrik_cas())),
+        ResolvedCacheProviderConfig::Local => Ok(CacheProvider::open_local(local_root)),
         ResolvedCacheProviderConfig::Tuist(config) => {
-            CacheProvider::tuist(xdg.fabrik_cas(), credentials_root(xdg), config)
+            CacheProvider::tuist(local_root, credentials_root(xdg), config)
                 .context("configuring Tuist cache provider")
         }
     }
+}
+
+fn local_cas_root(xdg: &Xdg) -> PathBuf {
+    if let Some(root) = non_empty_env_path(FABRIK_CACHE_DIR_ENV) {
+        return root;
+    }
+
+    if let Some(root) = detected_ci_cache_root() {
+        return root;
+    }
+
+    xdg.fabrik_cas()
+}
+
+fn detected_ci_cache_root() -> Option<PathBuf> {
+    detected_ci_cache_root_with_mount_and_vars(Path::new("/cache"), env::vars_os())
+}
+
+#[cfg(test)]
+fn detected_ci_cache_root_with_mount(cache_mount: &Path) -> Option<PathBuf> {
+    detected_ci_cache_root_with_mount_and_vars(cache_mount, env::vars_os())
+}
+
+fn detected_ci_cache_root_with_mount_and_vars<I, K, V>(
+    cache_mount: &Path,
+    vars: I,
+) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<std::ffi::OsStr>,
+    V: AsRef<std::ffi::OsStr>,
+{
+    let mut github_actions = false;
+    let mut namespace = false;
+    for (key, value) in vars {
+        if value.as_ref().is_empty() {
+            continue;
+        }
+        let key = key.as_ref().to_string_lossy();
+        github_actions |= key == "GITHUB_ACTIONS";
+        namespace |= key.starts_with("NSC_") || key.starts_with("NSCLOUD_");
+    }
+
+    if !github_actions {
+        return None;
+    }
+
+    if namespace && cache_mount_exists(cache_mount) {
+        return Some(cache_mount.join("fabrik").join("cas"));
+    }
+
+    None
+}
+
+fn cache_mount_exists(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+}
+
+fn non_empty_env_path(name: &str) -> Option<PathBuf> {
+    env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn resolve_provider_config(
@@ -308,7 +374,11 @@ fn non_empty(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn xdg_under(root: &Path) -> Xdg {
         Xdg {
@@ -328,6 +398,29 @@ mod tests {
         let dir = xdg.config_home.join("fabrik");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.toml"), body).unwrap();
+    }
+
+    fn with_env<F: FnOnce()>(vars: &[(&str, Option<&str>)], f: F) {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let saved: Vec<(&str, Option<OsString>)> = vars
+            .iter()
+            .map(|(key, _)| (*key, env::var_os(key)))
+            .collect();
+        for (key, value) in vars {
+            match value {
+                Some(value) => env::set_var(key, value),
+                None => env::remove_var(key),
+            }
+        }
+        f();
+        for (key, value) in saved {
+            match value {
+                Some(value) => env::set_var(key, value),
+                None => env::remove_var(key),
+            }
+        }
     }
 
     fn expect_tuist(config: ResolvedCacheProviderConfig) -> fabrik_cas::TuistCacheConfig {
@@ -480,5 +573,73 @@ account = "acme"
 
         assert_eq!(config.url, DEFAULT_TUIST_URL);
         assert_eq!(config.provider_name, "tuist");
+    }
+
+    #[test]
+    fn local_cas_root_uses_explicit_env_override() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        let explicit = tmp.path().join("explicit-cas");
+
+        with_env(
+            &[
+                (FABRIK_CACHE_DIR_ENV, Some(explicit.to_str().unwrap())),
+                ("GITHUB_ACTIONS", Some("true")),
+                ("NSC_WORKSPACE", Some("workspace")),
+            ],
+            || {
+                assert_eq!(local_cas_root(&xdg), explicit);
+            },
+        );
+    }
+
+    #[test]
+    fn namespace_github_actions_uses_cache_volume_when_present() {
+        let tmp = TempDir::new().unwrap();
+        let mount = tmp.path().join("cache-volume");
+        std::fs::create_dir(&mount).unwrap();
+
+        with_env(
+            &[
+                (FABRIK_CACHE_DIR_ENV, None),
+                ("GITHUB_ACTIONS", Some("true")),
+                ("NSC_WORKSPACE", Some("workspace")),
+            ],
+            || {
+                assert_eq!(
+                    detected_ci_cache_root_with_mount(&mount),
+                    Some(mount.join("fabrik").join("cas"))
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn ci_detection_ignores_non_namespace_runners() {
+        let tmp = TempDir::new().unwrap();
+        let mount = tmp.path().join("cache-volume");
+        std::fs::create_dir(&mount).unwrap();
+
+        assert_eq!(
+            detected_ci_cache_root_with_mount_and_vars(&mount, [("GITHUB_ACTIONS", "true")]),
+            None
+        );
+    }
+
+    #[test]
+    fn local_cas_root_falls_back_to_xdg() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+
+        with_env(
+            &[
+                (FABRIK_CACHE_DIR_ENV, None),
+                ("GITHUB_ACTIONS", None),
+                ("NSC_WORKSPACE", None),
+            ],
+            || {
+                assert_eq!(local_cas_root(&xdg), xdg.fabrik_cas());
+            },
+        );
     }
 }
