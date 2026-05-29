@@ -14,45 +14,43 @@ ten times because none of the workers know the others already paid
 for it.
 
 The `fabrik cache` CLI exposes Fabrik's content-addressed store
-directly to those scripts so they can stop. Hash the inputs that
+directly to those scripts so they can stop. Declare the inputs that
 determine a result, ask the cache whether you have already produced
 that result, and either skip the work or restore the artifact. The
 script stays a script. The speedup comes for free from the same store
 that the build graph uses.
 
-The surface is small. It has three caches and a hashing helper.
+The surface is small. Two caches, mirroring the shape that Bazel and
+the [Remote Execution API](https://github.com/bazelbuild/remote-apis)
+settled on: a content-addressed store of bytes, plus a map from an
+action's input digest to the result that input produced.
 
-## Hashing
+## Inputs
 
-`cache hash` computes BLAKE3 digests without storing anything. Use it
-to derive the keys you will then pass to the cache commands below.
+The action cache identifies a record by hashing the inputs you
+declare. The grammar:
+
+| Spec | Meaning |
+| --- | --- |
+| `<path>` | A file or directory on disk. Directories are walked sorted (content + relative path per entry), so the digest is deterministic. |
+| `path:<path>` | Explicit path form, for paths whose names contain `:`. |
+| `value:<str>` | A literal string. |
+| `env:<NAME>` | Environment variable `<NAME>`, hashed as `<NAME>\0<value>` so two variables sharing a value do not collide. Unset variables hash as empty. |
+| `-` | Standard input. May appear at most once across all inputs. |
+
+Inputs are hashed in declaration order and combined. The order matters:
+`(a, b)` and `(b, a)` produce different digests.
+
+## Blob cache
+
+The blob cache stores bytes and returns them by their content hash. A
+`get <digest>` always returns bytes that hash back to the digest you
+asked for; this invariant is what makes restoring outputs from a
+cached action result safe.
 
 | Command | Purpose |
 | --- | --- |
-| `fabrik cache hash <path>` | Print the BLAKE3 of a file's bytes. |
-| `fabrik cache hash -` | Print the BLAKE3 of stdin. |
-| `fabrik cache hash <path1> <path2> ...` | Hash each file and combine the digests in order. |
-| `fabrik cache hash --combine <d1> <d2> ...` | Combine already-computed digests in order. |
-
-A few rules worth knowing:
-
-- Combination is order-sensitive: `combine(a, b) != combine(b, a)`.
-- `-` may appear at most once. A second `-` would read an
-  already-drained stdin and silently hash to empty, so it is rejected.
-- For directory inputs, pipe a deterministic `tar` stream:
-  `tar --sort=name -cf - src test | fabrik cache hash`.
-
-## Content-addressed cache
-
-The default blob namespace. Blobs are stored under the BLAKE3 hash of
-their bytes. A `get` always returns bytes that hash back to the digest
-you asked for. The build graph and action results reference output
-blobs by their content hash, and this invariant is what makes caching
-safe.
-
-| Command | Purpose |
-| --- | --- |
-| `fabrik cache blob put [<path>]` | Store bytes from a file (or stdin) and print their content digest. |
+| `fabrik cache blob put [<path>]` | Store bytes from a file (or stdin) and print their BLAKE3 digest. |
 | `fabrik cache blob get <digest>` | Fetch bytes by digest. |
 | `fabrik cache blob exists <digest>` | Exit 0 on hit, 1 on miss. With `--format json`/`toon`, always exit 0 and emit `{"digest":"...","present":true|false}`. |
 
@@ -61,49 +59,33 @@ This namespace travels through whatever remote infrastructure your
 `get` falls back to the remote on local miss; `exists` consults the
 remote too, so the two are symmetric.
 
-## Keyed cache
-
-Blobs stored under a digest you choose, typically derived from a set
-of input files. The bytes are not required to hash to the key. This
-is what lets a script memoize an artifact under a digest derived from
-its inputs (for example, a `node_modules` tarball keyed by the hash
-of `package.json` and the lockfile).
-
-| Command | Purpose |
-| --- | --- |
-| `fabrik cache blob put --key <digest> [<path>]` | Store bytes under the caller-chosen `<digest>`. |
-| `fabrik cache blob get --key <digest>` | Fetch bytes by key. |
-| `fabrik cache blob exists --key <digest>` | Exit 0 on hit, 1 on miss. |
-
-Keyed blobs are kept in a separate namespace from content-addressed
-blobs. `cache blob get <digest>` will never return a keyed blob, and
-`cache blob get --key <digest>` will never return a content-addressed
-blob. Passing `--key` is how you declare which namespace you mean. The
-split is deliberate: action results reference output blobs by their
-content hash, and we never want a keyed entry to be silently
-substituted for one of those.
-
-Keyed blobs are local-only today. Remote support is on the roadmap.
-
 ## Action cache
 
 Maps an action digest to an `ActionResult`: the captured exit code,
-stdout and stderr digests, and any declared outputs (workspace path →
-blob digest). This is the right primitive when what you want to
-remember is whether a *run* succeeded, not an artifact you produced.
-The terminology mirrors the Bazel/REAPI action cache.
+optional stdout and stderr digests, and any declared outputs as
+`path -> blob digest`. This is the primitive both for remembering
+whether a *run* succeeded and for memoising an *artifact* a script
+produced from a set of inputs, since each declared output points back
+into the blob cache by content hash.
+
+Both `get` and `put` identify the action by an input declaration
+(`--input ...`). Declare the same inputs on the read and the write so
+the two derive the same key. A pre-computed digest may also be passed
+positionally when you already have one in hand (for example, from a
+prior `cache action get --format json`).
 
 | Command | Purpose |
 | --- | --- |
-| `fabrik cache action get <digest>` | Look up a cached action result. Always exits 0; parse `--format json` for `"hit": true\|false`. |
-| `fabrik cache action put <digest> --exit-code <n> --stdout <d> --stderr <d> [--output path=digest ...]` | Record an action result. |
-| `fabrik cache action forget <digest>` | Drop a cached action result. |
+| `fabrik cache action get --input <spec> ...` | Look up a result by declared inputs. Always exits 0; parse `--format json` for `"hit": true\|false` and `"result"`. |
+| `fabrik cache action get ... --if-success` | Exit 0 only when there is a hit AND the recorded exit code is 0. Exits non-zero on miss or on a cached failure. |
+| `fabrik cache action put --input <spec> ... [--exit-code N] [--stdout <d>] [--stderr <d>] [--output path=digest ...]` | Record a result under the declared inputs. `--exit-code` defaults to 0. |
+| `fabrik cache action forget <digest>` | Drop a cached action result by digest. |
 
 ## Inspecting
 
 | Command | Purpose |
 | --- | --- |
-| `fabrik cache stats` | Print counts and on-disk size for the content-addressed, keyed, and action caches. |
+| `fabrik cache stats` | Print counts and on-disk size for the blob cache and the action cache. |
 
 ## Examples
 
@@ -113,27 +95,24 @@ The terminology mirrors the Bazel/REAPI action cache.
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Derive a single digest from every input that determines the outcome.
-# `cache hash` operates on files; pipe a deterministic tar of any source
-# directories through it so directory iteration order does not leak in.
-src_digest=$(tar --sort=name -cf - src test | fabrik cache hash)
-config_digest=$(fabrik cache hash vitest.config.ts pnpm-lock.yaml)
-action=$(fabrik cache hash --combine "$src_digest" "$config_digest")
+inputs=(
+  --input src
+  --input test
+  --input vitest.config.ts
+  --input pnpm-lock.yaml
+)
 
-# If the same inputs already produced a green run, skip.
-if fabrik cache action get "$action" --format json | grep -q '"hit":true'; then
+if fabrik cache action get "${inputs[@]}" --if-success; then
   echo "vitest: cached green run for these inputs, skipping."
   exit 0
 fi
 
 pnpm vitest run
 
-# Record success so the next invocation can short-circuit.
-empty=$(printf '' | fabrik cache blob put)
-fabrik cache action put "$action" \
-  --exit-code 0 \
-  --stdout "$empty" \
-  --stderr "$empty"
+# `put` records exit_code 0 by default, so the same inputs short-circuit
+# on the next invocation. A failed run is not recorded - `set -e` would
+# have exited above, so we only reach this line on success.
+fabrik cache action put "${inputs[@]}"
 ```
 
 The same shape works for any test runner, linter, type checker, or
@@ -143,31 +122,91 @@ files.
 ### Restore an artifact instead of regenerating it
 
 When what you want to remember is the *output* of a step (a tarball,
-a generated folder, a built binary), the keyed cache is a better fit.
+a generated folder, a built binary), put the artifact in the blob
+cache and reference it from an action result keyed by the inputs that
+produced it. The next run computes the same action digest, fetches the
+result, and pulls the artifact straight from the blob cache.
 `npm install` is the canonical example.
 
 ```sh
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The install is determined by these two files.
-key=$(fabrik cache hash package.json package-lock.json)
+inputs=(--input package.json --input package-lock.json)
 
-# If we have a tarball for this combination, restore and exit.
-if fabrik cache blob exists --key "$key"; then
-  fabrik cache blob get --key "$key" | tar -xf -
+# If we recorded a result for these inputs, restore the tarball.
+result=$(fabrik cache action get "${inputs[@]}" --format json)
+if echo "$result" | grep -q '"hit":true'; then
+  digest=$(echo "$result" | jq -r '.result.outputs["node_modules.tar"]')
+  fabrik cache blob get "$digest" | tar -xf -
   echo "node_modules: restored from cache."
   exit 0
 fi
 
-# Cache miss: install and store the tarball under the input-derived key.
+# Cache miss: install, store the tarball in the blob cache, and
+# record an action result pointing at it.
 npm install
-tar -cf - node_modules | fabrik cache blob put --key "$key"
+nm_digest=$(tar -cf - node_modules | fabrik cache blob put)
+fabrik cache action put "${inputs[@]}" \
+  --output node_modules.tar="$nm_digest"
 ```
 
-Three commands carry the whole flow: one to derive the key, one to
-probe, one to either pull or populate.
+Three operations carry the whole flow: probe the action cache, put
+the tarball in the blob cache, record the result. The blob cache
+deduplicates: two teammates whose installs produce byte-identical
+tarballs end up sharing one entry.
 
 The same pattern works for `pip install`, `bundle install`,
 `cargo fetch`, or any output a tool produces deterministically from a
 small set of input files.
+
+### Restore a mise-managed toolchain
+
+[mise-action](https://github.com/jdx/mise-action) caches
+`~/.local/share/mise/` between GitHub Actions runs so the second job
+that asks for `node 20.x` and `python 3.13` does not re-download them.
+The cache key is `(prefix, runner platform, mise version, mise config
++ lockfile, install args, MISE_ENV)`; the cached payload is the whole
+mise data directory. Nothing about that shape is GitHub-specific, and
+the same script gives a single dev machine, an agent's worktree, and
+a CI runner the same speedup.
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The platform discriminator matters: a mise tree built on macOS arm64
+# cannot run on Linux x86_64. We feed both env vars in so switching
+# machines moves the cache key. `value:` carries a prefix you bump when
+# the cache format itself changes.
+inputs=(
+  --input value:mise-v1
+  --input env:OSTYPE
+  --input env:HOSTTYPE
+  --input mise.toml
+  --input mise.lock
+)
+
+mise_dir="${MISE_DATA_DIR:-$HOME/.local/share/mise}"
+
+result=$(fabrik cache action get "${inputs[@]}" --format json)
+if echo "$result" | grep -q '"hit":true'; then
+  digest=$(echo "$result" | jq -r '.result.outputs["mise.tar"]')
+  mkdir -p "$mise_dir"
+  fabrik cache blob get "$digest" | tar -xzf - -C "$(dirname "$mise_dir")"
+  echo "mise: restored toolchain from cache."
+else
+  mise install --locked
+  tools_digest=$(
+    tar --sort=name -czf - -C "$(dirname "$mise_dir")" "$(basename "$mise_dir")" \
+      | fabrik cache blob put
+  )
+  fabrik cache action put "${inputs[@]}" --output mise.tar="$tools_digest"
+fi
+```
+
+The local-development payoff is the part mise-action cannot deliver: a
+team member who already installed the same toolchain on their machine
+has primed your cache; switching to a new branch with a different
+`mise.toml` restores its toolchain in the time it takes to extract a
+tarball, and switching back restores the previous one for free.
