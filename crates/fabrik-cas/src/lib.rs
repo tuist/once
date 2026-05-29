@@ -249,7 +249,9 @@ impl Cas {
     /// True if a content-addressed blob exists at `digest`.
     pub async fn has_blob(&self, digest: &Digest) -> Result<bool> {
         let path = self.blob_path(digest);
-        fs::try_exists(&path).await.map_err(|source| Error::Io { path, source })
+        fs::try_exists(&path)
+            .await
+            .map_err(|source| Error::Io { path, source })
     }
 
     pub async fn put_action_result(&self, action: &Digest, result: &ActionResult) -> Result<()> {

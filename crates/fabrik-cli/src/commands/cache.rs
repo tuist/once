@@ -129,9 +129,7 @@ pub async fn put_blob(cache: &CacheProvider, path: Option<&Path>, output: Output
     write_stdout(body.as_bytes()).await
 }
 
-async fn open_blob_input(
-    path: Option<&Path>,
-) -> Result<Pin<Box<dyn AsyncRead + Send + Unpin>>> {
+async fn open_blob_input(path: Option<&Path>) -> Result<Pin<Box<dyn AsyncRead + Send + Unpin>>> {
     match path {
         Some(path) if path != Path::new("-") => {
             let file = tokio::fs::File::open(path)
@@ -370,8 +368,7 @@ async fn hash_directory(root: &Path) -> Result<Digest> {
     let entries = tokio::task::spawn_blocking(move || -> Result<Vec<(String, PathBuf)>> {
         let mut entries = Vec::new();
         for entry in WalkDir::new(&root).follow_links(true).sort_by_file_name() {
-            let entry =
-                entry.with_context(|| format!("walking directory {}", root.display()))?;
+            let entry = entry.with_context(|| format!("walking directory {}", root.display()))?;
             if !entry.file_type().is_file() {
                 continue;
             }

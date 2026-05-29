@@ -197,9 +197,7 @@ async fn run_cache_command(
                     action,
                     inputs,
                     if_success,
-                }) => {
-                    commands::cache::get_action(&cache, action, inputs, if_success, output).await
-                }
+                }) => commands::cache::get_action(&cache, action, inputs, if_success, output).await,
                 Some(cli::CacheActionCmd::Put {
                     action,
                     inputs,
