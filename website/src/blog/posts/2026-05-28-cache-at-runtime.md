@@ -121,7 +121,7 @@ The cross-machine version, where the first developer to install pays the cost an
 
 [mise](https://mise.jdx.dev) is a popular runtime version manager. Switching branches whose `mise.toml` declares different tool versions kicks off a fresh round of downloads even when you have already paid for them on another branch or another machine. The [mise-action](https://github.com/jdx/mise-action) for GitHub Actions exists for exactly this reason: it caches `~/.local/share/mise/` (the binary plus every installed tool) under a key derived from the platform, the mise version, and the mise config and lockfile, and restores it on the next run.
 
-The shape isn't GitHub-specific. The same script gives a single dev machine, an agent's worktree, and a CI runner the same speedup — and on a Tuist-backed blob cache, the toolchain follows you between machines too.
+The shape isn't GitHub-specific. The same script gives a single dev machine, an agent's worktree, and a CI runner the same speedup, and on a Tuist-backed blob cache the toolchain follows you between machines too.
 
 ```sh
 #!/usr/bin/env bash
