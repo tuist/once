@@ -150,8 +150,8 @@ impl TuistCache {
 
     async fn prefetch_action_blobs(&self, result: &ActionResult) -> Result<()> {
         let mut digests = Vec::with_capacity(2 + result.outputs.len());
-        digests.push(result.stdout);
-        digests.push(result.stderr);
+        digests.extend(result.stdout);
+        digests.extend(result.stderr);
         digests.extend(result.outputs.values().copied());
         for digest in digests {
             let _ = self.get_blob(&digest).await?;

@@ -9,7 +9,6 @@ Describe 'fabrik cache stats'
     When call fabrik cache stats
     The status should be success
     The stdout should include 'blobs:   0'
-    The stdout should include 'keyed:   0'
     The stdout should include 'actions: 0'
   End
 
@@ -28,7 +27,6 @@ Describe 'fabrik cache stats'
     When call "$FABRIK_BIN" --format json -C "$WORKSPACE" cache stats
     The status should be success
     The stdout should include '"blobs":'
-    The stdout should include '"keyed":'
     The stdout should include '"actions":'
     The stdout should include '"count":'
     The stdout should include '"bytes":'
@@ -39,7 +37,6 @@ Describe 'fabrik cache stats'
     When call "$FABRIK_BIN" --format toon -C "$WORKSPACE" cache stats
     The status should be success
     The stdout should include 'blobs:'
-    The stdout should include 'keyed:'
     The stdout should include 'actions:'
     The stdout should include 'count:'
     The stdout should include 'bytes:'

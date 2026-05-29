@@ -33,8 +33,8 @@ async fn action_results_survive_reopen() {
         let stdout = cas.put_blob(b"out").await.unwrap();
         let result = ActionResult {
             exit_code: 0,
-            stdout,
-            stderr: stdout,
+            stdout: Some(stdout),
+            stderr: Some(stdout),
             outputs: std::collections::BTreeMap::new(),
         };
         cas.put_action_result(&key, &result).await.unwrap();
@@ -55,8 +55,8 @@ async fn forget_action_persists_across_reopen() {
             &key,
             &ActionResult {
                 exit_code: 0,
-                stdout,
-                stderr: stdout,
+                stdout: Some(stdout),
+                stderr: Some(stdout),
                 outputs: std::collections::BTreeMap::new(),
             },
         )

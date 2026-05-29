@@ -76,44 +76,6 @@ impl CacheProvider {
         }
     }
 
-    /// Read a keyed blob by its caller-chosen key. Keyed blobs are
-    /// local-only today; the remote tier is never consulted.
-    pub async fn get_keyed_blob(&self, key: &Digest) -> Result<Vec<u8>> {
-        match self {
-            Self::Local(cas) => cas.get_keyed_blob(key).await,
-            Self::Tuist(cache) => cache.local().get_keyed_blob(key).await,
-        }
-    }
-
-    /// True if a keyed blob exists. Local-only.
-    pub async fn has_keyed_blob(&self, key: &Digest) -> Result<bool> {
-        match self {
-            Self::Local(cas) => cas.has_keyed_blob(key).await,
-            Self::Tuist(cache) => cache.local().has_keyed_blob(key).await,
-        }
-    }
-
-    /// Store `bytes` under a caller-chosen `key`. See
-    /// [`Cas::put_keyed_blob`] for semantics. Local-only.
-    pub async fn put_keyed_blob(&self, key: &Digest, bytes: &[u8]) -> Result<()> {
-        match self {
-            Self::Local(cas) => cas.put_keyed_blob(key, bytes).await,
-            Self::Tuist(cache) => cache.local().put_keyed_blob(key, bytes).await,
-        }
-    }
-
-    /// Streaming form of [`Self::put_keyed_blob`]. Local-only.
-    pub async fn put_keyed_stream<R: AsyncRead + Unpin>(
-        &self,
-        key: &Digest,
-        reader: R,
-    ) -> Result<()> {
-        match self {
-            Self::Local(cas) => cas.put_keyed_stream(key, reader).await,
-            Self::Tuist(cache) => cache.local().put_keyed_stream(key, reader).await,
-        }
-    }
-
     pub async fn put_action_result(&self, action: &Digest, result: &ActionResult) -> Result<()> {
         match self {
             Self::Local(cas) => cas.put_action_result(action, result).await,

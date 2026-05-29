@@ -64,11 +64,17 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// restores these blobs from the CAS to their declared paths so a
 /// dependent action sees the file it expected, even if the producing
 /// action did not actually run on this machine.
+///
+/// `stdout` and `stderr` are optional: a caller that did not capture
+/// output (or had nothing worth recording) simply leaves them unset
+/// rather than materialising an empty blob.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionResult {
     pub exit_code: i32,
-    pub stdout: Digest,
-    pub stderr: Digest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<Digest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<Digest>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub outputs: std::collections::BTreeMap<String, Digest>,
 }
@@ -79,13 +85,8 @@ pub struct ActionResult {
 /// Layout:
 /// - `cas/<aa>/<rest-of-hex>` - content-addressed blob bodies, sharded
 ///   by first byte. The file at `<digest>` is guaranteed to hash to
-///   `<digest>`; callers (including ActionResult restoration) trust
+///   `<digest>`; callers (including `ActionResult` restoration) trust
 ///   this invariant for integrity.
-/// - `kv/<aa>/<rest-of-hex>` - keyed blobs stored under a caller-chosen
-///   key. The bytes need NOT hash to the key. Intentionally kept in a
-///   separate namespace so a GC sweep over `cas/` (driven by `actions/`
-///   references) does not see keyed entries, and so `get_blob` never
-///   substitutes keyed bytes for a content-addressed lookup.
 /// - `actions/<aa>/<rest-of-hex>.json` - action results, same sharding
 ///   as `cas/`. Their referenced output digests are CAS-only.
 ///
@@ -111,10 +112,6 @@ impl Cas {
         self.root.join("cas")
     }
 
-    fn kv_dir(&self) -> PathBuf {
-        self.root.join("kv")
-    }
-
     fn actions_dir(&self) -> PathBuf {
         self.root.join("actions")
     }
@@ -131,10 +128,6 @@ impl Cas {
 
     fn blob_path(&self, digest: &Digest) -> PathBuf {
         Self::shard_path(&self.blobs_dir(), digest, "")
-    }
-
-    fn keyed_path(&self, key: &Digest) -> PathBuf {
-        Self::shard_path(&self.kv_dir(), key, "")
     }
 
     pub(crate) async fn blob_size(&self, digest: &Digest) -> Result<u64> {
@@ -173,8 +166,7 @@ impl Cas {
     /// file is removed; a crashed writer leaves at most one orphaned
     /// `scratch/stream-*` that future cache invocations ignore.
     pub async fn put_stream<R: AsyncRead + Unpin>(&self, reader: R) -> Result<Digest> {
-        let (tmp, digest) = self.stream_to_tmp("stream", reader, true).await?;
-        let digest = digest.expect("hash=true returns Some");
+        let (tmp, digest) = self.stream_to_tmp("stream", reader).await?;
         let final_path = self.blob_path(&digest);
 
         if fs::try_exists(&final_path).await.unwrap_or(false) {
@@ -187,22 +179,21 @@ impl Cas {
         Ok(digest)
     }
 
-    /// Stream `reader` into the scratch dir and (optionally) compute
-    /// the BLAKE3 of the bytes. The caller is responsible for renaming
-    /// the returned tmp path into its final location.
+    /// Stream `reader` into the scratch dir and compute the BLAKE3 of
+    /// the bytes. The caller is responsible for renaming the returned
+    /// tmp path into its final location.
     async fn stream_to_tmp<R: AsyncRead + Unpin>(
         &self,
         prefix: &str,
         reader: R,
-        hash: bool,
-    ) -> Result<(PathBuf, Option<Digest>)> {
+    ) -> Result<(PathBuf, Digest)> {
         let scratch = self.scratch_dir();
         ensure_dir(&scratch).await?;
         let pid = process::id();
         let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let tmp = scratch.join(format!("{prefix}-{pid}-{seq}"));
 
-        match self.write_stream_to(&tmp, reader, hash).await {
+        match self.write_stream_to(&tmp, reader).await {
             Ok(digest) => Ok((tmp, digest)),
             Err(e) => {
                 let _ = fs::remove_file(&tmp).await;
@@ -215,13 +206,12 @@ impl Cas {
         &self,
         tmp: &Path,
         mut reader: R,
-        hash: bool,
-    ) -> Result<Option<Digest>> {
+    ) -> Result<Digest> {
         let mut file = File::create(tmp).await.map_err(|source| Error::Io {
             path: tmp.to_path_buf(),
             source,
         })?;
-        let mut hasher = hash.then(blake3::Hasher::new);
+        let mut hasher = blake3::Hasher::new();
         let mut buf = vec![0u8; STREAM_CHUNK];
         loop {
             let n = reader.read(&mut buf).await.map_err(|source| Error::Io {
@@ -231,9 +221,7 @@ impl Cas {
             if n == 0 {
                 break;
             }
-            if let Some(h) = hasher.as_mut() {
-                h.update(&buf[..n]);
-            }
+            hasher.update(&buf[..n]);
             file.write_all(&buf[..n])
                 .await
                 .map_err(|source| Error::Io {
@@ -245,52 +233,23 @@ impl Cas {
             path: tmp.to_path_buf(),
             source,
         })?;
-        Ok(hasher.map(|h| Digest::from_bytes(*h.finalize().as_bytes())))
+        Ok(Digest::from_bytes(*hasher.finalize().as_bytes()))
     }
 
-    /// Read a content-addressed blob. The keyed namespace is NOT
-    /// consulted: returning bytes that don't hash to `digest` would
-    /// silently corrupt callers (notably ActionResult restoration) that
-    /// trust `get_blob` to honour content addressing.
+    /// Read a content-addressed blob.
     pub async fn get_blob(&self, digest: &Digest) -> Result<Vec<u8>> {
-        read_blob(&self.blob_path(digest), digest).await
-    }
-
-    /// Read a keyed blob by its caller-chosen key.
-    pub async fn get_keyed_blob(&self, key: &Digest) -> Result<Vec<u8>> {
-        read_blob(&self.keyed_path(key), key).await
+        let path = self.blob_path(digest);
+        match fs::read(&path).await {
+            Ok(bytes) => Ok(bytes),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Err(Error::BlobNotFound(*digest)),
+            Err(source) => Err(Error::Io { path, source }),
+        }
     }
 
     /// True if a content-addressed blob exists at `digest`.
     pub async fn has_blob(&self, digest: &Digest) -> Result<bool> {
-        try_exists_blob(&self.blob_path(digest)).await
-    }
-
-    /// True if a keyed blob exists at `key`.
-    pub async fn has_keyed_blob(&self, key: &Digest) -> Result<bool> {
-        try_exists_blob(&self.keyed_path(key)).await
-    }
-
-    /// Store `bytes` under the caller-chosen `key`, bypassing the
-    /// content-addressing invariant of [`Self::put_blob`]. The key is
-    /// just a 256-bit identifier; nothing requires it to equal the
-    /// BLAKE3 hash of `bytes`. Useful when a script wants to memoize an
-    /// artifact under a digest derived from inputs (e.g. a tarball of
-    /// `node_modules` keyed by the hash of `package-lock.json`).
-    pub async fn put_keyed_blob(&self, key: &Digest, bytes: &[u8]) -> Result<()> {
-        let path = self.keyed_path(key);
-        write_durably(&path, bytes).await
-    }
-
-    /// Streaming form of [`Self::put_keyed_blob`]. Memory use is bounded
-    /// by `STREAM_CHUNK` regardless of input size.
-    pub async fn put_keyed_stream<R: AsyncRead + Unpin>(
-        &self,
-        key: &Digest,
-        reader: R,
-    ) -> Result<()> {
-        let (tmp, _) = self.stream_to_tmp("kv", reader, false).await?;
-        rename_into_place(&tmp, &self.keyed_path(key)).await
+        let path = self.blob_path(digest);
+        fs::try_exists(&path).await.map_err(|source| Error::Io { path, source })
     }
 
     pub async fn put_action_result(&self, action: &Digest, result: &ActionResult) -> Result<()> {
@@ -324,18 +283,12 @@ impl Cas {
 
     pub async fn stats(&self) -> Result<Stats> {
         let blobs_dir = self.blobs_dir();
-        let kv_dir = self.kv_dir();
         let actions_dir = self.actions_dir();
-        let (blobs, keyed, actions) = tokio::try_join!(
-            count_files(&blobs_dir),
-            count_files(&kv_dir),
-            count_files(&actions_dir),
-        )?;
+        let (blobs, actions) =
+            tokio::try_join!(count_files(&blobs_dir), count_files(&actions_dir))?;
         Ok(Stats {
             blob_count: blobs.0,
             blob_bytes: blobs.1,
-            keyed_count: keyed.0,
-            keyed_bytes: keyed.1,
             action_count: actions.0,
             action_bytes: actions.1,
         })
@@ -346,8 +299,6 @@ impl Cas {
 pub struct Stats {
     pub blob_count: u64,
     pub blob_bytes: u64,
-    pub keyed_count: u64,
-    pub keyed_bytes: u64,
     pub action_count: u64,
     pub action_bytes: u64,
 }
@@ -435,24 +386,6 @@ async fn rename_into_place(tmp: &Path, final_path: &Path) -> Result<()> {
             source,
         })?;
     fsync_dir(parent).await
-}
-
-async fn read_blob(path: &Path, digest: &Digest) -> Result<Vec<u8>> {
-    match fs::read(path).await {
-        Ok(bytes) => Ok(bytes),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Err(Error::BlobNotFound(*digest)),
-        Err(source) => Err(Error::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-async fn try_exists_blob(path: &Path) -> Result<bool> {
-    fs::try_exists(path).await.map_err(|source| Error::Io {
-        path: path.to_path_buf(),
-        source,
-    })
 }
 
 async fn ensure_dir(path: &Path) -> Result<()> {
@@ -569,8 +502,23 @@ mod tests {
         let action = Digest::of_bytes(b"action-key");
         let result = ActionResult {
             exit_code: 0,
-            stdout,
-            stderr,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            outputs: std::collections::BTreeMap::new(),
+        };
+        cas.put_action_result(&action, &result).await.unwrap();
+        assert_eq!(cas.get_action_result(&action).await.unwrap(), Some(result));
+    }
+
+    #[tokio::test]
+    async fn action_result_without_stdout_or_stderr_roundtrips() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let action = Digest::of_bytes(b"silent-action");
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
             outputs: std::collections::BTreeMap::new(),
         };
         cas.put_action_result(&action, &result).await.unwrap();
@@ -593,8 +541,8 @@ mod tests {
         let key = Digest::of_bytes(b"k");
         let result = ActionResult {
             exit_code: 0,
-            stdout,
-            stderr: stdout,
+            stdout: Some(stdout),
+            stderr: Some(stdout),
             outputs: std::collections::BTreeMap::new(),
         };
         cas.put_action_result(&key, &result).await.unwrap();
@@ -631,8 +579,8 @@ mod tests {
             &key,
             &ActionResult {
                 exit_code: 0,
-                stdout,
-                stderr: stdout,
+                stdout: Some(stdout),
+                stderr: Some(stdout),
                 outputs: std::collections::BTreeMap::new(),
             },
         )
@@ -652,24 +600,8 @@ mod tests {
         let s = cas.stats().await.unwrap();
         assert_eq!(s.blob_count, 0);
         assert_eq!(s.blob_bytes, 0);
-        assert_eq!(s.keyed_count, 0);
-        assert_eq!(s.keyed_bytes, 0);
         assert_eq!(s.action_count, 0);
         assert_eq!(s.action_bytes, 0);
-    }
-
-    #[tokio::test]
-    async fn stats_tracks_keyed_blobs_separately() {
-        let tmp = TempDir::new().unwrap();
-        let cas = Cas::open(tmp.path());
-        cas.put_blob(b"cas-bytes").await.unwrap();
-        let key = Digest::of_bytes(b"any-key");
-        cas.put_keyed_blob(&key, b"keyed-bytes-longer").await.unwrap();
-        let s = cas.stats().await.unwrap();
-        assert_eq!(s.blob_count, 1);
-        assert_eq!(s.blob_bytes, 9);
-        assert_eq!(s.keyed_count, 1);
-        assert_eq!(s.keyed_bytes, 18);
     }
 
     #[tokio::test]
@@ -813,7 +745,6 @@ mod tests {
         let cas = Cas::open(tmp.path());
         let d = Digest::of_bytes(b"never-stored");
         assert!(!cas.has_blob(&d).await.unwrap());
-        assert!(!cas.has_keyed_blob(&d).await.unwrap());
     }
 
     #[tokio::test]
@@ -822,50 +753,6 @@ mod tests {
         let cas = Cas::open(tmp.path());
         let d = cas.put_blob(b"hello").await.unwrap();
         assert!(cas.has_blob(&d).await.unwrap());
-        assert!(!cas.has_keyed_blob(&d).await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn put_keyed_blob_roundtrip() {
-        let tmp = TempDir::new().unwrap();
-        let cas = Cas::open(tmp.path());
-        let key = Digest::of_bytes(b"input-derived-key");
-        cas.put_keyed_blob(&key, b"tarball").await.unwrap();
-        assert!(cas.has_keyed_blob(&key).await.unwrap());
-        assert_eq!(cas.get_keyed_blob(&key).await.unwrap(), b"tarball");
-    }
-
-    #[tokio::test]
-    async fn keyed_blob_does_not_appear_in_cas_namespace() {
-        // The whole point of the split: a keyed blob must NEVER be
-        // returned by get_blob, otherwise an attacker (or a careless
-        // user) can poison an ActionResult restore by pre-staging a
-        // keyed entry whose key matches a real output digest.
-        let tmp = TempDir::new().unwrap();
-        let cas = Cas::open(tmp.path());
-        let key = Digest::of_bytes(b"pkg+lock");
-        cas.put_keyed_blob(&key, b"node_modules tarball")
-            .await
-            .unwrap();
-        assert!(!cas.has_blob(&key).await.unwrap());
-        match cas.get_blob(&key).await {
-            Err(Error::BlobNotFound(missing)) => assert_eq!(missing, key),
-            other => panic!("expected BlobNotFound, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn put_keyed_stream_roundtrip() {
-        let tmp = TempDir::new().unwrap();
-        let cas = Cas::open(tmp.path());
-        let key = Digest::of_bytes(b"streamed-key");
-        let payload: Vec<u8> = (0..(STREAM_CHUNK * 2 + 13))
-            .map(|i| u8::try_from(i & 0xff).unwrap())
-            .collect();
-        cas.put_keyed_stream(&key, payload.as_slice())
-            .await
-            .unwrap();
-        assert_eq!(cas.get_keyed_blob(&key).await.unwrap(), payload);
     }
 
     #[tokio::test]
@@ -890,8 +777,8 @@ mod tests {
             &key,
             &ActionResult {
                 exit_code: 0,
-                stdout,
-                stderr: stdout,
+                stdout: Some(stdout),
+                stderr: Some(stdout),
                 outputs: std::collections::BTreeMap::new(),
             },
         )

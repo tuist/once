@@ -470,7 +470,7 @@ mod tests {
         assert_eq!(outcomes.len(), 2);
         let consumer_stdout = runner
             .cache()
-            .get_blob(&outcomes[1].outcome.result.stdout)
+            .get_blob(&outcomes[1].outcome.result.stdout.unwrap())
             .await
             .unwrap();
         assert_eq!(consumer_stdout, b"hello world");
