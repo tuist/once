@@ -363,10 +363,17 @@ async fn hash_spec(spec: &InputSpec) -> Result<(Digest, Option<u64>)> {
 /// Symlinks are followed; permissions are not part of the digest. Two
 /// directories with the same file paths and contents produce the same
 /// digest regardless of filesystem iteration order.
+///
+/// The whole walk + read + hash runs on a single `spawn_blocking`
+/// worker. Reading each file via `tokio::fs::read` (which itself
+/// dispatches to `spawn_blocking` per call) would churn the blocking
+/// pool once per entry and serialise on the await; doing the work
+/// inline on one blocking thread is one dispatch total and lets the
+/// kernel page bytes through without async hops.
 async fn hash_directory(root: &Path) -> Result<Digest> {
     let root = root.to_path_buf();
-    let entries = tokio::task::spawn_blocking(move || -> Result<Vec<(String, PathBuf)>> {
-        let mut entries = Vec::new();
+    tokio::task::spawn_blocking(move || -> Result<Digest> {
+        let mut entries: Vec<(String, PathBuf)> = Vec::new();
         for entry in WalkDir::new(&root).follow_links(true).sort_by_file_name() {
             let entry = entry.with_context(|| format!("walking directory {}", root.display()))?;
             if !entry.file_type().is_file() {
@@ -375,8 +382,7 @@ async fn hash_directory(root: &Path) -> Result<Digest> {
             let rel = entry
                 .path()
                 .strip_prefix(&root)
-                .expect("walkdir entries are under root")
-                .to_path_buf();
+                .expect("walkdir entries are under root");
             // Normalise the path separator so the digest is platform
             // independent.
             let rel_str = rel
@@ -390,23 +396,21 @@ async fn hash_directory(root: &Path) -> Result<Digest> {
         // against any directory entry that arrives out of order on
         // exotic filesystems.
         entries.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(entries)
+
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"fabrik.hash.directory.v1\0");
+        for (rel, abs) in entries {
+            let bytes = std::fs::read(&abs)
+                .with_context(|| format!("reading directory entry {}", abs.display()))?;
+            hasher.update(rel.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(&bytes);
+            hasher.update(b"\0");
+        }
+        Ok(Digest::from_bytes(*hasher.finalize().as_bytes()))
     })
     .await
-    .context("joining directory walk")??;
-
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"fabrik.hash.directory.v1\0");
-    for (rel, abs) in entries {
-        let bytes = tokio::fs::read(&abs)
-            .await
-            .with_context(|| format!("reading directory entry {}", abs.display()))?;
-        hasher.update(rel.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(&bytes);
-        hasher.update(b"\0");
-    }
-    Ok(Digest::from_bytes(*hasher.finalize().as_bytes()))
+    .context("joining directory walk")?
 }
 
 fn combine_digests(parts: &[Digest]) -> Digest {
