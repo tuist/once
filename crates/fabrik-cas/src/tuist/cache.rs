@@ -95,6 +95,31 @@ impl TuistCache {
         Ok(digest)
     }
 
+    /// True if the blob is present locally or remotely. A remote
+    /// failure is treated as "not present" so a transient outage degrades
+    /// to a cache miss instead of a hard error.
+    pub async fn has_blob(&self, digest: &Digest) -> Result<bool> {
+        if self.local.has_blob(digest).await? {
+            return Ok(true);
+        }
+        Ok(self.head_blob_remote(digest).await.unwrap_or(false))
+    }
+
+    async fn head_blob_remote(&self, digest: &Digest) -> Result<bool> {
+        let endpoint = self.data_plane_endpoint().await?;
+        let url = self.cas_url(&endpoint, &digest.to_hex())?;
+        let response = self
+            .authorized_request(Method::HEAD, url)?
+            .send()
+            .await
+            .map_err(|source| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "head blob",
+                message: source.to_string(),
+            })?;
+        Ok(response.status() == StatusCode::OK)
+    }
+
     pub async fn get_action_result(&self, action: &Digest) -> Result<Option<ActionResult>> {
         if let Some(result) = self.local.get_action_result(action).await? {
             return Ok(Some(result));
@@ -125,8 +150,8 @@ impl TuistCache {
 
     async fn prefetch_action_blobs(&self, result: &ActionResult) -> Result<()> {
         let mut digests = Vec::with_capacity(2 + result.outputs.len());
-        digests.push(result.stdout);
-        digests.push(result.stderr);
+        digests.extend(result.stdout);
+        digests.extend(result.stderr);
         digests.extend(result.outputs.values().copied());
         for digest in digests {
             let _ = self.get_blob(&digest).await?;

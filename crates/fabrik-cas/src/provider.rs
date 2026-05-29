@@ -66,6 +66,16 @@ impl CacheProvider {
         }
     }
 
+    /// True if a content-addressed blob exists. For Tuist this consults
+    /// the remote tier on local miss so it mirrors `get_blob`'s reach;
+    /// scripts can probe `exists` then `get` without surprises.
+    pub async fn has_blob(&self, digest: &Digest) -> Result<bool> {
+        match self {
+            Self::Local(cas) => cas.has_blob(digest).await,
+            Self::Tuist(cache) => cache.has_blob(digest).await,
+        }
+    }
+
     pub async fn put_action_result(&self, action: &Digest, result: &ActionResult) -> Result<()> {
         match self {
             Self::Local(cas) => cas.put_action_result(action, result).await,

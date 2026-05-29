@@ -20,6 +20,7 @@ fabrik-go.workspace = true
 fabrik-rust.workspace = true
 
 anyhow.workspace = true
+blake3.workspace = true
 clap.workspace = true
 console.workspace = true
 glob.workspace = true

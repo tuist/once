@@ -130,8 +130,14 @@ async fn finish_run(
         runtime_rpc_socket,
         remote: _,
     } = args;
-    let stdout_blob = cache.get_blob(&outcome.result.stdout).await?;
-    let stderr_blob = cache.get_blob(&outcome.result.stderr).await?;
+    let stdout_blob = match outcome.result.stdout {
+        Some(digest) => cache.get_blob(&digest).await?,
+        None => Vec::new(),
+    };
+    let stderr_blob = match outcome.result.stderr {
+        Some(digest) => cache.get_blob(&digest).await?,
+        None => Vec::new(),
+    };
     let tag = cache_tag(outcome.cache);
     let mut runtime = runtime_descriptor(target_id, target)?;
     let session = match (&mut runtime, runtime_rpc) {

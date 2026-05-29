@@ -6,6 +6,18 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use fabrik_core::WorkspacePath;
 
+mod auth;
+mod cache;
+mod deps;
+mod runtime;
+mod toolchain;
+
+pub use auth::AuthCmd;
+pub use cache::{CacheActionCmd, CacheBlobCmd, CacheCmd};
+pub use deps::DepsCmd;
+pub use runtime::RuntimeCmd;
+pub use toolchain::ToolchainCmd;
+
 /// Workspace-relative directory holding Fabrik's CAS, action results,
 /// and build outputs. Hidden so VCS and editors ignore it by default.
 pub const CACHE_DIR: &str = ".fabrik";
@@ -286,66 +298,6 @@ pub enum Cmd {
     },
 }
 
-#[derive(Subcommand)]
-pub enum CacheCmd {
-    /// Print blob and action counts plus on-disk size.
-    Stats,
-}
-
-#[derive(Subcommand)]
-pub enum AuthCmd {
-    /// Sign in to a provider so Fabrik can reuse its cache session.
-    Login {
-        /// Provider reference. Use `workspace` for the effective workspace provider.
-        #[arg(long)]
-        provider: String,
-
-        /// Print the authorization URL instead of opening the browser automatically.
-        #[arg(long)]
-        no_browser: bool,
-    },
-
-    /// Remove the stored session for a provider.
-    Logout {
-        /// Provider reference. Use `workspace` for the effective workspace provider.
-        #[arg(long)]
-        provider: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum ToolchainCmd {
-    /// Print the toolchain contract derived from mise.toml.
-    Inspect {
-        /// Mise platform key to inspect, e.g. linux-x64. Defaults to
-        /// the current host platform.
-        #[arg(long)]
-        platform: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum RuntimeCmd {
-    /// Serve the local runtime JSON-RPC endpoint for a session directory.
-    Rpc {
-        /// Runtime session directory containing session.json and logs.
-        session_dir: PathBuf,
-
-        /// Socket path. Defaults to `<session-dir>/control.sock`.
-        #[arg(long)]
-        socket: Option<PathBuf>,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum DepsCmd {
-    /// Synchronize generated dependency artifacts from `fabrik.toml`.
-    Sync {
-        /// Sync one dependency entry by name. Defaults to all entries.
-        name: Option<String>,
-    },
-}
-
 impl Cli {
     pub fn surface_path(&self) -> Vec<&'static str> {
         self.command
@@ -409,47 +361,6 @@ impl Cmd {
                 }
                 path
             }
-        }
-    }
-}
-
-impl CacheCmd {
-    fn surface_path(&self) -> Vec<&'static str> {
-        match self {
-            Self::Stats => vec!["stats"],
-        }
-    }
-}
-
-impl AuthCmd {
-    fn surface_path(&self) -> Vec<&'static str> {
-        match self {
-            Self::Login { .. } => vec!["login"],
-            Self::Logout { .. } => vec!["logout"],
-        }
-    }
-}
-
-impl ToolchainCmd {
-    fn surface_path(&self) -> Vec<&'static str> {
-        match self {
-            Self::Inspect { .. } => vec!["inspect"],
-        }
-    }
-}
-
-impl RuntimeCmd {
-    fn surface_path(&self) -> Vec<&'static str> {
-        match self {
-            Self::Rpc { .. } => vec!["rpc"],
-        }
-    }
-}
-
-impl DepsCmd {
-    fn surface_path(&self) -> Vec<&'static str> {
-        match self {
-            Self::Sync { .. } => vec!["sync"],
         }
     }
 }

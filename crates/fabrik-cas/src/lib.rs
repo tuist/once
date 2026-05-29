@@ -64,11 +64,17 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// restores these blobs from the CAS to their declared paths so a
 /// dependent action sees the file it expected, even if the producing
 /// action did not actually run on this machine.
+///
+/// `stdout` and `stderr` are optional: a caller that did not capture
+/// output (or had nothing worth recording) simply leaves them unset
+/// rather than materialising an empty blob.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionResult {
     pub exit_code: i32,
-    pub stdout: Digest,
-    pub stderr: Digest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<Digest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<Digest>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub outputs: std::collections::BTreeMap<String, Digest>,
 }
@@ -77,8 +83,12 @@ pub struct ActionResult {
 /// directory.
 ///
 /// Layout:
-/// - `cas/<aa>/<rest-of-hex>` - blob bodies, sharded by first byte.
-/// - `actions/<aa>/<rest-of-hex>.json` - action results, same sharding.
+/// - `cas/<aa>/<rest-of-hex>` - content-addressed blob bodies, sharded
+///   by first byte. The file at `<digest>` is guaranteed to hash to
+///   `<digest>`; callers (including `ActionResult` restoration) trust
+///   this invariant for integrity.
+/// - `actions/<aa>/<rest-of-hex>.json` - action results, same sharding
+///   as `cas/`. Their referenced output digests are CAS-only.
 ///
 /// `open` is cheap and side-effect-free; the directory tree is created
 /// lazily on the first write. A read-only consumer never touches disk
@@ -156,24 +166,46 @@ impl Cas {
     /// file is removed; a crashed writer leaves at most one orphaned
     /// `scratch/stream-*` that future cache invocations ignore.
     pub async fn put_stream<R: AsyncRead + Unpin>(&self, reader: R) -> Result<Digest> {
+        let (tmp, digest) = self.stream_to_tmp("stream", reader).await?;
+        let final_path = self.blob_path(&digest);
+
+        if fs::try_exists(&final_path).await.unwrap_or(false) {
+            // Another writer beat us, or this content is already cached.
+            let _ = fs::remove_file(&tmp).await;
+            return Ok(digest);
+        }
+
+        rename_into_place(&tmp, &final_path).await?;
+        Ok(digest)
+    }
+
+    /// Stream `reader` into the scratch dir and compute the BLAKE3 of
+    /// the bytes. The caller is responsible for renaming the returned
+    /// tmp path into its final location.
+    async fn stream_to_tmp<R: AsyncRead + Unpin>(
+        &self,
+        prefix: &str,
+        reader: R,
+    ) -> Result<(PathBuf, Digest)> {
         let scratch = self.scratch_dir();
         ensure_dir(&scratch).await?;
         let pid = process::id();
         let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let tmp = scratch.join(format!("stream-{pid}-{seq}"));
+        let tmp = scratch.join(format!("{prefix}-{pid}-{seq}"));
 
-        // Run the body and clean up the scratch file on any error.
-        let outcome = self.put_stream_inner(reader, &tmp).await;
-        if outcome.is_err() {
-            let _ = fs::remove_file(&tmp).await;
+        match self.write_stream_to(&tmp, reader).await {
+            Ok(digest) => Ok((tmp, digest)),
+            Err(e) => {
+                let _ = fs::remove_file(&tmp).await;
+                Err(e)
+            }
         }
-        outcome
     }
 
-    async fn put_stream_inner<R: AsyncRead + Unpin>(
+    async fn write_stream_to<R: AsyncRead + Unpin>(
         &self,
-        mut reader: R,
         tmp: &Path,
+        mut reader: R,
     ) -> Result<Digest> {
         let mut file = File::create(tmp).await.map_err(|source| Error::Io {
             path: tmp.to_path_buf(),
@@ -201,29 +233,10 @@ impl Cas {
             path: tmp.to_path_buf(),
             source,
         })?;
-        drop(file);
-
-        let digest = Digest::from_bytes(*hasher.finalize().as_bytes());
-        let final_path = self.blob_path(&digest);
-
-        if fs::try_exists(&final_path).await.unwrap_or(false) {
-            // Another writer beat us, or this content is already cached.
-            let _ = fs::remove_file(tmp).await;
-            return Ok(digest);
-        }
-
-        let parent = final_path.parent().expect("shard path has parent");
-        ensure_dir(parent).await?;
-        fs::rename(tmp, &final_path)
-            .await
-            .map_err(|source| Error::Io {
-                path: final_path.clone(),
-                source,
-            })?;
-        fsync_dir(parent).await?;
-        Ok(digest)
+        Ok(Digest::from_bytes(*hasher.finalize().as_bytes()))
     }
 
+    /// Read a content-addressed blob.
     pub async fn get_blob(&self, digest: &Digest) -> Result<Vec<u8>> {
         let path = self.blob_path(digest);
         match fs::read(&path).await {
@@ -231,6 +244,14 @@ impl Cas {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Err(Error::BlobNotFound(*digest)),
             Err(source) => Err(Error::Io { path, source }),
         }
+    }
+
+    /// True if a content-addressed blob exists at `digest`.
+    pub async fn has_blob(&self, digest: &Digest) -> Result<bool> {
+        let path = self.blob_path(digest);
+        fs::try_exists(&path)
+            .await
+            .map_err(|source| Error::Io { path, source })
     }
 
     pub async fn put_action_result(&self, action: &Digest, result: &ActionResult) -> Result<()> {
@@ -263,13 +284,15 @@ impl Cas {
     }
 
     pub async fn stats(&self) -> Result<Stats> {
-        let (blob_count, blob_bytes) = count_files(&self.blobs_dir()).await?;
-        let (action_count, action_bytes) = count_files(&self.actions_dir()).await?;
+        let blobs_dir = self.blobs_dir();
+        let actions_dir = self.actions_dir();
+        let (blobs, actions) =
+            tokio::try_join!(count_files(&blobs_dir), count_files(&actions_dir))?;
         Ok(Stats {
-            blob_count,
-            blob_bytes,
-            action_count,
-            action_bytes,
+            blob_count: blobs.0,
+            blob_bytes: blobs.1,
+            action_count: actions.0,
+            action_bytes: actions.1,
         })
     }
 }
@@ -353,6 +376,18 @@ async fn fsync_dir(dir: &Path) -> Result<()> {
 #[cfg(not(unix))]
 async fn fsync_dir(_: &Path) -> Result<()> {
     Ok(())
+}
+
+async fn rename_into_place(tmp: &Path, final_path: &Path) -> Result<()> {
+    let parent = final_path.parent().expect("shard path has parent");
+    ensure_dir(parent).await?;
+    fs::rename(tmp, final_path)
+        .await
+        .map_err(|source| Error::Io {
+            path: final_path.to_path_buf(),
+            source,
+        })?;
+    fsync_dir(parent).await
 }
 
 async fn ensure_dir(path: &Path) -> Result<()> {
@@ -469,8 +504,23 @@ mod tests {
         let action = Digest::of_bytes(b"action-key");
         let result = ActionResult {
             exit_code: 0,
-            stdout,
-            stderr,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            outputs: std::collections::BTreeMap::new(),
+        };
+        cas.put_action_result(&action, &result).await.unwrap();
+        assert_eq!(cas.get_action_result(&action).await.unwrap(), Some(result));
+    }
+
+    #[tokio::test]
+    async fn action_result_without_stdout_or_stderr_roundtrips() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let action = Digest::of_bytes(b"silent-action");
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
             outputs: std::collections::BTreeMap::new(),
         };
         cas.put_action_result(&action, &result).await.unwrap();
@@ -493,8 +543,8 @@ mod tests {
         let key = Digest::of_bytes(b"k");
         let result = ActionResult {
             exit_code: 0,
-            stdout,
-            stderr: stdout,
+            stdout: Some(stdout),
+            stderr: Some(stdout),
             outputs: std::collections::BTreeMap::new(),
         };
         cas.put_action_result(&key, &result).await.unwrap();
@@ -531,8 +581,8 @@ mod tests {
             &key,
             &ActionResult {
                 exit_code: 0,
-                stdout,
-                stderr: stdout,
+                stdout: Some(stdout),
+                stderr: Some(stdout),
                 outputs: std::collections::BTreeMap::new(),
             },
         )
@@ -692,6 +742,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn has_blob_is_false_for_unknown_digest() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let d = Digest::of_bytes(b"never-stored");
+        assert!(!cas.has_blob(&d).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn has_blob_finds_content_addressed_blob() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let d = cas.put_blob(b"hello").await.unwrap();
+        assert!(cas.has_blob(&d).await.unwrap());
+    }
+
+    #[tokio::test]
     async fn get_blob_returns_blob_not_found_for_unknown_digest() {
         let tmp = TempDir::new().unwrap();
         let cas = Cas::open(tmp.path());
@@ -713,8 +779,8 @@ mod tests {
             &key,
             &ActionResult {
                 exit_code: 0,
-                stdout,
-                stderr: stdout,
+                stdout: Some(stdout),
+                stderr: Some(stdout),
                 outputs: std::collections::BTreeMap::new(),
             },
         )

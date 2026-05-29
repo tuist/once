@@ -23,19 +23,25 @@ pub(in crate::commands::deps) async fn run_cached_resolution(
         .await
         .with_context(|| format!("executing {command_name}"))?;
     if outcome.result.exit_code != 0 {
-        let stderr = cache.get_blob(&outcome.result.stderr).await.map_or_else(
-            |_| "<stderr unavailable>".to_string(),
-            |bytes| String::from_utf8_lossy(&bytes).trim().to_string(),
-        );
+        let stderr = match outcome.result.stderr {
+            Some(digest) => cache.get_blob(&digest).await.map_or_else(
+                |_| "<stderr unavailable>".to_string(),
+                |bytes| String::from_utf8_lossy(&bytes).trim().to_string(),
+            ),
+            None => String::new(),
+        };
         return Err(anyhow!(
             "{command_name} failed (exit {}): {stderr}",
             outcome.result.exit_code
         ));
     }
-    let stdout = cache
-        .get_blob(&outcome.result.stdout)
-        .await
-        .with_context(|| format!("reading cached stdout for {command_name}"))?;
+    let stdout = match outcome.result.stdout {
+        Some(digest) => cache
+            .get_blob(&digest)
+            .await
+            .with_context(|| format!("reading cached stdout for {command_name}"))?,
+        None => Vec::new(),
+    };
     Ok(CachedResolution {
         stdout,
         cache: outcome.cache,

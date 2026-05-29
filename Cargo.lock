@@ -1131,6 +1131,7 @@ name = "fabrik-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "clap",
  "console",
  "fabrik-apple",

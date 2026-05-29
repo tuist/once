@@ -121,8 +121,14 @@ async fn render_output(
     summary: &TestSummary<'_>,
     output: Output,
 ) -> Result<()> {
-    let stdout = cache.get_blob(&outcome.result.stdout).await?;
-    let stderr = cache.get_blob(&outcome.result.stderr).await?;
+    let stdout = match outcome.result.stdout {
+        Some(digest) => cache.get_blob(&digest).await?,
+        None => Vec::new(),
+    };
+    let stderr = match outcome.result.stderr {
+        Some(digest) => cache.get_blob(&digest).await?,
+        None => Vec::new(),
+    };
 
     match output.format {
         Format::Human => {

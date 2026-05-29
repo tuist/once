@@ -618,8 +618,8 @@ async fn execute_run_command(
         })?;
         Ok::<_, Error>(ActionResult {
             exit_code: status.code().unwrap_or(-1),
-            stdout,
-            stderr,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
             outputs: BTreeMap::new(),
         })
     };
@@ -842,8 +842,8 @@ async fn collect_microsandbox_output(
     let stderr = cache.put_blob(&stderr).await?;
     Ok(ActionResult {
         exit_code: exit_code.unwrap_or(-1),
-        stdout,
-        stderr,
+        stdout: Some(stdout),
+        stderr: Some(stderr),
         outputs: BTreeMap::new(),
     })
 }
@@ -1021,8 +1021,8 @@ async fn execute_daytona_command(
     let stderr = cache.put_blob(&stderr).await?;
     Ok(ActionResult {
         exit_code: response.exit_code.unwrap_or(0),
-        stdout,
-        stderr,
+        stdout: Some(stdout),
+        stderr: Some(stderr),
         outputs: BTreeMap::new(),
     })
 }
@@ -1159,8 +1159,8 @@ async fn execute_child_streaming(
         let stderr = cache.put_blob(&stderr_bytes).await?;
         Ok::<_, Error>(ActionResult {
             exit_code: status.code().unwrap_or(-1),
-            stdout,
-            stderr,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
             outputs: BTreeMap::new(),
         })
     };
@@ -1269,7 +1269,10 @@ mod tests {
             .unwrap();
         assert_eq!(first.cache, CacheState::Miss);
         assert_eq!(first.result.exit_code, 0);
-        assert_eq!(cas.get_blob(&first.result.stdout).await.unwrap(), b"hello");
+        assert_eq!(
+            cas.get_blob(&first.result.stdout.unwrap()).await.unwrap(),
+            b"hello"
+        );
 
         let second = run(&action, tmp.path(), &cas, RunOpts::default())
             .await
@@ -1407,7 +1410,7 @@ mod tests {
             .unwrap();
         assert_eq!(outcome.result.exit_code, 0);
         assert_eq!(
-            cas.get_blob(&outcome.result.stdout).await.unwrap(),
+            cas.get_blob(&outcome.result.stdout.unwrap()).await.unwrap(),
             b"present"
         );
     }
@@ -1433,7 +1436,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome.result.exit_code, 0);
-        let stdout = cas.get_blob(&outcome.result.stdout).await.unwrap();
+        let stdout = cas.get_blob(&outcome.result.stdout.unwrap()).await.unwrap();
         assert_eq!(stdout, b"abc\x00def");
     }
 
@@ -1461,7 +1464,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome.result.exit_code, 0);
-        let stdout = cas.get_blob(&outcome.result.stdout).await.unwrap();
+        let stdout = cas.get_blob(&outcome.result.stdout.unwrap()).await.unwrap();
         assert_eq!(stdout.len(), 4 * 1024 * 1024);
     }
 
@@ -1700,7 +1703,7 @@ mod tests {
             .unwrap();
         assert_eq!(outcome.result.exit_code, 0);
         assert!(cas
-            .get_blob(&outcome.result.stdout)
+            .get_blob(&outcome.result.stdout.unwrap())
             .await
             .unwrap()
             .is_empty());
@@ -1769,7 +1772,7 @@ mod tests {
         assert_eq!(outcome.result.exit_code, 0);
         let stdout = runner
             .cache()
-            .get_blob(&outcome.result.stdout)
+            .get_blob(&outcome.result.stdout.unwrap())
             .await
             .unwrap();
         assert_eq!(stdout, b"ok");
