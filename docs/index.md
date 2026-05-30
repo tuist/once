@@ -25,6 +25,8 @@ features:
     linkText: Read the definition
   - title: A real cache contract
     details: Actions carry explicit inputs, outputs, environment dependencies, and runtime semantics, so reuse is deterministic instead of accidental.
+    link: /guide/cache
+    linkText: Learn about caching
   - title: A portable compute contract
     details: The same operational definition can stay on the host today and map onto other execution backends as the infrastructure evolves.
   - title: Scripts without rewrites

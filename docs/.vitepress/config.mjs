@@ -51,6 +51,7 @@ export default defineConfig({
               text: "Introduction",
               items: [
                 { text: "What is Fabrik", link: "/guide/what-is-fabrik" },
+                { text: "Cache", link: "/guide/cache" },
               ],
             },
             {

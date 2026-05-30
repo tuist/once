@@ -3,6 +3,7 @@
 //! resulting exit code.
 
 mod cache_provider;
+mod ci;
 mod cli;
 mod commands;
 mod dispatch;
