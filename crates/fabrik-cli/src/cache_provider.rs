@@ -101,48 +101,11 @@ fn local_cas_root(xdg: &Xdg) -> PathBuf {
     xdg.fabrik_cas()
 }
 
+/// Cache-store root carved out of a CI-provided cache volume, if one is
+/// available. The CI/runner detection lives in [`crate::ci`]; this only
+/// owns the `fabrik/cas` subtree convention.
 fn detected_ci_cache_root() -> Option<PathBuf> {
-    detected_ci_cache_root_with_mount_and_vars(Path::new("/cache"), env::vars_os())
-}
-
-#[cfg(test)]
-fn detected_ci_cache_root_with_mount(cache_mount: &Path) -> Option<PathBuf> {
-    detected_ci_cache_root_with_mount_and_vars(cache_mount, env::vars_os())
-}
-
-fn detected_ci_cache_root_with_mount_and_vars<I, K, V>(
-    cache_mount: &Path,
-    vars: I,
-) -> Option<PathBuf>
-where
-    I: IntoIterator<Item = (K, V)>,
-    K: AsRef<std::ffi::OsStr>,
-    V: AsRef<std::ffi::OsStr>,
-{
-    let mut github_actions = false;
-    let mut namespace = false;
-    for (key, value) in vars {
-        if value.as_ref().is_empty() {
-            continue;
-        }
-        let key = key.as_ref().to_string_lossy();
-        github_actions |= key == "GITHUB_ACTIONS";
-        namespace |= key.starts_with("NSC_") || key.starts_with("NSCLOUD_");
-    }
-
-    if !github_actions {
-        return None;
-    }
-
-    if namespace && cache_mount_exists(cache_mount) {
-        return Some(cache_mount.join("fabrik").join("cas"));
-    }
-
-    None
-}
-
-fn cache_mount_exists(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+    crate::ci::cache_volume_mount().map(|mount| mount.join("fabrik").join("cas"))
 }
 
 fn non_empty_env_path(name: &str) -> Option<PathBuf> {
@@ -590,39 +553,6 @@ account = "acme"
             || {
                 assert_eq!(local_cas_root(&xdg), explicit);
             },
-        );
-    }
-
-    #[test]
-    fn namespace_github_actions_uses_cache_volume_when_present() {
-        let tmp = TempDir::new().unwrap();
-        let mount = tmp.path().join("cache-volume");
-        std::fs::create_dir(&mount).unwrap();
-
-        with_env(
-            &[
-                (FABRIK_CACHE_DIR_ENV, None),
-                ("GITHUB_ACTIONS", Some("true")),
-                ("NSC_WORKSPACE", Some("workspace")),
-            ],
-            || {
-                assert_eq!(
-                    detected_ci_cache_root_with_mount(&mount),
-                    Some(mount.join("fabrik").join("cas"))
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn ci_detection_ignores_non_namespace_runners() {
-        let tmp = TempDir::new().unwrap();
-        let mount = tmp.path().join("cache-volume");
-        std::fs::create_dir(&mount).unwrap();
-
-        assert_eq!(
-            detected_ci_cache_root_with_mount_and_vars(&mount, [("GITHUB_ACTIONS", "true")]),
-            None
         );
     }
 
