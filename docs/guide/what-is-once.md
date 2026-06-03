@@ -40,10 +40,6 @@ Once reads those headers when the script runs through `once exec`.
 Workspace-level `once.toml` files are reserved for shared configuration
 such as cache provider settings.
 
-## Runtime API
-
-Once also exposes runtime sessions for tools and agents that need structured access to command output and metadata. Instead of scraping a terminal log, an agent can query logs, events, and runtime descriptors over the local JSON-RPC control socket.
-
 ## What Once Is Not
 
 Once is not trying to replace Buck, Bazel, Cargo, pnpm, Xcode, or language-specific build tools. Those systems should keep doing the work they are good at. Once focuses on the scripts and command workflows that teams already run around those tools, making them cacheable, inspectable, and portable.

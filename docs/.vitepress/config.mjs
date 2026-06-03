@@ -41,33 +41,9 @@ export default defineConfig({
     ],
     sidebar: {
       "/": [
-        {
-          text: "Documentation",
-          items: [
-            {
-              text: "Introduction",
-              items: [{ text: "What is Once", link: "/guide/what-is-once" }],
-            },
-            {
-              text: "Scripts",
-              items: [
-                {
-                  text: "Cacheable Scripts",
-                  link: "/guide/cacheable-scripts",
-                },
-              ],
-            },
-            {
-              text: "Primitives",
-              items: [
-                {
-                  text: "Cache CLI",
-                  link: "/guide/cache-cli",
-                },
-              ],
-            },
-          ],
-        },
+        { text: "What is Once", link: "/guide/what-is-once" },
+        { text: "Caching", link: "/guide/cacheable-scripts" },
+        { text: "Runtime", link: "/guide/runtime" },
       ],
     },
     socialLinks: [{ icon: "github", link: "https://github.com/tuist/once" }],
