@@ -17,11 +17,11 @@ and want to make cacheable without rewriting them as build rules.
 
 ## How It Works
 
-Start with a normal script. Keep the shebang, keep the implementation,
-and add a few `# once` comments at the top:
+Start with a normal script. Point the shebang at Once, keep the
+implementation, and add a few `# once` comments at the top:
 
 ```sh
-#!/usr/bin/env bash
+#!/usr/bin/env -S once exec -- bash
 # once input "../src/**/*"
 # once output "../dist/"
 # once env "NODE_ENV"
@@ -37,10 +37,10 @@ Those comments are the script contract:
 - **Environment variables**: Declared host values that are forwarded to the script and included in the cache key.
 - **Working directory**: The directory where the script should run.
 
-Then run the script through Once:
+Then run the script directly:
 
 ```sh
-once exec -- bash scripts/build.sh
+./scripts/build.sh
 ```
 
 Once reads the script, hashes the declared contract, and either reuses a
