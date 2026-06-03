@@ -71,6 +71,8 @@
 }
 
 .once-code-tabs {
+  min-width: 0;
+
   & > input {
     position: absolute;
     opacity: 0;
@@ -85,13 +87,16 @@
   }
 
   & [data-part="tabs"] label {
+    align-items: center;
     border-radius: var(--once-radius-full);
     color: var(--once-summer-10);
     cursor: pointer;
+    display: inline-flex;
     flex: 0 0 auto;
     font-family: var(--once-font-mono);
     font-size: var(--once-text-xs);
     font-weight: var(--once-weight-semibold);
+    line-height: 1;
     padding: 4px var(--once-spacing-3);
   }
 
@@ -106,12 +111,29 @@
     font-family: var(--once-font-mono);
     font-size: var(--once-text-xs);
     font-weight: var(--once-weight-semibold);
-    padding: var(--once-spacing-3) var(--once-spacing-5) 0;
+    overflow: hidden;
+    padding: var(--once-spacing-3) var(--once-spacing-5);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   & [data-part="pane"] > [data-part="body"] {
+    color: var(--once-summer-12);
+    font-family: var(--once-font-mono);
+    font-size: var(--once-text-sm);
+    line-height: 1.65;
     margin: 0;
-    padding-top: var(--once-spacing-3);
+    overflow-x: auto;
+    padding: var(--once-spacing-4) var(--once-spacing-5);
+    white-space: pre;
+
+    & [data-part="muted"] {
+      color: var(--once-summer-10);
+    }
+
+    & [data-part="value"] {
+      color: var(--once-thread-11);
+    }
   }
 
   &:has(#once-snippet-1:checked) {
