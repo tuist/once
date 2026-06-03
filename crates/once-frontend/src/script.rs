@@ -118,8 +118,8 @@ fn parse_once_exec_shebang(runtime: String, runtime_args: Vec<String>) -> (Strin
 
 fn annotation_payload(line: &str) -> Option<&str> {
     const PREFIXES: &[&str] = &[
-        "# Once", "#Once", "// Once", "//Once", "; Once", ";Once", "-- Once", "--Once", "% Once",
-        "%Once", "' Once", "'Once",
+        "# once", "#once", "// once", "//once", "; once", ";once", "-- once", "--once", "% once",
+        "%once", "' once", "'once",
     ];
     PREFIXES
         .iter()
@@ -165,7 +165,7 @@ fn parse_annotation_line(
     }
     Err(Error::Eval {
         path: display_name.to_string(),
-        message: format!("unknown Once directive `{line}`"),
+        message: format!("unknown once directive `{line}`"),
     })
 }
 
@@ -204,10 +204,10 @@ mod tests {
         fs::write(
             &path,
             r#"#!/usr/bin/env bash
-# Once input "src/**/*.ts"
-# Once output "dist/"
-# Once env "NODE_ENV"
-# Once cwd "."
+# once input "src/**/*.ts"
+# once output "dist/"
+# once env "NODE_ENV"
+# once cwd "."
 
 echo hi
 "#,
@@ -229,7 +229,7 @@ echo hi
         fs::write(
             &path,
             r#"#!/usr/bin/env bash
-# Once remote "microsandbox"
+# once remote "microsandbox"
 
 echo hi
 "#,
@@ -270,10 +270,10 @@ console.log("hi");
                 &path,
                 format!(
                     r#"#!/usr/bin/env {runtime}
-# Once input "src/**/*"
-# Once output "dist/"
-# Once env "APP_ENV"
-# Once cwd "."
+# once input "src/**/*"
+# once output "dist/"
+# once env "APP_ENV"
+# once cwd "."
 
 print("hi")
 "#
@@ -297,7 +297,7 @@ print("hi")
         fs::write(
             &path,
             r#"#!/usr/bin/env -S once exec --script python3
-# Once input "src/**/*.py"
+# once input "src/**/*.py"
 print("hi")
 "#,
         )
@@ -315,7 +315,7 @@ print("hi")
         fs::write(
             &path,
             r#"#!/usr/bin/env -S once exec -- python3
-# Once input "src/**/*.py"
+# once input "src/**/*.py"
 print("hi")
 "#,
         )
@@ -333,13 +333,13 @@ print("hi")
         fs::write(
             &path,
             r#"#!/bin/sh
-# Once unknown "thing"
+# once unknown "thing"
 echo hi
 "#,
         )
         .unwrap();
 
         let err = parse_script_annotations(&path, "bad.sh").unwrap_err();
-        assert!(err.to_string().contains("unknown Once directive"));
+        assert!(err.to_string().contains("unknown once directive"));
     }
 }

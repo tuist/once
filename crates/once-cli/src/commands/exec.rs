@@ -3,7 +3,7 @@
 //! Substrate-level escape hatch: bypass the target graph and put any
 //! argv through the action cache. Useful for ad-hoc shell-outs and for
 //! exercising the cache directly. With `--script`, or when argv looks
-//! like `<runtime> <script> [args...]` and the file carries `Once`
+//! like `<runtime> <script> [args...]` and the file carries `once`
 //! headers, Once treats argv as a script execution request.
 //!
 //! Stdout always carries the wrapped program's stdout verbatim
@@ -268,7 +268,7 @@ fn script_invocation(
     let (runtime, runtime_args, script_arg, script_args) = parse_script_exec_argv(workspace, argv)?;
     let script_abs = resolve_script_abs(workspace, script_arg)?;
     let annotations = parse_script_annotations(&script_abs, script_arg)
-        .with_context(|| format!("parsing Once headers for `{script_arg}`"))?;
+        .with_context(|| format!("parsing once headers for `{script_arg}`"))?;
     let workspace =
         resolve_script_workspace(workspace, &script_abs, &annotations, cwd_override.as_ref())?;
     let script_path = workspace_path_for_file(&workspace, &script_abs)?;
@@ -729,7 +729,7 @@ mod tests {
         fs::create_dir_all(script.parent().unwrap()).unwrap();
         fs::write(
             &script,
-            "#!/bin/bash\n# Once input \"../input.txt\"\ncat ../input.txt\n",
+            "#!/bin/bash\n# once input \"../input.txt\"\ncat ../input.txt\n",
         )
         .unwrap();
         fs::write(tmp.path().join("input.txt"), "hello\n").unwrap();

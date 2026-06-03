@@ -14,7 +14,7 @@ Once gives those scripts that contract without asking teams to adopt a new build
 
 ## What Once Standardizes
 
-Once projects use `# Once` script headers to describe:
+Once projects use `# once` script headers to describe:
 
 - command arguments
 - input files and globs
@@ -33,9 +33,9 @@ The script stays in a checked-in file:
 
 ```sh
 #!/usr/bin/env bash
-# Once input "../assets/**/*"
-# Once output "../dist/"
-# Once cwd ".."
+# once input "../assets/**/*"
+# once output "../dist/"
+# once cwd ".."
 
 scripts/build-assets.sh
 ```

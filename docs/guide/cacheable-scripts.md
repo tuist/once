@@ -18,37 +18,37 @@ example:
 ::: code-group
 ```sh [Bash]
 #!/usr/bin/env bash
-# Once input "../src/**/*.ts"
-# Once output "../dist/"
-# Once env "NODE_ENV"
-# Once remote "microsandbox"
+# once input "../src/**/*.ts"
+# once output "../dist/"
+# once env "NODE_ENV"
+# once remote "microsandbox"
 
 npm run build
 ```
 
 ```python [Python]
 #!/usr/bin/env python3
-# Once input "../src/**/*.py"
-# Once output "../dist/"
-# Once env "PYTHONPATH"
+# once input "../src/**/*.py"
+# once output "../dist/"
+# once env "PYTHONPATH"
 
 print("build")
 ```
 
 ```ruby [Ruby]
 #!/usr/bin/env ruby
-# Once input "../lib/**/*.rb"
-# Once output "../dist/"
-# Once env "RUBYLIB"
+# once input "../lib/**/*.rb"
+# once output "../dist/"
+# once env "RUBYLIB"
 
 puts "build"
 ```
 
 ```elixir [Elixir]
 #!/usr/bin/env elixir
-# Once input "../lib/**/*.ex"
-# Once output "../dist/"
-# Once env "MIX_ENV"
+# once input "../lib/**/*.ex"
+# once output "../dist/"
+# once env "MIX_ENV"
 
 IO.puts("build")
 ```
@@ -67,7 +67,7 @@ would normally use locally and put it after `once exec --`:
 once exec -- bash scripts/build.sh
 ```
 
-If the file carries `Once` headers, Once automatically switches to
+If the file carries `once` headers, Once automatically switches to
 script-aware execution. The explicit `--script` form still works when
 you want to force that mode.
 
@@ -79,36 +79,36 @@ shebang and name the runtime there:
 ::: code-group
 ```sh [Bash]
 #!/usr/bin/env -S once exec -- bash
-# Once input "../src/**/*.ts"
-# Once output "../dist/"
-# Once env "NODE_ENV"
+# once input "../src/**/*.ts"
+# once output "../dist/"
+# once env "NODE_ENV"
 
 npm run build
 ```
 
 ```python [Python]
 #!/usr/bin/env -S once exec -- python3
-# Once input "../src/**/*.py"
-# Once output "../dist/"
-# Once env "PYTHONPATH"
+# once input "../src/**/*.py"
+# once output "../dist/"
+# once env "PYTHONPATH"
 
 print("build")
 ```
 
 ```ruby [Ruby]
 #!/usr/bin/env -S once exec -- ruby
-# Once input "../lib/**/*.rb"
-# Once output "../dist/"
-# Once env "RUBYLIB"
+# once input "../lib/**/*.rb"
+# once output "../dist/"
+# once env "RUBYLIB"
 
 puts "build"
 ```
 
 ```elixir [Elixir]
 #!/usr/bin/env -S once exec -- elixir
-# Once input "../lib/**/*.ex"
-# Once output "../dist/"
-# Once env "MIX_ENV"
+# once input "../lib/**/*.ex"
+# once output "../dist/"
+# once env "MIX_ENV"
 
 IO.puts("build")
 ```
@@ -117,7 +117,7 @@ IO.puts("build")
 This keeps the script directly executable while still letting Once
 apply the annotated cache contract.
 
-The `Once` directives at the top of the file describe the parts
+The `once` directives at the top of the file describe the parts
 Once must reason about: tracked inputs, declared outputs, forwarded
 environment variables, and a working directory. That keeps the
 implementation and the cache contract in one place.
@@ -136,8 +136,8 @@ implementation and the cache contract in one place.
 
 Cacheable scripts and remotely executable scripts share the same
 contract. Inputs, outputs, environment, and working directory stay in
-the script header. Adding `# Once remote "microsandbox"` or
-`# Once remote "daytona"` tells Once that cache misses should run
+the script header. Adding `# once remote "microsandbox"` or
+`# once remote "daytona"` tells Once that cache misses should run
 through the compute provider instead of on the local host.
 
 You can also force a remote run from the CLI:
@@ -169,7 +169,7 @@ The script file itself is always part of the cache key, even when no
 `input` directives are present.
 
 ::: tip Path Resolution
-`Once` paths are resolved relative to the script file's directory,
+`once` paths are resolved relative to the script file's directory,
 so the contract stays portable when it lives in `scripts/`, `tools/`,
 or any other subdirectory next to the code it automates.
 :::

@@ -60,9 +60,9 @@ For example, imagine a small script that turns an input file into an output file
 
 ```sh
 #!/usr/bin/env -S once exec -- bash
-# Once input "../input.txt"
-# Once output "../out.txt"
-# Once cwd ".."
+# once input "../input.txt"
+# once output "../out.txt"
+# once cwd ".."
 
 tr '[:lower:]' '[:upper:]' < input.txt > out.txt
 cat out.txt
@@ -81,9 +81,9 @@ You can also make the script itself executable through Once:
 
 ```sh
 #!/usr/bin/env -S once exec -- bash
-# Once input "../input.txt"
-# Once output "../out.txt"
-# Once cwd ".."
+# once input "../input.txt"
+# once output "../out.txt"
+# once cwd ".."
 ```
 
 This is a small example, but it points at the shape of the system. A lot of developer automation starts as a script because scripts are easy to write and easy to understand. The problem is that they often remain opaque forever. By letting scripts declare their inputs and outputs, Once gives them enough structure to participate in the cache without forcing every team to rewrite them as a plugin, a rule, or a custom task type. And by letting the cache provider be Tuist, the result is not trapped on one laptop.

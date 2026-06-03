@@ -146,12 +146,12 @@ pub enum Cmd {
     /// variables, optional working directory, and optional timeout. A
     /// second invocation with the same key reuses the captured stdout,
     /// stderr, and exit code. With `--script`, or when argv looks like
-    /// `<runtime> <script> [args...]` and the file has `Once`
+    /// `<runtime> <script> [args...]` and the file has `once`
     /// headers, Once applies script-aware parsing instead.
     #[command(arg_required_else_help = true)]
     Exec {
         /// Interpret argv as `<runtime> <script> [args...]` and apply
-        /// `Once` headers from the script file. Useful as the
+        /// `once` headers from the script file. Useful as the
         /// explicit form, for example `once exec --script bash
         /// scripts/build.sh`, and for directly executable scripts via
         /// a shebang such as `#!/usr/bin/env -S once exec -- bash`.

@@ -14,13 +14,13 @@ Once makes project scripts cacheable, observable, and remotely executable. Decla
 
 ## Quick Start
 
-Describe a script with `# Once` annotations:
+Describe a script with `# once` annotations:
 
 ```sh
 #!/usr/bin/env bash
-# Once input "../assets/**/*"
-# Once output "../dist/"
-# Once cwd ".."
+# once input "../assets/**/*"
+# once output "../dist/"
+# once cwd ".."
 
 npm run build-assets
 ```

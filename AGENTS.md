@@ -20,7 +20,7 @@ inside each module file. Cross-module integration tests go under
   state, not a manifest. It is gitignored.
 - `once.toml` is reserved for workspace configuration such as cache
   providers.
-- Scripts declare their execution metadata with `# Once` headers in the
+- Scripts declare their execution metadata with `# once` headers in the
   script file.
 
 ## Scope

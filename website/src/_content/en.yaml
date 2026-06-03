@@ -99,18 +99,42 @@ home:
     title: "Declare the script contract."
     lede: "Once turns script contracts into cacheable actions that can run locally or remotely."
     bullets:
-      - "Use `# Once` headers in script files."
+      - "Use `# once` headers in script files."
       - "Cache state lives under `.once/` and shared cache providers can be configured in `once.toml`."
       - "Remote execution uses the same action contract as local execution."
-    snippet:
-      filename: "scripts/build-assets.sh"
-      body: |
-        #!/usr/bin/env bash
-        # Once input "../assets/**/*"
-        # Once output "../dist/"
-        # Once cwd ".."
+    snippets:
+      - filename: "scripts/build-assets.sh"
+        body: |
+          #!/usr/bin/env bash
+          # once input "../assets/**/*"
+          # once output "../dist/"
+          # once cwd ".."
 
-        npm run build-assets
+          npm run build-assets
+      - filename: "scripts/build-assets.mjs"
+        body: |
+          #!/usr/bin/env node
+          // once input "../src/**/*.js"
+          // once output "../dist/"
+          // once cwd ".."
+
+          await import("../scripts/build-assets.mjs")
+      - filename: "scripts/build_assets.py"
+        body: |
+          #!/usr/bin/env python3
+          # once input "../src/**/*.py"
+          # once output "../dist/"
+          # once cwd ".."
+
+          print("build assets")
+      - filename: "scripts/build_assets.rb"
+        body: |
+          #!/usr/bin/env ruby
+          # once input "../lib/**/*.rb"
+          # once output "../dist/"
+          # once cwd ".."
+
+          puts "build assets"
   faq:
     eyebrow: FAQ
     title: "Questions, answered."

@@ -54,7 +54,7 @@ The first variable names the Daytona sandbox id or name. The second authenticate
 For checked-in scripts, the repository can still carry the default:
 
 ```sh
-# Once remote "daytona"
+# once remote "daytona"
 ```
 
 The script body does not change. The target does not grow provider-specific code. Once routes the action through the selected provider, streams stdout and stderr back as it runs, restores declared outputs into the workspace, and caches the result. A second run with the same inputs, on your machine or on a teammate's, replays from the cache without touching the provider at all.

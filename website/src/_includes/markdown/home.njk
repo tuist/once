@@ -24,11 +24,13 @@
 {% for bullet in copy.home.howItWorks.bullets %}- {{ bullet | stripMd }}
 {% endfor %}
 
-Example `{{ copy.home.howItWorks.snippet.filename }}`:
+{% for snippet in copy.home.howItWorks.snippets %}Example `{{ snippet.filename }}`:
 
-```toml
-{{ copy.home.howItWorks.snippet.body | trim }}
+```sh
+{{ snippet.body | trim }}
 ```
+
+{% endfor %}
 
 ## {{ copy.home.faq.title }}
 
