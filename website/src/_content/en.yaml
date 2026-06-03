@@ -94,20 +94,6 @@ home:
       - heading: "Once adds the missing contract"
         paragraphs:
           - "Declare the command, inputs, outputs, env, cwd, and runtime metadata. Once hashes that contract, restores prior results when it can, and can send the same action to remote compute when local execution is not the right place."
-  what:
-    eyebrow: "What Once runs"
-    title: "Project scripts, without rewrites."
-    lede: "Use checked-in script headers. The script file becomes the source of truth for the content-addressed action."
-    extras:
-      - title: Script annotations
-        body: "Add `# Once` headers next to the script itself for inputs, outputs, env, cwd, and remote execution."
-        icon: terminal
-      - title: Direct execution
-        body: "Run scripts through `once exec` or use a Once shebang when the file should execute through the cache."
-        icon: terminal
-      - title: Runtime sessions
-        body: "Expose logs, events, and runtime descriptors over JSON-RPC for tools and coding agents."
-        icon: terminal
   howItWorks:
     eyebrow: "How it works"
     title: "Declare the script contract."

@@ -17,21 +17,7 @@
 
 {% for p in beat.paragraphs %}{{ p }}
 
-{% endfor %}{% endfor %}## {{ copy.home.what.title }}
-
-{{ copy.home.what.lede }}
-
-### Scripts
-
-{% for ex in copy.home.what.extras %}- **{{ ex.title }}**: {{ ex.body }}
-{% endfor %}
-
-### Languages
-
-{% for lang in copy.home.what.languages %}- **{{ lang.name }}{% if lang.status %} · {{ lang.status }}{% endif %}** ({{ lang.tags | join(", ") }}): {{ lang.body }}
-{% endfor %}- **{{ copy.home.what.addLanguage.title }}**: {{ copy.home.what.addLanguage.body }} {{ copy.home.what.addLanguage.cta }}
-
-## {{ copy.home.howItWorks.title }}
+{% endfor %}{% endfor %}## {{ copy.home.howItWorks.title }}
 
 {{ copy.home.howItWorks.lede }}
 

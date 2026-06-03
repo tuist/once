@@ -80,52 +80,6 @@ homepage: true
   </div>
 </section>
 
-<section class="once-section" data-tone="muted">
-  <div class="once-container">
-    <header class="once-section-header">
-      <span data-part="eyebrow">{{ copy.home.what.eyebrow }}</span>
-      <h2 data-part="title">{{ copy.home.what.title }}</h2>
-      <p data-part="lede">{{ copy.home.what.lede }}</p>
-    </header>
-
-    <div class="once-grid" data-columns="1">
-      {% for ex in copy.home.what.extras %}
-        <article class="once-card">
-          <span data-part="icon">{{ icon(ex.icon) }}</span>
-          <h3 data-part="title">{{ ex.title }}</h3>
-          <p data-part="body">{{ ex.body }}</p>
-        </article>
-      {% endfor %}
-    </div>
-
-    <div class="once-grid" data-columns="4">
-      {% for lang in copy.home.what.languages %}
-        <article class="once-card" data-variant="language">
-          <span data-part="mark">{{ langMark(lang.mark, 40) }}</span>
-          <div data-part="title-row">
-            <h3 data-part="title">{{ lang.name }}</h3>
-            {% if lang.status %}
-              <span data-part="status">{{ lang.status }}</span>
-            {% endif %}
-          </div>
-          <p data-part="body">{{ lang.body }}</p>
-          <ul data-part="tags">
-            {% for tag in lang.tags %}
-              <li>{{ tag }}</li>
-            {% endfor %}
-          </ul>
-        </article>
-      {% endfor %}
-      <a class="once-card" data-variant="language" data-ghost href="{{ site.github }}" rel="noopener">
-        <span data-part="mark">{{ icon("plus") }}</span>
-        <h3 data-part="title">{{ copy.home.what.addLanguage.title }}</h3>
-        <p data-part="body">{{ copy.home.what.addLanguage.body }}</p>
-        <span data-part="cta">{{ copy.home.what.addLanguage.cta }}</span>
-      </a>
-    </div>
-  </div>
-</section>
-
 <section class="once-section">
   <div class="once-container">
     <div class="once-split">
