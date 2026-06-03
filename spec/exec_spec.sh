@@ -36,8 +36,8 @@ Describe 'once exec'
     mkdir -p "$WORKSPACE/scripts"
     cat > "$WORKSPACE/scripts/build.sh" <<EOF
 #!/usr/bin/env -S $ONCE_BIN exec -- bash
-# ONCE input "../input.txt"
-# ONCE cwd ".."
+# Once input "../input.txt"
+# Once cwd ".."
 cat input.txt
 EOF
     chmod +x "$WORKSPACE/scripts/build.sh"
@@ -54,8 +54,8 @@ EOF
     mkdir -p "$WORKSPACE/scripts"
     cat > "$WORKSPACE/scripts/build.sh" <<EOF
 #!/usr/bin/env -S $ONCE_BIN exec -- bash
-# ONCE input "../input.txt"
-# ONCE cwd ".."
+# Once input "../input.txt"
+# Once cwd ".."
 cat input.txt
 EOF
     chmod +x "$WORKSPACE/scripts/build.sh"
@@ -73,8 +73,8 @@ EOF
     mkdir -p "$WORKSPACE/scripts"
     cat > "$WORKSPACE/scripts/build.sh" <<'EOF'
 #!/usr/bin/env bash
-# ONCE input "../input.txt"
-# ONCE cwd ".."
+# Once input "../input.txt"
+# Once cwd ".."
 cat input.txt
 EOF
     cat > "$WORKSPACE/input.txt" <<'EOF'
@@ -90,8 +90,8 @@ EOF
     mkdir -p "$WORKSPACE/scripts"
     cat > "$WORKSPACE/scripts/build.sh" <<'EOF'
 #!/usr/bin/env bash
-# ONCE input "../input.txt"
-# ONCE cwd ".."
+# Once input "../input.txt"
+# Once cwd ".."
 cat input.txt
 EOF
     cat > "$WORKSPACE/input.txt" <<'EOF'
@@ -282,7 +282,7 @@ PY
       The stdout should equal 'hello'
       # The "once: cache ..." trailer must not appear under --quiet.
       The stderr should not include 'cache miss'
-      The stderr should not include 'once:'
+      The stderr should not include 'Once:'
     End
 
     It 'still emits the structured trailer when --quiet is combined with --format json'
@@ -301,7 +301,7 @@ PY
       # success trailer; --quiet must not swallow them.
       When call "$ONCE_BIN" --quiet -C /nonexistent exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
       The status should not equal 0
-      The stderr should include 'once:'
+      The stderr should include 'Once:'
     End
 
     It 'accepts the short -q alias'

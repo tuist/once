@@ -14,7 +14,7 @@ Once gives those scripts that contract without asking teams to adopt a new build
 
 ## What Once Standardizes
 
-Once projects use `once.toml` files and `ONCE` script headers to describe:
+Once projects use `# Once` script headers to describe:
 
 - command arguments
 - input files and globs
@@ -29,28 +29,20 @@ That definition becomes the cache key and the remote execution request. If the i
 
 ## Scripts Belong Here
 
-A script can stay in a checked-in file:
+The script stays in a checked-in file:
 
 ```sh
 #!/usr/bin/env bash
-# ONCE input "../assets/**/*"
-# ONCE output "../dist/"
-# ONCE cwd ".."
+# Once input "../assets/**/*"
+# Once output "../dist/"
+# Once cwd ".."
 
 scripts/build-assets.sh
 ```
 
-Or it can be declared directly:
-
-```toml
-[[script]]
-name = "build-assets"
-argv = ["bash", "scripts/build-assets.sh"]
-input = ["scripts/build-assets.sh", "assets/**/*"]
-output = ["dist/"]
-```
-
-Both forms lower to the same action model.
+Once reads those headers when the script runs through `once exec`.
+Workspace-level `once.toml` files are reserved for shared configuration
+such as cache provider settings.
 
 ## Runtime API
 

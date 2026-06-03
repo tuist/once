@@ -118,8 +118,8 @@ fn parse_once_exec_shebang(runtime: String, runtime_args: Vec<String>) -> (Strin
 
 fn annotation_payload(line: &str) -> Option<&str> {
     const PREFIXES: &[&str] = &[
-        "# ONCE", "#ONCE", "// ONCE", "//ONCE", "; ONCE", ";ONCE", "-- ONCE", "--ONCE", "% ONCE",
-        "%ONCE", "' ONCE", "'ONCE",
+        "# Once", "#Once", "// Once", "//Once", "; Once", ";Once", "-- Once", "--Once", "% Once",
+        "%Once", "' Once", "'Once",
     ];
     PREFIXES
         .iter()
@@ -165,7 +165,7 @@ fn parse_annotation_line(
     }
     Err(Error::Eval {
         path: display_name.to_string(),
-        message: format!("unknown ONCE directive `{line}`"),
+        message: format!("unknown Once directive `{line}`"),
     })
 }
 
@@ -174,19 +174,19 @@ fn parse_quoted(raw: &str, name: &str, display_name: &str) -> Result<String> {
     let Some(rest) = raw.strip_prefix('"') else {
         return Err(Error::Eval {
             path: display_name.to_string(),
-            message: format!("ONCE {name} expects a quoted string"),
+            message: format!("Once {name} expects a quoted string"),
         });
     };
     let Some(end) = rest.find('"') else {
         return Err(Error::Eval {
             path: display_name.to_string(),
-            message: format!("ONCE {name} is missing a closing quote"),
+            message: format!("Once {name} is missing a closing quote"),
         });
     };
     if !rest[end + 1..].trim().is_empty() {
         return Err(Error::Eval {
             path: display_name.to_string(),
-            message: format!("ONCE {name} only accepts one quoted string"),
+            message: format!("Once {name} only accepts one quoted string"),
         });
     }
     Ok(rest[..end].to_string())
@@ -204,10 +204,10 @@ mod tests {
         fs::write(
             &path,
             r#"#!/usr/bin/env bash
-# ONCE input "src/**/*.ts"
-# ONCE output "dist/"
-# ONCE env "NODE_ENV"
-# ONCE cwd "."
+# Once input "src/**/*.ts"
+# Once output "dist/"
+# Once env "NODE_ENV"
+# Once cwd "."
 
 echo hi
 "#,
@@ -229,7 +229,7 @@ echo hi
         fs::write(
             &path,
             r#"#!/usr/bin/env bash
-# ONCE remote "microsandbox"
+# Once remote "microsandbox"
 
 echo hi
 "#,
@@ -270,10 +270,10 @@ console.log("hi");
                 &path,
                 format!(
                     r#"#!/usr/bin/env {runtime}
-# ONCE input "src/**/*"
-# ONCE output "dist/"
-# ONCE env "APP_ENV"
-# ONCE cwd "."
+# Once input "src/**/*"
+# Once output "dist/"
+# Once env "APP_ENV"
+# Once cwd "."
 
 print("hi")
 "#
@@ -297,7 +297,7 @@ print("hi")
         fs::write(
             &path,
             r#"#!/usr/bin/env -S once exec --script python3
-# ONCE input "src/**/*.py"
+# Once input "src/**/*.py"
 print("hi")
 "#,
         )
@@ -315,7 +315,7 @@ print("hi")
         fs::write(
             &path,
             r#"#!/usr/bin/env -S once exec -- python3
-# ONCE input "src/**/*.py"
+# Once input "src/**/*.py"
 print("hi")
 "#,
         )
@@ -333,13 +333,13 @@ print("hi")
         fs::write(
             &path,
             r#"#!/bin/sh
-# ONCE unknown "thing"
+# Once unknown "thing"
 echo hi
 "#,
         )
         .unwrap();
 
         let err = parse_script_annotations(&path, "bad.sh").unwrap_err();
-        assert!(err.to_string().contains("unknown ONCE directive"));
+        assert!(err.to_string().contains("unknown Once directive"));
     }
 }

@@ -60,9 +60,9 @@ For example, imagine a small script that turns an input file into an output file
 
 ```sh
 #!/usr/bin/env -S once exec -- bash
-# ONCE input "../input.txt"
-# ONCE output "../out.txt"
-# ONCE cwd ".."
+# Once input "../input.txt"
+# Once output "../out.txt"
+# Once cwd ".."
 
 tr '[:lower:]' '[:upper:]' < input.txt > out.txt
 cat out.txt
@@ -77,21 +77,13 @@ chmod +x scripts/uppercase.sh
 
 The first run is a miss. Once sees the script path, the declared input, the working directory, the command line, and the declared output. It runs the script, stores stdout, stderr, and `out.txt`, and publishes the action result through the configured cache infrastructure. If the workspace is configured with Tuist, the local CAS gets the result immediately, and Tuist can receive it for other machines. The second run on your machine becomes a local hit. A teammate or an agent running in another environment can get a Tuist hit and restore the output without rerunning the script.
 
-You can also expose the same script as a target if you prefer the workspace graph to name it:
-
-```toml
-[[target]]
-name = "uppercase"
-rule = "script"
-
-[target.script]
-path = "scripts/uppercase.sh"
-```
-
-Then the command becomes:
+You can also make the script itself executable through Once:
 
 ```sh
-once run uppercase
+#!/usr/bin/env -S once exec -- bash
+# Once input "../input.txt"
+# Once output "../out.txt"
+# Once cwd ".."
 ```
 
 This is a small example, but it points at the shape of the system. A lot of developer automation starts as a script because scripts are easy to write and easy to understand. The problem is that they often remain opaque forever. By letting scripts declare their inputs and outputs, Once gives them enough structure to participate in the cache without forcing every team to rewrite them as a plugin, a rule, or a custom task type. And by letting the cache provider be Tuist, the result is not trapped on one laptop.

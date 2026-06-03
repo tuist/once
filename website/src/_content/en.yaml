@@ -76,10 +76,10 @@ home:
     terminal:
       title: "~/your-project"
       body: |
-        $ once run build-assets
+        $ once exec -- bash scripts/build-assets.sh
         → cache miss · action completed
 
-        $ once run build-assets
+        $ once exec -- bash scripts/build-assets.sh
         → cache hit · restored stdout, stderr, and outputs
   why:
     eyebrow: "Why Once"
@@ -97,13 +97,13 @@ home:
   what:
     eyebrow: "What Once runs"
     title: "Project scripts, without rewrites."
-    lede: "Use checked-in script headers or `once.toml` declarations. Both become the same content-addressed action."
+    lede: "Use checked-in script headers. The script file becomes the source of truth for the content-addressed action."
     extras:
       - title: Script annotations
-        body: "Add `ONCE` headers next to the script itself for inputs, outputs, env, cwd, and remote execution."
+        body: "Add `# Once` headers next to the script itself for inputs, outputs, env, cwd, and remote execution."
         icon: terminal
-      - title: Manifest scripts
-        body: "Declare short commands in `once.toml` when the command belongs with the project metadata."
+      - title: Direct execution
+        body: "Run scripts through `once exec` or use a Once shebang when the file should execute through the cache."
         icon: terminal
       - title: Runtime sessions
         body: "Expose logs, events, and runtime descriptors over JSON-RPC for tools and coding agents."
@@ -113,17 +113,18 @@ home:
     title: "Declare the script contract."
     lede: "Once turns script contracts into cacheable actions that can run locally or remotely."
     bullets:
-      - "Use `ONCE` headers in script files or `[[script]]` entries in `once.toml`."
-      - "Cache state lives under `.once/` and shared cache providers can be configured in the manifest."
+      - "Use `# Once` headers in script files."
+      - "Cache state lives under `.once/` and shared cache providers can be configured in `once.toml`."
       - "Remote execution uses the same action contract as local execution."
     snippet:
-      filename: "once.toml"
+      filename: "scripts/build-assets.sh"
       body: |
-        [[script]]
-        name = "build-assets"
-        argv = ["bash", "scripts/build-assets.sh"]
-        input = ["scripts/build-assets.sh", "assets/**/*"]
-        output = ["dist/"]
+        #!/usr/bin/env bash
+        # Once input "../assets/**/*"
+        # Once output "../dist/"
+        # Once cwd ".."
+
+        npm run build-assets
   faq:
     eyebrow: FAQ
     title: "Questions, answered."
