@@ -8,37 +8,45 @@ Most repositories already have a long tail of scripts: test setup, asset generat
 
 Once gives those scripts that contract without asking teams to adopt a new build system.
 
-## What Once Standardizes
+## How It Works
 
-Once projects use `# once` script headers to describe:
-
-- **Command arguments**: The runtime and script invocation that Once should execute.
-- **Input files and globs**: The source files, directories, and patterns that participate in the cache key.
-- **Output paths**: The files or directories Once should restore when a cache hit is available.
-- **Tracked environment variables**: Host values that should be forwarded and included in the cache key.
-- **Working directory**: The directory where the script should run.
-- **Timeout and resource hints**: Execution limits that shape how Once schedules the action.
-- **Remote compute provider**: The optional provider that can execute cache misses away from the local host.
-- **Runtime metadata**: Agent-facing descriptors for sessions that expose logs, events, and controls.
-
-That definition becomes the cache key and the remote execution request. If the inputs and execution contract have not changed, Once can reuse the previous result.
-
-## Scripts Belong Here
-
-The script stays in a checked-in file:
+Start with a normal script. Keep the shebang, keep the implementation,
+and add a few `# once` comments at the top:
 
 ```sh
 #!/usr/bin/env bash
-# once input "../assets/**/*"
+# once input "../src/**/*"
 # once output "../dist/"
+# once env "NODE_ENV"
 # once cwd ".."
 
-scripts/build-assets.sh
+npm run build
 ```
 
-Once reads those headers when the script runs through `once exec`.
-Workspace-level `once.toml` files are reserved for shared configuration
-such as cache provider settings.
+Those comments are the script contract:
+
+- **Inputs**: The files, directories, and globs that decide whether the work changed.
+- **Outputs**: The files or directories Once should restore on a cache hit.
+- **Environment variables**: Declared host values that are forwarded to the script and included in the cache key.
+- **Working directory**: The directory where the script should run.
+- **Remote execution**: An optional provider for running cache misses away from the local host.
+
+Then run the script through Once:
+
+```sh
+once exec -- bash scripts/build.sh
+```
+
+Once reads the script, hashes the declared contract, and either reuses a
+previous result or runs the command and stores stdout, stderr, exit status,
+and declared outputs. The same contract can also become a remote execution
+request when the work should run on a compute provider. Workspace-level
+`once.toml` files are reserved for shared configuration such as cache
+provider settings.
+
+For longer-running workflows, Once exposes runtime sessions with structured
+logs, events, and descriptors. That gives tools and agents a runtime API to
+query instead of forcing them to scrape terminal output.
 
 ## What Once Is Not
 
