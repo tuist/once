@@ -2,10 +2,6 @@
 
 Once is an execution layer for project scripts. It turns ordinary repository commands into content-addressed actions with explicit inputs, outputs, environment dependencies, working directories, and runtime metadata.
 
-::: warning Beta
-Once is beta software. The CLI, local cache, remote execution path, and runtime API are usable, but the script contract may still change.
-:::
-
 ## Why this layer exists
 
 Most repositories already have a long tail of scripts: test setup, asset generation, packaging, fixture updates, deployment hooks, local tools, and CI glue. They are important, but they usually sit outside any cacheable execution model. A developer or agent runs them again because there is no shared contract that says what changed.
