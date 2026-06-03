@@ -27,6 +27,4 @@ features:
     details: Inputs, outputs, environment variables, working directories, and timeouts become part of the action contract.
   - title: Shared cache providers
     details: Once can store action results locally or use shared provider configuration for teams and CI.
-  - title: Runtime API for agents
-    details: Runtime sessions expose structured logs, events, and descriptors instead of forcing tools to scrape terminal output.
 ---
