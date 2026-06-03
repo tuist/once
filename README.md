@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/header.png" alt="Once: Run once. Reuse everywhere." width="100%" />
+  <img src="assets/header.png" alt="Once: Run once. Reuse everywhere." width="50%" />
 </p>
 
 <p align="center">
