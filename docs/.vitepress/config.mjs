@@ -24,7 +24,7 @@ export default defineConfig({
       text: "Edit this page on GitHub",
     },
     nav: [
-      { text: "Docs", link: "/guide/what-is-once" },
+      { text: "Docs", link: "/" },
       {
         text: "Links",
         items: [
