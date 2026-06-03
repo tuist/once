@@ -30,7 +30,7 @@ serde_json = "1"
 toml = "0.8"
 toon-rust = "0.1"
 tempfile = "3"
-thiserror = "1"
+thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 schlussel = { git = "https://github.com/tuist/schlussel.git", rev = "e90f561bfbe1f1c732ccc15ddc7e4780197dc609" }
