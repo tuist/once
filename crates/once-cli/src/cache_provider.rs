@@ -71,7 +71,13 @@ fn resolve_config(workspace: &Path, xdg: &Xdg) -> Result<ResolvedCacheProviderCo
         .context("loading cache provider")?
     {
         Some(config) => resolve_provider_config(xdg, config),
-        None => resolve_default_provider(xdg),
+        None => {
+            if let Some(config) = resolve_tuist_workspace_config(workspace) {
+                Ok(ResolvedCacheProviderConfig::Tuist(config?))
+            } else {
+                resolve_default_provider(xdg)
+            }
+        }
     }
 }
 
@@ -190,6 +196,106 @@ fn default_tuist_config(
         oauth_client_id: resolve_tuist_oauth_client_id(oauth_client_id),
         provider_name,
     }
+}
+
+fn resolve_tuist_workspace_config(workspace: &Path) -> Option<Result<TuistCacheConfig>> {
+    load_tuist_toml_config(workspace)
+        .or_else(|| load_tuist_swift_config(workspace))
+        .map(|config| {
+            let (account, project) = split_full_handle(&config.full_handle).with_context(|| {
+                format!(
+                    "Tuist project handle `{}` must have the form `account/project`",
+                    config.full_handle
+                )
+            })?;
+            Ok(default_tuist_config(
+                "tuist".to_string(),
+                config.url.unwrap_or_else(|| DEFAULT_TUIST_URL.to_string()),
+                Some(account),
+                Some(project),
+                None,
+            ))
+        })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TuistWorkspaceConfig {
+    full_handle: String,
+    url: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TuistTomlConfig {
+    project: Option<String>,
+    url: Option<String>,
+}
+
+fn load_tuist_toml_config(workspace: &Path) -> Option<TuistWorkspaceConfig> {
+    let path = workspace.join("tuist.toml");
+    let src = std::fs::read_to_string(path).ok()?;
+    let config: TuistTomlConfig = toml::from_str(&src).ok()?;
+    Some(TuistWorkspaceConfig {
+        full_handle: non_empty(config.project)?,
+        url: non_empty(config.url),
+    })
+}
+
+fn load_tuist_swift_config(workspace: &Path) -> Option<TuistWorkspaceConfig> {
+    let path = workspace.join("Tuist.swift");
+    let src = std::fs::read_to_string(path).ok()?;
+    Some(TuistWorkspaceConfig {
+        full_handle: swift_string_argument(&src, "fullHandle")?,
+        url: swift_string_argument(&src, "url"),
+    })
+}
+
+fn swift_string_argument(src: &str, label: &str) -> Option<String> {
+    let needle = format!("{label}:");
+    for line in src.lines() {
+        let mut rest = line.trim_start();
+        if rest.starts_with("//") {
+            continue;
+        }
+        while let Some(index) = rest.find(&needle) {
+            let candidate = &rest[index + needle.len()..];
+            if let Some(value) = leading_swift_string(candidate) {
+                return Some(value);
+            }
+            rest = candidate.get(1..)?;
+        }
+    }
+    None
+}
+
+fn leading_swift_string(src: &str) -> Option<String> {
+    let trimmed = src.trim_start();
+    let body = trimmed.strip_prefix('"')?;
+    let mut value = String::new();
+    let mut escaped = false;
+    for ch in body.chars() {
+        if escaped {
+            value.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            return non_empty(Some(value));
+        } else {
+            value.push(ch);
+        }
+    }
+    None
+}
+
+fn split_full_handle(full_handle: &str) -> Option<(String, String)> {
+    let mut parts = full_handle.split('/');
+    let account = non_empty(parts.next().map(str::to_string))?;
+    let project = non_empty(parts.next().map(str::to_string))?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((account, project))
 }
 
 fn resolve_tuist_oauth_client_id(config_value: Option<String>) -> Option<String> {
@@ -324,6 +430,14 @@ mod tests {
         std::fs::write(root.join("once.toml"), body).unwrap();
     }
 
+    fn write_tuist_swift(root: &Path, body: &str) {
+        std::fs::write(root.join("Tuist.swift"), body).unwrap();
+    }
+
+    fn write_tuist_toml(root: &Path, body: &str) {
+        std::fs::write(root.join("tuist.toml"), body).unwrap();
+    }
+
     fn write_user_config(xdg: &Xdg, body: &str) {
         let dir = xdg.config_home.join("once");
         std::fs::create_dir_all(&dir).unwrap();
@@ -398,6 +512,145 @@ account = "acme"
 
         let provider = resolve_config(tmp.path(), &xdg).unwrap();
         assert_eq!(provider, ResolvedCacheProviderConfig::Local);
+    }
+
+    #[test]
+    fn explicit_local_workspace_beats_tuist_workspace_config() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_workspace(
+            tmp.path(),
+            r#"
+[cache_provider]
+kind = "local"
+"#,
+        );
+        write_tuist_swift(
+            tmp.path(),
+            r#"
+import ProjectDescription
+
+let tuist = Tuist(
+    fullHandle: "tuist/app",
+    url: "https://canary.tuist.dev",
+    project: .xcode()
+)
+"#,
+        );
+
+        let provider = resolve_config(tmp.path(), &xdg).unwrap();
+        assert_eq!(provider, ResolvedCacheProviderConfig::Local);
+    }
+
+    #[test]
+    fn resolve_uses_tuist_swift_when_workspace_is_unspecified() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_tuist_swift(
+            tmp.path(),
+            r#"
+import ProjectDescription
+
+let tuist = Tuist(
+    fullHandle: "tuist/app",
+    url: "https://canary.tuist.dev",
+    project: .xcode()
+)
+"#,
+        );
+
+        let config = expect_tuist(resolve_config(tmp.path(), &xdg).unwrap());
+        assert_eq!(config.url, "https://canary.tuist.dev");
+        assert_eq!(config.account.as_deref(), Some("tuist"));
+        assert_eq!(config.project.as_deref(), Some("app"));
+        assert_eq!(config.provider_name, "tuist");
+    }
+
+    #[test]
+    fn resolve_uses_tuist_swift_default_url() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_tuist_swift(
+            tmp.path(),
+            r#"
+import ProjectDescription
+
+let tuist = Tuist(
+    fullHandle: "tuist/app",
+    project: .xcode()
+)
+"#,
+        );
+
+        let config = expect_tuist(resolve_config(tmp.path(), &xdg).unwrap());
+        assert_eq!(config.url, DEFAULT_TUIST_URL);
+        assert_eq!(config.account.as_deref(), Some("tuist"));
+        assert_eq!(config.project.as_deref(), Some("app"));
+    }
+
+    #[test]
+    fn resolve_ignores_commented_tuist_swift_handle() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_tuist_swift(
+            tmp.path(),
+            r#"
+import ProjectDescription
+
+let tuist = Tuist(
+    // fullHandle: "{account_handle}/{project_handle}",
+    project: .xcode()
+)
+"#,
+        );
+
+        let provider = resolve_config(tmp.path(), &xdg).unwrap();
+        assert_eq!(provider, ResolvedCacheProviderConfig::Local);
+    }
+
+    #[test]
+    fn resolve_uses_tuist_toml_when_workspace_is_unspecified() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_tuist_toml(
+            tmp.path(),
+            r#"
+project = "tuist/gradle-plugin"
+url = "https://canary.tuist.dev"
+"#,
+        );
+
+        let config = expect_tuist(resolve_config(tmp.path(), &xdg).unwrap());
+        assert_eq!(config.url, "https://canary.tuist.dev");
+        assert_eq!(config.account.as_deref(), Some("tuist"));
+        assert_eq!(config.project.as_deref(), Some("gradle-plugin"));
+        assert_eq!(config.provider_name, "tuist");
+    }
+
+    #[test]
+    fn tuist_toml_beats_tuist_swift_when_both_exist() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_tuist_toml(
+            tmp.path(),
+            r#"
+project = "tuist/toml-app"
+"#,
+        );
+        write_tuist_swift(
+            tmp.path(),
+            r#"
+import ProjectDescription
+
+let tuist = Tuist(
+    fullHandle: "tuist/swift-app",
+    project: .xcode()
+)
+"#,
+        );
+
+        let config = expect_tuist(resolve_config(tmp.path(), &xdg).unwrap());
+        assert_eq!(config.project.as_deref(), Some("toml-app"));
     }
 
     #[test]
