@@ -36,7 +36,6 @@ Those comments are the script contract:
 - **Outputs**: The files or directories Once should restore on a cache hit.
 - **Environment variables**: Declared host values that are forwarded to the script and included in the cache key.
 - **Working directory**: The directory where the script should run.
-- **Remote execution**: An optional provider for running cache misses away from the local host.
 
 Then run the script through Once:
 
@@ -46,10 +45,8 @@ once exec -- bash scripts/build.sh
 
 Once reads the script, hashes the declared contract, and either reuses a
 previous result or runs the command and stores stdout, stderr, exit status,
-and declared outputs. The same contract can also become a remote execution
-request when the work should run on a compute provider. Workspace-level
-`once.toml` files are reserved for shared configuration such as cache
-provider settings.
+and declared outputs. Workspace-level `once.toml` files are reserved for
+shared configuration such as cache provider settings.
 
 For longer-running workflows, Once exposes runtime sessions with structured
 logs, events, and descriptors. That gives tools and agents a runtime API to
