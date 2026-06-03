@@ -9,9 +9,12 @@ graph. Once lets those scripts stay where they are. The script file
 remains the source of truth, and Once learns just enough about it to
 cache it, inspect it, and schedule it safely.
 
-::: tip Works well with Mise
-Once works beautifully with [Mise file tasks](https://mise.jdx.dev/tasks/file-tasks.html). Keep the task as an executable script in `mise-tasks/`, `.mise/tasks/`, or another Mise task directory, add `# once` headers next to the existing task body, and run it through the same script file.
-:::
+## Mise File Tasks
+
+Once works beautifully with [Mise file tasks](https://mise.jdx.dev/tasks/file-tasks.html).
+Keep the task as an executable script in `mise-tasks/`, `.mise/tasks/`,
+or another Mise task directory, add `# once` headers next to the
+existing task body, and run it through the same script file.
 
 ## Annotated Script Files
 

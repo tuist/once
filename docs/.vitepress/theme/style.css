@@ -135,11 +135,13 @@ body:has(.VPHome)::before {
 }
 
 .VPNavBarTitle .title {
+  gap: 8px;
   font-weight: 700;
   color: var(--vp-c-text-1);
 }
 
 .VPNavBarTitle .logo {
+  margin-right: 0;
   filter: drop-shadow(0 7px 14px oklch(53.2% 0.276 286.9 / 0.25));
 }
 
