@@ -8,6 +8,13 @@ Most repositories already have a long tail of scripts: test setup, asset generat
 
 Once gives those scripts that contract without asking teams to adopt a new build system.
 
+::: tip Build systems can model this too
+Build systems can model cacheable workflows with rich dependency graphs,
+but moving existing repository automation into that shape can be a large
+product and migration decision. Once is for the scripts you already have
+and want to make cacheable without rewriting them as build rules.
+:::
+
 ## How It Works
 
 Start with a normal script. Keep the shebang, keep the implementation,
