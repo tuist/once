@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment:
       name: production
-      url: https://fabrik-website.workers.dev
+      url: https://once.tuist.dev
     defaults:
       run:
         working-directory: website

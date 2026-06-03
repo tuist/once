@@ -1,15 +1,15 @@
-.fabrik-card {
+.once-card {
   display: flex;
   flex-direction: column;
-  gap: var(--fabrik-spacing-3);
-  padding: var(--fabrik-spacing-6);
-  border-radius: var(--fabrik-radius-4);
-  background: var(--fabrik-summer-1);
-  border: 1px solid var(--fabrik-summer-4);
-  transition: border-color 150ms var(--fabrik-ease);
+  gap: var(--once-spacing-3);
+  padding: var(--once-spacing-6);
+  border-radius: var(--once-radius-4);
+  background: var(--once-summer-1);
+  border: 1px solid var(--once-summer-4);
+  transition: border-color 150ms var(--once-ease);
 
   &:hover {
-    border-color: var(--fabrik-summer-6);
+    border-color: var(--once-summer-6);
   }
 
   & > [data-part="icon"] {
@@ -18,10 +18,10 @@
     justify-content: center;
     width: 40px;
     height: 40px;
-    border-radius: var(--fabrik-radius-3);
-    background: var(--fabrik-thread-3);
-    color: var(--fabrik-thread-11);
-    margin-bottom: var(--fabrik-spacing-2);
+    border-radius: var(--once-radius-3);
+    background: var(--once-thread-3);
+    color: var(--once-thread-11);
+    margin-bottom: var(--once-spacing-2);
 
     & svg {
       width: 20px;
@@ -30,30 +30,30 @@
   }
 
   & > [data-part="title"] {
-    font-family: var(--fabrik-font-serif);
-    font-weight: var(--fabrik-weight-extrabold);
-    font-size: var(--fabrik-text-xl);
-    color: var(--fabrik-summer-12);
+    font-family: var(--once-font-serif);
+    font-weight: var(--once-weight-extrabold);
+    font-size: var(--once-text-xl);
+    color: var(--once-summer-12);
     letter-spacing: -0.015em;
   }
 
   & > [data-part="body"] {
-    color: var(--fabrik-summer-11);
-    font-size: var(--fabrik-text-sm);
+    color: var(--once-summer-11);
+    font-size: var(--once-text-sm);
     line-height: 1.6;
   }
 
   &[data-variant="featured"] > [data-part="title"] {
-    font-size: var(--fabrik-text-2xl);
+    font-size: var(--once-text-2xl);
   }
 
   &[data-tone="alt"] > [data-part="icon"] {
-    background: var(--fabrik-summer-3);
-    color: var(--fabrik-summer-12);
+    background: var(--once-summer-3);
+    color: var(--once-summer-12);
   }
 
   &[data-variant="language"] {
-    padding: var(--fabrik-spacing-7);
+    padding: var(--once-spacing-7);
     min-height: 360px;
 
     & > [data-part="mark"] {
@@ -62,10 +62,10 @@
       justify-content: center;
       width: 56px;
       height: 56px;
-      border-radius: var(--fabrik-radius-3);
-      background: var(--fabrik-summer-1);
-      border: 1px solid var(--fabrik-summer-4);
-      margin-bottom: var(--fabrik-spacing-3);
+      border-radius: var(--once-radius-3);
+      background: var(--once-summer-1);
+      border: 1px solid var(--once-summer-4);
+      margin-bottom: var(--once-spacing-3);
 
       & svg {
         width: 32px;
@@ -80,29 +80,29 @@
 
     & > [data-part="title"],
     & > [data-part="title-row"] > [data-part="title"] {
-      font-family: var(--fabrik-font-serif);
-      font-weight: var(--fabrik-weight-extrabold);
-      font-size: var(--fabrik-text-2xl);
-      color: var(--fabrik-summer-12);
+      font-family: var(--once-font-serif);
+      font-weight: var(--once-weight-extrabold);
+      font-size: var(--once-text-2xl);
+      color: var(--once-summer-12);
       letter-spacing: -0.015em;
     }
 
     & > [data-part="title-row"] {
       display: flex;
       align-items: center;
-      gap: var(--fabrik-spacing-2);
+      gap: var(--once-spacing-2);
       min-height: 2rem;
     }
 
     & > [data-part="title-row"] > [data-part="status"] {
       display: inline-flex;
       align-items: center;
-      padding: 2px var(--fabrik-spacing-2);
-      border-radius: var(--fabrik-radius-full);
-      background: var(--fabrik-summer-3);
-      color: var(--fabrik-summer-10);
-      font-size: var(--fabrik-text-xs);
-      font-weight: var(--fabrik-weight-semibold);
+      padding: 2px var(--once-spacing-2);
+      border-radius: var(--once-radius-full);
+      background: var(--once-summer-3);
+      color: var(--once-summer-10);
+      font-size: var(--once-text-xs);
+      font-weight: var(--once-weight-semibold);
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
@@ -113,17 +113,17 @@
       margin: auto 0 0;
       display: flex;
       flex-wrap: wrap;
-      gap: var(--fabrik-spacing-1);
+      gap: var(--once-spacing-1);
 
       & > li {
         display: inline-flex;
         align-items: center;
-        padding: 2px var(--fabrik-spacing-2);
-        border-radius: var(--fabrik-radius-full);
-        background: var(--fabrik-thread-3);
-        color: var(--fabrik-thread-11);
-        font-size: var(--fabrik-text-xs);
-        font-weight: var(--fabrik-weight-semibold);
+        padding: 2px var(--once-spacing-2);
+        border-radius: var(--once-radius-full);
+        background: var(--once-thread-3);
+        color: var(--once-thread-11);
+        font-size: var(--once-text-xs);
+        font-weight: var(--once-weight-semibold);
       }
     }
 
@@ -132,34 +132,34 @@
       flex-direction: column;
       text-decoration: none;
       background: transparent;
-      border: 1px dashed var(--fabrik-summer-6);
+      border: 1px dashed var(--once-summer-6);
       transition: border-color 0.15s ease, background 0.15s ease;
 
       & > [data-part="mark"] {
         background: transparent;
-        border: 1px dashed var(--fabrik-summer-6);
-        color: var(--fabrik-summer-11);
+        border: 1px dashed var(--once-summer-6);
+        color: var(--once-summer-11);
       }
 
       & > [data-part="body"] {
-        color: var(--fabrik-summer-11);
+        color: var(--once-summer-11);
       }
 
       & > [data-part="cta"] {
         margin-top: auto;
-        padding-top: var(--fabrik-spacing-3);
-        color: var(--fabrik-thread-11);
-        font-size: var(--fabrik-text-sm);
-        font-weight: var(--fabrik-weight-semibold);
+        padding-top: var(--once-spacing-3);
+        color: var(--once-thread-11);
+        font-size: var(--once-text-sm);
+        font-weight: var(--once-weight-semibold);
       }
 
       &:hover {
-        background: var(--fabrik-summer-1);
-        border-color: var(--fabrik-thread-9);
+        background: var(--once-summer-1);
+        border-color: var(--once-thread-9);
 
         & > [data-part="mark"] {
-          border-color: var(--fabrik-thread-9);
-          color: var(--fabrik-thread-11);
+          border-color: var(--once-thread-9);
+          color: var(--once-thread-11);
         }
       }
     }

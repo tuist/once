@@ -1,33 +1,45 @@
 <p align="center">
-  <img src="assets/logo.png" alt="Fabrik" width="50%" />
+  <img src="assets/logo.png" alt="Once" width="50%" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/tuist/fabrik/actions/workflows/fabrik.yml"><img src="https://github.com/tuist/fabrik/actions/workflows/fabrik.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/tuist/fabrik/releases/latest"><img src="https://img.shields.io/github/v/release/tuist/fabrik?display_name=tag&sort=semver" alt="Latest release" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/tuist/fabrik" alt="License" /></a>
+  <a href="https://github.com/tuist/once/actions/workflows/once.yml"><img src="https://github.com/tuist/once/actions/workflows/once.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/tuist/once/releases/latest"><img src="https://img.shields.io/github/v/release/tuist/once?display_name=tag&sort=semver" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/tuist/once" alt="License" /></a>
 </p>
 
-# Fabrik
+# Once
 
-Fabrik is a polyglot automation kernel for humans and agents. It sits between your team, their coding agents, and the execution infrastructure beneath them: local cache, remote runners, and the toolchains they invoke. Content-addressed actions, structured declarations, and explicit runtime semantics give humans and coding agents one graph to build, run, test, and debug.
+Once makes project scripts cacheable, observable, and remotely executable. Declare the inputs, outputs, environment, and runtime contract once, then reuse the result locally, in CI, or on a compute provider.
 
 ## Quick Start
 
-Install `fabrik`, then initialize a project:
+Declare a script in `once.toml`:
 
-```sh
-fabrik --list
-fabrik init
-fabrik init --templates
-fabrik init rust-app --path hello
+```toml
+[[script]]
+name = "build-assets"
+argv = ["bash", "scripts/build-assets.sh"]
+input = ["scripts/build-assets.sh", "assets/**/*"]
+output = ["dist/"]
 ```
 
-Use the canonical template ids printed by `fabrik init --templates`, for example `rust-app`.
+Run it through the cache:
+
+```sh
+once run build-assets
+once run build-assets --remote --compute microsandbox
+```
+
+Scripts can also describe themselves with `ONCE` headers and run directly:
+
+```sh
+once exec --script bash scripts/build-assets.sh
+```
 
 ## Documentation
 
-Read the documentation at [fabrik.run](https://fabrik.run).
+Read the documentation at [once.tuist.dev](https://once.tuist.dev).
 
 ## License
 

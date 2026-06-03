@@ -13,9 +13,9 @@ export default function () {
   return {
     locale,
     currentYear: new Date().getFullYear(),
-    url: "https://fabrik.run",
-    github: "https://github.com/tuist/fabrik",
-    docs: "https://fabrik.run",
+    url: "https://once.tuist.dev",
+    github: "https://github.com/tuist/once",
+    docs: "https://once.tuist.dev",
     name: content.site.name,
     title: content.site.title,
     description: content.site.description,

@@ -29,15 +29,15 @@ if [[ -z "${target}" || -z "${version}" ]]; then
 fi
 
 mkdir -p dist
-FABRIK_VERSION="${version}" cargo build --locked --release --target "${target}"
+ONCE_VERSION="${version}" cargo build --locked --release --target "${target}"
 
 # Windows uses the .exe suffix; everything else ships a bare binary.
 case "${target}" in
   *-windows-*)
-    bin_name="fabrik.exe"
+    bin_name="once.exe"
     ;;
   *)
-    bin_name="fabrik"
+    bin_name="once"
     ;;
 esac
 
@@ -49,7 +49,7 @@ cp "target/${target}/release/${bin_name}" "${stage_dir}/${bin_name}"
 # ubi backend handles either format. Keeping one extension across
 # platforms makes the asset-naming pattern downstream tools key off
 # (mise/aqua/ubi) trivially predictable.
-asset="fabrik-${version}-${target}.tar.gz"
+asset="once-${version}-${target}.tar.gz"
 tar -C "${stage_dir}" -czf "dist/${asset}" "${bin_name}"
 
 # sha256: sha256sum on Linux and Git-Bash-on-Windows; shasum -a 256 on macOS.

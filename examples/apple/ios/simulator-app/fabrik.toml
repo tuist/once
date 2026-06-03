@@ -1,6 +1,0 @@
-[[apple.simulator_app]]
-name = "Demo"
-platform = "ios"
-bundle_id = "dev.fabrik.ios-demo"
-srcs = ["Sources/App.swift"]
-minimum_os = "17.0"

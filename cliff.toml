@@ -6,7 +6,7 @@ initial_tag = "0.1.0"
 
 [remote.github]
 owner = "tuist"
-repo = "fabrik"
+repo = "once"
 
 [changelog]
 header = """

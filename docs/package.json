@@ -1,7 +1,7 @@
 {
-  "name": "@fabrik/docs",
+  "name": "@once/docs",
   "version": "0.1.0",
-  "description": "Documentation site for Fabrik",
+  "description": "Documentation site for Once",
   "private": true,
   "devDependencies": {
     "vitepress": "^1.6.4",

@@ -2,33 +2,31 @@
 layout: home
 
 hero:
-  name: "Fabrik"
-  text: "Optimize software operations."
-  tagline: Fabrik gives developers and agents one execution layer that maps software operations onto cache and compute infrastructure.
+  name: "Once"
+  text: "Run once. Reuse anywhere."
+  tagline: Once makes project scripts cacheable, observable, and remotely executable.
   image:
     src: /logo.png
-    alt: Fabrik
+    alt: Once
   actions:
     - theme: brand
-      text: What is Fabrik
-      link: /guide/what-is-fabrik
+      text: What is Once
+      link: /guide/what-is-once
     - theme: alt
-      text: Scripts
+      text: Cacheable Scripts
       link: /guide/cacheable-scripts
     - theme: alt
       text: View on GitHub
-      link: https://github.com/tuist/fabrik
+      link: https://github.com/tuist/once
 features:
-  - title: One surface for developers and agents
-    details: Describe software operations once. Fabrik keeps the graph inspectable, editable, and debuggable instead of scattering work across wrappers and tool-specific glue.
-    link: /guide/what-is-fabrik
-    linkText: Read the definition
-  - title: A real cache contract
-    details: Actions carry explicit inputs, outputs, environment dependencies, and runtime semantics, so reuse is deterministic instead of accidental.
-  - title: A portable compute contract
-    details: The same operational definition can stay on the host today and map onto other execution backends as the infrastructure evolves.
-  - title: Scripts without rewrites
-    details: Checked-in scripts do not need to become bespoke rules. Fabrik can learn just enough about them to cache, inspect, and schedule them safely.
+  - title: Scripts stay scripts
+    details: Keep the shell, Node, Python, Ruby, or other scripts you already have. Add a small execution contract instead of rewriting them as build rules.
     link: /guide/cacheable-scripts
     linkText: Learn about scripts
+  - title: Deterministic cache keys
+    details: Inputs, outputs, environment variables, working directories, and timeouts become part of the action contract.
+  - title: Remote execution when it helps
+    details: The same script contract can run locally or on a compute provider with `--remote`.
+  - title: Runtime API for agents
+    details: Runtime sessions expose structured logs, events, and control over JSON-RPC instead of forcing agents to scrape terminal output.
 ---

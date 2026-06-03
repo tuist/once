@@ -2,18 +2,11 @@
 rust = "1.88"
 shellspec = "latest"
 git-cliff = "2.12.0"
-"github:tuist/fabrik" = "0.12.0"
 "github:tuist/blick" = "0.8.0"
 "github:superradcompany/microsandbox" = "0.5.1"
 node = "22.11.0"
-go = "1.26.3"
 "npm:opencode-ai" = "1.15.0"
 aube = "1.10.4"
-# Elixir + OTP power the granular elixir.* targets and the compile
-# daemon spec tests. Pinned to a precompiled elixir-on-otp pair so
-# `:json` (OTP 27+) is available without a from-source rebuild.
-erlang = "28.5"
-elixir = "1.19.5-otp-28"
 
 [env]
 CARGO_TERM_COLOR = "always"

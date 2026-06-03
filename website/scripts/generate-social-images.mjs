@@ -107,10 +107,10 @@ function renderSvg({ title, date, kicker }) {
   <rect width="${WIDTH}" height="${HEIGHT}" fill="url(#glow)"/>
   <path d="M0 120H1200M0 510H1200" stroke="#20201d" stroke-opacity="0.06"/>
   <path d="M90 0V630M1110 0V630" stroke="#20201d" stroke-opacity="0.04"/>
-  <text x="390" y="200" font-family="${sansStack}" font-size="30" font-weight="800" letter-spacing="8" fill="#ad7c1f">${escapeHtml(kicker || "FABRIK")}</text>
+  <text x="390" y="200" font-family="${sansStack}" font-size="30" font-weight="800" letter-spacing="8" fill="#ad7c1f">${escapeHtml(kicker || "ONCE")}</text>
   <text font-family="${serifStack}" font-size="${fontSize}" font-weight="800" fill="#20201d" letter-spacing="-1">${titleLines}</text>
   ${dateLine}
-  <text x="390" y="${footerY}" font-family="${sansStack}" font-size="26" font-weight="600" fill="#605d54">fabrik.run</text>
+  <text x="390" y="${footerY}" font-family="${sansStack}" font-size="26" font-weight="600" fill="#605d54">once.tuist.dev</text>
 </svg>`;
 }
 
@@ -141,7 +141,7 @@ async function renderPostImage(postPath, logoBuffer) {
   const svg = renderSvg({
     title: data.title,
     date: formatDate(data.date),
-    kicker: "FABRIK · BLOG",
+    kicker: "ONCE · BLOG",
   });
 
   const outputPath = path.join(outputDir, `${slug}.png`);
@@ -160,12 +160,12 @@ async function renderStaticPageImages(logoBuffer, copy) {
     {
       slug: "default",
       title: copy?.home?.hero?.title || "A polyglot automation kernel for humans and agents.",
-      kicker: "FABRIK",
+      kicker: "ONCE",
     },
     {
       slug: "blog",
       title: copy?.blog?.headline || "Updates from the workshop.",
-      kicker: "FABRIK · BLOG",
+      kicker: "ONCE · BLOG",
     },
   ];
 

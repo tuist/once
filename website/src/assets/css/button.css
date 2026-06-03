@@ -1,91 +1,91 @@
-.fabrik-button {
+.once-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--fabrik-spacing-2);
+  gap: var(--once-spacing-2);
   border: 0;
-  border-radius: var(--fabrik-radius-full);
-  padding: var(--fabrik-spacing-2) var(--fabrik-spacing-5);
+  border-radius: var(--once-radius-full);
+  padding: var(--once-spacing-2) var(--once-spacing-5);
   font-family: inherit;
-  font-size: var(--fabrik-text-sm);
-  font-weight: var(--fabrik-weight-medium);
+  font-size: var(--once-text-sm);
+  font-weight: var(--once-weight-medium);
   line-height: 1.4;
   cursor: pointer;
   text-decoration: none;
   transition:
-    background-color 150ms var(--fabrik-ease),
-    color 150ms var(--fabrik-ease),
-    box-shadow 150ms var(--fabrik-ease),
-    transform 150ms var(--fabrik-ease);
+    background-color 150ms var(--once-ease),
+    color 150ms var(--once-ease),
+    box-shadow 150ms var(--once-ease),
+    transform 150ms var(--once-ease);
 
   & svg {
-    width: var(--fabrik-icon-size-sm);
-    height: var(--fabrik-icon-size-sm);
+    width: var(--once-icon-size-sm);
+    height: var(--once-icon-size-sm);
     flex-shrink: 0;
   }
 
   &[data-variant="primary"] {
-    background: var(--fabrik-summer-12);
-    color: var(--fabrik-summer-2);
+    background: var(--once-summer-12);
+    color: var(--once-summer-2);
 
     &:hover {
-      background: var(--fabrik-summer-11);
+      background: var(--once-summer-11);
     }
   }
 
   &[data-variant="secondary"] {
-    background: var(--fabrik-summer-3);
-    color: var(--fabrik-summer-12);
-    box-shadow: inset 0 0 0 1px var(--fabrik-summer-5);
+    background: var(--once-summer-3);
+    color: var(--once-summer-12);
+    box-shadow: inset 0 0 0 1px var(--once-summer-5);
 
     &:hover {
-      background: var(--fabrik-summer-4);
+      background: var(--once-summer-4);
     }
   }
 
   &[data-variant="ghost"] {
     background: transparent;
-    color: var(--fabrik-summer-11);
+    color: var(--once-summer-11);
 
     &:hover {
-      color: var(--fabrik-summer-12);
-      background: var(--fabrik-summer-3);
+      color: var(--once-summer-12);
+      background: var(--once-summer-3);
     }
   }
 
   &[data-variant="invert"] {
-    background: var(--fabrik-summer-2);
-    color: var(--fabrik-summer-12);
+    background: var(--once-summer-2);
+    color: var(--once-summer-12);
 
     &:hover {
-      background: var(--fabrik-summer-3);
+      background: var(--once-summer-3);
     }
   }
 
   &[data-variant="invert-outline"] {
     background: transparent;
-    color: var(--fabrik-summer-2);
-    box-shadow: inset 0 0 0 1px var(--fabrik-summer-9);
+    color: var(--once-summer-2);
+    box-shadow: inset 0 0 0 1px var(--once-summer-9);
 
     &:hover {
-      background: var(--fabrik-summer-11);
+      background: var(--once-summer-11);
     }
   }
 
   &[data-size="large"] {
-    padding: var(--fabrik-spacing-3) var(--fabrik-spacing-6);
-    font-size: var(--fabrik-text-base);
+    padding: var(--once-spacing-3) var(--once-spacing-6);
+    font-size: var(--once-text-base);
 
     & svg {
-      width: var(--fabrik-icon-size-md);
-      height: var(--fabrik-icon-size-md);
+      width: var(--once-icon-size-md);
+      height: var(--once-icon-size-md);
     }
   }
 }
 
-.fabrik-button-group {
+.once-button-group {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: var(--fabrik-spacing-3);
+  gap: var(--once-spacing-3);
   justify-content: center;
 }

@@ -1,17 +1,14 @@
 import { defineConfig } from "vitepress";
 
-const targetText = (label, icon) =>
-  `<span class="sidebar-target-link sidebar-target-link-${icon}"><span class="sidebar-target-icon" aria-hidden="true"></span><span>${label}</span></span>`;
-
 export default defineConfig({
-  title: "Fabrik",
-  titleTemplate: ":title | Fabrik",
+  title: "Once",
+  titleTemplate: ":title | Once",
   description:
-    "Fabrik gives developers and agents one execution layer that maps software operations onto cache and compute infrastructure.",
+    "Once makes project scripts cacheable, observable, and remotely executable.",
   cleanUrls: true,
   lastUpdated: true,
   sitemap: {
-    hostname: "https://fabrik.run",
+    hostname: "https://once.tuist.dev",
   },
   head: [
     ["link", { rel: "icon", type: "image/png", href: "/favicon.png" }],
@@ -23,21 +20,21 @@ export default defineConfig({
       provider: "local",
     },
     editLink: {
-      pattern: "https://github.com/tuist/fabrik/edit/main/docs/:path",
+      pattern: "https://github.com/tuist/once/edit/main/docs/:path",
       text: "Edit this page on GitHub",
     },
     nav: [
-      { text: "Docs", link: "/guide/what-is-fabrik" },
+      { text: "Docs", link: "/guide/what-is-once" },
       {
         text: "Links",
         items: [
           {
             text: "Releases",
-            link: "https://github.com/tuist/fabrik/releases",
+            link: "https://github.com/tuist/once/releases",
           },
           {
             text: "Issues",
-            link: "https://github.com/tuist/fabrik/issues",
+            link: "https://github.com/tuist/once/issues",
           },
         ],
       },
@@ -49,34 +46,15 @@ export default defineConfig({
           items: [
             {
               text: "Introduction",
-              items: [
-                { text: "What is Fabrik", link: "/guide/what-is-fabrik" },
-              ],
-            },
-            {
-              text: "Native Rules",
-              items: [
-                { text: targetText("Rust", "rust"), link: "/targets/rust" },
-                {
-                  text: targetText("Apple and Swift", "swift"),
-                  link: "/targets/apple",
-                },
-                { text: targetText("Go", "go"), link: "/targets/go" },
-                {
-                  text: targetText("Elixir", "elixir"),
-                  link: "/targets/elixir",
-                },
-              ],
+              items: [{ text: "What is Once", link: "/guide/what-is-once" }],
             },
             {
               text: "Scripts",
               items: [
-                { text: "Overview", link: "/targets/actions" },
                 {
-                  text: "Script Files",
+                  text: "Cacheable Scripts",
                   link: "/guide/cacheable-scripts",
                 },
-                { text: "Script Rules", link: "/targets/scripts" },
               ],
             },
             {
@@ -92,9 +70,7 @@ export default defineConfig({
         },
       ],
     },
-    socialLinks: [
-      { icon: "github", link: "https://github.com/tuist/fabrik" },
-    ],
+    socialLinks: [{ icon: "github", link: "https://github.com/tuist/once" }],
     footer: {
       message: "Released under the MIT License.",
       copyright: "Copyright © Tuist GmbH",

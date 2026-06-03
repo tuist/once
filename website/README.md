@@ -1,6 +1,6 @@
-# Fabrik website
+# Once website
 
-Marketing site and blog for Fabrik. Built with Eleventy and Tailwind v4.
+Marketing site and blog for Once. Built with Eleventy and Tailwind v4.
 
 ## Develop
 

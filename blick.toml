@@ -13,12 +13,12 @@ source = "apollographql/skills"
 subpath = "skills/rust-best-practices"
 
 [[skills]]
-name = "fabrik-rust-review"
-source = "./.blick/skills/fabrik-rust-review"
+name = "once-rust-review"
+source = "./.blick/skills/once-rust-review"
 
 [[reviews]]
 name = "default"
-skills = ["rust-best-practices", "fabrik-rust-review"]
+skills = ["rust-best-practices", "once-rust-review"]
 prompt = """
 Focus on correctness, invalidation, build-graph behavior, artifact paths,
 CLI contract regressions, and test coverage.

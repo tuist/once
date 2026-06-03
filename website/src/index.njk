@@ -1,23 +1,23 @@
 ---
 layout: layouts/base.njk
-title: "Fabrik: a polyglot automation kernel for humans and agents"
-description: "Fabrik sits between your team, their agents, and the infrastructure that runs their code. Cache hits, remote runners, and toolchains, all behind one graph."
+title: "Once: a polyglot automation kernel for humans and agents"
+description: "Once sits between your team, their agents, and the infrastructure that runs their code. Cache hits, remote runners, and toolchains, all behind one graph."
 homepage: true
 ---
 
 {% from "partials/icons.njk" import icon, langMark %}
 
-<section class="fabrik-section" data-tone="hero">
+<section class="once-section" data-tone="hero">
   <div data-part="glow"></div>
-  <div class="fabrik-container">
-    <div class="fabrik-hero">
+  <div class="once-container">
+    <div class="once-hero">
       <div data-part="copy">
         <div data-part="badges">
-          <span class="fabrik-badge">
+          <span class="once-badge">
             <span data-part="dot"></span>
             {{ copy.home.hero.badge }}
           </span>
-          <a href="{{ copy.home.hero.bylineHref }}" class="fabrik-byline" rel="noopener">
+          <a href="{{ copy.home.hero.bylineHref }}" class="once-byline" rel="noopener">
             <span data-part="mark">
               <svg width="14" height="14" viewBox="0 0 512 512" aria-hidden="true">
                 <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
@@ -38,7 +38,7 @@ homepage: true
         <p data-part="subtitle">{{ copy.home.hero.subtitle }}</p>
         <div data-part="actions">
           {% for action in copy.home.hero.actions %}
-            <a href="{{ action.href }}" class="fabrik-button" data-variant="{{ action.variant }}" data-size="large">
+            <a href="{{ action.href }}" class="once-button" data-variant="{{ action.variant }}" data-size="large">
               {% if action.icon == "github" %}{{ icon("github", 16) }}{% endif %}
               {{ action.text }}
               {% if action.icon == "arrow-right" %}{{ icon("arrow-right", 16) }}{% endif %}
@@ -48,7 +48,7 @@ homepage: true
       </div>
 
       <div data-part="visual">
-        <div class="fabrik-terminal">
+        <div class="once-terminal">
           <div data-part="header">
             <span data-part="dots"><span></span><span></span><span></span></span>
             <span data-part="title">{{ copy.home.hero.terminal.title }}</span>
@@ -60,9 +60,9 @@ homepage: true
   </div>
 </section>
 
-<section class="fabrik-section">
-  <div class="fabrik-container">
-    <div class="fabrik-narrative">
+<section class="once-section">
+  <div class="once-container">
+    <div class="once-narrative">
       <header data-part="header">
         <span data-part="eyebrow">{{ copy.home.why.eyebrow }}</span>
         <h2 data-part="title">{{ copy.home.why.title }}</h2>
@@ -80,17 +80,17 @@ homepage: true
   </div>
 </section>
 
-<section class="fabrik-section" data-tone="muted">
-  <div class="fabrik-container">
-    <header class="fabrik-section-header">
+<section class="once-section" data-tone="muted">
+  <div class="once-container">
+    <header class="once-section-header">
       <span data-part="eyebrow">{{ copy.home.what.eyebrow }}</span>
       <h2 data-part="title">{{ copy.home.what.title }}</h2>
       <p data-part="lede">{{ copy.home.what.lede }}</p>
     </header>
 
-    <div class="fabrik-grid" data-columns="1">
+    <div class="once-grid" data-columns="1">
       {% for ex in copy.home.what.extras %}
-        <article class="fabrik-card">
+        <article class="once-card">
           <span data-part="icon">{{ icon(ex.icon) }}</span>
           <h3 data-part="title">{{ ex.title }}</h3>
           <p data-part="body">{{ ex.body }}</p>
@@ -98,9 +98,9 @@ homepage: true
       {% endfor %}
     </div>
 
-    <div class="fabrik-grid" data-columns="4">
+    <div class="once-grid" data-columns="4">
       {% for lang in copy.home.what.languages %}
-        <article class="fabrik-card" data-variant="language">
+        <article class="once-card" data-variant="language">
           <span data-part="mark">{{ langMark(lang.mark, 40) }}</span>
           <div data-part="title-row">
             <h3 data-part="title">{{ lang.name }}</h3>
@@ -116,7 +116,7 @@ homepage: true
           </ul>
         </article>
       {% endfor %}
-      <a class="fabrik-card" data-variant="language" data-ghost href="{{ site.github }}" rel="noopener">
+      <a class="once-card" data-variant="language" data-ghost href="{{ site.github }}" rel="noopener">
         <span data-part="mark">{{ icon("plus") }}</span>
         <h3 data-part="title">{{ copy.home.what.addLanguage.title }}</h3>
         <p data-part="body">{{ copy.home.what.addLanguage.body }}</p>
@@ -126,9 +126,9 @@ homepage: true
   </div>
 </section>
 
-<section class="fabrik-section">
-  <div class="fabrik-container">
-    <div class="fabrik-split">
+<section class="once-section">
+  <div class="once-container">
+    <div class="once-split">
       <div>
         <span data-part="eyebrow">{{ copy.home.howItWorks.eyebrow }}</span>
         <h2 data-part="title">{{ copy.home.howItWorks.title }}</h2>
@@ -143,7 +143,7 @@ homepage: true
         </ul>
       </div>
 
-      <div class="fabrik-terminal">
+      <div class="once-terminal">
         <div data-part="header">
           <span data-part="dots"><span></span><span></span><span></span></span>
           <span data-part="title">{{ copy.home.howItWorks.snippet.filename }}</span>
@@ -154,14 +154,14 @@ homepage: true
   </div>
 </section>
 
-<section class="fabrik-section">
-  <div class="fabrik-container">
-    <header class="fabrik-section-header">
+<section class="once-section">
+  <div class="once-container">
+    <header class="once-section-header">
       <span data-part="eyebrow">{{ copy.home.faq.eyebrow }}</span>
       <h2 data-part="title">{{ copy.home.faq.title }}</h2>
     </header>
 
-    <div class="fabrik-faq">
+    <div class="once-faq">
       {% for faq in copy.home.faq.items %}
         <details>
           <summary>
@@ -175,14 +175,14 @@ homepage: true
   </div>
 </section>
 
-<section class="fabrik-section">
-  <div class="fabrik-container">
-    <div class="fabrik-cta-panel">
+<section class="once-section">
+  <div class="once-container">
+    <div class="once-cta-panel">
       <h2 data-part="title">{{ copy.home.cta.title }}</h2>
       <p data-part="lede">{{ copy.home.cta.lede | inlineMd | safe }}</p>
       <div data-part="actions">
         {% for action in copy.home.cta.actions %}
-          <a href="{{ action.href }}" class="fabrik-button" data-variant="{{ action.variant }}" data-size="large">
+          <a href="{{ action.href }}" class="once-button" data-variant="{{ action.variant }}" data-size="large">
             {% if action.icon == "github" %}{{ icon("github", 16) }}{% endif %}
             {{ action.text }}
             {% if action.icon == "arrow-right" %}{{ icon("arrow-right", 16) }}{% endif %}

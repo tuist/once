@@ -13,12 +13,12 @@ operating across ten parallel worktrees redoes the same codegen step
 ten times because none of the workers know the others already paid
 for it.
 
-The `fabrik cache` CLI exposes Fabrik's content-addressed store
+The `once cache` CLI exposes Once's content-addressed store
 directly to those scripts so they can stop. Declare the inputs that
 determine a result, ask the cache whether you have already produced
 that result, and either skip the work or restore the artifact. The
-script stays a script. The speedup comes for free from the same store
-that the build graph uses.
+script stays a script. The speedup comes from the same store that Once
+uses for declared script actions.
 
 The surface is small. Two caches, mirroring the shape that Bazel and
 the [Remote Execution API](https://github.com/bazelbuild/remote-apis)
@@ -50,12 +50,12 @@ cached action result safe.
 
 | Command | Purpose |
 | --- | --- |
-| `fabrik cache blob put [<path>]` | Store bytes from a file (or stdin) and print their BLAKE3 digest. |
-| `fabrik cache blob get <digest>` | Fetch bytes by digest. |
-| `fabrik cache blob exists <digest>` | Exit 0 on hit, 1 on miss. With `--format json`/`toon`, always exit 0 and emit `{"digest":"...","present":true|false}`. |
+| `once cache blob put [<path>]` | Store bytes from a file (or stdin) and print their BLAKE3 digest. |
+| `once cache blob get <digest>` | Fetch bytes by digest. |
+| `once cache blob exists <digest>` | Exit 0 on hit, 1 on miss. With `--format json`/`toon`, always exit 0 and emit `{"digest":"...","present":true|false}`. |
 
 This namespace travels through whatever remote infrastructure your
-`fabrik.toml` configures (for example, [Tuist](https://tuist.dev)).
+`once.toml` configures (for example, [Tuist](https://tuist.dev)).
 `get` falls back to the remote on local miss; `exists` consults the
 remote too, so the two are symmetric.
 
@@ -76,16 +76,16 @@ prior `cache action get --format json`).
 
 | Command | Purpose |
 | --- | --- |
-| `fabrik cache action get --input <spec> ...` | Look up a result by declared inputs. Always exits 0; parse `--format json` for `"hit": true\|false` and `"result"`. |
-| `fabrik cache action get ... --if-success` | Exit 0 only when there is a hit AND the recorded exit code is 0. Exits non-zero on miss or on a cached failure. |
-| `fabrik cache action put --input <spec> ... [--exit-code N] [--stdout <d>] [--stderr <d>] [--output path=digest ...]` | Record a result under the declared inputs. `--exit-code` defaults to 0. |
-| `fabrik cache action forget <digest>` | Drop a cached action result by digest. |
+| `once cache action get --input <spec> ...` | Look up a result by declared inputs. Always exits 0; parse `--format json` for `"hit": true\|false` and `"result"`. |
+| `once cache action get ... --if-success` | Exit 0 only when there is a hit AND the recorded exit code is 0. Exits non-zero on miss or on a cached failure. |
+| `once cache action put --input <spec> ... [--exit-code N] [--stdout <d>] [--stderr <d>] [--output path=digest ...]` | Record a result under the declared inputs. `--exit-code` defaults to 0. |
+| `once cache action forget <digest>` | Drop a cached action result by digest. |
 
 ## Inspecting
 
 | Command | Purpose |
 | --- | --- |
-| `fabrik cache stats` | Print counts and on-disk size for the blob cache and the action cache. |
+| `once cache stats` | Print counts and on-disk size for the blob cache and the action cache. |
 
 ## Examples
 
@@ -102,7 +102,7 @@ inputs=(
   --input pnpm-lock.yaml
 )
 
-if fabrik cache action get "${inputs[@]}" --if-success; then
+if once cache action get "${inputs[@]}" --if-success; then
   echo "vitest: cached green run for these inputs, skipping."
   exit 0
 fi
@@ -112,7 +112,7 @@ pnpm vitest run
 # `put` records exit_code 0 by default, so the same inputs short-circuit
 # on the next invocation. A failed run is not recorded - `set -e` would
 # have exited above, so we only reach this line on success.
-fabrik cache action put "${inputs[@]}"
+once cache action put "${inputs[@]}"
 ```
 
 The same shape works for any test runner, linter, type checker, or
@@ -135,10 +135,10 @@ set -euo pipefail
 inputs=(--input package.json --input package-lock.json)
 
 # If we recorded a result for these inputs, restore the tarball.
-result=$(fabrik cache action get "${inputs[@]}" --format json)
+result=$(once cache action get "${inputs[@]}" --format json)
 if echo "$result" | grep -q '"hit":true'; then
   digest=$(echo "$result" | jq -r '.result.outputs["node_modules.tar"]')
-  fabrik cache blob get "$digest" | tar -xf -
+  once cache blob get "$digest" | tar -xf -
   echo "node_modules: restored from cache."
   exit 0
 fi
@@ -146,8 +146,8 @@ fi
 # Cache miss: install, store the tarball in the blob cache, and
 # record an action result pointing at it.
 npm install
-nm_digest=$(tar -cf - node_modules | fabrik cache blob put)
-fabrik cache action put "${inputs[@]}" \
+nm_digest=$(tar -cf - node_modules | once cache blob put)
+once cache action put "${inputs[@]}" \
   --output node_modules.tar="$nm_digest"
 ```
 
@@ -189,19 +189,19 @@ inputs=(
 
 mise_dir="${MISE_DATA_DIR:-$HOME/.local/share/mise}"
 
-result=$(fabrik cache action get "${inputs[@]}" --format json)
+result=$(once cache action get "${inputs[@]}" --format json)
 if echo "$result" | grep -q '"hit":true'; then
   digest=$(echo "$result" | jq -r '.result.outputs["mise.tar"]')
   mkdir -p "$mise_dir"
-  fabrik cache blob get "$digest" | tar -xzf - -C "$(dirname "$mise_dir")"
+  once cache blob get "$digest" | tar -xzf - -C "$(dirname "$mise_dir")"
   echo "mise: restored toolchain from cache."
 else
   mise install --locked
   tools_digest=$(
     tar --sort=name -czf - -C "$(dirname "$mise_dir")" "$(basename "$mise_dir")" \
-      | fabrik cache blob put
+      | once cache blob put
   )
-  fabrik cache action put "${inputs[@]}" --output mise.tar="$tools_digest"
+  once cache action put "${inputs[@]}" --output mise.tar="$tools_digest"
 fi
 ```
 

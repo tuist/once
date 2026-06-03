@@ -9,11 +9,11 @@
 }
 
 html {
-  font-family: var(--fabrik-font-sans);
+  font-family: var(--once-font-sans);
   font-size: 16px;
   line-height: 1.55;
-  color: var(--fabrik-summer-12);
-  background: var(--fabrik-summer-2);
+  color: var(--once-summer-12);
+  background: var(--once-summer-2);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   text-size-adjust: 100%;
@@ -37,9 +37,9 @@ a {
 a:focus-visible,
 button:focus-visible,
 summary:focus-visible {
-  outline: 2px solid var(--fabrik-thread-9);
+  outline: 2px solid var(--once-thread-9);
   outline-offset: 3px;
-  border-radius: var(--fabrik-radius-1);
+  border-radius: var(--once-radius-1);
 }
 
 img,
@@ -58,11 +58,11 @@ svg {
 
 code,
 pre {
-  font-family: var(--fabrik-font-mono);
+  font-family: var(--once-font-mono);
   font-size: 0.95em;
 }
 
 ::selection {
-  background: var(--fabrik-thread-6);
-  color: var(--fabrik-summer-12);
+  background: var(--once-thread-6);
+  color: var(--once-summer-12);
 }

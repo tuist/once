@@ -1,21 +1,21 @@
-.fabrik-badge {
+.once-badge {
   display: inline-flex;
   align-items: center;
-  gap: var(--fabrik-spacing-2);
+  gap: var(--once-spacing-2);
   width: fit-content;
-  padding: var(--fabrik-spacing-1) var(--fabrik-spacing-3);
-  border-radius: var(--fabrik-radius-full);
-  font-size: var(--fabrik-text-xs);
-  font-weight: var(--fabrik-weight-medium);
-  background: var(--fabrik-summer-12);
-  color: var(--fabrik-summer-2);
-  box-shadow: var(--fabrik-shadow-sm);
+  padding: var(--once-spacing-1) var(--once-spacing-3);
+  border-radius: var(--once-radius-full);
+  font-size: var(--once-text-xs);
+  font-weight: var(--once-weight-medium);
+  background: var(--once-summer-12);
+  color: var(--once-summer-2);
+  box-shadow: var(--once-shadow-sm);
 
   & > [data-part="dot"] {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--fabrik-thread-9);
+    background: var(--once-thread-9);
   }
 
   & > [data-part="icon"] {
@@ -24,7 +24,7 @@
   }
 
   &[data-variant="soft"] {
-    background: var(--fabrik-thread-3);
-    color: var(--fabrik-thread-11);
+    background: var(--once-thread-3);
+    color: var(--once-thread-11);
   }
 }

@@ -16,7 +16,7 @@
 @import "./blog.css";
 @import "./prose.css";
 
-.fabrik-page {
-  padding-top: calc(var(--fabrik-spacing-12) + var(--fabrik-spacing-7));
-  padding-bottom: var(--fabrik-spacing-11);
+.once-page {
+  padding-top: calc(var(--once-spacing-12) + var(--once-spacing-7));
+  padding-bottom: var(--once-spacing-11);
 }

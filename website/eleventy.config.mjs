@@ -46,7 +46,7 @@ function highlightShellLine(line) {
     return `<span class="syntax-comment">${escaped}</span>`;
   }
   return escaped
-    .replace(/^(\s*)(export|chmod|fabrik|cat|tr)(\b)/, '$1<span class="syntax-keyword">$2</span>$3')
+    .replace(/^(\s*)(export|chmod|once|cat|tr)(\b)/, '$1<span class="syntax-keyword">$2</span>$3')
     .replace(/(&quot;[^&]*?&quot;|'[^']*?')/g, '<span class="syntax-string">$1</span>');
 }
 
@@ -76,7 +76,7 @@ export default function (eleventyConfig) {
     return content.replace(
       /<pre><code class="language-([A-Za-z0-9_-]+)">([\s\S]*?)<\/code><\/pre>/g,
       (_match, language, source) =>
-        `<pre data-language="${language}"><code class="language-${language} fabrik-code-highlight">${highlightCode(language, source)}</code></pre>`,
+        `<pre data-language="${language}"><code class="language-${language} once-code-highlight">${highlightCode(language, source)}</code></pre>`,
     );
   });
 

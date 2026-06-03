@@ -1,82 +1,82 @@
 :root {
   color-scheme: light dark;
 
-  --fabrik-summer-1: light-dark(#fdfdfc, #11110f);
-  --fabrik-summer-2: light-dark(#fafaf7, #191917);
-  --fabrik-summer-3: light-dark(#f1f1ee, #232320);
-  --fabrik-summer-4: light-dark(#e9e9e5, #2a2a27);
-  --fabrik-summer-5: light-dark(#e1e1de, #31312e);
-  --fabrik-summer-6: light-dark(#d9d9d5, #3a3a37);
-  --fabrik-summer-7: light-dark(#cfcfca, #484845);
-  --fabrik-summer-8: light-dark(#b9b9b3, #5d5d59);
-  --fabrik-summer-9: light-dark(#8d8d86, #7c7c78);
-  --fabrik-summer-10: light-dark(#82827e, #b4b4b0);
-  --fabrik-summer-11: light-dark(#636360, #d2d2cf);
-  --fabrik-summer-12: light-dark(#20201d, #eeeeeb);
+  --once-summer-1: light-dark(#fdfdfc, #11110f);
+  --once-summer-2: light-dark(#fafaf7, #191917);
+  --once-summer-3: light-dark(#f1f1ee, #232320);
+  --once-summer-4: light-dark(#e9e9e5, #2a2a27);
+  --once-summer-5: light-dark(#e1e1de, #31312e);
+  --once-summer-6: light-dark(#d9d9d5, #3a3a37);
+  --once-summer-7: light-dark(#cfcfca, #484845);
+  --once-summer-8: light-dark(#b9b9b3, #5d5d59);
+  --once-summer-9: light-dark(#8d8d86, #7c7c78);
+  --once-summer-10: light-dark(#82827e, #b4b4b0);
+  --once-summer-11: light-dark(#636360, #d2d2cf);
+  --once-summer-12: light-dark(#20201d, #eeeeeb);
 
-  --fabrik-thread-3: light-dark(#f6ecd5, #2d2410);
-  --fabrik-thread-6: light-dark(#d9bd8b, #4a3a18);
-  --fabrik-thread-9: light-dark(#ad7c1f, #c08a2a);
-  --fabrik-thread-11: light-dark(#8a5d11, #d9a14b);
-  --fabrik-thread-12: light-dark(#3a2603, #f1d999);
+  --once-thread-3: light-dark(#f6ecd5, #2d2410);
+  --once-thread-6: light-dark(#d9bd8b, #4a3a18);
+  --once-thread-9: light-dark(#ad7c1f, #c08a2a);
+  --once-thread-11: light-dark(#8a5d11, #d9a14b);
+  --once-thread-12: light-dark(#3a2603, #f1d999);
 
-  --fabrik-tuist-3: light-dark(#efe9ff, #1c1432);
-  --fabrik-tuist-11: light-dark(oklch(53.2% 0.276 286.9), oklch(70.7% 0.161 286.8));
-  --fabrik-tuist-12: light-dark(oklch(38.1% 0.22 286.8), oklch(79.4% 0.11 287.1));
+  --once-tuist-3: light-dark(#efe9ff, #1c1432);
+  --once-tuist-11: light-dark(oklch(53.2% 0.276 286.9), oklch(70.7% 0.161 286.8));
+  --once-tuist-12: light-dark(oklch(38.1% 0.22 286.8), oklch(79.4% 0.11 287.1));
 
-  --fabrik-shadow-rgb: 0, 0, 0;
-  --fabrik-shadow-sm: 0 1px 2px rgb(var(--fabrik-shadow-rgb) / 0.06);
-  --fabrik-shadow-md: 0 4px 12px rgb(var(--fabrik-shadow-rgb) / 0.08);
-  --fabrik-shadow-lg: 0 24px 60px -30px rgb(var(--fabrik-shadow-rgb) / 0.18);
+  --once-shadow-rgb: 0, 0, 0;
+  --once-shadow-sm: 0 1px 2px rgb(var(--once-shadow-rgb) / 0.06);
+  --once-shadow-md: 0 4px 12px rgb(var(--once-shadow-rgb) / 0.08);
+  --once-shadow-lg: 0 24px 60px -30px rgb(var(--once-shadow-rgb) / 0.18);
 
-  --fabrik-font-sans: "Geist", ui-sans-serif, system-ui, -apple-system,
+  --once-font-sans: "Geist", ui-sans-serif, system-ui, -apple-system,
     sans-serif;
-  --fabrik-font-serif: "Petrona", ui-serif, Georgia, serif;
-  --fabrik-font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+  --once-font-serif: "Petrona", ui-serif, Georgia, serif;
+  --once-font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
     Consolas, monospace;
 
-  --fabrik-weight-regular: 400;
-  --fabrik-weight-medium: 500;
-  --fabrik-weight-semibold: 600;
-  --fabrik-weight-extrabold: 800;
+  --once-weight-regular: 400;
+  --once-weight-medium: 500;
+  --once-weight-semibold: 600;
+  --once-weight-extrabold: 800;
 
-  --fabrik-spacing-1: 0.25rem;
-  --fabrik-spacing-2: 0.5rem;
-  --fabrik-spacing-3: 0.75rem;
-  --fabrik-spacing-4: 1rem;
-  --fabrik-spacing-5: 1.5rem;
-  --fabrik-spacing-6: 2rem;
-  --fabrik-spacing-7: 2.5rem;
-  --fabrik-spacing-8: 3rem;
-  --fabrik-spacing-9: 4rem;
-  --fabrik-spacing-10: 5rem;
-  --fabrik-spacing-11: 6rem;
-  --fabrik-spacing-12: 7rem;
+  --once-spacing-1: 0.25rem;
+  --once-spacing-2: 0.5rem;
+  --once-spacing-3: 0.75rem;
+  --once-spacing-4: 1rem;
+  --once-spacing-5: 1.5rem;
+  --once-spacing-6: 2rem;
+  --once-spacing-7: 2.5rem;
+  --once-spacing-8: 3rem;
+  --once-spacing-9: 4rem;
+  --once-spacing-10: 5rem;
+  --once-spacing-11: 6rem;
+  --once-spacing-12: 7rem;
 
-  --fabrik-radius-1: 0.25rem;
-  --fabrik-radius-2: 0.5rem;
-  --fabrik-radius-3: 0.75rem;
-  --fabrik-radius-4: 1rem;
-  --fabrik-radius-5: 1.5rem;
-  --fabrik-radius-full: 999px;
+  --once-radius-1: 0.25rem;
+  --once-radius-2: 0.5rem;
+  --once-radius-3: 0.75rem;
+  --once-radius-4: 1rem;
+  --once-radius-5: 1.5rem;
+  --once-radius-full: 999px;
 
-  --fabrik-text-xs: 0.75rem;
-  --fabrik-text-sm: 0.875rem;
-  --fabrik-text-base: 1rem;
-  --fabrik-text-lg: 1.125rem;
-  --fabrik-text-xl: 1.25rem;
-  --fabrik-text-2xl: 1.5rem;
-  --fabrik-text-3xl: 1.875rem;
-  --fabrik-text-4xl: 2.25rem;
-  --fabrik-text-5xl: 3rem;
-  --fabrik-text-6xl: 3.75rem;
+  --once-text-xs: 0.75rem;
+  --once-text-sm: 0.875rem;
+  --once-text-base: 1rem;
+  --once-text-lg: 1.125rem;
+  --once-text-xl: 1.25rem;
+  --once-text-2xl: 1.5rem;
+  --once-text-3xl: 1.875rem;
+  --once-text-4xl: 2.25rem;
+  --once-text-5xl: 3rem;
+  --once-text-6xl: 3.75rem;
 
-  --fabrik-icon-size-sm: 14px;
-  --fabrik-icon-size-md: 18px;
-  --fabrik-icon-size-lg: 22px;
-  --fabrik-icon-size-xl: 28px;
+  --once-icon-size-sm: 14px;
+  --once-icon-size-md: 18px;
+  --once-icon-size-lg: 22px;
+  --once-icon-size-xl: 28px;
 
-  --fabrik-container-max: 1120px;
+  --once-container-max: 1120px;
 
-  --fabrik-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --once-ease: cubic-bezier(0.4, 0, 0.2, 1);
 }

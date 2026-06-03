@@ -1,22 +1,22 @@
-.fabrik-container {
+.once-container {
   width: 100%;
-  max-width: var(--fabrik-container-max);
+  max-width: var(--once-container-max);
   margin-inline: auto;
-  padding-inline: var(--fabrik-spacing-5);
+  padding-inline: var(--once-spacing-5);
 }
 
-.fabrik-section {
-  padding-block: var(--fabrik-spacing-10);
+.once-section {
+  padding-block: var(--once-spacing-10);
 
   &[data-tone="muted"] {
-    background: var(--fabrik-summer-3);
-    border-block: 1px solid var(--fabrik-summer-4);
+    background: var(--once-summer-3);
+    border-block: 1px solid var(--once-summer-4);
   }
 
   &[data-tone="hero"] {
-    background: var(--fabrik-summer-3);
-    padding-top: calc(var(--fabrik-spacing-12) + var(--fabrik-spacing-7));
-    padding-bottom: var(--fabrik-spacing-11);
+    background: var(--once-summer-3);
+    padding-top: calc(var(--once-spacing-12) + var(--once-spacing-7));
+    padding-bottom: var(--once-spacing-11);
     position: relative;
     overflow-x: clip;
 
@@ -33,25 +33,25 @@
         content: "";
         width: min(640px, 90%);
         height: 280px;
-        background: var(--fabrik-thread-3);
+        background: var(--once-thread-3);
         opacity: 0.7;
         filter: blur(80px);
         border-radius: 50%;
       }
     }
 
-    & > .fabrik-container {
+    & > .once-container {
       position: relative;
       z-index: 1;
     }
   }
 
   @media (min-width: 768px) {
-    padding-block: var(--fabrik-spacing-12);
+    padding-block: var(--once-spacing-12);
   }
 }
 
-.fabrik-section-header {
+.once-section-header {
   text-align: center;
   max-width: 640px;
   margin-inline: auto;
@@ -66,41 +66,41 @@
     display: inline-block;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    font-size: var(--fabrik-text-xs);
-    font-weight: var(--fabrik-weight-semibold);
-    color: var(--fabrik-thread-11);
+    font-size: var(--once-text-xs);
+    font-weight: var(--once-weight-semibold);
+    color: var(--once-thread-11);
   }
 
   & > [data-part="title"] {
-    margin-top: var(--fabrik-spacing-3);
-    font-family: var(--fabrik-font-serif);
-    font-weight: var(--fabrik-weight-extrabold);
+    margin-top: var(--once-spacing-3);
+    font-family: var(--once-font-serif);
+    font-weight: var(--once-weight-extrabold);
     letter-spacing: -0.025em;
     line-height: 1.1;
     font-size: clamp(
-      var(--fabrik-text-3xl),
+      var(--once-text-3xl),
       2.5vw + 1.5rem,
-      var(--fabrik-text-5xl)
+      var(--once-text-5xl)
     );
-    color: var(--fabrik-summer-12);
+    color: var(--once-summer-12);
   }
 
   & > [data-part="lede"] {
-    margin-top: var(--fabrik-spacing-4);
+    margin-top: var(--once-spacing-4);
     font-size: clamp(
-      var(--fabrik-text-base),
+      var(--once-text-base),
       0.5vw + 0.875rem,
-      var(--fabrik-text-lg)
+      var(--once-text-lg)
     );
-    color: var(--fabrik-summer-11);
+    color: var(--once-summer-11);
     line-height: 1.6;
   }
 }
 
-.fabrik-grid {
+.once-grid {
   display: grid;
-  gap: var(--fabrik-spacing-4);
-  margin-top: var(--fabrik-spacing-9);
+  gap: var(--once-spacing-4);
+  margin-top: var(--once-spacing-9);
 
   &[data-columns="1"] {
     grid-template-columns: 1fr;
@@ -119,7 +119,7 @@
   }
 
   & + & {
-    margin-top: var(--fabrik-spacing-4);
+    margin-top: var(--once-spacing-4);
   }
 
   @media (min-width: 1024px) {

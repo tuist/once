@@ -1,0 +1,173 @@
+name: once
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: once-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_RETRY: "10"
+  RUSTUP_MAX_RETRIES: "10"
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+      - run: rustup component add rustfmt
+      - run: mise exec -- cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+      - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+      - run: rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+          cache-on-failure: true
+          cache-bin: false
+      - run: mise exec -- cargo clippy --workspace --all-targets -- -D warnings
+
+  tests:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tests-${{ matrix.os }}
+          cache-on-failure: true
+          cache-bin: false
+      - run: mise exec -- cargo test --workspace --all-targets
+
+  release-build:
+    name: release build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-build-${{ matrix.os }}
+          cache-on-failure: true
+          cache-bin: false
+      - run: mise exec -- cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: once-${{ matrix.os }}
+          path: target/release/once
+
+  dogfood:
+    name: dogfood (${{ matrix.os }})
+    needs: release-build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+      - uses: actions/download-artifact@v4
+        with:
+          name: once-${{ matrix.os }}
+          path: target/release
+      - run: chmod +x target/release/once
+      - run: mise exec -- target/release/once run check
+
+  shellspec:
+    name: shellspec (${{ matrix.os }})
+    needs: release-build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: once-${{ matrix.os }}
+          path: target/release
+      - run: chmod +x target/release/once
+      - run: mise exec -- shellspec
+
+  windows-build:
+    name: windows build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install pinned rust
+        shell: bash
+        run: |
+          rust_version="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          rustup toolchain install "$rust_version" --profile minimal --no-self-update
+          rustup default "$rust_version"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-build
+          cache-on-failure: true
+          cache-bin: false
+      - run: cargo build --workspace --all-targets
+
+  windows-cas-test:
+    name: windows cas test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install pinned rust
+        shell: bash
+        run: |
+          rust_version="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          rustup toolchain install "$rust_version" --profile minimal --no-self-update
+          rustup default "$rust_version"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-cas-test
+          cache-on-failure: true
+          cache-bin: false
+      - run: cargo test -p once-cas

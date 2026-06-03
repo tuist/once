@@ -1,6 +1,6 @@
-.fabrik-split {
+.once-split {
   display: grid;
-  gap: var(--fabrik-spacing-8);
+  gap: var(--once-spacing-8);
   align-items: center;
 
   @media (min-width: 1024px) {
@@ -11,60 +11,60 @@
     display: inline-block;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    font-size: var(--fabrik-text-xs);
-    font-weight: var(--fabrik-weight-semibold);
-    color: var(--fabrik-thread-11);
+    font-size: var(--once-text-xs);
+    font-weight: var(--once-weight-semibold);
+    color: var(--once-thread-11);
   }
 
   & [data-part="title"] {
-    font-family: var(--fabrik-font-serif);
-    font-weight: var(--fabrik-weight-extrabold);
+    font-family: var(--once-font-serif);
+    font-weight: var(--once-weight-extrabold);
     letter-spacing: -0.025em;
     line-height: 1.1;
     font-size: clamp(
-      var(--fabrik-text-3xl),
+      var(--once-text-3xl),
       2vw + 1.5rem,
-      var(--fabrik-text-5xl)
+      var(--once-text-5xl)
     );
-    color: var(--fabrik-summer-12);
-    margin-top: var(--fabrik-spacing-3);
+    color: var(--once-summer-12);
+    margin-top: var(--once-spacing-3);
   }
 
   & [data-part="lede"] {
-    margin-top: var(--fabrik-spacing-4);
-    color: var(--fabrik-summer-11);
+    margin-top: var(--once-spacing-4);
+    color: var(--once-summer-11);
     line-height: 1.6;
-    font-size: var(--fabrik-text-lg);
+    font-size: var(--once-text-lg);
   }
 
   & [data-part="bullets"] {
     list-style: none;
     padding: 0;
-    margin: var(--fabrik-spacing-6) 0 0;
+    margin: var(--once-spacing-6) 0 0;
     display: flex;
     flex-direction: column;
-    gap: var(--fabrik-spacing-3);
-    color: var(--fabrik-summer-11);
+    gap: var(--once-spacing-3);
+    color: var(--once-summer-11);
 
     & li {
       display: flex;
-      gap: var(--fabrik-spacing-3);
+      gap: var(--once-spacing-3);
       align-items: flex-start;
 
       & > svg {
         margin-top: 4px;
-        width: var(--fabrik-icon-size-sm);
-        height: var(--fabrik-icon-size-sm);
-        color: var(--fabrik-thread-9);
+        width: var(--once-icon-size-sm);
+        height: var(--once-icon-size-sm);
+        color: var(--once-thread-9);
         flex-shrink: 0;
       }
     }
 
     & code {
-      background: var(--fabrik-summer-3);
-      color: var(--fabrik-summer-12);
+      background: var(--once-summer-3);
+      color: var(--once-summer-12);
       padding: 2px 6px;
-      border-radius: var(--fabrik-radius-1);
+      border-radius: var(--once-radius-1);
       font-size: 0.9em;
     }
   }

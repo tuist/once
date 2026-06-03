@@ -1099,134 +1099,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fabrik-apple"
-version = "0.0.0"
-dependencies = [
- "fabrik-cas",
- "fabrik-core",
- "fabrik-frontend",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "fabrik-cas"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "blake3",
- "hex",
- "reqwest 0.12.28",
- "schlussel",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "fabrik-cli"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "blake3",
- "clap",
- "console",
- "fabrik-apple",
- "fabrik-cas",
- "fabrik-core",
- "fabrik-elixir",
- "fabrik-frontend",
- "fabrik-go",
- "fabrik-rust",
- "glob",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "toml",
- "toon-rust",
- "tracing",
- "tracing-subscriber",
- "walkdir",
-]
-
-[[package]]
-name = "fabrik-core"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "fabrik-cas",
- "jsonwebtoken",
- "microsandbox",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "fabrik-elixir"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "fabrik-cas",
- "fabrik-core",
- "fabrik-frontend",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "fabrik-frontend"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "glob",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "toml",
- "walkdir",
-]
-
-[[package]]
-name = "fabrik-go"
-version = "0.0.0"
-dependencies = [
- "fabrik-cas",
- "fabrik-core",
- "fabrik-frontend",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "fabrik-rust"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "fabrik-cas",
- "fabrik-core",
- "fabrik-frontend",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2858,6 +2730,76 @@ dependencies = [
  "serde",
  "serde_json",
  "unicode-normalization",
+]
+
+[[package]]
+name = "once-cas"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "hex",
+ "reqwest 0.12.28",
+ "schlussel",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "once-cli"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "clap",
+ "console",
+ "glob",
+ "once-cas",
+ "once-core",
+ "once-frontend",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "toon-rust",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
+]
+
+[[package]]
+name = "once-core"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "jsonwebtoken",
+ "microsandbox",
+ "once-cas",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "once-frontend"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "glob",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml",
+ "walkdir",
 ]
 
 [[package]]

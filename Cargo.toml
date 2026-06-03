@@ -1,14 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/fabrik-cli",
-    "crates/fabrik-core",
-    "crates/fabrik-cas",
-    "crates/fabrik-apple",
-    "crates/fabrik-elixir",
-    "crates/fabrik-frontend",
-    "crates/fabrik-go",
-    "crates/fabrik-rust",
+    "crates/once-cli",
+    "crates/once-core",
+    "crates/once-cas",
+    "crates/once-frontend",
 ]
 
 [workspace.package]
@@ -16,16 +12,12 @@ version = "0.0.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/tuist/fabrik"
+repository = "https://github.com/tuist/once"
 
 [workspace.dependencies]
-fabrik-core = { path = "crates/fabrik-core" }
-fabrik-cas = { path = "crates/fabrik-cas" }
-fabrik-apple = { path = "crates/fabrik-apple" }
-fabrik-elixir = { path = "crates/fabrik-elixir" }
-fabrik-frontend = { path = "crates/fabrik-frontend" }
-fabrik-go = { path = "crates/fabrik-go" }
-fabrik-rust = { path = "crates/fabrik-rust" }
+once-core = { path = "crates/once-core" }
+once-cas = { path = "crates/once-cas" }
+once-frontend = { path = "crates/once-frontend" }
 
 anyhow = "1"
 blake3 = "1"

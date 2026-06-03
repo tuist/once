@@ -1,19 +1,19 @@
-.fabrik-byline {
+.once-byline {
   display: inline-flex;
   align-items: center;
-  gap: var(--fabrik-spacing-2);
+  gap: var(--once-spacing-2);
   width: fit-content;
-  padding: var(--fabrik-spacing-1) var(--fabrik-spacing-3);
-  border-radius: var(--fabrik-radius-full);
-  background: var(--fabrik-tuist-3);
-  color: var(--fabrik-tuist-11);
-  font-size: var(--fabrik-text-xs);
-  font-weight: var(--fabrik-weight-medium);
+  padding: var(--once-spacing-1) var(--once-spacing-3);
+  border-radius: var(--once-radius-full);
+  background: var(--once-tuist-3);
+  color: var(--once-tuist-11);
+  font-size: var(--once-text-xs);
+  font-weight: var(--once-weight-medium);
   text-decoration: none;
-  box-shadow: var(--fabrik-shadow-sm);
+  box-shadow: var(--once-shadow-sm);
   transition:
-    background-color 150ms var(--fabrik-ease),
-    color 150ms var(--fabrik-ease);
+    background-color 150ms var(--once-ease),
+    color 150ms var(--once-ease);
 
   & > [data-part="mark"] {
     width: 14px;
@@ -21,7 +21,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: var(--fabrik-tuist-11);
+    color: var(--once-tuist-11);
 
     & svg {
       width: 100%;
@@ -35,7 +35,7 @@
     justify-content: center;
     width: 12px;
     height: 12px;
-    transition: transform 150ms var(--fabrik-ease);
+    transition: transform 150ms var(--once-ease);
 
     & svg {
       width: 100%;
@@ -44,11 +44,11 @@
   }
 
   &:hover {
-    background: color-mix(in srgb, var(--fabrik-tuist-3) 60%, var(--fabrik-tuist-11) 12%);
-    color: var(--fabrik-tuist-12);
+    background: color-mix(in srgb, var(--once-tuist-3) 60%, var(--once-tuist-11) 12%);
+    color: var(--once-tuist-12);
 
     & > [data-part="mark"] {
-      color: var(--fabrik-tuist-12);
+      color: var(--once-tuist-12);
     }
 
     & > [data-part="arrow"] {
@@ -57,10 +57,10 @@
   }
 }
 
-.fabrik-hero [data-part="badges"] {
+.once-hero [data-part="badges"] {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: var(--fabrik-spacing-2);
+  gap: var(--once-spacing-2);
 }

@@ -1,7 +1,7 @@
 {
-  "name": "@fabrik/website",
+  "name": "@once/website",
   "version": "0.1.0",
-  "description": "Marketing site and blog for Fabrik",
+  "description": "Marketing site and blog for Once",
   "private": true,
   "type": "module",
   "scripts": {

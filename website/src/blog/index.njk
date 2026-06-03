@@ -1,23 +1,23 @@
 ---
 layout: layouts/base.njk
 title: "Blog"
-description: "Release notes, design decisions, and field notes from building Fabrik."
+description: "Release notes, design decisions, and field notes from building Once."
 permalink: "/blog/"
-socialImage: "https://fabrik.run/assets/social/blog.png"
-socialImageAlt: "Fabrik blog · updates from the workshop"
+socialImage: "https://once.tuist.dev/assets/social/blog.png"
+socialImageAlt: "Once blog · updates from the workshop"
 ---
 
 {% from "partials/icons.njk" import icon %}
 
-<section class="fabrik-page">
-  <div class="fabrik-container">
-    <header class="fabrik-section-header" data-align="left">
+<section class="once-page">
+  <div class="once-container">
+    <header class="once-section-header" data-align="left">
       <span data-part="eyebrow">{{ copy.blog.eyebrow }}</span>
       <h1 data-part="title">{{ copy.blog.headline }}</h1>
       <p data-part="lede">{{ copy.blog.lede }}</p>
     </header>
 
-    <div class="fabrik-post-list">
+    <div class="once-post-list">
       {% for post in collections.posts %}
         <a href="{{ post.url }}">
           <time datetime="{{ post.date | isoDate }}">{{ post.date | readableDate }}</time>

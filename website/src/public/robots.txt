@@ -1,4 +1,4 @@
-# Fabrik is open source. We want our content indexed for search, used to
+# Once is open source. We want our content indexed for search, used to
 # ground AI answers, and used for training models. yes/yes/yes.
 User-agent: *
 Content-Signal: search=yes, ai-input=yes, ai-train=yes
@@ -55,4 +55,4 @@ Allow: /
 User-agent: MistralAI-User
 Allow: /
 
-Sitemap: https://fabrik.run/sitemap.xml
+Sitemap: https://once.tuist.dev/sitemap.xml
