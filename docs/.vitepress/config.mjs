@@ -2,7 +2,7 @@ import { defineConfig } from "vitepress";
 
 export default defineConfig({
   title: "Once",
-  titleTemplate: ":title | Once",
+  titleTemplate: false,
   description:
     "Once makes project scripts cacheable, observable, and remotely executable.",
   cleanUrls: true,

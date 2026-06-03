@@ -9,13 +9,6 @@ graph. Once lets those scripts stay where they are. The script file
 remains the source of truth, and Once learns just enough about it to
 cache it, inspect it, and schedule it safely.
 
-## Mise File Tasks
-
-Once works beautifully with [Mise file tasks](https://mise.jdx.dev/tasks/file-tasks.html).
-Keep the task as an executable script in `mise-tasks/`, `.mise/tasks/`,
-or another Mise task directory, add `# once` headers next to the
-existing task body, and run it through the same script file.
-
 ## Annotated Script Files
 
 Use a script file when the implementation belongs in a real script.
@@ -127,6 +120,30 @@ The `once` directives at the top of the file describe the parts
 Once must reason about: tracked inputs, declared outputs, forwarded
 environment variables, and a working directory. That keeps the
 implementation and the cache contract in one place.
+
+## Mise File Tasks
+
+Once works beautifully with [Mise file tasks](https://mise.jdx.dev/tasks/file-tasks.html).
+Keep the task as an executable script in `mise-tasks/`, `.mise/tasks/`,
+or another Mise task directory, add `# once` headers next to the
+existing task body, and run it through the same script file:
+
+```sh
+# mise-tasks/build
+#!/usr/bin/env -S once exec -- bash
+#MISE description="Build assets"
+# once input "../src/**/*.ts"
+# once output "../dist/"
+# once env "NODE_ENV"
+
+npm run build
+```
+
+Run it the same way you run the rest of your Mise tasks:
+
+```sh
+mise run build
+```
 
 ## Supported Annotations
 
