@@ -54,4 +54,4 @@ query instead of forcing them to scrape terminal output.
 
 ## What Once Is Not
 
-Once is not trying to replace Buck, Bazel, Cargo, pnpm, Xcode, or language-specific build tools. Those systems should keep doing the work they are good at. Once focuses on the scripts and command workflows that teams already run around those tools, making them cacheable, inspectable, and portable.
+Once is not trying to replace [Buck](https://buck2.build/), [Bazel](https://bazel.build/), [Cargo](https://doc.rust-lang.org/cargo/), [pnpm](https://pnpm.io/), [Xcode](https://developer.apple.com/xcode/), or language-specific build tools. Those systems should keep doing the work they are good at. Once focuses on the scripts and command workflows that teams already run around those tools, making them cacheable, inspectable, and portable.
