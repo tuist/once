@@ -70,32 +70,91 @@
   }
 }
 
-.once-snippet-grid {
-  display: grid;
-  gap: var(--once-spacing-4);
-
-  @media (min-width: 720px) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+.once-code-tabs {
+  & > input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
   }
 
-  & .once-terminal {
-    box-shadow: var(--once-shadow-md);
+  & [data-part="tabs"] {
+    display: flex;
+    gap: var(--once-spacing-1);
+    min-width: 0;
+    overflow-x: auto;
   }
 
-  & .once-terminal > [data-part="header"] {
-    padding-inline: var(--once-spacing-3);
+  & [data-part="tabs"] label {
+    border-radius: var(--once-radius-full);
+    color: var(--once-summer-10);
+    cursor: pointer;
+    flex: 0 0 auto;
+    font-family: var(--once-font-mono);
+    font-size: var(--once-text-xs);
+    font-weight: var(--once-weight-semibold);
+    padding: 4px var(--once-spacing-3);
+  }
 
-    & > [data-part="title"] {
-      margin-left: var(--once-spacing-2);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+  & [data-part="pane"] {
+    display: none;
+  }
+
+  & [data-part="filename"] {
+    display: block;
+    border-bottom: 1px solid var(--once-summer-4);
+    color: var(--once-summer-10);
+    font-family: var(--once-font-mono);
+    font-size: var(--once-text-xs);
+    font-weight: var(--once-weight-semibold);
+    padding: var(--once-spacing-3) var(--once-spacing-5) 0;
+  }
+
+  & [data-part="pane"] > [data-part="body"] {
+    margin: 0;
+    padding-top: var(--once-spacing-3);
+  }
+
+  &:has(#once-snippet-1:checked) {
+    & label[data-tab="1"] {
+      background: var(--once-thread-3);
+      color: var(--once-thread-11);
+    }
+
+    & [data-pane="1"] {
+      display: block;
     }
   }
 
-  & .once-terminal > [data-part="body"] {
-    padding: var(--once-spacing-3);
-    font-size: var(--once-text-xs);
-    line-height: 1.55;
+  &:has(#once-snippet-2:checked) {
+    & label[data-tab="2"] {
+      background: var(--once-thread-3);
+      color: var(--once-thread-11);
+    }
+
+    & [data-pane="2"] {
+      display: block;
+    }
+  }
+
+  &:has(#once-snippet-3:checked) {
+    & label[data-tab="3"] {
+      background: var(--once-thread-3);
+      color: var(--once-thread-11);
+    }
+
+    & [data-pane="3"] {
+      display: block;
+    }
+  }
+
+  &:has(#once-snippet-4:checked) {
+    & label[data-tab="4"] {
+      background: var(--once-thread-3);
+      color: var(--once-thread-11);
+    }
+
+    & [data-pane="4"] {
+      display: block;
+    }
   }
 }

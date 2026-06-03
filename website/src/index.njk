@@ -53,7 +53,7 @@ homepage: true
             <span data-part="dots"><span></span><span></span><span></span></span>
             <span data-part="title">{{ copy.home.hero.terminal.title }}</span>
           </div>
-          <pre data-part="body">{{ copy.home.hero.terminal.body | trim | terminalHtml | safe }}</pre>
+          <pre data-part="body">{{ copy.home.hero.terminal.body | trim | tomlHighlight | safe }}</pre>
         </div>
       </div>
     </div>
@@ -97,16 +97,26 @@ homepage: true
         </ul>
       </div>
 
-      <div class="once-snippet-grid">
+      <div class="once-code-tabs">
         {% for snippet in copy.home.howItWorks.snippets %}
-          <div class="once-terminal">
-            <div data-part="header">
-              <span data-part="dots"><span></span><span></span><span></span></span>
-              <span data-part="title">{{ snippet.filename }}</span>
-            </div>
-            <pre data-part="body">{{ snippet.body | trim | tomlHighlight | safe }}</pre>
-          </div>
+          <input type="radio" id="once-snippet-{{ loop.index }}" name="once-snippet" {% if loop.first %}checked{% endif %}>
         {% endfor %}
+        <div class="once-terminal">
+          <div data-part="header">
+            <span data-part="dots"><span></span><span></span><span></span></span>
+            <div data-part="tabs">
+              {% for snippet in copy.home.howItWorks.snippets %}
+                <label for="once-snippet-{{ loop.index }}" data-tab="{{ loop.index }}">{{ snippet.label }}</label>
+              {% endfor %}
+            </div>
+          </div>
+          {% for snippet in copy.home.howItWorks.snippets %}
+            <div data-part="pane" data-pane="{{ loop.index }}">
+              <span data-part="filename">{{ snippet.filename }}</span>
+              <pre data-part="body">{{ snippet.body | trim | tomlHighlight | safe }}</pre>
+            </div>
+          {% endfor %}
+        </div>
       </div>
     </div>
   </div>

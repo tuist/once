@@ -74,13 +74,14 @@ home:
         variant: secondary
         icon: github
     terminal:
-      title: "~/your-project"
+      title: "scripts/build-assets.sh"
       body: |
-        $ once exec -- bash scripts/build-assets.sh
-        → cache miss · action completed
+        #!/usr/bin/env bash
+        # once input "../assets/**/*"
+        # once output "../dist/"
+        # once cwd ".."
 
-        $ once exec -- bash scripts/build-assets.sh
-        → cache hit · restored stdout, stderr, and outputs
+        npm run build-assets
   why:
     eyebrow: "Why Once"
     title: "Scripts should not pay the same cost twice."
@@ -103,7 +104,8 @@ home:
       - "Cache state lives under `.once/` and shared cache providers can be configured in `once.toml`."
       - "Remote execution uses the same action contract as local execution."
     snippets:
-      - filename: "scripts/build-assets.sh"
+      - label: "Bash"
+        filename: "scripts/build-assets.sh"
         body: |
           #!/usr/bin/env bash
           # once input "../assets/**/*"
@@ -111,7 +113,8 @@ home:
           # once cwd ".."
 
           npm run build-assets
-      - filename: "scripts/build-assets.mjs"
+      - label: "Node.js"
+        filename: "scripts/build-assets.mjs"
         body: |
           #!/usr/bin/env node
           // once input "../src/**/*.js"
@@ -119,7 +122,8 @@ home:
           // once cwd ".."
 
           await import("../scripts/build-assets.mjs")
-      - filename: "scripts/build_assets.py"
+      - label: "Python"
+        filename: "scripts/build_assets.py"
         body: |
           #!/usr/bin/env python3
           # once input "../src/**/*.py"
@@ -127,7 +131,8 @@ home:
           # once cwd ".."
 
           print("build assets")
-      - filename: "scripts/build_assets.rb"
+      - label: "Ruby"
+        filename: "scripts/build_assets.rb"
         body: |
           #!/usr/bin/env ruby
           # once input "../lib/**/*.rb"
