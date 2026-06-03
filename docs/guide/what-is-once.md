@@ -12,14 +12,14 @@ Once gives those scripts that contract without asking teams to adopt a new build
 
 Once projects use `# once` script headers to describe:
 
-- command arguments
-- input files and globs
-- output paths
-- tracked environment variables
-- working directory
-- timeout and resource hints
-- optional remote compute provider
-- runtime metadata for agent-facing sessions
+- **Command arguments**: The runtime and script invocation that Once should execute.
+- **Input files and globs**: The source files, directories, and patterns that participate in the cache key.
+- **Output paths**: The files or directories Once should restore when a cache hit is available.
+- **Tracked environment variables**: Host values that should be forwarded and included in the cache key.
+- **Working directory**: The directory where the script should run.
+- **Timeout and resource hints**: Execution limits that shape how Once schedules the action.
+- **Remote compute provider**: The optional provider that can execute cache misses away from the local host.
+- **Runtime metadata**: Agent-facing descriptors for sessions that expose logs, events, and controls.
 
 That definition becomes the cache key and the remote execution request. If the inputs and execution contract have not changed, Once can reuse the previous result.
 
