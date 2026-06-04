@@ -1,12 +1,20 @@
-# What is Once
+# Scripts
 
-Once is an execution layer for project scripts. It turns ordinary repository commands into content-addressed actions with explicit inputs, outputs, environment dependencies, working directories, and runtime metadata.
+Scripts are the first way Once makes cacheable actions concrete. Keep the
+file, keep the implementation, and add a small contract that tells Once
+what the script reads, what it writes, and which host values affect the
+result.
 
-## Why this layer exists
+## Why Scripts
 
-Most repositories already have a long tail of scripts: test setup, asset generation, packaging, fixture updates, deployment hooks, local tools, and CI glue. They are important, but they usually sit outside any cacheable execution model. A developer or agent runs them again because there is no shared contract that says what changed.
+Most repositories already have a long tail of scripts: test setup, asset
+generation, packaging, fixture updates, deployment hooks, local tools, and
+CI glue. They are important, but they often sit outside any cacheable
+execution model. A developer, CI job, or agent runs them again because
+there is no shared contract that says what changed.
 
-Once gives those scripts that contract without asking teams to adopt a new build system.
+Once gives those scripts that contract without asking teams to move the
+implementation into a new build-system shape.
 
 ::: tip Build systems can model this too
 Build systems can model cacheable workflows with rich dependency graphs,
@@ -48,10 +56,8 @@ previous result or runs the command and stores stdout, stderr, exit status,
 and declared outputs. Workspace-level `once.toml` files are reserved for
 shared configuration such as cache provider settings.
 
-For longer-running workflows, Once exposes runtime sessions with structured
-logs, events, and descriptors. That gives tools and agents a runtime API to
-query instead of forcing them to scrape terminal output.
+## Next
 
-## What Once Is Not
-
-Once is not trying to replace [Buck](https://buck2.build/), [Bazel](https://bazel.build/), [Cargo](https://doc.rust-lang.org/cargo/), [pnpm](https://pnpm.io/), [Xcode](https://developer.apple.com/xcode/), or language-specific build tools. Those systems should keep doing the work they are good at. Once focuses on the scripts and command workflows that teams already run around those tools, making them cacheable, inspectable, and portable.
+Read [Caching](/guide/scripts/caching) for annotation examples across
+languages and [Runtime](/guide/scripts/runtime) for the `once cache` CLI
+primitives that scripts can call directly.

@@ -4,7 +4,7 @@ export default defineConfig({
   title: "Once",
   titleTemplate: false,
   description:
-    "Once makes project scripts cacheable, observable, and remotely executable.",
+    "Once makes project automation cacheable, observable, and remotely executable.",
   cleanUrls: true,
   lastUpdated: true,
   sitemap: {
@@ -41,9 +41,16 @@ export default defineConfig({
     ],
     sidebar: {
       "/": [
-        { text: "What is Once", link: "/guide/what-is-once" },
-        { text: "Caching", link: "/guide/cacheable-scripts" },
-        { text: "Runtime", link: "/guide/runtime" },
+        { text: "Why", link: "/guide/why" },
+        {
+          text: "Scripts",
+          collapsed: false,
+          items: [
+            { text: "Overview", link: "/guide/scripts/" },
+            { text: "Caching", link: "/guide/scripts/caching" },
+            { text: "Runtime", link: "/guide/scripts/runtime" },
+          ],
+        },
       ],
     },
     socialLinks: [{ icon: "github", link: "https://github.com/tuist/once" }],
