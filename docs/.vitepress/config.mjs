@@ -1,10 +1,10 @@
 import { defineConfig } from "vitepress";
+import { site } from "../site.js";
 
 export default defineConfig({
   title: "Once",
   titleTemplate: false,
-  description:
-    "Once makes project automation cacheable, observable, and remotely executable.",
+  description: site.description,
   cleanUrls: true,
   lastUpdated: true,
   sitemap: {
@@ -23,40 +23,9 @@ export default defineConfig({
       pattern: "https://github.com/tuist/once/edit/main/docs/:path",
       text: "Edit this page on GitHub",
     },
-    nav: [
-      { text: "Docs", link: "/" },
-      {
-        text: "Links",
-        items: [
-          {
-            text: "Releases",
-            link: "https://github.com/tuist/once/releases",
-          },
-          {
-            text: "Issues",
-            link: "https://github.com/tuist/once/issues",
-          },
-        ],
-      },
-    ],
-    sidebar: {
-      "/": [
-        { text: "Why", link: "/guide/why" },
-        {
-          text: "Scripts",
-          collapsed: false,
-          items: [
-            { text: "Overview", link: "/guide/scripts/" },
-            { text: "Caching", link: "/guide/scripts/caching" },
-            { text: "Runtime", link: "/guide/scripts/runtime" },
-          ],
-        },
-      ],
-    },
+    nav: site.nav,
+    sidebar: site.sidebar,
     socialLinks: [{ icon: "github", link: "https://github.com/tuist/once" }],
-    footer: {
-      message: "Released under the MIT License.",
-      copyright: "Copyright © Tuist GmbH",
-    },
+    footer: site.footer,
   },
 });
