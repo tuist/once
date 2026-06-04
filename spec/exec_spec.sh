@@ -282,7 +282,7 @@ PY
       The stdout should equal 'hello'
       # The "once: cache ..." trailer must not appear under --quiet.
       The stderr should not include 'cache miss'
-      The stderr should not include 'Once:'
+      The stderr should not include 'once:'
     End
 
     It 'still emits the structured trailer when --quiet is combined with --format json'
@@ -301,7 +301,7 @@ PY
       # success trailer; --quiet must not swallow them.
       When call "$ONCE_BIN" --quiet -C /nonexistent exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
       The status should not equal 0
-      The stderr should include 'Once:'
+      The stderr should include 'once:'
     End
 
     It 'accepts the short -q alias'
