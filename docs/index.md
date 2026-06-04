@@ -25,6 +25,6 @@ features:
     linkText: Learn about caching
   - title: Deterministic cache keys
     details: Inputs, outputs, environment variables, working directories, and timeouts become part of the action contract.
-  - title: Shared cache providers
-    details: Cache provider implementation is decoupled from scripts, so teams can choose local storage, Tuist, or another shared provider.
+  - title: Providers
+    details: Provider implementation is decoupled from scripts, so teams can choose local cache storage, Tuist, and future remote compute providers.
 ---
