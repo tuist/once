@@ -20,6 +20,7 @@ once-cas = { path = "crates/once-cas" }
 once-frontend = { path = "crates/once-frontend" }
 
 anyhow = "1"
+bazel-remote-apis = "0.27"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 console = "0.15"
@@ -27,11 +28,13 @@ glob = "0.3"
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 toml = "0.8"
 toon-rust = "0.1"
 tempfile = "3"
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
+tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 schlussel = { git = "https://github.com/tuist/schlussel.git", rev = "e90f561bfbe1f1c732ccc15ddc7e4780197dc609" }
 tracing = "0.1"
