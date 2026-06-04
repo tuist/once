@@ -125,15 +125,12 @@ fn annotation_payload(line: &str) -> Option<&str> {
 }
 
 fn strip_once_marker(rest: &str) -> Option<&str> {
-    let marker = rest.get(..4)?;
+    let split = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let marker = &rest[..split];
     if !marker.eq_ignore_ascii_case("once") {
         return None;
     }
-    let after = &rest[4..];
-    if after.chars().next().is_none_or(char::is_whitespace) {
-        return Some(after);
-    }
-    None
+    Some(&rest[split..])
 }
 
 fn looks_like_comment(line: &str) -> bool {
