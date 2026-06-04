@@ -43,11 +43,3 @@ once() {
 microsandbox_specs_disabled() {
   [ "${ONCE_RUN_MICROSANDBOX_SPECS:-}" != "1" ]
 }
-
-tuist_kura_specs_disabled() {
-  [ "${ONCE_RUN_TUIST_KURA_SPECS:-}" != "1" ]
-}
-
-tuist_kura_token_missing() {
-  [ -z "${ONCE_TUIST_E2E_TOKEN:-${TUIST_TOKEN:-}}" ]
-}
