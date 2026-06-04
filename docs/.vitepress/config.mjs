@@ -15,7 +15,7 @@ export default defineConfig({
     ["meta", { name: "theme-color", content: "#3c4858" }],
   ],
   themeConfig: {
-    logo: "/logo.png",
+    logo: "/nav-logo.png",
     search: {
       provider: "local",
     },

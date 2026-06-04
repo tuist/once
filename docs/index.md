@@ -26,5 +26,5 @@ features:
   - title: Deterministic cache keys
     details: Inputs, outputs, environment variables, working directories, and timeouts become part of the action contract.
   - title: Shared cache providers
-    details: Once can store action results locally or use shared provider configuration for teams and CI.
+    details: Cache provider implementation is decoupled from scripts, so teams can choose local storage, Tuist, or another shared provider.
 ---
