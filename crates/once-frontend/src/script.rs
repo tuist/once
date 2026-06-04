@@ -117,13 +117,23 @@ fn parse_once_exec_shebang(runtime: String, runtime_args: Vec<String>) -> (Strin
 }
 
 fn annotation_payload(line: &str) -> Option<&str> {
-    const PREFIXES: &[&str] = &[
-        "# once", "#once", "// once", "//once", "; once", ";once", "-- once", "--once", "% once",
-        "%once", "' once", "'once",
-    ];
-    PREFIXES
-        .iter()
-        .find_map(|prefix| line.strip_prefix(prefix).map(str::trim))
+    const COMMENT_PREFIXES: &[&str] = &["#", "//", ";", "--", "%", "'"];
+    COMMENT_PREFIXES.iter().find_map(|prefix| {
+        let rest = line.strip_prefix(prefix)?.trim_start();
+        strip_once_marker(rest).map(str::trim_start)
+    })
+}
+
+fn strip_once_marker(rest: &str) -> Option<&str> {
+    let marker = rest.get(..4)?;
+    if !marker.eq_ignore_ascii_case("once") {
+        return None;
+    }
+    let after = &rest[4..];
+    if after.chars().next().is_none_or(char::is_whitespace) {
+        return Some(after);
+    }
+    None
 }
 
 fn looks_like_comment(line: &str) -> bool {
@@ -238,6 +248,26 @@ echo hi
 
         let annotations = parse_script_annotations(&path, "build.sh").unwrap();
         assert_eq!(annotations.remote.as_deref(), Some("microsandbox"));
+    }
+
+    #[test]
+    fn accepts_legacy_uppercase_once_marker() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("build.sh");
+        fs::write(
+            &path,
+            r#"#!/usr/bin/env bash
+# ONCE input "src/**/*.ts"
+# ONCE output "dist/"
+
+echo hi
+"#,
+        )
+        .unwrap();
+
+        let annotations = parse_script_annotations(&path, "build.sh").unwrap();
+        assert_eq!(annotations.inputs, vec!["src/**/*.ts".to_string()]);
+        assert_eq!(annotations.outputs, vec!["dist/".to_string()]);
     }
 
     #[test]
