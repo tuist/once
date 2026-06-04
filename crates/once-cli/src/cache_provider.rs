@@ -360,8 +360,7 @@ fn skip_swift_comment(src: &str, cursor: usize) -> Option<usize> {
         return Some(
             src[cursor..]
                 .find('\n')
-                .map(|offset| cursor + offset + 1)
-                .unwrap_or(src.len()),
+                .map_or(src.len(), |offset| cursor + offset + 1),
         );
     }
     if !src[cursor..].starts_with("/*") {
@@ -394,8 +393,7 @@ fn skip_swift_string(src: &str, cursor: usize) -> Option<usize> {
         return Some(
             src[cursor + 3..]
                 .find("\"\"\"")
-                .map(|offset| cursor + 3 + offset + 3)
-                .unwrap_or(src.len()),
+                .map_or(src.len(), |offset| cursor + 3 + offset + 3),
         );
     }
     let mut current = cursor + 1;
