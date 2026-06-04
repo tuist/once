@@ -113,7 +113,7 @@ jobs:
           name: once-${{ matrix.os }}
           path: target/release
       - run: chmod +x target/release/once
-      - run: mise exec -- target/release/once exec -- cargo check --workspace
+      - run: mise exec -- target/release/once exec -e PATH="$PATH" -- cargo check --workspace
 
   shellspec:
     name: shellspec (${{ matrix.os }})
