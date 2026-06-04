@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::{Method, StatusCode, Url};
+use reqwest::{header::CONTENT_TYPE, Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
@@ -197,6 +197,7 @@ impl TuistCache {
         let url = self.cas_url(&endpoint, &digest.to_hex())?;
         let response = self
             .authorized_request(Method::POST, url)?
+            .header(CONTENT_TYPE, "application/octet-stream")
             .body(bytes.to_vec())
             .send()
             .await
