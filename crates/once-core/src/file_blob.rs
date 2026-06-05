@@ -50,6 +50,20 @@ pub(crate) fn restore_file_blob(logical_path: &str, abs: &Path, bytes: &[u8]) ->
             }
         })?;
     }
+    #[cfg(not(unix))]
+    {
+        let mut permissions = std::fs::metadata(abs)
+            .map_err(|source| Error::RestoreOutput {
+                path: logical_path.to_string(),
+                source,
+            })?
+            .permissions();
+        permissions.set_readonly(mode & 0o222 == 0);
+        std::fs::set_permissions(abs, permissions).map_err(|source| Error::RestoreOutput {
+            path: logical_path.to_string(),
+            source,
+        })?;
+    }
     Ok(())
 }
 
@@ -60,18 +74,44 @@ fn decode_file_blob<'a>(logical_path: &str, bytes: &'a [u8]) -> Result<(u32, &'a
             message: "missing file blob magic".to_string(),
         });
     }
-    let mode_start = FILE_BLOB_MAGIC.len();
-    let content_start = mode_start + 4;
-    if bytes.len() < content_start {
-        return Err(Error::InvalidFileOutput {
+    let mode_bytes = bytes
+        .get(FILE_BLOB_MAGIC.len()..FILE_BLOB_MAGIC.len() + 4)
+        .ok_or_else(|| Error::InvalidFileOutput {
             path: logical_path.to_string(),
             message: "truncated file mode".to_string(),
-        });
-    }
+        })?;
+    let content =
+        bytes
+            .get(FILE_BLOB_MAGIC.len() + 4..)
+            .ok_or_else(|| Error::InvalidFileOutput {
+                path: logical_path.to_string(),
+                message: "truncated file content".to_string(),
+            })?;
     let mut raw_mode = [0u8; 4];
-    raw_mode.copy_from_slice(&bytes[mode_start..content_start]);
-    Ok((
-        u32::from_le_bytes(raw_mode) & 0o777,
-        &bytes[content_start..],
-    ))
+    raw_mode.copy_from_slice(mode_bytes);
+    Ok((u32::from_le_bytes(raw_mode) & 0o777, content))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_rejects_missing_magic() {
+        let error = decode_file_blob("out/file", b"raw").unwrap_err();
+
+        assert!(matches!(error, Error::InvalidFileOutput { .. }));
+        assert!(error.to_string().contains("missing file blob magic"));
+    }
+
+    #[test]
+    fn decode_rejects_truncated_mode() {
+        let mut bytes = Vec::from(FILE_BLOB_MAGIC);
+        bytes.extend_from_slice(&[1, 2, 3]);
+
+        let error = decode_file_blob("out/file", &bytes).unwrap_err();
+
+        assert!(matches!(error, Error::InvalidFileOutput { .. }));
+        assert!(error.to_string().contains("truncated file mode"));
+    }
 }

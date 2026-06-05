@@ -39,6 +39,9 @@ struct ExecuteResponse {
     artifacts: Option<Artifacts>,
 }
 
+// Daytona has returned output in several shapes. Prefer the structured
+// artifact streams, then legacy stdout/stderr, then the older `result`
+// stdout fallback.
 #[derive(Deserialize)]
 struct Artifacts {
     #[serde(default)]
@@ -166,17 +169,16 @@ fn command(argv: &[String], env: &BTreeMap<String, String>) -> Result<String> {
 
     let mut words = Vec::new();
     if !env.is_empty() {
-        words.push("env".to_string());
-        words.push("-i".to_string());
-        words.extend(env.iter().map(|(key, value)| format!("{key}={value}")));
+        words.push(shell_word("env"));
+        words.push(shell_word("-i"));
+        words.extend(
+            env.iter()
+                .map(|(key, value)| shell_word(&format!("{key}={value}"))),
+        );
     }
-    words.extend(argv.iter().cloned());
+    words.extend(argv.iter().map(|word| shell_word(word)));
 
-    Ok(words
-        .into_iter()
-        .map(|word| shell_word(&word))
-        .collect::<Vec<_>>()
-        .join(" "))
+    Ok(words.join(" "))
 }
 
 fn workdir(cwd: Option<&WorkspacePath>) -> String {
@@ -260,6 +262,25 @@ mod tests {
             command,
             "'env' '-i' 'SPECIAL=line 1\n$(echo nope)`uname`;$HOME' 'printenv' 'SPECIAL'"
         );
+    }
+
+    #[test]
+    fn output_streams_use_documented_precedence() {
+        let response = ExecuteResponse {
+            exit_code: Some(0),
+            result: Some("result".to_string()),
+            stdout: Some("stdout".to_string()),
+            stderr: Some("stderr".to_string()),
+            artifacts: Some(Artifacts {
+                stdout: Some("artifact stdout".to_string()),
+                stderr: Some("artifact stderr".to_string()),
+            }),
+        };
+
+        let (stdout, stderr) = output_streams(response);
+
+        assert_eq!(stdout, b"artifact stdout");
+        assert_eq!(stderr, b"artifact stderr");
     }
 
     #[test]

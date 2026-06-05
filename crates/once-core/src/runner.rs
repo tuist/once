@@ -1,3 +1,10 @@
+//! Cache-aware action execution.
+//!
+//! This module owns the execution lifecycle around an [`Action`]: check
+//! the action cache, acquire resource permits for misses, run locally or
+//! remotely, restore declared outputs on hits, and write fresh results
+//! back to the configured cache.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -15,8 +22,11 @@ pub enum CacheState {
 
 #[derive(Debug, Clone)]
 pub struct Outcome {
+    /// Digest of the action that produced or looked up this result.
     pub action: Digest,
+    /// Process result and declared output digests.
     pub result: ActionResult,
+    /// Whether the result came from cache or fresh execution.
     pub cache: CacheState,
 }
 

@@ -58,6 +58,16 @@ async fn restore_legacy_file(rel: &str, abs: &Path, bytes: &[u8]) -> Result<()> 
         path: rel.to_string(),
         source,
     })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&abs, std::fs::Permissions::from_mode(0o755))
+            .await
+            .map_err(|source| Error::RestoreOutput {
+                path: rel.to_string(),
+                source,
+            })?;
+    }
     Ok(())
 }
 
@@ -148,5 +158,31 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o640);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn legacy_file_outputs_restore_with_executable_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_tmp, workspace, cache) = workspace_and_cache();
+        let digest = cache.put_blob(b"payload").await.unwrap();
+        let output_path = workspace.join("out/tool");
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::from([("out/tool".to_string(), digest)]),
+        };
+
+        restore(&result, &workspace, &cache).await.unwrap();
+
+        assert_eq!(std::fs::read(&output_path).unwrap(), b"payload");
+        let mode = std::fs::metadata(&output_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o755);
     }
 }

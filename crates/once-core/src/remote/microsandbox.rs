@@ -39,6 +39,7 @@ pub(super) async fn execute_command(
         .create()
         .await
         .map_err(|source| microsandbox_error(&source))?;
+    let cleanup = SandboxCleanup::new(sandbox.clone());
 
     let work = async {
         let mut handle = sandbox
@@ -63,6 +64,57 @@ pub(super) async fn execute_command(
         None => work.await,
     };
 
+    let cleanup = cleanup.run().await;
+
+    match (result, cleanup) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Ok(_), Err(err)) | (Err(err), _) => Err(err),
+    }
+}
+
+#[cfg(unix)]
+struct SandboxCleanup {
+    sandbox: Option<microsandbox::Sandbox>,
+}
+
+#[cfg(unix)]
+impl SandboxCleanup {
+    fn new(sandbox: microsandbox::Sandbox) -> Self {
+        Self {
+            sandbox: Some(sandbox),
+        }
+    }
+
+    async fn run(mut self) -> Result<()> {
+        let sandbox = self.sandbox.take().expect("cleanup sandbox is present");
+        spawn_cleanup(sandbox)
+            .await
+            .map_err(|source| Error::RemoteProviderApi {
+                provider: "microsandbox".to_string(),
+                message: format!("cleanup task failed: {source}"),
+            })?
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SandboxCleanup {
+    fn drop(&mut self) {
+        let Some(sandbox) = self.sandbox.take() else {
+            return;
+        };
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(cleanup_sandbox(sandbox));
+        }
+    }
+}
+
+#[cfg(unix)]
+fn spawn_cleanup(sandbox: microsandbox::Sandbox) -> tokio::task::JoinHandle<Result<()>> {
+    tokio::spawn(cleanup_sandbox(sandbox))
+}
+
+#[cfg(unix)]
+async fn cleanup_sandbox(sandbox: microsandbox::Sandbox) -> Result<()> {
     let stop_result = sandbox
         .stop_and_wait()
         .await
@@ -71,14 +123,9 @@ pub(super) async fn execute_command(
         .remove_persisted()
         .await
         .map_err(|source| microsandbox_error(&source));
-    let cleanup = match (stop_result, remove_result) {
+    match (stop_result, remove_result) {
         (Ok(_status), Ok(())) => Ok(()),
         (Err(error), _) | (_, Err(error)) => Err(error),
-    };
-
-    match (result, cleanup) {
-        (Ok(result), Ok(())) => Ok(result),
-        (Ok(_), Err(err)) | (Err(err), _) => Err(err),
     }
 }
 
