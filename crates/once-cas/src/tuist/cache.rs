@@ -217,7 +217,7 @@ impl TuistCache {
         self.reapi_to_once_action_result(result)
             .await
             .map(Some)
-            .map_err(RemoteReadError::fatal)
+            .map_err(remote_action_read_error)
     }
 
     async fn put_action_result_remote(&self, action: &Digest, result: &ActionResult) -> Result<()> {
@@ -962,5 +962,27 @@ mod tests {
             blob_mapping_digest(&digest).unwrap(),
             action_mapping_digest(&digest).unwrap()
         );
+    }
+
+    #[test]
+    fn remote_action_materialization_errors_are_read_misses() {
+        let error = Error::Remote {
+            provider: PROVIDER_NAME,
+            operation: "get action result",
+            message: "remote action result points at missing blob".to_string(),
+        };
+
+        assert!(remote_action_read_error(error).is_read_miss());
+    }
+
+    #[test]
+    fn unrelated_remote_action_errors_stay_fatal() {
+        let error = Error::Remote {
+            provider: PROVIDER_NAME,
+            operation: "put blob",
+            message: "write failed".to_string(),
+        };
+
+        assert!(!remote_action_read_error(error).is_read_miss());
     }
 }

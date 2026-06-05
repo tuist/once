@@ -204,3 +204,33 @@ fn read_u64(logical_path: &str, bytes: &[u8], pos: &mut usize) -> Result<u64> {
     *pos += 8;
     Ok(u64::from_le_bytes(raw))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_blob_restores_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("source");
+        let restored = tmp.path().join("restored");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("tool"), b"run").unwrap();
+        std::fs::set_permissions(source.join("tool"), std::fs::Permissions::from_mode(0o750))
+            .unwrap();
+
+        let blob = capture_directory_blob(&source).unwrap();
+        restore_directory_blob("bundle", &restored, &blob).unwrap();
+
+        let mode = std::fs::metadata(restored.join("tool"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o750);
+    }
+}
