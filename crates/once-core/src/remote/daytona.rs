@@ -248,6 +248,21 @@ mod tests {
     }
 
     #[test]
+    fn command_quotes_shell_metacharacters_in_env_values() {
+        let env = BTreeMap::from([(
+            "SPECIAL".to_string(),
+            "line 1\n$(echo nope)`uname`;$HOME".to_string(),
+        )]);
+
+        let command = command(&["printenv".to_string(), "SPECIAL".to_string()], &env).unwrap();
+
+        assert_eq!(
+            command,
+            "'env' '-i' 'SPECIAL=line 1\n$(echo nope)`uname`;$HOME' 'printenv' 'SPECIAL'"
+        );
+    }
+
+    #[test]
     fn timeout_uses_at_least_one_second() {
         assert_eq!(timeout_secs(1), 1);
         assert_eq!(timeout_secs(1_001), 2);

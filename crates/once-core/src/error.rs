@@ -52,6 +52,8 @@ pub enum Error {
     },
     #[error("invalid cached directory output `{path}`: {message}")]
     InvalidDirectoryOutput { path: String, message: String },
+    #[error("invalid cached file output `{path}`: {message}")]
+    InvalidFileOutput { path: String, message: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

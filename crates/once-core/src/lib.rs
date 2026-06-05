@@ -10,6 +10,7 @@ mod directory_blob;
 mod env;
 mod error;
 mod execute;
+mod file_blob;
 mod input_digest;
 mod local;
 mod outputs;

@@ -36,14 +36,14 @@ pub(crate) async fn run(
                     .await?
                 }
                 (None, true) => {
-                    Box::pin(local::execute_command_streaming(
+                    local::execute_command_streaming(
                         argv,
                         env,
                         cwd.as_ref(),
                         *timeout_ms,
                         workspace_root,
                         cache,
-                    ))
+                    )
                     .await?
                 }
                 (None, false) => {

@@ -150,7 +150,7 @@ pub async fn run_with_cache_streaming(
     if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
         return Ok(hit);
     }
-    let result = Box::pin(execute::run(action, workspace_root, cache, true)).await?;
+    let result = execute::run(action, workspace_root, cache, true).await?;
     let cacheable = result.exit_code == 0 || opts.cache_failures;
     if cacheable {
         cache.put_action_result(&key, &result).await?;
