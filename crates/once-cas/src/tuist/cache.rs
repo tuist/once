@@ -862,11 +862,14 @@ fn digest_key(digest: &reapi::Digest) -> String {
 }
 
 fn size_bytes_i64(size: usize) -> Result<i64> {
-    i64::try_from(size).map_err(|source| Error::Remote {
-        provider: PROVIDER_NAME,
-        operation: "compute digest",
-        message: source.to_string(),
-    })
+    let Ok(size) = i64::try_from(size) else {
+        return Err(Error::Remote {
+            provider: PROVIDER_NAME,
+            operation: "compute digest",
+            message: format!("blob size exceeds REAPI size limit: {size} bytes"),
+        });
+    };
+    Ok(size)
 }
 
 fn grpc_endpoint_url(endpoint: &str) -> String {
@@ -907,6 +910,24 @@ mod tests {
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
         assert_eq!(digest.size_bytes, 5);
+    }
+
+    #[test]
+    fn size_bytes_rejects_values_that_do_not_fit_reapi_digest() {
+        if i64::try_from(usize::MAX).is_ok() {
+            return;
+        }
+
+        let error = size_bytes_i64(usize::MAX).unwrap_err();
+        assert!(error.to_string().contains("REAPI size limit"));
+    }
+
+    #[test]
+    fn grpc_error_includes_code_and_message() {
+        let error = grpc_error("get blob", &Status::unavailable("cache unavailable"));
+        let message = error.to_string();
+        assert!(message.to_lowercase().contains("unavailable"));
+        assert!(message.contains("cache unavailable"));
     }
 
     #[test]
