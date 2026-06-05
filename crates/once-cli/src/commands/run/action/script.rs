@@ -10,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use once_cas::Digest;
 use once_core::{
-    tool_env, workspace_tool, workspace_tool_env, Action, RemoteExecution, ResourceRequest,
-    WorkspacePath,
+    tool_env, workspace_tool, workspace_tool_env, Action, OutputSymlinkMode, RemoteExecution,
+    ResourceRequest, WorkspacePath,
 };
 
 use super::{input_digest, parse_attr, ActionPlan};
@@ -37,6 +37,7 @@ pub(super) fn script_action(
     let cwd = cwd(target)?;
     let resources = resources(target)?;
     let remote = remote(target);
+    let output_symlink_mode = output_symlink_mode(target)?;
 
     if !target.attrs.contains_key("script_path") {
         anyhow::bail!("script {} has no script_path", target.id());
@@ -51,6 +52,7 @@ pub(super) fn script_action(
         resources,
         timeout_ms,
         remote,
+        output_symlink_mode,
     )
 }
 
@@ -64,6 +66,7 @@ fn file_script_action(
     resources: ResourceRequest,
     timeout_ms: Option<u64>,
     remote: Option<RemoteExecution>,
+    output_symlink_mode: OutputSymlinkMode,
 ) -> Result<ActionPlan> {
     let runtime = target
         .attrs
@@ -89,6 +92,7 @@ fn file_script_action(
             cwd,
             input_digest,
             outputs,
+            output_symlink_mode,
             resources,
             timeout_ms,
             remote,
@@ -189,6 +193,16 @@ fn resources(target: &once_frontend::Target) -> Result<ResourceRequest> {
     let cpu_slots = parse_attr::<usize>(target, "cpu_slots")?.unwrap_or(1);
     let memory_bytes = parse_attr::<u64>(target, "memory_bytes")?.unwrap_or(0);
     Ok(ResourceRequest::new(cpu_slots, memory_bytes))
+}
+
+fn output_symlink_mode(target: &once_frontend::Target) -> Result<OutputSymlinkMode> {
+    target
+        .attrs
+        .get("output_symlinks")
+        .map(|raw| raw.parse().map_err(anyhow::Error::msg))
+        .transpose()
+        .with_context(|| format!("parsing output_symlinks for script {}", target.id()))?
+        .map_or_else(|| Ok(OutputSymlinkMode::default()), Ok)
 }
 
 fn host_script_path(script_path: &str, cwd: Option<&WorkspacePath>) -> Result<String> {

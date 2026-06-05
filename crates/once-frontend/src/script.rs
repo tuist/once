@@ -12,6 +12,7 @@ pub struct ScriptAnnotations {
     pub env_vars: Vec<String>,
     pub cwd: Option<String>,
     pub remote: Option<String>,
+    pub output_symlinks: Option<String>,
 }
 
 pub fn parse_script_annotations(path: &Path, display_name: &str) -> Result<ScriptAnnotations> {
@@ -170,6 +171,10 @@ fn parse_annotation_line(
         annotations.remote = Some(parse_quoted(raw, "remote", display_name)?);
         return Ok(());
     }
+    if let Some(raw) = line.strip_prefix("output-symlinks ") {
+        annotations.output_symlinks = Some(parse_quoted(raw, "output-symlinks", display_name)?);
+        return Ok(());
+    }
     Err(Error::Eval {
         path: display_name.to_string(),
         message: format!("unknown once directive `{line}`"),
@@ -215,6 +220,7 @@ mod tests {
 # once output "dist/"
 # once env "NODE_ENV"
 # once cwd "."
+# once output-symlinks "preserve"
 
 echo hi
 "#,
@@ -227,6 +233,7 @@ echo hi
         assert_eq!(annotations.outputs, vec!["dist/".to_string()]);
         assert_eq!(annotations.env_vars, vec!["NODE_ENV".to_string()]);
         assert_eq!(annotations.cwd.as_deref(), Some("."));
+        assert_eq!(annotations.output_symlinks.as_deref(), Some("preserve"));
     }
 
     #[test]
