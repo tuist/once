@@ -41,6 +41,7 @@ pub struct TuistCache {
     client: reqwest::Client,
     config: TuistCacheConfig,
     endpoint_cache: Arc<Mutex<Option<String>>>,
+    grpc_channel_cache: Arc<Mutex<Option<(String, Channel)>>>,
     auth: TuistAuth,
 }
 
@@ -78,6 +79,7 @@ impl TuistCache {
             client,
             config,
             endpoint_cache: Arc::new(Mutex::new(None)),
+            grpc_channel_cache: Arc::new(Mutex::new(None)),
             auth,
         })
     }
@@ -132,7 +134,9 @@ impl TuistCache {
 
         match self.get_action_result_remote(action).await {
             Ok(Some(result)) => {
-                let _ = self.local.put_action_result(action, &result).await;
+                if self.prefetch_action_blobs(&result).await.is_ok() {
+                    let _ = self.local.put_action_result(action, &result).await;
+                }
                 Ok(Some(result))
             }
             Ok(None) => Ok(None),
@@ -149,6 +153,17 @@ impl TuistCache {
 
     pub async fn forget_action(&self, action: &Digest) -> Result<bool> {
         self.local.forget_action(action).await
+    }
+
+    async fn prefetch_action_blobs(&self, result: &ActionResult) -> Result<()> {
+        let mut digests = Vec::with_capacity(2 + result.outputs.len());
+        digests.extend(result.stdout);
+        digests.extend(result.stderr);
+        digests.extend(result.outputs.values().copied());
+        for digest in digests {
+            let _ = self.local.get_blob(&digest).await?;
+        }
+        Ok(())
     }
 
     async fn head_blob_remote(&self, digest: &Digest) -> Result<bool> {
@@ -642,13 +657,23 @@ impl TuistCache {
 
     async fn grpc_channel(&self) -> Result<Channel> {
         let endpoint = self.data_plane_endpoint().await?;
-        connect_grpc_endpoint(&endpoint)
+        {
+            let cached = self.grpc_channel_cache.lock().await;
+            if let Some((cached_endpoint, channel)) = cached.as_ref() {
+                if cached_endpoint == &endpoint {
+                    return Ok(channel.clone());
+                }
+            }
+        }
+        let channel = connect_grpc_endpoint(&endpoint)
             .await
             .map_err(|message| Error::Remote {
                 provider: PROVIDER_NAME,
                 operation: "connect endpoint",
                 message,
-            })
+            })?;
+        *self.grpc_channel_cache.lock().await = Some((endpoint, channel.clone()));
+        Ok(channel)
     }
 
     async fn auth_token(&self) -> Result<String> {
