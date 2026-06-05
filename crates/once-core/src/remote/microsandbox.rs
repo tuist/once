@@ -1,0 +1,181 @@
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use once_cas::{ActionResult, CacheProvider};
+
+use crate::{Error, Result, WorkspacePath};
+
+#[cfg(unix)]
+use super::join_path;
+#[cfg(unix)]
+use crate::stream::{self, Destination};
+#[cfg(unix)]
+use std::time::Duration;
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(unix)]
+pub(super) async fn execute_command(
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: Option<&WorkspacePath>,
+    timeout_ms: Option<u64>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
+    let image = std::env::var("ONCE_MICROSANDBOX_IMAGE").unwrap_or_else(|_| "alpine".to_string());
+    let guest_root =
+        std::env::var("ONCE_MICROSANDBOX_WORKDIR").unwrap_or_else(|_| "/workspace".to_string());
+    let guest_cwd = cwd.map_or_else(
+        || guest_root.clone(),
+        |cwd| join_path(&guest_root, cwd.as_str()),
+    );
+    let sandbox_name = sandbox_name();
+    let sandbox = microsandbox::Sandbox::builder(&sandbox_name)
+        .image(image)
+        .workdir(&guest_cwd)
+        .volume(&guest_root, |mount| mount.bind(workspace_root))
+        .create()
+        .await
+        .map_err(|source| microsandbox_error(&source))?;
+
+    let work = async {
+        let mut handle = sandbox
+            .exec_stream_with(program, |exec| {
+                let exec = exec.args(rest.iter().cloned()).cwd(&guest_cwd);
+                env.iter()
+                    .fold(exec, |exec, (key, value)| exec.env(key, value))
+            })
+            .await
+            .map_err(|source| microsandbox_error(&source))?;
+        collect_output(&mut handle, cache, stream_to_parent).await
+    };
+
+    let result = match timeout_ms {
+        Some(ms) => {
+            let dur = Duration::from_millis(ms);
+            match tokio::time::timeout(dur, work).await {
+                Ok(result) => result,
+                Err(_) => Err(Error::Timeout(dur)),
+            }
+        }
+        None => work.await,
+    };
+
+    let cleanup = async {
+        let stop_result = sandbox
+            .stop_and_wait()
+            .await
+            .map_err(|source| microsandbox_error(&source));
+        let remove_result = sandbox
+            .remove_persisted()
+            .await
+            .map_err(|source| microsandbox_error(&source));
+        stop_result.and(remove_result)
+    }
+    .await;
+
+    match (result, cleanup) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Ok(_), Err(err)) | (Err(err), _) => Err(err),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(not(unix))]
+pub(super) async fn execute_command(
+    _argv: &[String],
+    _env: &BTreeMap<String, String>,
+    _cwd: Option<&WorkspacePath>,
+    _timeout_ms: Option<u64>,
+    _workspace_root: &Path,
+    _cache: &CacheProvider,
+    _stream_to_parent: bool,
+) -> Result<ActionResult> {
+    Err(Error::RemoteProviderConfig {
+        provider: "microsandbox".to_string(),
+        message: "the embedded Microsandbox provider is only available on Unix platforms"
+            .to_string(),
+    })
+}
+
+#[cfg(unix)]
+async fn collect_output(
+    handle: &mut microsandbox::ExecHandle,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    let (mut stdout_reader, mut stdout_writer) = tokio::io::duplex(stream::PIPE_CAPACITY);
+    let (mut stderr_reader, mut stderr_writer) = tokio::io::duplex(stream::PIPE_CAPACITY);
+    let collect = async {
+        let mut exit_code = None;
+        while let Some(event) = handle.recv().await {
+            match event {
+                microsandbox::ExecEvent::Started { .. } => {}
+                microsandbox::ExecEvent::Stdout(data) => {
+                    stream::write_parent(&data, Destination::Stdout, stream_to_parent).await?;
+                    stream::write_pipe(&mut stdout_writer, &data).await?;
+                }
+                microsandbox::ExecEvent::Stderr(data) => {
+                    stream::write_parent(&data, Destination::Stderr, stream_to_parent).await?;
+                    stream::write_pipe(&mut stderr_writer, &data).await?;
+                }
+                microsandbox::ExecEvent::Exited { code } => {
+                    exit_code = Some(code);
+                    break;
+                }
+                microsandbox::ExecEvent::Failed(payload) => {
+                    return Err(Error::RemoteProviderApi {
+                        provider: "microsandbox".to_string(),
+                        message: format!("{payload:?}"),
+                    });
+                }
+                microsandbox::ExecEvent::StdinError(payload) => {
+                    return Err(Error::RemoteProviderApi {
+                        provider: "microsandbox".to_string(),
+                        message: format!("{payload:?}"),
+                    });
+                }
+            }
+        }
+        stream::shutdown_pipe(&mut stdout_writer).await?;
+        stream::shutdown_pipe(&mut stderr_writer).await?;
+        Ok::<_, Error>(exit_code.unwrap_or(-1))
+    };
+    let stdout_store = async {
+        cache
+            .put_stream(&mut stdout_reader)
+            .await
+            .map_err(Error::from)
+    };
+    let stderr_store = async {
+        cache
+            .put_stream(&mut stderr_reader)
+            .await
+            .map_err(Error::from)
+    };
+    let (exit_code, stdout, stderr) = tokio::try_join!(collect, stdout_store, stderr_store)?;
+    Ok(ActionResult {
+        exit_code,
+        stdout: Some(stdout),
+        stderr: Some(stderr),
+        outputs: BTreeMap::new(),
+    })
+}
+
+#[cfg(unix)]
+fn microsandbox_error(source: &microsandbox::MicrosandboxError) -> Error {
+    Error::RemoteProviderApi {
+        provider: "microsandbox".to_string(),
+        message: source.to_string(),
+    }
+}
+
+#[cfg(unix)]
+fn sandbox_name() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    format!("once-{}-{nanos}", std::process::id())
+}
