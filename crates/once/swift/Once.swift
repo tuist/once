@@ -195,7 +195,13 @@ private extension JSONDecoder {
 private func runAsync<Value: Sendable>(
     _ operation: @escaping @Sendable () throws -> Value
 ) async throws -> Value {
-    try await Task.detached(operation: operation).value
+    try Task.checkCancellation()
+    let task = Task(operation: operation)
+    return try await withTaskCancellationHandler {
+        try await task.value
+    } onCancel: {
+        task.cancel()
+    }
 }
 
 private func decodeRequestAsync<Request: Encodable & Sendable, Value: Decodable & Sendable>(
