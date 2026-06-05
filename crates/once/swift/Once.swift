@@ -18,7 +18,11 @@ public struct OnceCache: Sendable {
     }
 
     public var version: String {
-        String(cString: once_version())
+        guard let raw = once_version() else {
+            return ""
+        }
+        defer { once_string_free(raw) }
+        return String(cString: raw)
     }
 
     public func digest(bytes: Data) throws -> String {

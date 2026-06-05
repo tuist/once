@@ -62,15 +62,13 @@ enum FfiResponse<T> {
     Error { message: String },
 }
 
-static VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
-
-/// Return the linked Once version as a borrowed nul-terminated string.
+/// Return the linked Once version.
 #[no_mangle]
-pub extern "C" fn once_version() -> *const c_char {
-    VERSION.as_ptr().cast()
+pub extern "C" fn once_version() -> *mut c_char {
+    string_to_raw(env!("CARGO_PKG_VERSION"))
 }
 
-/// Free strings returned by other `once_*` FFI functions.
+/// Free strings returned by `once_*` FFI functions.
 #[no_mangle]
 pub extern "C" fn once_string_free(value: *mut c_char) {
     if value.is_null() {
@@ -87,7 +85,7 @@ pub extern "C" fn once_digest_bytes(data: *const c_uchar, len: usize) -> *mut c_
     let Some(bytes) = bytes_from_raw(data, len) else {
         return response_error("data cannot be null when len is non-zero");
     };
-    response_ok(Digest::of_bytes(bytes).to_hex())
+    response_ok(Digest::of_bytes(&bytes).to_hex())
 }
 
 /// Compute the Once action digest for a JSON-encoded `once_core::Action`.
@@ -96,7 +94,7 @@ pub extern "C" fn once_action_digest_json(action_json: *const c_char) -> *mut c_
     let Some(action_json) = str_from_raw(action_json) else {
         return response_error("action_json cannot be null");
     };
-    let action = match serde_json::from_str::<once_core::Action>(action_json) {
+    let action = match serde_json::from_str::<once_core::Action>(&action_json) {
         Ok(action) => action,
         Err(error) => return response_error(error.to_string()),
     };
@@ -208,7 +206,7 @@ where
     let Some(request_json) = str_from_raw(request_json) else {
         return response_error("request_json cannot be null");
     };
-    let request = match serde_json::from_str::<Request>(request_json) {
+    let request = match serde_json::from_str::<Request>(&request_json) {
         Ok(request) => request,
         Err(error) => return response_error(error.to_string()),
     };
@@ -243,39 +241,81 @@ fn response_error(message: impl Into<String>) -> *mut c_char {
 fn response<T: Serialize>(value: &FfiResponse<T>) -> *mut c_char {
     let json = serde_json::to_string(&value)
         .unwrap_or_else(|error| format!(r#"{{"status":"error","message":"{error}"}}"#));
-    CString::new(json)
-        .expect("JSON response cannot contain interior nul bytes")
+    string_to_raw(json)
+}
+
+fn string_to_raw(value: impl Into<String>) -> *mut c_char {
+    CString::new(value.into())
+        .expect("FFI string cannot contain interior nul bytes")
         .into_raw()
 }
 
-fn str_from_raw(value: *const c_char) -> Option<&'static str> {
+fn str_from_raw(value: *const c_char) -> Option<String> {
     if value.is_null() {
         return None;
     }
-    unsafe { CStr::from_ptr(value).to_str().ok() }
+    unsafe {
+        CStr::from_ptr(value)
+            .to_str()
+            .ok()
+            .map(std::borrow::ToOwned::to_owned)
+    }
 }
 
-fn bytes_from_raw(data: *const c_uchar, len: usize) -> Option<&'static [u8]> {
+fn bytes_from_raw(data: *const c_uchar, len: usize) -> Option<Vec<u8>> {
     if len == 0 {
-        return Some(&[]);
+        return Some(Vec::new());
     }
     if data.is_null() {
         return None;
     }
-    unsafe { Some(std::slice::from_raw_parts(data, len)) }
+    unsafe { Some(std::slice::from_raw_parts(data, len).to_vec()) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn response_json(response: *mut c_char) -> serde_json::Value {
+        let json = unsafe { CStr::from_ptr(response).to_string_lossy().into_owned() };
+        once_string_free(response);
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn version_returns_owned_string() {
+        let response = once_version();
+        let version = unsafe { CStr::from_ptr(response).to_string_lossy().into_owned() };
+        once_string_free(response);
+
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
+    }
+
     #[test]
     fn digest_bytes_returns_json_response() {
         let response = once_digest_bytes(b"hello".as_ptr(), 5);
-        let json = unsafe { CStr::from_ptr(response).to_string_lossy().into_owned() };
-        once_string_free(response);
-        assert!(json.contains(r#""status":"ok""#));
-        assert!(json.contains(&Digest::of_bytes(b"hello").to_hex()));
+        let json = response_json(response);
+
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["value"], Digest::of_bytes(b"hello").to_hex());
+    }
+
+    #[test]
+    fn digest_bytes_rejects_null_pointer_with_non_zero_length() {
+        let response = once_digest_bytes(std::ptr::null(), 1);
+        let json = response_json(response);
+
+        assert_eq!(json["status"], "error");
+        assert_eq!(json["message"], "data cannot be null when len is non-zero");
+    }
+
+    #[test]
+    fn action_digest_rejects_null_pointer() {
+        let response = once_action_digest_json(std::ptr::null());
+        let json = response_json(response);
+
+        assert_eq!(json["status"], "error");
+        assert_eq!(json["message"], "action_json cannot be null");
     }
 
     #[test]
@@ -288,10 +328,35 @@ mod tests {
         .to_string();
 
         let response = once_cache_put_blob_json(CString::new(request).unwrap().as_ptr());
-        let json = unsafe { CStr::from_ptr(response).to_string_lossy().into_owned() };
-        once_string_free(response);
+        let json = response_json(response);
 
-        assert!(json.contains(r#""status":"ok""#));
-        assert!(json.contains(&Digest::of_bytes(b"hello").to_hex()));
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["value"], Digest::of_bytes(b"hello").to_hex());
+    }
+
+    #[test]
+    fn cache_request_rejects_malformed_json() {
+        let request = CString::new("not json").unwrap();
+        let response = once_cache_stats_json(request.as_ptr());
+        let json = response_json(response);
+
+        assert_eq!(json["status"], "error");
+        assert!(json["message"].as_str().unwrap().contains("expected ident"));
+    }
+
+    #[test]
+    fn cache_request_rejects_invalid_digest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let request = serde_json::json!({
+            "local_cache_root": tmp.path().to_string_lossy(),
+            "digest": "not-a-digest"
+        })
+        .to_string();
+
+        let response = once_cache_get_blob_json(CString::new(request).unwrap().as_ptr());
+        let json = response_json(response);
+
+        assert_eq!(json["status"], "error");
+        assert_eq!(json["message"], "invalid digest: not-a-digest");
     }
 }

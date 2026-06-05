@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-const char *once_version(void);
+char *once_version(void);
 
 void once_string_free(char *value);
 
