@@ -3,6 +3,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{Error, Result};
 
+/// Bounded pipe size for connecting producers to CAS streaming writes.
+/// This keeps subprocess output memory bounded while letting the CAS
+/// reader apply backpressure.
 pub(crate) const PIPE_CAPACITY: usize = 64 * 1024;
 
 #[derive(Clone, Copy)]
@@ -11,6 +14,9 @@ pub(crate) enum Destination {
     Stderr,
 }
 
+/// Forwards a stream to the CAS and optionally mirrors it to stdout or
+/// stderr. Parent write failures fail the whole operation; any scratch
+/// data left by a cancelled CAS write is ignored by future cache reads.
 pub(crate) async fn to_cache<R>(
     mut reader: R,
     destination: Destination,
@@ -46,6 +52,8 @@ where
     Ok(digest)
 }
 
+/// Writes bytes to the caller's terminal stream when live mirroring is
+/// enabled.
 pub(crate) async fn write_parent(
     bytes: &[u8],
     destination: Destination,
@@ -81,6 +89,7 @@ pub(crate) async fn write_parent(
     Ok(())
 }
 
+/// Writes a complete chunk into the bounded CAS pipe.
 pub(crate) async fn write_pipe<W>(writer: &mut W, bytes: &[u8]) -> Result<()>
 where
     W: AsyncWrite + Unpin,
@@ -91,10 +100,15 @@ where
     })
 }
 
+/// Flushes and closes the bounded CAS pipe so the reader observes EOF.
 pub(crate) async fn shutdown_pipe<W>(writer: &mut W) -> Result<()>
 where
     W: AsyncWrite + Unpin,
 {
+    writer.flush().await.map_err(|source| Error::Wait {
+        program: "stream".to_string(),
+        source,
+    })?;
     writer.shutdown().await.map_err(|source| Error::Wait {
         program: "stream".to_string(),
         source,

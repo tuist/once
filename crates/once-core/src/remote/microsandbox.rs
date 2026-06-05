@@ -63,18 +63,18 @@ pub(super) async fn execute_command(
         None => work.await,
     };
 
-    let cleanup = async {
-        let stop_result = sandbox
-            .stop_and_wait()
-            .await
-            .map_err(|source| microsandbox_error(&source));
-        let remove_result = sandbox
-            .remove_persisted()
-            .await
-            .map_err(|source| microsandbox_error(&source));
-        stop_result.and(remove_result)
-    }
-    .await;
+    let stop_result = sandbox
+        .stop_and_wait()
+        .await
+        .map_err(|source| microsandbox_error(&source));
+    let remove_result = sandbox
+        .remove_persisted()
+        .await
+        .map_err(|source| microsandbox_error(&source));
+    let cleanup = match (stop_result, remove_result) {
+        (Ok(_status), Ok(())) => Ok(()),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+    };
 
     match (result, cleanup) {
         (Ok(result), Ok(())) => Ok(result),

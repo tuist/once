@@ -191,6 +191,9 @@ fn timeout_secs(timeout_ms: u64) -> u64 {
     timeout_ms.div_ceil(1000).max(1)
 }
 
+/// Quotes one POSIX sh word with single quotes. Embedded single quotes
+/// are represented as the standard close, escaped quote, reopen
+/// sequence.
 fn shell_word(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

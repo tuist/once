@@ -217,8 +217,8 @@ mod tests {
     use std::time::Duration;
 
     use crate::action::ACTION_DIGEST_DOMAIN;
-    use crate::{Error, ResourceRequest, WorkspacePath};
-    use once_cas::{Cas, Digest};
+    use crate::{Error, RemoteExecution, ResourceRequest, WorkspacePath};
+    use once_cas::{CacheProvider, Cas, Digest};
     use tempfile::TempDir;
 
     fn fresh_cas() -> (TempDir, Cas) {
@@ -439,6 +439,62 @@ mod tests {
         assert_eq!(outcome.result.exit_code, 0);
         let stdout = cas.get_blob(&outcome.result.stdout.unwrap()).await.unwrap();
         assert_eq!(stdout.len(), 4 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn streaming_run_writes_and_reuses_cache_entries() {
+        let (tmp, cas) = fresh_cas();
+        let cache = CacheProvider::Local(cas.clone());
+        let action = Action::RunCommand {
+            argv: vec!["/bin/sh".into(), "-c".into(), "true".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            outputs: vec![],
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: None,
+        };
+
+        let first = run_with_cache_streaming(&action, tmp.path(), &cache, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        assert_eq!(
+            cas.get_blob(&first.result.stdout.unwrap()).await.unwrap(),
+            b""
+        );
+
+        let second = run_with_cache_streaming(&action, tmp.path(), &cache, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.cache, CacheState::Hit);
+    }
+
+    #[tokio::test]
+    async fn remote_actions_delegate_to_remote_provider_dispatch() {
+        let (tmp, cas) = fresh_cas();
+        let action = Action::RunCommand {
+            argv: vec!["true".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            outputs: vec![],
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: Some(RemoteExecution {
+                provider: "unknown-remote".to_string(),
+            }),
+        };
+
+        let error = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::UnsupportedRemoteProvider { ref provider } if provider == "unknown-remote"
+        ));
     }
 
     #[tokio::test]
