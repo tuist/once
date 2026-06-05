@@ -40,6 +40,7 @@ schlussel = { git = "https://github.com/tuist/schlussel.git", rev = "e90f561bfbe
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 walkdir = "2"
+zstd = "0.13"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
