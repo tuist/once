@@ -1,4 +1,4 @@
-module Once {
+module COnce {
   header "once.h"
   export *
 }

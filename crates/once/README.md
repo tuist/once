@@ -1,6 +1,6 @@
 # once
 
-Embeddable SDK for Once cache-aware command execution.
+Embeddable SDK for Once cache access.
 
 ## Rust
 
@@ -11,31 +11,26 @@ Add the crate from this repository:
 once = { git = "https://github.com/tuist/once" }
 ```
 
-Run a command with a local cache:
+Read and write blobs with a local cache:
 
 ```rust
 #[tokio::main]
 async fn main() -> once::Result<()> {
-    let once = once::Once::new(".", ".once");
-    let outcome = once
-        .run_command(
-            once::Command::new("sh")
-                .arg("-c")
-                .arg("printf hello")
-                .output("dist/app"),
-        )
-        .await?;
+    let cache = once::OnceCache::local(".once");
+    let digest = cache.put_blob(b"hello").await?;
+    let bytes = cache.get_blob(digest).await?;
 
-    println!("{} {:?}", outcome.exit_code, outcome.cache);
+    assert_eq!(bytes, b"hello");
     Ok(())
 }
 ```
 
 The high-level API is:
 
-- `Once`: reusable runtime bound to a workspace root and cache provider.
-- `Command`: builder for argv, environment, workspace-relative cwd, declared outputs, input digest, and timeout.
-- `CommandOutcome`: action digest, cache hit or miss state, exit code, and cached output digests.
+- `OnceCache`: reusable client bound to a cache provider.
+- Blob operations: `put_blob`, `get_blob`, and `has_blob`.
+- Action-cache operations: `put_action_result`, `get_action_result`, and `forget_action`.
+- Metadata helpers: `stats`, `digest_from_hex`, and lower-level digest/action types.
 
 Lower-level modules are re-exported as `once::core`, `once::cas`, and
 `once::frontend` for integrations that need action construction, CAS
@@ -43,30 +38,21 @@ access, or manifest parsing.
 
 ## Apple
 
-Download `Once.xcframework.zip` from a release and link it from an iOS or
-macOS target. Swift can import the C module:
+Download `Once.xcframework.zip` from a release, link `Once.xcframework`,
+and add the included `Once.swift` file to your Swift target. `Once.swift`
+wraps the `COnce` C module:
 
 ```swift
-import Once
+let once = OnceCache(cacheRoot: ".once")
+let digest = try once.putBlob(Data("hello".utf8))
+let bytes = try once.getBlob(digest)
 
-let request = """
-{
-  "workspace_root": ".",
-  "cache_root": ".once",
-  "argv": ["sh", "-c", "printf hello"],
-  "outputs": [],
-  "cache_failures": false,
-  "stream": false
-}
-"""
-
-let raw = once_run_command_json(request)!
-defer { once_string_free(raw) }
-let json = String(cString: raw)
+print(String(decoding: bytes, as: UTF8.self))
 ```
 
-All owned strings returned by `once_*` functions must be released with
-`once_string_free`.
+If you call the C API directly, all owned strings returned by `once_*`
+functions must be released with `once_string_free`. The C module name is
+`COnce`.
 
 ### FFI responses
 
@@ -82,18 +68,11 @@ or:
 { "status": "error", "message": "..." }
 ```
 
-`once_run_command_json` returns this value on success:
+`once_cache_get_blob_json` returns this value on success:
 
 ```json
 {
-  "action_digest": "64 lowercase hex characters",
-  "cache": "hit",
-  "exit_code": 0,
-  "stdout_digest": "64 lowercase hex characters or null",
-  "stderr_digest": "64 lowercase hex characters or null",
-  "outputs": {
-    "dist/app": "64 lowercase hex characters"
-  }
+  "bytes": [104, 101, 108, 108, 111]
 }
 ```
 

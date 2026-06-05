@@ -1,29 +1,53 @@
-use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_uchar};
 use std::path::PathBuf;
 
+use once_cas::{ActionResult, Digest};
 use serde::{Deserialize, Serialize};
 
-use crate::{Command, Once};
+use crate::{digest_from_hex, OnceCache};
 
 #[derive(Debug, Deserialize)]
-struct RunCommandRequest {
-    workspace_root: PathBuf,
+struct CacheRootRequest {
     cache_root: PathBuf,
-    argv: Vec<String>,
-    #[serde(default)]
-    env: BTreeMap<String, String>,
-    #[serde(default)]
-    cwd: Option<String>,
-    #[serde(default)]
-    outputs: Vec<String>,
-    #[serde(default)]
-    timeout_ms: Option<u64>,
-    #[serde(default)]
-    cache_failures: bool,
-    #[serde(default)]
-    stream: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct BlobPutRequest {
+    cache_root: PathBuf,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DigestRequest {
+    cache_root: PathBuf,
+    digest: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActionResultPutRequest {
+    cache_root: PathBuf,
+    action_digest: String,
+    result: ActionResult,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActionDigestRequest {
+    cache_root: PathBuf,
+    action_digest: String,
+}
+
+#[derive(Debug, Serialize)]
+struct BlobResponse {
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Serialize)]
+struct StatsResponse {
+    blob_count: u64,
+    blob_bytes: u64,
+    action_count: u64,
+    action_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -31,16 +55,6 @@ struct RunCommandRequest {
 enum FfiResponse<T> {
     Ok { value: T },
     Error { message: String },
-}
-
-#[derive(Debug, Serialize)]
-struct RunCommandResponse {
-    action_digest: String,
-    cache: &'static str,
-    exit_code: i32,
-    stdout_digest: Option<String>,
-    stderr_digest: Option<String>,
-    outputs: BTreeMap<String, String>,
 }
 
 static VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
@@ -68,7 +82,7 @@ pub extern "C" fn once_digest_bytes(data: *const c_uchar, len: usize) -> *mut c_
     let Some(bytes) = bytes_from_raw(data, len) else {
         return response_error("data cannot be null when len is non-zero");
     };
-    response_ok(once_cas::Digest::of_bytes(bytes).to_hex())
+    response_ok(Digest::of_bytes(bytes).to_hex())
 }
 
 /// Compute the Once action digest for a JSON-encoded `once_core::Action`.
@@ -84,91 +98,127 @@ pub extern "C" fn once_action_digest_json(action_json: *const c_char) -> *mut c_
     response_ok(action.digest().to_hex())
 }
 
-/// Execute a JSON command request through the high-level Once SDK.
+/// Store a blob in the local cache.
 #[no_mangle]
-pub extern "C" fn once_run_command_json(request_json: *const c_char) -> *mut c_char {
-    let Some(request_json) = str_from_raw(request_json) else {
-        return response_error("request_json cannot be null");
-    };
-    let request = match serde_json::from_str::<RunCommandRequest>(request_json) {
-        Ok(request) => request,
-        Err(error) => return response_error(error.to_string()),
-    };
-    match run_command(request) {
-        Ok(response) => response_ok(response),
-        Err(error) => response_error(error),
-    }
-}
-
-fn run_command(request: RunCommandRequest) -> Result<RunCommandResponse, String> {
-    let command = Command::from_argv(request.argv)
-        .timeout_ms_opt(request.timeout_ms)
-        .cwd_opt(request.cwd)
-        .outputs(request.outputs)
-        .envs(request.env);
-    let once = Once::new(request.workspace_root, request.cache_root)
-        .streaming(request.stream)
-        .cache_failures(request.cache_failures);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| error.to_string())?;
-    let outcome = runtime
-        .block_on(once.run_command(command))
-        .map_err(|error| error.to_string())?;
-    Ok(RunCommandResponse {
-        action_digest: outcome.action_digest.to_hex(),
-        cache: match outcome.cache {
-            once_core::CacheState::Hit => "hit",
-            once_core::CacheState::Miss => "miss",
-        },
-        exit_code: outcome.exit_code,
-        stdout_digest: outcome.result.stdout.map(|digest| digest.to_hex()),
-        stderr_digest: outcome.result.stderr.map(|digest| digest.to_hex()),
-        outputs: outcome
-            .result
-            .outputs
-            .into_iter()
-            .map(|(path, digest)| (path, digest.to_hex()))
-            .collect(),
+pub extern "C" fn once_cache_put_blob_json(request_json: *const c_char) -> *mut c_char {
+    run_json::<BlobPutRequest, _>(request_json, |request| {
+        let cache = OnceCache::local(request.cache_root);
+        block_on(async {
+            cache
+                .put_blob(&request.bytes)
+                .await
+                .map(|digest| digest.to_hex())
+        })
     })
 }
 
-trait FfiCommandExt {
-    fn cwd_opt(self, path: Option<String>) -> Self;
-    fn envs(self, env: BTreeMap<String, String>) -> Self;
-    fn outputs(self, outputs: Vec<String>) -> Self;
-    fn timeout_ms_opt(self, timeout_ms: Option<u64>) -> Self;
+/// Read a blob from the local cache.
+#[no_mangle]
+pub extern "C" fn once_cache_get_blob_json(request_json: *const c_char) -> *mut c_char {
+    run_json::<DigestRequest, _>(request_json, |request| {
+        let cache = OnceCache::local(request.cache_root);
+        let digest = digest_from_hex(&request.digest)?;
+        block_on(async {
+            cache
+                .get_blob(digest)
+                .await
+                .map(|bytes| BlobResponse { bytes })
+        })
+    })
 }
 
-impl FfiCommandExt for Command {
-    fn cwd_opt(self, path: Option<String>) -> Self {
-        match path {
-            Some(path) => self.cwd(path),
-            None => self,
-        }
-    }
+/// Return whether a blob exists in the local cache.
+#[no_mangle]
+pub extern "C" fn once_cache_has_blob_json(request_json: *const c_char) -> *mut c_char {
+    run_json::<DigestRequest, _>(request_json, |request| {
+        let cache = OnceCache::local(request.cache_root);
+        let digest = digest_from_hex(&request.digest)?;
+        block_on(async { cache.has_blob(digest).await })
+    })
+}
 
-    fn envs(mut self, env: BTreeMap<String, String>) -> Self {
-        for (key, value) in env {
-            self = self.env(key, value);
-        }
-        self
-    }
+/// Store an action result in the local cache.
+#[no_mangle]
+pub extern "C" fn once_cache_put_action_result_json(request_json: *const c_char) -> *mut c_char {
+    run_json::<ActionResultPutRequest, _>(request_json, |request| {
+        let cache = OnceCache::local(request.cache_root);
+        let action = digest_from_hex(&request.action_digest)?;
+        block_on(async {
+            cache
+                .put_action_result(action, &request.result)
+                .await
+                .map(|()| true)
+        })
+    })
+}
 
-    fn outputs(mut self, outputs: Vec<String>) -> Self {
-        for output in outputs {
-            self = self.output(output);
-        }
-        self
-    }
+/// Read an action result from the local cache.
+#[no_mangle]
+pub extern "C" fn once_cache_get_action_result_json(request_json: *const c_char) -> *mut c_char {
+    run_json::<ActionDigestRequest, _>(request_json, |request| {
+        let cache = OnceCache::local(request.cache_root);
+        let action = digest_from_hex(&request.action_digest)?;
+        block_on(async { cache.get_action_result(action).await })
+    })
+}
 
-    fn timeout_ms_opt(self, timeout_ms: Option<u64>) -> Self {
-        match timeout_ms {
-            Some(timeout_ms) => self.timeout_ms(timeout_ms),
-            None => self,
-        }
+/// Remove an action result from the local cache.
+#[no_mangle]
+pub extern "C" fn once_cache_forget_action_json(request_json: *const c_char) -> *mut c_char {
+    run_json::<ActionDigestRequest, _>(request_json, |request| {
+        let cache = OnceCache::local(request.cache_root);
+        let action = digest_from_hex(&request.action_digest)?;
+        block_on(async { cache.forget_action(action).await })
+    })
+}
+
+/// Return local cache statistics.
+#[no_mangle]
+pub extern "C" fn once_cache_stats_json(request_json: *const c_char) -> *mut c_char {
+    run_json::<CacheRootRequest, _>(request_json, |request| {
+        let cache = OnceCache::local(request.cache_root);
+        block_on(async {
+            cache.stats().await.map(|stats| StatsResponse {
+                blob_count: stats.blob_count,
+                blob_bytes: stats.blob_bytes,
+                action_count: stats.action_count,
+                action_bytes: stats.action_bytes,
+            })
+        })
+    })
+}
+
+fn run_json<Request, Value>(
+    request_json: *const c_char,
+    operation: impl FnOnce(Request) -> crate::Result<Value>,
+) -> *mut c_char
+where
+    Request: for<'de> Deserialize<'de>,
+    Value: Serialize,
+{
+    let Some(request_json) = str_from_raw(request_json) else {
+        return response_error("request_json cannot be null");
+    };
+    let request = match serde_json::from_str::<Request>(request_json) {
+        Ok(request) => request,
+        Err(error) => return response_error(error.to_string()),
+    };
+    match operation(request) {
+        Ok(value) => response_ok(value),
+        Err(error) => response_error(error.to_string()),
     }
+}
+
+fn block_on<T>(work: impl std::future::Future<Output = crate::Result<T>>) -> crate::Result<T> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|source| once_cas::Error::Remote {
+            provider: "local",
+            operation: "runtime",
+            message: source.to_string(),
+        })?
+        .block_on(work)
 }
 
 fn response_ok<T: Serialize>(value: T) -> *mut c_char {
@@ -216,6 +266,23 @@ mod tests {
         let json = unsafe { CStr::from_ptr(response).to_string_lossy().into_owned() };
         once_string_free(response);
         assert!(json.contains(r#""status":"ok""#));
-        assert!(json.contains(&once_cas::Digest::of_bytes(b"hello").to_hex()));
+        assert!(json.contains(&Digest::of_bytes(b"hello").to_hex()));
+    }
+
+    #[test]
+    fn put_blob_returns_digest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let request = serde_json::json!({
+            "cache_root": tmp.path().to_string_lossy(),
+            "bytes": [104, 101, 108, 108, 111]
+        })
+        .to_string();
+
+        let response = once_cache_put_blob_json(CString::new(request).unwrap().as_ptr());
+        let json = unsafe { CStr::from_ptr(response).to_string_lossy().into_owned() };
+        once_string_free(response);
+
+        assert!(json.contains(r#""status":"ok""#));
+        assert!(json.contains(&Digest::of_bytes(b"hello").to_hex()));
     }
 }

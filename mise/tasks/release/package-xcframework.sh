@@ -103,23 +103,31 @@ lipo -create \
   "target/x86_64-apple-ios/release/libonce.a" \
   -output "${stage_dir}/ios-simulator/libonce.a"
 
-rm -rf "${stage_dir}/Once.xcframework"
+release_dir="${stage_dir}/release"
+mkdir -p "${release_dir}"
+
+rm -rf "${release_dir}/Once.xcframework"
 xcodebuild -create-xcframework \
   -library "${stage_dir}/macos/libonce.a" -headers "crates/once/include/Once" \
   -library "target/aarch64-apple-ios/release/libonce.a" -headers "crates/once/include/Once" \
   -library "${stage_dir}/ios-simulator/libonce.a" -headers "crates/once/include/Once" \
-  -output "${stage_dir}/Once.xcframework"
+  -output "${release_dir}/Once.xcframework"
+
+cp crates/once/swift/Once.swift "${release_dir}/Once.swift"
 
 if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then
   codesign --force \
     --timestamp \
     --options runtime \
     --sign "${APPLE_DEVELOPER_ID_CERTIFICATE_NAME}" \
-    "${stage_dir}/Once.xcframework"
+    "${release_dir}/Once.xcframework"
 fi
 
 asset="Once-${version}.xcframework.zip"
-ditto -c -k --keepParent "${stage_dir}/Once.xcframework" "dist/${asset}"
+(
+  cd "${release_dir}"
+  ditto -c -k --keepParent Once.xcframework Once.swift "${OLDPWD}/dist/${asset}"
+)
 
 if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then
   xcrun notarytool submit "dist/${asset}" \

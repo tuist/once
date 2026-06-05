@@ -53,7 +53,7 @@ once = { git = "https://github.com/tuist/once" }
 
 Release builds also publish `Once.xcframework.zip` for Apple platforms.
 The framework exposes a small C ABI that Swift and Objective-C can call,
-with JSON requests and responses for cache-aware command execution.
+with JSON requests and responses for cache access.
 
 ## License
 

@@ -1,21 +1,15 @@
 //! Embed Once in Rust, Swift, Objective-C, or C.
 //!
-//! The Rust API gives embedders a small, stable entry point for
-//! cache-aware command execution while still exposing the lower-level
-//! building blocks for advanced integrations.
+//! The Rust API gives embedders a small, stable entry point for cache
+//! access while still exposing the lower-level building blocks for
+//! advanced integrations.
 //!
 //! ```no_run
 //! # async fn example() -> once::Result<()> {
-//! let once = once::Once::new(".", ".once");
-//! let outcome = once
-//!     .run_command(
-//!         once::Command::new("sh")
-//!             .arg("-c")
-//!             .arg("printf hello")
-//!     )
-//!     .await?;
+//! let cache = once::OnceCache::local(".once");
+//! let digest = cache.put_blob(b"hello").await?;
 //!
-//! assert_eq!(outcome.exit_code, 0);
+//! assert_eq!(cache.get_blob(digest).await?, b"hello");
 //! # Ok(())
 //! # }
 //! ```
@@ -23,7 +17,7 @@
 mod ffi;
 mod sdk;
 
-pub use sdk::{Command, CommandOutcome, Error, Once, Result};
+pub use sdk::{digest_from_hex, Error, OnceCache, Result};
 
 /// Content-addressed storage and cache-provider primitives.
 pub mod cas {
