@@ -141,6 +141,8 @@ fn collect_symlink_entry(
         return Ok(());
     }
     let resolved_target = resolve_symlink_target(path, &target);
+    // Follow the link here so external targets can be classified and
+    // materialized, while the directory walk itself never follows links.
     let Ok(target_metadata) = std::fs::metadata(path) else {
         entries.push(capture_symlink_entry(path, logical_path, &target));
         return Ok(());
@@ -164,6 +166,10 @@ fn collect_symlink_entry(
             materialized_dirs,
             symlink_mode,
         )?;
+        // Track only the active recursion stack. Reusing the same
+        // external target from another link should materialize another
+        // standalone subtree at that output path, not restore a link
+        // back to the external store.
         materialized_dirs.remove(&target_canonical);
     } else if target_metadata.is_file() {
         entries.push(capture_file_entry(

@@ -8,7 +8,9 @@ use crate::{ResourceRequest, WorkspacePath};
 
 /// Domain-separation prefix for action digests. Bump the version when
 /// the canonical encoding (or the [`Action`] schema) changes in a way
-/// that should invalidate the cache.
+/// that should invalidate the cache. Older action result JSON still
+/// deserializes through serde defaults; the domain only partitions new
+/// action lookups.
 pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v4\0";
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

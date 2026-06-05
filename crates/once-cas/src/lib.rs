@@ -133,15 +133,15 @@ impl Cas {
 
     pub(crate) async fn blob_size(&self, digest: &Digest) -> Result<u64> {
         let path = self.blob_path(digest);
-        let metadata = match fs::metadata(&path).await {
-            Ok(metadata) => Ok(metadata),
+        let mut file = match File::open(&path).await {
+            Ok(file) => Ok(file),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Err(Error::BlobNotFound(*digest)),
             Err(source) => Err(Error::Io {
                 path: path.clone(),
                 source,
             }),
         }?;
-        let mut file = File::open(&path).await.map_err(|source| Error::Io {
+        let metadata = file.metadata().await.map_err(|source| Error::Io {
             path: path.clone(),
             source,
         })?;

@@ -11,15 +11,11 @@ const RAW_SIZE_LEN: usize = 8;
 
 pub(crate) fn encode_bytes(raw: &[u8]) -> io::Result<Vec<u8>> {
     let compressed = encode_all(raw, ZSTD_LEVEL)?;
-    let wrapped_len = ZSTD_BLOB_HEADER_LEN
-        .checked_add(compressed.len())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "blob is too large"))?;
+    let wrapped_len = checked_wrapped_len(compressed.len())?;
     if raw.starts_with(ZSTD_BLOB_MAGIC) || wrapped_len < raw.len() {
-        let raw_len = u64::try_from(raw.len())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "blob is too large"))?;
         let mut out = Vec::with_capacity(wrapped_len);
         out.extend_from_slice(ZSTD_BLOB_MAGIC);
-        out.extend_from_slice(&raw_len.to_le_bytes());
+        out.extend_from_slice(&raw_len_header(raw.len())?);
         out.extend_from_slice(&compressed);
         Ok(out)
     } else {
@@ -91,6 +87,27 @@ fn read_raw_size(bytes: &[u8]) -> u64 {
     u64::from_le_bytes(raw)
 }
 
+fn checked_wrapped_len(compressed_len: usize) -> io::Result<usize> {
+    ZSTD_BLOB_HEADER_LEN
+        .checked_add(compressed_len)
+        .ok_or_else(blob_too_large)
+}
+
+fn raw_len_header(raw_len: usize) -> io::Result<[u8; RAW_SIZE_LEN]> {
+    let raw_len = u64::try_from(raw_len).map_err(|_| blob_too_large())?;
+    Ok(raw_len.to_le_bytes())
+}
+
+#[cfg(test)]
+fn raw_len_header_from_u128(raw_len: u128) -> io::Result<[u8; RAW_SIZE_LEN]> {
+    let raw_len = u64::try_from(raw_len).map_err(|_| blob_too_large())?;
+    Ok(raw_len.to_le_bytes())
+}
+
+fn blob_too_large() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "blob is too large")
+}
+
 fn file_starts_with(path: &Path, needle: &[u8]) -> io::Result<bool> {
     let mut file = File::open(path)?;
     let mut prefix = vec![0_u8; needle.len()];
@@ -135,5 +152,21 @@ mod tests {
 
         assert!(encoded.starts_with(ZSTD_BLOB_MAGIC));
         assert_eq!(decode_bytes(encoded).unwrap(), raw);
+    }
+
+    #[test]
+    fn checked_wrapped_len_rejects_overflow() {
+        let err = checked_wrapped_len(usize::MAX).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(err.to_string(), "blob is too large");
+    }
+
+    #[test]
+    fn raw_len_header_rejects_u64_overflow() {
+        let err = raw_len_header_from_u128(u128::from(u64::MAX) + 1).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(err.to_string(), "blob is too large");
     }
 }
