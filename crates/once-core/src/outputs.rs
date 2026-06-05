@@ -26,6 +26,8 @@ pub(crate) async fn restore(
             restore_file_blob(rel, &abs, &bytes)?;
             continue;
         }
+        // TODO: Remove this raw-blob compatibility branch only after an
+        // action cache version bump makes old file outputs unreachable.
         restore_legacy_file(rel, &abs, &bytes).await?;
     }
     Ok(())
@@ -95,21 +97,38 @@ pub(crate) async fn capture(
                 });
             }
         };
+        let path = rel.as_str().to_string();
         let bytes = if metadata.is_dir() {
-            capture_directory_blob(&abs).map_err(|source| Error::ReadOutput {
-                path: rel.as_str().to_string(),
-                source,
-            })?
+            read_output_blocking(path.clone(), {
+                let abs = abs.clone();
+                move || capture_directory_blob(&abs)
+            })
+            .await?
         } else {
-            capture_file_blob(&abs).map_err(|source| Error::ReadOutput {
-                path: rel.as_str().to_string(),
-                source,
-            })?
+            read_output_blocking(path.clone(), {
+                let abs = abs.clone();
+                move || capture_file_blob(&abs)
+            })
+            .await?
         };
         let digest = cache.put_blob(&bytes).await?;
-        captured.insert(rel.as_str().to_string(), digest);
+        captured.insert(path, digest);
     }
     Ok(captured)
+}
+
+async fn read_output_blocking(
+    path: String,
+    read: impl FnOnce() -> std::io::Result<Vec<u8>> + Send + 'static,
+) -> Result<Vec<u8>> {
+    let path_for_join = path.clone();
+    tokio::task::spawn_blocking(read)
+        .await
+        .map_err(|source| Error::ReadOutput {
+            path: path_for_join,
+            source: std::io::Error::other(source.to_string()),
+        })?
+        .map_err(|source| Error::ReadOutput { path, source })
 }
 
 #[cfg(test)]

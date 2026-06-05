@@ -102,8 +102,17 @@ impl Drop for SandboxCleanup {
         let Some(sandbox) = self.sandbox.take() else {
             return;
         };
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(cleanup_sandbox(sandbox));
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(cleanup_sandbox(sandbox));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    sandbox = sandbox.name(),
+                    %error,
+                    "skipping async microsandbox cleanup because no Tokio runtime is available"
+                );
+            }
         }
     }
 }

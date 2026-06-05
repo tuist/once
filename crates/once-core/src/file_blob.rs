@@ -80,13 +80,7 @@ fn decode_file_blob<'a>(logical_path: &str, bytes: &'a [u8]) -> Result<(u32, &'a
             path: logical_path.to_string(),
             message: "truncated file mode".to_string(),
         })?;
-    let content =
-        bytes
-            .get(FILE_BLOB_MAGIC.len() + 4..)
-            .ok_or_else(|| Error::InvalidFileOutput {
-                path: logical_path.to_string(),
-                message: "truncated file content".to_string(),
-            })?;
+    let content = bytes.get(FILE_BLOB_MAGIC.len() + 4..).unwrap_or_default();
     let mut raw_mode = [0u8; 4];
     raw_mode.copy_from_slice(mode_bytes);
     Ok((u32::from_le_bytes(raw_mode) & 0o777, content))
