@@ -25,49 +25,56 @@ public struct OnceCache: Sendable {
         return String(cString: raw)
     }
 
-    public func digest(bytes: Data) throws -> String {
-        try bytes.withUnsafeBytes { buffer in
-            let pointer = buffer.bindMemory(to: UInt8.self).baseAddress
-            return try decodeStringResponse(
-                once_digest_bytes(pointer, buffer.count)
-            )
+    public func digest(bytes: Data) async throws -> String {
+        try await runAsync {
+            if bytes.isEmpty {
+                return try decodeStringResponse(once_digest_bytes(nil, 0))
+            }
+            return try bytes.withUnsafeBytes { buffer in
+                let pointer = buffer.bindMemory(to: UInt8.self).baseAddress
+                return try decodeStringResponse(
+                    once_digest_bytes(pointer, buffer.count)
+                )
+            }
         }
     }
 
-    public func actionDigest(actionJSON: String) throws -> String {
-        try decodeStringResponse(once_action_digest_json(actionJSON))
+    public func actionDigest(actionJSON: String) async throws -> String {
+        try await runAsync {
+            try decodeStringResponse(once_action_digest_json(actionJSON))
+        }
     }
 
     @discardableResult
-    public func putBlob(_ bytes: Data) throws -> String {
+    public func putBlob(_ bytes: Data) async throws -> String {
         let request = BlobPutRequest(localCacheRoot: localCacheRoot, bytes: Array(bytes))
-        return try decodeRequest(request, with: once_cache_put_blob_json, as: String.self)
+        return try await decodeRequestAsync(request, with: once_cache_put_blob_json, as: String.self)
     }
 
-    public func getBlob(_ digest: String) throws -> Data {
+    public func getBlob(_ digest: String) async throws -> Data {
         let request = DigestRequest(localCacheRoot: localCacheRoot, digest: digest)
-        let response = try decodeRequest(request, with: once_cache_get_blob_json, as: BlobResponse.self)
+        let response = try await decodeRequestAsync(request, with: once_cache_get_blob_json, as: BlobResponse.self)
         return Data(response.bytes)
     }
 
-    public func hasBlob(_ digest: String) throws -> Bool {
+    public func hasBlob(_ digest: String) async throws -> Bool {
         let request = DigestRequest(localCacheRoot: localCacheRoot, digest: digest)
-        return try decodeRequest(request, with: once_cache_has_blob_json, as: Bool.self)
+        return try await decodeRequestAsync(request, with: once_cache_has_blob_json, as: Bool.self)
     }
 
     @discardableResult
-    public func putActionResult(_ result: OnceActionResult, for actionDigest: String) throws -> Bool {
+    public func putActionResult(_ result: OnceActionResult, for actionDigest: String) async throws -> Bool {
         let request = ActionResultPutRequest(
             localCacheRoot: localCacheRoot,
             actionDigest: actionDigest,
             result: result
         )
-        return try decodeRequest(request, with: once_cache_put_action_result_json, as: Bool.self)
+        return try await decodeRequestAsync(request, with: once_cache_put_action_result_json, as: Bool.self)
     }
 
-    public func getActionResult(_ actionDigest: String) throws -> OnceActionResult? {
+    public func getActionResult(_ actionDigest: String) async throws -> OnceActionResult? {
         let request = ActionDigestRequest(localCacheRoot: localCacheRoot, actionDigest: actionDigest)
-        return try decodeRequest(
+        return try await decodeRequestAsync(
             request,
             with: once_cache_get_action_result_json,
             as: OnceActionResult?.self
@@ -75,14 +82,14 @@ public struct OnceCache: Sendable {
     }
 
     @discardableResult
-    public func forgetAction(_ actionDigest: String) throws -> Bool {
+    public func forgetAction(_ actionDigest: String) async throws -> Bool {
         let request = ActionDigestRequest(localCacheRoot: localCacheRoot, actionDigest: actionDigest)
-        return try decodeRequest(request, with: once_cache_forget_action_json, as: Bool.self)
+        return try await decodeRequestAsync(request, with: once_cache_forget_action_json, as: Bool.self)
     }
 
-    public func stats() throws -> OnceCacheStats {
+    public func stats() async throws -> OnceCacheStats {
         let request = CacheRootRequest(localCacheRoot: localCacheRoot)
-        return try decodeRequest(request, with: once_cache_stats_json, as: OnceCacheStats.self)
+        return try await decodeRequestAsync(request, with: once_cache_stats_json, as: OnceCacheStats.self)
     }
 }
 
@@ -114,31 +121,31 @@ public struct OnceCacheStats: Decodable, Sendable, Equatable {
 
 private typealias CJSONFunction = @convention(c) (UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
 
-private struct CacheRootRequest: Encodable {
+private struct CacheRootRequest: Encodable, Sendable {
     let localCacheRoot: String?
 }
 
-private struct BlobPutRequest: Encodable {
+private struct BlobPutRequest: Encodable, Sendable {
     let localCacheRoot: String?
     let bytes: [UInt8]
 }
 
-private struct BlobResponse: Decodable {
+private struct BlobResponse: Decodable, Sendable {
     let bytes: [UInt8]
 }
 
-private struct DigestRequest: Encodable {
+private struct DigestRequest: Encodable, Sendable {
     let localCacheRoot: String?
     let digest: String
 }
 
-private struct ActionResultPutRequest: Encodable {
+private struct ActionResultPutRequest: Encodable, Sendable {
     let localCacheRoot: String?
     let actionDigest: String
     let result: OnceActionResult
 }
 
-private struct ActionDigestRequest: Encodable {
+private struct ActionDigestRequest: Encodable, Sendable {
     let localCacheRoot: String?
     let actionDigest: String
 }
@@ -182,6 +189,22 @@ private extension JSONDecoder {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return decoder
+    }
+}
+
+private func runAsync<Value: Sendable>(
+    _ operation: @escaping @Sendable () throws -> Value
+) async throws -> Value {
+    try await Task.detached(operation: operation).value
+}
+
+private func decodeRequestAsync<Request: Encodable & Sendable, Value: Decodable & Sendable>(
+    _ request: Request,
+    with function: CJSONFunction,
+    as type: Value.Type
+) async throws -> Value {
+    try await runAsync {
+        try decodeRequest(request, with: function, as: type)
     }
 }
 

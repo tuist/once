@@ -44,8 +44,8 @@ wraps the `COnce` C module:
 
 ```swift
 let once = OnceCache()
-let digest = try once.putBlob(Data("hello".utf8))
-let bytes = try once.getBlob(digest)
+let digest = try await once.putBlob(Data("hello".utf8))
+let bytes = try await once.getBlob(digest)
 
 print(String(decoding: bytes, as: UTF8.self))
 ```
