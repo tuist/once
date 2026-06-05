@@ -43,7 +43,7 @@ and add the included `Once.swift` file to your Swift target. `Once.swift`
 wraps the `COnce` C module:
 
 ```swift
-let once = OnceCache(cacheRoot: ".once")
+let once = OnceCache(localCacheRoot: ".once")
 let digest = try once.putBlob(Data("hello".utf8))
 let bytes = try once.getBlob(digest)
 

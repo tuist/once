@@ -18,7 +18,9 @@ pub enum Error {
 ///
 /// `OnceCache` is cheap to clone and can be reused across many cache
 /// operations. The default constructor opens a local filesystem cache
-/// rooted at `cache_root`, usually the workspace's `.once` directory.
+/// rooted at `local_cache_root`, usually the workspace's `.once`
+/// directory. Remote providers use this path as their local mirror for
+/// reads and writes.
 #[derive(Clone)]
 pub struct OnceCache {
     cache: CacheProvider,
@@ -26,8 +28,8 @@ pub struct OnceCache {
 
 impl OnceCache {
     /// Create a client backed by a local filesystem cache.
-    pub fn local(cache_root: impl Into<PathBuf>) -> Self {
-        Self::with_provider(CacheProvider::open_local(cache_root))
+    pub fn local(local_cache_root: impl Into<PathBuf>) -> Self {
+        Self::with_provider(CacheProvider::open_local(local_cache_root))
     }
 
     /// Create a client with an explicit cache provider.

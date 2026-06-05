@@ -7,10 +7,10 @@ public enum OnceError: Error, Equatable {
 }
 
 public struct OnceCache: Sendable {
-    public let cacheRoot: String
+    public let localCacheRoot: String
 
-    public init(cacheRoot: String) {
-        self.cacheRoot = cacheRoot
+    public init(localCacheRoot: String) {
+        self.localCacheRoot = localCacheRoot
     }
 
     public var version: String {
@@ -32,25 +32,25 @@ public struct OnceCache: Sendable {
 
     @discardableResult
     public func putBlob(_ bytes: Data) throws -> String {
-        let request = BlobPutRequest(cacheRoot: cacheRoot, bytes: Array(bytes))
+        let request = BlobPutRequest(localCacheRoot: localCacheRoot, bytes: Array(bytes))
         return try decodeRequest(request, with: once_cache_put_blob_json, as: String.self)
     }
 
     public func getBlob(_ digest: String) throws -> Data {
-        let request = DigestRequest(cacheRoot: cacheRoot, digest: digest)
+        let request = DigestRequest(localCacheRoot: localCacheRoot, digest: digest)
         let response = try decodeRequest(request, with: once_cache_get_blob_json, as: BlobResponse.self)
         return Data(response.bytes)
     }
 
     public func hasBlob(_ digest: String) throws -> Bool {
-        let request = DigestRequest(cacheRoot: cacheRoot, digest: digest)
+        let request = DigestRequest(localCacheRoot: localCacheRoot, digest: digest)
         return try decodeRequest(request, with: once_cache_has_blob_json, as: Bool.self)
     }
 
     @discardableResult
     public func putActionResult(_ result: OnceActionResult, for actionDigest: String) throws -> Bool {
         let request = ActionResultPutRequest(
-            cacheRoot: cacheRoot,
+            localCacheRoot: localCacheRoot,
             actionDigest: actionDigest,
             result: result
         )
@@ -58,7 +58,7 @@ public struct OnceCache: Sendable {
     }
 
     public func getActionResult(_ actionDigest: String) throws -> OnceActionResult? {
-        let request = ActionDigestRequest(cacheRoot: cacheRoot, actionDigest: actionDigest)
+        let request = ActionDigestRequest(localCacheRoot: localCacheRoot, actionDigest: actionDigest)
         return try decodeRequest(
             request,
             with: once_cache_get_action_result_json,
@@ -68,12 +68,12 @@ public struct OnceCache: Sendable {
 
     @discardableResult
     public func forgetAction(_ actionDigest: String) throws -> Bool {
-        let request = ActionDigestRequest(cacheRoot: cacheRoot, actionDigest: actionDigest)
+        let request = ActionDigestRequest(localCacheRoot: localCacheRoot, actionDigest: actionDigest)
         return try decodeRequest(request, with: once_cache_forget_action_json, as: Bool.self)
     }
 
     public func stats() throws -> OnceCacheStats {
-        let request = CacheRootRequest(cacheRoot: cacheRoot)
+        let request = CacheRootRequest(localCacheRoot: localCacheRoot)
         return try decodeRequest(request, with: once_cache_stats_json, as: OnceCacheStats.self)
     }
 }
@@ -107,11 +107,11 @@ public struct OnceCacheStats: Decodable, Sendable, Equatable {
 private typealias CJSONFunction = @convention(c) (UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
 
 private struct CacheRootRequest: Encodable {
-    let cacheRoot: String
+    let localCacheRoot: String
 }
 
 private struct BlobPutRequest: Encodable {
-    let cacheRoot: String
+    let localCacheRoot: String
     let bytes: [UInt8]
 }
 
@@ -120,18 +120,18 @@ private struct BlobResponse: Decodable {
 }
 
 private struct DigestRequest: Encodable {
-    let cacheRoot: String
+    let localCacheRoot: String
     let digest: String
 }
 
 private struct ActionResultPutRequest: Encodable {
-    let cacheRoot: String
+    let localCacheRoot: String
     let actionDigest: String
     let result: OnceActionResult
 }
 
 private struct ActionDigestRequest: Encodable {
-    let cacheRoot: String
+    let localCacheRoot: String
     let actionDigest: String
 }
 
