@@ -88,10 +88,14 @@ pub extern "C" fn once_string_free(value: *mut c_char) {
 /// Compute a BLAKE3 digest for a byte buffer.
 #[no_mangle]
 pub extern "C" fn once_digest_bytes(data: *const c_uchar, len: usize) -> *mut c_char {
-    let Some(bytes) = bytes_from_raw(data, len) else {
+    if len == 0 {
+        return response_ok(Digest::of_bytes(&[]).to_hex());
+    }
+    if data.is_null() {
         return response_error("data cannot be null when len is non-zero");
-    };
-    response_ok(Digest::of_bytes(&bytes).to_hex())
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    response_ok(Digest::of_bytes(bytes).to_hex())
 }
 
 /// Compute the Once action digest for a JSON-encoded `once_core::Action`.
@@ -274,16 +278,6 @@ fn str_from_raw(value: *const c_char) -> Option<String> {
             .ok()
             .map(std::borrow::ToOwned::to_owned)
     }
-}
-
-fn bytes_from_raw(data: *const c_uchar, len: usize) -> Option<Vec<u8>> {
-    if len == 0 {
-        return Some(Vec::new());
-    }
-    if data.is_null() {
-        return None;
-    }
-    unsafe { Some(std::slice::from_raw_parts(data, len).to_vec()) }
 }
 
 #[cfg(test)]
