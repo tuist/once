@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use once_cas::{ActionResult, CacheProvider, Digest, Stats};
+use once_core::Xdg;
 
 /// Result type used by the high-level Once SDK.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -17,16 +18,20 @@ pub enum Error {
 /// Embeddable Once cache client.
 ///
 /// `OnceCache` is cheap to clone and can be reused across many cache
-/// operations. The default constructor opens a local filesystem cache
-/// rooted at `local_cache_root`, usually the workspace's `.once`
-/// directory. Remote providers use this path as their local mirror for
-/// reads and writes.
+/// operations. The default constructor opens the local filesystem cache
+/// at `$XDG_CACHE_HOME/once/cas`, or `$HOME/.cache/once/cas` when
+/// `XDG_CACHE_HOME` is not set.
 #[derive(Clone)]
 pub struct OnceCache {
     cache: CacheProvider,
 }
 
 impl OnceCache {
+    /// Create a client backed by Once's default XDG local cache.
+    pub fn new() -> Self {
+        Self::local(Xdg::from_env().once_cas())
+    }
+
     /// Create a client backed by a local filesystem cache.
     pub fn local(local_cache_root: impl Into<PathBuf>) -> Self {
         Self::with_provider(CacheProvider::open_local(local_cache_root))
@@ -83,6 +88,12 @@ impl OnceCache {
     }
 }
 
+impl Default for OnceCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Parse a lowercase BLAKE3 hex digest.
 pub fn digest_from_hex(hex: &str) -> Result<Digest> {
     Digest::from_hex(hex).ok_or_else(|| Error::InvalidDigest(hex.to_string()))
@@ -92,6 +103,13 @@ pub fn digest_from_hex(hex: &str) -> Result<Digest> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn default_cache_uses_xdg_cas_root() {
+        let cache = OnceCache::new();
+
+        assert!(cache.root().ends_with("once/cas"));
+    }
 
     #[tokio::test]
     async fn stores_and_reads_blobs() {

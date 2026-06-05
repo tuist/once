@@ -6,7 +6,7 @@
 //!
 //! ```no_run
 //! # async fn example() -> once::Result<()> {
-//! let cache = once::OnceCache::local(".once");
+//! let cache = once::OnceCache::new();
 //! let digest = cache.put_blob(b"hello").await?;
 //!
 //! assert_eq!(cache.get_blob(digest).await?, b"hello");

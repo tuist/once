@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Rust SDK and C ABI for Once cacheable action execution"
+description = "Rust SDK and C ABI for Once cache access"
 
 [lib]
 name = "once"

@@ -16,7 +16,7 @@ Read and write blobs with a local cache:
 ```rust
 #[tokio::main]
 async fn main() -> once::Result<()> {
-    let cache = once::OnceCache::local(".once");
+    let cache = once::OnceCache::new();
     let digest = cache.put_blob(b"hello").await?;
     let bytes = cache.get_blob(digest).await?;
 
@@ -27,7 +27,7 @@ async fn main() -> once::Result<()> {
 
 The high-level API is:
 
-- `OnceCache`: reusable client bound to a cache provider.
+- `OnceCache`: reusable client bound to the default XDG local cache, or an explicit cache provider.
 - Blob operations: `put_blob`, `get_blob`, and `has_blob`.
 - Action-cache operations: `put_action_result`, `get_action_result`, and `forget_action`.
 - Metadata helpers: `stats`, `digest_from_hex`, and lower-level digest/action types.
@@ -43,7 +43,7 @@ and add the included `Once.swift` file to your Swift target. `Once.swift`
 wraps the `COnce` C module:
 
 ```swift
-let once = OnceCache(localCacheRoot: ".once")
+let once = OnceCache()
 let digest = try once.putBlob(Data("hello".utf8))
 let bytes = try once.getBlob(digest)
 
@@ -52,7 +52,8 @@ print(String(decoding: bytes, as: UTF8.self))
 
 If you call the C API directly, all owned strings returned by `once_*`
 functions must be released with `once_string_free`. The C module name is
-`COnce`.
+`COnce`. JSON requests use the default XDG local cache unless they include
+`local_cache_root` as an override.
 
 ### FFI responses
 

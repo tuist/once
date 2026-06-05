@@ -10,27 +10,27 @@ use crate::{digest_from_hex, OnceCache};
 #[derive(Debug, Deserialize)]
 struct CacheRootRequest {
     #[serde(alias = "cache_root")]
-    local_cache_root: PathBuf,
+    local_cache_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
 struct BlobPutRequest {
     #[serde(alias = "cache_root")]
-    local_cache_root: PathBuf,
+    local_cache_root: Option<PathBuf>,
     bytes: Vec<u8>,
 }
 
 #[derive(Debug, Deserialize)]
 struct DigestRequest {
     #[serde(alias = "cache_root")]
-    local_cache_root: PathBuf,
+    local_cache_root: Option<PathBuf>,
     digest: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct ActionResultPutRequest {
     #[serde(alias = "cache_root")]
-    local_cache_root: PathBuf,
+    local_cache_root: Option<PathBuf>,
     action_digest: String,
     result: ActionResult,
 }
@@ -38,7 +38,7 @@ struct ActionResultPutRequest {
 #[derive(Debug, Deserialize)]
 struct ActionDigestRequest {
     #[serde(alias = "cache_root")]
-    local_cache_root: PathBuf,
+    local_cache_root: Option<PathBuf>,
     action_digest: String,
 }
 
@@ -107,7 +107,7 @@ pub extern "C" fn once_action_digest_json(action_json: *const c_char) -> *mut c_
 #[no_mangle]
 pub extern "C" fn once_cache_put_blob_json(request_json: *const c_char) -> *mut c_char {
     run_json::<BlobPutRequest, _>(request_json, |request| {
-        let cache = OnceCache::local(request.local_cache_root);
+        let cache = cache_from_root(request.local_cache_root);
         block_on(async {
             cache
                 .put_blob(&request.bytes)
@@ -121,7 +121,7 @@ pub extern "C" fn once_cache_put_blob_json(request_json: *const c_char) -> *mut 
 #[no_mangle]
 pub extern "C" fn once_cache_get_blob_json(request_json: *const c_char) -> *mut c_char {
     run_json::<DigestRequest, _>(request_json, |request| {
-        let cache = OnceCache::local(request.local_cache_root);
+        let cache = cache_from_root(request.local_cache_root);
         let digest = digest_from_hex(&request.digest)?;
         block_on(async {
             cache
@@ -136,7 +136,7 @@ pub extern "C" fn once_cache_get_blob_json(request_json: *const c_char) -> *mut 
 #[no_mangle]
 pub extern "C" fn once_cache_has_blob_json(request_json: *const c_char) -> *mut c_char {
     run_json::<DigestRequest, _>(request_json, |request| {
-        let cache = OnceCache::local(request.local_cache_root);
+        let cache = cache_from_root(request.local_cache_root);
         let digest = digest_from_hex(&request.digest)?;
         block_on(async { cache.has_blob(digest).await })
     })
@@ -146,7 +146,7 @@ pub extern "C" fn once_cache_has_blob_json(request_json: *const c_char) -> *mut 
 #[no_mangle]
 pub extern "C" fn once_cache_put_action_result_json(request_json: *const c_char) -> *mut c_char {
     run_json::<ActionResultPutRequest, _>(request_json, |request| {
-        let cache = OnceCache::local(request.local_cache_root);
+        let cache = cache_from_root(request.local_cache_root);
         let action = digest_from_hex(&request.action_digest)?;
         block_on(async {
             cache
@@ -161,7 +161,7 @@ pub extern "C" fn once_cache_put_action_result_json(request_json: *const c_char)
 #[no_mangle]
 pub extern "C" fn once_cache_get_action_result_json(request_json: *const c_char) -> *mut c_char {
     run_json::<ActionDigestRequest, _>(request_json, |request| {
-        let cache = OnceCache::local(request.local_cache_root);
+        let cache = cache_from_root(request.local_cache_root);
         let action = digest_from_hex(&request.action_digest)?;
         block_on(async { cache.get_action_result(action).await })
     })
@@ -171,7 +171,7 @@ pub extern "C" fn once_cache_get_action_result_json(request_json: *const c_char)
 #[no_mangle]
 pub extern "C" fn once_cache_forget_action_json(request_json: *const c_char) -> *mut c_char {
     run_json::<ActionDigestRequest, _>(request_json, |request| {
-        let cache = OnceCache::local(request.local_cache_root);
+        let cache = cache_from_root(request.local_cache_root);
         let action = digest_from_hex(&request.action_digest)?;
         block_on(async { cache.forget_action(action).await })
     })
@@ -181,7 +181,7 @@ pub extern "C" fn once_cache_forget_action_json(request_json: *const c_char) -> 
 #[no_mangle]
 pub extern "C" fn once_cache_stats_json(request_json: *const c_char) -> *mut c_char {
     run_json::<CacheRootRequest, _>(request_json, |request| {
-        let cache = OnceCache::local(request.local_cache_root);
+        let cache = cache_from_root(request.local_cache_root);
         block_on(async {
             cache.stats().await.map(|stats| StatsResponse {
                 blob_count: stats.blob_count,
@@ -191,6 +191,10 @@ pub extern "C" fn once_cache_stats_json(request_json: *const c_char) -> *mut c_c
             })
         })
     })
+}
+
+fn cache_from_root(local_cache_root: Option<PathBuf>) -> OnceCache {
+    local_cache_root.map_or_else(OnceCache::new, OnceCache::local)
 }
 
 fn run_json<Request, Value>(

@@ -7,7 +7,11 @@ public enum OnceError: Error, Equatable {
 }
 
 public struct OnceCache: Sendable {
-    public let localCacheRoot: String
+    private let localCacheRoot: String?
+
+    public init() {
+        self.localCacheRoot = nil
+    }
 
     public init(localCacheRoot: String) {
         self.localCacheRoot = localCacheRoot
@@ -107,11 +111,11 @@ public struct OnceCacheStats: Decodable, Sendable, Equatable {
 private typealias CJSONFunction = @convention(c) (UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
 
 private struct CacheRootRequest: Encodable {
-    let localCacheRoot: String
+    let localCacheRoot: String?
 }
 
 private struct BlobPutRequest: Encodable {
-    let localCacheRoot: String
+    let localCacheRoot: String?
     let bytes: [UInt8]
 }
 
@@ -120,18 +124,18 @@ private struct BlobResponse: Decodable {
 }
 
 private struct DigestRequest: Encodable {
-    let localCacheRoot: String
+    let localCacheRoot: String?
     let digest: String
 }
 
 private struct ActionResultPutRequest: Encodable {
-    let localCacheRoot: String
+    let localCacheRoot: String?
     let actionDigest: String
     let result: OnceActionResult
 }
 
 private struct ActionDigestRequest: Encodable {
-    let localCacheRoot: String
+    let localCacheRoot: String?
     let actionDigest: String
 }
 
