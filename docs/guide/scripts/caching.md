@@ -151,8 +151,13 @@ mise run build
 | --- | --- |
 | `input` | Declares tracked files, directories, or globs. |
 | `output` | Declares output files or directories that Once should restore on cache hits. |
+| `output-symlinks` | Controls output symlink capture. Use `materialize-external` to copy targets outside the output directory, or `preserve` to store links as links. |
 | `env` | Forwards selected environment variables from the host and includes them in the cache key. |
 | `cwd` | Chooses the working directory for the script. |
+
+Directory outputs default to `materialize-external`, so package-manager
+stores linked from outputs such as `node_modules/` can restore from the
+cache without depending on the original global store path.
 
 The script file itself is always part of the cache key, even when no
 `input` directives are present.

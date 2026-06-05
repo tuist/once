@@ -3,9 +3,9 @@ use std::path::Path;
 
 use once_cas::{ActionResult, CacheProvider, Digest};
 
-use crate::directory_blob::{capture_directory_blob, restore_directory_blob, DIRECTORY_BLOB_MAGIC};
+use crate::directory_blob::{capture_directory_blob, is_directory_blob, restore_directory_blob};
 use crate::file_blob::{capture_file_blob, restore_file_blob, FILE_BLOB_MAGIC};
-use crate::{Error, Result, WorkspacePath};
+use crate::{Error, OutputSymlinkMode, Result, WorkspacePath};
 
 /// Materialize every cached output blob to its declared workspace path.
 /// On cache hit this is what makes a downstream action see a file the
@@ -18,7 +18,7 @@ pub(crate) async fn restore(
     for (rel, digest) in &result.outputs {
         let abs = workspace_root.join(rel);
         let bytes = cache.get_blob(digest).await?;
-        if bytes.starts_with(DIRECTORY_BLOB_MAGIC) {
+        if is_directory_blob(&bytes) {
             restore_directory_blob(rel, &abs, &bytes)?;
             continue;
         }
@@ -79,6 +79,7 @@ pub(crate) async fn capture(
     outputs: &[WorkspacePath],
     workspace_root: &Path,
     cache: &CacheProvider,
+    symlink_mode: OutputSymlinkMode,
 ) -> Result<BTreeMap<String, Digest>> {
     let mut captured = BTreeMap::new();
     for rel in outputs {
@@ -101,7 +102,7 @@ pub(crate) async fn capture(
         let bytes = if metadata.is_dir() {
             read_output_blocking(path.clone(), {
                 let abs = abs.clone();
-                move || capture_directory_blob(&abs)
+                move || capture_directory_blob(&abs, symlink_mode)
             })
             .await?
         } else {
@@ -157,9 +158,14 @@ mod tests {
         std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o640)).unwrap();
 
         let output = WorkspacePath::try_from("out/data.txt").unwrap();
-        let outputs = capture(std::slice::from_ref(&output), &workspace, &cache)
-            .await
-            .unwrap();
+        let outputs = capture(
+            std::slice::from_ref(&output),
+            &workspace,
+            &cache,
+            OutputSymlinkMode::default(),
+        )
+        .await
+        .unwrap();
         std::fs::remove_file(&output_path).unwrap();
 
         let result = ActionResult {

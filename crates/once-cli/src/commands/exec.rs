@@ -21,7 +21,7 @@ use anyhow::{Context, Result};
 use once_cas::{CacheProvider, Digest};
 use once_core::{
     tool_env, workspace_tool, workspace_tool_env, Action, CacheState, InputDigestBuilder,
-    RemoteExecution, ResourceRequest, RunOpts, WorkspacePath,
+    OutputSymlinkMode, RemoteExecution, ResourceRequest, RunOpts, WorkspacePath,
 };
 use once_frontend::{parse_script_annotations, ScriptAnnotations};
 use serde::Serialize;
@@ -62,6 +62,7 @@ struct ScriptInvocation {
     cwd: WorkspacePath,
     env: BTreeMap<String, String>,
     outputs: Vec<WorkspacePath>,
+    output_symlink_mode: OutputSymlinkMode,
     input_digest: Option<Digest>,
     timeout_ms: Option<u64>,
     remote: Option<RemoteExecution>,
@@ -103,6 +104,7 @@ pub async fn exec(
                 cwd,
                 input_digest: None,
                 outputs: vec![],
+                output_symlink_mode: OutputSymlinkMode::default(),
                 resources: ResourceRequest::default(),
                 timeout_ms,
                 remote: remote_execution(remote.as_deref()),
@@ -207,6 +209,7 @@ fn script_action(
             cwd: Some(invocation.cwd),
             input_digest: invocation.input_digest,
             outputs: invocation.outputs,
+            output_symlink_mode: invocation.output_symlink_mode,
             resources: ResourceRequest::default(),
             timeout_ms: invocation.timeout_ms,
             remote: invocation.remote,
@@ -300,6 +303,7 @@ fn script_invocation(
     let timeout_ms = timeout_ms_override;
     let env = script_env(&workspace, &runtime, &annotations.env_vars, explicit_env)?;
     let remote = remote_execution(remote_override.or(annotations.remote.as_deref()));
+    let output_symlink_mode = output_symlink_mode(annotations.output_symlinks.as_deref())?;
 
     Ok(ScriptInvocation {
         workspace,
@@ -310,6 +314,7 @@ fn script_invocation(
         cwd,
         env,
         outputs,
+        output_symlink_mode,
         input_digest,
         timeout_ms,
         remote,
@@ -605,6 +610,14 @@ fn has_once_annotations(annotations: &ScriptAnnotations) -> bool {
         || !annotations.env_vars.is_empty()
         || annotations.cwd.is_some()
         || annotations.remote.is_some()
+        || annotations.output_symlinks.is_some()
+}
+
+fn output_symlink_mode(raw: Option<&str>) -> Result<OutputSymlinkMode> {
+    raw.unwrap_or("materialize-external")
+        .parse()
+        .map_err(anyhow::Error::msg)
+        .context("parsing output-symlinks")
 }
 
 fn script_input_digest(workspace: &Path, inputs: &[WorkspacePath]) -> Result<Digest> {
@@ -757,6 +770,61 @@ mod tests {
                 assert!(input_digest.is_some());
             }
         }
+    }
+
+    #[test]
+    fn script_annotation_sets_output_symlink_mode() {
+        let tmp = TempDir::new().unwrap();
+        let script = tmp.path().join("scripts").join("build.sh");
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
+        fs::write(
+            &script,
+            "#!/bin/bash\n# once output-symlinks \"preserve\"\ntrue\n",
+        )
+        .unwrap();
+
+        let (_, action) = script_action(
+            tmp.path(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
+        )
+        .unwrap();
+
+        match action {
+            Action::RunCommand {
+                output_symlink_mode,
+                ..
+            } => {
+                assert_eq!(output_symlink_mode, OutputSymlinkMode::Preserve);
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_output_symlink_mode() {
+        let tmp = TempDir::new().unwrap();
+        let script = tmp.path().join("scripts").join("build.sh");
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
+        fs::write(
+            &script,
+            "#!/bin/bash\n# once output-symlinks \"copy-everything\"\ntrue\n",
+        )
+        .unwrap();
+
+        let err = script_action(
+            tmp.path(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("parsing output-symlinks"));
     }
 
     #[test]

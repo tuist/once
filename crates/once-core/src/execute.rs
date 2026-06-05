@@ -17,6 +17,7 @@ pub(crate) async fn run(
             cwd,
             input_digest: _,
             outputs,
+            output_symlink_mode,
             resources: _,
             timeout_ms,
             remote,
@@ -59,7 +60,8 @@ pub(crate) async fn run(
                 }
             };
             if result.exit_code == 0 {
-                result.outputs = outputs::capture(outputs, workspace_root, cache).await?;
+                result.outputs =
+                    outputs::capture(outputs, workspace_root, cache, *output_symlink_mode).await?;
             }
             Ok(result)
         }
