@@ -1,9 +1,11 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_uchar};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use once_cas::{ActionResult, Digest};
 use serde::{Deserialize, Serialize};
+use tokio::runtime::Runtime;
 
 use crate::{digest_from_hex, OnceCache};
 
@@ -61,6 +63,8 @@ enum FfiResponse<T> {
     Ok { value: T },
     Error { message: String },
 }
+
+static RUNTIME: OnceLock<std::result::Result<Runtime, String>> = OnceLock::new();
 
 /// Return the linked Once version.
 #[no_mangle]
@@ -217,15 +221,20 @@ where
 }
 
 fn block_on<T>(work: impl std::future::Future<Output = crate::Result<T>>) -> crate::Result<T> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|source| once_cas::Error::Remote {
+    let runtime = RUNTIME
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|source| source.to_string())
+        })
+        .as_ref()
+        .map_err(|message| once_cas::Error::Remote {
             provider: "local",
             operation: "runtime",
-            message: source.to_string(),
-        })?
-        .block_on(work)
+            message: message.clone(),
+        })?;
+    runtime.block_on(work)
 }
 
 fn response_ok<T: Serialize>(value: T) -> *mut c_char {
@@ -245,7 +254,7 @@ fn response<T: Serialize>(value: &FfiResponse<T>) -> *mut c_char {
 }
 
 fn string_to_raw(value: impl Into<String>) -> *mut c_char {
-    CString::new(value.into())
+    CString::new(value.into().replace('\0', "\\0"))
         .expect("FFI string cannot contain interior nul bytes")
         .into_raw()
 }
