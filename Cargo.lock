@@ -2822,6 +2822,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "once"
+version = "0.0.0"
+dependencies = [
+ "once-cas",
+ "once-core",
+ "once-frontend",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "once-cas"
 version = "0.0.0"
 dependencies = [
