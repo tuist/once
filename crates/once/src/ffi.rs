@@ -229,6 +229,7 @@ where
 fn block_on<T>(work: impl std::future::Future<Output = crate::Result<T>>) -> crate::Result<T> {
     if RUNTIME.get().is_none() {
         let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
             .enable_all()
             .build()
             .map_err(|source| once_cas::Error::Remote {

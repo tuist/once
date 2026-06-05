@@ -1,6 +1,8 @@
 import Foundation
 import COnce
 
+private let onceEmptyBytes: [UInt8] = [0]
+
 public enum OnceError: Error, Equatable {
     case invalidUTF8
     case api(String)
@@ -27,13 +29,17 @@ public struct OnceCache: Sendable {
 
     public func digest(bytes: Data) async throws -> String {
         try await runAsync {
-            if bytes.isEmpty {
-                return try decodeStringResponse(once_digest_bytes(nil, 0))
-            }
             return try bytes.withUnsafeBytes { buffer in
                 let pointer = buffer.bindMemory(to: UInt8.self).baseAddress
+                if let pointer {
+                    return try decodeStringResponse(
+                        once_digest_bytes(pointer, buffer.count)
+                    )
+                }
                 return try decodeStringResponse(
-                    once_digest_bytes(pointer, buffer.count)
+                    onceEmptyBytes.withUnsafeBufferPointer { pointer in
+                        once_digest_bytes(pointer.baseAddress, 0)
+                    }
                 )
             }
         }

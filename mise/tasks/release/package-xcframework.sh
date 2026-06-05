@@ -17,7 +17,7 @@ while (($# > 0)); do
   esac
 done
 
-if [[ -z "${version}" ]]; then
+if [[ -z "${version//[[:space:]]/}" ]]; then
   echo "--version is required" >&2
   exit 1
 fi
