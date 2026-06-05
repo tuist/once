@@ -65,6 +65,8 @@ enum FfiResponse<T> {
 }
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+const RESPONSE_SERIALIZATION_ERROR: &str =
+    r#"{"status":"error","message":"response serialization failed"}"#;
 
 /// Return the linked Once version.
 #[no_mangle]
@@ -235,7 +237,7 @@ fn block_on<T>(work: impl std::future::Future<Output = crate::Result<T>>) -> cra
     let runtime = RUNTIME.get().ok_or_else(|| once_cas::Error::Remote {
         provider: "local",
         operation: "runtime",
-        message: "runtime initialization failed".to_string(),
+        message: "runtime initialization completed without caching a runtime".to_string(),
     })?;
     runtime.block_on(work)
 }
@@ -251,8 +253,8 @@ fn response_error(message: impl Into<String>) -> *mut c_char {
 }
 
 fn response<T: Serialize>(value: &FfiResponse<T>) -> *mut c_char {
-    let json = serde_json::to_string(&value)
-        .unwrap_or_else(|error| format!(r#"{{"status":"error","message":"{error}"}}"#));
+    let json =
+        serde_json::to_string(&value).unwrap_or_else(|_| RESPONSE_SERIALIZATION_ERROR.to_string());
     string_to_raw(json)
 }
 
