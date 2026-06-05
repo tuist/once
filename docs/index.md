@@ -4,29 +4,25 @@ layout: home
 hero:
   name: "Once"
   text: "Run once. Reuse anywhere."
-  tagline: Once makes project scripts cacheable, observable, and remotely executable.
+  tagline: Once turns ordinary project automation into content-addressed actions with explicit inputs, outputs, environment, and runtime metadata.
   image:
     src: /logo.png
     alt: Once
   actions:
     - theme: brand
-      text: What is Once
-      link: /guide/what-is-once
+      text: Why
+      link: /guide/why
     - theme: alt
-      text: Cacheable Scripts
-      link: /guide/cacheable-scripts
+      text: Scripts
+      link: /guide/scripts/
     - theme: alt
       text: View on GitHub
       link: https://github.com/tuist/once
 features:
-  - title: Scripts stay scripts
-    details: Keep the shell, Node, Python, Ruby, or other scripts you already have. Add a small execution contract instead of rewriting them as build rules.
-    link: /guide/cacheable-scripts
-    linkText: Learn about scripts
+  - title: Actions stay flexible
+    details: Keep existing commands, tools, and workflows in place. Add a small execution contract around the work you want to cache.
   - title: Deterministic cache keys
     details: Inputs, outputs, environment variables, working directories, and timeouts become part of the action contract.
-  - title: Remote execution when it helps
-    details: The same script contract can run locally or on a compute provider with `--remote`.
-  - title: Runtime API for agents
-    details: Runtime sessions expose structured logs, events, and control over JSON-RPC instead of forcing agents to scrape terminal output.
+  - title: Providers
+    details: Provider implementation is decoupled from actions, so teams can choose local cache storage, Tuist, and future remote compute providers.
 ---

@@ -135,11 +135,13 @@ body:has(.VPHome)::before {
 }
 
 .VPNavBarTitle .title {
+  gap: 8px;
   font-weight: 700;
   color: var(--vp-c-text-1);
 }
 
 .VPNavBarTitle .logo {
+  margin-right: 0;
   filter: drop-shadow(0 7px 14px oklch(53.2% 0.276 286.9 / 0.25));
 }
 
@@ -213,15 +215,7 @@ body:has(.VPHome)::before {
 }
 
 .VPHero .image-bg {
-  display: block;
-  opacity: 1;
-  filter: blur(18px);
-  background:
-    linear-gradient(135deg, oklch(53.2% 0.276 286.9 / 0.22), oklch(63% 0.182 259.5 / 0.12)),
-    var(--fabrik-purple-50);
-  border-radius: 28px;
-  width: 86%;
-  height: 86%;
+  display: none;
 }
 
 .VPHero .image-src {
@@ -245,7 +239,7 @@ body:has(.VPHome)::before {
 
 .VPHomeFeatures .items {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 24px;
 }
 
@@ -271,10 +265,6 @@ body:has(.VPHome)::before {
 
 .VPHomeFeatures .item:nth-child(3) .VPFeature {
   --feature-accent: var(--fabrik-green-500);
-}
-
-.VPHomeFeatures .item:nth-child(4) .VPFeature {
-  --feature-accent: var(--fabrik-orange-500);
 }
 
 .VPFeature .title {
@@ -304,17 +294,16 @@ body:has(.VPHome)::before {
   font-weight: 700;
 }
 
-.dark .VPHero .image-bg {
-  filter: blur(28px);
-  background:
-    radial-gradient(circle, oklch(53.2% 0.276 286.9 / 0.3), transparent 62%),
-    radial-gradient(circle, oklch(63% 0.182 259.5 / 0.18), transparent 74%);
-}
-
 .dark .VPFeature {
   background:
     linear-gradient(180deg, oklch(97.2% 0 0 / 0.045), transparent),
     var(--vp-c-bg-soft);
+}
+
+@media (max-width: 959px) {
+  .VPHomeFeatures .items {
+    grid-template-columns: 1fr;
+  }
 }
 
 .VPDoc {

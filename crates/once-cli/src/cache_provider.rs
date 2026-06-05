@@ -71,7 +71,13 @@ fn resolve_config(workspace: &Path, xdg: &Xdg) -> Result<ResolvedCacheProviderCo
         .context("loading cache provider")?
     {
         Some(config) => resolve_provider_config(xdg, config),
-        None => resolve_default_provider(xdg),
+        None => {
+            if let Some(config) = resolve_tuist_workspace_config(workspace) {
+                Ok(ResolvedCacheProviderConfig::Tuist(config?))
+            } else {
+                resolve_default_provider(xdg)
+            }
+        }
     }
 }
 
@@ -190,6 +196,250 @@ fn default_tuist_config(
         oauth_client_id: resolve_tuist_oauth_client_id(oauth_client_id),
         provider_name,
     }
+}
+
+fn resolve_tuist_workspace_config(workspace: &Path) -> Option<Result<TuistCacheConfig>> {
+    load_tuist_toml_config(workspace)
+        .or_else(|| load_tuist_swift_config(workspace))
+        .map(|config| {
+            let (account, project) = split_full_handle(&config.full_handle).with_context(|| {
+                format!(
+                    "Tuist project handle `{}` must have the form `account/project`",
+                    config.full_handle
+                )
+            })?;
+            Ok(default_tuist_config(
+                "tuist".to_string(),
+                config.url.unwrap_or_else(|| DEFAULT_TUIST_URL.to_string()),
+                Some(account),
+                Some(project),
+                None,
+            ))
+        })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TuistWorkspaceConfig {
+    full_handle: String,
+    url: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TuistTomlConfig {
+    project: Option<String>,
+    url: Option<String>,
+}
+
+fn load_tuist_toml_config(workspace: &Path) -> Option<TuistWorkspaceConfig> {
+    let path = workspace.join("tuist.toml");
+    let src = std::fs::read_to_string(path).ok()?;
+    let config: TuistTomlConfig = toml::from_str(&src).ok()?;
+    Some(TuistWorkspaceConfig {
+        full_handle: non_empty(config.project)?,
+        url: non_empty(config.url),
+    })
+}
+
+fn load_tuist_swift_config(workspace: &Path) -> Option<TuistWorkspaceConfig> {
+    let path = workspace.join("Tuist.swift");
+    let src = std::fs::read_to_string(path).ok()?;
+    let body = swift_tuist_constructor_body(&src)?;
+    Some(TuistWorkspaceConfig {
+        full_handle: swift_string_argument(body, "fullHandle")?,
+        url: swift_string_argument(body, "url"),
+    })
+}
+
+fn swift_tuist_constructor_body(src: &str) -> Option<&str> {
+    let mut cursor = 0;
+    while cursor < src.len() {
+        if let Some(next) = skip_swift_comment_or_string(src, cursor) {
+            cursor = next;
+            continue;
+        }
+        if starts_swift_identifier(src, cursor, "Tuist") {
+            let open = skip_swift_space_and_comments(src, cursor + "Tuist".len())?;
+            if src[open..].starts_with('(') {
+                return swift_parenthesized_body(src, open);
+            }
+        }
+        cursor += src[cursor..].chars().next()?.len_utf8();
+    }
+    None
+}
+
+fn swift_parenthesized_body(src: &str, open: usize) -> Option<&str> {
+    let mut cursor = open + 1;
+    let mut depth = 1;
+    while cursor < src.len() {
+        if let Some(next) = skip_swift_comment_or_string(src, cursor) {
+            cursor = next;
+            continue;
+        }
+        let ch = src[cursor..].chars().next()?;
+        if ch == '(' {
+            depth += 1;
+        } else if ch == ')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(&src[open + 1..cursor]);
+            }
+        }
+        cursor += ch.len_utf8();
+    }
+    None
+}
+
+fn swift_string_argument(src: &str, label: &str) -> Option<String> {
+    let mut cursor = 0;
+    let mut depth = 0usize;
+    while cursor < src.len() {
+        if let Some(next) = skip_swift_comment_or_string(src, cursor) {
+            cursor = next;
+            continue;
+        }
+        let ch = src[cursor..].chars().next()?;
+        if matches!(ch, '(' | '[' | '{') {
+            depth += 1;
+            cursor += ch.len_utf8();
+            continue;
+        }
+        if matches!(ch, ')' | ']' | '}') {
+            depth = depth.saturating_sub(1);
+            cursor += ch.len_utf8();
+            continue;
+        }
+        if depth == 0 && starts_swift_identifier(src, cursor, label) {
+            let colon = skip_swift_space_and_comments(src, cursor + label.len())?;
+            if src[colon..].starts_with(':') {
+                return leading_swift_string(&src[colon + 1..]);
+            }
+        }
+        cursor += ch.len_utf8();
+    }
+    None
+}
+
+fn starts_swift_identifier(src: &str, index: usize, identifier: &str) -> bool {
+    if !src[index..].starts_with(identifier) {
+        return false;
+    }
+    let before = src[..index].chars().next_back();
+    let after = src[index + identifier.len()..].chars().next();
+    !before.is_some_and(is_swift_identifier_char) && !after.is_some_and(is_swift_identifier_char)
+}
+
+fn is_swift_identifier_char(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric()
+}
+
+fn skip_swift_space_and_comments(src: &str, mut cursor: usize) -> Option<usize> {
+    loop {
+        while cursor < src.len() {
+            let ch = src[cursor..].chars().next()?;
+            if !ch.is_whitespace() {
+                break;
+            }
+            cursor += ch.len_utf8();
+        }
+        if let Some(next) = skip_swift_comment(src, cursor) {
+            cursor = next;
+        } else {
+            return Some(cursor);
+        }
+    }
+}
+
+fn skip_swift_comment_or_string(src: &str, cursor: usize) -> Option<usize> {
+    skip_swift_comment(src, cursor).or_else(|| skip_swift_string(src, cursor))
+}
+
+fn skip_swift_comment(src: &str, cursor: usize) -> Option<usize> {
+    if src[cursor..].starts_with("//") {
+        return Some(
+            src[cursor..]
+                .find('\n')
+                .map_or(src.len(), |offset| cursor + offset + 1),
+        );
+    }
+    if !src[cursor..].starts_with("/*") {
+        return None;
+    }
+    let mut depth = 1usize;
+    let mut current = cursor + 2;
+    while current < src.len() {
+        if src[current..].starts_with("/*") {
+            depth += 1;
+            current += 2;
+        } else if src[current..].starts_with("*/") {
+            depth -= 1;
+            current += 2;
+            if depth == 0 {
+                return Some(current);
+            }
+        } else {
+            current += src[current..].chars().next()?.len_utf8();
+        }
+    }
+    Some(src.len())
+}
+
+fn skip_swift_string(src: &str, cursor: usize) -> Option<usize> {
+    if !src[cursor..].starts_with('"') {
+        return None;
+    }
+    if src[cursor..].starts_with("\"\"\"") {
+        return Some(
+            src[cursor + 3..]
+                .find("\"\"\"")
+                .map_or(src.len(), |offset| cursor + 3 + offset + 3),
+        );
+    }
+    let mut current = cursor + 1;
+    let mut escaped = false;
+    while current < src.len() {
+        let ch = src[current..].chars().next()?;
+        current += ch.len_utf8();
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            return Some(current);
+        }
+    }
+    Some(src.len())
+}
+
+fn leading_swift_string(src: &str) -> Option<String> {
+    let trimmed = src.trim_start();
+    let body = trimmed.strip_prefix('"')?;
+    let mut value = String::new();
+    let mut escaped = false;
+    for ch in body.chars() {
+        if escaped {
+            value.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            return non_empty(Some(value));
+        } else {
+            value.push(ch);
+        }
+    }
+    None
+}
+
+fn split_full_handle(full_handle: &str) -> Option<(String, String)> {
+    let mut parts = full_handle.split('/');
+    let account = non_empty(parts.next().map(str::to_string))?;
+    let project = non_empty(parts.next().map(str::to_string))?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((account, project))
 }
 
 fn resolve_tuist_oauth_client_id(config_value: Option<String>) -> Option<String> {
@@ -324,6 +574,14 @@ mod tests {
         std::fs::write(root.join("once.toml"), body).unwrap();
     }
 
+    fn write_tuist_swift(root: &Path, body: &str) {
+        std::fs::write(root.join("Tuist.swift"), body).unwrap();
+    }
+
+    fn write_tuist_toml(root: &Path, body: &str) {
+        std::fs::write(root.join("tuist.toml"), body).unwrap();
+    }
+
     fn write_user_config(xdg: &Xdg, body: &str) {
         let dir = xdg.config_home.join("once");
         std::fs::create_dir_all(&dir).unwrap();
@@ -398,6 +656,179 @@ account = "acme"
 
         let provider = resolve_config(tmp.path(), &xdg).unwrap();
         assert_eq!(provider, ResolvedCacheProviderConfig::Local);
+    }
+
+    #[test]
+    fn explicit_local_workspace_beats_tuist_workspace_config() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_workspace(
+            tmp.path(),
+            r#"
+[cache_provider]
+kind = "local"
+"#,
+        );
+        write_tuist_swift(
+            tmp.path(),
+            r#"
+import ProjectDescription
+
+let tuist = Tuist(
+    fullHandle: "tuist/app",
+    url: "https://canary.tuist.dev",
+    project: .xcode()
+)
+"#,
+        );
+
+        let provider = resolve_config(tmp.path(), &xdg).unwrap();
+        assert_eq!(provider, ResolvedCacheProviderConfig::Local);
+    }
+
+    #[test]
+    fn resolve_uses_tuist_swift_when_workspace_is_unspecified() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_tuist_swift(
+            tmp.path(),
+            r#"
+import ProjectDescription
+
+let tuist = Tuist(
+    fullHandle: "tuist/app",
+    url: "https://canary.tuist.dev",
+    project: .xcode()
+)
+"#,
+        );
+
+        let config = expect_tuist(resolve_config(tmp.path(), &xdg).unwrap());
+        assert_eq!(config.url, "https://canary.tuist.dev");
+        assert_eq!(config.account.as_deref(), Some("tuist"));
+        assert_eq!(config.project.as_deref(), Some("app"));
+        assert_eq!(config.provider_name, "tuist");
+    }
+
+    #[test]
+    fn resolve_uses_tuist_swift_default_url() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_tuist_swift(
+            tmp.path(),
+            r#"
+import ProjectDescription
+
+let tuist = Tuist(
+    fullHandle: "tuist/app",
+    project: .xcode()
+)
+"#,
+        );
+
+        let config = expect_tuist(resolve_config(tmp.path(), &xdg).unwrap());
+        assert_eq!(config.url, DEFAULT_TUIST_URL);
+        assert_eq!(config.account.as_deref(), Some("tuist"));
+        assert_eq!(config.project.as_deref(), Some("app"));
+    }
+
+    #[test]
+    fn resolve_ignores_commented_tuist_swift_handle() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_tuist_swift(
+            tmp.path(),
+            r#"
+import ProjectDescription
+
+let tuist = Tuist(
+    // fullHandle: "{account_handle}/{project_handle}",
+    project: .xcode()
+)
+"#,
+        );
+
+        let provider = resolve_config(tmp.path(), &xdg).unwrap();
+        assert_eq!(provider, ResolvedCacheProviderConfig::Local);
+    }
+
+    #[test]
+    fn resolve_reads_tuist_swift_values_from_tuist_constructor_only() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_tuist_swift(
+            tmp.path(),
+            r#"
+import ProjectDescription
+
+let fixture = "fullHandle: \"acme/from-string\""
+let unrelated = Workspace(
+    fullHandle: "acme/from-workspace",
+    url: "https://ignored.example.com"
+)
+/*
+let ignored = Tuist(
+    fullHandle: "acme/from-comment",
+    url: "https://ignored.example.com"
+)
+*/
+let tuist = Tuist(
+    url: "https://canary.tuist.dev",
+    project: .xcode(name: "fullHandle: \"acme/from-nested\""),
+    fullHandle: "tuist/app"
+)
+"#,
+        );
+
+        let config = expect_tuist(resolve_config(tmp.path(), &xdg).unwrap());
+        assert_eq!(config.url, "https://canary.tuist.dev");
+        assert_eq!(config.account.as_deref(), Some("tuist"));
+        assert_eq!(config.project.as_deref(), Some("app"));
+    }
+
+    #[test]
+    fn resolve_uses_tuist_toml_when_workspace_is_unspecified() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_tuist_toml(
+            tmp.path(),
+            r#"
+project = "tuist/gradle-plugin"
+url = "https://canary.tuist.dev"
+"#,
+        );
+
+        let config = expect_tuist(resolve_config(tmp.path(), &xdg).unwrap());
+        assert_eq!(config.url, "https://canary.tuist.dev");
+        assert_eq!(config.account.as_deref(), Some("tuist"));
+        assert_eq!(config.project.as_deref(), Some("gradle-plugin"));
+        assert_eq!(config.provider_name, "tuist");
+    }
+
+    #[test]
+    fn tuist_toml_beats_tuist_swift_when_both_exist() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_tuist_toml(
+            tmp.path(),
+            r#"
+project = "tuist/toml-app"
+"#,
+        );
+        write_tuist_swift(
+            tmp.path(),
+            r#"
+import ProjectDescription
+
+let tuist = Tuist(
+    fullHandle: "tuist/swift-app",
+    project: .xcode()
+)
+"#,
+        );
+
+        let config = expect_tuist(resolve_config(tmp.path(), &xdg).unwrap());
+        assert_eq!(config.project.as_deref(), Some("toml-app"));
     }
 
     #[test]
