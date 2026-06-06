@@ -113,8 +113,9 @@ pub extern "C" fn once_digest_bytes(data: *const c_uchar, len: usize) -> *mut c_
 /// Compute the Once action digest for a JSON-encoded `once_core::Action`.
 #[no_mangle]
 pub extern "C" fn once_action_digest_json(action_json: *const c_char) -> *mut c_char {
-    let Some(action_json) = str_from_raw(action_json) else {
-        return response_error("action_json cannot be null");
+    let action_json = match str_from_raw(action_json, "action_json") {
+        Ok(value) => value,
+        Err(message) => return response_error(message),
     };
     let action = match serde_json::from_str::<once_core::Action>(&action_json) {
         Ok(action) => action,
@@ -225,8 +226,9 @@ where
     Request: for<'de> Deserialize<'de>,
     Value: Serialize,
 {
-    let Some(request_json) = str_from_raw(request_json) else {
-        return response_error("request_json cannot be null");
+    let request_json = match str_from_raw(request_json, "request_json") {
+        Ok(value) => value,
+        Err(message) => return response_error(message),
     };
     let request = match serde_json::from_str::<Request>(&request_json) {
         Ok(request) => request,
@@ -239,7 +241,9 @@ where
 }
 
 fn block_on<T>(work: impl std::future::Future<Output = crate::Result<T>>) -> crate::Result<T> {
-    if RUNTIME.get().is_none() {
+    let runtime = if let Some(runtime) = RUNTIME.get() {
+        runtime
+    } else {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(worker_threads())
             .enable_all()
@@ -250,12 +254,12 @@ fn block_on<T>(work: impl std::future::Future<Output = crate::Result<T>>) -> cra
                 message: source.to_string(),
             })?;
         let _ = RUNTIME.set(runtime);
-    }
-    let runtime = RUNTIME.get().ok_or_else(|| once_cas::Error::Remote {
-        provider: "local",
-        operation: "runtime",
-        message: "runtime initialization completed without caching a runtime".to_string(),
-    })?;
+        RUNTIME.get().ok_or_else(|| once_cas::Error::Remote {
+            provider: "local",
+            operation: "runtime",
+            message: "runtime initialization completed without caching a runtime".to_string(),
+        })?
+    };
     runtime.block_on(work)
 }
 
@@ -289,14 +293,14 @@ fn string_to_raw(value: impl Into<String>) -> *mut c_char {
         .into_raw()
 }
 
-fn str_from_raw(value: *const c_char) -> Option<String> {
+fn str_from_raw(value: *const c_char, name: &str) -> std::result::Result<String, String> {
     if value.is_null() {
-        return None;
+        return Err(format!("{name} cannot be null"));
     }
     unsafe {
         CStr::from_ptr(value)
             .to_str()
-            .ok()
+            .map_err(|_| format!("{name} must be valid UTF-8"))
             .map(std::borrow::ToOwned::to_owned)
     }
 }
@@ -345,6 +349,16 @@ mod tests {
 
         assert_eq!(json["status"], "error");
         assert_eq!(json["message"], "action_json cannot be null");
+    }
+
+    #[test]
+    fn cache_request_rejects_invalid_utf8() {
+        let request = [0xff, 0x00];
+        let response = once_cache_stats_json(request.as_ptr().cast());
+        let json = response_json(response);
+
+        assert_eq!(json["status"], "error");
+        assert_eq!(json["message"], "request_json must be valid UTF-8");
     }
 
     #[test]
