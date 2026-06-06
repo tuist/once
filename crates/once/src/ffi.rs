@@ -1,3 +1,13 @@
+//! C ABI boundary for the embeddable Once cache API.
+//!
+//! The exported functions are safe to call from any host thread. Strings
+//! returned from this module are owned by Rust and must be released with
+//! `once_string_free`. JSON cache functions share a lazily initialized
+//! Tokio runtime; its worker count defaults to 2 and can be overridden
+//! with `ONCE_FFI_WORKER_THREADS`. Raw pointer inputs are checked for
+//! null before dereferencing. A null byte buffer is accepted only when
+//! its length is zero.
+
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_uchar};
 use std::path::PathBuf;
@@ -7,7 +17,7 @@ use once_cas::{ActionResult, Digest};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
 
-use crate::{digest_from_hex, OnceCache};
+use crate::{digest_from_hex, Cache};
 
 #[derive(Debug, Deserialize)]
 struct CacheRootRequest {
@@ -67,6 +77,8 @@ enum FfiResponse<T> {
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 const RESPONSE_SERIALIZATION_ERROR: &str =
     r#"{"status":"error","message":"response serialization failed"}"#;
+const DEFAULT_WORKER_THREADS: usize = 2;
+const WORKER_THREADS_ENV: &str = "ONCE_FFI_WORKER_THREADS";
 
 /// Return the linked Once version.
 #[no_mangle]
@@ -201,8 +213,8 @@ pub extern "C" fn once_cache_stats_json(request_json: *const c_char) -> *mut c_c
     })
 }
 
-fn cache_from_root(local_cache_root: Option<PathBuf>) -> OnceCache {
-    local_cache_root.map_or_else(OnceCache::new, OnceCache::local)
+fn cache_from_root(local_cache_root: Option<PathBuf>) -> Cache {
+    local_cache_root.map_or_else(Cache::new, Cache::local)
 }
 
 fn run_json<Request, Value>(
@@ -229,7 +241,7 @@ where
 fn block_on<T>(work: impl std::future::Future<Output = crate::Result<T>>) -> crate::Result<T> {
     if RUNTIME.get().is_none() {
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(worker_threads())
             .enable_all()
             .build()
             .map_err(|source| once_cas::Error::Remote {
@@ -245,6 +257,14 @@ fn block_on<T>(work: impl std::future::Future<Output = crate::Result<T>>) -> cra
         message: "runtime initialization completed without caching a runtime".to_string(),
     })?;
     runtime.block_on(work)
+}
+
+fn worker_threads() -> usize {
+    std::env::var(WORKER_THREADS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_WORKER_THREADS)
 }
 
 fn response_ok<T: Serialize>(value: T) -> *mut c_char {

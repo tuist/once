@@ -8,6 +8,11 @@
 extern "C" {
 #endif
 
+// All functions are thread-safe. Returned char pointers are owned by Once
+// and must be released with once_string_free. Cache functions use a shared
+// runtime with 2 worker threads by default. Set ONCE_FFI_WORKER_THREADS to
+// override that count.
+
 char *once_version(void);
 
 void once_string_free(char *value);

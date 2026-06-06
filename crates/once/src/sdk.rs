@@ -17,16 +17,16 @@ pub enum Error {
 
 /// Embeddable Once cache client.
 ///
-/// `OnceCache` is cheap to clone and can be reused across many cache
+/// `Cache` is cheap to clone and can be reused across many cache
 /// operations. The default constructor opens the local filesystem cache
 /// at `$XDG_CACHE_HOME/once/cas`, or `$HOME/.cache/once/cas` when
 /// `XDG_CACHE_HOME` is not set.
 #[derive(Clone)]
-pub struct OnceCache {
+pub struct Cache {
     cache: CacheProvider,
 }
 
-impl OnceCache {
+impl Cache {
     /// Create a client backed by Once's default XDG local cache.
     pub fn new() -> Self {
         Self::local(Xdg::from_env().once_cas())
@@ -88,11 +88,14 @@ impl OnceCache {
     }
 }
 
-impl Default for OnceCache {
+impl Default for Cache {
     fn default() -> Self {
         Self::new()
     }
 }
+
+/// Backward-compatible name for the cache client.
+pub type OnceCache = Cache;
 
 /// Parse a lowercase BLAKE3 hex digest.
 pub fn digest_from_hex(hex: &str) -> Result<Digest> {
@@ -106,7 +109,7 @@ mod tests {
 
     #[test]
     fn default_cache_uses_xdg_cas_root() {
-        let cache = OnceCache::new();
+        let cache = Cache::new();
 
         assert!(cache.root().ends_with("once/cas"));
     }
@@ -114,7 +117,7 @@ mod tests {
     #[tokio::test]
     async fn stores_and_reads_blobs() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let cache = OnceCache::local(tmp.path());
+        let cache = Cache::local(tmp.path());
 
         let digest = cache.put_blob(b"hello").await.unwrap();
 
@@ -125,7 +128,7 @@ mod tests {
     #[tokio::test]
     async fn stores_and_reads_action_results() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let cache = OnceCache::local(tmp.path());
+        let cache = Cache::local(tmp.path());
         let stdout = cache.put_blob(b"out").await.unwrap();
         let action = Digest::of_bytes(b"action");
         let result = ActionResult {

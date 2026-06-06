@@ -46,15 +46,23 @@ require_file() {
 require_lipo_archs() {
   local path="$1"
   shift
-  local info
-  info="$(lipo -info "${path}")"
-  echo "${info}"
+  local archs
+  archs="$(lipo -archs "${path}")"
+  echo "${path}: ${archs}"
   for arch in "$@"; do
-    if [[ "${info}" != *"${arch}"* ]]; then
+    if [[ " ${archs} " != *" ${arch} "* ]]; then
       echo "${path} is missing ${arch}" >&2
       exit 1
     fi
   done
+}
+
+build_target() {
+  local target="$1"
+  if ! cargo build --locked --release --package once --target "${target}"; then
+    echo "cargo build failed for ${target}" >&2
+    exit 1
+  fi
 }
 
 for tool in cargo ditto lipo rustup swiftc xcodebuild; do
@@ -72,7 +80,7 @@ targets=(
 rustup target add "${targets[@]}"
 
 for target in "${targets[@]}"; do
-  cargo build --locked --release --package once --target "${target}"
+  build_target "${target}"
 done
 
 for target in "${targets[@]}"; do

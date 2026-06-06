@@ -16,7 +16,7 @@ Read and write blobs with a local cache:
 ```rust
 #[tokio::main]
 async fn main() -> once::Result<()> {
-    let cache = once::OnceCache::new();
+    let cache = once::Cache::new();
     let digest = cache.put_blob(b"hello").await?;
     let bytes = cache.get_blob(digest).await?;
 
@@ -27,7 +27,7 @@ async fn main() -> once::Result<()> {
 
 The high-level API is:
 
-- `OnceCache`: reusable client bound to the default XDG local cache, or an explicit cache provider.
+- `Cache`: reusable client bound to the default XDG local cache, or an explicit cache provider.
 - Blob operations: `put_blob`, `get_blob`, and `has_blob`.
 - Action-cache operations: `put_action_result`, `get_action_result`, and `forget_action`.
 - Metadata helpers: `stats`, `digest_from_hex`, and lower-level digest/action types.

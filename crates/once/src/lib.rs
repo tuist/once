@@ -6,7 +6,7 @@
 //!
 //! ```no_run
 //! # async fn example() -> once::Result<()> {
-//! let cache = once::OnceCache::new();
+//! let cache = once::Cache::new();
 //! let digest = cache.put_blob(b"hello").await?;
 //!
 //! assert_eq!(cache.get_blob(digest).await?, b"hello");
@@ -17,7 +17,7 @@
 mod ffi;
 mod sdk;
 
-pub use sdk::{digest_from_hex, Error, OnceCache, Result};
+pub use sdk::{digest_from_hex, Cache, Error, OnceCache, Result};
 
 /// Content-addressed storage and cache-provider primitives.
 pub mod cas {
