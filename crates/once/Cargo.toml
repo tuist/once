@@ -19,7 +19,6 @@ remote-microsandbox = ["once-core/remote-microsandbox"]
 [dependencies]
 once-cas.workspace = true
 once-core.workspace = true
-once-frontend.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true

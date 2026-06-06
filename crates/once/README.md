@@ -30,11 +30,7 @@ The high-level API is:
 - `Cache`: reusable client bound to the default XDG local cache, or an explicit cache provider.
 - Blob operations: `put_blob`, `get_blob`, and `has_blob`.
 - Action-cache operations: `put_action_result`, `get_action_result`, and `forget_action`.
-- Metadata helpers: `stats`, `digest_from_hex`, and lower-level digest/action types.
-
-Lower-level modules are re-exported as `once::core`, `once::cas`, and
-`once::frontend` for integrations that need action construction, CAS
-access, or manifest parsing.
+- Cache primitives: `Digest`, `ActionResult`, `Stats`, `CacheProvider`, and `digest_from_hex`.
 
 ## Apple
 
