@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use once_cas::{ActionResult, CacheProvider, Digest, Stats};
-use once_core::Xdg;
+use once_core::Xdg as XDG;
 
 /// Result type used by the high-level Once SDK.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -29,7 +29,7 @@ pub struct Cache {
 impl Cache {
     /// Create a client backed by Once's default XDG local cache.
     pub fn new() -> Self {
-        Self::local(Xdg::from_env().once_cas())
+        Self::local(XDG::from_env().once_cas())
     }
 
     /// Create a client backed by a local filesystem cache.
