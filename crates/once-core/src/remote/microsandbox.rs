@@ -5,15 +5,27 @@ use once_cas::{ActionResult, CacheProvider};
 
 use crate::{Error, Result, WorkspacePath};
 
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 use super::join_path;
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 use crate::stream::{self, Destination};
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 use std::time::Duration;
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 pub(super) async fn execute_command(
     argv: &[String],
     env: &BTreeMap<String, String>,
@@ -72,12 +84,18 @@ pub(super) async fn execute_command(
     }
 }
 
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 struct SandboxCleanup {
     sandbox: Option<microsandbox::Sandbox>,
 }
 
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 impl SandboxCleanup {
     fn new(sandbox: microsandbox::Sandbox) -> Self {
         Self {
@@ -96,7 +114,10 @@ impl SandboxCleanup {
     }
 }
 
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 impl Drop for SandboxCleanup {
     fn drop(&mut self) {
         let Some(sandbox) = self.sandbox.take() else {
@@ -117,12 +138,18 @@ impl Drop for SandboxCleanup {
     }
 }
 
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 fn spawn_cleanup(sandbox: microsandbox::Sandbox) -> tokio::task::JoinHandle<Result<()>> {
     tokio::spawn(cleanup_sandbox(sandbox))
 }
 
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 async fn cleanup_sandbox(sandbox: microsandbox::Sandbox) -> Result<()> {
     let stop_result = sandbox
         .stop_and_wait()
@@ -139,7 +166,11 @@ async fn cleanup_sandbox(sandbox: microsandbox::Sandbox) -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(not(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))))]
+#[allow(clippy::unused_async)]
+#[cfg(not(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+)))]
 pub(super) async fn execute_command(
     _argv: &[String],
     _env: &BTreeMap<String, String>,
@@ -151,13 +182,27 @@ pub(super) async fn execute_command(
 ) -> Result<ActionResult> {
     Err(Error::RemoteProviderConfig {
         provider: "microsandbox".to_string(),
-        message:
-            "the embedded Microsandbox provider is only available on Linux and Apple Silicon macOS"
-                .to_string(),
+        message: microsandbox_unavailable_message().to_string(),
     })
 }
 
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(not(feature = "remote-microsandbox"))]
+fn microsandbox_unavailable_message() -> &'static str {
+    "the embedded Microsandbox provider is not enabled in this build"
+}
+
+#[cfg(all(
+    feature = "remote-microsandbox",
+    not(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))
+))]
+fn microsandbox_unavailable_message() -> &'static str {
+    "the embedded Microsandbox provider is only available on Linux and Apple Silicon macOS"
+}
+
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 async fn collect_output(
     handle: &mut microsandbox::ExecHandle,
     cache: &CacheProvider,
@@ -221,7 +266,10 @@ async fn collect_output(
     })
 }
 
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 fn microsandbox_error(source: &microsandbox::MicrosandboxError) -> Error {
     Error::RemoteProviderApi {
         provider: "microsandbox".to_string(),
@@ -229,7 +277,10 @@ fn microsandbox_error(source: &microsandbox::MicrosandboxError) -> Error {
     }
 }
 
-#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 fn sandbox_name() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

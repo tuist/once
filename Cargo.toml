@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/once",
     "crates/once-cli",
     "crates/once-core",
     "crates/once-cas",
@@ -15,9 +16,10 @@ license = "MIT"
 repository = "https://github.com/tuist/once"
 
 [workspace.dependencies]
-once-core = { path = "crates/once-core" }
-once-cas = { path = "crates/once-cas" }
-once-frontend = { path = "crates/once-frontend" }
+once = { version = "0.0.0", path = "crates/once" }
+once-core = { version = "0.0.0", path = "crates/once-core", default-features = false }
+once-cas = { version = "0.0.0", path = "crates/once-cas" }
+once-frontend = { version = "0.0.0", path = "crates/once-frontend" }
 
 anyhow = "1"
 bazel-remote-apis = "0.27"
@@ -57,3 +59,4 @@ must_use_candidate = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+panic = "abort"

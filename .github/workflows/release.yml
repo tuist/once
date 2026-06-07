@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: jdx/mise-action@v4.0.1
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "git-cliff"
@@ -69,7 +69,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v4.0.1
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
           # Restrict to rust so shellspec (no Windows binary) doesn't
@@ -78,7 +78,7 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
       - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           shared-key: release-${{ matrix.target }}
           cache-on-failure: true
@@ -92,18 +92,50 @@ jobs:
           name: ${{ matrix.target }}
           path: dist/*
 
+  build-xcframework:
+    name: Build Once.xcframework
+    needs: detect
+    if: needs.detect.outputs.should-release == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "rust"
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: release-xcframework
+          cache-on-failure: true
+      - name: Package XCFramework
+        run: mise run release:package-xcframework --version "${{ needs.detect.outputs.next-version }}"
+        env:
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_NAME: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_NAME }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: Once.xcframework
+          path: dist/*
+
   publish:
     name: Publish GitHub release
     needs:
       - detect
       - build
+      - build-xcframework
     if: needs.detect.outputs.should-release == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: jdx/mise-action@v4.0.1
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "git-cliff"
