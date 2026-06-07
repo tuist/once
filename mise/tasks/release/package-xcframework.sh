@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #MISE description="Build and package the Once XCFramework"
 #USAGE flag "--version <version>" help="Version number used in the asset name"
-set -euo pipefail
+set -Eeuo pipefail
 
 version=""
 while (($# > 0)); do
@@ -17,8 +17,14 @@ while (($# > 0)); do
   esac
 done
 
-if [[ -z "${version//[[:space:]]/}" ]]; then
+version="${version//[[:space:]]/}"
+if [[ -z "${version}" ]]; then
   echo "--version is required" >&2
+  exit 1
+fi
+
+if [[ ! "${version}" =~ ^[0-9]+[.][0-9]+[.][0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+  echo "--version must be a semantic version" >&2
   exit 1
 fi
 
@@ -87,14 +93,21 @@ for target in "${targets[@]}"; do
   require_file "target/${target}/release/libonce.a"
 done
 
-stage_dir="$(mktemp -d)"
+stage_dir=""
 keychain_path=""
+certificate_path=""
 cleanup() {
+  if [[ -n "${certificate_path}" ]]; then
+    rm -f "${certificate_path}"
+  fi
   if [[ -n "${keychain_path}" ]]; then
     security delete-keychain "${keychain_path}" >/dev/null 2>&1 || true
   fi
-  rm -rf "${stage_dir}"
+  if [[ -n "${stage_dir}" ]]; then
+    rm -rf "${stage_dir}"
+  fi
 }
+stage_dir="$(mktemp -d)"
 trap cleanup EXIT
 
 mkdir -p "${stage_dir}/macos" "${stage_dir}/ios-simulator" dist
@@ -122,7 +135,12 @@ if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then
   openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 \
     -in certificates/developer-id-application.p12.enc \
     -out "${certificate_path}" \
-    -pass "pass:${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD}"
+    -pass env:APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD
+  chmod 600 "${certificate_path}"
+  openssl pkcs12 \
+    -in "${certificate_path}" \
+    -passin env:APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD \
+    -noout
 
   keychain_path="${stage_dir}/signing.keychain"
   keychain_password="$(uuidgen)"
