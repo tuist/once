@@ -7,7 +7,7 @@ SDK surface.
 
 ```swift
 import Foundation
-import COnce
+import Once
 
 func example() async throws {
     let cache = OnceCache()
@@ -35,10 +35,10 @@ let package = Package(
     targets: [
         .target(
             name: "MyPackage",
-            dependencies: ["COnce"]
+            dependencies: ["Once"]
         ),
         .binaryTarget(
-            name: "COnce",
+            name: "Once",
             url: "https://github.com/tuist/once/releases/download/0.1.0/Once-0.1.0.xcframework.zip",
             checksum: "<checksum>"
         ),
@@ -51,7 +51,7 @@ checksum is published next to the release asset and can also be computed
 locally with `swift package compute-checksum Once-0.1.0.xcframework.zip`.
 
 Download `Once-0.1.0.swift` from the same release, add it to the Swift
-target that depends on `COnce`, and rename it to `Once.swift` if your
+target that depends on `Once`, and rename it to `Once.swift` if your
 project keeps source filenames stable. The wrapper imports the C module
 from the binary target and gives callers the high-level Swift API.
 

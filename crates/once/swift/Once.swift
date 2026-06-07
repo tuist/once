@@ -1,5 +1,5 @@
 import Foundation
-import COnce
+import Once
 
 private let onceEmptyBytes: [UInt8] = [0]
 

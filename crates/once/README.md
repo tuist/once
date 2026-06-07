@@ -35,7 +35,7 @@ The high-level API is:
 ## Apple
 
 Reference `Once-{version}.xcframework.zip` from a release with a SwiftPM
-binary target named `COnce`, then add `Once-{version}.swift` from the same
+binary target named `Once`, then add `Once-{version}.swift` from the same
 release to the Swift target that depends on that binary target:
 
 ```swift
@@ -48,7 +48,7 @@ print(String(decoding: bytes, as: UTF8.self))
 
 If you call the C API directly, all owned strings returned by `once_*`
 functions must be released with `once_string_free`. The C module name is
-`COnce`. JSON requests use the default XDG local cache unless they include
+`Once`. JSON requests use the default XDG local cache unless they include
 `local_cache_root` as an override.
 
 ### FFI responses
