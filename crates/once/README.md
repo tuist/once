@@ -27,7 +27,7 @@ async fn main() -> once::Result<()> {
 
 The high-level API is:
 
-- `Cache`: reusable client bound to the default XDG local cache, or an explicit cache provider.
+- `Cache`: reusable client bound to the default XDG local cache.
 - Blob operations: `put_blob`, `get_blob`, and `has_blob`.
 - Action-cache operations: `put_action_result`, `get_action_result`, and `forget_action`.
 - Cache primitives: `Digest`, `ActionResult`, `Stats`, `CacheProvider`, and `digest_from_hex`.
@@ -48,8 +48,7 @@ print(String(decoding: bytes, as: UTF8.self))
 
 If you call the C API directly, all owned strings returned by `once_*`
 functions must be released with `once_string_free`. The C module name is
-`Once`. JSON requests use the default XDG local cache unless they include
-`local_cache_root` as an override.
+`Once`. JSON requests use the default XDG local cache.
 
 ### FFI responses
 

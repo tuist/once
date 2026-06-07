@@ -19,6 +19,9 @@ pub use once_cas::{ActionResult, CacheProvider, Digest, Stats};
 
 mod ffi;
 
+#[cfg(test)]
+static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Result type used by the high-level Once SDK.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -45,12 +48,7 @@ pub struct Cache {
 impl Cache {
     /// Create a client backed by Once's default XDG local cache.
     pub fn new() -> Self {
-        Self::local(default_cache_root())
-    }
-
-    /// Create a client backed by a local filesystem cache.
-    pub fn local(local_cache_root: impl Into<PathBuf>) -> Self {
-        Self::with_provider(CacheProvider::open_local(local_cache_root))
+        Self::with_provider(CacheProvider::open_local(default_cache_root()))
     }
 
     /// Create a client with an explicit cache provider.
@@ -126,15 +124,19 @@ mod tests {
 
     #[test]
     fn default_cache_uses_xdg_cas_root() {
+        let _env_lock = TEST_ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CACHE_HOME", tmp.path());
         let cache = Cache::new();
 
-        assert!(cache.root().ends_with("once/cas"));
+        assert_eq!(cache.root(), tmp.path().join("once").join("cas"));
+        std::env::remove_var("XDG_CACHE_HOME");
     }
 
     #[tokio::test]
     async fn stores_and_reads_blobs() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let cache = Cache::local(tmp.path());
+        let cache = Cache::with_provider(CacheProvider::open_local(tmp.path()));
 
         let digest = cache.put_blob(b"hello").await.unwrap();
 
@@ -145,7 +147,7 @@ mod tests {
     #[tokio::test]
     async fn stores_and_reads_action_results() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let cache = Cache::local(tmp.path());
+        let cache = Cache::with_provider(CacheProvider::open_local(tmp.path()));
         let stdout = cache.put_blob(b"out").await.unwrap();
         let action = Digest::of_bytes(b"action");
         let result = ActionResult {

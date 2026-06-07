@@ -59,16 +59,13 @@ from the binary target and gives callers the high-level Swift API.
 
 `OnceCache` is the Swift cache client.
 
-Choose an initializer based on who owns the cache location. Most
-applications should use the XDG-backed default and only pass a path when
-they need isolation or deterministic test setup.
+`OnceCache` opens the default local cache using XDG conventions.
 
 All cache operations that touch storage are `async throws`.
 
 | API | Use |
 | --- | --- |
 | `init()` | Opens the default local cache using XDG conventions. |
-| `init(localCacheRoot:)` | Opens a local filesystem cache at an explicit root. |
 | `version` | Returns the linked Once version. |
 
 The default cache root is `$XDG_CACHE_HOME/once/cas` when
@@ -94,7 +91,6 @@ retrieves metadata for completed actions. It does not run commands.
 
 | API | Use |
 | --- | --- |
-| `actionDigest(actionJSON:)` | Returns the digest for a canonical action JSON payload. |
 | `putActionResult(_:for:)` | Stores a cached result for an action digest. |
 | `getActionResult(_:)` | Returns a cached result when one exists. |
 | `forgetAction(_:)` | Removes one cached action result. Referenced blobs are left intact. |

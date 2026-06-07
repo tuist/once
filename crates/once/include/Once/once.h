@@ -8,18 +8,21 @@
 extern "C" {
 #endif
 
-// All functions are thread-safe. Returned char pointers are owned by Once
-// and must be released with once_string_free. Cache functions use a shared
-// runtime with 2 worker threads by default. Set ONCE_FFI_WORKER_THREADS to
-// override that count.
+// All functions are thread-safe and reentrant. The first cache call lazily
+// initializes a shared runtime; concurrent first calls are safe and require
+// no caller-side ordering.
+//
+// Returned char pointers are owned by Once and must be released with
+// once_string_free.
+//
+// once_digest_bytes accepts a null data pointer only when len is zero. That
+// combination is treated as an empty byte buffer.
 
 char *once_version(void);
 
 void once_string_free(char *value);
 
 char *once_digest_bytes(const uint8_t *data, size_t len);
-
-char *once_action_digest_json(const char *action_json);
 
 char *once_cache_put_blob_json(const char *request_json);
 

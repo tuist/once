@@ -43,13 +43,10 @@ they need isolation or deterministic test setup.
 | API | Use |
 | --- | --- |
 | `Cache::new()` | Opens the default local cache using XDG conventions. |
-| `Cache::local(local_cache_root)` | Opens a local filesystem cache at an explicit root. |
 | `Cache::with_provider(cache)` | Wraps an existing `CacheProvider`. |
 
 The default cache root is `$XDG_CACHE_HOME/once/cas` when
-`XDG_CACHE_HOME` is set, and `$HOME/.cache/once/cas` otherwise. Use
-`Cache::local(...)` for tests, isolated sandboxes, and applications that
-need a caller-owned cache location.
+`XDG_CACHE_HOME` is set, and `$HOME/.cache/once/cas` otherwise.
 
 ### Introspection
 
@@ -124,7 +121,7 @@ level Once modules.
 | `Digest` | Identifies blobs and action cache entries. |
 | `ActionResult` | Stores an action exit code, stdout digest, stderr digest, and output digests. |
 | `Stats` | Reports local cache size and entry counts. |
-| `CacheProvider` | Provides lower-level cache access for integrations that already use the provider layer. |
+| `CacheProvider` | Provides lower-level cache access for integrations that already own a provider. |
 | `Result<T>` | SDK result alias. |
 | `Error` | Reports invalid digest strings and cache provider errors. |
 
