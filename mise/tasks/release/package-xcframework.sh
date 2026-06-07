@@ -154,6 +154,10 @@ if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then
     -t cert \
     -f pkcs12 \
     -k "${keychain_path}"
+  if ! security find-identity -v -p codesigning "${keychain_path}" | grep -F "${APPLE_DEVELOPER_ID_CERTIFICATE_NAME}" >/dev/null; then
+    echo "imported certificate does not match APPLE_DEVELOPER_ID_CERTIFICATE_NAME" >&2
+    exit 1
+  fi
   rm -f "${certificate_path}"
   security set-key-partition-list \
     -S apple-tool:,apple:,codesign: \
