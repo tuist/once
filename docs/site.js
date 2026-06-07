@@ -33,8 +33,14 @@ export const site = {
         text: "SDK",
         collapsed: false,
         items: [
-          { text: "Rust", link: "/guide/sdk/rust" },
-          { text: "Swift", link: "/guide/sdk/swift" },
+          {
+            text: '<span class="sidebar-target-link sidebar-target-link-rust"><span class="sidebar-target-icon"></span><span>Rust</span></span>',
+            link: "/guide/sdk/rust",
+          },
+          {
+            text: '<span class="sidebar-target-link sidebar-target-link-swift"><span class="sidebar-target-icon"></span><span>Swift</span></span>',
+            link: "/guide/sdk/swift",
+          },
         ],
       },
     ],
