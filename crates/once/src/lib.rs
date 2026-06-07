@@ -110,9 +110,6 @@ impl Default for Cache {
     }
 }
 
-/// Backward-compatible name for the cache client.
-pub type OnceCache = Cache;
-
 /// Parse a lowercase BLAKE3 hex digest.
 pub fn digest_from_hex(hex: &str) -> Result<Digest> {
     Digest::from_hex(hex).ok_or_else(|| Error::InvalidDigest(hex.to_string()))
