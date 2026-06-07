@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #MISE description="Build and package the Once XCFramework"
-#USAGE flag "--version <version>" help="Version number used in the asset name"
+#USAGE flag "--version <version>" help="Version number to validate the release input"
 set -Eeuo pipefail
 
 version=""
@@ -200,7 +200,7 @@ swiftc -typecheck \
   crates/once/swift/Once.swift
 
 cp crates/once/swift/Once.swift "${release_dir}/Once.swift"
-cp crates/once/swift/Once.swift "dist/Once-${version}.swift"
+cp crates/once/swift/Once.swift "dist/Once.swift"
 
 if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then
   codesign --force \
@@ -211,7 +211,7 @@ if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then
   codesign --verify --strict --verbose=2 "${release_dir}/Once.xcframework"
 fi
 
-asset="Once-${version}.xcframework.zip"
+asset="Once.xcframework.zip"
 (
   cd "${release_dir}"
   ditto -c -k --keepParent Once.xcframework "${OLDPWD}/dist/${asset}"
