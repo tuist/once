@@ -7,9 +7,14 @@ public enum OnceError: Error, Equatable {
 }
 
 public struct OnceCache: Sendable {
+    /// Creates a cache client backed by the default XDG cache location.
+    ///
+    /// The local cache root is `$XDG_CACHE_HOME/once/cas` when
+    /// `XDG_CACHE_HOME` is set, and `$HOME/.cache/once/cas` otherwise.
     public init() {
     }
 
+    /// Returns the linked Once version.
     public var version: String {
         guard let raw = once_version() else {
             return ""
@@ -18,6 +23,7 @@ public struct OnceCache: Sendable {
         return String(cString: raw)
     }
 
+    /// Returns the content digest for bytes without writing them to the cache.
     public func digest(bytes: Data) async throws -> String {
         try await runAsync {
             return try bytes.withUnsafeBytes { buffer in
@@ -32,23 +38,27 @@ public struct OnceCache: Sendable {
         }
     }
 
+    /// Stores bytes and returns their content digest.
     @discardableResult
     public func putBlob(_ bytes: Data) async throws -> String {
         let request = BlobPutRequest(bytes: Array(bytes))
         return try await decodeRequestAsync(request, with: once_cache_put_blob_json, as: String.self)
     }
 
+    /// Reads bytes for a digest.
     public func getBlob(_ digest: String) async throws -> Data {
         let request = DigestRequest(digest: digest)
         let response = try await decodeRequestAsync(request, with: once_cache_get_blob_json, as: BlobResponse.self)
         return Data(response.bytes)
     }
 
+    /// Returns whether a blob exists.
     public func hasBlob(_ digest: String) async throws -> Bool {
         let request = DigestRequest(digest: digest)
         return try await decodeRequestAsync(request, with: once_cache_has_blob_json, as: Bool.self)
     }
 
+    /// Stores a cached result for an action digest.
     @discardableResult
     public func putActionResult(_ result: OnceActionResult, for actionDigest: String) async throws -> Bool {
         let request = ActionResultPutRequest(
@@ -58,6 +68,7 @@ public struct OnceCache: Sendable {
         return try await decodeRequestAsync(request, with: once_cache_put_action_result_json, as: Bool.self)
     }
 
+    /// Returns a cached result when one exists.
     public func getActionResult(_ actionDigest: String) async throws -> OnceActionResult? {
         let request = ActionDigestRequest(actionDigest: actionDigest)
         return try await decodeRequestAsync(
@@ -67,12 +78,14 @@ public struct OnceCache: Sendable {
         )
     }
 
+    /// Removes one cached action result.
     @discardableResult
     public func forgetAction(_ actionDigest: String) async throws -> Bool {
         let request = ActionDigestRequest(actionDigest: actionDigest)
         return try await decodeRequestAsync(request, with: once_cache_forget_action_json, as: Bool.self)
     }
 
+    /// Returns local cache statistics.
     public func stats() async throws -> OnceCacheStats {
         return try await decodeRequestAsync(EmptyRequest(), with: once_cache_stats_json, as: OnceCacheStats.self)
     }
