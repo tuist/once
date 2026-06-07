@@ -21,20 +21,20 @@ export const site = {
     "/": [
       { text: "Why", link: "/guide/why" },
       {
-        text: "SDK",
-        collapsed: false,
-        items: [
-          { text: "Rust", link: "/guide/sdk/rust" },
-          { text: "Swift", link: "/guide/sdk/swift" },
-        ],
-      },
-      {
         text: "Scripts",
         collapsed: false,
         items: [
           { text: "Overview", link: "/guide/scripts/" },
           { text: "Caching", link: "/guide/scripts/caching" },
           { text: "Runtime", link: "/guide/scripts/runtime" },
+        ],
+      },
+      {
+        text: "SDK",
+        collapsed: false,
+        items: [
+          { text: "Rust", link: "/guide/sdk/rust" },
+          { text: "Swift", link: "/guide/sdk/swift" },
         ],
       },
     ],

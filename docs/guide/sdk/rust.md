@@ -5,14 +5,11 @@ embedding Once in Rust applications and tools. Script execution is CLI
 specific and is not part of the SDK surface.
 
 ```rust
-# async fn example() -> once::Result<()> {
 let cache = once::Cache::new();
 let digest = cache.put_blob(b"hello").await?;
 let bytes = cache.get_blob(digest).await?;
 
 assert_eq!(bytes, b"hello");
-# Ok(())
-# }
 ```
 
 ## Installation
@@ -67,7 +64,6 @@ stdout digest, stderr digest, and output digests.
 ```rust
 use std::collections::BTreeMap;
 
-# async fn example() -> once::Result<()> {
 let cache = once::Cache::new();
 let stdout = cache.put_blob(b"compiled").await?;
 let action = once::Digest::of_bytes(br#"{"tool":"example"}"#);
@@ -82,8 +78,6 @@ cache.put_action_result(action, &result).await?;
 let cached = cache.get_action_result(action).await?;
 
 assert_eq!(cached, Some(result));
-# Ok(())
-# }
 ```
 
 `put_action_result(action, result)` stores a cached result for an action
@@ -99,16 +93,38 @@ whether a result was removed. Referenced blobs are left intact.
 
 ## Types
 
-`Digest` identifies blobs and action cache entries.
+### Digest
 
-`digest_from_hex(hex)` parses a lowercase BLAKE3 hex digest and returns an
-SDK error for invalid input.
+`Digest` identifies blobs and action cache entries. Blob digests come from
+the bytes stored in the cache. Action digests come from the action payload
+your integration wants to cache.
 
-`ActionResult` stores the cached result of an action.
+Use `digest_from_hex(hex)` when a digest crosses a string boundary, such
+as JSON, configuration, or another process. It validates lowercase BLAKE3
+hex strings and returns `Error::InvalidDigest` for invalid input.
 
-`Stats` reports cache size and entry counts.
+### ActionResult
 
-`CacheProvider` is the lower-level provider type used by `Cache`.
+`ActionResult` stores the cached result of an action. It contains:
+
+- `exit_code`
+- `stdout`, as an optional blob digest
+- `stderr`, as an optional blob digest
+- `outputs`, mapping output paths to blob digests
+
+### Stats
+
+`Stats` reports local cache size and entry counts. Use it for diagnostics,
+cleanup UI, and telemetry around cache growth.
+
+### CacheProvider
+
+`CacheProvider` is the lower-level provider type used by `Cache`. Most
+consumers should start with `Cache::new()` or `Cache::local(...)` and only
+pass a provider directly when they already integrate with the lower-level
+cache layer.
+
+### Result And Error
 
 `Result<T>` is the SDK result alias.
 

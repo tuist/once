@@ -7,6 +7,7 @@ SDK surface.
 
 ```swift
 import Foundation
+import COnce
 
 let cache = OnceCache()
 let digest = try await cache.putBlob(Data("hello".utf8))
@@ -20,6 +21,9 @@ Download `Once.xcframework.zip` from a Once release and link the
 
 Add `crates/once/swift/Once.swift` to the Swift target that links the
 framework. The wrapper imports the C module as `COnce`.
+
+Applications that use `Once.swift` directly import `COnce` from the linked
+XCFramework and compile the Swift wrapper into their own target.
 
 ## OnceCache
 
@@ -85,13 +89,3 @@ intact.
 
 - `invalidUTF8`
 - `api(String)`
-
-## C Bridge
-
-The Swift APIs are async even though they bridge through synchronous C
-functions. The wrapper runs C calls in a Swift task and propagates thrown
-errors through `async throws`.
-
-All C functions return JSON or string payloads as owned C strings. The
-Swift wrapper releases those strings with `once_string_free`. If you call
-the C API directly, every returned `char *` must be released the same way.
