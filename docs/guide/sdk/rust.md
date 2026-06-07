@@ -36,6 +36,10 @@ be reused across blob and action-result operations.
 
 ### Constructors
 
+Choose a constructor based on who owns the cache location. Most
+applications should use the XDG-backed default and only pass a path when
+they need isolation or deterministic test setup.
+
 | API | Use |
 | --- | --- |
 | `Cache::new()` | Opens the default local cache using XDG conventions. |
@@ -49,12 +53,19 @@ need a caller-owned cache location.
 
 ### Introspection
 
+Use these methods when your integration needs to inspect how the cache was
+configured, for example to display diagnostics or pass the lower-level
+provider into code that already works with CAS primitives.
+
 | API | Use |
 | --- | --- |
 | `provider()` | Returns the underlying `CacheProvider`. |
 | `root()` | Returns the local root directory used by the provider. |
 
 ### Blobs
+
+Blobs are content-addressed byte payloads. Store bytes once, then refer to
+them by digest from action results, manifests, or other integration state.
 
 | API | Use |
 | --- | --- |
@@ -90,6 +101,11 @@ async fn main() -> once::Result<()> {
 }
 ```
 
+The action-result APIs store and retrieve metadata for a completed action.
+They do not run commands. The caller is responsible for defining the
+action payload, hashing it, executing any work, and deciding which blob
+digests belong in the cached result.
+
 | API | Use |
 | --- | --- |
 | `put_action_result(action, result)` | Stores a cached result for an action digest. |
@@ -98,6 +114,10 @@ async fn main() -> once::Result<()> {
 | `stats()` | Returns local cache statistics. |
 
 ## Types
+
+These are the public supporting types exposed by the crate root. They are
+re-exported so embedders can model cache state without importing lower
+level Once modules.
 
 | Type | Use |
 | --- | --- |
