@@ -34,9 +34,9 @@ The high-level API is:
 
 ## Apple
 
-Download `Once.xcframework.zip` from a release, link `Once.xcframework`,
-and add the included `Once.swift` file to your Swift target. `Once.swift`
-wraps the `COnce` C module:
+Reference `Once-{version}.xcframework.zip` from a release with a SwiftPM
+binary target named `COnce`, then add `Once-{version}.swift` from the same
+release to the Swift target that depends on that binary target:
 
 ```swift
 let once = OnceCache()

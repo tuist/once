@@ -178,6 +178,7 @@ swiftc -typecheck \
   crates/once/swift/Once.swift
 
 cp crates/once/swift/Once.swift "${release_dir}/Once.swift"
+cp crates/once/swift/Once.swift "dist/Once-${version}.swift"
 
 if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then
   codesign --force \
@@ -191,7 +192,7 @@ fi
 asset="Once-${version}.xcframework.zip"
 (
   cd "${release_dir}"
-  ditto -c -k --keepParent Once.xcframework Once.swift "${OLDPWD}/dist/${asset}"
+  ditto -c -k --keepParent Once.xcframework "${OLDPWD}/dist/${asset}"
 )
 
 if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then
