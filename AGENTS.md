@@ -37,6 +37,19 @@ Keep the CLI surface centered on:
 - `once runtime` for JSON-RPC runtime sessions
 - `once auth` and `once toolchain` for supporting infrastructure
 
+## SDK API And Docs
+
+The `once` crate root and `crates/once/swift/Once.swift` are public SDK
+surfaces. Keep them centered on cache access unless an explicit product
+decision expands them. Do not expose script execution, runtime sessions,
+frontend parsing, or provider internals through the SDK by accident.
+
+When changing the Rust or Swift SDK API, update `docs/guide/sdk/` in the
+same change. Treat method names, return types, default cache behavior,
+memory ownership, and async behavior as compatibility-sensitive. Avoid
+regressions in the public API and call out deliberate breaking changes in
+the pull request description.
+
 ## Tests
 
 - Rust unit tests cover in-process behavior such as digest stability,

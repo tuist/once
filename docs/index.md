@@ -13,11 +13,11 @@ hero:
       text: Why
       link: /guide/why
     - theme: alt
+      text: SDK
+      link: /guide/sdk/rust
+    - theme: alt
       text: Scripts
       link: /guide/scripts/
-    - theme: alt
-      text: View on GitHub
-      link: https://github.com/tuist/once
 features:
   - title: Actions stay flexible
     details: Keep existing commands, tools, and workflows in place. Add a small execution contract around the work you want to cache.

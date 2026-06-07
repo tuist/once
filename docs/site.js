@@ -21,6 +21,14 @@ export const site = {
     "/": [
       { text: "Why", link: "/guide/why" },
       {
+        text: "SDK",
+        collapsed: false,
+        items: [
+          { text: "Rust", link: "/guide/sdk/rust" },
+          { text: "Swift", link: "/guide/sdk/swift" },
+        ],
+      },
+      {
         text: "Scripts",
         collapsed: false,
         items: [
