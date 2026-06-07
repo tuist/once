@@ -288,8 +288,14 @@ fn response<T: Serialize>(value: &FfiResponse<T>) -> *mut c_char {
 }
 
 fn string_to_raw(value: impl Into<String>) -> *mut c_char {
-    CString::new(value.into().replace('\0', "\\0"))
-        .expect("FFI string cannot contain interior nul bytes")
+    match CString::new(value.into().replace('\0', "\\0")) {
+        Ok(value) => value.into_raw(),
+        Err(_) => fallback_response_serialization_error_raw(),
+    }
+}
+
+fn fallback_response_serialization_error_raw() -> *mut c_char {
+    unsafe { CString::from_vec_unchecked(RESPONSE_SERIALIZATION_ERROR.as_bytes().to_vec()) }
         .into_raw()
 }
 
@@ -359,6 +365,15 @@ mod tests {
 
         assert_eq!(json["status"], "error");
         assert_eq!(json["message"], "request_json must be valid UTF-8");
+    }
+
+    #[test]
+    fn raw_strings_sanitize_interior_null_bytes() {
+        let response = string_to_raw("before\0after");
+        let value = unsafe { CStr::from_ptr(response).to_string_lossy().into_owned() };
+        once_string_free(response);
+
+        assert_eq!(value, "before\\0after");
     }
 
     #[test]
