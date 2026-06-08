@@ -62,7 +62,7 @@ gem install buildonce
 Use it to read and write blobs through the default local cache:
 
 ```ruby
-require "once"
+require "buildonce"
 
 cache = Once::Cache.new
 digest = cache.put_blob("hello")

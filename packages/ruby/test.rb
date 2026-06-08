@@ -3,7 +3,7 @@
 require "tmpdir"
 
 $LOAD_PATH.unshift(File.expand_path("lib", __dir__))
-require "once"
+require "buildonce"
 
 Dir.mktmpdir("once-ruby-") do |dir|
   ENV["XDG_CACHE_HOME"] = dir

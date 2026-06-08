@@ -5,7 +5,7 @@ native Once library used by the other SDKs and does not expose script
 execution.
 
 ```ruby
-require "once"
+require "buildonce"
 
 cache = Once::Cache.new
 digest = cache.put_blob("hello")

@@ -5,7 +5,7 @@ applications and tools. Script execution is CLI specific and is not part
 of the SDK surface.
 
 ```ruby
-require "once"
+require "buildonce"
 
 cache = Once::Cache.new
 digest = cache.put_blob("hello")
