@@ -22,6 +22,10 @@ export class Cache {
   digest(bytes: Buffer | Uint8Array | string): string;
   /**
    * Strings are encoded as UTF-8 before being stored.
+   *
+   * Blob bytes currently cross the native boundary as JSON arrays, so very
+   * large blobs should use the Rust SDK or CLI until the JavaScript SDK has a
+   * streaming native ABI.
    */
   putBlob(bytes: Buffer | Uint8Array | string): Promise<string>;
   getBlob(digest: string): Promise<Buffer>;

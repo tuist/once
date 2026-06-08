@@ -10,6 +10,14 @@ async function assertRejectsOnceError(work) {
   await assert.rejects(work, OnceError);
 }
 
+async function assertRejectsTypeError(work, pattern) {
+  await assert.rejects(work, (error) => {
+    assert(error instanceof TypeError);
+    assert.match(error.message, pattern);
+    return true;
+  });
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(`${os.tmpdir()}/once-js-`);
   process.env.XDG_CACHE_HOME = tmp;
@@ -20,6 +28,8 @@ async function main() {
   assert.equal(digest("hello"), blobDigest);
   assert.equal(digest(""), await cache.putBlob(""));
   assert.equal(digest("é"), digest(Buffer.from("é", "utf8")));
+  assert.throws(() => digest({}), /Cache#digest bytes/);
+  await assertRejectsTypeError(() => cache.putBlob({}), /Cache#putBlob bytes/);
   assert.equal(await cache.hasBlob(blobDigest), true);
   assert.deepEqual(await cache.getBlob(blobDigest), Buffer.from("hello"));
   assert.deepEqual(await cache.getBlob(digest("")), Buffer.alloc(0));

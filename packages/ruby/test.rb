@@ -42,6 +42,7 @@ Dir.mktmpdir("once-ruby-") do |dir|
     stderr: nil,
     outputs: {},
   )
+  raise "outputs should be frozen" unless result.outputs.frozen?
 
   raise "put action failed" unless cache.put_action_result(result, action_digest: action_digest)
   raise "action mismatch" unless cache.get_action_result(action_digest) == result

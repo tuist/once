@@ -17,13 +17,6 @@ while (($# > 0)); do
   esac
 done
 
-if [[ -z "${target}" ]]; then
-  echo "--target is required" >&2
-  exit 1
-fi
-
-cargo build --locked --release --package once --target "${target}"
-
 case "${target}" in
   aarch64-apple-darwin)
     platform="darwin-arm64"
@@ -46,10 +39,16 @@ case "${target}" in
     library="once.dll"
     ;;
   *)
+    if [[ -z "${target}" ]]; then
+      echo "--target is required" >&2
+      exit 1
+    fi
     echo "unsupported SDK package target: ${target}" >&2
     exit 1
     ;;
 esac
+
+cargo build --locked --release --package once --target "${target}"
 
 source="target/${target}/release/${library}"
 if [[ ! -f "${source}" ]]; then

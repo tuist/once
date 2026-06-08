@@ -7,6 +7,11 @@ module Once
   class Error < StandardError; end
 
   ActionResult = Struct.new(:exit_code, :stdout, :stderr, :outputs, keyword_init: true) do
+    def initialize(exit_code:, stdout: nil, stderr: nil, outputs: {})
+      outputs ||= {}
+      super(exit_code: exit_code, stdout: stdout, stderr: stderr, outputs: outputs.dup.freeze)
+    end
+
     def to_h
       {
         exit_code: exit_code,
@@ -26,7 +31,7 @@ module Once
 
     def digest(bytes)
       buffer = bytes.to_s.b
-      pointer = buffer.empty? ? FFI::Pointer::NULL : FFI::MemoryPointer.from_string(buffer)
+      pointer = memory_pointer(buffer)
       decode_response(Native.once_digest_bytes(pointer, buffer.bytesize))
     end
 
@@ -75,6 +80,12 @@ module Once
 
     def decode_request(function, request)
       decode_response(Native.public_send(function, JSON.generate(request)))
+    end
+
+    def memory_pointer(buffer)
+      pointer = FFI::MemoryPointer.new(:uint8, [buffer.bytesize, 1].max)
+      pointer.put_bytes(0, buffer) unless buffer.empty?
+      pointer
     end
 
     def decode_response(pointer)

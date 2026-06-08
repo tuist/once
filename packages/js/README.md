@@ -18,3 +18,7 @@ async function example() {
 
 The package looks for a bundled native library under `prebuilds/`. Set
 `ONCE_LIBRARY_PATH` to load a custom `libonce` build.
+
+`putBlob` sends bytes to the native library through the JSON SDK ABI. This
+keeps the package portable across platforms, but it means very large blobs are
+materialized as JSON byte arrays before crossing into Rust.

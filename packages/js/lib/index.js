@@ -20,13 +20,12 @@ class Cache {
   }
 
   digest(bytes) {
-    const buffer = toBuffer(bytes);
-    const pointer = buffer.length === 0 ? null : buffer;
-    return decodeStringResponse(native.once_digest_bytes(pointer, buffer.length));
+    const buffer = toBuffer(bytes, "Cache#digest bytes");
+    return decodeStringResponse(native.once_digest_bytes(buffer, buffer.length));
   }
 
   async putBlob(bytes) {
-    const buffer = toBuffer(bytes);
+    const buffer = toBuffer(bytes, "Cache#putBlob bytes");
     return decodeRequest(
       native.once_cache_put_blob_json,
       { bytes: Array.from(buffer) },
@@ -136,7 +135,7 @@ function validateDigest(value, name) {
   }
 }
 
-function toBuffer(bytes) {
+function toBuffer(bytes, name) {
   if (Buffer.isBuffer(bytes)) {
     return bytes;
   }
@@ -146,7 +145,7 @@ function toBuffer(bytes) {
   if (typeof bytes === "string") {
     return Buffer.from(bytes, "utf8");
   }
-  throw new TypeError("bytes must be a Buffer, Uint8Array, or string");
+  throw new TypeError(`${name} must be a Buffer, Uint8Array, or string`);
 }
 
 function loadNative() {
