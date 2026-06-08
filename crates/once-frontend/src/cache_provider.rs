@@ -4,17 +4,12 @@ use crate::error::{Error, Result};
 
 pub const DEFAULT_TUIST_URL: &str = "https://tuist.dev";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum CacheProviderConfig {
+    #[default]
     Local,
     Named(NamedCacheProviderConfig),
     Tuist(TuistCacheProviderConfig),
-}
-
-impl Default for CacheProviderConfig {
-    fn default() -> Self {
-        Self::Local
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

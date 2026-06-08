@@ -307,7 +307,7 @@ fn script_invocation(
 
     Ok(ScriptInvocation {
         workspace,
-        runtime: runtime.to_string(),
+        runtime: runtime.clone(),
         runtime_args: merged_runtime_args,
         script_path,
         script_args,
