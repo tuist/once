@@ -3754,8 +3754,8 @@ dependencies = [
 
 [[package]]
 name = "schlussel"
-version = "0.16.1"
-source = "git+https://github.com/tuist/schlussel.git?rev=e90f561bfbe1f1c732ccc15ddc7e4780197dc609#e90f561bfbe1f1c732ccc15ddc7e4780197dc609"
+version = "0.17.1"
+source = "git+https://github.com/tuist/schlussel.git?rev=80a7bc1fc0b68bdc2cd2379b16240ddbfbe0267b#80a7bc1fc0b68bdc2cd2379b16240ddbfbe0267b"
 dependencies = [
  "base64",
  "directories",
