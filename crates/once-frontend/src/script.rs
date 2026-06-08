@@ -12,6 +12,7 @@ pub struct ScriptAnnotations {
     pub env_vars: Vec<String>,
     pub cwd: Option<String>,
     pub remote: Option<String>,
+    pub output_symlinks: Option<String>,
 }
 
 pub fn parse_script_annotations(path: &Path, display_name: &str) -> Result<ScriptAnnotations> {
@@ -117,13 +118,20 @@ fn parse_once_exec_shebang(runtime: String, runtime_args: Vec<String>) -> (Strin
 }
 
 fn annotation_payload(line: &str) -> Option<&str> {
-    const PREFIXES: &[&str] = &[
-        "# ONCE", "#ONCE", "// ONCE", "//ONCE", "; ONCE", ";ONCE", "-- ONCE", "--ONCE", "% ONCE",
-        "%ONCE", "' ONCE", "'ONCE",
-    ];
-    PREFIXES
-        .iter()
-        .find_map(|prefix| line.strip_prefix(prefix).map(str::trim))
+    const COMMENT_PREFIXES: &[&str] = &["#", "//", ";", "--", "%", "'"];
+    COMMENT_PREFIXES.iter().find_map(|prefix| {
+        let rest = line.strip_prefix(prefix)?.trim_start();
+        strip_once_marker(rest).map(str::trim_start)
+    })
+}
+
+fn strip_once_marker(rest: &str) -> Option<&str> {
+    let split = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let marker = &rest[..split];
+    if !marker.eq_ignore_ascii_case("once") {
+        return None;
+    }
+    Some(&rest[split..])
 }
 
 fn looks_like_comment(line: &str) -> bool {
@@ -163,9 +171,13 @@ fn parse_annotation_line(
         annotations.remote = Some(parse_quoted(raw, "remote", display_name)?);
         return Ok(());
     }
+    if let Some(raw) = line.strip_prefix("output-symlinks ") {
+        annotations.output_symlinks = Some(parse_quoted(raw, "output-symlinks", display_name)?);
+        return Ok(());
+    }
     Err(Error::Eval {
         path: display_name.to_string(),
-        message: format!("unknown ONCE directive `{line}`"),
+        message: format!("unknown once directive `{line}`"),
     })
 }
 
@@ -174,19 +186,19 @@ fn parse_quoted(raw: &str, name: &str, display_name: &str) -> Result<String> {
     let Some(rest) = raw.strip_prefix('"') else {
         return Err(Error::Eval {
             path: display_name.to_string(),
-            message: format!("ONCE {name} expects a quoted string"),
+            message: format!("Once {name} expects a quoted string"),
         });
     };
     let Some(end) = rest.find('"') else {
         return Err(Error::Eval {
             path: display_name.to_string(),
-            message: format!("ONCE {name} is missing a closing quote"),
+            message: format!("Once {name} is missing a closing quote"),
         });
     };
     if !rest[end + 1..].trim().is_empty() {
         return Err(Error::Eval {
             path: display_name.to_string(),
-            message: format!("ONCE {name} only accepts one quoted string"),
+            message: format!("Once {name} only accepts one quoted string"),
         });
     }
     Ok(rest[..end].to_string())
@@ -204,10 +216,11 @@ mod tests {
         fs::write(
             &path,
             r#"#!/usr/bin/env bash
-# ONCE input "src/**/*.ts"
-# ONCE output "dist/"
-# ONCE env "NODE_ENV"
-# ONCE cwd "."
+# once input "src/**/*.ts"
+# once output "dist/"
+# once env "NODE_ENV"
+# once cwd "."
+# once output-symlinks "preserve"
 
 echo hi
 "#,
@@ -220,6 +233,7 @@ echo hi
         assert_eq!(annotations.outputs, vec!["dist/".to_string()]);
         assert_eq!(annotations.env_vars, vec!["NODE_ENV".to_string()]);
         assert_eq!(annotations.cwd.as_deref(), Some("."));
+        assert_eq!(annotations.output_symlinks.as_deref(), Some("preserve"));
     }
 
     #[test]
@@ -229,7 +243,7 @@ echo hi
         fs::write(
             &path,
             r#"#!/usr/bin/env bash
-# ONCE remote "microsandbox"
+# once remote "microsandbox"
 
 echo hi
 "#,
@@ -238,6 +252,26 @@ echo hi
 
         let annotations = parse_script_annotations(&path, "build.sh").unwrap();
         assert_eq!(annotations.remote.as_deref(), Some("microsandbox"));
+    }
+
+    #[test]
+    fn accepts_legacy_uppercase_once_marker() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("build.sh");
+        fs::write(
+            &path,
+            r#"#!/usr/bin/env bash
+# ONCE input "src/**/*.ts"
+# ONCE output "dist/"
+
+echo hi
+"#,
+        )
+        .unwrap();
+
+        let annotations = parse_script_annotations(&path, "build.sh").unwrap();
+        assert_eq!(annotations.inputs, vec!["src/**/*.ts".to_string()]);
+        assert_eq!(annotations.outputs, vec!["dist/".to_string()]);
     }
 
     #[test]
@@ -270,10 +304,10 @@ console.log("hi");
                 &path,
                 format!(
                     r#"#!/usr/bin/env {runtime}
-# ONCE input "src/**/*"
-# ONCE output "dist/"
-# ONCE env "APP_ENV"
-# ONCE cwd "."
+# once input "src/**/*"
+# once output "dist/"
+# once env "APP_ENV"
+# once cwd "."
 
 print("hi")
 "#
@@ -297,7 +331,7 @@ print("hi")
         fs::write(
             &path,
             r#"#!/usr/bin/env -S once exec --script python3
-# ONCE input "src/**/*.py"
+# once input "src/**/*.py"
 print("hi")
 "#,
         )
@@ -315,7 +349,7 @@ print("hi")
         fs::write(
             &path,
             r#"#!/usr/bin/env -S once exec -- python3
-# ONCE input "src/**/*.py"
+# once input "src/**/*.py"
 print("hi")
 "#,
         )
@@ -333,13 +367,13 @@ print("hi")
         fs::write(
             &path,
             r#"#!/bin/sh
-# ONCE unknown "thing"
+# once unknown "thing"
 echo hi
 "#,
         )
         .unwrap();
 
         let err = parse_script_annotations(&path, "bad.sh").unwrap_err();
-        assert!(err.to_string().contains("unknown ONCE directive"));
+        assert!(err.to_string().contains("unknown once directive"));
     }
 }

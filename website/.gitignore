@@ -1,6 +1,0 @@
-_site/
-node_modules/
-.cache/
-.wrangler/
-*.log
-.DS_Store

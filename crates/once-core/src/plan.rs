@@ -284,7 +284,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::{ResourceRequest, RunOpts, WorkspacePath};
+    use crate::{OutputSymlinkMode, ResourceRequest, RunOpts, WorkspacePath};
     use once_cas::Cas;
     use tempfile::TempDir;
 
@@ -302,6 +302,7 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(10_000),
             remote: None,
@@ -357,6 +358,7 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
             remote: None,
@@ -441,6 +443,7 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![WorkspacePath::try_from("out/produced.txt").unwrap()],
+            output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
             remote: None,
@@ -451,6 +454,7 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
             remote: None,
