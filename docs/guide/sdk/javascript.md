@@ -34,18 +34,22 @@ platforms. Set `ONCE_LIBRARY_PATH` when you need to load a custom
 cache root is `$XDG_CACHE_HOME/once/cas` when `XDG_CACHE_HOME` is set, and
 `$HOME/.cache/once/cas` otherwise.
 
+`version()` and `digest(bytes)` are synchronous. Cache storage operations
+return promises and must be awaited. When `bytes` is a string, the SDK
+encodes it as UTF-8 before hashing or storing it.
+
 | API | Use |
 | --- | --- |
 | `new Cache()` | Opens the default local cache using XDG conventions. |
-| `version()` | Returns the linked Once version. |
-| `digest(bytes)` | Returns the content digest for bytes without writing them to the cache. |
-| `putBlob(bytes)` | Stores bytes and returns their content digest. |
-| `getBlob(digest)` | Reads bytes for a digest. |
-| `hasBlob(digest)` | Returns whether a blob exists. |
-| `putActionResult(result, actionDigest)` | Stores a cached result for an action digest. |
-| `getActionResult(actionDigest)` | Returns a cached result when one exists. |
-| `forgetAction(actionDigest)` | Removes one cached action result. Referenced blobs are left intact. |
-| `stats()` | Returns local cache statistics. |
+| `version()` | Synchronously returns the linked Once version. |
+| `digest(bytes)` | Synchronously returns the content digest for bytes without writing them to the cache. |
+| `putBlob(bytes)` | Stores bytes and returns a promise for their content digest. |
+| `getBlob(digest)` | Reads bytes for a digest and returns a promise. |
+| `hasBlob(digest)` | Returns a promise for whether a blob exists. |
+| `putActionResult(result, actionDigest)` | Stores a cached result for an action digest and returns a promise. |
+| `getActionResult(actionDigest)` | Returns a promise for a cached result when one exists. |
+| `forgetAction(actionDigest)` | Removes one cached action result and returns a promise. Referenced blobs are left intact. |
+| `stats()` | Returns a promise for local cache statistics. |
 
 ## Types
 

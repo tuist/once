@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tuist/once.git",
+    "url": "git+https://github.com/tuist/once.git",
     "directory": "packages/js"
   },
   "main": "lib/index.js",

@@ -16,7 +16,13 @@ export class OnceError extends Error {}
 
 export class Cache {
   version(): string;
+  /**
+   * Strings are encoded as UTF-8 before hashing.
+   */
   digest(bytes: Buffer | Uint8Array | string): string;
+  /**
+   * Strings are encoded as UTF-8 before being stored.
+   */
   putBlob(bytes: Buffer | Uint8Array | string): Promise<string>;
   getBlob(digest: string): Promise<Buffer>;
   hasBlob(digest: string): Promise<boolean>;
@@ -26,4 +32,7 @@ export class Cache {
   stats(): Promise<CacheStats>;
 }
 
+/**
+ * Strings are encoded as UTF-8 before hashing.
+ */
 export function digest(bytes: Buffer | Uint8Array | string): string;

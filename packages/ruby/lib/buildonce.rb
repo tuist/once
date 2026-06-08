@@ -21,12 +21,7 @@ module Once
 
   class Cache
     def version
-      pointer = Native.once_version
-      return "" if pointer.null?
-
-      pointer.read_string
-    ensure
-      Native.once_string_free(pointer) if pointer && !pointer.null?
+      read_native_string(Native.once_version)
     end
 
     def digest(bytes)
@@ -85,12 +80,22 @@ module Once
     def decode_response(pointer)
       raise Error, "native Once function returned null" if pointer.null?
 
-      response = JSON.parse(pointer.read_string)
+      response = JSON.parse(read_native_string(pointer, free: false))
       return response.fetch("value") if response.fetch("status") == "ok"
 
       raise Error, response.fetch("message")
+    rescue JSON::ParserError, KeyError => e
+      raise Error, e.message
     ensure
       Native.once_string_free(pointer) if pointer && !pointer.null?
+    end
+
+    def read_native_string(pointer, free: true)
+      raise Error, "native Once function returned null" if pointer.null?
+
+      pointer.read_string
+    ensure
+      Native.once_string_free(pointer) if free && pointer && !pointer.null?
     end
 
     def normalize_action_result(result)

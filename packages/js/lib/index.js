@@ -12,6 +12,7 @@ class OnceError extends Error {
 }
 
 const native = loadNative();
+const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 
 class Cache {
   version() {
@@ -33,15 +34,18 @@ class Cache {
   }
 
   async getBlob(digest) {
+    validateDigest(digest, "digest");
     const response = decodeRequest(native.once_cache_get_blob_json, { digest });
     return Buffer.from(response.bytes);
   }
 
   async hasBlob(digest) {
+    validateDigest(digest, "digest");
     return decodeRequest(native.once_cache_has_blob_json, { digest });
   }
 
   async putActionResult(result, actionDigest) {
+    validateDigest(actionDigest, "actionDigest");
     return decodeRequest(
       native.once_cache_put_action_result_json,
       {
@@ -52,6 +56,7 @@ class Cache {
   }
 
   async getActionResult(actionDigest) {
+    validateDigest(actionDigest, "actionDigest");
     const result = decodeRequest(
       native.once_cache_get_action_result_json,
       { action_digest: actionDigest },
@@ -60,6 +65,7 @@ class Cache {
   }
 
   async forgetAction(actionDigest) {
+    validateDigest(actionDigest, "actionDigest");
     return decodeRequest(
       native.once_cache_forget_action_json,
       { action_digest: actionDigest },
@@ -119,6 +125,12 @@ function actionResultFromNative(result) {
   };
 }
 
+function validateDigest(value, name) {
+  if (typeof value !== "string" || !DIGEST_PATTERN.test(value)) {
+    throw new OnceError(`${name} must be a lowercase BLAKE3 hex digest`);
+  }
+}
+
 function toBuffer(bytes) {
   if (Buffer.isBuffer(bytes)) {
     return bytes;
@@ -127,7 +139,7 @@ function toBuffer(bytes) {
     return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   }
   if (typeof bytes === "string") {
-    return Buffer.from(bytes);
+    return Buffer.from(bytes, "utf8");
   }
   throw new TypeError("bytes must be a Buffer, Uint8Array, or string");
 }

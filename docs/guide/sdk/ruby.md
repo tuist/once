@@ -31,6 +31,10 @@ Set `ONCE_LIBRARY_PATH` when you need to load a custom `libonce` build.
 default cache root is `$XDG_CACHE_HOME/once/cas` when `XDG_CACHE_HOME` is
 set, and `$HOME/.cache/once/cas` otherwise.
 
+Ruby SDK methods are synchronous. `digest(bytes)` only hashes bytes and
+does not touch storage. When `bytes` is a string, the SDK uses the
+string's byte representation.
+
 | API | Use |
 | --- | --- |
 | `Once::Cache.new` | Opens the default local cache using XDG conventions. |
