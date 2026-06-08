@@ -2,7 +2,7 @@
 rust = "1.88"
 shellspec = "latest"
 git-cliff = "2.13.1"
-"github:tuist/blick" = "0.8.0"
+"github:tuist/blick" = "0.10.0"
 "github:superradcompany/microsandbox" = "0.5.5"
 node = "22.11.0"
 "npm:opencode-ai" = "1.15.0"
