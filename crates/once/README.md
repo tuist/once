@@ -35,8 +35,9 @@ The high-level API is:
 ## Apple
 
 Reference `Once.xcframework.zip` from a release with a SwiftPM binary
-target named `Once`, then add `Once.swift` from the same release to the
-Swift target that depends on that binary target:
+target named `Once`, then add `crates/once/swift/Once.swift` from the
+matching repository tag to the Swift target that depends on that binary
+target:
 
 ```swift
 let once = OnceCache()

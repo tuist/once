@@ -199,9 +199,6 @@ swiftc -typecheck \
   -I crates/once/include/Once \
   crates/once/swift/Once.swift
 
-cp crates/once/swift/Once.swift "${release_dir}/Once.swift"
-cp crates/once/swift/Once.swift "dist/Once.swift"
-
 if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then
   codesign --force \
     --timestamp \
