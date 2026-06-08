@@ -36,8 +36,8 @@ Describe 'once exec'
     mkdir -p "$WORKSPACE/scripts"
     cat > "$WORKSPACE/scripts/build.sh" <<EOF
 #!/usr/bin/env -S $ONCE_BIN exec -- bash
-# ONCE input "../input.txt"
-# ONCE cwd ".."
+# once input "../input.txt"
+# once cwd ".."
 cat input.txt
 EOF
     chmod +x "$WORKSPACE/scripts/build.sh"
@@ -54,8 +54,8 @@ EOF
     mkdir -p "$WORKSPACE/scripts"
     cat > "$WORKSPACE/scripts/build.sh" <<EOF
 #!/usr/bin/env -S $ONCE_BIN exec -- bash
-# ONCE input "../input.txt"
-# ONCE cwd ".."
+# once input "../input.txt"
+# once cwd ".."
 cat input.txt
 EOF
     chmod +x "$WORKSPACE/scripts/build.sh"
@@ -73,8 +73,8 @@ EOF
     mkdir -p "$WORKSPACE/scripts"
     cat > "$WORKSPACE/scripts/build.sh" <<'EOF'
 #!/usr/bin/env bash
-# ONCE input "../input.txt"
-# ONCE cwd ".."
+# once input "../input.txt"
+# once cwd ".."
 cat input.txt
 EOF
     cat > "$WORKSPACE/input.txt" <<'EOF'
@@ -90,8 +90,8 @@ EOF
     mkdir -p "$WORKSPACE/scripts"
     cat > "$WORKSPACE/scripts/build.sh" <<'EOF'
 #!/usr/bin/env bash
-# ONCE input "../input.txt"
-# ONCE cwd ".."
+# once input "../input.txt"
+# once cwd ".."
 cat input.txt
 EOF
     cat > "$WORKSPACE/input.txt" <<'EOF'

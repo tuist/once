@@ -18,10 +18,10 @@ inside each module file. Cross-module integration tests go under
 - Per-package manifests are named `once.toml`.
 - The `.once/` directory at the workspace root is cache and runtime
   state, not a manifest. It is gitignored.
-- Once supports script-like targets: `[[script]]` and `[[target]]`
-  with `rule = "script"`.
-- File-backed scripts declare their execution metadata with `ONCE`
-  headers. Inline manifest scripts declare the same metadata in TOML.
+- `once.toml` is reserved for workspace configuration such as cache
+  providers.
+- Scripts declare their execution metadata with `# once` headers in the
+  script file.
 
 ## Scope
 
@@ -32,11 +32,23 @@ without an explicit product decision.
 
 Keep the CLI surface centered on:
 
-- `once run` for declared script targets
 - `once exec` for literal commands and annotated script files
 - `once cache` for CAS and action-cache primitives
 - `once runtime` for JSON-RPC runtime sessions
 - `once auth` and `once toolchain` for supporting infrastructure
+
+## SDK API And Docs
+
+The `once` crate root and `crates/once/swift/Once.swift` are public SDK
+surfaces. Keep them centered on cache access unless an explicit product
+decision expands them. Do not expose script execution, runtime sessions,
+frontend parsing, or provider internals through the SDK by accident.
+
+When changing the Rust or Swift SDK API, update `docs/guide/sdk/` in the
+same change. Treat method names, return types, default cache behavior,
+memory ownership, and async behavior as compatibility-sensitive. Avoid
+regressions in the public API and call out deliberate breaking changes in
+the pull request description.
 
 ## Tests
 
@@ -82,7 +94,7 @@ mise exec -- cargo fmt --all -- --check
 mise exec -- cargo build --release
 mise exec -- shellspec
 
-mise exec -- target/release/once run check
+mise exec -- target/release/once exec -- cargo check --workspace
 mise exec -- target/release/once exec -- /bin/sh -c 'printf hello'
 ```
 

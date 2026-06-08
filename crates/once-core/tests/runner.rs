@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use once_cas::Cas;
-use once_core::{Action, CacheState, ResourceRequest, RunOpts, Runner, WorkspacePath};
+use once_core::{
+    Action, CacheState, OutputSymlinkMode, ResourceRequest, RunOpts, Runner, WorkspacePath,
+};
 use tempfile::TempDir;
 
 fn ws() -> (TempDir, Runner) {
@@ -25,6 +27,7 @@ fn cmd(script: &str) -> Action {
         cwd: None,
         input_digest: None,
         outputs: vec![],
+        output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
         timeout_ms: Some(10_000),
         remote: None,
@@ -86,6 +89,7 @@ async fn cache_keys_partition_by_workspace_path() {
         cwd: Some(WorkspacePath::try_from(sub).unwrap()),
         input_digest: None,
         outputs: vec![],
+        output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
         timeout_ms: Some(5_000),
         remote: None,
@@ -131,6 +135,7 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         cwd: None,
         input_digest: None,
         outputs: vec![],
+        output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
         timeout_ms: Some(5_000),
         remote: None,
@@ -146,6 +151,7 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         cwd: None,
         input_digest: None,
         outputs: vec![],
+        output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
         timeout_ms: Some(5_000),
         remote: None,

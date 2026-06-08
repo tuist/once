@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs::{self, File};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
+mod blob;
 mod digest;
 mod provider;
 mod tuist;
@@ -83,10 +84,10 @@ pub struct ActionResult {
 /// directory.
 ///
 /// Layout:
-/// - `cas/<aa>/<rest-of-hex>` - content-addressed blob bodies, sharded
-///   by first byte. The file at `<digest>` is guaranteed to hash to
-///   `<digest>`; callers (including `ActionResult` restoration) trust
-///   this invariant for integrity.
+/// - `cas/<aa>/<rest-of-hex>` - logical blob bodies, sharded by first
+///   byte. Blob paths are addressed by the BLAKE3 digest of the
+///   uncompressed bytes; the stored body may be raw bytes or a
+///   zstd-wrapped representation.
 /// - `actions/<aa>/<rest-of-hex>.json` - action results, same sharding
 ///   as `cas/`. Their referenced output digests are CAS-only.
 ///
@@ -132,9 +133,22 @@ impl Cas {
 
     pub(crate) async fn blob_size(&self, digest: &Digest) -> Result<u64> {
         let path = self.blob_path(digest);
-        match fs::metadata(&path).await {
-            Ok(metadata) => Ok(metadata.len()),
+        let mut file = match File::open(&path).await {
+            Ok(file) => Ok(file),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Err(Error::BlobNotFound(*digest)),
+            Err(source) => Err(Error::Io {
+                path: path.clone(),
+                source,
+            }),
+        }?;
+        let metadata = file.metadata().await.map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let mut header = vec![0_u8; blob::ZSTD_BLOB_HEADER_LEN];
+        match file.read_exact(&mut header).await {
+            Ok(_) => Ok(blob::raw_size_from_header(&header).unwrap_or(metadata.len())),
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(metadata.len()),
             Err(source) => Err(Error::Io { path, source }),
         }
     }
@@ -151,20 +165,25 @@ impl Cas {
         if fs::try_exists(&path).await.unwrap_or(false) {
             return Ok(digest);
         }
-        write_durably(&path, bytes).await?;
+        let stored = blob::encode_bytes(bytes).map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+        write_durably(&path, &stored).await?;
         Ok(digest)
     }
 
     /// Stream `reader` into the CAS, returning the content's digest.
     ///
-    /// Memory use is bounded by `STREAM_CHUNK` regardless of the input
-    /// size - this is the path subprocess stdout/stderr go through, so
-    /// a multi-GB linker log doesn't OOM the executor. The stream is
-    /// hashed and written to a scratch file in one pass; on completion
-    /// the scratch file is renamed into place (or discarded if the
-    /// blob already exists). On any error along the way the scratch
-    /// file is removed; a crashed writer leaves at most one orphaned
-    /// `scratch/stream-*` that future cache invocations ignore.
+    /// Memory use while reading is bounded by `STREAM_CHUNK` regardless
+    /// of the input size - this is the path subprocess stdout/stderr go
+    /// through, so a multi-GB linker log doesn't OOM the executor. The
+    /// stream is hashed and written to a scratch file in one pass; on
+    /// completion the scratch file is optionally compressed, then
+    /// renamed into place or discarded if the blob already exists. On
+    /// any error along the way the scratch file is removed; a crashed
+    /// writer leaves at most one orphaned `scratch/stream-*` that
+    /// future cache invocations ignore.
     pub async fn put_stream<R: AsyncRead + Unpin>(&self, reader: R) -> Result<Digest> {
         let (tmp, digest) = self.stream_to_tmp("stream", reader).await?;
         let final_path = self.blob_path(&digest);
@@ -175,7 +194,19 @@ impl Cas {
             return Ok(digest);
         }
 
-        rename_into_place(&tmp, &final_path).await?;
+        let stored_tmp = self.prepare_blob_tmp(&tmp).await?;
+        if fs::try_exists(&final_path).await.unwrap_or(false) {
+            let _ = fs::remove_file(&stored_tmp).await;
+            if stored_tmp != tmp {
+                let _ = fs::remove_file(&tmp).await;
+            }
+            return Ok(digest);
+        }
+
+        rename_into_place(&stored_tmp, &final_path).await?;
+        if stored_tmp != tmp {
+            let _ = fs::remove_file(&tmp).await;
+        }
         Ok(digest)
     }
 
@@ -236,11 +267,40 @@ impl Cas {
         Ok(Digest::from_bytes(*hasher.finalize().as_bytes()))
     }
 
+    async fn prepare_blob_tmp(&self, raw_tmp: &Path) -> Result<PathBuf> {
+        let scratch = self.scratch_dir();
+        ensure_dir(&scratch).await?;
+        let pid = process::id();
+        let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let encoded_tmp = scratch.join(format!("zstd-{pid}-{seq}"));
+        let raw_for_task = raw_tmp.to_path_buf();
+        let encoded_for_task = encoded_tmp.clone();
+        let encoded = tokio::task::spawn_blocking(move || {
+            blob::encode_file(&raw_for_task, &encoded_for_task)
+        })
+        .await
+        .map_err(|source| Error::Io {
+            path: raw_tmp.to_path_buf(),
+            source: io::Error::other(source.to_string()),
+        })?
+        .map_err(|source| Error::Io {
+            path: raw_tmp.to_path_buf(),
+            source,
+        })?;
+
+        if encoded.should_store {
+            Ok(encoded_tmp)
+        } else {
+            let _ = fs::remove_file(&encoded_tmp).await;
+            Ok(raw_tmp.to_path_buf())
+        }
+    }
+
     /// Read a content-addressed blob.
     pub async fn get_blob(&self, digest: &Digest) -> Result<Vec<u8>> {
         let path = self.blob_path(digest);
         match fs::read(&path).await {
-            Ok(bytes) => Ok(bytes),
+            Ok(bytes) => blob::decode_bytes(bytes).map_err(|source| Error::Io { path, source }),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Err(Error::BlobNotFound(*digest)),
             Err(source) => Err(Error::Io { path, source }),
         }
@@ -468,6 +528,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn put_blob_compresses_repetitive_payload_at_rest() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let payload = b"cache line\n".repeat(4096);
+
+        let d = cas.put_blob(&payload).await.unwrap();
+        let stored = fs::read(cas.blob_path(&d)).await.unwrap();
+
+        assert!(stored.starts_with(blob::ZSTD_BLOB_MAGIC));
+        assert!(stored.len() < payload.len());
+        assert_eq!(cas.blob_size(&d).await.unwrap(), payload.len() as u64);
+        assert_eq!(cas.get_blob(&d).await.unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn get_blob_reads_legacy_raw_blob() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let payload = b"legacy raw blob";
+        let d = Digest::of_bytes(payload);
+        let path = cas.blob_path(&d);
+        fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        fs::write(&path, payload).await.unwrap();
+
+        assert_eq!(cas.get_blob(&d).await.unwrap(), payload);
+        assert_eq!(cas.blob_size(&d).await.unwrap(), payload.len() as u64);
+    }
+
+    #[tokio::test]
     async fn put_blob_is_idempotent() {
         let tmp = TempDir::new().unwrap();
         let cas = Cas::open(tmp.path());
@@ -636,6 +725,21 @@ mod tests {
             .collect();
         let d = cas.put_stream(&payload[..]).await.unwrap();
         assert_eq!(d, Digest::of_bytes(&payload));
+        assert_eq!(cas.get_blob(&d).await.unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn put_stream_compresses_repetitive_payload_at_rest() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let payload = vec![b'x'; STREAM_CHUNK * 3];
+
+        let d = cas.put_stream(payload.as_slice()).await.unwrap();
+        let stored = fs::read(cas.blob_path(&d)).await.unwrap();
+
+        assert_eq!(d, Digest::of_bytes(&payload));
+        assert!(stored.starts_with(blob::ZSTD_BLOB_MAGIC));
+        assert!(stored.len() < payload.len());
         assert_eq!(cas.get_blob(&d).await.unwrap(), payload);
     }
 

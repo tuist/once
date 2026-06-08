@@ -9,10 +9,7 @@ pub use auth::{TuistAuth, TuistAuthPrompt, TUIST_APP_OAUTH_CLIENT_ID, TUIST_OAUT
 pub use cache::TuistCache;
 
 const PROVIDER_NAME: &str = "tuist";
-const HEALTH_PATH: &str = "up";
 const ENDPOINTS_PATH: &str = "api/cache/endpoints";
-const CAS_PATH: &str = "api/cache/cas";
-const KEY_VALUE_PATH: &str = "api/cache/keyvalue";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TuistCacheConfig {
