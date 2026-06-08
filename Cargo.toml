@@ -38,7 +38,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-schlussel = { git = "https://github.com/tuist/schlussel.git", rev = "e90f561bfbe1f1c732ccc15ddc7e4780197dc609" }
+schlussel = { git = "https://github.com/tuist/schlussel.git", rev = "80a7bc1fc0b68bdc2cd2379b16240ddbfbe0267b" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 walkdir = "2"
