@@ -1,5 +1,5 @@
 {
-  "name": "@tuist/once",
+  "name": "buildonce",
   "version": "0.0.0",
   "description": "JavaScript SDK for Once cache access",
   "license": "MIT",

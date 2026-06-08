@@ -1,11 +1,11 @@
 # Once JavaScript SDK
 
-`@tuist/once` exposes Once cache primitives to Node.js. It loads the same
+`buildonce` exposes Once primitives to Node.js. It loads the same
 native Once library used by the other SDKs and does not expose script
 execution.
 
 ```js
-const { Cache } = require("@tuist/once");
+const { Cache } = require("buildonce");
 
 async function example() {
   const cache = new Cache();

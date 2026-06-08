@@ -76,13 +76,13 @@ puts bytes
 Install the JavaScript SDK from npm:
 
 ```sh
-npm install @tuist/once
+npm install buildonce
 ```
 
 Use it from Node.js:
 
 ```js
-const { Cache } = require("@tuist/once");
+const { Cache } = require("buildonce");
 
 async function main() {
   const cache = new Cache();

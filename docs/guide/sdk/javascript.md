@@ -1,11 +1,11 @@
 # JavaScript SDK
 
-The JavaScript SDK is the `@tuist/once` npm package. It exposes cache
+The JavaScript SDK is the `buildonce` npm package. It exposes cache
 primitives for Node.js applications and tools. Script execution is CLI
 specific and is not part of the SDK surface.
 
 ```js
-const { Cache } = require("@tuist/once");
+const { Cache } = require("buildonce");
 
 async function main() {
   const cache = new Cache();
@@ -21,7 +21,7 @@ async function main() {
 Install the package from npm:
 
 ```sh
-npm install @tuist/once
+npm install buildonce
 ```
 
 The package includes prebuilt native Once libraries for supported
