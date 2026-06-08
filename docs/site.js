@@ -21,6 +21,11 @@ export const site = {
     "/": [
       { text: "Why", link: "/guide/why" },
       {
+        text: "Graph",
+        collapsed: false,
+        items: [{ text: "Apple", link: "/guide/apple-graph" }],
+      },
+      {
         text: "Scripts",
         collapsed: false,
         items: [

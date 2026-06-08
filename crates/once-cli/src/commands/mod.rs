@@ -5,6 +5,8 @@
 pub mod auth;
 pub mod cache;
 pub mod exec;
+pub mod graph;
+pub mod query;
 pub mod run;
 pub mod runtime;
 pub mod surface;

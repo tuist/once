@@ -8,11 +8,13 @@ use once_core::WorkspacePath;
 
 mod auth;
 mod cache;
+mod query;
 mod runtime;
 mod toolchain;
 
 pub use auth::AuthCmd;
 pub use cache::{CacheActionCmd, CacheBlobCmd, CacheCmd};
+pub use query::QueryCmd;
 pub use runtime::RuntimeCmd;
 pub use toolchain::ToolchainCmd;
 
@@ -111,6 +113,14 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Build a declared target.
+    #[command(arg_required_else_help = true)]
+    Build {
+        /// Target id, e.g. `apps/ios/App` or `./App`.
+        #[arg(required_unless_present = "list")]
+        target: Option<String>,
+    },
+
     /// Run a declared target action.
     ///
     /// Finds the matching target and runs it through the action cache.
@@ -135,6 +145,14 @@ pub enum Cmd {
         compute: String,
 
         /// Target id, e.g. `examples/hello/hello` or `./hello`.
+        #[arg(required_unless_present = "list")]
+        target: Option<String>,
+    },
+
+    /// Test a declared target.
+    #[command(arg_required_else_help = true)]
+    Test {
+        /// Target id, e.g. `apps/ios/AppTests` or `./AppTests`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
     },
@@ -212,6 +230,13 @@ pub enum Cmd {
         cmd: Option<ToolchainCmd>,
     },
 
+    /// Query the typed build graph.
+    #[command(arg_required_else_help = true)]
+    Query {
+        #[command(subcommand)]
+        cmd: Option<QueryCmd>,
+    },
+
     /// Runtime session inspection and control.
     #[command(arg_required_else_help = true)]
     Runtime {
@@ -231,8 +256,10 @@ impl Cli {
 impl Cmd {
     pub fn surface_path(&self) -> Vec<&'static str> {
         match self {
+            Self::Build { .. } => vec!["build"],
             Self::Run { .. } => vec!["run"],
             Self::Exec { .. } => vec!["exec"],
+            Self::Test { .. } => vec!["test"],
             Self::Cache { cmd } => {
                 let mut path = vec!["cache"];
                 if let Some(cmd) = cmd {
@@ -249,6 +276,13 @@ impl Cmd {
             }
             Self::Toolchain { cmd } => {
                 let mut path = vec!["toolchain"];
+                if let Some(cmd) = cmd {
+                    path.extend(cmd.surface_path());
+                }
+                path
+            }
+            Self::Query { cmd } => {
+                let mut path = vec!["query"];
                 if let Some(cmd) = cmd {
                     path.extend(cmd.surface_path());
                 }

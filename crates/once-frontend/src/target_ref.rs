@@ -61,6 +61,20 @@ pub fn normalize_cli_target_from(
     }
 }
 
+pub fn normalize_manifest_target(package: &str, raw: &str) -> Result<String, TargetIdError> {
+    validate_raw(raw)?;
+    if raw.starts_with("./") || raw.starts_with("../") {
+        let base = package
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        normalize_from(&base, raw)
+    } else {
+        normalize_from(&[], raw)
+    }
+}
+
 fn validate_raw(raw: &str) -> Result<(), TargetIdError> {
     if raw.is_empty() {
         return Err(TargetIdError::Empty);
@@ -209,5 +223,21 @@ mod tests {
             normalize_cli_target_from(root.path(), outside.path(), "./hello"),
             Err(TargetIdError::CurrentDirOutsideProject { .. })
         ));
+    }
+
+    #[test]
+    fn manifest_deps_allow_root_and_package_relative_refs() {
+        assert_eq!(
+            normalize_manifest_target("apps/ios", "packages/auth/Auth").unwrap(),
+            "packages/auth/Auth"
+        );
+        assert_eq!(
+            normalize_manifest_target("apps/ios", "./AppKit").unwrap(),
+            "apps/ios/AppKit"
+        );
+        assert_eq!(
+            normalize_manifest_target("apps/ios", "../shared/Logging").unwrap(),
+            "apps/shared/Logging"
+        );
     }
 }

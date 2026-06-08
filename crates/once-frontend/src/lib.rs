@@ -6,6 +6,7 @@
 
 mod cache_provider;
 mod error;
+mod graph;
 mod manifest;
 mod script;
 mod target;
@@ -21,11 +22,15 @@ pub use cache_provider::{
     CacheProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig, DEFAULT_TUIST_URL,
 };
 pub use error::{Error, Result};
+pub use graph::{
+    built_in_rule_schema, built_in_rule_schemas, graph_from_targets, load_graph_workspace,
+    AttrSchema, Capability, DepSchema, Diagnostic, GraphTarget, RuleSchema, TargetLabel,
+};
 pub use manifest::{load_cache_provider_toml_str, load_toml_str};
 pub use script::{parse_script_annotations, ScriptAnnotations};
-pub use target::Target;
+pub use target::{AttrValue, Target};
 pub use target_ref::{
-    absolutize, normalize_cli_target, normalize_cli_target_from, target_id, validate_target_name,
-    TargetIdError,
+    absolutize, normalize_cli_target, normalize_cli_target_from, normalize_manifest_target,
+    target_id, validate_target_name, TargetIdError,
 };
 pub use workspace::{load_cache_provider, load_cache_provider_override, load_file, load_workspace};
