@@ -2,6 +2,10 @@
 /.fabrik
 /.blick/runs/
 /vendor
+/packages/js/node_modules
+/packages/js/prebuilds
+/packages/ruby/prebuilds
+/packages/ruby/*.gem
 *.swp
 .DS_Store
 

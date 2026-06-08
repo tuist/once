@@ -1,0 +1,219 @@
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+const koffi = require("koffi");
+
+class OnceError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "OnceError";
+  }
+}
+
+const native = loadNative();
+
+class Cache {
+  version() {
+    return native.once_version() || "";
+  }
+
+  digest(bytes) {
+    const buffer = toBuffer(bytes);
+    const pointer = buffer.length === 0 ? null : buffer;
+    return decodeStringResponse(native.once_digest_bytes(pointer, buffer.length));
+  }
+
+  async putBlob(bytes) {
+    const buffer = toBuffer(bytes);
+    return decodeRequest(
+      native.once_cache_put_blob_json,
+      { bytes: Array.from(buffer) },
+    );
+  }
+
+  async getBlob(digest) {
+    const response = decodeRequest(native.once_cache_get_blob_json, { digest });
+    return Buffer.from(response.bytes);
+  }
+
+  async hasBlob(digest) {
+    return decodeRequest(native.once_cache_has_blob_json, { digest });
+  }
+
+  async putActionResult(result, actionDigest) {
+    return decodeRequest(
+      native.once_cache_put_action_result_json,
+      {
+        action_digest: actionDigest,
+        result: actionResultToNative(result),
+      },
+    );
+  }
+
+  async getActionResult(actionDigest) {
+    const result = decodeRequest(
+      native.once_cache_get_action_result_json,
+      { action_digest: actionDigest },
+    );
+    return result === null ? null : actionResultFromNative(result);
+  }
+
+  async forgetAction(actionDigest) {
+    return decodeRequest(
+      native.once_cache_forget_action_json,
+      { action_digest: actionDigest },
+    );
+  }
+
+  async stats() {
+    const stats = decodeRequest(native.once_cache_stats_json, {});
+    return {
+      blobCount: stats.blob_count,
+      blobBytes: stats.blob_bytes,
+      actionCount: stats.action_count,
+      actionBytes: stats.action_bytes,
+    };
+  }
+}
+
+function digest(bytes) {
+  return new Cache().digest(bytes);
+}
+
+function decodeStringResponse(pointer) {
+  return decodeResponse(pointer);
+}
+
+function decodeRequest(fn, request) {
+  const pointer = fn(JSON.stringify(request));
+  return decodeResponse(pointer);
+}
+
+function decodeResponse(pointer) {
+  if (pointer == null) {
+    throw new OnceError("native Once function returned null");
+  }
+  const response = JSON.parse(pointer);
+  if (response.status === "ok") {
+    return response.value;
+  }
+  throw new OnceError(response.message || "Once native call failed");
+}
+
+function actionResultToNative(result) {
+  return {
+    exit_code: result.exitCode,
+    stdout: result.stdout ?? null,
+    stderr: result.stderr ?? null,
+    outputs: result.outputs ?? {},
+  };
+}
+
+function actionResultFromNative(result) {
+  return {
+    exitCode: result.exit_code,
+    stdout: result.stdout ?? null,
+    stderr: result.stderr ?? null,
+    outputs: result.outputs ?? {},
+  };
+}
+
+function toBuffer(bytes) {
+  if (Buffer.isBuffer(bytes)) {
+    return bytes;
+  }
+  if (bytes instanceof Uint8Array) {
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
+  if (typeof bytes === "string") {
+    return Buffer.from(bytes);
+  }
+  throw new TypeError("bytes must be a Buffer, Uint8Array, or string");
+}
+
+function loadNative() {
+  const library = koffi.load(resolveLibraryPath());
+  const onceStringFree = library.func("void once_string_free(void *value)");
+  const onceString = koffi.disposable("OnceString", "str", onceStringFree);
+
+  return {
+    once_version: library.func("once_version", onceString, []),
+    once_digest_bytes: library.func("once_digest_bytes", onceString, [
+      "const void *",
+      "size_t",
+    ]),
+    once_cache_put_blob_json: library.func(
+      "once_cache_put_blob_json",
+      onceString,
+      ["str"],
+    ),
+    once_cache_get_blob_json: library.func(
+      "once_cache_get_blob_json",
+      onceString,
+      ["str"],
+    ),
+    once_cache_has_blob_json: library.func(
+      "once_cache_has_blob_json",
+      onceString,
+      ["str"],
+    ),
+    once_cache_put_action_result_json: library.func(
+      "once_cache_put_action_result_json",
+      onceString,
+      ["str"],
+    ),
+    once_cache_get_action_result_json: library.func(
+      "once_cache_get_action_result_json",
+      onceString,
+      ["str"],
+    ),
+    once_cache_forget_action_json: library.func(
+      "once_cache_forget_action_json",
+      onceString,
+      ["str"],
+    ),
+    once_cache_stats_json: library.func("once_cache_stats_json", onceString, [
+      "str",
+    ]),
+  };
+}
+
+function resolveLibraryPath() {
+  if (process.env.ONCE_LIBRARY_PATH) {
+    return process.env.ONCE_LIBRARY_PATH;
+  }
+
+  const candidate = path.join(
+    __dirname,
+    "..",
+    "prebuilds",
+    `${process.platform}-${process.arch}`,
+    libraryName(),
+  );
+  if (fs.existsSync(candidate)) {
+    return candidate;
+  }
+
+  throw new OnceError(
+    `missing native Once library for ${process.platform}-${process.arch}; ` +
+      "set ONCE_LIBRARY_PATH or install a package that includes this platform",
+  );
+}
+
+function libraryName() {
+  switch (process.platform) {
+    case "darwin":
+      return "libonce.dylib";
+    case "win32":
+      return "once.dll";
+    default:
+      return "libonce.so";
+  }
+}
+
+module.exports = {
+  Cache,
+  OnceError,
+  digest,
+};

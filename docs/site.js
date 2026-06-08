@@ -41,6 +41,14 @@ export const site = {
             text: '<span class="sidebar-target-link sidebar-target-link-swift"><span class="sidebar-target-icon"></span><span>Swift</span></span>',
             link: "/guide/sdk/swift",
           },
+          {
+            text: "Ruby",
+            link: "/guide/sdk/ruby",
+          },
+          {
+            text: "JavaScript",
+            link: "/guide/sdk/javascript",
+          },
         ],
       },
     ],
