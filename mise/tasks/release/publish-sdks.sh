@@ -22,6 +22,22 @@ if [[ -z "${version}" ]]; then
   exit 1
 fi
 
+for tool in cargo gem npm python3; do
+  if ! command -v "${tool}" >/dev/null 2>&1; then
+    echo "${tool} is required" >&2
+    exit 1
+  fi
+done
+
+rust_version="$(
+  cargo metadata --locked --no-deps --format-version 1 |
+    python3 -c 'import json, sys; print(next(package["version"] for package in json.load(sys.stdin)["packages"] if package["name"] == "once"))'
+)"
+if [[ "${rust_version}" != "${version}" ]]; then
+  echo "Rust once crate version ${rust_version} does not match release version ${version}" >&2
+  exit 1
+fi
+
 if [[ ! -d packages/js/prebuilds || ! -d packages/ruby/prebuilds ]]; then
   echo "SDK prebuilds are missing; run release:package-sdk-libs first" >&2
   exit 1
@@ -38,7 +54,6 @@ rm -rf "${stage_dir}/js/node_modules" "${stage_dir}/ruby/"*.gem
 (
   cd "${stage_dir}/js"
   npm version "${version}" \
-    --workspace=false \
     --no-git-tag-version \
     --allow-same-version
   npm publish --access public
