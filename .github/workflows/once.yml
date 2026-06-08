@@ -87,7 +87,7 @@ jobs:
           cache-on-failure: true
           cache-bin: false
       - run: mise exec -- cargo build --release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: once-${{ matrix.os }}
           path: target/release/once
@@ -108,7 +108,7 @@ jobs:
           cache: true
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: once-${{ matrix.os }}
           path: target/release
@@ -129,7 +129,7 @@ jobs:
         with:
           experimental: true
           cache: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: once-${{ matrix.os }}
           path: target/release
