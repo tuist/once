@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/once",
     "crates/once-cli",
     "crates/once-core",
     "crates/once-cas",
@@ -15,11 +16,13 @@ license = "MIT"
 repository = "https://github.com/tuist/once"
 
 [workspace.dependencies]
-once-core = { path = "crates/once-core" }
-once-cas = { path = "crates/once-cas" }
-once-frontend = { path = "crates/once-frontend" }
+once = { version = "0.0.0", path = "crates/once" }
+once-core = { version = "0.0.0", path = "crates/once-core", default-features = false }
+once-cas = { version = "0.0.0", path = "crates/once-cas" }
+once-frontend = { version = "0.0.0", path = "crates/once-frontend" }
 
 anyhow = "1"
+bazel-remote-apis = "0.27"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 console = "0.15"
@@ -27,16 +30,19 @@ glob = "0.3"
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+sha2 = "0.10"
+toml = "1.0"
 toon-rust = "0.1"
 tempfile = "3"
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
+tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 schlussel = { git = "https://github.com/tuist/schlussel.git", rev = "e90f561bfbe1f1c732ccc15ddc7e4780197dc609" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 walkdir = "2"
+zstd = "0.13"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -53,3 +59,4 @@ must_use_candidate = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+panic = "abort"

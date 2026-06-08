@@ -1,9 +1,1 @@
-[[script]]
-name = "check"
-argv = ["cargo", "check", "--workspace"]
-input = ["Cargo.toml", "Cargo.lock", "crates/**/*.rs"]
 
-[[script]]
-name = "test"
-argv = ["cargo", "test", "--workspace"]
-input = ["Cargo.toml", "Cargo.lock", "crates/**/*.rs"]
