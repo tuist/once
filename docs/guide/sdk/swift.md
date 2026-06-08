@@ -39,7 +39,7 @@ let package = Package(
         ),
         .binaryTarget(
             name: "Once",
-            url: "https://github.com/tuist/once/releases/download/0.1.0/Once-0.1.0.xcframework.zip",
+            url: "https://github.com/tuist/once/releases/download/0.1.0/Once.xcframework.zip",
             checksum: "<checksum>"
         ),
     ]
@@ -48,12 +48,11 @@ let package = Package(
 
 Replace the version in the URL with the Once release you want to use. The
 checksum is published next to the release asset and can also be computed
-locally with `swift package compute-checksum Once-0.1.0.xcframework.zip`.
+locally with `swift package compute-checksum Once.xcframework.zip`.
 
-Download `Once-0.1.0.swift` from the same release, add it to the Swift
-target that depends on `Once`, and rename it to `Once.swift` if your
-project keeps source filenames stable. The wrapper imports the C module
-from the binary target and gives callers the high-level Swift API.
+Add `crates/once/swift/Once.swift` from the matching Once repository tag
+to the Swift target that depends on `Once`. The wrapper imports the C
+module from the binary target and gives callers the high-level Swift API.
 
 ## OnceCache
 
