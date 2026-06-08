@@ -34,9 +34,10 @@ The high-level API is:
 
 ## Apple
 
-Reference `Once-{version}.xcframework.zip` from a release with a SwiftPM
-binary target named `Once`, then add `Once-{version}.swift` from the same
-release to the Swift target that depends on that binary target:
+Reference `Once.xcframework.zip` from a release with a SwiftPM binary
+target named `Once`, then add `crates/once/swift/Once.swift` from the
+matching repository tag to the Swift target that depends on that binary
+target:
 
 ```swift
 let once = OnceCache()
@@ -80,4 +81,4 @@ On macOS with Xcode installed:
 mise run release:package-xcframework --version 0.0.0
 ```
 
-The task writes `dist/Once-0.0.0.xcframework.zip` and a SHA-256 file.
+The task writes `dist/Once.xcframework.zip` and a SHA-256 file.
