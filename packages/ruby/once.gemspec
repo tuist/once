@@ -1,5 +1,5 @@
 Gem::Specification.new do |spec|
-  spec.name = "tuist-once"
+  spec.name = "buildonce"
   spec.version = ENV.fetch("ONCE_VERSION", "0.0.0")
   spec.summary = "Ruby SDK for Once"
   spec.description = "Embeds Once primitives in Ruby through the native Once library."

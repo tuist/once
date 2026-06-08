@@ -1,6 +1,6 @@
 # Once Ruby SDK
 
-`tuist-once` exposes Once primitives to Ruby. It loads the same
+`buildonce` exposes Once primitives to Ruby. It loads the same
 native Once library used by the other SDKs and does not expose script
 execution.
 
