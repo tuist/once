@@ -400,7 +400,7 @@ mod tests {
         let outcomes = runner.run_plan(&plan).await.unwrap();
         assert_eq!(outcomes.len(), 6);
         assert!(
-            started.elapsed() < std::time::Duration::from_millis(1_000),
+            started.elapsed() < std::time::Duration::from_secs(1),
             "expected parallel scheduling; took {:?}",
             started.elapsed()
         );
