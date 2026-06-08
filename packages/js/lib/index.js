@@ -100,7 +100,12 @@ function decodeResponse(pointer) {
   if (pointer == null) {
     throw new OnceError("native Once function returned null");
   }
-  const response = JSON.parse(pointer);
+  let response;
+  try {
+    response = JSON.parse(pointer);
+  } catch (error) {
+    throw new OnceError(`native Once response must be valid JSON: ${error.message}`);
+  }
   if (response.status === "ok") {
     return response.value;
   }
