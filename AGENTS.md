@@ -18,24 +18,29 @@ inside each module file. Cross-module integration tests go under
 - Per-package manifests are named `once.toml`.
 - The `.once/` directory at the workspace root is cache and runtime
   state, not a manifest. It is gitignored.
-- `once.toml` is reserved for workspace configuration such as cache
-  providers.
+- Root `once.toml` configures workspace-level settings such as cache
+  providers. Package `once.toml` files may grow build graph declarations
+  as Once expands beyond script-only workflows.
 - Scripts declare their execution metadata with `# once` headers in the
   script file.
 
 ## Scope
 
-Once focuses on cacheable and remotely executable scripts plus the
-runtime API. It is not a build system and should not grow language
-compiler frontends, dependency graph generation, or build target rules
-without an explicit product decision.
+Once starts with cacheable and remotely executable scripts plus the
+runtime API, and is expanding toward build-system capabilities. Scripts
+remain the migration ramp into the Once build graph. Build graph work
+should follow RFCs and keep the agent-facing graph model typed,
+queryable, and structurally editable.
 
-Keep the CLI surface centered on:
+Keep the current CLI surface centered on:
 
 - `once exec` for literal commands and annotated script files
 - `once cache` for CAS and action-cache primitives
 - `once runtime` for JSON-RPC runtime sessions
 - `once auth` and `once toolchain` for supporting infrastructure
+
+New build graph CLI, rule, and query surfaces should be introduced
+deliberately and documented in the relevant RFC or implementation plan.
 
 ## SDK API And Docs
 

@@ -468,7 +468,7 @@ mod tests {
         assert!(matches!(InputSpec::parse("-"), InputSpec::Stdin));
         assert!(matches!(
             InputSpec::parse("path:a:b"),
-            InputSpec::Path(p) if p == PathBuf::from("a:b")
+            InputSpec::Path(p) if p == Path::new("a:b")
         ));
         assert!(matches!(
             InputSpec::parse("value:hello"),
@@ -480,7 +480,7 @@ mod tests {
         ));
         assert!(matches!(
             InputSpec::parse("src/lib.rs"),
-            InputSpec::Path(p) if p == PathBuf::from("src/lib.rs")
+            InputSpec::Path(p) if p == Path::new("src/lib.rs")
         ));
     }
 

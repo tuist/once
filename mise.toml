@@ -1,13 +1,13 @@
 [tools]
-rust = "1.88"
+rust = "1.96.0"
 ruby = "4.0.5"
 shellspec = "latest"
-git-cliff = "2.12.0"
-"github:tuist/blick" = "0.8.0"
-"github:superradcompany/microsandbox" = "0.5.1"
+git-cliff = "2.13.1"
+"github:tuist/blick" = "0.10.0"
+"github:superradcompany/microsandbox" = "0.5.5"
 node = "26.3.0"
-"npm:opencode-ai" = "1.15.0"
-aube = "1.10.4"
+"npm:opencode-ai" = "1.16.2"
+aube = "1.18.1"
 
 [env]
 CARGO_TERM_COLOR = "always"

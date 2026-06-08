@@ -107,7 +107,7 @@ fn remote(target: &once_frontend::Target) -> Option<RemoteExecution> {
         .attrs
         .get("remote_provider")
         .map(|provider| RemoteExecution {
-            provider: provider.to_string(),
+            provider: provider.clone(),
         })
 }
 

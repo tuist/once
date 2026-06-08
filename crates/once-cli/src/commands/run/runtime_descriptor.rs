@@ -62,7 +62,7 @@ fn runtime_task_descriptor(
         .attrs
         .get("runtime")
         .ok_or_else(|| anyhow::anyhow!("runtime_task {} has no runtime", target.id()))?
-        .to_string();
+        .clone();
     let subject = target
         .attrs
         .get("runtime_target")

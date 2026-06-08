@@ -601,7 +601,7 @@ impl TuistCache {
                     let mut client = CapabilitiesClient::new(channel);
                     let request = reapi::GetCapabilitiesRequest { instance_name };
                     let request = authorized_grpc_request_with_token(request, &token)
-                        .map_err(|error| error.to_string())?;
+                        .map_err(|error| error.clone())?;
                     timeout_result(
                         tokio::time::timeout(
                             ENDPOINT_PROBE_TIMEOUT,

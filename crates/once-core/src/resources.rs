@@ -126,9 +126,7 @@ impl ResourceLimits {
 
 impl Default for ResourceLimits {
     fn default() -> Self {
-        let cpu_slots = std::thread::available_parallelism()
-            .map(NonZeroUsize::get)
-            .unwrap_or(8);
+        let cpu_slots = std::thread::available_parallelism().map_or(8, NonZeroUsize::get);
         Self::new(cpu_slots, 0)
     }
 }

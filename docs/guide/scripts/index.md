@@ -16,11 +16,10 @@ there is no shared contract that says what changed.
 Once gives those scripts that contract without asking teams to move the
 implementation into a new build-system shape.
 
-::: tip Build systems can model this too
-Build systems can model cacheable workflows with rich dependency graphs,
-but moving existing repository automation into that shape can be a large
-product and migration decision. Once is for the scripts you already have
-and want to make cacheable without rewriting them as build rules.
+::: tip Scripts are the migration ramp
+Build systems can model cacheable workflows with rich dependency graphs.
+Once starts with the scripts you already have so teams can make them
+cacheable before moving the same work into typed build graph targets.
 :::
 
 ## How It Works
@@ -53,8 +52,9 @@ Then run the script directly:
 
 Once reads the script, hashes the declared contract, and either reuses a
 previous result or runs the command and stores stdout, stderr, exit status,
-and declared outputs. Workspace-level `once.toml` files are reserved for
-shared configuration such as cache provider settings.
+and declared outputs. Root `once.toml` files configure shared settings such as
+cache providers, while package `once.toml` files may grow build graph
+declarations as Once expands beyond scripts.
 
 ## Next
 
