@@ -1,6 +1,6 @@
 # Once Ruby SDK
 
-`once-cache` exposes Once cache primitives to Ruby. It loads the same
+`tuist-once` exposes Once primitives to Ruby. It loads the same
 native Once library used by the other SDKs and does not expose script
 execution.
 

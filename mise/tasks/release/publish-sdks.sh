@@ -47,5 +47,5 @@ rm -rf "${stage_dir}/js/node_modules" "${stage_dir}/ruby/"*.gem
 (
   cd "${stage_dir}/ruby"
   ONCE_VERSION="${version}" gem build once.gemspec
-  gem push "once-cache-${version}.gem"
+  gem push "tuist-once-${version}.gem"
 )

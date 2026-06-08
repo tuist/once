@@ -56,7 +56,7 @@ functions must be released with `once_string_free`. The C module name is
 Install the Ruby SDK from RubyGems:
 
 ```sh
-gem install once-cache
+gem install tuist-once
 ```
 
 Use it to read and write blobs through the default local cache:

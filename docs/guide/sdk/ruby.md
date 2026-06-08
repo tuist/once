@@ -1,6 +1,6 @@
 # Ruby SDK
 
-The Ruby SDK is the `once-cache` gem. It exposes cache primitives for Ruby
+The Ruby SDK is the `tuist-once` gem. It exposes Once primitives for Ruby
 applications and tools. Script execution is CLI specific and is not part
 of the SDK surface.
 
@@ -19,7 +19,7 @@ raise unless bytes == "hello"
 Install the gem from RubyGems:
 
 ```sh
-gem install once-cache
+gem install tuist-once
 ```
 
 The gem includes prebuilt native Once libraries for supported platforms.

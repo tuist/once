@@ -1,8 +1,8 @@
 Gem::Specification.new do |spec|
-  spec.name = "once-cache"
+  spec.name = "tuist-once"
   spec.version = ENV.fetch("ONCE_VERSION", "0.0.0")
-  spec.summary = "Ruby SDK for Once cache access"
-  spec.description = "Embeds Once cache primitives in Ruby through the native Once library."
+  spec.summary = "Ruby SDK for Once"
+  spec.description = "Embeds Once primitives in Ruby through the native Once library."
   spec.license = "MIT"
   spec.homepage = "https://github.com/tuist/once"
   spec.metadata = {
