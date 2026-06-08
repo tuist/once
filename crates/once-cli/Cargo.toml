@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 once-cas.workspace = true
-once-core.workspace = true
+once-core = { workspace = true, features = ["remote-microsandbox"] }
 once-frontend.workspace = true
 
 anyhow.workspace = true

@@ -1,8 +1,7 @@
 //! Lower script targets into concrete command actions.
 //!
-//! File-backed scripts carry their execution contract in ONCE
-//! headers inside the script file. Manifest-backed scripts carry the
-//! same contract in the target attrs. Both lower to `RunCommand`.
+//! File-backed scripts carry their execution contract in `Once`
+//! headers inside the script file and lower to `RunCommand`.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -11,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use once_cas::Digest;
 use once_core::{
-    tool_env, workspace_tool, workspace_tool_env, Action, RemoteExecution, ResourceRequest,
-    WorkspacePath,
+    tool_env, workspace_tool, workspace_tool_env, Action, OutputSymlinkMode, RemoteExecution,
+    ResourceRequest, WorkspacePath,
 };
 
 use super::{input_digest, parse_attr, ActionPlan};
@@ -38,21 +37,14 @@ pub(super) fn script_action(
     let cwd = cwd(target)?;
     let resources = resources(target)?;
     let remote = remote(target);
+    let output_symlink_mode = output_symlink_mode(target)?;
 
-    if target.attrs.contains_key("script_path") {
-        return file_script_action(
-            workspace,
-            target,
-            input_digest,
-            outputs,
-            cwd,
-            resources,
-            timeout_ms,
-            remote,
-        );
+    if !target.attrs.contains_key("script_path") {
+        anyhow::bail!("script {} has no script_path", target.id());
     }
 
-    manifest_script_action(
+    file_script_action(
+        workspace,
         target,
         input_digest,
         outputs,
@@ -60,6 +52,7 @@ pub(super) fn script_action(
         resources,
         timeout_ms,
         remote,
+        output_symlink_mode,
     )
 }
 
@@ -73,6 +66,7 @@ fn file_script_action(
     resources: ResourceRequest,
     timeout_ms: Option<u64>,
     remote: Option<RemoteExecution>,
+    output_symlink_mode: OutputSymlinkMode,
 ) -> Result<ActionPlan> {
     let runtime = target
         .attrs
@@ -98,33 +92,7 @@ fn file_script_action(
             cwd,
             input_digest,
             outputs,
-            resources,
-            timeout_ms,
-            remote,
-        },
-        output: String::new(),
-        output_dir: None,
-    })
-}
-
-fn manifest_script_action(
-    target: &once_frontend::Target,
-    input_digest: Option<Digest>,
-    outputs: Vec<WorkspacePath>,
-    cwd: Option<WorkspacePath>,
-    resources: ResourceRequest,
-    timeout_ms: Option<u64>,
-    remote: Option<RemoteExecution>,
-) -> Result<ActionPlan> {
-    let argv = manifest_script_argv(target)?;
-
-    Ok(ActionPlan {
-        action: Action::RunCommand {
-            argv,
-            env: host_manifest_env(target)?,
-            cwd,
-            input_digest,
-            outputs,
+            output_symlink_mode,
             resources,
             timeout_ms,
             remote,
@@ -167,12 +135,6 @@ fn tracked_env(target: &once_frontend::Target) -> Result<BTreeMap<String, String
         }
     }
     Ok(out)
-}
-
-fn host_manifest_env(target: &once_frontend::Target) -> Result<BTreeMap<String, String>> {
-    let env_names = tracked_env_names(target)?;
-    let env_keys = env_names.iter().map(String::as_str).collect::<Vec<_>>();
-    Ok(tool_env(&env_keys))
 }
 
 fn host_env(
@@ -233,17 +195,14 @@ fn resources(target: &once_frontend::Target) -> Result<ResourceRequest> {
     Ok(ResourceRequest::new(cpu_slots, memory_bytes))
 }
 
-fn manifest_script_argv(target: &once_frontend::Target) -> Result<Vec<String>> {
-    let argv_json = target
+fn output_symlink_mode(target: &once_frontend::Target) -> Result<OutputSymlinkMode> {
+    target
         .attrs
-        .get("script_argv_json")
-        .ok_or_else(|| anyhow::anyhow!("script {} has no argv", target.id()))?;
-    let argv: Vec<String> = serde_json::from_str(argv_json)
-        .with_context(|| format!("parsing argv for script {}", target.id()))?;
-    if argv.is_empty() {
-        anyhow::bail!("script {} has empty argv", target.id());
-    }
-    Ok(argv)
+        .get("output_symlinks")
+        .map(|raw| raw.parse().map_err(anyhow::Error::msg))
+        .transpose()
+        .with_context(|| format!("parsing output_symlinks for script {}", target.id()))?
+        .map_or_else(|| Ok(OutputSymlinkMode::default()), Ok)
 }
 
 fn host_script_path(script_path: &str, cwd: Option<&WorkspacePath>) -> Result<String> {
@@ -336,59 +295,6 @@ mod tests {
                     env.get("ONCE_TEST_HOST_SCRIPT_ENV").map(String::as_str),
                     Some("present")
                 );
-            }
-        }
-    }
-
-    #[test]
-    fn host_manifest_script_action_uses_declared_argv_env_and_resources() {
-        let tmp = TempDir::new().unwrap();
-        std::fs::create_dir_all(tmp.path().join("pkg")).unwrap();
-        std::fs::write(tmp.path().join("pkg/input.txt"), "hello\n").unwrap();
-
-        let mut target = once_frontend::Target {
-            package: "pkg".to_string(),
-            kind: "script".to_string(),
-            name: "build".to_string(),
-            srcs: vec!["input.txt".to_string()],
-            attrs: BTreeMap::new(),
-        };
-        target.attrs.insert(
-            "script_argv_json".into(),
-            r#"["/bin/sh","-c","printf \"$INLINE_FROM_HOST\""]"#.into(),
-        );
-        target
-            .attrs
-            .insert("script_env_json".into(), r#"["INLINE_FROM_HOST"]"#.into());
-        target.attrs.insert("cwd".into(), "pkg".into());
-        std::env::set_var("INLINE_FROM_HOST", "present");
-
-        let plan = script_action(tmp.path(), &target).unwrap();
-        match plan.action {
-            Action::RunCommand {
-                argv,
-                env,
-                cwd,
-                resources,
-                input_digest,
-                ..
-            } => {
-                assert_eq!(
-                    argv,
-                    vec![
-                        "/bin/sh".to_string(),
-                        "-c".to_string(),
-                        "printf \"$INLINE_FROM_HOST\"".to_string()
-                    ]
-                );
-                assert_eq!(cwd.unwrap().as_str(), "pkg");
-                assert_eq!(
-                    env.get("INLINE_FROM_HOST").map(String::as_str),
-                    Some("present")
-                );
-                assert!(env.contains_key("PATH"));
-                assert_eq!(resources, ResourceRequest::new(1, 0));
-                assert!(input_digest.is_some());
             }
         }
     }
