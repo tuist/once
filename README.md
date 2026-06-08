@@ -14,32 +14,46 @@ Once makes project scripts cacheable, observable, and remotely executable. Decla
 
 ## Quick Start
 
-Declare a script in `once.toml`:
+Describe a script with `# once` annotations:
 
-```toml
-[[script]]
-name = "build-assets"
-argv = ["bash", "scripts/build-assets.sh"]
-input = ["scripts/build-assets.sh", "assets/**/*"]
-output = ["dist/"]
+```sh
+#!/usr/bin/env bash
+# once input "../assets/**/*"
+# once output "../dist/"
+# once cwd ".."
+
+npm run build-assets
 ```
 
 Run it through the cache:
 
 ```sh
-once run build-assets
-once run build-assets --remote --compute microsandbox
+once exec -- bash scripts/build-assets.sh
+once exec --remote --compute microsandbox -- bash scripts/build-assets.sh
 ```
 
-Scripts can also describe themselves with `ONCE` headers and run directly:
+Scripts can also run directly with a Once shebang:
 
 ```sh
-once exec --script bash scripts/build-assets.sh
+#!/usr/bin/env -S once exec -- bash
 ```
 
 ## Documentation
 
 Read the documentation at [once.tuist.dev](https://once.tuist.dev).
+
+## Integrations
+
+Use the `once` crate when embedding Once in Rust applications:
+
+```toml
+[dependencies]
+once = { git = "https://github.com/tuist/once" }
+```
+
+Release builds also publish `Once.xcframework.zip` for Apple platforms.
+The framework exposes a small C ABI that Swift and Objective-C can call,
+with JSON requests and responses for cache access.
 
 ## License
 
