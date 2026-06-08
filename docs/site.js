@@ -42,11 +42,11 @@ export const site = {
             link: "/guide/sdk/swift",
           },
           {
-            text: "Ruby",
+            text: '<span class="sidebar-target-link sidebar-target-link-ruby"><span class="sidebar-target-icon"></span><span>Ruby</span></span>',
             link: "/guide/sdk/ruby",
           },
           {
-            text: "JavaScript",
+            text: '<span class="sidebar-target-link sidebar-target-link-javascript"><span class="sidebar-target-icon"></span><span>JavaScript</span></span>',
             link: "/guide/sdk/javascript",
           },
         ],

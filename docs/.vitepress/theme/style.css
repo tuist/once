@@ -502,6 +502,23 @@ body:has(.VPHome)::before {
   --sidebar-target-icon-color: var(--fabrik-orange-600);
 }
 
+.sidebar-target-link-ruby {
+  --sidebar-target-icon: url("/icons/ruby.svg");
+  --sidebar-target-icon-color: var(--fabrik-red-500);
+}
+
+.sidebar-target-link-javascript {
+  --sidebar-target-icon: url("/icons/javascript.svg");
+  --sidebar-target-icon-color: oklch(83% 0.17 91);
+}
+
+.sidebar-target-link-ruby .sidebar-target-icon,
+.sidebar-target-link-javascript .sidebar-target-icon {
+  background: var(--sidebar-target-icon) center / contain no-repeat;
+  -webkit-mask: none;
+  mask: none;
+}
+
 .sidebar-target-link-go {
   --sidebar-target-icon: url("/icons/go.svg");
   --sidebar-target-icon-color: var(--fabrik-azure-500);
