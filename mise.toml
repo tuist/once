@@ -6,7 +6,7 @@ git-cliff = "2.13.1"
 "github:superradcompany/microsandbox" = "0.5.1"
 node = "22.11.0"
 "npm:opencode-ai" = "1.15.0"
-aube = "1.18.0"
+aube = "1.18.1"
 
 [env]
 CARGO_TERM_COLOR = "always"
