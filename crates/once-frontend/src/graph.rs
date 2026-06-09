@@ -11,82 +11,122 @@ use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 use starlark::values::Value;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::target::{AttrValue, Target};
 use crate::workspace::load_workspace;
 
+/// Fully qualified graph target label.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TargetLabel {
+    /// Package path that owns the target.
     pub package: String,
+    /// Target name inside the package manifest.
     pub name: String,
+    /// Canonical target id, formed from package and name.
     pub id: String,
 }
 
+/// Target record after manifest loading and rule metadata attachment.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct GraphTarget {
+    /// Canonical target label.
     pub label: TargetLabel,
+    /// Rule kind such as `apple_application` or `script`.
     pub kind: String,
+    /// Canonical dependency target ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deps: Vec<String>,
+    /// Source file patterns declared by the target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub srcs: Vec<String>,
+    /// Typed target attributes parsed from the manifest.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub attrs: BTreeMap<String, AttrValue>,
+    /// Operations exposed by the target's rule schema.
     pub capabilities: Vec<Capability>,
+    /// Providers emitted by this target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<String>,
+    /// Non-fatal graph loading diagnostics for this target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Operation exposed by a rule, such as build, run, or test.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Capability {
+    /// Capability name.
     pub name: String,
+    /// Output groups produced by this capability.
     pub output_groups: Vec<String>,
+    /// Output groups that must already exist before this capability runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_outputs: Vec<String>,
 }
 
+/// Diagnostic emitted while constructing the typed graph.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Diagnostic {
+    /// Stable diagnostic code.
     pub code: String,
+    /// Human-readable diagnostic message.
     pub message: String,
+    /// Suggested repairs that an agent can apply or present.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repairs: Vec<String>,
 }
 
+/// Rule metadata used for schema queries and graph target enrichment.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RuleSchema {
+    /// Rule kind matched by `target.kind`.
     pub kind: String,
+    /// Human-readable rule description.
     pub docs: String,
+    /// Attribute schema for this rule.
     pub attrs: Vec<AttrSchema>,
+    /// Dependency expectations for this rule.
     pub deps: Vec<DepSchema>,
+    /// Providers emitted by targets of this rule.
     pub providers: Vec<String>,
+    /// Capabilities exposed by targets of this rule.
     pub capabilities: Vec<Capability>,
+    /// Example `once.toml` declarations.
     pub examples: Vec<String>,
 }
 
+/// Attribute metadata exposed by a rule schema.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AttrSchema {
+    /// Attribute name under `[target.attrs]`.
     pub name: String,
+    /// Human-readable type name.
     pub ty: String,
+    /// Whether the attribute must be present.
     pub required: bool,
+    /// Default value rendered as rule metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    /// Human-readable attribute description.
     pub docs: String,
+    /// Whether the value can vary by configuration.
     pub configurable: bool,
 }
 
+/// Dependency metadata exposed by a rule schema.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DepSchema {
+    /// Dependency attribute name.
     pub name: String,
+    /// Providers accepted by this dependency edge.
     pub expected_providers: Vec<String>,
+    /// Human-readable dependency description.
     pub docs: String,
 }
 
 pub fn load_graph_workspace(root: &Path) -> Result<Vec<GraphTarget>> {
     let targets = load_workspace(root)?;
-    Ok(graph_from_targets(&targets))
+    graph_from_targets_result(&targets)
 }
 
 #[must_use]
@@ -94,11 +134,26 @@ pub fn graph_from_targets(targets: &[Target]) -> Vec<GraphTarget> {
     targets.iter().map(GraphTarget::from).collect()
 }
 
+pub fn graph_from_targets_result(targets: &[Target]) -> Result<Vec<GraphTarget>> {
+    let schemas = built_in_rule_schemas_result()?;
+    Ok(targets
+        .iter()
+        .map(|target| graph_target_from_schema(target, &schemas))
+        .collect())
+}
+
 #[must_use]
 pub fn built_in_rule_schemas() -> Vec<RuleSchema> {
-    let mut schemas = starlark_prelude_rule_schemas();
-    schemas.push(script_schema());
+    let Ok(schemas) = built_in_rule_schemas_result() else {
+        return vec![script_schema()];
+    };
     schemas
+}
+
+pub fn built_in_rule_schemas_result() -> Result<Vec<RuleSchema>> {
+    let mut schemas = starlark_prelude_rule_schemas()?;
+    schemas.push(script_schema());
+    Ok(schemas)
 }
 
 #[must_use]
@@ -110,32 +165,36 @@ pub fn built_in_rule_schema(kind: &str) -> Option<RuleSchema> {
 
 impl From<&Target> for GraphTarget {
     fn from(target: &Target) -> Self {
-        let schema = built_in_rule_schema(&target.kind);
-        let diagnostics = if schema.is_some() {
-            Vec::new()
-        } else {
-            vec![Diagnostic {
-                code: "unknown_rule_kind".to_string(),
-                message: format!("target kind `{}` has no built-in schema", target.kind),
-                repairs: Vec::new(),
-            }]
-        };
-        GraphTarget {
-            label: TargetLabel {
-                package: target.package.clone(),
-                name: target.name.clone(),
-                id: target.id(),
-            },
-            kind: target.kind.clone(),
-            deps: target.deps.clone(),
-            srcs: target.srcs.clone(),
-            attrs: graph_attrs(target),
-            capabilities: schema
-                .as_ref()
-                .map_or_else(Vec::new, |schema| schema.capabilities.clone()),
-            providers: schema.map_or_else(Vec::new, |schema| schema.providers),
-            diagnostics,
-        }
+        graph_target_from_schema(target, &built_in_rule_schemas())
+    }
+}
+
+fn graph_target_from_schema(target: &Target, schemas: &[RuleSchema]) -> GraphTarget {
+    let schema = schemas.iter().find(|schema| schema.kind == target.kind);
+    let diagnostics = if schema.is_some() {
+        Vec::new()
+    } else {
+        vec![Diagnostic {
+            code: "unknown_rule_kind".to_string(),
+            message: format!("target kind `{}` has no built-in schema", target.kind),
+            repairs: Vec::new(),
+        }]
+    };
+    GraphTarget {
+        label: TargetLabel {
+            package: target.package.clone(),
+            name: target.name.clone(),
+            id: target.id(),
+        },
+        kind: target.kind.clone(),
+        deps: target.deps.clone(),
+        srcs: target.srcs.clone(),
+        attrs: graph_attrs(target),
+        capabilities: schema
+            .as_ref()
+            .map_or_else(Vec::new, |schema| schema.capabilities.clone()),
+        providers: schema.map_or_else(Vec::new, |schema| schema.providers.clone()),
+        diagnostics,
     }
 }
 
@@ -150,25 +209,32 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
         .collect()
 }
 
-fn starlark_prelude_rule_schemas() -> Vec<RuleSchema> {
+fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
+    const PRELUDE_PATH: &str = "once//prelude/apple.star";
     let source = include_str!("../prelude/apple.star");
     Module::with_temp_heap(|module| {
-        let ast = AstModule::parse(
-            "once//prelude/apple.star",
-            source.to_string(),
-            &Dialect::Standard,
-        )
-        .expect("built-in Apple Starlark prelude should parse");
+        let ast = AstModule::parse(PRELUDE_PATH, source.to_string(), &Dialect::Standard)
+            .map_err(|error| prelude_error(PRELUDE_PATH, error))?;
         let globals = GlobalsBuilder::standard().build();
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
-            .expect("built-in Apple Starlark prelude should evaluate");
+            .map_err(|error| prelude_error(PRELUDE_PATH, error))?;
         let rules = module
             .get("APPLE_RULES")
-            .expect("built-in Apple Starlark prelude should export APPLE_RULES");
-        rule_schemas_from_value(rules)
-            .expect("built-in Apple Starlark prelude should produce valid rule schemas")
+            .ok_or_else(|| prelude_message(PRELUDE_PATH, "missing APPLE_RULES export"))?;
+        rule_schemas_from_value(rules).map_err(|message| prelude_message(PRELUDE_PATH, &message))
     })
+}
+
+fn prelude_error(path: &str, error: impl std::fmt::Display) -> Error {
+    prelude_message(path, &error.to_string())
+}
+
+fn prelude_message(path: &str, message: &str) -> Error {
+    Error::Eval {
+        path: path.to_string(),
+        message: message.to_string(),
+    }
 }
 
 fn rule_schemas_from_value(value: Value<'_>) -> std::result::Result<Vec<RuleSchema>, String> {

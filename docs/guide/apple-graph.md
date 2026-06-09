@@ -1,8 +1,10 @@
 # Apple Graph
 
-Once is starting its build graph with Apple targets. The first implementation
-models target declarations, rule schemas, capabilities, and local build, run,
-and test commands. It does not invoke Xcode yet.
+Once is starting its build graph with Apple targets, following
+[RFC 0001: Once Build Graph](https://github.com/tuist/once/blob/main/rfcs/0001-build-graph.md).
+The first implementation models target declarations, rule schemas,
+capabilities, and local build, run, and test commands. It does not invoke Xcode
+yet.
 
 The model is informed by:
 
@@ -21,10 +23,12 @@ The model is informed by:
   profiles, and tests.
 
 Once adapts those concepts into typed graph data instead of copying the rule
-names or macro model. Users and agents declare graph targets in `once.toml`.
-Built-in Apple rule metadata is defined in Once's Starlark prelude, then lowered
-into typed Rust graph schemas. The graph is intentionally inspectable first, so
-agents and CLI users can ask what a target can do before broad execution exists.
+names or macro model. It is not Buck-compatible, Bazel-compatible, or a drop-in
+replacement for either tool. Users and agents declare graph targets in
+`once.toml`. Built-in Apple rule metadata is defined in Once's Starlark prelude,
+then lowered into typed Rust graph schemas. The graph is intentionally
+inspectable first, so agents and CLI users can ask what a target can do before
+broad execution exists.
 
 ## Targets
 

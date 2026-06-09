@@ -23,8 +23,9 @@ pub use cache_provider::{
 };
 pub use error::{Error, Result};
 pub use graph::{
-    built_in_rule_schema, built_in_rule_schemas, graph_from_targets, load_graph_workspace,
-    AttrSchema, Capability, DepSchema, Diagnostic, GraphTarget, RuleSchema, TargetLabel,
+    built_in_rule_schema, built_in_rule_schemas, built_in_rule_schemas_result, graph_from_targets,
+    graph_from_targets_result, load_graph_workspace, AttrSchema, Capability, DepSchema, Diagnostic,
+    GraphTarget, RuleSchema, TargetLabel,
 };
 pub use manifest::{load_cache_provider_toml_str, load_toml_str};
 pub use script::{parse_script_annotations, ScriptAnnotations};

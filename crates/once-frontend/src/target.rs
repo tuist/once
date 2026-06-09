@@ -30,7 +30,7 @@ impl Target {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum AttrValue {
     String(String),
@@ -39,6 +39,20 @@ pub enum AttrValue {
     Bool(bool),
     List(Vec<AttrValue>),
     Map(BTreeMap<String, AttrValue>),
+}
+
+impl PartialEq for AttrValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::String(lhs), Self::String(rhs)) => lhs == rhs,
+            (Self::Integer(lhs), Self::Integer(rhs)) => lhs == rhs,
+            (Self::Float(lhs), Self::Float(rhs)) => lhs.to_bits() == rhs.to_bits(),
+            (Self::Bool(lhs), Self::Bool(rhs)) => lhs == rhs,
+            (Self::List(lhs), Self::List(rhs)) => lhs == rhs,
+            (Self::Map(lhs), Self::Map(rhs)) => lhs == rhs,
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]

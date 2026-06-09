@@ -10,7 +10,7 @@ use tokio::io::AsyncWriteExt;
 use crate::cli::{Format, Output};
 use crate::render;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 struct TargetRecord {
     id: String,
     package: String,
@@ -22,7 +22,12 @@ struct TargetRecord {
 
 pub async fn targets(workspace: &Path, output: Output, kind: Option<&str>) -> Result<()> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let records = graph
+    let records = target_records(graph, kind);
+    write_body(output, || render_targets_human(&records), &records).await
+}
+
+fn target_records(graph: Vec<once_frontend::GraphTarget>, kind: Option<&str>) -> Vec<TargetRecord> {
+    graph
         .into_iter()
         .filter(|target| kind.is_none_or(|kind| target.kind == kind))
         .map(|target| TargetRecord {
@@ -37,8 +42,7 @@ pub async fn targets(workspace: &Path, output: Output, kind: Option<&str>) -> Re
                 .map(|capability| capability.name)
                 .collect(),
         })
-        .collect::<Vec<_>>();
-    write_body(output, || render_targets_human(&records), &records).await
+        .collect::<Vec<_>>()
 }
 
 pub async fn capabilities(workspace: &Path, output: Output, target_id: &str) -> Result<()> {
@@ -78,7 +82,9 @@ pub async fn capabilities(workspace: &Path, output: Output, target_id: &str) -> 
 
 pub async fn schema(workspace: &Path, output: Output, kind: &str) -> Result<()> {
     let _ = workspace;
-    let schema = once_frontend::built_in_rule_schema(kind)
+    let schema = once_frontend::built_in_rule_schemas_result()?
+        .into_iter()
+        .find(|schema| schema.kind == kind)
         .with_context(|| format!("no built-in rule schema matches `{kind}`"))?;
     write_body(
         output,
@@ -154,4 +160,61 @@ async fn write_body<T: Serialize>(
     out.write_all(body.as_bytes()).await?;
     out.flush().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use once_frontend::{Capability, GraphTarget, TargetLabel};
+
+    use super::*;
+
+    fn target(id: &str, kind: &str, capabilities: &[&str]) -> GraphTarget {
+        let (package, name) = id.rsplit_once('/').unwrap_or(("", id));
+        GraphTarget {
+            label: TargetLabel {
+                package: package.to_string(),
+                name: name.to_string(),
+                id: id.to_string(),
+            },
+            kind: kind.to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            capabilities: capabilities
+                .iter()
+                .map(|name| Capability {
+                    name: (*name).to_string(),
+                    output_groups: Vec::new(),
+                    requires_outputs: Vec::new(),
+                })
+                .collect(),
+            providers: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn target_records_filters_by_kind() {
+        let records = target_records(
+            vec![
+                target("apps/ios/App", "apple_application", &["build", "run"]),
+                target("apps/ios/AppTests", "apple_test_bundle", &["build", "test"]),
+            ],
+            Some("apple_application"),
+        );
+
+        assert_eq!(
+            records,
+            vec![TargetRecord {
+                id: "apps/ios/App".to_string(),
+                package: "apps/ios".to_string(),
+                name: "App".to_string(),
+                kind: "apple_application".to_string(),
+                deps: Vec::new(),
+                capabilities: vec!["build".to_string(), "run".to_string()],
+            }]
+        );
+    }
 }
