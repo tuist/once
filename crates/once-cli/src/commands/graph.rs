@@ -247,6 +247,8 @@ ONCE_MANIFEST
 
 fn library_build_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -> String {
     let product = product_name(target);
+    let product_text = shell_quote(&product);
+    let target_text = shell_quote(&target.label.id);
     let manifest_path = shell_quote(&format!("{}/manifest.json", build_root(target)));
     let binary_path = shell_quote(&format!("{}/{}.a", build_root(target), product));
     let swiftmodule_path = shell_quote(&format!("{}/{}.swiftmodule", build_root(target), product));
@@ -258,19 +260,24 @@ fn library_build_script(target: &GraphTarget, manifest_json: &str, output_paths:
 cat > {manifest_path} <<'ONCE_MANIFEST'
 {manifest_json}
 ONCE_MANIFEST
-printf 'archive for {target}\n' > {binary_path}
-printf 'swiftmodule for {product}\n' > {swiftmodule_path}
+printf 'archive for %s\n' {target_text} > {binary_path}
+printf 'swiftmodule for %s\n' {product_text} > {swiftmodule_path}
 mkdir -p {generated_sources_path}
 ",
-        target = target.label.id,
     )
 }
 
 fn framework_build_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -> String {
     let product = product_name(target);
+    let product_text = shell_quote(&product);
+    let target_text = shell_quote(&target.label.id);
     let root = build_root(target);
     let manifest_path = shell_quote(&format!("{root}/manifest.json"));
     let info_plist = shell_quote(&format!("{root}/{product}.framework/Info.plist"));
+    let info_plist_content = shell_quote(&format!(
+        r#"<?xml version="1.0"?><plist><dict><key>CFBundleName</key><string>{}</string></dict></plist>"#,
+        xml_escape(&product)
+    ));
     let binary_path = shell_quote(&format!("{root}/{product}.framework/{product}"));
     let modules_path = shell_quote(&format!("{root}/{product}.framework/Modules"));
     let modulemap_path = shell_quote(&format!(
@@ -283,18 +290,17 @@ fn framework_build_script(target: &GraphTarget, manifest_json: &str, output_path
     ));
     let prepare_outputs = prepare_outputs_script(output_paths);
     format!(
-        r#"set -eu
+        r"set -eu
 {prepare_outputs}
 cat > {manifest_path} <<'ONCE_MANIFEST'
 {manifest_json}
 ONCE_MANIFEST
-printf '<?xml version="1.0"?><plist><dict><key>CFBundleName</key><string>{product}</string></dict></plist>\n' > {info_plist}
-printf 'framework binary for {target}\n' > {binary_path}
+printf '%s\n' {info_plist_content} > {info_plist}
+printf 'framework binary for %s\n' {target_text} > {binary_path}
 mkdir -p {modules_path} {dsyms_contents_path}
-printf 'framework module {product}\n' > {modulemap_path}
-printf 'dSYM for {target}\n' > {dsym_info_path}
-"#,
-        target = target.label.id,
+printf 'framework module %s\n' {product_text} > {modulemap_path}
+printf 'dSYM for %s\n' {target_text} > {dsym_info_path}
+",
     )
 }
 
@@ -304,9 +310,14 @@ fn application_build_script(
     output_paths: &str,
 ) -> String {
     let product = product_name(target);
+    let target_text = shell_quote(&target.label.id);
     let root = build_root(target);
     let manifest_path = shell_quote(&format!("{root}/manifest.json"));
     let info_plist = shell_quote(&format!("{root}/{product}.app/Info.plist"));
+    let info_plist_content = shell_quote(&format!(
+        r#"<?xml version="1.0"?><plist><dict><key>CFBundleExecutable</key><string>{}</string></dict></plist>"#,
+        xml_escape(&product)
+    ));
     let binary_path = shell_quote(&format!("{root}/{product}.app/{product}"));
     let resources_path = shell_quote(&format!("{root}/{product}.app/Resources"));
     let resources_manifest = shell_quote(&format!(
@@ -318,19 +329,18 @@ fn application_build_script(
     ));
     let prepare_outputs = prepare_outputs_script(output_paths);
     format!(
-        r#"set -eu
+        r"set -eu
 {prepare_outputs}
 cat > {manifest_path} <<'ONCE_MANIFEST'
 {manifest_json}
 ONCE_MANIFEST
-printf '<?xml version="1.0"?><plist><dict><key>CFBundleExecutable</key><string>{product}</string></dict></plist>\n' > {info_plist}
-printf 'app executable for {target}\n' > {binary_path}
+printf '%s\n' {info_plist_content} > {info_plist}
+printf 'app executable for %s\n' {target_text} > {binary_path}
 chmod +x {binary_path}
 mkdir -p {resources_path} {dsyms_contents_path}
-printf 'resources for {target}\n' > {resources_manifest}
-printf 'dSYM for {target}\n' > {dsym_info_path}
-"#,
-        target = target.label.id,
+printf 'resources for %s\n' {target_text} > {resources_manifest}
+printf 'dSYM for %s\n' {target_text} > {dsym_info_path}
+",
     )
 }
 
@@ -340,9 +350,14 @@ fn test_bundle_build_script(
     output_paths: &str,
 ) -> String {
     let product = product_name(target);
+    let target_text = shell_quote(&target.label.id);
     let root = build_root(target);
     let manifest_path = shell_quote(&format!("{root}/manifest.json"));
     let info_plist = shell_quote(&format!("{root}/{product}.xctest/Info.plist"));
+    let info_plist_content = shell_quote(&format!(
+        r#"<?xml version="1.0"?><plist><dict><key>CFBundleExecutable</key><string>{}</string></dict></plist>"#,
+        xml_escape(&product)
+    ));
     let binary_path = shell_quote(&format!("{root}/{product}.xctest/{product}"));
     let dsyms_contents_path = shell_quote(&format!("{root}/dSYMs/{product}.xctest.dSYM/Contents"));
     let dsym_info_path = shell_quote(&format!(
@@ -350,18 +365,17 @@ fn test_bundle_build_script(
     ));
     let prepare_outputs = prepare_outputs_script(output_paths);
     format!(
-        r#"set -eu
+        r"set -eu
 {prepare_outputs}
 cat > {manifest_path} <<'ONCE_MANIFEST'
 {manifest_json}
 ONCE_MANIFEST
-printf '<?xml version="1.0"?><plist><dict><key>CFBundleExecutable</key><string>{product}</string></dict></plist>\n' > {info_plist}
-printf 'xctest binary for {target}\n' > {binary_path}
+printf '%s\n' {info_plist_content} > {info_plist}
+printf 'xctest binary for %s\n' {target_text} > {binary_path}
 chmod +x {binary_path}
 mkdir -p {dsyms_contents_path}
-printf 'dSYM for {target}\n' > {dsym_info_path}
-"#,
-        target = target.label.id,
+printf 'dSYM for %s\n' {target_text} > {dsym_info_path}
+",
     )
 }
 
@@ -372,19 +386,24 @@ fn run_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -> 
     let bundle_path = shell_quote(&format!("{}/{bundle}", build_root(target)));
     let manifest_path = shell_quote(&format!("{root}/manifest.json"));
     let run_json = shell_quote(&format!("{root}/run.json"));
+    let run_record = shell_quote(
+        &serde_json::json!({
+            "target": target.label.id,
+            "bundle": bundle,
+            "status": "launched",
+        })
+        .to_string(),
+    );
     let prepare_outputs = prepare_outputs_script(output_paths);
     format!(
-        r#"set -eu
+        r"set -eu
 {prepare_outputs}
 test -d {bundle_path}
 cat > {manifest_path} <<'ONCE_MANIFEST'
 {manifest_json}
 ONCE_MANIFEST
-cat > {run_json} <<'ONCE_RUN'
-{{"target":"{target}","bundle":"{bundle}","status":"launched"}}
-ONCE_RUN
-"#,
-        target = target.label.id,
+printf '%s\n' {run_record} > {run_json}
+",
     )
 }
 
@@ -396,22 +415,34 @@ fn test_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) ->
     let manifest_path = shell_quote(&format!("{root}/manifest.json"));
     let test_json = shell_quote(&format!("{root}/test_results.json"));
     let coverage_json = shell_quote(&format!("{root}/coverage.json"));
+    let test_record = shell_quote(
+        &serde_json::json!({
+            "target": target.label.id,
+            "bundle": bundle,
+            "status": "passed",
+            "tests": 0,
+            "failures": 0,
+        })
+        .to_string(),
+    );
+    let coverage_record = shell_quote(
+        &serde_json::json!({
+            "target": target.label.id,
+            "line_coverage": serde_json::Value::Null,
+        })
+        .to_string(),
+    );
     let prepare_outputs = prepare_outputs_script(output_paths);
     format!(
-        r#"set -eu
+        r"set -eu
 {prepare_outputs}
 test -d {bundle_path}
 cat > {manifest_path} <<'ONCE_MANIFEST'
 {manifest_json}
 ONCE_MANIFEST
-cat > {test_json} <<'ONCE_TESTS'
-{{"target":"{target}","bundle":"{bundle}","status":"passed","tests":0,"failures":0}}
-ONCE_TESTS
-cat > {coverage_json} <<'ONCE_COVERAGE'
-{{"target":"{target}","line_coverage":null}}
-ONCE_COVERAGE
-"#,
-        target = target.label.id,
+printf '%s\n' {test_record} > {test_json}
+printf '%s\n' {coverage_record} > {coverage_json}
+",
     )
 }
 
@@ -536,4 +567,74 @@ fn shell_quote(value: &str) -> String {
     }
     let escaped = value.replace('\'', "'\"'\"'");
     format!("'{escaped}'")
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use once_frontend::{Capability, TargetLabel};
+
+    fn graph_target(kind: &str, name: &str) -> GraphTarget {
+        GraphTarget {
+            label: TargetLabel {
+                package: "apps/ios".to_string(),
+                name: name.to_string(),
+                id: format!("apps/ios/{name}"),
+            },
+            kind: kind.to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            capabilities: vec![Capability {
+                name: "build".to_string(),
+                output_groups: Vec::new(),
+                requires_outputs: Vec::new(),
+            }],
+            providers: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn shell_quote_escapes_single_quotes() {
+        assert_eq!(shell_quote("App'; echo pwn"), "'App'\"'\"'; echo pwn'");
+    }
+
+    #[test]
+    fn application_script_uses_shell_quoted_dynamic_text() {
+        let mut target = graph_target("apple_application", "App");
+        target.attrs.insert(
+            "product_name".to_string(),
+            AttrValue::String("Bad'; echo pwn".to_string()),
+        );
+
+        let script = application_build_script(&target, "{}", "'.once/out/apps/ios/App'");
+
+        assert!(script.contains("printf 'app executable for %s\\n' 'apps/ios/App'"));
+        assert!(!script.contains("app executable for apps/ios/App"));
+        assert!(!script.contains("echo pwn\\n"));
+    }
+
+    #[test]
+    fn plist_values_are_xml_escaped_before_shell_quoting() {
+        let mut target = graph_target("apple_framework", "Framework");
+        target.attrs.insert(
+            "product_name".to_string(),
+            AttrValue::String("A&B<\"'>".to_string()),
+        );
+
+        let script = framework_build_script(&target, "{}", "'.once/out/apps/ios/Framework'");
+
+        assert!(script.contains("A&amp;B&lt;&quot;&apos;&gt;"));
+        assert!(!script.contains("<string>A&B<\"'></string>"));
+    }
 }
