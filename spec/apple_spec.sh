@@ -152,4 +152,36 @@ EOF
     The stdout should include 'apple_test_bundle'
     The stdout should include 'test: default, test_results, coverage'
   End
+
+  It 'errors when building a target id that does not match'
+    create_apple_workspace
+
+    When call once build apps/ios/Missing
+    The status should not equal 0
+    The stderr should include 'no target matches'
+  End
+
+  It 'errors when a capability is not exposed by the target'
+    create_apple_workspace
+
+    When call once test apps/ios/App
+    The status should not equal 0
+    The stderr should include 'does not expose `test`'
+  End
+
+  It 'rejects --remote for graph run targets'
+    create_apple_workspace
+
+    When call once run --remote apps/ios/App
+    The status should not equal 0
+    The stderr should include '--remote is only supported for executable script targets'
+  End
+
+  It 'rejects --runtime-rpc for graph run targets'
+    create_apple_workspace
+
+    When call once run --runtime-rpc apps/ios/App
+    The status should not equal 0
+    The stderr should include '--runtime-rpc is only supported for executable script targets'
+  End
 End
