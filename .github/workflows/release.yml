@@ -227,6 +227,8 @@ jobs:
           NPM_TOKEN: op://once/npm Automation Token/token
       - name: Configure package registries
         run: |
+          echo "::add-mask::${RUBYGEMS_API_KEY}"
+          echo "::add-mask::${NPM_TOKEN}"
           printf '%s\n' "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
           chmod 0600 ~/.npmrc
       - name: Publish SDK packages
