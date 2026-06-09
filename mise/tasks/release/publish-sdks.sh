@@ -17,25 +17,23 @@ while (($# > 0)); do
   esac
 done
 
+version="${version//[[:space:]]/}"
 if [[ -z "${version}" ]]; then
   echo "--version is required" >&2
   exit 1
 fi
 
-for tool in cargo gem npm; do
+if [[ ! "${version}" =~ ^[0-9]+[.][0-9]+[.][0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+  echo "--version must be a semantic version" >&2
+  exit 1
+fi
+
+for tool in gem npm; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
     echo "${tool} is required" >&2
     exit 1
   fi
 done
-
-rust_pkgid="$(cargo pkgid --package once)"
-rust_version="${rust_pkgid##*#}"
-rust_version="${rust_version##*@}"
-if [[ "${rust_version}" != "${version}" ]]; then
-  echo "Rust once crate version ${rust_version} does not match release version ${version}" >&2
-  exit 1
-fi
 
 if [[ ! -d packages/js/prebuilds || ! -d packages/ruby/prebuilds ]]; then
   echo "SDK prebuilds are missing; run release:package-sdk-libs first" >&2

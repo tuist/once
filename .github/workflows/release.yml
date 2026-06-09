@@ -216,7 +216,7 @@ jobs:
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
-          install_args: "rust ruby node"
+          install_args: "ruby node"
       - uses: 1password/load-secrets-action/configure@dafbe7cb03502b260e2b2893c753c352eee545bf
         with:
           service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
