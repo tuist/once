@@ -39,6 +39,7 @@ jobs:
       - name: run blick review
         env:
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           blick review \
             --base "origin/${{ github.event.pull_request.base.ref }}" \

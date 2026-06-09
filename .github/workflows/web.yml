@@ -1,0 +1,171 @@
+name: web
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/web.yml"
+      - "infra/**"
+      - "web/**"
+      - "mise.toml"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/web.yml"
+      - "infra/**"
+      - "web/**"
+      - "mise.toml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MIX_ENV: test
+
+jobs:
+  build:
+    name: build
+    runs-on: tuist-linux
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
+
+      - name: Cache deps
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: web/deps
+          key: web-deps-${{ runner.os }}-${{ hashFiles('web/mix.lock') }}
+          restore-keys: web-deps-${{ runner.os }}-
+
+      - name: Cache build
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: web/_build
+          key: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-${{ hashFiles('web/mix.lock') }}
+          restore-keys: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-
+
+      - run: mise exec -- mix deps.get
+      - run: mise exec -- mix compile --warnings-as-errors
+
+  format:
+    name: format
+    runs-on: tuist-linux
+    needs: build
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
+
+      - name: Cache deps
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: web/deps
+          key: web-deps-${{ runner.os }}-${{ hashFiles('web/mix.lock') }}
+          restore-keys: web-deps-${{ runner.os }}-
+
+      - name: Cache build
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: web/_build
+          key: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-${{ hashFiles('web/mix.lock') }}
+          restore-keys: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-
+
+      - run: mise exec -- mix deps.get
+      - run: mise exec -- mix format --check-formatted
+
+  test:
+    name: test
+    runs-on: tuist-linux
+    needs: build
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: once_site_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
+
+      - name: Cache deps
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: web/deps
+          key: web-deps-${{ runner.os }}-${{ hashFiles('web/mix.lock') }}
+          restore-keys: web-deps-${{ runner.os }}-
+
+      - name: Cache build
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: web/_build
+          key: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-${{ hashFiles('web/mix.lock') }}
+          restore-keys: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-
+
+      - run: mise exec -- mix deps.get
+      - run: mise exec -- mix test
+
+  release:
+    name: release
+    runs-on: tuist-linux
+    defaults:
+      run:
+        working-directory: web
+    env:
+      MIX_ENV: prod
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
+
+      - run: mise exec -- mix deps.get --only prod
+      - run: mise exec -- mix compile
+      - run: mise exec -- mix assets.deploy
+      - run: mise exec -- mix release --overwrite
+
+  docker:
+    name: docker
+    runs-on: tuist-linux
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: false
+          platforms: linux/amd64
+          tags: once-web:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  helm:
+    name: helm
+    runs-on: tuist-linux
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
+        with:
+          install_args: "helm@3.21.0"
+          cache: "false"
+
+      - run: mise exec -- helm lint infra/helm/once
+      - run: mise exec -- helm template once infra/helm/once --namespace once-production >/tmp/once-helm-rendered.yaml

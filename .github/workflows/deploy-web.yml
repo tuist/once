@@ -1,0 +1,145 @@
+name: deploy web
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-web.yml"
+      - "infra/**"
+      - "web/**"
+      - "mise.toml"
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Commit SHA to deploy, defaults to the event SHA
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-web-production
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: tuist/once-web
+  HELM_CHART_PATH: infra/helm/once
+  HELM_RELEASE_NAME: once
+  NAMESPACE: once-production
+  DEPLOY_SHA: ${{ inputs.commit_sha || github.sha }}
+
+jobs:
+  build:
+    name: build and push
+    runs-on: tuist-linux
+    timeout-minutes: 30
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+      - id: tag
+        run: echo "image_tag=sha-$(echo "$DEPLOY_SHA" | cut -c1-12)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: deploy
+    needs: build
+    runs-on: tuist-linux
+    environment:
+      name: production
+      url: https://buildonce.dev
+    timeout-minutes: 20
+    env:
+      KUBECONFIG: ${{ github.workspace }}/.kube/config
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
+        with:
+          install_args: "helm@3.21.0 kubectl@1.34.6 jq@1.8.1"
+          cache: "false"
+      - uses: 1password/install-cli-action@8d006a0d0a4fd505af7f7ce589e7f768385ff5e4
+      - name: Load kubeconfig from 1Password
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          mkdir -p "$(dirname "$KUBECONFIG")"
+          op document get "kubeconfig: once-production" \
+            --vault once-k8s-production --output "$KUBECONFIG"
+          chmod 600 "$KUBECONFIG"
+      - name: Verify cluster reachability
+        run: |
+          set -euo pipefail
+          API="$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.server}')"
+          echo "Reaching apiserver at $API"
+          kubectl --request-timeout=10s get --raw /version >/dev/null
+      - name: Recover stuck release
+        run: |
+          status=$(helm status "$HELM_RELEASE_NAME" -n "$NAMESPACE" -o json 2>/dev/null \
+            | jq -r '.info.status // empty' || true)
+          echo "Current release status: ${status:-<none>}"
+          case "$status" in
+            pending-install)
+              echo "Release stuck in pending-install; uninstalling."
+              helm uninstall "$HELM_RELEASE_NAME" -n "$NAMESPACE" --wait || true
+              ;;
+            pending-upgrade|pending-rollback)
+              echo "Release stuck in $status; rolling back to last deployed revision."
+              helm rollback "$HELM_RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m || true
+              ;;
+          esac
+      - name: helm upgrade --install
+        run: |
+          helm upgrade --install "$HELM_RELEASE_NAME" "$HELM_CHART_PATH" \
+            --namespace "$NAMESPACE" --create-namespace \
+            --set image.tag="${{ needs.build.outputs.image_tag }}" \
+            --rollback-on-failure --timeout 15m --wait
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          set +e
+          echo "::group::helm history"
+          helm history "$HELM_RELEASE_NAME" -n "$NAMESPACE" --max 10 || true
+          echo "::endgroup::"
+          echo "::group::pods"
+          kubectl -n "$NAMESPACE" get pods -o wide || true
+          echo "::endgroup::"
+          echo "::group::events"
+          kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp 2>&1 | tail -100 || true
+          echo "::endgroup::"
+          echo "::group::deployment and pods"
+          kubectl -n "$NAMESPACE" describe deploy/once || true
+          for pod in $(kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/name=once -o name 2>/dev/null); do
+            kubectl -n "$NAMESPACE" describe "$pod" || true
+            kubectl -n "$NAMESPACE" logs "$pod" --all-containers --tail=500 || true
+            kubectl -n "$NAMESPACE" logs "$pod" --all-containers --previous --tail=500 || true
+          done
+          echo "::endgroup::"
+          echo "::group::external secrets"
+          kubectl -n "$NAMESPACE" get externalsecret 2>&1 || true
+          kubectl -n "$NAMESPACE" describe externalsecret 2>&1 || true
+          echo "::endgroup::"
+      - name: Smoke test
+        run: |
+          kubectl -n "$NAMESPACE" rollout status deploy/once --timeout=10m
+          kubectl -n "$NAMESPACE" run smoke-$RANDOM --rm -i --restart=Never --image=curlimages/curl \
+            --command -- curl -fsS "http://once/ready"
