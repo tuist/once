@@ -33,6 +33,9 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
+export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-13.0}"
+
 require_tool() {
   local tool="$1"
   if ! command -v "${tool}" >/dev/null 2>&1; then
