@@ -1,6 +1,6 @@
 ---
 name: once-rust-review
-description: Project-specific PR-review rules for the tuist/once Rust workspace. Focuses on script caching, runtime execution, `once.toml` placement, toolchain pinning, shellspec coverage, crate structure, and avoiding build-system scope creep.
+description: Project-specific PR-review rules for the tuist/once Rust workspace. Focuses on script caching, build graph work, runtime execution, `once.toml` placement, toolchain pinning, shellspec coverage, and crate structure.
 ---
 
 # Once Rust Review
@@ -14,25 +14,36 @@ For each finding, cite `path:line` and quote the relevant snippet.
 
 ---
 
-## 1. Once stays focused on scripts and runtime execution
+## 1. Build graph work follows the RFC and keeps scripts first-class
 
-Once is not a build system. The supported scope is cacheable scripts,
-remote execution, and the runtime API.
+Once starts with cacheable and remotely executable scripts plus the runtime
+API, and is expanding toward typed build graph capabilities. Scripts remain the
+migration ramp into the graph. Build graph work should follow
+`rfcs/0001-build-graph.md`, keep the agent-facing graph model typed,
+queryable, and structurally editable, and preserve the existing script
+workflow.
 
 ### Flag
 
-- **A diff that reintroduces build-system commands such as `build`,
-  `test`, `deps`, `targets`, language-specific compilers, or generated
-  external dependency graphs.** **Severity: high.**
-- **Docs or CLI help that position Once as a replacement for build
-  systems such as Buck, Bazel, or Cargo.** **Severity: medium.**
+- **Build graph CLI, rule, or query surfaces that are not tied to the RFC
+  model, lack a clear migration path from scripts, or make scripts
+  second-class.** **Severity: high.**
+- **Docs or CLI help that position Once as Buck-compatible, Bazel-compatible,
+  or as a drop-in replacement for Buck, Bazel, or Cargo.** **Severity:
+  medium.**
 - **Manifest parsing that accepts non-script target rules without a
   clear migration path and tests.** **Severity: high.**
+- **Build graph changes that bypass Once's action cache, CAS, remote execution,
+  or runtime API instead of using them as the execution substrate.**
+  **Severity: medium.**
 
 ### Do not flag
 
 - Script or runtime features that make individual commands cacheable,
   observable, or remotely executable.
+- Build graph commands, providers, capabilities, queries, Starlark rule
+  metadata, or Apple target modeling that align with `rfcs/0001-build-graph.md`
+  and include focused Rust tests or ShellSpec coverage.
 
 ---
 
