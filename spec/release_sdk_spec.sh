@@ -46,25 +46,63 @@ Describe 'release SDK packaging scripts'
     The stderr should include 'unsupported SDK package target: unknown-target'
   End
 
-  It 'rejects publish versions that do not match the Rust SDK crate'
+  It 'rejects publish versions that are not semantic versions'
     setup_release_path
-    write_stub cargo \
-      '#!/usr/bin/env bash' \
-      'printf "%s\n" "path+file:///workspace/crates/once#0.2.0"'
     write_stub gem '#!/usr/bin/env bash'
     write_stub npm '#!/usr/bin/env bash'
     cd "$WORKSPACE"
 
-    When call "$REPO_ROOT/mise/tasks/release/publish-sdks.sh" --version 0.1.0
+    When call "$REPO_ROOT/mise/tasks/release/publish-sdks.sh" --version latest
     The status should be failure
-    The stderr should include 'Rust once crate version 0.2.0 does not match release version 0.1.0'
+    The stderr should include '--version must be a semantic version'
+  End
+
+  It 'rejects publish versions with empty prerelease metadata'
+    setup_release_path
+    write_stub gem '#!/usr/bin/env bash'
+    write_stub npm '#!/usr/bin/env bash'
+    cd "$WORKSPACE"
+
+    When call "$REPO_ROOT/mise/tasks/release/publish-sdks.sh" --version 1.2.3-
+    The status should be failure
+    The stderr should include '--version must be a semantic version'
+  End
+
+  It 'rejects publish versions with empty build metadata'
+    setup_release_path
+    write_stub gem '#!/usr/bin/env bash'
+    write_stub npm '#!/usr/bin/env bash'
+    cd "$WORKSPACE"
+
+    When call "$REPO_ROOT/mise/tasks/release/publish-sdks.sh" --version 1.2.3+
+    The status should be failure
+    The stderr should include '--version must be a semantic version'
+  End
+
+  It 'rejects publish versions with malformed prerelease metadata'
+    setup_release_path
+    write_stub gem '#!/usr/bin/env bash'
+    write_stub npm '#!/usr/bin/env bash'
+    cd "$WORKSPACE"
+
+    When call "$REPO_ROOT/mise/tasks/release/publish-sdks.sh" --version 1.2.3-+foo
+    The status should be failure
+    The stderr should include '--version must be a semantic version'
+  End
+
+  It 'accepts publish versions with prerelease and build metadata'
+    setup_release_path
+    write_stub gem '#!/usr/bin/env bash'
+    write_stub npm '#!/usr/bin/env bash'
+    cd "$WORKSPACE"
+
+    When call "$REPO_ROOT/mise/tasks/release/publish-sdks.sh" --version 1.2.3-beta.1+build.5
+    The status should be failure
+    The stderr should include 'SDK prebuilds are missing'
   End
 
   It 'checks SDK prebuilds before publishing'
     setup_release_path
-    write_stub cargo \
-      '#!/usr/bin/env bash' \
-      'printf "%s\n" "path+file:///workspace/crates/once#0.1.0"'
     write_stub gem '#!/usr/bin/env bash'
     write_stub npm '#!/usr/bin/env bash'
     cd "$WORKSPACE"
