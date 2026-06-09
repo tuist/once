@@ -123,6 +123,53 @@ jobs:
           name: Once.xcframework
           path: dist/*
 
+  build-sdk-libs:
+    name: Build SDK libraries ${{ matrix.target }}
+    needs: detect
+    if: needs.detect.outputs.should-release == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "rust"
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: release-sdk-${{ matrix.target }}
+          cache-on-failure: true
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Package SDK libraries
+        run: mise run release:package-sdk-libs --target "${{ matrix.target }}"
+      - name: Upload SDK libraries
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdk-libs-${{ matrix.target }}
+          path: |
+            packages/js/prebuilds/*
+            packages/ruby/prebuilds/*
+
   publish:
     name: Publish GitHub release
     needs:
@@ -150,3 +197,39 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: mise run release:publish --version "${{ needs.detect.outputs.next-version }}" --notes release-notes.md --dist dist
+
+  publish-sdks:
+    name: Publish RubyGems and npm packages
+    needs:
+      - detect
+      - publish
+      - build-sdk-libs
+    if: needs.detect.outputs.should-release == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: sdk-libs-*
+          merge-multiple: true
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "rust ruby node"
+      - uses: 1password/load-secrets-action/configure@v3
+        with:
+          service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      - uses: 1password/load-secrets-action@v3
+        with:
+          export-env: true
+        env:
+          RUBYGEMS_API_KEY: op://once/RubyGems API Key/api_key
+          NPM_TOKEN: op://once/npm Automation Token/token
+      - name: Configure package registries
+        run: |
+          printf '%s\n' "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          chmod 0600 ~/.npmrc
+      - name: Publish SDK packages
+        run: |
+          export GEM_HOST_API_KEY="${RUBYGEMS_API_KEY}"
+          mise run release:publish-sdks --version "${{ needs.detect.outputs.next-version }}"
