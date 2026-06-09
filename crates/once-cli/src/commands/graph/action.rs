@@ -2,9 +2,12 @@
 //!
 //! The current build, run, and test scripts are local placeholders: they
 //! materialize the artifact layout each Apple product kind is expected to
-//! produce and record a manifest, without invoking Xcode. Keeping this
-//! concern separate from orchestration lets the script generation grow into
-//! real toolchain invocations without turning the command module into a
+//! produce and record a manifest, without invoking Xcode. They are not a
+//! bypass of Once's execution substrate: every capability runs as an
+//! [`Action`] through `once_core::run_with_cache`, so it goes through the
+//! action cache and content-addressed storage like any other action. Keeping
+//! this concern separate from orchestration lets the script generation grow
+//! into real toolchain invocations without turning the command module into a
 //! monolith.
 
 use std::collections::BTreeMap;
@@ -630,6 +633,16 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("unsupported graph capability `lint`"));
+    }
+
+    #[test]
+    fn output_paths_reject_product_name_that_escapes_workspace() {
+        // A product_name carrying `..` would otherwise steer generated paths
+        // (and the chmod target) outside the workspace. WorkspacePath rejects
+        // the escape before any script is built or run.
+        let target = with_product("apple_application", "App", "../../etc/App");
+        let err = output_paths(&target, "build").unwrap_err().to_string();
+        assert!(err.contains("invalid graph output path"));
     }
 
     #[test]
