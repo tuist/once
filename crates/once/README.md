@@ -51,6 +51,48 @@ If you call the C API directly, all owned strings returned by `once_*`
 functions must be released with `once_string_free`. The C module name is
 `Once`. JSON requests use the default XDG local cache.
 
+## Ruby
+
+Install the Ruby SDK from RubyGems:
+
+```sh
+gem install buildonce
+```
+
+Use it to read and write blobs through the default local cache:
+
+```ruby
+require "buildonce"
+
+cache = Once::Cache.new
+digest = cache.put_blob("hello")
+bytes = cache.get_blob(digest)
+
+puts bytes
+```
+
+## JavaScript
+
+Install the JavaScript SDK from npm:
+
+```sh
+npm install buildonce
+```
+
+Use it from Node.js:
+
+```js
+const { Cache } = require("buildonce");
+
+async function main() {
+  const cache = new Cache();
+  const digest = await cache.putBlob("hello");
+  const bytes = await cache.getBlob(digest);
+
+  console.log(bytes.toString());
+}
+```
+
 ### FFI responses
 
 FFI functions return UTF-8 JSON:

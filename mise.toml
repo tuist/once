@@ -1,10 +1,11 @@
 [tools]
 rust = "1.96.0"
+ruby = "4.0.5"
 shellspec = "latest"
 git-cliff = "2.13.1"
 "github:tuist/blick" = "0.10.0"
 "github:superradcompany/microsandbox" = "0.5.5"
-node = "22.11.0"
+node = "26.3.0"
 "npm:opencode-ai" = "1.16.2"
 aube = "1.18.1"
 

@@ -45,7 +45,7 @@ stage_dir="$(mktemp -d)"
 trap 'rm -rf "${stage_dir}"' EXIT
 cp "target/${target}/release/${bin_name}" "${stage_dir}/${bin_name}"
 
-# tar.gz everywhere — modern Windows ships tar(1) and `mise install`'s
+# tar.gz everywhere, modern Windows ships tar(1) and `mise install`'s
 # ubi backend handles either format. Keeping one extension across
 # platforms makes the asset-naming pattern downstream tools key off
 # (mise/aqua/ubi) trivially predictable.

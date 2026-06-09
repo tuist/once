@@ -152,7 +152,11 @@ jobs:
           shared-key: windows-build
           cache-on-failure: true
           cache-bin: false
-      - run: cargo build --workspace --all-targets
+      - run: |
+          # Build the SDK crate separately to avoid a Windows PDB name collision
+          # between the `once` cdylib and the CLI binary.
+          cargo build --workspace --all-targets --exclude once
+          cargo build --package once --all-targets
 
   windows-cas-test:
     name: windows cas test

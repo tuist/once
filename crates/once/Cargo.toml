@@ -10,7 +10,7 @@ description = "Rust SDK and C ABI for Once cache access"
 [lib]
 name = "once"
 path = "src/lib.rs"
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
 once-cas.workspace = true
