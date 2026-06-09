@@ -110,16 +110,20 @@ async fn run_target_capability(
     let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
         .await
         .with_context(|| format!("executing {capability_name} for {}", target.label.id))?;
+    if outcome.result.exit_code != 0 {
+        anyhow::bail!(
+            "{} failed for {} with exit code {}",
+            capability_name,
+            target.label.id,
+            outcome.result.exit_code
+        );
+    }
     let cache = cache_tag(outcome.cache);
     Ok(CapabilityRunRecord {
         target: target.label.id.clone(),
         kind: target.kind.clone(),
         capability: capability.name.clone(),
-        status: if outcome.result.exit_code == 0 {
-            "completed"
-        } else {
-            "failed"
-        },
+        status: "completed",
         action_digest: outcome.action.to_string(),
         cache,
         output_groups: capability.output_groups.clone(),
@@ -565,6 +569,8 @@ fn shell_quote(value: &str) -> String {
     if value.is_empty() {
         return "''".to_string();
     }
+    // POSIX single-quoted strings treat every byte literally except `'`,
+    // which is represented by closing, emitting an escaped quote, and reopening.
     let escaped = value.replace('\'', "'\"'\"'");
     format!("'{escaped}'")
 }
