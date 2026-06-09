@@ -21,6 +21,7 @@ erl_crash.dump
 
 # Temporary files, for example, from tests.
 /tmp/
+/.once-site-dev-instance
 
 # Ignore package tarball (built via "mix hex.build").
 once_site-*.tar
@@ -34,4 +35,3 @@ once_site-*.tar
 # In case you use Node.js/npm, you want to ignore these.
 npm-debug.log
 /assets/node_modules/
-

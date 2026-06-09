@@ -12,7 +12,7 @@ defmodule OnceSiteWeb.PageControllerTest do
     conn = get(conn, ~p"/registry")
     response = html_response(conn, 200)
 
-    assert response =~ "Once rules and scripts"
+    assert response =~ "Once scripts and cached commands"
     assert response =~ "release/package"
   end
 end

@@ -16,6 +16,9 @@ on:
       - "web/**"
       - "mise.toml"
 
+permissions:
+  contents: read
+
 concurrency:
   group: web-${{ github.ref }}
   cancel-in-progress: true
@@ -31,18 +34,18 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
 
       - name: Cache deps
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: web/deps
           key: web-deps-${{ runner.os }}-${{ hashFiles('web/mix.lock') }}
           restore-keys: web-deps-${{ runner.os }}-
 
       - name: Cache build
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: web/_build
           key: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-${{ hashFiles('web/mix.lock') }}
@@ -59,18 +62,18 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
 
       - name: Cache deps
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: web/deps
           key: web-deps-${{ runner.os }}-${{ hashFiles('web/mix.lock') }}
           restore-keys: web-deps-${{ runner.os }}-
 
       - name: Cache build
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: web/_build
           key: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-${{ hashFiles('web/mix.lock') }}
@@ -83,22 +86,36 @@ jobs:
     name: test
     runs-on: tuist-linux
     needs: build
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: once_site_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
 
       - name: Cache deps
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: web/deps
           key: web-deps-${{ runner.os }}-${{ hashFiles('web/mix.lock') }}
           restore-keys: web-deps-${{ runner.os }}-
 
       - name: Cache build
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: web/_build
           key: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-${{ hashFiles('web/mix.lock') }}
@@ -116,8 +133,8 @@ jobs:
     env:
       MIX_ENV: prod
     steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
 
       - run: mise exec -- mix deps.get --only prod
       - run: mise exec -- mix compile
@@ -128,9 +145,9 @@ jobs:
     name: docker
     runs-on: tuist-linux
     steps:
-      - uses: actions/checkout@v6
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v7
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
         with:
           context: ./web
           file: ./web/Dockerfile
@@ -144,10 +161,10 @@ jobs:
     name: helm
     runs-on: tuist-linux
     steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
         with:
-          install_args: "helm"
+          install_args: "helm@3.21.0"
           cache: "false"
 
       - run: mise exec -- helm lint infra/helm/once

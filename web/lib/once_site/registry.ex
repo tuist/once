@@ -22,9 +22,9 @@ defmodule OnceSite.Registry do
       tags: ["release", "remote-ready"]
     },
     %{
-      kind: "rule",
+      kind: "script",
       name: "rust/workspace-check",
-      summary: "Runs the workspace Rust checks as a reusable build graph rule.",
+      summary: "Runs the workspace Rust checks as a reusable cached command.",
       command: "once exec -- cargo check --workspace",
       tags: ["rust", "workspace"]
     }

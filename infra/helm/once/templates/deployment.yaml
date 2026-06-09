@@ -1,4 +1,5 @@
 {{- $appSecret := include "once.appSecretName" . -}}
+{{- $pgSecret := include "once.postgresAppSecret" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,6 +31,14 @@ spec:
         - name: once
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.postgres.enabled }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              export DATABASE_URL="ecto://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
+              exec /app/bin/once_site start
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
@@ -43,6 +52,33 @@ spec:
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
+            {{- end }}
+            {{- if .Values.postgres.enabled }}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pgSecret }}
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pgSecret }}
+                  key: password
+            - name: PGHOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pgSecret }}
+                  key: host
+            - name: PGPORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pgSecret }}
+                  key: port
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pgSecret }}
+                  key: dbname
             {{- end }}
           envFrom:
             - secretRef:

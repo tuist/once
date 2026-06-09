@@ -19,15 +19,15 @@ defmodule OnceSiteWeb.ConnCase do
 
   using do
     quote do
+      use OnceSiteWeb, :verified_routes
+
+      import OnceSiteWeb.ConnCase
+      import Phoenix.ConnTest
+      import Plug.Conn
       # The default endpoint for testing
       @endpoint OnceSiteWeb.Endpoint
 
-      use OnceSiteWeb, :verified_routes
-
       # Import conveniences for testing with connections
-      import Plug.Conn
-      import Phoenix.ConnTest
-      import OnceSiteWeb.ConnCase
     end
   end
 

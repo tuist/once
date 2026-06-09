@@ -1,6 +1,6 @@
 # Once Web
 
-Phoenix application for the Once marketing site and the public rules and scripts registry.
+Phoenix application for the Once marketing site and the public scripts and cached commands registry.
 
 ## Running Locally
 

@@ -7,20 +7,6 @@
 # General application configuration
 import Config
 
-config :once_site,
-  generators: [timestamp_type: :utc_datetime]
-
-# Configure the endpoint
-config :once_site, OnceSiteWeb.Endpoint,
-  url: [host: "localhost"],
-  adapter: Bandit.PhoenixAdapter,
-  render_errors: [
-    formats: [html: OnceSiteWeb.ErrorHTML, json: OnceSiteWeb.ErrorJSON],
-    layout: false
-  ],
-  pubsub_server: OnceSite.PubSub,
-  live_view: [signing_salt: "TloqJLzK"]
-
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",
@@ -36,9 +22,30 @@ config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
 
-# Use Jason for JSON parsing in Phoenix
-config :phoenix, :json_library, Jason
+# Configure the endpoint
+config :once_site, OnceSiteWeb.Endpoint,
+  url: [host: "localhost"],
+  adapter: Bandit.PhoenixAdapter,
+  render_errors: [
+    formats: [html: OnceSiteWeb.ErrorHTML, json: OnceSiteWeb.ErrorJSON],
+    layout: false
+  ],
+  pubsub_server: OnceSite.PubSub,
+  live_view: [signing_salt: "TloqJLzK"]
+
+config :once_site,
+  ecto_repos: [OnceSite.Repo],
+  generators: [
+    timestamp_type: :utc_datetime,
+    migration_primary_key: [name: :id, type: :uuid],
+    migration_foreign_key: [type: :uuid],
+    binary_id_type: UUIDv7
+  ]
 
 # Import environment specific config. This must remain at the bottom
+
+# Use Jason for JSON parsing in Phoenix
 # of this file so it overrides the configuration defined above.
+config :phoenix, :json_library, Jason
+
 import_config "#{config_env()}.exs"

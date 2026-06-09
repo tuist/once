@@ -73,3 +73,18 @@ externalSecrets:
     enabled: true
     item: "once-ghcr-pull"
     field: "notesPlain"
+
+postgres:
+  enabled: true
+  instances: 2
+  storageSize: 20Gi
+  storageClass: hcloud-volumes
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.0
+  database: once
+  owner: once
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
