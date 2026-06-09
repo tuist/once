@@ -51,33 +51,7 @@ pub async fn capabilities(workspace: &Path, output: Output, target_id: &str) -> 
         .into_iter()
         .find(|target| target.label.id == target_id)
         .with_context(|| format!("no target matches `{target_id}`"))?;
-    write_body(
-        output,
-        || {
-            let mut out = format!("{} ({})\n", target.label.id, target.kind);
-            if target.capabilities.is_empty() {
-                out.push_str("capabilities: none\n");
-                return out;
-            }
-            out.push_str("capabilities:\n");
-            for capability in &target.capabilities {
-                writeln!(out, "  {}", capability.name).expect("writing to string cannot fail");
-                writeln!(out, "    outputs: {}", capability.output_groups.join(", "))
-                    .expect("writing to string cannot fail");
-                if !capability.requires_outputs.is_empty() {
-                    writeln!(
-                        out,
-                        "    requires: {}",
-                        capability.requires_outputs.join(", ")
-                    )
-                    .expect("writing to string cannot fail");
-                }
-            }
-            out
-        },
-        &target,
-    )
-    .await
+    write_body(output, || render_capabilities_human(&target), &target).await
 }
 
 pub async fn schema(workspace: &Path, output: Output, kind: &str) -> Result<()> {
@@ -86,48 +60,68 @@ pub async fn schema(workspace: &Path, output: Output, kind: &str) -> Result<()> 
         .into_iter()
         .find(|schema| schema.kind == kind)
         .with_context(|| format!("no built-in rule schema matches `{kind}`"))?;
-    write_body(
-        output,
-        || {
-            let mut out = format!("{}: {}\n", schema.kind, schema.docs);
-            if !schema.attrs.is_empty() {
-                out.push_str("attrs:\n");
-                for attr in &schema.attrs {
-                    let required = if attr.required {
-                        "required"
-                    } else {
-                        "optional"
-                    };
-                    let configurable = if attr.configurable {
-                        ", configurable"
-                    } else {
-                        ""
-                    };
-                    writeln!(
-                        out,
-                        "  {}: {} ({required}{configurable})",
-                        attr.name, attr.ty
-                    )
-                    .expect("writing to string cannot fail");
-                }
-            }
-            if !schema.capabilities.is_empty() {
-                out.push_str("capabilities:\n");
-                for capability in &schema.capabilities {
-                    writeln!(
-                        out,
-                        "  {}: {}",
-                        capability.name,
-                        capability.output_groups.join(", ")
-                    )
-                    .expect("writing to string cannot fail");
-                }
-            }
-            out
-        },
-        &schema,
-    )
-    .await
+    write_body(output, || render_schema_human(&schema), &schema).await
+}
+
+fn render_capabilities_human(target: &once_frontend::GraphTarget) -> String {
+    let mut out = format!("{} ({})\n", target.label.id, target.kind);
+    if target.capabilities.is_empty() {
+        out.push_str("capabilities: none\n");
+        return out;
+    }
+    out.push_str("capabilities:\n");
+    for capability in &target.capabilities {
+        writeln!(out, "  {}", capability.name).expect("writing to string cannot fail");
+        writeln!(out, "    outputs: {}", capability.output_groups.join(", "))
+            .expect("writing to string cannot fail");
+        if !capability.requires_outputs.is_empty() {
+            writeln!(
+                out,
+                "    requires: {}",
+                capability.requires_outputs.join(", ")
+            )
+            .expect("writing to string cannot fail");
+        }
+    }
+    out
+}
+
+fn render_schema_human(schema: &once_frontend::RuleSchema) -> String {
+    let mut out = format!("{}: {}\n", schema.kind, schema.docs);
+    if !schema.attrs.is_empty() {
+        out.push_str("attrs:\n");
+        for attr in &schema.attrs {
+            let required = if attr.required {
+                "required"
+            } else {
+                "optional"
+            };
+            let configurable = if attr.configurable {
+                ", configurable"
+            } else {
+                ""
+            };
+            writeln!(
+                out,
+                "  {}: {} ({required}{configurable})",
+                attr.name, attr.ty
+            )
+            .expect("writing to string cannot fail");
+        }
+    }
+    if !schema.capabilities.is_empty() {
+        out.push_str("capabilities:\n");
+        for capability in &schema.capabilities {
+            writeln!(
+                out,
+                "  {}: {}",
+                capability.name,
+                capability.output_groups.join(", ")
+            )
+            .expect("writing to string cannot fail");
+        }
+    }
+    out
 }
 
 fn render_targets_human(records: &[TargetRecord]) -> String {
@@ -193,6 +187,47 @@ mod tests {
             providers: Vec::new(),
             diagnostics: Vec::new(),
         }
+    }
+
+    #[test]
+    fn render_targets_human_reports_empty_and_populated() {
+        assert_eq!(render_targets_human(&[]), "targets: none\n");
+        let rendered = render_targets_human(&[TargetRecord {
+            id: "apps/ios/App".to_string(),
+            package: "apps/ios".to_string(),
+            name: "App".to_string(),
+            kind: "apple_application".to_string(),
+            deps: Vec::new(),
+            capabilities: vec!["build".to_string(), "run".to_string()],
+        }]);
+        assert!(rendered.contains("apps/ios/App (apple_application) [build, run]"));
+    }
+
+    #[test]
+    fn render_capabilities_human_lists_outputs_and_requires() {
+        let mut target = target("apps/ios/App", "apple_application", &["build", "run"]);
+        target.capabilities[1].output_groups = vec!["default".to_string()];
+        target.capabilities[1].requires_outputs = vec!["bundle".to_string()];
+
+        let rendered = render_capabilities_human(&target);
+
+        assert!(rendered.contains("apps/ios/App (apple_application)"));
+        assert!(rendered.contains("  run\n    outputs: default\n    requires: bundle"));
+    }
+
+    #[test]
+    fn render_capabilities_human_reports_none() {
+        let target = target("apps/ios/App", "mystery", &[]);
+        assert!(render_capabilities_human(&target).contains("capabilities: none"));
+    }
+
+    #[test]
+    fn render_schema_human_includes_attrs_and_capabilities() {
+        let schema = once_frontend::built_in_rule_schema("apple_application").unwrap();
+        let rendered = render_schema_human(&schema);
+        assert!(rendered.starts_with("apple_application: "));
+        assert!(rendered.contains("bundle_id: string (required"));
+        assert!(rendered.contains("run: default"));
     }
 
     #[test]

@@ -1,32 +1,18 @@
-//! Graph capability commands for build, run, and test.
+//! Turns a graph target and capability into a cacheable [`Action`].
+//!
+//! The current build, run, and test scripts are local placeholders: they
+//! materialize the artifact layout each Apple product kind is expected to
+//! produce and record a manifest, without invoking Xcode. Keeping this
+//! concern separate from orchestration lets the script generation grow into
+//! real toolchain invocations without turning the command module into a
+//! monolith.
 
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::process::ExitCode;
 
-use anyhow::{anyhow, Context, Result};
-use once_cas::CacheProvider;
-use once_core::{Action, OutputSymlinkMode, ResourceRequest, RunOpts, WorkspacePath};
+use anyhow::{Context, Result};
+use once_core::{Action, OutputSymlinkMode, ResourceRequest, WorkspacePath};
 use once_frontend::{AttrValue, GraphTarget};
 use serde::Serialize;
-use tokio::io::AsyncWriteExt;
-
-use crate::cli::{Format, Output};
-use crate::commands::util::cache_tag;
-use crate::render;
-
-#[derive(Debug, Serialize)]
-struct CapabilityRunRecord {
-    target: String,
-    kind: String,
-    capability: String,
-    status: &'static str,
-    action_digest: String,
-    cache: &'static str,
-    output_groups: Vec<String>,
-    required_outputs: Vec<String>,
-    outputs: Vec<String>,
-}
 
 #[derive(Debug, Serialize)]
 struct AppleArtifactManifest<'a> {
@@ -38,149 +24,12 @@ struct AppleArtifactManifest<'a> {
     srcs: &'a [String],
 }
 
-pub async fn build(
-    workspace: &Path,
-    cache: &CacheProvider,
-    output: Output,
-    target_id: &str,
-) -> Result<ExitCode> {
-    run_capability(workspace, cache, output, target_id, "build").await
-}
-
-pub async fn test(
-    workspace: &Path,
-    cache: &CacheProvider,
-    output: Output,
-    target_id: &str,
-) -> Result<ExitCode> {
-    let target = graph_target(workspace, target_id)?;
-    ensure_capability(&target, "test")?;
-    let _ = run_target_capability(workspace, cache, &target, "build").await?;
-    let record = run_target_capability(workspace, cache, &target, "test").await?;
-    write_record(output, &record).await?;
-    Ok(ExitCode::SUCCESS)
-}
-
-pub async fn run(
-    workspace: &Path,
-    cache: &CacheProvider,
-    output: Output,
-    target_id: &str,
-) -> Result<ExitCode> {
-    let target = graph_target(workspace, target_id)?;
-    ensure_capability(&target, "run")?;
-    let _ = run_target_capability(workspace, cache, &target, "build").await?;
-    let record = run_target_capability(workspace, cache, &target, "run").await?;
-    write_record(output, &record).await?;
-    Ok(ExitCode::SUCCESS)
-}
-
-pub fn supports(workspace: &Path, target_id: &str, capability: &str) -> Result<bool> {
-    let Some(target) = find_graph_target(workspace, target_id)? else {
-        return Ok(false);
-    };
-    Ok(target
-        .capabilities
-        .iter()
-        .any(|candidate| candidate.name == capability))
-}
-
-async fn run_capability(
-    workspace: &Path,
-    cache: &CacheProvider,
-    output: Output,
-    target_id: &str,
-    capability: &str,
-) -> Result<ExitCode> {
-    let target = graph_target(workspace, target_id)?;
-    let record = run_target_capability(workspace, cache, &target, capability).await?;
-    write_record(output, &record).await?;
-    Ok(ExitCode::SUCCESS)
-}
-
-async fn run_target_capability(
-    workspace: &Path,
-    cache: &CacheProvider,
+/// Build the cacheable action that produces a capability's outputs.
+pub(super) fn action_for(
     target: &GraphTarget,
-    capability_name: &str,
-) -> Result<CapabilityRunRecord> {
-    let capability = ensure_capability(target, capability_name)?;
-    let outputs = output_paths(target, capability_name)?;
-    let action = action_for(target, capability_name, &outputs)?;
-    let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
-        .await
-        .with_context(|| format!("executing {capability_name} for {}", target.label.id))?;
-    if outcome.result.exit_code != 0 {
-        anyhow::bail!(
-            "{} failed for {} with exit code {}",
-            capability_name,
-            target.label.id,
-            outcome.result.exit_code
-        );
-    }
-    let cache = cache_tag(outcome.cache);
-    Ok(CapabilityRunRecord {
-        target: target.label.id.clone(),
-        kind: target.kind.clone(),
-        capability: capability.name.clone(),
-        status: "completed",
-        action_digest: outcome.action.to_string(),
-        cache,
-        output_groups: capability.output_groups.clone(),
-        required_outputs: capability.requires_outputs.clone(),
-        outputs: outputs
-            .into_iter()
-            .map(|output| output.as_str().to_string())
-            .collect(),
-    })
-}
-
-fn graph_target(workspace: &Path, target_id: &str) -> Result<GraphTarget> {
-    find_graph_target(workspace, target_id)?
-        .with_context(|| format!("no target matches `{target_id}`"))
-}
-
-fn find_graph_target(workspace: &Path, target_id: &str) -> Result<Option<GraphTarget>> {
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    Ok(graph
-        .into_iter()
-        .find(|target| target.label.id == target_id))
-}
-
-fn ensure_capability<'a>(
-    target: &'a GraphTarget,
     capability: &str,
-) -> Result<&'a once_frontend::Capability> {
-    target
-        .capabilities
-        .iter()
-        .find(|candidate| candidate.name == capability)
-        .ok_or_else(|| unsupported_capability(target, capability))
-}
-
-fn unsupported_capability(target: &GraphTarget, capability: &str) -> anyhow::Error {
-    let available = target
-        .capabilities
-        .iter()
-        .map(|capability| capability.name.as_str())
-        .collect::<Vec<_>>();
-    if available.is_empty() {
-        return anyhow!(
-            "{} ({}) does not expose any capabilities",
-            target.label.id,
-            target.kind
-        );
-    }
-    anyhow!(
-        "{} ({}) does not expose `{}`. Available capabilities: {}",
-        target.label.id,
-        target.kind,
-        capability,
-        available.join(", ")
-    )
-}
-
-fn action_for(target: &GraphTarget, capability: &str, outputs: &[WorkspacePath]) -> Result<Action> {
+    outputs: &[WorkspacePath],
+) -> Result<Action> {
     Ok(Action::RunCommand {
         argv: vec![
             "/bin/sh".to_string(),
@@ -196,6 +45,51 @@ fn action_for(target: &GraphTarget, capability: &str, outputs: &[WorkspacePath])
         timeout_ms: None,
         remote: None,
     })
+}
+
+/// Workspace-relative outputs a capability declares for a target kind.
+pub(super) fn output_paths(target: &GraphTarget, capability: &str) -> Result<Vec<WorkspacePath>> {
+    let product = product_name(target);
+    let paths = match capability {
+        "build" => match target.kind.as_str() {
+            "apple_library" => vec![
+                build_root(target),
+                format!("{}/{}.a", build_root(target), product),
+                format!("{}/{}.swiftmodule", build_root(target), product),
+                format!("{}/generated_sources", build_root(target)),
+            ],
+            "apple_framework" => vec![
+                build_root(target),
+                format!("{}/{product}.framework", build_root(target)),
+                format!("{}/dSYMs", build_root(target)),
+            ],
+            "apple_application" => vec![
+                build_root(target),
+                format!("{}/{product}.app", build_root(target)),
+                format!("{}/dSYMs", build_root(target)),
+            ],
+            "apple_test_bundle" => vec![
+                build_root(target),
+                format!("{}/{product}.xctest", build_root(target)),
+                format!("{}/dSYMs", build_root(target)),
+            ],
+            _ => vec![build_root(target)],
+        },
+        "run" => vec![run_root(target)],
+        "test" => vec![
+            test_root(target),
+            format!("{}/test_results.json", test_root(target)),
+            format!("{}/coverage.json", test_root(target)),
+        ],
+        other => anyhow::bail!("unsupported graph capability `{other}`"),
+    };
+    paths
+        .into_iter()
+        .map(|path| {
+            WorkspacePath::try_from(path.as_str())
+                .with_context(|| format!("invalid graph output path `{path}`"))
+        })
+        .collect()
 }
 
 fn action_script(
@@ -461,50 +355,6 @@ done"#
     )
 }
 
-fn output_paths(target: &GraphTarget, capability: &str) -> Result<Vec<WorkspacePath>> {
-    let product = product_name(target);
-    let paths = match capability {
-        "build" => match target.kind.as_str() {
-            "apple_library" => vec![
-                build_root(target),
-                format!("{}/{}.a", build_root(target), product),
-                format!("{}/{}.swiftmodule", build_root(target), product),
-                format!("{}/generated_sources", build_root(target)),
-            ],
-            "apple_framework" => vec![
-                build_root(target),
-                format!("{}/{product}.framework", build_root(target)),
-                format!("{}/dSYMs", build_root(target)),
-            ],
-            "apple_application" => vec![
-                build_root(target),
-                format!("{}/{product}.app", build_root(target)),
-                format!("{}/dSYMs", build_root(target)),
-            ],
-            "apple_test_bundle" => vec![
-                build_root(target),
-                format!("{}/{product}.xctest", build_root(target)),
-                format!("{}/dSYMs", build_root(target)),
-            ],
-            _ => vec![build_root(target)],
-        },
-        "run" => vec![run_root(target)],
-        "test" => vec![
-            test_root(target),
-            format!("{}/test_results.json", test_root(target)),
-            format!("{}/coverage.json", test_root(target)),
-        ],
-        other => anyhow::bail!("unsupported graph capability `{other}`"),
-    };
-    paths
-        .into_iter()
-        .map(|path| {
-            WorkspacePath::try_from(path.as_str())
-                .with_context(|| format!("invalid graph output path `{path}`"))
-        })
-        .collect()
-}
-
 fn build_root(target: &GraphTarget) -> String {
     format!(".once/out/{}", target.label.id)
 }
@@ -526,43 +376,6 @@ fn product_name(target: &GraphTarget) -> String {
             _ => None,
         })
         .unwrap_or_else(|| target.label.name.clone())
-}
-
-async fn write_record(output: Output, record: &CapabilityRunRecord) -> Result<()> {
-    let body = match output.format {
-        Format::Human => render_human(record),
-        Format::Json | Format::Toon => render::structured(output.format, record)?,
-    };
-    let mut out = tokio::io::stdout();
-    out.write_all(body.as_bytes()).await?;
-    out.flush().await?;
-    Ok(())
-}
-
-fn render_human(record: &CapabilityRunRecord) -> String {
-    let groups = if record.output_groups.is_empty() {
-        "none".to_string()
-    } else {
-        record.output_groups.join(", ")
-    };
-    let mut out = format!(
-        "once: {} {} ({}) cache {}, exit=0\noutputs: {}\n",
-        record.capability, record.target, record.kind, record.cache, groups
-    );
-    if !record.required_outputs.is_empty() {
-        out.push_str("requires: ");
-        out.push_str(&record.required_outputs.join(", "));
-        out.push('\n');
-    }
-    if !record.outputs.is_empty() {
-        out.push_str("paths:\n");
-        for path in &record.outputs {
-            out.push_str("  ");
-            out.push_str(path);
-            out.push('\n');
-        }
-    }
-    out
 }
 
 fn shell_quote(value: &str) -> String {
@@ -610,18 +423,54 @@ mod tests {
         }
     }
 
+    fn with_product(kind: &str, name: &str, product: &str) -> GraphTarget {
+        let mut target = graph_target(kind, name);
+        target.attrs.insert(
+            "product_name".to_string(),
+            AttrValue::String(product.to_string()),
+        );
+        target
+    }
+
     #[test]
     fn shell_quote_escapes_single_quotes() {
         assert_eq!(shell_quote("App'; echo pwn"), "'App'\"'\"'; echo pwn'");
     }
 
     #[test]
-    fn application_script_uses_shell_quoted_dynamic_text() {
-        let mut target = graph_target("apple_application", "App");
-        target.attrs.insert(
-            "product_name".to_string(),
-            AttrValue::String("Bad'; echo pwn".to_string()),
+    fn shell_quote_handles_empty_string() {
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn xml_escape_escapes_all_entities() {
+        assert_eq!(
+            xml_escape(r#"A&B<C>D"E'F"#),
+            "A&amp;B&lt;C&gt;D&quot;E&apos;F"
         );
+    }
+
+    #[test]
+    fn product_name_prefers_attr_then_label() {
+        assert_eq!(
+            product_name(&graph_target("apple_library", "AppCore")),
+            "AppCore"
+        );
+        assert_eq!(
+            product_name(&with_product("apple_library", "AppCore", "CoreKit")),
+            "CoreKit"
+        );
+        // A non-string product_name attr falls back to the target name.
+        let mut target = graph_target("apple_library", "AppCore");
+        target
+            .attrs
+            .insert("product_name".to_string(), AttrValue::Integer(7));
+        assert_eq!(product_name(&target), "AppCore");
+    }
+
+    #[test]
+    fn application_script_uses_shell_quoted_dynamic_text() {
+        let target = with_product("apple_application", "App", "Bad'; echo pwn");
 
         let script = application_build_script(&target, "{}", "'.once/out/apps/ios/App'");
 
@@ -631,16 +480,172 @@ mod tests {
     }
 
     #[test]
+    fn library_script_quotes_dynamic_text() {
+        let target = with_product("apple_library", "AppCore", "Bad'; echo pwn");
+
+        let script = library_build_script(&target, "{}", "'.once/out/apps/ios/AppCore'");
+
+        assert!(script.contains("printf 'archive for %s\\n' 'apps/ios/AppCore'"));
+        assert!(script.contains("'.once/out/apps/ios/AppCore/Bad'\"'\"'; echo pwn.a'"));
+        assert!(!script.contains("> .once/out/apps/ios/AppCore/Bad'; echo pwn.a"));
+    }
+
+    #[test]
+    fn test_bundle_script_quotes_dynamic_text() {
+        let target = with_product("apple_test_bundle", "AppTests", "Bad'; echo pwn");
+
+        let script = test_bundle_build_script(&target, "{}", "'.once/out/apps/ios/AppTests'");
+
+        assert!(script.contains("printf 'xctest binary for %s\\n' 'apps/ios/AppTests'"));
+        assert!(!script.contains("echo pwn\\n"));
+    }
+
+    #[test]
     fn plist_values_are_xml_escaped_before_shell_quoting() {
-        let mut target = graph_target("apple_framework", "Framework");
-        target.attrs.insert(
-            "product_name".to_string(),
-            AttrValue::String("A&B<\"'>".to_string()),
-        );
+        let target = with_product("apple_framework", "Framework", "A&B<\"'>");
 
         let script = framework_build_script(&target, "{}", "'.once/out/apps/ios/Framework'");
 
         assert!(script.contains("A&amp;B&lt;&quot;&apos;&gt;"));
         assert!(!script.contains("<string>A&B<\"'></string>"));
+    }
+
+    #[test]
+    fn run_script_guards_on_built_bundle() {
+        let target = graph_target("apple_application", "App");
+
+        let script = run_script(&target, "{}", "'.once/out/apps/ios/App/run'");
+
+        assert!(script.contains("test -d '.once/out/apps/ios/App/App.app'"));
+        assert!(script.contains(r#""status":"launched""#));
+        assert!(script.contains("> '.once/out/apps/ios/App/run/run.json'"));
+    }
+
+    #[test]
+    fn test_script_guards_on_built_bundle_and_emits_results() {
+        let target = graph_target("apple_test_bundle", "AppTests");
+
+        let script = test_script(&target, "{}", "'.once/out/apps/ios/AppTests/test'");
+
+        assert!(script.contains("test -d '.once/out/apps/ios/AppTests/AppTests.xctest'"));
+        assert!(script.contains(r#""status":"passed""#));
+        assert!(script.contains("> '.once/out/apps/ios/AppTests/test/test_results.json'"));
+        assert!(script.contains("> '.once/out/apps/ios/AppTests/test/coverage.json'"));
+    }
+
+    #[test]
+    fn prepare_outputs_creates_dirs_for_files_and_dirs() {
+        let script = prepare_outputs_script("'.once/out/x' '.once/out/x/App.a'");
+        assert!(script.contains(r#"*.a|*.json|*.plist|*.swiftmodule) mkdir -p "$(dirname "$p")""#));
+        assert!(script.contains(r#"*) mkdir -p "$p""#));
+    }
+
+    fn output_strings(target: &GraphTarget, capability: &str) -> Vec<String> {
+        output_paths(target, capability)
+            .unwrap()
+            .into_iter()
+            .map(|path| path.as_str().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn output_paths_cover_library_products() {
+        assert_eq!(
+            output_strings(&graph_target("apple_library", "AppCore"), "build"),
+            vec![
+                ".once/out/apps/ios/AppCore".to_string(),
+                ".once/out/apps/ios/AppCore/AppCore.a".to_string(),
+                ".once/out/apps/ios/AppCore/AppCore.swiftmodule".to_string(),
+                ".once/out/apps/ios/AppCore/generated_sources".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn output_paths_cover_bundle_products() {
+        assert_eq!(
+            output_strings(&graph_target("apple_framework", "DesignSystem"), "build"),
+            vec![
+                ".once/out/apps/ios/DesignSystem".to_string(),
+                ".once/out/apps/ios/DesignSystem/DesignSystem.framework".to_string(),
+                ".once/out/apps/ios/DesignSystem/dSYMs".to_string(),
+            ]
+        );
+        assert_eq!(
+            output_strings(&graph_target("apple_application", "App"), "build"),
+            vec![
+                ".once/out/apps/ios/App".to_string(),
+                ".once/out/apps/ios/App/App.app".to_string(),
+                ".once/out/apps/ios/App/dSYMs".to_string(),
+            ]
+        );
+        assert_eq!(
+            output_strings(&graph_target("apple_test_bundle", "AppTests"), "build"),
+            vec![
+                ".once/out/apps/ios/AppTests".to_string(),
+                ".once/out/apps/ios/AppTests/AppTests.xctest".to_string(),
+                ".once/out/apps/ios/AppTests/dSYMs".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn output_paths_cover_run_and_test() {
+        assert_eq!(
+            output_strings(&graph_target("apple_application", "App"), "run"),
+            vec![".once/out/apps/ios/App/run".to_string()]
+        );
+        assert_eq!(
+            output_strings(&graph_target("apple_test_bundle", "AppTests"), "test"),
+            vec![
+                ".once/out/apps/ios/AppTests/test".to_string(),
+                ".once/out/apps/ios/AppTests/test/test_results.json".to_string(),
+                ".once/out/apps/ios/AppTests/test/coverage.json".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn output_paths_use_product_name_when_set() {
+        assert_eq!(
+            output_strings(&with_product("apple_application", "App", "Once"), "build"),
+            vec![
+                ".once/out/apps/ios/App".to_string(),
+                ".once/out/apps/ios/App/Once.app".to_string(),
+                ".once/out/apps/ios/App/dSYMs".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn output_paths_reject_unknown_capability() {
+        let err = output_paths(&graph_target("apple_library", "AppCore"), "lint")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unsupported graph capability `lint`"));
+    }
+
+    #[test]
+    fn action_for_wraps_script_in_sh_invocation() {
+        let target = graph_target("apple_library", "AppCore");
+        let outputs = output_paths(&target, "build").unwrap();
+        let Action::RunCommand {
+            argv,
+            outputs: action_outputs,
+            input_digest,
+            ..
+        } = action_for(&target, "build", &outputs).unwrap();
+        assert_eq!(argv[0], "/bin/sh");
+        assert_eq!(argv[1], "-c");
+        assert!(argv[2].contains("ONCE_MANIFEST"));
+        assert_eq!(action_outputs, outputs);
+        assert!(input_digest.is_none());
+    }
+
+    #[test]
+    fn action_script_rejects_unknown_capability() {
+        let target = graph_target("apple_library", "AppCore");
+        let err = action_script(&target, "lint", &[]).unwrap_err().to_string();
+        assert!(err.contains("unsupported graph capability `lint`"));
     }
 }

@@ -479,6 +479,73 @@ mod tests {
     }
 
     #[test]
+    fn unknown_kind_gets_diagnostic_and_no_capabilities() {
+        let target = Target {
+            package: "apps/ios".to_string(),
+            kind: "mystery_rule".to_string(),
+            name: "Thing".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            typed_attrs: BTreeMap::new(),
+        };
+
+        let graph = graph_from_targets(&[target]);
+        let thing = &graph[0];
+        assert!(thing.capabilities.is_empty());
+        assert!(thing.providers.is_empty());
+        assert_eq!(thing.diagnostics.len(), 1);
+        assert_eq!(thing.diagnostics[0].code, "unknown_rule_kind");
+        assert!(thing.diagnostics[0]
+            .message
+            .contains("`mystery_rule` has no built-in schema"));
+    }
+
+    #[test]
+    fn graph_attrs_fall_back_to_string_attrs_when_untyped() {
+        let mut attrs = BTreeMap::new();
+        attrs.insert("platform".to_string(), "ios".to_string());
+        let target = Target {
+            package: "apps/ios".to_string(),
+            kind: "apple_library".to_string(),
+            name: "AppCore".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs,
+            typed_attrs: BTreeMap::new(),
+        };
+
+        let graph = graph_from_targets(&[target]);
+        assert_eq!(
+            graph[0].attrs.get("platform"),
+            Some(&AttrValue::String("ios".to_string()))
+        );
+    }
+
+    #[test]
+    fn typed_attrs_take_precedence_over_string_attrs() {
+        let mut attrs = BTreeMap::new();
+        attrs.insert("enable_testing".to_string(), "true".to_string());
+        let mut typed_attrs = BTreeMap::new();
+        typed_attrs.insert("enable_testing".to_string(), AttrValue::Bool(true));
+        let target = Target {
+            package: "apps/ios".to_string(),
+            kind: "apple_library".to_string(),
+            name: "AppCore".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs,
+            typed_attrs,
+        };
+
+        let graph = graph_from_targets(&[target]);
+        assert_eq!(
+            graph[0].attrs.get("enable_testing"),
+            Some(&AttrValue::Bool(true))
+        );
+    }
+
+    #[test]
     fn built_in_schema_contains_apple_rule_set() {
         let kinds = built_in_rule_schemas()
             .into_iter()
