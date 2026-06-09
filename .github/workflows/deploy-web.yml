@@ -75,7 +75,7 @@ jobs:
           ref: ${{ env.DEPLOY_SHA }}
       - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
         with:
-          install_args: "helm@3.21.0 kubectl@1.34.6"
+          install_args: "helm@3.21.0 kubectl@1.34.6 jq@1.8.1"
           cache: "false"
       - uses: 1password/install-cli-action@8d006a0d0a4fd505af7f7ce589e7f768385ff5e4
       - name: Load kubeconfig from 1Password

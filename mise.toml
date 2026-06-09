@@ -12,6 +12,7 @@ node = "26.3.0"
 aube = "1.18.1"
 helm = "3.21.0"
 kubectl = "1.34.6"
+jq = "1.8.1"
 "1password-cli" = "2.32.0"
 
 [env]
