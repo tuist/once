@@ -177,8 +177,10 @@ mod tests {
         // only surfaces at runtime as "unknown command path segment"
         // when `<subcommand> --list` is invoked.
         let invocations: &[&[&str]] = &[
+            &["once", "build", "apps/ios/App"],
             &["once", "run", "t"],
             &["once", "exec", "true"],
+            &["once", "test", "apps/ios/AppTests"],
             &["once", "cache", "stats"],
             &["once", "cache", "blob", "put", "-"],
             &[
@@ -202,6 +204,9 @@ mod tests {
                 "get",
                 "0000000000000000000000000000000000000000000000000000000000000000",
             ],
+            &["once", "query", "targets"],
+            &["once", "query", "capabilities", "apps/ios/App"],
+            &["once", "query", "schema", "apple_application"],
             &["once", "toolchain", "inspect"],
             &["once", "runtime", "rpc", "/tmp/session"],
         ];

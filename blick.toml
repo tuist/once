@@ -24,6 +24,14 @@ Focus on correctness, invalidation, build-graph behavior, artifact paths,
 CLI contract regressions, and test coverage.
 
 Skip style nits since rustfmt, clippy, and shellspec already cover the basics.
+
+Output format is strict. Respond with a single JSON object and nothing else:
+no analysis, reasoning, or prose before or after it, and no Markdown code
+fences. Each finding is its own object with exactly these keys: severity,
+file, line, title, body. Emit exactly one title per finding, never repeat a
+key within an object, and never add other keys such as file2. When two files
+share an issue, report each as its own finding instead of merging them into
+one object.
 """
 
 [learn]

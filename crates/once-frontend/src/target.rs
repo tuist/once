@@ -7,15 +7,19 @@ use serde::Serialize;
 use crate::target_ref::target_id;
 
 /// A script-like target declared by a `once.toml` file.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Target {
     pub package: String,
     pub kind: String,
     pub name: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deps: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub srcs: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub attrs: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub typed_attrs: BTreeMap<String, AttrValue>,
 }
 
 impl Target {
@@ -23,6 +27,31 @@ impl Target {
     #[must_use]
     pub fn id(&self) -> String {
         target_id(&self.package, &self.name)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum AttrValue {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Bool(bool),
+    List(Vec<AttrValue>),
+    Map(BTreeMap<String, AttrValue>),
+}
+
+impl PartialEq for AttrValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::String(lhs), Self::String(rhs)) => lhs == rhs,
+            (Self::Integer(lhs), Self::Integer(rhs)) => lhs == rhs,
+            (Self::Float(lhs), Self::Float(rhs)) => lhs.to_bits() == rhs.to_bits(),
+            (Self::Bool(lhs), Self::Bool(rhs)) => lhs == rhs,
+            (Self::List(lhs), Self::List(rhs)) => lhs == rhs,
+            (Self::Map(lhs), Self::Map(rhs)) => lhs == rhs,
+            _ => false,
+        }
     }
 }
 
@@ -36,8 +65,10 @@ mod tests {
             package: "crates/foo".into(),
             kind: "script".into(),
             name: "bar".into(),
+            deps: vec![],
             srcs: vec![],
             attrs: BTreeMap::new(),
+            typed_attrs: BTreeMap::new(),
         };
         assert_eq!(t.id(), "crates/foo/bar");
         let root_t = Target {

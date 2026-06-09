@@ -55,6 +55,11 @@ async fn run_command(
 ) -> Result<ExitCode> {
     match command {
         Cmd::Auth { cmd } => run_auth_command(workspace, xdg, output, cmd).await,
+        Cmd::Build { target } => {
+            let target = resolve_required_target(workspace, target)?;
+            let cache = crate::cache_provider::resolve(workspace, xdg)?;
+            commands::graph::build(workspace, &cache, output, &target).await
+        }
         Cmd::Run {
             target,
             runtime_rpc,
@@ -100,12 +105,33 @@ async fn run_command(
             .await
         }
         Cmd::Cache { cmd } => run_cache_command(workspace, xdg, output, cmd).await,
+        Cmd::Test { target } => {
+            let target = resolve_required_target(workspace, target)?;
+            let cache = crate::cache_provider::resolve(workspace, xdg)?;
+            commands::graph::test(workspace, &cache, output, &target).await
+        }
         Cmd::Toolchain {
             cmd: Some(cli::ToolchainCmd::Inspect { platform }),
         } => commands::toolchain::inspect(workspace, output, platform.as_deref())
             .await
             .map(|()| ExitCode::SUCCESS),
         Cmd::Toolchain { cmd: None } => anyhow::bail!("toolchain subcommand required"),
+        Cmd::Query {
+            cmd: Some(cli::QueryCmd::Targets { kind }),
+        } => commands::query::targets(workspace, output, kind.as_deref())
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Cmd::Query {
+            cmd: Some(cli::QueryCmd::Capabilities { target }),
+        } => commands::query::capabilities(workspace, output, &target)
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Cmd::Query {
+            cmd: Some(cli::QueryCmd::Schema { kind }),
+        } => commands::query::schema(workspace, output, &kind)
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Cmd::Query { cmd: None } => anyhow::bail!("query subcommand required"),
         Cmd::Runtime {
             cmd:
                 Some(cli::RuntimeCmd::Rpc {
@@ -215,12 +241,23 @@ async fn dispatch_run(
     runtime_rpc_socket: Option<PathBuf>,
     remote: Option<String>,
 ) -> Result<ExitCode> {
+    let resolved_target = resolve_required_target(workspace, target.clone())?;
+    if commands::graph::supports(workspace, &resolved_target, "run")? {
+        if runtime_rpc || runtime_rpc_socket.is_some() {
+            anyhow::bail!("--runtime-rpc is only supported for executable script targets");
+        }
+        if remote.is_some() {
+            anyhow::bail!("--remote is only supported for executable script targets");
+        }
+        let cache = crate::cache_provider::resolve(workspace, xdg)?;
+        return commands::graph::run(workspace, &cache, output, &resolved_target).await;
+    }
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     run_target_command(
         workspace,
         &cache,
         output,
-        target,
+        Some(resolved_target),
         runtime_rpc,
         runtime_rpc_socket,
         remote,

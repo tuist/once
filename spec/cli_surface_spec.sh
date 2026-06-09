@@ -6,10 +6,13 @@ Describe 'once --help'
     When call "$ONCE_BIN" --help
     The status should be success
     The stdout should include 'once'
+    The stdout should include 'build'
     The stdout should include 'run'
     The stdout should include 'exec'
+    The stdout should include 'test'
     The stdout should include 'cache'
     The stdout should include 'auth'
+    The stdout should include 'query'
     The stdout should include 'runtime'
     The stdout should include '--directory'
     The stdout should include '--list'
@@ -32,9 +35,12 @@ Describe 'once --list'
     When call "$ONCE_BIN" --list
     The status should be success
     The stdout should include 'once'
+    The stdout should include 'build'
     The stdout should include 'run'
     The stdout should include 'exec'
+    The stdout should include 'test'
     The stdout should include 'auth'
+    The stdout should include 'query'
     The stdout should include 'runtime'
     The stdout should include '--list'
   End
