@@ -1,0 +1,75 @@
+# Production values for the Once Helm chart.
+#
+# This chart assumes the cluster has cert-manager, ingress-nginx,
+# external-dns, and external-secrets-operator with a 1Password
+# ClusterSecretStore named `onepassword`.
+
+nameOverride: ""
+fullnameOverride: "once"
+
+host: once.tuist.dev
+
+image:
+  repository: ghcr.io/tuist/once-web
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecretName: ghcr-pull
+
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 75
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+service:
+  port: 80
+  targetPort: 4000
+
+ingress:
+  className: nginx
+  clusterIssuer: letsencrypt-prod
+
+env: {}
+
+probes:
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startup:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+
+externalSecrets:
+  refreshInterval: 1h
+  storeRef:
+    name: onepassword
+    kind: ClusterSecretStore
+  items:
+    SECRET_KEY_BASE:
+      remoteRef: "once-secret-key-base/password"
+  pullSecret:
+    enabled: true
+    item: "once-ghcr-pull"
+    field: "notesPlain"

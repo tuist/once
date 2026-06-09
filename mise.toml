@@ -10,6 +10,9 @@ git-cliff = "2.13.1"
 node = "26.3.0"
 "npm:opencode-ai" = "1.16.2"
 aube = "1.18.1"
+helm = "latest"
+kubectl = "latest"
+"1password-cli" = "latest"
 
 [env]
 CARGO_TERM_COLOR = "always"

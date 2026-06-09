@@ -15,6 +15,10 @@ defmodule OnceSiteWeb.Router do
   end
 
   scope "/", OnceSiteWeb do
+    get "/ready", HealthController, :ready
+  end
+
+  scope "/", OnceSiteWeb do
     pipe_through :browser
 
     get "/", PageController, :home

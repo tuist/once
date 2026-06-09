@@ -11,10 +11,9 @@ config :once_site, OnceSiteWeb.Endpoint, cache_static_manifest: "priv/static/cac
 # known as HSTS. If you have a health check endpoint, you may want to exclude it below.
 # Note `:force_ssl` is required to be set at compile-time.
 config :once_site, OnceSiteWeb.Endpoint,
-  force_ssl: [rewrite_on: [:x_forwarded_proto]],
-  exclude: [
-    # paths: ["/health"],
-    hosts: ["localhost", "127.0.0.1"]
+  force_ssl: [
+    rewrite_on: [:x_forwarded_proto],
+    exclude: [paths: ["/ready"], hosts: ["localhost", "127.0.0.1"]]
   ]
 
 # Do not print debug messages in production
