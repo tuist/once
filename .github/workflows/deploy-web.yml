@@ -65,7 +65,7 @@ jobs:
     runs-on: tuist-linux
     environment:
       name: production
-      url: https://once.tuist.dev
+      url: https://buildonce.dev
     timeout-minutes: 20
     env:
       KUBECONFIG: ${{ github.workspace }}/.kube/config

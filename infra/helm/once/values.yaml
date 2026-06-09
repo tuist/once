@@ -7,7 +7,7 @@
 nameOverride: ""
 fullnameOverride: "once"
 
-host: once.tuist.dev
+host: buildonce.dev
 
 image:
   repository: ghcr.io/tuist/once-web
