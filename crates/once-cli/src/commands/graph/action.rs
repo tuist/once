@@ -132,13 +132,12 @@ fn build_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -
 
 fn generic_build_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -> String {
     let manifest_path = shell_quote(&format!("{}/manifest.json", build_root(target)));
+    let write_manifest = write_manifest_cmd(&manifest_path, manifest_json);
     let prepare_outputs = prepare_outputs_script(output_paths);
     format!(
         r"set -eu
 {prepare_outputs}
-cat > {manifest_path} <<'ONCE_MANIFEST'
-{manifest_json}
-ONCE_MANIFEST
+{write_manifest}
 ",
     )
 }
@@ -148,6 +147,7 @@ fn library_build_script(target: &GraphTarget, manifest_json: &str, output_paths:
     let product_text = shell_quote(&product);
     let target_text = shell_quote(&target.label.id);
     let manifest_path = shell_quote(&format!("{}/manifest.json", build_root(target)));
+    let write_manifest = write_manifest_cmd(&manifest_path, manifest_json);
     let binary_path = shell_quote(&format!("{}/{}.a", build_root(target), product));
     let swiftmodule_path = shell_quote(&format!("{}/{}.swiftmodule", build_root(target), product));
     let generated_sources_path = shell_quote(&format!("{}/generated_sources", build_root(target)));
@@ -155,9 +155,7 @@ fn library_build_script(target: &GraphTarget, manifest_json: &str, output_paths:
     format!(
         r"set -eu
 {prepare_outputs}
-cat > {manifest_path} <<'ONCE_MANIFEST'
-{manifest_json}
-ONCE_MANIFEST
+{write_manifest}
 printf 'archive for %s\n' {target_text} > {binary_path}
 printf 'swiftmodule for %s\n' {product_text} > {swiftmodule_path}
 mkdir -p {generated_sources_path}
@@ -171,6 +169,7 @@ fn framework_build_script(target: &GraphTarget, manifest_json: &str, output_path
     let target_text = shell_quote(&target.label.id);
     let root = build_root(target);
     let manifest_path = shell_quote(&format!("{root}/manifest.json"));
+    let write_manifest = write_manifest_cmd(&manifest_path, manifest_json);
     let info_plist = shell_quote(&format!("{root}/{product}.framework/Info.plist"));
     let info_plist_content = shell_quote(&format!(
         r#"<?xml version="1.0"?><plist><dict><key>CFBundleName</key><string>{}</string></dict></plist>"#,
@@ -190,9 +189,7 @@ fn framework_build_script(target: &GraphTarget, manifest_json: &str, output_path
     format!(
         r"set -eu
 {prepare_outputs}
-cat > {manifest_path} <<'ONCE_MANIFEST'
-{manifest_json}
-ONCE_MANIFEST
+{write_manifest}
 printf '%s\n' {info_plist_content} > {info_plist}
 printf 'framework binary for %s\n' {target_text} > {binary_path}
 mkdir -p {modules_path} {dsyms_contents_path}
@@ -211,6 +208,7 @@ fn application_build_script(
     let target_text = shell_quote(&target.label.id);
     let root = build_root(target);
     let manifest_path = shell_quote(&format!("{root}/manifest.json"));
+    let write_manifest = write_manifest_cmd(&manifest_path, manifest_json);
     let info_plist = shell_quote(&format!("{root}/{product}.app/Info.plist"));
     let info_plist_content = shell_quote(&format!(
         r#"<?xml version="1.0"?><plist><dict><key>CFBundleExecutable</key><string>{}</string></dict></plist>"#,
@@ -229,9 +227,7 @@ fn application_build_script(
     format!(
         r"set -eu
 {prepare_outputs}
-cat > {manifest_path} <<'ONCE_MANIFEST'
-{manifest_json}
-ONCE_MANIFEST
+{write_manifest}
 printf '%s\n' {info_plist_content} > {info_plist}
 printf 'app executable for %s\n' {target_text} > {binary_path}
 chmod +x {binary_path}
@@ -251,6 +247,7 @@ fn test_bundle_build_script(
     let target_text = shell_quote(&target.label.id);
     let root = build_root(target);
     let manifest_path = shell_quote(&format!("{root}/manifest.json"));
+    let write_manifest = write_manifest_cmd(&manifest_path, manifest_json);
     let info_plist = shell_quote(&format!("{root}/{product}.xctest/Info.plist"));
     let info_plist_content = shell_quote(&format!(
         r#"<?xml version="1.0"?><plist><dict><key>CFBundleExecutable</key><string>{}</string></dict></plist>"#,
@@ -265,9 +262,7 @@ fn test_bundle_build_script(
     format!(
         r"set -eu
 {prepare_outputs}
-cat > {manifest_path} <<'ONCE_MANIFEST'
-{manifest_json}
-ONCE_MANIFEST
+{write_manifest}
 printf '%s\n' {info_plist_content} > {info_plist}
 printf 'xctest binary for %s\n' {target_text} > {binary_path}
 chmod +x {binary_path}
@@ -283,6 +278,7 @@ fn run_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -> 
     let bundle = format!("{product}.app");
     let bundle_path = shell_quote(&format!("{}/{bundle}", build_root(target)));
     let manifest_path = shell_quote(&format!("{root}/manifest.json"));
+    let write_manifest = write_manifest_cmd(&manifest_path, manifest_json);
     let run_json = shell_quote(&format!("{root}/run.json"));
     let run_record = shell_quote(
         &serde_json::json!({
@@ -297,9 +293,7 @@ fn run_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -> 
         r"set -eu
 {prepare_outputs}
 test -d {bundle_path}
-cat > {manifest_path} <<'ONCE_MANIFEST'
-{manifest_json}
-ONCE_MANIFEST
+{write_manifest}
 printf '%s\n' {run_record} > {run_json}
 ",
     )
@@ -311,6 +305,7 @@ fn test_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) ->
     let bundle = format!("{product}.xctest");
     let bundle_path = shell_quote(&format!("{}/{bundle}", build_root(target)));
     let manifest_path = shell_quote(&format!("{root}/manifest.json"));
+    let write_manifest = write_manifest_cmd(&manifest_path, manifest_json);
     let test_json = shell_quote(&format!("{root}/test_results.json"));
     let coverage_json = shell_quote(&format!("{root}/coverage.json"));
     let test_record = shell_quote(
@@ -335,9 +330,7 @@ fn test_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) ->
         r"set -eu
 {prepare_outputs}
 test -d {bundle_path}
-cat > {manifest_path} <<'ONCE_MANIFEST'
-{manifest_json}
-ONCE_MANIFEST
+{write_manifest}
 printf '%s\n' {test_record} > {test_json}
 printf '%s\n' {coverage_record} > {coverage_json}
 ",
@@ -376,6 +369,20 @@ fn product_name(target: &GraphTarget) -> String {
             _ => None,
         })
         .unwrap_or_else(|| target.label.name.clone())
+}
+
+/// Emit the command that writes the artifact manifest.
+///
+/// The manifest is single-quoted with the same escaping every other dynamic
+/// value uses, rather than embedded in a heredoc. This keeps all generated
+/// content on the quoted side of the shell: no manifest value can terminate
+/// the script body or be interpreted by the shell. `manifest_path` is already
+/// shell quoted by the caller.
+fn write_manifest_cmd(manifest_path: &str, manifest_json: &str) -> String {
+    format!(
+        "printf '%s\\n' {} > {manifest_path}",
+        shell_quote(manifest_json)
+    )
 }
 
 fn shell_quote(value: &str) -> String {
@@ -637,9 +644,34 @@ mod tests {
         } = action_for(&target, "build", &outputs).unwrap();
         assert_eq!(argv[0], "/bin/sh");
         assert_eq!(argv[1], "-c");
-        assert!(argv[2].contains("ONCE_MANIFEST"));
+        assert!(argv[2].contains("manifest.json"));
         assert_eq!(action_outputs, outputs);
         assert!(input_digest.is_none());
+    }
+
+    #[test]
+    fn manifest_is_single_quoted_not_heredoc() {
+        let target = graph_target("apple_library", "AppCore");
+        let outputs = output_paths(&target, "build").unwrap();
+        let script = action_script(&target, "build", &outputs).unwrap();
+
+        // The manifest is written through the same single-quote escaping as
+        // every other value, so no heredoc terminator can appear in the body.
+        assert!(!script.contains("ONCE_MANIFEST"));
+        assert!(!script.contains("<<"));
+        assert!(script.contains("printf '%s\\n' '"));
+        assert!(script.contains("> '.once/out/apps/ios/AppCore/manifest.json'"));
+    }
+
+    #[test]
+    fn write_manifest_cmd_single_quotes_dynamic_content() {
+        // A manifest value that would close a quoted heredoc, plus a single
+        // quote, must stay inert inside the generated command.
+        let cmd = write_manifest_cmd("'out/manifest.json'", "{\n\"k\": \"ONCE_MANIFEST'x\"\n}");
+        assert!(cmd.starts_with("printf '%s\\n' '"));
+        assert!(cmd.ends_with("> 'out/manifest.json'"));
+        // The embedded single quote is escaped via the close/escape/reopen form.
+        assert!(cmd.contains("'\"'\"'"));
     }
 
     #[test]
