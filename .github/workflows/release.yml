@@ -151,7 +151,7 @@ jobs:
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "rust"
-      - if: runner.os == 'Linux'
+      - if: startsWith(matrix.runner, 'ubuntu-')
         run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
       - name: Cache Rust
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
@@ -204,7 +204,7 @@ jobs:
       - detect
       - publish
       - build-sdk-libs
-    if: needs.detect.outputs.should-release == 'true'
+    if: needs.detect.outputs.should-release == 'true' && needs.publish.result == 'success' && needs.build-sdk-libs.result == 'success'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
