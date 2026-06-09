@@ -213,6 +213,7 @@ jobs:
         with:
           pattern: sdk-libs-*
           merge-multiple: true
+          path: packages
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
