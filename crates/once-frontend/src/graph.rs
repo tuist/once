@@ -212,17 +212,27 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
 fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
     const PRELUDE_PATH: &str = "once//prelude/apple.star";
     let source = include_str!("../prelude/apple.star");
+    parse_rule_schemas(PRELUDE_PATH, source)
+}
+
+/// Evaluate a Starlark prelude source and read its `APPLE_RULES` export.
+///
+/// Split out from [`starlark_prelude_rule_schemas`] so the error paths
+/// (parse failure, missing export, wrong types) are reachable from tests
+/// without depending on the compiled-in prelude staying valid, and so they
+/// keep working if the prelude ever becomes user-configurable.
+fn parse_rule_schemas(path: &str, source: &str) -> Result<Vec<RuleSchema>> {
     Module::with_temp_heap(|module| {
-        let ast = AstModule::parse(PRELUDE_PATH, source.to_string(), &Dialect::Standard)
-            .map_err(|error| prelude_error(PRELUDE_PATH, error))?;
+        let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
+            .map_err(|error| prelude_error(path, error))?;
         let globals = GlobalsBuilder::standard().build();
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
-            .map_err(|error| prelude_error(PRELUDE_PATH, error))?;
+            .map_err(|error| prelude_error(path, error))?;
         let rules = module
             .get("APPLE_RULES")
-            .ok_or_else(|| prelude_message(PRELUDE_PATH, "missing APPLE_RULES export"))?;
-        rule_schemas_from_value(rules).map_err(|message| prelude_message(PRELUDE_PATH, &message))
+            .ok_or_else(|| prelude_message(path, "missing APPLE_RULES export"))?;
+        rule_schemas_from_value(rules).map_err(|message| prelude_message(path, &message))
     })
 }
 
@@ -464,18 +474,73 @@ mod tests {
         let graph = graph_from_targets(&[target]);
         let app = &graph[0];
         assert_eq!(app.label.id, "apps/ios/App");
-        assert_eq!(
-            app.capabilities
-                .iter()
-                .map(|capability| capability.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["build", "run"]
-        );
+        // Assert membership rather than order: capability order is defined by
+        // the prelude and reordering it there should not break this test.
+        let mut names = app
+            .capabilities
+            .iter()
+            .map(|capability| capability.name.as_str())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(names, vec!["build", "run"]);
         assert!(app
             .capabilities
             .iter()
             .any(|capability| capability.name == "run"
                 && capability.requires_outputs == vec!["bundle"]));
+    }
+
+    #[test]
+    fn parse_rule_schemas_rejects_invalid_syntax() {
+        let err = parse_rule_schemas("test.star", "APPLE_RULES = [").unwrap_err();
+        assert!(matches!(err, Error::Eval { .. }));
+    }
+
+    #[test]
+    fn parse_rule_schemas_requires_apple_rules_export() {
+        let err = parse_rule_schemas("test.star", "OTHER = []").unwrap_err();
+        match err {
+            Error::Eval { message, .. } => assert!(message.contains("missing APPLE_RULES export")),
+            other => panic!("expected Error::Eval, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_rule_schemas_requires_list_export() {
+        let err = parse_rule_schemas("test.star", "APPLE_RULES = 7").unwrap_err();
+        match err {
+            Error::Eval { message, .. } => assert!(message.contains("should be a list")),
+            other => panic!("expected Error::Eval, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_rule_schemas_reports_missing_rule_field() {
+        let err = parse_rule_schemas("test.star", r#"APPLE_RULES = [{"kind": "x"}]"#).unwrap_err();
+        match err {
+            Error::Eval { message, .. } => assert!(message.contains("is missing")),
+            other => panic!("expected Error::Eval, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_rule_schemas_accepts_minimal_valid_rule() {
+        let source = r#"
+APPLE_RULES = [
+    {
+        "kind": "demo",
+        "docs": "Demo rule",
+        "attrs": [],
+        "deps": [],
+        "providers": [],
+        "capabilities": [],
+        "examples": [],
+    },
+]
+"#;
+        let schemas = parse_rule_schemas("test.star", source).unwrap();
+        assert_eq!(schemas.len(), 1);
+        assert_eq!(schemas[0].kind, "demo");
     }
 
     #[test]
