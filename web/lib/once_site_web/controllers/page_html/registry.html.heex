@@ -1,0 +1,26 @@
+<Layouts.app flash={@flash}>
+  <section id="registry" data-part="registry-page">
+    <div data-part="page-header">
+      <p data-part="eyebrow">Registry preview</p>
+      <h1>Once rules and scripts</h1>
+      <p data-part="page-copy">
+        A first public surface for reusable Once workflows. These entries are static seeds now,
+        ready to become a package-backed registry as the rule model lands.
+      </p>
+    </div>
+
+    <div data-part="registry-list">
+      <article :for={entry <- @entries} data-part="registry-entry">
+        <div data-part="entry-header">
+          <span data-part={"entry-kind-#{entry.kind}"}>{entry.kind}</span>
+          <h2>{entry.name}</h2>
+        </div>
+        <p data-part="entry-summary">{entry.summary}</p>
+        <code data-part="entry-command">{entry.command}</code>
+        <div data-part="entry-tags">
+          <span :for={tag <- entry.tags} data-part="entry-tag">{tag}</span>
+        </div>
+      </article>
+    </div>
+  </section>
+</Layouts.app>

@@ -1,0 +1,47 @@
+<Layouts.app flash={@flash}>
+  <section id="home" data-part="home-page">
+    <div data-part="hero">
+      <p data-part="eyebrow">Build once. Reuse everywhere.</p>
+      <h1>Once turns scripts into cacheable, remotely executable building blocks.</h1>
+      <p data-part="hero-copy">
+        Keep the shell scripts teams already trust, then add content-addressed caching,
+        remote execution, and a path toward a typed build graph.
+      </p>
+      <div data-part="hero-actions">
+        <a data-part="primary-action" href="/guide/scripts/">Read the script guide</a>
+        <a data-part="secondary-action" href={~p"/registry"}>Browse the registry</a>
+      </div>
+    </div>
+
+    <div data-part="terminal-panel" aria-label="Once command example">
+      <span data-part="terminal-dot"></span>
+      <span data-part="terminal-dot"></span>
+      <span data-part="terminal-dot"></span>
+      <pre phx-no-curly-interpolation><code>$ once exec -- cargo check --workspace
+cache key  b3f9d0...
+result     hit
+duration   117ms</code></pre>
+    </div>
+
+    <section data-part="value-grid" aria-label="Once capabilities">
+      <article data-part="value-item">
+        <h2>Cache primitives</h2>
+        <p>
+          Use the CAS and action cache from the CLI or SDKs without adopting a new build system all at once.
+        </p>
+      </article>
+      <article data-part="value-item">
+        <h2>Script migration ramp</h2>
+        <p>
+          Declare execution metadata in script headers, then run those scripts locally or remotely with stable cache keys.
+        </p>
+      </article>
+      <article data-part="value-item">
+        <h2>Registry ready</h2>
+        <p>
+          Publish reusable rules and scripts so agents and humans can discover the right workflow for a workspace.
+        </p>
+      </article>
+    </section>
+  </section>
+</Layouts.app>
