@@ -319,6 +319,44 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
+    /// Declare an action that materialises `content` at the workspace-
+    /// relative `path`. The content is hashed into the input digest so
+    /// any edit (including in starlark that produced it) invalidates
+    /// downstream consumers.
+    ///
+    /// Implementation note: the materialisation runs as `/bin/sh -c
+    /// printf '%s' <quoted_content> > <path>` so it goes through the
+    /// same `Action::RunCommand` path as every other declared action,
+    /// keeping execution and caching uniform.
+    #[allow(clippy::unnecessary_wraps)]
+    fn write_file(path: &str, content: &str) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let script = format!(
+            "set -eu\nmkdir -p \"$(dirname {path_arg})\"\nprintf '%s' {content_arg} > {path_arg}\n",
+            path_arg = shell_quote(path),
+            content_arg = shell_quote(content),
+        );
+        let action = DeclaredAction {
+            argv: vec!["/bin/sh".to_string(), "-c".to_string(), script],
+            inputs: Vec::new(),
+            outputs: vec![path.to_string()],
+            env: BTreeMap::new(),
+            // Folding the literal content into the toolchain identity
+            // keeps the digest pinned to what the file should contain,
+            // so changing the content alone invalidates the action.
+            toolchain_identity: Some(format!("once.write_file.v1\0{content}")),
+            identifier: Some(format!("write_file:{path}")),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
     /// Record one command action declaration. Argument shape:
     /// `argv`: list of strings; `inputs`: list of workspace-relative
     /// source paths to hash into the input digest; `outputs`: list of
@@ -362,6 +400,14 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         });
         Ok(NoneType)
     }
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    let escaped = value.replace('\'', "'\"'\"'");
+    format!("'{escaped}'")
 }
 
 fn host_arch_str() -> &'static str {

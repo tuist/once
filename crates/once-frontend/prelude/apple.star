@@ -245,6 +245,7 @@ def _apple_library_impl(ctx):
     exported_deps = attrs.get("exported_deps") or []
     bridging_header = attrs.get("bridging_header") or ""
     exported_headers = attrs.get("exported_headers") or []
+    enable_modules = attrs.get("enable_modules") or False
 
     all_srcs = glob(ctx["srcs"])
     swift_srcs = _filter_swift_sources(all_srcs)
@@ -281,11 +282,38 @@ def _apple_library_impl(ctx):
         for h in dep.get("transitive_exported_header_dirs") or []:
             if h not in compile_header_dirs:
                 compile_header_dirs.append(h)
+    dep_modulemaps = []
+    for dep in deps:
+        for m in dep.get("transitive_modulemaps") or []:
+            if m not in dep_modulemaps:
+                dep_modulemaps.append(m)
 
     # Own exported headers as workspace-relative paths, plus the
     # dirs we expose to consumers.
     own_exported_headers = [_package_relative(ctx, h) for h in exported_headers]
     own_exported_header_dirs = _unique_dirs(own_exported_headers)
+
+    # Modulemap generation: if the target exports headers AND opts into
+    # clang modules, write a modulemap so consumers can `import` the
+    # module without listing each header on the command line. This is
+    # the minimum Buck2 / rules_apple do; framework modules and umbrella
+    # headers can layer on later.
+    modulemap_path = ""
+    if enable_modules and len(own_exported_headers) > 0:
+        modulemap_path = declare_output("module.modulemap")
+        modulemap_lines = ["module " + module_name + " {"]
+        for header in own_exported_headers:
+            # Header paths in modulemaps are relative to the modulemap's
+            # location. We write the modulemap into `build_dir/` and
+            # reference each header by its workspace-relative path
+            # prefixed with the relative escape back to workspace root.
+            depth = len(ctx["build_dir"].split("/"))
+            relative = ("../" * depth) + header
+            modulemap_lines.append("    header \"" + relative + "\"")
+        modulemap_lines.append("    export *")
+        modulemap_lines.append("}")
+        modulemap_lines.append("")
+        write_file(modulemap_path, "\n".join(modulemap_lines))
 
     exported_deps_records = [deps[i] for i in exported_dep_indices]
     transitive_swiftmodule_dirs = _collect_transitive(
@@ -302,6 +330,11 @@ def _apple_library_impl(ctx):
         exported_deps_records,
         "transitive_exported_headers",
         own_exported_headers,
+    )
+    transitive_modulemaps = _collect_transitive(
+        exported_deps_records,
+        "transitive_modulemaps",
+        [modulemap_path] if modulemap_path else [],
     )
     transitive_archives = _collect_transitive(deps, "transitive_archives", [archive])
     transitive_sdk_frameworks = _collect_transitive(deps, "transitive_sdk_frameworks", sdk_frameworks)
@@ -362,6 +395,13 @@ def _apple_library_impl(ctx):
         # interop) can locate dep headers.
         for hdir in compile_header_dirs:
             swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+        # Feed each dep's modulemap to swiftc's underlying Clang so
+        # `import` of a clang-module dep resolves without manual
+        # `-fmodule-map-file` from the user.
+        for mmap in dep_modulemaps:
+            swift_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
+        if enable_modules:
+            swift_argv.extend(["-Xcc", "-fmodules"])
         for define in defines:
             swift_argv.extend(["-D", define])
         for flag in swift_flags:
@@ -424,12 +464,16 @@ def _apple_library_impl(ctx):
                 argv.append("-fobjc-arc")
             if emit_dsym:
                 argv.append("-g")
+            if enable_modules:
+                argv.append("-fmodules")
             for framework in sdk_frameworks:
                 argv.extend(["-framework", framework])
             for hdir in own_exported_header_dirs:
                 argv.extend(["-I", hdir])
             for hdir in compile_header_dirs:
                 argv.extend(["-I", hdir])
+            for mmap in dep_modulemaps:
+                argv.append("-fmodule-map-file=" + mmap)
             for define in defines:
                 argv.append("-D" + define)
             for flag in clang_flags:
@@ -507,9 +551,11 @@ def _apple_library_impl(ctx):
         "alwayslink": alwayslink,
         "exported_headers": own_exported_headers,
         "exported_header_dirs": own_exported_header_dirs,
+        "modulemap": modulemap_path,
         "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
         "transitive_exported_headers": transitive_exported_headers,
         "transitive_exported_header_dirs": transitive_exported_header_dirs,
+        "transitive_modulemaps": transitive_modulemaps,
         "transitive_archives": transitive_archives,
         "transitive_alwayslink_archives": transitive_alwayslink_archives,
         "transitive_sdk_frameworks": transitive_sdk_frameworks,
@@ -546,6 +592,7 @@ APPLE_RULES = [
             attr("alwayslink", "bool", default = "false", docs = "Hint to downstream linker rules to force-load this archive (`-Wl,-force_load`)"),
             attr("exported_deps", "list<string>", default = "[]", docs = "Target IDs from `deps` whose module interface flows through to consumers' compile path"),
             attr("bridging_header", "string", docs = "ObjC bridging header that lets Swift sources see ObjC symbols (`-import-objc-header`)"),
+            attr("enable_modules", "bool", default = "false", docs = "Emit a `module.modulemap` for `exported_headers` and pass `-fmodules` to Clang so consumers can `import` the module instead of #importing each header"),
         ],
         deps = [
             dep("deps", ["apple_linkable", "apple_resource"], "Libraries, frameworks, or resources consumed by this library"),
