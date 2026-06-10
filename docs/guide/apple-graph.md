@@ -102,13 +102,80 @@ and coverage records. For example, an `apple_application` build produces a
 `apple_test_bundle` test produces `test_results` and `coverage`, and also
 depends on the built bundle.
 
-For `apple_library`, `build` invokes `xcrun --sdk <sdk> swiftc -emit-library
--static -emit-module` and produces a real static archive, swiftmodule, and
-swiftdoc. When the target depends on other `apple_library` targets, Once builds
-them first and forwards each dep's swiftmodule directory through a `-I` search
-path so `import` statements resolve. The action cache key composes the active
-swiftc identity, source content digests, and the dep action digests, so a
-change to a dep's source rebuilds dependents on next invocation.
+For `apple_library`, `build` produces a real static archive plus a Swift
+module triple (`.swiftmodule`, `.swiftdoc`, `-Swift.h`). The rule supports
+mixed-language sources:
+
+- `.swift` sources go through `xcrun --sdk <sdk> swiftc -emit-library -static
+  -emit-module`. If a `bridging_header` is set, swiftc gets
+  `-import-objc-header` so Swift sources can see ObjC symbols.
+- `.m`/`.mm`/`.c`/`.cc`/`.cpp`/`.cxx` sources each become a separate
+  `xcrun --sdk <sdk> clang -c` (or `clang++`) action producing a per-source
+  `.o`. The clang invocation uses the SDK sysroot from `xcrun --show-sdk-path`,
+  the active target triple, and ARC (`-fobjc-arc`) for ObjC.
+- If both Swift and clang sources are present, swiftc emits an intermediate
+  `<Module>-swift.a` and `xcrun libtool -static` merges it with the clang
+  objects into the final `<Module>.a`. Swift-only and clang-only libraries
+  emit the final archive directly without the merge step.
+
+The driver builds dep targets first and forwards each dep's swiftmodule
+directory through `-I` (with `-Xcc -I` for the underlying Clang) so `import`
+statements resolve. When `enable_modules = true`, the impl writes a
+`module.modulemap` from `exported_headers` and propagates it through
+`transitive_modulemaps`; consumers pick up `-fmodule-map-file=<path>`
+automatically.
+
+The action cache key composes the resolved toolchain identity (swiftc,
+clang, or libtool — each with their `xcrun`-resolved path, version banner,
+and any `DEVELOPER_DIR` override), the source content digests, and the
+dep action digests. A swap of Xcode, a source edit, or a transitive dep
+change each invalidates exactly the affected cache slots.
+
+### `apple_library` attribute reference
+
+- **Platform + triple**: `platform` (required), `minimum_os` (deployment
+  target), `target_sdk_version` (build-time SDK; defaults to `minimum_os`),
+  `sdk_variant` (`simulator` or `device`; macOS ignores it).
+- **Toolchain pin**: `xcode_developer_dir` overlays `DEVELOPER_DIR` on every
+  `xcrun` call and is folded into the action cache identity.
+- **Sources + headers**: `srcs` (globs), `headers`, `exported_headers`,
+  `bridging_header`.
+- **Module compile flags**: `module_name`, `swift_flags`, `clang_flags`,
+  `defines` (propagated transitively), `enable_testing`, `library_evolution`,
+  `enable_modules`, `emit_dsym`.
+- **Link inputs (propagated transitively)**: `sdk_frameworks`,
+  `weak_sdk_frameworks`, `sdk_dylibs`, `linkopts`, `alwayslink`.
+- **Dep edges**: top-level `deps` (linked), `exported_deps` (linked AND
+  re-exposed to consumers' compile path; matches Buck2's privacy boundary).
+
+### Provider record returned by `apple_library`
+
+`SwiftInfo` / `CcInfo`-shaped record consumed by downstream rules:
+
+| field | what it carries |
+| --- | --- |
+| `label_id`, `swiftmodule_dir`, `archive`, `objc_header`, `alwayslink`, `modulemap` | Direct outputs for the immediate consumer |
+| `exported_headers`, `exported_header_dirs` | Header surface this target re-exposes |
+| `transitive_swiftmodule_dirs` | Only via `exported_deps` (Buck2 privacy) |
+| `transitive_archives`, `transitive_alwayslink_archives` | Full link inputs |
+| `transitive_sdk_frameworks`, `transitive_weak_sdk_frameworks`, `transitive_sdk_dylibs` | Frameworks / dylibs the linker reads |
+| `transitive_linkopts`, `transitive_defines` | Flags + preprocessor macros that flow |
+| `transitive_exported_headers`, `transitive_exported_header_dirs`, `transitive_modulemaps` | Compile-time header & module-map plumbing |
+
+### Not yet implemented (tracking)
+
+- **Multi-arch + `lipo`**: targets compile against the host arch only.
+  Universal archives, Mac Catalyst, and pre-built SDK distribution are
+  blocked on a per-arch fan-out.
+- **`select()` / configurable attributes / platform transitions**: the
+  schema marks attrs `configurable = True` but there is no `select()`
+  runtime yet, so the flag is aspirational. This is the platform model
+  epic and is bigger than every per-rule item combined.
+- **Swift macros (`plugins`)**: needs its own `swift_macro` rule to produce
+  the plugin `.dylib`s before they can be loaded via
+  `-load-plugin-executable`.
+- **Header maps (`.hmap`)**: the binary `.hmap` format needs a dedicated
+  writer; pure `module.modulemap` covers the common path for now.
 
 ## Rule Implementations
 
