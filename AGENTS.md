@@ -89,6 +89,14 @@ sudo apt-get update && sudo apt-get install -y libcap-ng-dev
 - Default to writing no comments. Add one only when the why is
   non-obvious.
 
+## Concurrency
+
+Parallelize as much as possible. When work units are independent (graph
+target builds, action executions, network fetches, file reads, test
+runs) drive them concurrently with tasks, joins, or `try_join` rather
+than serialising them. Sequential code should be a deliberate choice
+for data dependencies or ordering constraints, not the default.
+
 ## Running Things
 
 ```sh
