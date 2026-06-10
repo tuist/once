@@ -210,6 +210,7 @@ EOF
       The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.a" should be file
       The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftmodule" should be file
       The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftdoc" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore-Swift.h" should be file
     End
 
     It 'recursively builds apple_library dependencies'

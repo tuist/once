@@ -116,33 +116,74 @@ def _filter_swift_sources(paths):
             out.append(path)
     return out
 
+# Accumulate a transitive list of strings from a field that every dep
+# provider exposes. Preserves order while removing duplicates: the
+# first occurrence wins. Mirrors the rules_swift / Buck2 convention of
+# propagating SwiftInfo / CcInfo fields up the graph.
+def _collect_transitive(deps, key, own_values):
+    seen = {}
+    out = []
+    for value in own_values:
+        if value not in seen:
+            seen[value] = True
+            out.append(value)
+    for dep in deps:
+        for value in dep.get(key) or []:
+            if value not in seen:
+                seen[value] = True
+                out.append(value)
+    return out
+
 def _apple_library_impl(ctx):
     attrs = ctx["attr"]
     platform = attrs["platform"]
     minimum_os = attrs.get("minimum_os") or "13.0"
+    target_sdk_version = attrs.get("target_sdk_version") or minimum_os
     module_name = attrs.get("module_name") or ctx["label"]["name"]
     sdk_frameworks = attrs.get("sdk_frameworks") or []
     weak_sdk_frameworks = attrs.get("weak_sdk_frameworks") or []
+    sdk_dylibs = attrs.get("sdk_dylibs") or []
+    linkopts = attrs.get("linkopts") or []
     swift_flags = attrs.get("swift_flags") or []
+    defines = attrs.get("defines") or []
     enable_testing = attrs.get("enable_testing") or False
     library_evolution = attrs.get("library_evolution") or False
+    emit_dsym = attrs.get("emit_dsym") or False
 
     swift_srcs = _filter_swift_sources(glob(ctx["srcs"]))
     if len(swift_srcs) == 0:
         fail("apple_library " + ctx["label"]["id"] + " has no Swift sources; add `.swift` files matching `srcs`")
 
     xcrun, sdk, swiftc_identity = _xcrun_swiftc(platform)
-    triple = _apple_triple(platform, minimum_os)
+    # target_sdk_version drives the triple's deployment-target component
+    # so manifests can pin a build-time SDK that differs from the
+    # runtime minimum (Buck2 splits these explicitly; we follow suit).
+    triple = _apple_triple(platform, target_sdk_version)
 
     archive = declare_output(module_name + ".a")
     swiftmodule = declare_output(module_name + ".swiftmodule")
     swiftdoc = declare_output(module_name + ".swiftdoc")
+    objc_header = declare_output(module_name + "-Swift.h")
 
+    # Walk dep providers once to compose the transitive views every
+    # downstream rule (the parent library, a future linker, a future
+    # bundler) needs in a single place.
+    deps = ctx["deps"]
+    transitive_swiftmodule_dirs = _collect_transitive(deps, "transitive_swiftmodule_dirs", [ctx["build_dir"]])
+    transitive_archives = _collect_transitive(deps, "transitive_archives", [archive])
+    transitive_sdk_frameworks = _collect_transitive(deps, "transitive_sdk_frameworks", sdk_frameworks)
+    transitive_weak_sdk_frameworks = _collect_transitive(deps, "transitive_weak_sdk_frameworks", weak_sdk_frameworks)
+    transitive_sdk_dylibs = _collect_transitive(deps, "transitive_sdk_dylibs", sdk_dylibs)
+    transitive_linkopts = _collect_transitive(deps, "transitive_linkopts", linkopts)
+    transitive_defines = _collect_transitive(deps, "transitive_defines", defines)
+    # Each dep already exposes its own swiftmodule_dir through its
+    # transitive list; pulling it via the transitive accumulator avoids
+    # duplicating it as a single-value field.
     dep_swiftmodule_dirs = []
-    for dep_record in ctx["deps"]:
-        dir = dep_record.get("swiftmodule_dir")
-        if dir:
-            dep_swiftmodule_dirs.append(dir)
+    for dep in deps:
+        for dir in dep.get("transitive_swiftmodule_dirs") or []:
+            if dir != ctx["build_dir"] and dir not in dep_swiftmodule_dirs:
+                dep_swiftmodule_dirs.append(dir)
 
     argv = [
         xcrun,
@@ -156,10 +197,19 @@ def _apple_library_impl(ctx):
         module_name,
         "-emit-module-path",
         swiftmodule,
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        objc_header,
         "-target",
         triple,
         "-parse-as-library",
     ]
+    if emit_dsym:
+        # `-g` emits DWARF into the object stream; downstream a
+        # dedicated dsymutil step would extract the .dSYM bundle. The
+        # `-debug-info-format=dwarf` flag is the default for static
+        # archives so we don't repeat it.
+        argv.append("-g")
     if enable_testing:
         argv.append("-enable-testing")
     if library_evolution:
@@ -170,6 +220,12 @@ def _apple_library_impl(ctx):
         argv.extend(["-weak_framework", framework])
     for dep_dir in dep_swiftmodule_dirs:
         argv.extend(["-I", dep_dir])
+    for define in defines:
+        # Swift wants -D<NAME>=<VALUE> wrapped in -Xfrontend? Actually
+        # `swiftc -D` accepts a single identifier; values get filtered
+        # to Clang via -Xcc. We pass identifiers through directly.
+        argv.append("-D")
+        argv.append(define)
     for flag in swift_flags:
         argv.append(flag)
     argv.extend(["-o", archive])
@@ -179,14 +235,25 @@ def _apple_library_impl(ctx):
     run_action(
         argv = argv,
         inputs = swift_srcs,
-        outputs = [archive, swiftmodule, swiftdoc],
+        outputs = [archive, swiftmodule, swiftdoc, objc_header],
         toolchain_identity = swiftc_identity,
         identifier = "swift_compile_" + module_name,
     )
 
     return {
+        # Direct outputs the parent library reads.
         "swiftmodule_dir": ctx["build_dir"],
         "archive": archive,
+        "objc_header": objc_header,
+        # SwiftInfo / CcInfo-style transitive views downstream rules
+        # (linker, bundler, test) walk to compose their own commands.
+        "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
+        "transitive_archives": transitive_archives,
+        "transitive_sdk_frameworks": transitive_sdk_frameworks,
+        "transitive_weak_sdk_frameworks": transitive_weak_sdk_frameworks,
+        "transitive_sdk_dylibs": transitive_sdk_dylibs,
+        "transitive_linkopts": transitive_linkopts,
+        "transitive_defines": transitive_defines,
     }
 
 APPLE_RULES = [
@@ -196,18 +263,21 @@ APPLE_RULES = [
         impl = _apple_library_impl,
         attrs = [
             attr("platform", "string", required = True, docs = "Apple platform such as ios, macos, tvos, watchos, or visionos"),
-            attr("minimum_os", "string", docs = "Minimum supported OS version"),
+            attr("minimum_os", "string", docs = "Minimum supported OS version (deployment target)"),
+            attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
             attr("module_name", "string", docs = "Compiled module name. Defaults to the target name", configurable = False),
             attr("headers", "list<string>", default = "[]", docs = "Public or private C-family headers compiled with this target"),
             attr("exported_headers", "list<string>", default = "[]", docs = "Headers made available to dependent targets"),
             attr("sdk_frameworks", "list<string>", default = "[]", docs = "Apple SDK frameworks linked by name, such as UIKit or Foundation"),
             attr("weak_sdk_frameworks", "list<string>", default = "[]", docs = "Apple SDK frameworks linked weakly"),
             attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple SDK dynamic libraries linked by name"),
-            attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
+            attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags, propagated transitively to consumers"),
             attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
             attr("clang_flags", "list<string>", default = "[]", docs = "Extra Clang compiler flags"),
+            attr("defines", "list<string>", default = "[]", docs = "`-D` preprocessor / Swift conditional compilation flags, propagated transitively"),
             attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled for dependent tests"),
             attr("library_evolution", "bool", default = "false", docs = "Emit stable Swift module interfaces for binary compatibility"),
+            attr("emit_dsym", "bool", default = "false", docs = "Emit DWARF debug info so downstream rules can extract a `.dSYM` bundle"),
         ],
         deps = [
             dep("deps", ["apple_linkable", "apple_resource"], "Libraries, frameworks, or resources consumed by this library"),
