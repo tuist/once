@@ -8,7 +8,6 @@
 mod action;
 mod analysis;
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -44,8 +43,8 @@ pub async fn build(
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let target = require_target(&graph, target_id)?;
-    let mut built: HashMap<String, analysis::BuildOutcome> = HashMap::new();
-    let record = build_target(workspace, cache, &graph, &target, &mut built).await?;
+    let session = analysis::BuildSession::new(workspace, cache, &graph)?;
+    let record = build_target(workspace, cache, &target, &session).await?;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -59,8 +58,8 @@ pub async fn test(
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let target = require_target(&graph, target_id)?;
     ensure_capability(&target, "test")?;
-    let mut built: HashMap<String, analysis::BuildOutcome> = HashMap::new();
-    let _ = build_target(workspace, cache, &graph, &target, &mut built).await?;
+    let session = analysis::BuildSession::new(workspace, cache, &graph)?;
+    let _ = build_target(workspace, cache, &target, &session).await?;
     let record = run_target_capability(workspace, cache, &target, "test").await?;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
@@ -75,8 +74,8 @@ pub async fn run(
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let target = require_target(&graph, target_id)?;
     ensure_capability(&target, "run")?;
-    let mut built: HashMap<String, analysis::BuildOutcome> = HashMap::new();
-    let _ = build_target(workspace, cache, &graph, &target, &mut built).await?;
+    let session = analysis::BuildSession::new(workspace, cache, &graph)?;
+    let _ = build_target(workspace, cache, &target, &session).await?;
     let record = run_target_capability(workspace, cache, &target, "run").await?;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
@@ -96,23 +95,31 @@ fn require_target(graph: &[GraphTarget], target_id: &str) -> Result<GraphTarget>
 async fn build_target(
     workspace: &Path,
     cache: &CacheProvider,
-    graph: &[GraphTarget],
     target: &GraphTarget,
-    built: &mut HashMap<String, analysis::BuildOutcome>,
+    session: &analysis::BuildSession,
 ) -> Result<CapabilityRunRecord> {
     let capability = ensure_capability(target, "build")?;
-    if let Some(outcome) = analysis::build_with_impl(workspace, cache, graph, target, built).await?
-    {
+    if let Some(outcome) = session.build_with_impl(target).await? {
+        // Destructure the outcome so `outputs` moves into the record
+        // instead of being cloned. `action_digest` is `Copy`,
+        // `cache_tag` is `&'static str`, and `provider` is dropped on
+        // this path because the run record doesn't surface it yet.
+        let analysis::BuildOutcome {
+            action_digest,
+            outputs,
+            cache_tag,
+            ..
+        } = outcome;
         Ok(CapabilityRunRecord {
             target: target.label.id.clone(),
             kind: target.kind.clone(),
             capability: capability.name.clone(),
             status: "completed",
-            action_digest: outcome.action_digest.to_string(),
-            cache: outcome.cache_tag,
+            action_digest: action_digest.to_string(),
+            cache: cache_tag,
             output_groups: capability.output_groups.clone(),
             required_outputs: capability.requires_outputs.clone(),
-            outputs: outcome.outputs.clone(),
+            outputs,
         })
     } else {
         run_target_capability(workspace, cache, target, "build").await

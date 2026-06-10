@@ -23,6 +23,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
@@ -64,18 +65,89 @@ pub struct AnalysisStore {
     pub build_dir: String,
     pub declared_outputs: Vec<String>,
     pub actions: Vec<DeclaredAction>,
+    host_cache: HostCache,
 }
 
 impl AnalysisStore {
     #[must_use]
     pub fn new(workspace_root: PathBuf, package: String, build_dir: String) -> Self {
+        Self::with_host_cache(workspace_root, package, build_dir, HostCache::default())
+    }
+
+    #[must_use]
+    fn with_host_cache(
+        workspace_root: PathBuf,
+        package: String,
+        build_dir: String,
+        host_cache: HostCache,
+    ) -> Self {
         Self {
             workspace_root,
             package,
             build_dir,
             declared_outputs: Vec::new(),
             actions: Vec::new(),
+            host_cache,
         }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct HostCache {
+    which: Arc<Mutex<BTreeMap<String, Option<String>>>>,
+    commands: Arc<Mutex<BTreeMap<Vec<String>, String>>>,
+}
+
+impl HostCache {
+    fn which(&self, name: &str) -> Result<Option<String>> {
+        let mut cache = self
+            .which
+            .lock()
+            .map_err(|_| anyhow!("host_which cache lock poisoned"))?;
+        if let Some(cached) = cache.get(name).cloned() {
+            return Ok(cached);
+        }
+
+        let resolved = which_on_path(name).map(|path| path.display().to_string());
+        cache.insert(name.to_string(), resolved.clone());
+        Ok(resolved)
+    }
+
+    fn command(&self, argv: &[String]) -> Result<String> {
+        let mut cache = self
+            .commands
+            .lock()
+            .map_err(|_| anyhow!("host_command cache lock poisoned"))?;
+        if let Some(cached) = cache.get(argv).cloned() {
+            return Ok(cached);
+        }
+
+        let mut iter = argv.iter();
+        let program = iter
+            .next()
+            .ok_or_else(|| anyhow!("host_command requires a non-empty argv"))?;
+        let command_args: Vec<&String> = iter.collect();
+        let output = Command::new(program)
+            .args(&command_args)
+            .output()
+            .with_context(|| format!("running `{program}`"))?;
+        if !output.status.success() {
+            let rendered_args = command_args
+                .iter()
+                .map(|arg| arg.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            return Err(anyhow!(
+                "`{program} {}` exited with {}: {}",
+                rendered_args,
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|error| anyhow!("non-utf8 stdout: {error}"))?;
+        cache.insert(argv.to_vec(), stdout.clone());
+        Ok(stdout)
     }
 }
 
@@ -147,9 +219,11 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(String::new());
         }
-        which_on_path(name)
-            .map(|path| path.display().to_string())
-            .ok_or_else(|| anyhow!("`{name}` not found on PATH"))
+        let resolved = with_store(|store| -> Result<Option<String>> {
+            let store = store.ok_or_else(|| anyhow!("host_which called outside analysis"))?;
+            store.host_cache.which(name)
+        })?;
+        resolved.ok_or_else(|| anyhow!("`{name}` not found on PATH"))
     }
 
     /// Run `argv[0]` with `argv[1..]` as arguments and return its
@@ -161,24 +235,10 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             return Ok(String::new());
         }
         let argv = unpack_string_list(argv, "argv")?;
-        let mut iter = argv.into_iter();
-        let program = iter
-            .next()
-            .ok_or_else(|| anyhow!("host_command requires a non-empty argv"))?;
-        let args: Vec<String> = iter.collect();
-        let output = Command::new(&program)
-            .args(&args)
-            .output()
-            .with_context(|| format!("running `{program}`"))?;
-        if !output.status.success() {
-            return Err(anyhow!(
-                "`{program} {}` exited with {}: {}",
-                args.join(" "),
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        String::from_utf8(output.stdout).map_err(|error| anyhow!("non-utf8 stdout: {error}"))
+        with_store(|store| -> Result<String> {
+            let store = store.ok_or_else(|| anyhow!("host_command called outside analysis"))?;
+            store.host_cache.command(&argv)
+        })
     }
 
     /// Expand a list of glob patterns against the active target's
@@ -365,6 +425,73 @@ pub struct AnalysisResult {
     pub declared_outputs: Vec<String>,
 }
 
+/// Command-scoped analysis helper.
+///
+/// Construct this once for a graph command and reuse it for every
+/// target. It caches cheap rule metadata and generic host lookups
+/// (`host_which`, `host_command`) while still evaluating each target's
+/// Starlark impl in an isolated module heap.
+#[derive(Debug, Clone)]
+pub struct AnalysisEngine {
+    source: &'static str,
+    rule_impls: RuleImpls,
+    host_cache: HostCache,
+}
+
+impl AnalysisEngine {
+    pub fn new() -> Result<Self> {
+        let source = include_str!("../prelude/apple.star");
+        Self::from_source(source)
+    }
+
+    pub fn from_source(source: &'static str) -> Result<Self> {
+        Ok(Self {
+            source,
+            rule_impls: parse_rule_impls(source)?,
+            host_cache: HostCache::default(),
+        })
+    }
+
+    #[must_use]
+    pub fn rule_has_impl(&self, kind: &str) -> bool {
+        self.rule_impls.has_impl(kind)
+    }
+
+    /// Run a single target's rule impl and collect its declared
+    /// actions and provider record.
+    ///
+    /// `dep_providers` supplies the provider record each in-graph
+    /// dependency already returned; impls iterate it to gather things
+    /// like swiftmodule search paths.
+    pub fn analyze_target(
+        &self,
+        target: &GraphTarget,
+        workspace_root: &Path,
+        dep_providers: &[JsonValue],
+    ) -> Result<AnalysisResult> {
+        analyze_target_with_host_cache(
+            self.source,
+            self.host_cache.clone(),
+            target,
+            workspace_root,
+            dep_providers,
+        )
+    }
+}
+
+/// Cached view of which rules declare executable impls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuleImpls {
+    by_kind: BTreeMap<String, bool>,
+}
+
+impl RuleImpls {
+    #[must_use]
+    pub fn has_impl(&self, kind: &str) -> bool {
+        self.by_kind.get(kind).copied().unwrap_or(false)
+    }
+}
+
 /// Run a single target's rule impl and collect its declared actions
 /// and provider record.
 ///
@@ -376,12 +503,22 @@ pub fn analyze_target(
     workspace_root: &Path,
     dep_providers: &[JsonValue],
 ) -> Result<AnalysisResult> {
-    let source = include_str!("../prelude/apple.star");
+    AnalysisEngine::new()?.analyze_target(target, workspace_root, dep_providers)
+}
+
+fn analyze_target_with_host_cache(
+    source: &'static str,
+    host_cache: HostCache,
+    target: &GraphTarget,
+    workspace_root: &Path,
+    dep_providers: &[JsonValue],
+) -> Result<AnalysisResult> {
     let build_dir = format!(".once/out/{}", target.label.id);
-    let store = AnalysisStore::new(
+    let store = AnalysisStore::with_host_cache(
         workspace_root.to_path_buf(),
         target.label.package.clone(),
         build_dir.clone(),
+        host_cache,
     );
 
     let (store, result) = with_active_store(store, || {
@@ -399,7 +536,10 @@ pub fn analyze_target(
 /// the prelude. The driver consults this before walking deps so
 /// placeholder rules don't trigger analysis of their library deps.
 pub fn rule_has_impl(kind: &str) -> Result<bool> {
-    let source = include_str!("../prelude/apple.star");
+    Ok(AnalysisEngine::new()?.rule_has_impl(kind))
+}
+
+fn parse_rule_impls(source: &'static str) -> Result<RuleImpls> {
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse(
             "once//prelude/apple.star",
@@ -415,16 +555,20 @@ pub fn rule_has_impl(kind: &str) -> Result<bool> {
             .get("APPLE_RULES")
             .context("prelude is missing APPLE_RULES export")?;
         let rules = ListRef::from_value(rules_value).context("APPLE_RULES is not a list")?;
+        let mut by_kind = BTreeMap::new();
         for rule in rules.iter() {
             let dict = DictRef::from_value(rule)
                 .ok_or_else(|| anyhow!("APPLE_RULES entry is not a dict"))?;
-            let rule_kind = dict.get_str("kind").and_then(Value::unpack_str);
-            if rule_kind == Some(kind) {
-                let impl_value = dict.get_str("impl");
-                return Ok(impl_value.is_some_and(|value| !value.is_none()));
-            }
+            let Some(rule_kind) = dict.get_str("kind").and_then(Value::unpack_str) else {
+                continue;
+            };
+            let impl_value = dict.get_str("impl");
+            by_kind.insert(
+                rule_kind.to_string(),
+                impl_value.is_some_and(|value| !value.is_none()),
+            );
         }
-        Ok(false)
+        Ok(RuleImpls { by_kind })
     })
 }
 
@@ -730,6 +874,26 @@ run_action(
         assert!(message.contains("entries to be strings"), "{message}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn host_command_cache_reuses_identical_argv_results() {
+        let tmp = TempDir::new().unwrap();
+        let counter = tmp.path().join("counter");
+        let cache = HostCache::default();
+        let argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "printf x >> \"$1\"; printf done".to_string(),
+            "sh".to_string(),
+            counter.display().to_string(),
+        ];
+
+        assert_eq!(cache.command(&argv).unwrap(), "done");
+        assert_eq!(cache.command(&argv).unwrap(), "done");
+
+        assert_eq!(std::fs::read_to_string(counter).unwrap(), "x");
+    }
+
     #[test]
     fn glob_expands_against_active_package_directory() {
         let tmp = TempDir::new().unwrap();
@@ -770,8 +934,11 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
         let pkg = workspace.path().join("apps/ios/AppCore");
         std::fs::create_dir_all(&pkg).unwrap();
         std::fs::write(external.path().join("stolen.swift"), "").unwrap();
-        std::os::unix::fs::symlink(external.path().join("stolen.swift"), pkg.join("escape.swift"))
-            .unwrap();
+        std::os::unix::fs::symlink(
+            external.path().join("stolen.swift"),
+            pkg.join("escape.swift"),
+        )
+        .unwrap();
 
         let err = expand_globs(
             workspace.path(),

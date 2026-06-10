@@ -17,17 +17,18 @@
 //! Buck2/Bazel-style so a parent's input digest composes its deps'
 //! action digests.
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use once_cas::{CacheProvider, Digest};
 use once_core::{
     Action, InputDigestBuilder, OutputSymlinkMode, ResourceRequest, RunOpts, WorkspacePath,
 };
-use once_frontend::analysis::{analyze_target, rule_has_impl, AnalysisResult, DeclaredAction};
+use once_frontend::analysis::{AnalysisEngine, AnalysisResult, DeclaredAction};
 use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
+use tokio::task::JoinSet;
 
 /// Per-target outcome cached during a single command invocation.
 #[derive(Debug, Clone)]
@@ -38,87 +39,270 @@ pub(super) struct BuildOutcome {
     pub cache_tag: &'static str,
 }
 
-/// Build a target and (recursively) its declared deps. Returns the
-/// terminal action's outcome and the impl-returned provider; if the
-/// rule has no impl, returns `Ok(None)` and the caller is expected to
-/// fall back to its placeholder path.
-pub(super) async fn build_with_impl(
-    workspace: &Path,
-    cache: &CacheProvider,
-    graph: &[GraphTarget],
-    target: &GraphTarget,
-    built: &mut HashMap<String, BuildOutcome>,
-) -> Result<Option<BuildOutcome>> {
-    if !rule_has_impl(&target.kind)? {
-        // Placeholder rules keep their existing shell scripts; we
-        // don't walk their deps because the placeholder doesn't
-        // consume them yet.
-        return Ok(None);
-    }
-    if let Some(outcome) = built.get(&target.label.id) {
-        return Ok(Some(outcome.clone()));
-    }
-
-    let mut dep_providers: Vec<JsonValue> = Vec::new();
-    let mut dep_action_digests: Vec<(String, Digest)> = Vec::new();
-    for dep_id in &target.deps {
-        let Some(dep) = graph.iter().find(|candidate| candidate.label.id == *dep_id) else {
-            continue;
-        };
-        if !rule_has_impl(&dep.kind)? {
-            continue;
-        }
-        let dep_outcome = Box::pin(build_with_impl(workspace, cache, graph, dep, built)).await?;
-        if let Some(outcome) = dep_outcome {
-            dep_providers.push(outcome.provider.clone());
-            dep_action_digests.push((dep_id.clone(), outcome.action_digest));
-        }
-    }
-
-    let analysis = analyze_target(target, workspace, &dep_providers)
-        .with_context(|| format!("analysing {}", target.label.id))?;
-
-    let outcome =
-        run_declared_actions(workspace, cache, target, &analysis, &dep_action_digests).await?;
-    built.insert(target.label.id.clone(), outcome.clone());
-    Ok(Some(outcome))
+/// Command-scoped graph build session.
+///
+/// The session owns the target id map and analysis engine so one graph
+/// command does not repeatedly parse rule metadata or linearly scan the
+/// graph for every dependency edge.
+pub(super) struct BuildSession {
+    workspace: PathBuf,
+    cache: CacheProvider,
+    targets: HashMap<String, GraphTarget>,
+    analyzer: AnalysisEngine,
 }
 
+impl BuildSession {
+    pub(super) fn new(
+        workspace: &Path,
+        cache: &CacheProvider,
+        graph: &[GraphTarget],
+    ) -> Result<Self> {
+        Ok(Self::new_with_analyzer(
+            workspace,
+            cache,
+            graph,
+            AnalysisEngine::new()?,
+        ))
+    }
+
+    fn new_with_analyzer(
+        workspace: &Path,
+        cache: &CacheProvider,
+        graph: &[GraphTarget],
+        analyzer: AnalysisEngine,
+    ) -> Self {
+        Self {
+            workspace: workspace.to_path_buf(),
+            cache: cache.clone(),
+            targets: graph
+                .iter()
+                .map(|target| (target.label.id.clone(), target.clone()))
+                .collect(),
+            analyzer,
+        }
+    }
+
+    /// Build a target and the impl-backed portion of its dependency
+    /// closure. Returns `Ok(None)` when the target's own rule has no
+    /// impl, allowing callers to fall back to placeholder actions.
+    pub(super) async fn build_with_impl(
+        &self,
+        target: &GraphTarget,
+    ) -> Result<Option<BuildOutcome>> {
+        if !self.analyzer.rule_has_impl(&target.kind) {
+            // Placeholder rules keep their existing shell scripts; we
+            // don't walk their deps because the placeholder doesn't
+            // consume them yet.
+            return Ok(None);
+        }
+
+        let reachable = self.reachable_impl_targets(target);
+        let outcome = self.build_reachable(&target.label.id, &reachable).await?;
+        Ok(Some(outcome))
+    }
+
+    fn reachable_impl_targets(&self, target: &GraphTarget) -> HashSet<String> {
+        let mut reachable = HashSet::new();
+        let mut stack = vec![target.label.id.clone()];
+        while let Some(target_id) = stack.pop() {
+            if !reachable.insert(target_id.clone()) {
+                continue;
+            }
+            let Some(target) = self.targets.get(&target_id) else {
+                continue;
+            };
+            for dep_id in &target.deps {
+                let Some(dep) = self.targets.get(dep_id) else {
+                    continue;
+                };
+                if self.analyzer.rule_has_impl(&dep.kind) {
+                    stack.push(dep_id.clone());
+                }
+            }
+        }
+        reachable
+    }
+
+    async fn build_reachable(
+        &self,
+        root_id: &str,
+        reachable: &HashSet<String>,
+    ) -> Result<BuildOutcome> {
+        let mut remaining_deps: HashMap<String, usize> = HashMap::new();
+        let mut dependents: HashMap<String, Vec<String>> = HashMap::new();
+        for target_id in reachable {
+            let target = self
+                .targets
+                .get(target_id)
+                .with_context(|| format!("target `{target_id}` vanished from graph"))?;
+            let mut count = 0;
+            for dep_id in &target.deps {
+                if reachable.contains(dep_id) {
+                    count += 1;
+                    dependents
+                        .entry(dep_id.clone())
+                        .or_default()
+                        .push(target_id.clone());
+                }
+            }
+            remaining_deps.insert(target_id.clone(), count);
+        }
+
+        let mut ready = remaining_deps
+            .iter()
+            .filter_map(|(target_id, count)| (*count == 0).then_some(target_id.clone()))
+            .collect::<VecDeque<_>>();
+        let mut running = JoinSet::new();
+        let mut outcomes: HashMap<String, BuildOutcome> = HashMap::new();
+        let mut completed = 0;
+
+        self.spawn_ready(&mut ready, &outcomes, reachable, &mut running)?;
+        while completed < reachable.len() {
+            if running.is_empty() {
+                anyhow::bail!("cycle detected while building graph target `{root_id}`");
+            }
+
+            let joined = running
+                .join_next()
+                .await
+                .context("build task set ended unexpectedly")?;
+            let (target_id, outcome) = joined.context("joining graph build task")??;
+            outcomes.insert(target_id.clone(), outcome);
+            completed += 1;
+
+            if let Some(next_targets) = dependents.get(&target_id) {
+                for next_id in next_targets {
+                    let count = remaining_deps
+                        .get_mut(next_id)
+                        .with_context(|| format!("missing dependency count for `{next_id}`"))?;
+                    *count -= 1;
+                    if *count == 0 {
+                        ready.push_back(next_id.clone());
+                    }
+                }
+            }
+            self.spawn_ready(&mut ready, &outcomes, reachable, &mut running)?;
+        }
+
+        outcomes
+            .remove(root_id)
+            .with_context(|| format!("missing build outcome for `{root_id}`"))
+    }
+
+    fn spawn_ready(
+        &self,
+        ready: &mut VecDeque<String>,
+        outcomes: &HashMap<String, BuildOutcome>,
+        reachable: &HashSet<String>,
+        running: &mut JoinSet<Result<(String, BuildOutcome)>>,
+    ) -> Result<()> {
+        while let Some(target_id) = ready.pop_front() {
+            let target = self
+                .targets
+                .get(&target_id)
+                .with_context(|| format!("target `{target_id}` vanished from graph"))?
+                .clone();
+            let mut dep_providers = Vec::new();
+            let mut dep_action_digests = Vec::new();
+            for dep_id in &target.deps {
+                if !reachable.contains(dep_id) {
+                    continue;
+                }
+                let outcome = outcomes
+                    .get(dep_id)
+                    .with_context(|| format!("missing build outcome for dependency `{dep_id}`"))?;
+                dep_providers.push(outcome.provider.clone());
+                dep_action_digests.push((dep_id.clone(), outcome.action_digest));
+            }
+
+            let workspace = self.workspace.clone();
+            let cache = self.cache.clone();
+            let analyzer = self.analyzer.clone();
+            running.spawn(Box::pin(build_one(
+                workspace,
+                cache,
+                analyzer,
+                target,
+                dep_providers,
+                dep_action_digests,
+            )));
+        }
+        Ok(())
+    }
+}
+
+async fn build_one(
+    workspace: PathBuf,
+    cache: CacheProvider,
+    analyzer: AnalysisEngine,
+    target: GraphTarget,
+    dep_providers: Vec<JsonValue>,
+    dep_action_digests: Vec<(String, Digest)>,
+) -> Result<(String, BuildOutcome)> {
+    let target_id = target.label.id.clone();
+    let analysis_target = target.clone();
+    let analysis_workspace = workspace.clone();
+    let analysis = tokio::task::spawn_blocking(move || {
+        analyzer
+            .analyze_target(&analysis_target, &analysis_workspace, &dep_providers)
+            .with_context(|| format!("analysing {}", analysis_target.label.id))
+    })
+    .await
+    .context("joining graph analysis task")??;
+
+    let outcome =
+        run_declared_actions(&workspace, &cache, &target, analysis, &dep_action_digests).await?;
+    Ok((target_id, outcome))
+}
+
+/// Materialise each declared action through the action cache, then
+/// fold the analysis provider directly into the build outcome.
+///
+/// Takes `analysis` by value so the impl-returned provider record (a
+/// potentially large `JsonValue` tree) and each declared action's
+/// `env`/`outputs` move into their destinations rather than being
+/// cloned.
 async fn run_declared_actions(
     workspace: &Path,
     cache: &CacheProvider,
     target: &GraphTarget,
-    analysis: &AnalysisResult,
+    analysis: AnalysisResult,
     dep_action_digests: &[(String, Digest)],
 ) -> Result<BuildOutcome> {
+    let AnalysisResult {
+        actions, provider, ..
+    } = analysis;
     let mut terminal_digest = None;
     let mut last_cache_tag = "miss";
-    for (index, declared) in analysis.actions.iter().enumerate() {
+    let mut all_outputs: Vec<String> = Vec::new();
+    for (index, declared) in actions.into_iter().enumerate() {
+        // The identifier is only a short label; clone once for the
+        // error contexts that survive past the move into the action.
+        let identifier_for_error = declared
+            .identifier
+            .clone()
+            .unwrap_or_else(|| "<anonymous>".to_string());
+        all_outputs.extend(declared.outputs.iter().cloned());
         let action =
             declared_to_action(workspace, declared, dep_action_digests).with_context(|| {
                 format!(
-                    "building action {index} for {} ({})",
+                    "building action {index} for {} ({identifier_for_error})",
                     target.label.id,
-                    declared.identifier.as_deref().unwrap_or("<anonymous>")
                 )
             })?;
         let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
             .await
             .with_context(|| {
                 format!(
-                    "executing action {index} for {} ({})",
+                    "executing action {index} for {} ({identifier_for_error})",
                     target.label.id,
-                    declared.identifier.as_deref().unwrap_or("<anonymous>")
                 )
             })?;
         let exit_code = outcome.result.exit_code;
         if exit_code != 0 {
             anyhow::bail!(
-                "{} ({}) failed for {} with exit code {}",
-                declared.identifier.as_deref().unwrap_or("<anonymous>"),
-                index,
+                "{identifier_for_error} ({index}) failed for {} with exit code {exit_code}",
                 target.label.id,
-                exit_code
             );
         }
         terminal_digest = Some(outcome.action);
@@ -126,25 +310,26 @@ async fn run_declared_actions(
     }
     let action_digest = terminal_digest
         .unwrap_or_else(|| Digest::of_bytes(format!("empty:{}", target.label.id).as_bytes()));
-    let outputs: Vec<String> = analysis
-        .actions
-        .iter()
-        .flat_map(|declared| declared.outputs.iter().cloned())
-        .collect();
     Ok(BuildOutcome {
-        provider: analysis.provider.clone(),
+        provider,
         action_digest,
-        outputs,
+        outputs: all_outputs,
         cache_tag: last_cache_tag,
     })
 }
 
+/// Convert a single declared action into a cacheable [`Action`].
+///
+/// Takes `declared` by value so `env` moves into the resulting
+/// `Action::RunCommand` instead of being cloned. The borrow phase
+/// (input digest, output paths, script body) runs first; the
+/// destructure at the end relinquishes ownership of just `env`.
 fn declared_to_action(
     workspace: &Path,
-    declared: &DeclaredAction,
+    declared: DeclaredAction,
     dep_action_digests: &[(String, Digest)],
 ) -> Result<Action> {
-    let input_digest = compose_input_digest(workspace, declared, dep_action_digests)?;
+    let input_digest = compose_input_digest(workspace, &declared, dep_action_digests)?;
     let outputs: Vec<WorkspacePath> = declared
         .outputs
         .iter()
@@ -154,9 +339,10 @@ fn declared_to_action(
         })
         .collect::<Result<_>>()?;
     let script = wrap_in_script(&declared.argv, &declared.outputs);
+    let DeclaredAction { env, .. } = declared;
     Ok(Action::RunCommand {
         argv: vec!["/bin/sh".into(), "-c".into(), script],
-        env: declared.env.clone().into_iter().collect::<BTreeMap<_, _>>(),
+        env,
         cwd: None,
         input_digest: Some(input_digest),
         outputs,
@@ -167,6 +353,15 @@ fn declared_to_action(
     })
 }
 
+/// Compose the action's input digest from references, sorting borrows
+/// rather than copying owned data:
+///
+/// * Inputs sort as `Vec<&str>` so the digest never owns parallel
+///   copies of the source path strings.
+/// * Dep digests sort by index into the caller's slice instead of
+///   `to_vec()`-ing the slice up front.
+/// * `declared.env` is a `BTreeMap`, which already iterates in key
+///   order, so we walk it directly without a separate sort buffer.
 fn compose_input_digest(
     workspace: &Path,
     declared: &DeclaredAction,
@@ -182,23 +377,22 @@ fn compose_input_digest(
     for arg in &declared.argv {
         builder.push_bytes(arg.as_bytes());
     }
-    let mut sorted_env: Vec<(&String, &String)> = declared.env.iter().collect();
-    sorted_env.sort_by(|a, b| a.0.cmp(b.0));
-    for (key, value) in sorted_env {
+    for (key, value) in &declared.env {
         builder.push_bytes(key.as_bytes());
         builder.push_bytes(value.as_bytes());
     }
-    let mut sorted_inputs = declared.inputs.clone();
-    sorted_inputs.sort();
+    let mut sorted_inputs: Vec<&str> = declared.inputs.iter().map(String::as_str).collect();
+    sorted_inputs.sort_unstable();
     sorted_inputs.dedup();
     for input in &sorted_inputs {
         builder
             .push_source(workspace, input)
             .with_context(|| format!("hashing declared input `{input}`"))?;
     }
-    let mut sorted_deps = dep_action_digests.to_vec();
-    sorted_deps.sort_by(|a, b| a.0.cmp(&b.0));
-    for (label, digest) in &sorted_deps {
+    let mut dep_order: Vec<usize> = (0..dep_action_digests.len()).collect();
+    dep_order.sort_unstable_by(|&a, &b| dep_action_digests[a].0.cmp(&dep_action_digests[b].0));
+    for index in dep_order {
+        let (label, digest) = &dep_action_digests[index];
         let key = format!("dep:{label}");
         builder.push_keyed(key.as_bytes(), digest);
     }
@@ -246,7 +440,10 @@ fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
     use once_frontend::analysis::DeclaredAction;
+    use once_frontend::{AttrValue, Capability, TargetLabel};
 
     #[test]
     fn shell_quote_escapes_single_quotes() {
@@ -320,5 +517,65 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a, b);
+    }
+
+    fn test_target(name: &str, deps: &[&str], script: &str) -> GraphTarget {
+        GraphTarget {
+            label: TargetLabel {
+                package: String::new(),
+                name: name.to_string(),
+                id: name.to_string(),
+            },
+            kind: "test_rule".to_string(),
+            deps: deps.iter().map(|dep| (*dep).to_string()).collect(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::from([("script".to_string(), AttrValue::String(script.to_string()))]),
+            capabilities: vec![Capability {
+                name: "build".to_string(),
+                output_groups: Vec::new(),
+                requires_outputs: Vec::new(),
+            }],
+            providers: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn independent_dependencies_run_in_parallel() {
+        static TEST_PRELUDE: &str = r#"
+def rule(kind, impl = None):
+    return {"kind": kind, "impl": impl}
+
+def _impl(ctx):
+    out = declare_output(ctx["label"]["name"] + ".txt")
+    run_action(
+        argv = ["/bin/sh", "-c", ctx["attr"]["script"], "sh", out],
+        outputs = [out],
+        identifier = ctx["label"]["name"],
+    )
+    return {"out": out}
+
+APPLE_RULES = [rule("test_rule", impl = _impl)]
+"#;
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+        let graph = vec![
+            test_target("Root", &["LeafA", "LeafB"], "printf root > \"$1\""),
+            test_target("LeafA", &[], "sleep 0.7; printf a > \"$1\""),
+            test_target("LeafB", &[], "sleep 0.7; printf b > \"$1\""),
+        ];
+        let analyzer = AnalysisEngine::from_source(TEST_PRELUDE).unwrap();
+        let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
+
+        let started = std::time::Instant::now();
+        let outcome = session.build_with_impl(&graph[0]).await.unwrap().unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(1_200),
+            "expected sibling deps to run concurrently, elapsed {elapsed:?}"
+        );
+        assert_eq!(outcome.outputs, vec![".once/out/Root/Root.txt".to_string()]);
     }
 }
