@@ -135,11 +135,74 @@ def _ends_with(value, suffix):
         return False
     return value[len(value) - len(suffix):] == suffix
 
-def _filter_swift_sources(paths):
+def _filter_by_extensions(paths, extensions):
     out = []
     for path in paths:
-        if _ends_with(path, ".swift"):
-            out.append(path)
+        for ext in extensions:
+            if _ends_with(path, ext):
+                out.append(path)
+                break
+    return out
+
+def _filter_swift_sources(paths):
+    return _filter_by_extensions(paths, [".swift"])
+
+def _filter_objc_sources(paths):
+    return _filter_by_extensions(paths, [".m", ".mm"])
+
+def _filter_c_sources(paths):
+    return _filter_by_extensions(paths, [".c"])
+
+def _filter_cxx_sources(paths):
+    return _filter_by_extensions(paths, [".cc", ".cpp", ".cxx"])
+
+def _xcrun_clang(platform, sdk_variant, xcode_developer_dir):
+    xcrun = host_which("xcrun")
+    sdk = _apple_sdk_name(platform, sdk_variant)
+    env = _xcrun_env(xcode_developer_dir)
+    clang_path = host_command([xcrun, "--sdk", sdk, "--find", "clang"], env = env).strip()
+    sdk_path = host_command([xcrun, "--sdk", sdk, "--show-sdk-path"], env = env).strip()
+    version = host_command([xcrun, "--sdk", sdk, "clang", "--version"], env = env).strip()
+    identity = "once.apple.clang.v1\x00" + clang_path + "\x00" + version + "\x00" + (xcode_developer_dir or "")
+    return (xcrun, sdk, sdk_path, identity, env)
+
+def _xcrun_libtool(platform, sdk_variant, xcode_developer_dir):
+    xcrun = host_which("xcrun")
+    sdk = _apple_sdk_name(platform, sdk_variant)
+    env = _xcrun_env(xcode_developer_dir)
+    libtool_path = host_command([xcrun, "--sdk", sdk, "--find", "libtool"], env = env).strip()
+    identity = "once.apple.libtool.v1\x00" + libtool_path + "\x00" + (xcode_developer_dir or "")
+    return (xcrun, sdk, identity, env)
+
+def _package_relative(ctx, path):
+    if not path:
+        return path
+    # Absolute / already-workspace-rooted paths (rare in once.toml)
+    # are returned untouched.
+    if path.startswith("/") or path.startswith("."):
+        return path
+    package = ctx["label"]["package"]
+    if package:
+        return package + "/" + path
+    return path
+
+def _parent_dir(path):
+    idx = -1
+    for i in range(len(path)):
+        if path[i] == "/":
+            idx = i
+    if idx < 0:
+        return ""
+    return path[:idx]
+
+def _unique_dirs(paths):
+    seen = {}
+    out = []
+    for path in paths:
+        directory = _parent_dir(path)
+        if directory and directory not in seen:
+            seen[directory] = True
+            out.append(directory)
     return out
 
 # Accumulate a transitive list of strings from a field that every dep
@@ -173,58 +236,72 @@ def _apple_library_impl(ctx):
     sdk_dylibs = attrs.get("sdk_dylibs") or []
     linkopts = attrs.get("linkopts") or []
     swift_flags = attrs.get("swift_flags") or []
+    clang_flags = attrs.get("clang_flags") or []
     defines = attrs.get("defines") or []
     enable_testing = attrs.get("enable_testing") or False
     library_evolution = attrs.get("library_evolution") or False
     emit_dsym = attrs.get("emit_dsym") or False
     alwayslink = attrs.get("alwayslink") or False
     exported_deps = attrs.get("exported_deps") or []
+    bridging_header = attrs.get("bridging_header") or ""
+    exported_headers = attrs.get("exported_headers") or []
 
-    swift_srcs = _filter_swift_sources(glob(ctx["srcs"]))
-    if len(swift_srcs) == 0:
-        fail("apple_library " + ctx["label"]["id"] + " has no Swift sources; add `.swift` files matching `srcs`")
+    all_srcs = glob(ctx["srcs"])
+    swift_srcs = _filter_swift_sources(all_srcs)
+    objc_srcs = _filter_objc_sources(all_srcs)
+    c_srcs = _filter_c_sources(all_srcs)
+    cxx_srcs = _filter_cxx_sources(all_srcs)
+    if len(swift_srcs) == 0 and len(objc_srcs) == 0 and len(c_srcs) == 0 and len(cxx_srcs) == 0:
+        fail("apple_library " + ctx["label"]["id"] + " has no compilable sources (.swift/.m/.mm/.c/.cc)")
 
     xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
-    # target_sdk_version drives the triple's deployment-target component
-    # so manifests can pin a build-time SDK that differs from the
-    # runtime minimum (Buck2 splits these explicitly; we follow suit).
     triple = _apple_triple(platform, target_sdk_version, sdk_variant)
-
     archive = declare_output(module_name + ".a")
-    swiftmodule = declare_output(module_name + ".swiftmodule")
-    swiftdoc = declare_output(module_name + ".swiftdoc")
-    objc_header = declare_output(module_name + "-Swift.h")
 
     deps = ctx["deps"]
     # Split deps into compile-visible (exported) and link-only.
-    # Direct deps (whether exported or not) are visible at THIS
-    # target's compile because we need to `import` them. Only
-    # exported deps' transitive modules flow through to OUR consumers,
-    # matching Buck2's compile-time privacy boundary.
     exported_dep_indices = []
     for index, dep in enumerate(deps):
         dep_label = dep.get("label_id")
         if dep_label and dep_label in exported_deps:
             exported_dep_indices.append(index)
 
-    # Compile-visible: all direct deps' transitive modules (so this
-    # target's sources can `import` them).
     compile_swiftmodule_dirs = []
     for dep in deps:
         for dir in dep.get("transitive_swiftmodule_dirs") or []:
             if dir != ctx["build_dir"] and dir not in compile_swiftmodule_dirs:
                 compile_swiftmodule_dirs.append(dir)
 
-    # Transitive (consumer-visible) views: ALL link-affecting fields
-    # propagate fully (frameworks, archives, linkopts...) since the
-    # link line needs everything reachable, but `transitive_swiftmodule_dirs`
-    # propagates ONLY through exported_deps so private deps don't leak
-    # into consumers' compile paths.
+    # Compile-visible header dirs: direct deps' exported headers'
+    # parent directories. Used as `-I` flags for both clang and
+    # swiftc's `-Xcc -I` (so Swift can see ObjC types via the
+    # bridging header or import path).
+    compile_header_dirs = []
+    for dep in deps:
+        for h in dep.get("transitive_exported_header_dirs") or []:
+            if h not in compile_header_dirs:
+                compile_header_dirs.append(h)
+
+    # Own exported headers as workspace-relative paths, plus the
+    # dirs we expose to consumers.
+    own_exported_headers = [_package_relative(ctx, h) for h in exported_headers]
+    own_exported_header_dirs = _unique_dirs(own_exported_headers)
+
     exported_deps_records = [deps[i] for i in exported_dep_indices]
     transitive_swiftmodule_dirs = _collect_transitive(
         exported_deps_records,
         "transitive_swiftmodule_dirs",
         [ctx["build_dir"]],
+    )
+    transitive_exported_header_dirs = _collect_transitive(
+        exported_deps_records,
+        "transitive_exported_header_dirs",
+        own_exported_header_dirs,
+    )
+    transitive_exported_headers = _collect_transitive(
+        exported_deps_records,
+        "transitive_exported_headers",
+        own_exported_headers,
     )
     transitive_archives = _collect_transitive(deps, "transitive_archives", [archive])
     transitive_sdk_frameworks = _collect_transitive(deps, "transitive_sdk_frameworks", sdk_frameworks)
@@ -232,79 +309,207 @@ def _apple_library_impl(ctx):
     transitive_sdk_dylibs = _collect_transitive(deps, "transitive_sdk_dylibs", sdk_dylibs)
     transitive_linkopts = _collect_transitive(deps, "transitive_linkopts", linkopts)
     transitive_defines = _collect_transitive(deps, "transitive_defines", defines)
-    # alwayslink propagates as a per-archive list of (archive, flag)
-    # pairs so a future linker knows which transitive archives need
-    # whole-archive linking (`-Wl,-force_load` on ld64).
     transitive_alwayslink_archives = _collect_transitive(deps, "transitive_alwayslink_archives", [archive] if alwayslink else [])
 
-    argv = [
-        xcrun,
-        "--sdk",
-        sdk,
-        "swiftc",
-        "-emit-library",
-        "-static",
-        "-emit-module",
-        "-module-name",
-        module_name,
-        "-emit-module-path",
-        swiftmodule,
-        "-emit-objc-header",
-        "-emit-objc-header-path",
-        objc_header,
-        "-target",
-        triple,
-        "-parse-as-library",
-    ]
-    if emit_dsym:
-        # `-g` emits DWARF into the object stream; downstream a
-        # dedicated dsymutil step would extract the .dSYM bundle. The
-        # `-debug-info-format=dwarf` flag is the default for static
-        # archives so we don't repeat it.
-        argv.append("-g")
-    if enable_testing:
-        argv.append("-enable-testing")
-    if library_evolution:
-        argv.append("-enable-library-evolution")
-    for framework in sdk_frameworks:
-        argv.extend(["-framework", framework])
-    for framework in weak_sdk_frameworks:
-        argv.extend(["-weak_framework", framework])
-    for dep_dir in compile_swiftmodule_dirs:
-        argv.extend(["-I", dep_dir])
-    for define in defines:
-        # `swiftc -D` accepts conditional compilation flag identifiers
-        # without values; complex preprocessor defines flow to Clang
-        # via `-Xcc -D<NAME>=<VAL>` once mixed-language support lands.
-        argv.append("-D")
-        argv.append(define)
-    for flag in swift_flags:
-        argv.append(flag)
-    argv.extend(["-o", archive])
-    for src in swift_srcs:
-        argv.append(src)
+    # --- Swift compile -----------------------------------------------
+    # When there are no Swift sources, skip the swiftc action entirely
+    # and emit the archive from the clang side via libtool.
+    swift_objc_header = declare_output(module_name + "-Swift.h") if len(swift_srcs) > 0 else ""
+    swiftmodule = declare_output(module_name + ".swiftmodule") if len(swift_srcs) > 0 else ""
+    swiftdoc = declare_output(module_name + ".swiftdoc") if len(swift_srcs) > 0 else ""
 
-    run_action(
-        argv = argv,
-        inputs = swift_srcs,
-        outputs = [archive, swiftmodule, swiftdoc, objc_header],
-        env = xcrun_env,
-        toolchain_identity = swiftc_identity,
-        identifier = "swift_compile_" + module_name,
-    )
+    # Swift output: either the final archive (Swift-only) or an
+    # intermediate that libtool will merge with the clang objects.
+    swift_only = len(objc_srcs) == 0 and len(c_srcs) == 0 and len(cxx_srcs) == 0
+    swift_archive = archive if swift_only else (declare_output(module_name + "-swift.a") if len(swift_srcs) > 0 else "")
+
+    if len(swift_srcs) > 0:
+        swift_argv = [
+            xcrun,
+            "--sdk",
+            sdk,
+            "swiftc",
+            "-emit-library",
+            "-static",
+            "-emit-module",
+            "-module-name",
+            module_name,
+            "-emit-module-path",
+            swiftmodule,
+            "-emit-objc-header",
+            "-emit-objc-header-path",
+            swift_objc_header,
+            "-target",
+            triple,
+            "-parse-as-library",
+        ]
+        if emit_dsym:
+            swift_argv.append("-g")
+        if enable_testing:
+            swift_argv.append("-enable-testing")
+        if library_evolution:
+            swift_argv.append("-enable-library-evolution")
+        if bridging_header:
+            swift_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
+        for framework in sdk_frameworks:
+            swift_argv.extend(["-framework", framework])
+        for framework in weak_sdk_frameworks:
+            swift_argv.extend(["-weak_framework", framework])
+        for dep_dir in compile_swiftmodule_dirs:
+            swift_argv.extend(["-I", dep_dir])
+        # Header search paths flow through `-Xcc -I` so swiftc's
+        # underlying Clang invocation (for bridging headers + ObjC
+        # interop) can locate dep headers.
+        for hdir in compile_header_dirs:
+            swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+        for define in defines:
+            swift_argv.extend(["-D", define])
+        for flag in swift_flags:
+            swift_argv.append(flag)
+        swift_argv.extend(["-o", swift_archive])
+        for src in swift_srcs:
+            swift_argv.append(src)
+
+        swift_inputs = list(swift_srcs)
+        if bridging_header:
+            swift_inputs.append(_package_relative(ctx, bridging_header))
+        # The bridging header may #include other headers, so feed
+        # each exported header through as an action input too.
+        for h in own_exported_headers:
+            if h not in swift_inputs:
+                swift_inputs.append(h)
+
+        run_action(
+            argv = swift_argv,
+            inputs = swift_inputs,
+            outputs = [swift_archive, swiftmodule, swiftdoc, swift_objc_header],
+            env = xcrun_env,
+            toolchain_identity = swiftc_identity,
+            identifier = "swift_compile_" + module_name,
+        )
+
+    # --- C / ObjC / C++ compile --------------------------------------
+    clang_objects = []
+    if len(objc_srcs) > 0 or len(c_srcs) > 0 or len(cxx_srcs) > 0:
+        clang_xcrun, clang_sdk, sdk_path, clang_identity, clang_env = _xcrun_clang(platform, sdk_variant, xcode_developer_dir)
+
+        def clang_object_name(src):
+            # Sanitise the source path into a stable .o filename under
+            # the build dir: `apps/ios/AppCore/Sources/A.m` →
+            # `apps_ios_AppCore_Sources_A.m.o`. The full path keeps
+            # collisions impossible without forcing a tree mkdir.
+            sanitised = src.replace("/", "_")
+            return declare_output(sanitised + ".o")
+
+        def compile_with_clang(src, language):
+            obj = clang_object_name(src)
+            argv = [
+                clang_xcrun,
+                "--sdk",
+                clang_sdk,
+                "clang" if language != "c++" else "clang++",
+                "-c",
+                "-x",
+                language,
+                "-arch",
+                host_arch(),
+                "-isysroot",
+                sdk_path,
+                "-target",
+                triple,
+                "-o",
+                obj,
+            ]
+            if language == "objective-c" or language == "objective-c++":
+                argv.append("-fobjc-arc")
+            if emit_dsym:
+                argv.append("-g")
+            for framework in sdk_frameworks:
+                argv.extend(["-framework", framework])
+            for hdir in own_exported_header_dirs:
+                argv.extend(["-I", hdir])
+            for hdir in compile_header_dirs:
+                argv.extend(["-I", hdir])
+            for define in defines:
+                argv.append("-D" + define)
+            for flag in clang_flags:
+                argv.append(flag)
+            argv.append(src)
+            inputs = [src]
+            for h in own_exported_headers:
+                if h not in inputs:
+                    inputs.append(h)
+            run_action(
+                argv = argv,
+                inputs = inputs,
+                outputs = [obj],
+                env = clang_env,
+                toolchain_identity = clang_identity,
+                identifier = "clang_compile_" + module_name + "_" + src.replace("/", "_"),
+            )
+            clang_objects.append(obj)
+
+        for src in objc_srcs:
+            compile_with_clang(src, "objective-c")
+        for src in c_srcs:
+            compile_with_clang(src, "c")
+        for src in cxx_srcs:
+            compile_with_clang(src, "c++")
+
+    # --- libtool merge ----------------------------------------------
+    # Combine the swift-only archive plus clang objects into the final
+    # archive. Only needed when there is at least one non-Swift input
+    # alongside Swift; Swift-only and C-only libraries produce the
+    # final archive directly.
+    if not swift_only and len(swift_srcs) > 0:
+        libtool_xcrun, libtool_sdk, libtool_identity, libtool_env = _xcrun_libtool(platform, sdk_variant, xcode_developer_dir)
+        libtool_argv = [
+            libtool_xcrun,
+            "--sdk",
+            libtool_sdk,
+            "libtool",
+            "-static",
+            "-o",
+            archive,
+            swift_archive,
+        ]
+        libtool_argv.extend(clang_objects)
+        libtool_inputs = [swift_archive]
+        libtool_inputs.extend(clang_objects)
+        run_action(
+            argv = libtool_argv,
+            inputs = libtool_inputs,
+            outputs = [archive],
+            env = libtool_env,
+            toolchain_identity = libtool_identity,
+            identifier = "libtool_merge_" + module_name,
+        )
+    elif len(swift_srcs) == 0 and len(clang_objects) > 0:
+        # No Swift at all: ar the clang objects directly into the
+        # final archive.
+        libtool_xcrun, libtool_sdk, libtool_identity, libtool_env = _xcrun_libtool(platform, sdk_variant, xcode_developer_dir)
+        libtool_argv = [libtool_xcrun, "--sdk", libtool_sdk, "libtool", "-static", "-o", archive]
+        libtool_argv.extend(clang_objects)
+        run_action(
+            argv = libtool_argv,
+            inputs = list(clang_objects),
+            outputs = [archive],
+            env = libtool_env,
+            toolchain_identity = libtool_identity,
+            identifier = "libtool_archive_" + module_name,
+        )
 
     return {
-        # Identity so consumers can tell which dep record they're
-        # looking at (used to filter exported_deps).
         "label_id": ctx["label"]["id"],
-        # Direct outputs the parent library reads.
-        "swiftmodule_dir": ctx["build_dir"],
+        "swiftmodule_dir": ctx["build_dir"] if len(swift_srcs) > 0 else "",
         "archive": archive,
-        "objc_header": objc_header,
+        "objc_header": swift_objc_header,
         "alwayslink": alwayslink,
-        # SwiftInfo / CcInfo-style transitive views downstream rules
-        # (linker, bundler, test) walk to compose their own commands.
+        "exported_headers": own_exported_headers,
+        "exported_header_dirs": own_exported_header_dirs,
         "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
+        "transitive_exported_headers": transitive_exported_headers,
+        "transitive_exported_header_dirs": transitive_exported_header_dirs,
         "transitive_archives": transitive_archives,
         "transitive_alwayslink_archives": transitive_alwayslink_archives,
         "transitive_sdk_frameworks": transitive_sdk_frameworks,
@@ -340,6 +545,7 @@ APPLE_RULES = [
             attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
             attr("alwayslink", "bool", default = "false", docs = "Hint to downstream linker rules to force-load this archive (`-Wl,-force_load`)"),
             attr("exported_deps", "list<string>", default = "[]", docs = "Target IDs from `deps` whose module interface flows through to consumers' compile path"),
+            attr("bridging_header", "string", docs = "ObjC bridging header that lets Swift sources see ObjC symbols (`-import-objc-header`)"),
         ],
         deps = [
             dep("deps", ["apple_linkable", "apple_resource"], "Libraries, frameworks, or resources consumed by this library"),

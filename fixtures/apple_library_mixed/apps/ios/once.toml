@@ -1,0 +1,11 @@
+[[target]]
+name = "Mixed"
+kind = "apple_library"
+srcs = ["Mixed/Sources/*.swift", "Mixed/Sources/*.m"]
+
+[target.attrs]
+platform = "ios"
+minimum_os = "17.0"
+bridging_header = "Mixed/include/Mixed-Bridging.h"
+exported_headers = ["Mixed/include/MixedObjC.h"]
+sdk_frameworks = ["Foundation"]

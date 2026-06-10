@@ -18,6 +18,10 @@ Describe 'apple graph'
     cp -R "$REPO_ROOT/fixtures/apple_library/." "$WORKSPACE/"
   }
 
+  copy_apple_library_mixed_fixture() {
+    cp -R "$REPO_ROOT/fixtures/apple_library_mixed/." "$WORKSPACE/"
+  }
+
   create_apple_workspace() {
     mkdir -p "$WORKSPACE/apps/ios"
     cat > "$WORKSPACE/apps/ios/once.toml" <<'EOF'
@@ -238,6 +242,21 @@ EOF
       When call once --format json build apps/ios/AppCore
       The status should be success
       The stdout should include '"cache":"hit"'
+    End
+
+    It 'compiles a mixed Swift + Objective-C target into a single archive'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_mixed_fixture
+
+      When call once --format json build apps/ios/Mixed
+      The status should be success
+      The stdout should include '"target":"apps/ios/Mixed"'
+      The stdout should include '"status":"completed"'
+      The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed.a" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed-swift.a" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed.swiftmodule" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed-Swift.h" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Mixed/apps_ios_Mixed_Sources_MixedObjC.m.o" should be file
     End
 
     It 'invalidates the parent cache slot when a dep source changes'
