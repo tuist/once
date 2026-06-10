@@ -148,6 +148,41 @@ Script targets still execute through `once run` and the action cache. The
 bundle and test rules will migrate to starlark impls alongside their
 Xcode-driven actions in later implementations.
 
+## Build Pipeline
+
+A graph command opens a single `BuildSession` for the entire invocation.
+The session owns:
+
+- an `AnalysisEngine` that parses the prelude once and reuses both the
+  rule schemas and a `HostCache` across every analyzed target;
+- an `Arc<GraphTarget>` per target so spawned tasks share a cheap
+  refcount handle instead of deep-cloning the graph row;
+- the workspace path and cache provider for the lifetime of the build.
+
+For a target that needs analysis, the session walks the impl-reachable
+dependency closure, builds a per-target reverse-dependency map, and
+schedules targets through a `tokio::task::JoinSet`. Sibling targets
+without dependencies on each other compile in parallel, bounded only by
+the runtime and the locks held inside the host cache.
+
+A reader counter on each dependency lets the **last** consumer move the
+producer's provider record out of the session map instead of cloning it,
+so a large `JsonValue` tree only ever has one live owner. The
+`HostCache` releases its lock before shelling out to `xcrun` and before
+walking `PATH`, so a slow xcrun spawn on one task never blocks a sibling
+task asking about a different binary.
+
+The action input digest composes:
+
+- `toolchain_identity` from the impl (the prelude folds in `swiftc`'s
+  resolved path plus its version banner);
+- the content digest of every input file passed to `run_action`;
+- each direct dep's action digest, keyed by label.
+
+So an Xcode swap, a source edit, or a transitive dep change each
+invalidate exactly the affected cache slots without churning unrelated
+ones.
+
 ## Agent Workflows (Planned)
 
 The action cache and content-addressed storage already give every action a

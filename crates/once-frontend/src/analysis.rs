@@ -99,29 +99,32 @@ struct HostCache {
 }
 
 impl HostCache {
+    /// Resolve `name` on `PATH`, caching the result.
+    ///
+    /// The lock is released before the filesystem walk so concurrent
+    /// `host_which` calls for different binaries don't serialise on
+    /// each other.
     fn which(&self, name: &str) -> Result<Option<String>> {
-        let mut cache = self
-            .which
-            .lock()
-            .map_err(|_| anyhow!("host_which cache lock poisoned"))?;
-        if let Some(cached) = cache.get(name).cloned() {
+        if let Some(cached) = self.lock_which()?.get(name).cloned() {
             return Ok(cached);
         }
-
         let resolved = which_on_path(name).map(|path| path.display().to_string());
-        cache.insert(name.to_string(), resolved.clone());
+        // Cache the result after the slow path. A racing concurrent
+        // caller may have populated the slot already; that's fine, we
+        // just overwrite with an equivalent value.
+        self.lock_which()?
+            .insert(name.to_string(), resolved.clone());
         Ok(resolved)
     }
 
+    /// Run `argv` and cache its stdout.
+    ///
+    /// The lock is released before `Command::output` so other analyses
+    /// running on sibling targets aren't blocked by a slow xcrun spawn.
     fn command(&self, argv: &[String]) -> Result<String> {
-        let mut cache = self
-            .commands
-            .lock()
-            .map_err(|_| anyhow!("host_command cache lock poisoned"))?;
-        if let Some(cached) = cache.get(argv).cloned() {
+        if let Some(cached) = self.lock_commands()?.get(argv).cloned() {
             return Ok(cached);
         }
-
         let mut iter = argv.iter();
         let program = iter
             .next()
@@ -146,8 +149,20 @@ impl HostCache {
         }
         let stdout = String::from_utf8(output.stdout)
             .map_err(|error| anyhow!("non-utf8 stdout: {error}"))?;
-        cache.insert(argv.to_vec(), stdout.clone());
+        self.lock_commands()?.insert(argv.to_vec(), stdout.clone());
         Ok(stdout)
+    }
+
+    fn lock_which(&self) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, Option<String>>>> {
+        self.which
+            .lock()
+            .map_err(|_| anyhow!("host_which cache lock poisoned"))
+    }
+
+    fn lock_commands(&self) -> Result<std::sync::MutexGuard<'_, BTreeMap<Vec<String>, String>>> {
+        self.commands
+            .lock()
+            .map_err(|_| anyhow!("host_command cache lock poisoned"))
     }
 }
 

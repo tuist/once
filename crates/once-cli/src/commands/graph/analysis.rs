@@ -19,6 +19,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use once_cas::{CacheProvider, Digest};
@@ -31,7 +32,13 @@ use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 
 /// Per-target outcome cached during a single command invocation.
-#[derive(Debug, Clone)]
+///
+/// Deliberately not `Clone`: each outcome has exactly one owner at a
+/// time — first the producing build task, then `outcomes` in
+/// [`BuildSession::build_reachable`], and finally either the
+/// `dep_providers` of the last reader (move) or the returning caller
+/// (also a move via `outcomes.remove`).
+#[derive(Debug)]
 pub(super) struct BuildOutcome {
     pub provider: JsonValue,
     pub action_digest: Digest,
@@ -47,7 +54,12 @@ pub(super) struct BuildOutcome {
 pub(super) struct BuildSession {
     workspace: PathBuf,
     cache: CacheProvider,
-    targets: HashMap<String, GraphTarget>,
+    /// Graph targets are wrapped in `Arc` so spawned tasks can hold a
+    /// cheap shared handle (refcount bump) instead of deep-cloning the
+    /// whole `GraphTarget` (which itself owns several `Vec`s and a
+    /// `BTreeMap`) once for the analysis task and again for action
+    /// execution.
+    targets: HashMap<String, Arc<GraphTarget>>,
     analyzer: AnalysisEngine,
 }
 
@@ -76,7 +88,7 @@ impl BuildSession {
             cache: cache.clone(),
             targets: graph
                 .iter()
-                .map(|target| (target.label.id.clone(), target.clone()))
+                .map(|target| (target.label.id.clone(), Arc::new(target.clone())))
                 .collect(),
             analyzer,
         }
@@ -105,10 +117,14 @@ impl BuildSession {
         let mut reachable = HashSet::new();
         let mut stack = vec![target.label.id.clone()];
         while let Some(target_id) = stack.pop() {
-            if !reachable.insert(target_id.clone()) {
+            // Check membership before insert so the owned `target_id`
+            // moves into the set instead of being cloned.
+            if reachable.contains(&target_id) {
                 continue;
             }
-            let Some(target) = self.targets.get(&target_id) else {
+            let target = self.targets.get(&target_id).cloned();
+            reachable.insert(target_id);
+            let Some(target) = target else {
                 continue;
             };
             for dep_id in &target.deps {
@@ -148,6 +164,16 @@ impl BuildSession {
             remaining_deps.insert(target_id.clone(), count);
         }
 
+        // Reader count tracks how many dependents still need to read
+        // each outcome's provider. When it reaches zero we move the
+        // outcome out of the map instead of cloning its provider, so
+        // the last reader takes sole ownership of the (potentially
+        // large) `JsonValue` tree.
+        let mut remaining_readers: HashMap<String, usize> = dependents
+            .iter()
+            .map(|(target_id, deps)| (target_id.clone(), deps.len()))
+            .collect();
+
         let mut ready = remaining_deps
             .iter()
             .filter_map(|(target_id, count)| (*count == 0).then_some(target_id.clone()))
@@ -156,7 +182,13 @@ impl BuildSession {
         let mut outcomes: HashMap<String, BuildOutcome> = HashMap::new();
         let mut completed = 0;
 
-        self.spawn_ready(&mut ready, &outcomes, reachable, &mut running)?;
+        self.spawn_ready(
+            &mut ready,
+            &mut outcomes,
+            &mut remaining_readers,
+            reachable,
+            &mut running,
+        )?;
         while completed < reachable.len() {
             if running.is_empty() {
                 anyhow::bail!("cycle detected while building graph target `{root_id}`");
@@ -181,7 +213,13 @@ impl BuildSession {
                     }
                 }
             }
-            self.spawn_ready(&mut ready, &outcomes, reachable, &mut running)?;
+            self.spawn_ready(
+                &mut ready,
+                &mut outcomes,
+                &mut remaining_readers,
+                reachable,
+                &mut running,
+            )?;
         }
 
         outcomes
@@ -192,27 +230,45 @@ impl BuildSession {
     fn spawn_ready(
         &self,
         ready: &mut VecDeque<String>,
-        outcomes: &HashMap<String, BuildOutcome>,
+        outcomes: &mut HashMap<String, BuildOutcome>,
+        remaining_readers: &mut HashMap<String, usize>,
         reachable: &HashSet<String>,
         running: &mut JoinSet<Result<(String, BuildOutcome)>>,
     ) -> Result<()> {
         while let Some(target_id) = ready.pop_front() {
-            let target = self
-                .targets
-                .get(&target_id)
-                .with_context(|| format!("target `{target_id}` vanished from graph"))?
-                .clone();
+            let target = Arc::clone(
+                self.targets
+                    .get(&target_id)
+                    .with_context(|| format!("target `{target_id}` vanished from graph"))?,
+            );
             let mut dep_providers = Vec::new();
             let mut dep_action_digests = Vec::new();
             for dep_id in &target.deps {
                 if !reachable.contains(dep_id) {
                     continue;
                 }
-                let outcome = outcomes
-                    .get(dep_id)
-                    .with_context(|| format!("missing build outcome for dependency `{dep_id}`"))?;
-                dep_providers.push(outcome.provider.clone());
-                dep_action_digests.push((dep_id.clone(), outcome.action_digest));
+                let remaining = remaining_readers
+                    .get_mut(dep_id)
+                    .with_context(|| format!("missing reader count for `{dep_id}`"))?;
+                *remaining = remaining.saturating_sub(1);
+                let take_ownership = *remaining == 0;
+
+                let (provider, action_digest) = if take_ownership {
+                    // Last dependent moves the provider out of the
+                    // map; the outcome is dropped along with the
+                    // entry, so the JsonValue tree never gets cloned.
+                    let outcome = outcomes.remove(dep_id).with_context(|| {
+                        format!("missing build outcome for dependency `{dep_id}`")
+                    })?;
+                    (outcome.provider, outcome.action_digest)
+                } else {
+                    let outcome = outcomes.get(dep_id).with_context(|| {
+                        format!("missing build outcome for dependency `{dep_id}`")
+                    })?;
+                    (outcome.provider.clone(), outcome.action_digest)
+                };
+                dep_providers.push(provider);
+                dep_action_digests.push((dep_id.clone(), action_digest));
             }
 
             let workspace = self.workspace.clone();
@@ -235,12 +291,14 @@ async fn build_one(
     workspace: PathBuf,
     cache: CacheProvider,
     analyzer: AnalysisEngine,
-    target: GraphTarget,
+    target: Arc<GraphTarget>,
     dep_providers: Vec<JsonValue>,
     dep_action_digests: Vec<(String, Digest)>,
 ) -> Result<(String, BuildOutcome)> {
     let target_id = target.label.id.clone();
-    let analysis_target = target.clone();
+    // Cheap refcount bumps so the analyzer task and the action runner
+    // both reach the same `GraphTarget` without deep-cloning it.
+    let analysis_target = Arc::clone(&target);
     let analysis_workspace = workspace.clone();
     let analysis = tokio::task::spawn_blocking(move || {
         analyzer
