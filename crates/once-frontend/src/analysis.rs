@@ -292,6 +292,21 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
+/// Expand `patterns` against `package` and return workspace-relative
+/// file paths.
+///
+/// Each match is canonicalized and required to land inside the
+/// canonical workspace root, which rejects symlinks that point
+/// outside the tree. The check is best-effort against the on-disk
+/// state at evaluation time: a write-capable attacker on the
+/// workspace could in principle swap a symlink between
+/// `glob::glob` and `canonicalize`. Once treats the workspace as
+/// trusted (a developer's own checkout), so this TOCTOU window is
+/// out of scope for the threat model; the check exists to surface
+/// honest mistakes (a stray `..` symlink), not adversarial races.
+/// Windows junctions are not exercised by tests yet; the
+/// `canonicalize` call covers them in production but a dedicated
+/// Windows test should land alongside Windows CI.
 fn expand_globs(workspace_root: &Path, package: &str, patterns: &[String]) -> Result<Vec<String>> {
     let package_dir = if package.is_empty() {
         workspace_root.to_path_buf()
@@ -738,6 +753,34 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
         assert!(argv[1..].iter().any(|p| p.ends_with("Sources/a.swift")));
         assert!(argv[1..].iter().any(|p| p.ends_with("Sources/b.swift")));
         assert!(!argv[1..].iter().any(|p| p.ends_with("Sources/c.txt")));
+    }
+
+    /// A symlink that resolves outside the workspace must surface as
+    /// an error rather than silently leaking external paths into the
+    /// returned list. The check rejects honest mistakes; the threat
+    /// model assumes a non-adversarial workspace (documented on
+    /// `expand_globs`). Windows junctions/symlinks behave similarly
+    /// via the same canonicalize call, but get their own test once
+    /// Windows CI exists.
+    #[cfg(unix)]
+    #[test]
+    fn glob_rejects_symlink_that_escapes_workspace() {
+        let workspace = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        let pkg = workspace.path().join("apps/ios/AppCore");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(external.path().join("stolen.swift"), "").unwrap();
+        std::os::unix::fs::symlink(external.path().join("stolen.swift"), pkg.join("escape.swift"))
+            .unwrap();
+
+        let err = expand_globs(
+            workspace.path(),
+            "apps/ios/AppCore",
+            &["escape.swift".to_string()],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("outside the workspace"), "{err}");
     }
 
     fn target(kind: &str) -> GraphTarget {
