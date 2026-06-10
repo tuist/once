@@ -92,10 +92,21 @@ impl AnalysisStore {
     }
 }
 
+/// Key for cached command results.
+///
+/// `env` is included so two calls with the same argv but different
+/// `DEVELOPER_DIR` (or any other override) get distinct cache slots,
+/// which is the whole point of accepting an env at all.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CommandKey {
+    argv: Vec<String>,
+    env: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct HostCache {
     which: Arc<Mutex<BTreeMap<String, Option<String>>>>,
-    commands: Arc<Mutex<BTreeMap<Vec<String>, String>>>,
+    commands: Arc<Mutex<BTreeMap<CommandKey, String>>>,
 }
 
 impl HostCache {
@@ -117,12 +128,17 @@ impl HostCache {
         Ok(resolved)
     }
 
-    /// Run `argv` and cache its stdout.
+    /// Run `argv` (optionally with extra env vars) and cache its
+    /// stdout.
     ///
     /// The lock is released before `Command::output` so other analyses
     /// running on sibling targets aren't blocked by a slow xcrun spawn.
-    fn command(&self, argv: &[String]) -> Result<String> {
-        if let Some(cached) = self.lock_commands()?.get(argv).cloned() {
+    fn command(&self, argv: &[String], env: &BTreeMap<String, String>) -> Result<String> {
+        let key = CommandKey {
+            argv: argv.to_vec(),
+            env: env.clone(),
+        };
+        if let Some(cached) = self.lock_commands()?.get(&key).cloned() {
             return Ok(cached);
         }
         let mut iter = argv.iter();
@@ -130,8 +146,12 @@ impl HostCache {
             .next()
             .ok_or_else(|| anyhow!("host_command requires a non-empty argv"))?;
         let command_args: Vec<&String> = iter.collect();
-        let output = Command::new(program)
-            .args(&command_args)
+        let mut command = Command::new(program);
+        command.args(&command_args);
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let output = command
             .output()
             .with_context(|| format!("running `{program}`"))?;
         if !output.status.success() {
@@ -149,7 +169,7 @@ impl HostCache {
         }
         let stdout = String::from_utf8(output.stdout)
             .map_err(|error| anyhow!("non-utf8 stdout: {error}"))?;
-        self.lock_commands()?.insert(argv.to_vec(), stdout.clone());
+        self.lock_commands()?.insert(key, stdout.clone());
         Ok(stdout)
     }
 
@@ -159,7 +179,7 @@ impl HostCache {
             .map_err(|_| anyhow!("host_which cache lock poisoned"))
     }
 
-    fn lock_commands(&self) -> Result<std::sync::MutexGuard<'_, BTreeMap<Vec<String>, String>>> {
+    fn lock_commands(&self) -> Result<std::sync::MutexGuard<'_, BTreeMap<CommandKey, String>>> {
         self.commands
             .lock()
             .map_err(|_| anyhow!("host_command cache lock poisoned"))
@@ -243,16 +263,26 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
 
     /// Run `argv[0]` with `argv[1..]` as arguments and return its
     /// stdout as a string. Fails if the process exits non-zero;
-    /// includes stderr in the error message. Schema parsing returns
-    /// `""`.
-    fn host_command<'v>(argv: Value<'v>) -> anyhow::Result<String> {
+    /// includes stderr in the error message. Optional `env` is a
+    /// `dict<string, string>` of environment variables overlaid on the
+    /// host process env. Both `argv` and `env` participate in the
+    /// cache key, so a different `DEVELOPER_DIR` resolves to a
+    /// different cached result. Schema parsing returns `""`.
+    fn host_command<'v>(
+        argv: Value<'v>,
+        env: Option<Value<'v>>,
+    ) -> anyhow::Result<String> {
         if !analysis_active() {
             return Ok(String::new());
         }
         let argv = unpack_string_list(argv, "argv")?;
+        let env = env
+            .map(|value| unpack_string_dict(value, "env"))
+            .transpose()?
+            .unwrap_or_default();
         with_store(|store| -> Result<String> {
             let store = store.ok_or_else(|| anyhow!("host_command called outside analysis"))?;
-            store.host_cache.command(&argv)
+            store.host_cache.command(&argv, &env)
         })
     }
 
@@ -903,8 +933,9 @@ run_action(
             counter.display().to_string(),
         ];
 
-        assert_eq!(cache.command(&argv).unwrap(), "done");
-        assert_eq!(cache.command(&argv).unwrap(), "done");
+        let env = BTreeMap::new();
+        assert_eq!(cache.command(&argv, &env).unwrap(), "done");
+        assert_eq!(cache.command(&argv, &env).unwrap(), "done");
 
         assert_eq!(std::fs::read_to_string(counter).unwrap(), "x");
     }

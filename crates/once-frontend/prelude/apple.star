@@ -59,16 +59,28 @@ def rule(kind, docs, attrs = [], deps = [], providers = [], capabilities = [], e
 # primitives. Everything platform-specific (SDK names, triple format,
 # xcrun resolution, file-extension filtering) lives here, not in Rust.
 
-def _apple_sdk_name(platform):
-    if platform == "ios":
-        return "iphonesimulator"
+def _apple_sdk_name(platform, sdk_variant):
+    # macOS doesn't ship a simulator SDK; the variant is ignored.
     if platform == "macos" or platform == "macosx":
         return "macosx"
+    # For every other platform pick the device SDK or the simulator
+    # SDK based on `sdk_variant`. Defaulting to simulator preserves
+    # the previous behavior for manifests that don't set it.
+    if platform == "ios":
+        if sdk_variant == "device":
+            return "iphoneos"
+        return "iphonesimulator"
     if platform == "tvos":
+        if sdk_variant == "device":
+            return "appletvos"
         return "appletvsimulator"
     if platform == "watchos":
+        if sdk_variant == "device":
+            return "watchos"
         return "watchsimulator"
     if platform == "visionos" or platform == "xros":
+        if sdk_variant == "device":
+            return "xros"
         return "xrsimulator"
     fail("unsupported apple platform `" + platform + "`")
 
@@ -85,24 +97,38 @@ def _apple_triple_os(platform):
         return "xros"
     return platform
 
-def _apple_triple_suffix(platform):
+def _apple_triple_suffix(platform, sdk_variant):
+    # macOS has no simulator. Device variants on other platforms render
+    # an empty suffix; simulators keep the `-simulator` tag swiftc
+    # expects.
     if platform == "macos" or platform == "macosx":
+        return ""
+    if sdk_variant == "device":
         return ""
     return "-simulator"
 
-def _apple_triple(platform, minimum_os):
+def _apple_triple(platform, minimum_os, sdk_variant):
     arch = host_arch()
     triple_os = _apple_triple_os(platform)
-    suffix = _apple_triple_suffix(platform)
+    suffix = _apple_triple_suffix(platform, sdk_variant)
     return arch + "-apple-" + triple_os + minimum_os + suffix
 
-def _xcrun_swiftc(platform):
+def _xcrun_env(xcode_developer_dir):
+    env = {}
+    if xcode_developer_dir:
+        env["DEVELOPER_DIR"] = xcode_developer_dir
+    return env
+
+def _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir):
     xcrun = host_which("xcrun")
-    sdk = _apple_sdk_name(platform)
-    swiftc_path = host_command([xcrun, "--sdk", sdk, "--find", "swiftc"]).strip()
-    version = host_command([xcrun, "--sdk", sdk, "swiftc", "--version"]).strip()
-    identity = "once.apple.swiftc.v1\x00" + swiftc_path + "\x00" + version
-    return (xcrun, sdk, identity)
+    sdk = _apple_sdk_name(platform, sdk_variant)
+    env = _xcrun_env(xcode_developer_dir)
+    swiftc_path = host_command([xcrun, "--sdk", sdk, "--find", "swiftc"], env = env).strip()
+    version = host_command([xcrun, "--sdk", sdk, "swiftc", "--version"], env = env).strip()
+    # Identity also folds in the developer dir override so different
+    # Xcode installations partition the action cache cleanly.
+    identity = "once.apple.swiftc.v1\x00" + swiftc_path + "\x00" + version + "\x00" + (xcode_developer_dir or "")
+    return (xcrun, sdk, identity, env)
 
 def _ends_with(value, suffix):
     if len(value) < len(suffix):
@@ -139,6 +165,8 @@ def _apple_library_impl(ctx):
     platform = attrs["platform"]
     minimum_os = attrs.get("minimum_os") or "13.0"
     target_sdk_version = attrs.get("target_sdk_version") or minimum_os
+    sdk_variant = attrs.get("sdk_variant") or "simulator"
+    xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
     module_name = attrs.get("module_name") or ctx["label"]["name"]
     sdk_frameworks = attrs.get("sdk_frameworks") or []
     weak_sdk_frameworks = attrs.get("weak_sdk_frameworks") or []
@@ -149,41 +177,65 @@ def _apple_library_impl(ctx):
     enable_testing = attrs.get("enable_testing") or False
     library_evolution = attrs.get("library_evolution") or False
     emit_dsym = attrs.get("emit_dsym") or False
+    alwayslink = attrs.get("alwayslink") or False
+    exported_deps = attrs.get("exported_deps") or []
 
     swift_srcs = _filter_swift_sources(glob(ctx["srcs"]))
     if len(swift_srcs) == 0:
         fail("apple_library " + ctx["label"]["id"] + " has no Swift sources; add `.swift` files matching `srcs`")
 
-    xcrun, sdk, swiftc_identity = _xcrun_swiftc(platform)
+    xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
     # target_sdk_version drives the triple's deployment-target component
     # so manifests can pin a build-time SDK that differs from the
     # runtime minimum (Buck2 splits these explicitly; we follow suit).
-    triple = _apple_triple(platform, target_sdk_version)
+    triple = _apple_triple(platform, target_sdk_version, sdk_variant)
 
     archive = declare_output(module_name + ".a")
     swiftmodule = declare_output(module_name + ".swiftmodule")
     swiftdoc = declare_output(module_name + ".swiftdoc")
     objc_header = declare_output(module_name + "-Swift.h")
 
-    # Walk dep providers once to compose the transitive views every
-    # downstream rule (the parent library, a future linker, a future
-    # bundler) needs in a single place.
     deps = ctx["deps"]
-    transitive_swiftmodule_dirs = _collect_transitive(deps, "transitive_swiftmodule_dirs", [ctx["build_dir"]])
+    # Split deps into compile-visible (exported) and link-only.
+    # Direct deps (whether exported or not) are visible at THIS
+    # target's compile because we need to `import` them. Only
+    # exported deps' transitive modules flow through to OUR consumers,
+    # matching Buck2's compile-time privacy boundary.
+    exported_dep_indices = []
+    for index, dep in enumerate(deps):
+        dep_label = dep.get("label_id")
+        if dep_label and dep_label in exported_deps:
+            exported_dep_indices.append(index)
+
+    # Compile-visible: all direct deps' transitive modules (so this
+    # target's sources can `import` them).
+    compile_swiftmodule_dirs = []
+    for dep in deps:
+        for dir in dep.get("transitive_swiftmodule_dirs") or []:
+            if dir != ctx["build_dir"] and dir not in compile_swiftmodule_dirs:
+                compile_swiftmodule_dirs.append(dir)
+
+    # Transitive (consumer-visible) views: ALL link-affecting fields
+    # propagate fully (frameworks, archives, linkopts...) since the
+    # link line needs everything reachable, but `transitive_swiftmodule_dirs`
+    # propagates ONLY through exported_deps so private deps don't leak
+    # into consumers' compile paths.
+    exported_deps_records = [deps[i] for i in exported_dep_indices]
+    transitive_swiftmodule_dirs = _collect_transitive(
+        exported_deps_records,
+        "transitive_swiftmodule_dirs",
+        [ctx["build_dir"]],
+    )
     transitive_archives = _collect_transitive(deps, "transitive_archives", [archive])
     transitive_sdk_frameworks = _collect_transitive(deps, "transitive_sdk_frameworks", sdk_frameworks)
     transitive_weak_sdk_frameworks = _collect_transitive(deps, "transitive_weak_sdk_frameworks", weak_sdk_frameworks)
     transitive_sdk_dylibs = _collect_transitive(deps, "transitive_sdk_dylibs", sdk_dylibs)
     transitive_linkopts = _collect_transitive(deps, "transitive_linkopts", linkopts)
     transitive_defines = _collect_transitive(deps, "transitive_defines", defines)
-    # Each dep already exposes its own swiftmodule_dir through its
-    # transitive list; pulling it via the transitive accumulator avoids
-    # duplicating it as a single-value field.
-    dep_swiftmodule_dirs = []
-    for dep in deps:
-        for dir in dep.get("transitive_swiftmodule_dirs") or []:
-            if dir != ctx["build_dir"] and dir not in dep_swiftmodule_dirs:
-                dep_swiftmodule_dirs.append(dir)
+    # alwayslink propagates as a per-archive list of (archive, flag)
+    # pairs so a future linker knows which transitive archives need
+    # whole-archive linking (`-Wl,-force_load` on ld64).
+    transitive_alwayslink_archives = _collect_transitive(deps, "transitive_alwayslink_archives", [archive] if alwayslink else [])
 
     argv = [
         xcrun,
@@ -218,12 +270,12 @@ def _apple_library_impl(ctx):
         argv.extend(["-framework", framework])
     for framework in weak_sdk_frameworks:
         argv.extend(["-weak_framework", framework])
-    for dep_dir in dep_swiftmodule_dirs:
+    for dep_dir in compile_swiftmodule_dirs:
         argv.extend(["-I", dep_dir])
     for define in defines:
-        # Swift wants -D<NAME>=<VALUE> wrapped in -Xfrontend? Actually
-        # `swiftc -D` accepts a single identifier; values get filtered
-        # to Clang via -Xcc. We pass identifiers through directly.
+        # `swiftc -D` accepts conditional compilation flag identifiers
+        # without values; complex preprocessor defines flow to Clang
+        # via `-Xcc -D<NAME>=<VAL>` once mixed-language support lands.
         argv.append("-D")
         argv.append(define)
     for flag in swift_flags:
@@ -236,19 +288,25 @@ def _apple_library_impl(ctx):
         argv = argv,
         inputs = swift_srcs,
         outputs = [archive, swiftmodule, swiftdoc, objc_header],
+        env = xcrun_env,
         toolchain_identity = swiftc_identity,
         identifier = "swift_compile_" + module_name,
     )
 
     return {
+        # Identity so consumers can tell which dep record they're
+        # looking at (used to filter exported_deps).
+        "label_id": ctx["label"]["id"],
         # Direct outputs the parent library reads.
         "swiftmodule_dir": ctx["build_dir"],
         "archive": archive,
         "objc_header": objc_header,
+        "alwayslink": alwayslink,
         # SwiftInfo / CcInfo-style transitive views downstream rules
         # (linker, bundler, test) walk to compose their own commands.
         "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
         "transitive_archives": transitive_archives,
+        "transitive_alwayslink_archives": transitive_alwayslink_archives,
         "transitive_sdk_frameworks": transitive_sdk_frameworks,
         "transitive_weak_sdk_frameworks": transitive_weak_sdk_frameworks,
         "transitive_sdk_dylibs": transitive_sdk_dylibs,
@@ -278,6 +336,10 @@ APPLE_RULES = [
             attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled for dependent tests"),
             attr("library_evolution", "bool", default = "false", docs = "Emit stable Swift module interfaces for binary compatibility"),
             attr("emit_dsym", "bool", default = "false", docs = "Emit DWARF debug info so downstream rules can extract a `.dSYM` bundle"),
+            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS (always uses macosx)"),
+            attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
+            attr("alwayslink", "bool", default = "false", docs = "Hint to downstream linker rules to force-load this archive (`-Wl,-force_load`)"),
+            attr("exported_deps", "list<string>", default = "[]", docs = "Target IDs from `deps` whose module interface flows through to consumers' compile path"),
         ],
         deps = [
             dep("deps", ["apple_linkable", "apple_resource"], "Libraries, frameworks, or resources consumed by this library"),
