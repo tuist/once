@@ -228,7 +228,11 @@ EOF
       Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
       copy_apple_library_fixture
 
-      once --format json build apps/ios/AppCore >/dev/null
+      # The priming run happens unconditionally in the example body,
+      # so `|| true` keeps it from aborting on hosts where Skip if
+      # already short-circuited the assertions but the body still
+      # executes (e.g. Linux runners with no xcrun).
+      once --format json build apps/ios/AppCore >/dev/null 2>&1 || true
 
       When call once --format json build apps/ios/AppCore
       The status should be success
@@ -239,8 +243,8 @@ EOF
       Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
       copy_apple_library_fixture
 
-      once --format json build apps/ios/Greeter >/dev/null
-      printf '\n// trigger rebuild\n' >> "$WORKSPACE/apps/ios/AppCore/Sources/Greeting.swift"
+      once --format json build apps/ios/Greeter >/dev/null 2>&1 || true
+      printf '\n// trigger rebuild\n' >> "$WORKSPACE/apps/ios/AppCore/Sources/Greeting.swift" 2>/dev/null || true
 
       When call once --format json build apps/ios/Greeter
       The status should be success
