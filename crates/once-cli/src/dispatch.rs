@@ -67,7 +67,7 @@ async fn run_command(
             remote,
             compute,
         } => {
-            dispatch_run(
+            Box::pin(dispatch_run(
                 workspace,
                 xdg,
                 output,
@@ -75,7 +75,7 @@ async fn run_command(
                 runtime_rpc,
                 runtime_rpc_socket,
                 remote.then_some(compute),
-            )
+            ))
             .await
         }
         Cmd::Exec {

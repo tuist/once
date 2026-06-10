@@ -6,7 +6,10 @@
 //! and capability into a cacheable action lives in [`action`].
 
 mod action;
+mod analysis;
+mod apple;
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -40,7 +43,12 @@ pub async fn build(
     output: Output,
     target_id: &str,
 ) -> Result<ExitCode> {
-    run_capability(workspace, cache, output, target_id, "build").await
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let target = require_target(&graph, target_id)?;
+    let mut built: HashMap<String, analysis::BuildOutcome> = HashMap::new();
+    let record = build_target(workspace, cache, &graph, &target, &mut built).await?;
+    write_record(output, &record).await?;
+    Ok(ExitCode::SUCCESS)
 }
 
 pub async fn test(
@@ -49,9 +57,11 @@ pub async fn test(
     output: Output,
     target_id: &str,
 ) -> Result<ExitCode> {
-    let target = graph_target(workspace, target_id)?;
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let target = require_target(&graph, target_id)?;
     ensure_capability(&target, "test")?;
-    let _ = run_target_capability(workspace, cache, &target, "build").await?;
+    let mut built: HashMap<String, analysis::BuildOutcome> = HashMap::new();
+    let _ = build_target(workspace, cache, &graph, &target, &mut built).await?;
     let record = run_target_capability(workspace, cache, &target, "test").await?;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
@@ -63,12 +73,51 @@ pub async fn run(
     output: Output,
     target_id: &str,
 ) -> Result<ExitCode> {
-    let target = graph_target(workspace, target_id)?;
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let target = require_target(&graph, target_id)?;
     ensure_capability(&target, "run")?;
-    let _ = run_target_capability(workspace, cache, &target, "build").await?;
+    let mut built: HashMap<String, analysis::BuildOutcome> = HashMap::new();
+    let _ = build_target(workspace, cache, &graph, &target, &mut built).await?;
     let record = run_target_capability(workspace, cache, &target, "run").await?;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
+}
+
+fn require_target(graph: &[GraphTarget], target_id: &str) -> Result<GraphTarget> {
+    graph
+        .iter()
+        .find(|target| target.label.id == target_id)
+        .cloned()
+        .with_context(|| format!("no target matches `{target_id}`"))
+}
+
+/// Build a target, walking deps first. If the target's rule has an
+/// `impl` callable, we execute the actions the impl declares; otherwise
+/// we fall back to the placeholder shell scripts in [`action`].
+async fn build_target(
+    workspace: &Path,
+    cache: &CacheProvider,
+    graph: &[GraphTarget],
+    target: &GraphTarget,
+    built: &mut HashMap<String, analysis::BuildOutcome>,
+) -> Result<CapabilityRunRecord> {
+    let capability = ensure_capability(target, "build")?;
+    if let Some(outcome) = analysis::build_with_impl(workspace, cache, graph, target, built).await?
+    {
+        Ok(CapabilityRunRecord {
+            target: target.label.id.clone(),
+            kind: target.kind.clone(),
+            capability: capability.name.clone(),
+            status: "completed",
+            action_digest: outcome.action_digest.to_string(),
+            cache: outcome.cache_tag,
+            output_groups: capability.output_groups.clone(),
+            required_outputs: capability.requires_outputs.clone(),
+            outputs: outcome.outputs.clone(),
+        })
+    } else {
+        run_target_capability(workspace, cache, target, "build").await
+    }
 }
 
 pub fn supports(workspace: &Path, target_id: &str, capability: &str) -> Result<bool> {
@@ -79,19 +128,6 @@ pub fn supports(workspace: &Path, target_id: &str, capability: &str) -> Result<b
         .capabilities
         .iter()
         .any(|candidate| candidate.name == capability))
-}
-
-async fn run_capability(
-    workspace: &Path,
-    cache: &CacheProvider,
-    output: Output,
-    target_id: &str,
-    capability: &str,
-) -> Result<ExitCode> {
-    let target = graph_target(workspace, target_id)?;
-    let record = run_target_capability(workspace, cache, &target, capability).await?;
-    write_record(output, &record).await?;
-    Ok(ExitCode::SUCCESS)
 }
 
 async fn run_target_capability(
@@ -129,11 +165,6 @@ async fn run_target_capability(
             .map(|output| output.as_str().to_string())
             .collect(),
     })
-}
-
-fn graph_target(workspace: &Path, target_id: &str) -> Result<GraphTarget> {
-    find_graph_target(workspace, target_id)?
-        .with_context(|| format!("no target matches `{target_id}`"))
 }
 
 fn find_graph_target(workspace: &Path, target_id: &str) -> Result<Option<GraphTarget>> {

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Serialize;
-use starlark::environment::{GlobalsBuilder, Module};
+use starlark::environment::Module;
 use starlark::eval::Evaluator;
 use starlark::syntax::{AstModule, Dialect};
 use starlark::values::dict::DictRef;
@@ -225,7 +225,7 @@ fn parse_rule_schemas(path: &str, source: &str) -> Result<Vec<RuleSchema>> {
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
             .map_err(|error| prelude_error(path, error))?;
-        let globals = GlobalsBuilder::standard().build();
+        let globals = crate::analysis::globals_for_prelude();
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
             .map_err(|error| prelude_error(path, error))?;
@@ -236,8 +236,11 @@ fn parse_rule_schemas(path: &str, source: &str) -> Result<Vec<RuleSchema>> {
     })
 }
 
-fn prelude_error(path: &str, error: impl std::fmt::Display) -> Error {
-    prelude_message(path, &error.to_string())
+fn prelude_error(path: &str, error: impl std::fmt::Debug) -> Error {
+    // The starlark crate's errors carry their detail in Debug, not Display,
+    // so reach through Debug to surface variable-not-found / type-mismatch
+    // diagnostics instead of an empty `Eval` body.
+    prelude_message(path, &format!("{error:?}"))
 }
 
 fn prelude_message(path: &str, message: &str) -> Error {

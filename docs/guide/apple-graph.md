@@ -3,8 +3,11 @@
 Once is starting its build graph with Apple targets, following
 [RFC 0001: Once Build Graph](https://github.com/tuist/once/blob/main/rfcs/0001-build-graph.md).
 The first implementation models target declarations, rule schemas,
-capabilities, and local build, run, and test commands. It does not invoke Xcode
-yet.
+capabilities, and local build, run, and test commands. `apple_library` is
+driven by a starlark rule implementation in the prelude and invokes a real
+`xcrun`-backed `swiftc` compile on macOS hosts. The other Apple rule kinds
+(`apple_framework`, `apple_application`, `apple_test_bundle`) keep their
+placeholder shell scripts until their toolchain plumbing lands.
 
 The model is informed by:
 
@@ -99,7 +102,48 @@ and coverage records. For example, an `apple_application` build produces a
 `apple_test_bundle` test produces `test_results` and `coverage`, and also
 depends on the built bundle.
 
-Script targets still execute through `once run` and the action cache. Apple
-target execution will move from these local materialization actions to Xcode
-toolchain-backed configured graph snapshots and concrete compile, link, bundle,
-sign, install, launch, and XCTest actions in later implementations.
+For `apple_library`, `build` invokes `xcrun --sdk <sdk> swiftc -emit-library
+-static -emit-module` and produces a real static archive, swiftmodule, and
+swiftdoc. When the target depends on other `apple_library` targets, Once builds
+them first and forwards each dep's swiftmodule directory through a `-I` search
+path so `import` statements resolve. The action cache key composes the active
+swiftc identity, source content digests, and the dep action digests, so a
+change to a dep's source rebuilds dependents on next invocation.
+
+## Rule Implementations
+
+Rule logic lives in the starlark prelude alongside the schema. Each rule
+optionally declares an `impl = <callable>` that the analysis pass invokes with
+a `ctx` describing the target. `ctx["attr"]` carries typed attributes,
+`ctx["srcs"]` carries workspace-relative source paths (glob-expanded by the
+host), `ctx["deps"]` carries provider records returned by analyzed
+dependencies, and `ctx["build_dir"]` is the workspace-relative output
+directory. The impl composes the toolchain command line and declares actions
+through host-provided globals:
+
+- `xcrun_swiftc(platform)` resolves the active `swiftc` and returns
+  `(xcrun_path, sdk_name, identity)`. The identity is folded into the action's
+  input digest so a swap of Xcode invalidates affected cache slots.
+- `apple_triple(platform, minimum_os)` renders the LLVM target triple for the
+  host architecture.
+- `declare_output(name)` reserves a workspace-relative path under the target's
+  `build_dir`.
+- `run_action(argv, inputs, outputs, env, toolchain_identity, identifier)`
+  records one command to execute.
+
+The impl returns a provider dict that downstream rules read from `ctx["deps"]`.
+For `apple_library` the provider carries `swiftmodule_dir` (so consumers can
+add it to `-I`) and `archive` (so future linking rules can reach the `.a`).
+
+Script targets still execute through `once run` and the action cache. The
+bundle and test rules will migrate to starlark impls alongside their
+Xcode-driven actions in later implementations.
+
+## Agent Workflows (Planned)
+
+The action cache and content-addressed storage already give every action a
+stable digest and addressable outputs. A follow-up will expose this through an
+MCP interface so coding agents can call `run_action` with a returned id, then
+later query the cached outputs, logs, and provider records by that id without
+re-running anything. Schema introspection, structured diagnostics, and the
+graph queries above are designed to feed that surface.

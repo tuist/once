@@ -22,7 +22,7 @@ def capability(name, output_groups, requires_outputs = []):
         "requires_outputs": requires_outputs,
     }
 
-def rule(kind, docs, attrs = [], deps = [], providers = [], capabilities = [], examples = []):
+def rule(kind, docs, attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None):
     return {
         "kind": kind,
         "docs": docs,
@@ -31,12 +31,102 @@ def rule(kind, docs, attrs = [], deps = [], providers = [], capabilities = [], e
         "providers": providers,
         "capabilities": capabilities,
         "examples": examples,
+        "impl": impl,
+    }
+
+# Rule implementations.
+#
+# Each impl receives a `ctx` dict built by the Rust analysis pass with:
+#   ctx["label"]      -> {"package", "name", "id"}
+#   ctx["attr"]       -> typed attribute dict
+#   ctx["srcs"]       -> list of workspace-relative source paths (glob-expanded)
+#   ctx["deps"]       -> list of provider records returned by analyzed deps
+#   ctx["build_dir"]  -> workspace-relative output directory for this target
+#
+# Globals provided by Rust to impl callbacks:
+#   xcrun_swiftc(platform)        -> {"xcrun", "sdk", "identity"}
+#   apple_triple(platform, min_os) -> "<arch>-apple-<os><min><suffix>"
+#   declare_output(name)           -> workspace-relative output path
+#   run_action(argv=..., inputs=..., outputs=..., env={}, toolchain_identity=None, identifier=None)
+#
+# The impl returns a provider dict. Conventional keys downstream rules read:
+#   "swiftmodule_dir" -> directory holding the .swiftmodule (added to -I by consumers)
+#   "archive"         -> workspace-relative path to the .a archive
+
+def _apple_library_impl(ctx):
+    attrs = ctx["attr"]
+    platform = attrs["platform"]
+    minimum_os = attrs.get("minimum_os") or "13.0"
+    module_name = attrs.get("module_name") or ctx["label"]["name"]
+    sdk_frameworks = attrs.get("sdk_frameworks") or []
+    weak_sdk_frameworks = attrs.get("weak_sdk_frameworks") or []
+    swift_flags = attrs.get("swift_flags") or []
+    enable_testing = attrs.get("enable_testing") or False
+    library_evolution = attrs.get("library_evolution") or False
+
+    xcrun, sdk, swiftc_identity = xcrun_swiftc(platform)
+    triple = apple_triple(platform, minimum_os)
+
+    archive = declare_output(module_name + ".a")
+    swiftmodule = declare_output(module_name + ".swiftmodule")
+    swiftdoc = declare_output(module_name + ".swiftdoc")
+
+    dep_swiftmodule_dirs = []
+    for dep_record in ctx["deps"]:
+        dir = dep_record.get("swiftmodule_dir")
+        if dir:
+            dep_swiftmodule_dirs.append(dir)
+
+    argv = [
+        xcrun,
+        "--sdk",
+        sdk,
+        "swiftc",
+        "-emit-library",
+        "-static",
+        "-emit-module",
+        "-module-name",
+        module_name,
+        "-emit-module-path",
+        swiftmodule,
+        "-target",
+        triple,
+        "-parse-as-library",
+    ]
+    if enable_testing:
+        argv.append("-enable-testing")
+    if library_evolution:
+        argv.append("-enable-library-evolution")
+    for framework in sdk_frameworks:
+        argv.extend(["-framework", framework])
+    for framework in weak_sdk_frameworks:
+        argv.extend(["-weak_framework", framework])
+    for dep_dir in dep_swiftmodule_dirs:
+        argv.extend(["-I", dep_dir])
+    for flag in swift_flags:
+        argv.append(flag)
+    argv.extend(["-o", archive])
+    for src in ctx["srcs"]:
+        argv.append(src)
+
+    run_action(
+        argv = argv,
+        inputs = ctx["srcs"],
+        outputs = [archive, swiftmodule, swiftdoc],
+        toolchain_identity = swiftc_identity,
+        identifier = "swift_compile_" + module_name,
+    )
+
+    return {
+        "swiftmodule_dir": ctx["build_dir"],
+        "archive": archive,
     }
 
 APPLE_RULES = [
     rule(
         kind = "apple_library",
         docs = "Compiles Swift, Objective-C, C, and C++ sources into a linkable Apple module.",
+        impl = _apple_library_impl,
         attrs = [
             attr("platform", "string", required = True, docs = "Apple platform such as ios, macos, tvos, watchos, or visionos"),
             attr("minimum_os", "string", docs = "Minimum supported OS version"),

@@ -5,6 +5,19 @@ Describe 'apple graph'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
+  apple_toolchain_unavailable() {
+    case "$(uname -s)" in
+      Darwin) ;;
+      *) return 0 ;;
+    esac
+    command -v xcrun >/dev/null 2>&1 || return 0
+    return 1
+  }
+
+  copy_apple_library_fixture() {
+    cp -R "$REPO_ROOT/fixtures/apple_library/." "$WORKSPACE/"
+  }
+
   create_apple_workspace() {
     mkdir -p "$WORKSPACE/apps/ios"
     cat > "$WORKSPACE/apps/ios/once.toml" <<'EOF'
@@ -183,5 +196,55 @@ EOF
     When call once run --runtime-rpc apps/ios/App
     The status should not equal 0
     The stderr should include '--runtime-rpc is only supported for executable script targets'
+  End
+
+  Describe 'apple_library swiftc compile'
+    It 'compiles an apple_library target to a real static archive'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_fixture
+
+      When call once --format json build apps/ios/AppCore
+      The status should be success
+      The stdout should include '"target":"apps/ios/AppCore"'
+      The stdout should include '"status":"completed"'
+      The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.a" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftmodule" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftdoc" should be file
+    End
+
+    It 'recursively builds apple_library dependencies'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_fixture
+
+      When call once --format json build apps/ios/Greeter
+      The status should be success
+      The stdout should include '"target":"apps/ios/Greeter"'
+      The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftmodule" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Greeter/Greeter.a" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Greeter/Greeter.swiftmodule" should be file
+    End
+
+    It 'reuses cached swift compile output across runs'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_fixture
+
+      once --format json build apps/ios/AppCore >/dev/null
+
+      When call once --format json build apps/ios/AppCore
+      The status should be success
+      The stdout should include '"cache":"hit"'
+    End
+
+    It 'invalidates the parent cache slot when a dep source changes'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_fixture
+
+      once --format json build apps/ios/Greeter >/dev/null
+      printf '\n// trigger rebuild\n' >> "$WORKSPACE/apps/ios/AppCore/Sources/Greeting.swift"
+
+      When call once --format json build apps/ios/Greeter
+      The status should be success
+      The stdout should include '"cache":"miss"'
+    End
   End
 End
