@@ -6,16 +6,16 @@
 //! `DeclaredAction`s plus a provider record; we materialise each
 //! declared command as a cacheable `Action`, run it through
 //! `once_core::run_with_cache`, and pass the resulting provider down
-//! to consumers. When the rule has no `impl` yet (the
-//! `apple_framework`, `apple_application`, `apple_test_bundle` rules
-//! at present) the driver returns `None` so the caller can fall back
-//! to its placeholder path.
+//! to consumers. When the rule has no `impl` declared in the prelude
+//! (the bundle and test rules at present) the driver returns `None`
+//! so the caller can fall back to its placeholder path.
 //!
-//! Dep providers and dep action digests are carried in
-//! `Buck2`/`Bazel`-style: a parent's input digest composes its deps'
-//! action digests so any change downstream invalidates the parent
-//! cache slot, and the impl reads dep providers (e.g. each dep's
-//! `swiftmodule_dir`) through `ctx.deps`.
+//! This module has no Apple-specific logic: it consults the prelude
+//! via `rule_has_impl` to know which kinds run through analysis, and
+//! the analysis layer is fed everything it needs through generic
+//! starlark globals. Dep providers and dep action digests are carried
+//! Buck2/Bazel-style so a parent's input digest composes its deps'
+//! action digests.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -25,26 +25,9 @@ use once_cas::{CacheProvider, Digest};
 use once_core::{
     Action, InputDigestBuilder, OutputSymlinkMode, ResourceRequest, RunOpts, WorkspacePath,
 };
-use once_frontend::analysis::{analyze_target, AnalysisResult, DeclaredAction};
+use once_frontend::analysis::{analyze_target, rule_has_impl, AnalysisResult, DeclaredAction};
 use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
-
-use super::apple;
-
-/// Rule kinds that today carry an `impl` callable in `apple.star`.
-///
-/// The driver checks this list before walking deps and before calling
-/// `analyze_target`. Placeholder rules (`apple_framework`,
-/// `apple_application`, `apple_test_bundle`) are not in the list:
-/// their existing shell-script actions stay untouched, and they don't
-/// trigger analysis of their library deps because the placeholder
-/// scripts don't yet consume `.swiftmodule` outputs. Each new rule
-/// that gains an impl gets added here.
-const RULES_WITH_IMPL: &[&str] = &["apple_library"];
-
-fn rule_has_impl(kind: &str) -> bool {
-    RULES_WITH_IMPL.contains(&kind)
-}
 
 /// Per-target outcome cached during a single command invocation.
 #[derive(Debug, Clone)]
@@ -66,7 +49,7 @@ pub(super) async fn build_with_impl(
     target: &GraphTarget,
     built: &mut HashMap<String, BuildOutcome>,
 ) -> Result<Option<BuildOutcome>> {
-    if !rule_has_impl(&target.kind) {
+    if !rule_has_impl(&target.kind)? {
         // Placeholder rules keep their existing shell scripts; we
         // don't walk their deps because the placeholder doesn't
         // consume them yet.
@@ -82,7 +65,7 @@ pub(super) async fn build_with_impl(
         let Some(dep) = graph.iter().find(|candidate| candidate.label.id == *dep_id) else {
             continue;
         };
-        if !rule_has_impl(&dep.kind) {
+        if !rule_has_impl(&dep.kind)? {
             continue;
         }
         let dep_outcome = Box::pin(build_with_impl(workspace, cache, graph, dep, built)).await?;
@@ -92,9 +75,7 @@ pub(super) async fn build_with_impl(
         }
     }
 
-    let srcs = apple::srcs::resolve_swift_sources(workspace, target)
-        .with_context(|| format!("resolving srcs for {}", target.label.id))?;
-    let analysis = analyze_target(target, &srcs, &dep_providers, workspace)
+    let analysis = analyze_target(target, workspace, &dep_providers)
         .with_context(|| format!("analysing {}", target.label.id))?;
 
     let outcome =

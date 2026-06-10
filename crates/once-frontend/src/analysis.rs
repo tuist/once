@@ -3,15 +3,14 @@
 //! Rule schemas declared in the prelude carry an optional `impl`
 //! callable. The analysis pass evaluates that callable for one target
 //! at a time with a `ctx` dict and collects the actions the impl
-//! declares through globals defined here (`run_action`,
-//! `declare_output`) plus helpers backed by the host toolchain
-//! (`xcrun_swiftc`, `apple_triple`).
+//! declares through globals defined here.
 //!
-//! For schema parsing the same globals are registered as defined names
-//! so prelude functions that reference them compile. When called
-//! without an active [`AnalysisStore`] in the thread-local the stubs
-//! return inert defaults instead of failing, since the schema-parse
-//! evaluator never invokes rule impls.
+//! The globals are deliberately generic: `host_arch`, `host_which`,
+//! `host_command`, `glob`, `declare_output`, `run_action`. Anything
+//! domain-specific (xcrun discovery, SDK names, triple rendering,
+//! file extension filtering for a particular language) lives in the
+//! starlark prelude, not in Rust. The Rust side is an executor for
+//! whatever the prelude declares.
 //!
 //! State threading uses a thread-local instead of `Evaluator::extra`
 //! because `extra` requires implementing the `unsafe`
@@ -22,7 +21,8 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
@@ -54,10 +54,13 @@ pub struct DeclaredAction {
     pub identifier: Option<String>,
 }
 
-/// Per-target collection of declared outputs and actions, populated by
-/// starlark native callbacks during a rule impl evaluation.
+/// Per-target collection of declared outputs, actions, and the host
+/// context the rule impl needs (workspace root + package for globbing,
+/// build dir for output declaration).
 #[derive(Debug, Default)]
 pub struct AnalysisStore {
+    pub workspace_root: PathBuf,
+    pub package: String,
     pub build_dir: String,
     pub declared_outputs: Vec<String>,
     pub actions: Vec<DeclaredAction>,
@@ -65,8 +68,10 @@ pub struct AnalysisStore {
 
 impl AnalysisStore {
     #[must_use]
-    pub fn new(build_dir: String) -> Self {
+    pub fn new(workspace_root: PathBuf, package: String, build_dir: String) -> Self {
         Self {
+            workspace_root,
+            package,
             build_dir,
             declared_outputs: Vec::new(),
             actions: Vec::new(),
@@ -80,8 +85,7 @@ thread_local! {
 
 /// Install `store` as the active analysis target for the duration of
 /// `f`, then return it back to the caller along with the closure's
-/// result. Nested calls overwrite the inner closure's view; the
-/// callers serialize analyses per thread, so nesting is not expected.
+/// result.
 pub fn with_active_store<R>(store: AnalysisStore, f: impl FnOnce() -> R) -> (AnalysisStore, R) {
     ACTIVE_STORE.with(|cell| {
         *cell.borrow_mut() = Some(store);
@@ -95,15 +99,21 @@ fn with_store_mut<R>(f: impl FnOnce(Option<&mut AnalysisStore>) -> R) -> R {
     ACTIVE_STORE.with(|cell| f(cell.borrow_mut().as_mut()))
 }
 
+fn with_store<R>(f: impl FnOnce(Option<&AnalysisStore>) -> R) -> R {
+    ACTIVE_STORE.with(|cell| f(cell.borrow().as_ref()))
+}
+
 fn analysis_active() -> bool {
     ACTIVE_STORE.with(|cell| cell.borrow().is_some())
 }
 
-/// Globals used by both schema parsing and target analysis.
+/// Globals exposed to the prelude.
 ///
-/// Schema parsing only needs the names resolvable; the bodies are not
-/// invoked. Analysis re-uses the same globals plus an [`AnalysisStore`]
-/// installed via [`with_active_store`].
+/// The set is intentionally generic: anything platform- or
+/// toolchain-specific is implemented in starlark on top of these
+/// primitives. Schema parsing references the names without invoking
+/// them, so the bodies short-circuit to inert values when no
+/// [`AnalysisStore`] is installed.
 #[must_use]
 pub fn globals_for_prelude() -> Globals {
     GlobalsBuilder::standard().with(prelude_globals).build()
@@ -111,37 +121,88 @@ pub fn globals_for_prelude() -> Globals {
 
 #[starlark_module]
 fn prelude_globals(builder: &mut GlobalsBuilder) {
-    /// Resolve the Swift toolchain for `platform`. Returns a 3-tuple
-    /// `(xcrun_path, sdk_name, identity)` where `identity` is a stable
-    /// string used to partition the action cache by Xcode version.
-    /// Outside analysis the three values are empty strings, so schema
-    /// parsing never spawns `xcrun`.
-    fn xcrun_swiftc<'v>(
-        platform: &str,
+    /// Host CPU architecture as a normalized string (e.g. `"arm64"`,
+    /// `"x86_64"`). Schema parsing returns `""`.
+    #[allow(clippy::unnecessary_wraps)]
+    fn host_arch() -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        Ok(host_arch_str().to_string())
+    }
+
+    /// Host operating system as a normalized string (e.g. `"macos"`,
+    /// `"linux"`). Schema parsing returns `""`.
+    #[allow(clippy::unnecessary_wraps)]
+    fn host_os() -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        Ok(host_os_str().to_string())
+    }
+
+    /// Find `name` on `PATH` and return its absolute path. Fails if
+    /// the binary is not found. Schema parsing returns `""`.
+    fn host_which(name: &str) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        which_on_path(name)
+            .map(|path| path.display().to_string())
+            .ok_or_else(|| anyhow!("`{name}` not found on PATH"))
+    }
+
+    /// Run `argv[0]` with `argv[1..]` as arguments and return its
+    /// stdout as a string. Fails if the process exits non-zero;
+    /// includes stderr in the error message. Schema parsing returns
+    /// `""`.
+    fn host_command<'v>(argv: Value<'v>) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        let argv = unpack_string_list(argv, "argv")?;
+        let mut iter = argv.into_iter();
+        let program = iter
+            .next()
+            .ok_or_else(|| anyhow!("host_command requires a non-empty argv"))?;
+        let args: Vec<String> = iter.collect();
+        let output = Command::new(&program)
+            .args(&args)
+            .output()
+            .with_context(|| format!("running `{program}`"))?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "`{program} {}` exited with {}: {}",
+                args.join(" "),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        String::from_utf8(output.stdout).map_err(|error| anyhow!("non-utf8 stdout: {error}"))
+    }
+
+    /// Expand a list of glob patterns against the active target's
+    /// package directory. Returns sorted, deduplicated, workspace-
+    /// relative file paths. Schema parsing returns an empty list.
+    fn glob<'v>(
+        patterns: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         let heap = eval.heap();
         if !analysis_active() {
-            return Ok(heap.alloc((String::new(), String::new(), String::new())));
+            return Ok(heap.alloc(Vec::<String>::new()));
         }
-        let resolution = crate::analysis_host::resolve_swift_toolchain(platform)?;
-        Ok(heap.alloc((resolution.xcrun, resolution.sdk, resolution.identity)))
-    }
-
-    /// Render a target triple for `platform`/`minimum_os` using the
-    /// host architecture.
-    #[allow(clippy::unnecessary_wraps)]
-    fn apple_triple(platform: &str, minimum_os: &str) -> anyhow::Result<String> {
-        // Result wrapping keeps the starlark_module signature uniform
-        // with the other globals; triple_parts is infallible because
-        // unknown platforms fall back to a literal.
-        Ok(crate::analysis_host::apple_triple(platform, minimum_os))
+        let patterns = unpack_string_list(patterns, "patterns")?;
+        let resolved = with_store(|store| -> Result<Vec<String>> {
+            let store = store.ok_or_else(|| anyhow!("glob called outside analysis"))?;
+            expand_globs(&store.workspace_root, &store.package, &patterns)
+        })?;
+        Ok(heap.alloc(resolved))
     }
 
     /// Reserve a workspace-relative output path under the active
     /// target's build directory and return it. Outside analysis this
-    /// returns the bare name, which is harmless because schema parsing
-    /// never inspects the value.
+    /// returns the bare name.
     fn declare_output(name: &str) -> anyhow::Result<String> {
         with_store_mut(|store| match store {
             Some(store) => {
@@ -153,7 +214,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
-    /// Record one `run_action` declaration. Argument shape:
+    /// Record one command action declaration. Argument shape:
     /// `argv`: list of strings; `inputs`: list of workspace-relative
     /// source paths to hash into the input digest; `outputs`: list of
     /// workspace-relative paths the action produces; `env`: optional
@@ -198,14 +259,92 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     }
 }
 
+fn host_arch_str() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else {
+        std::env::consts::ARCH
+    }
+}
+
+fn host_os_str() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        std::env::consts::OS
+    }
+}
+
+fn which_on_path(name: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    for entry in std::env::split_paths(&paths) {
+        let candidate = entry.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn expand_globs(workspace_root: &Path, package: &str, patterns: &[String]) -> Result<Vec<String>> {
+    let package_dir = if package.is_empty() {
+        workspace_root.to_path_buf()
+    } else {
+        workspace_root.join(package)
+    };
+    let canonical_workspace = std::fs::canonicalize(workspace_root)
+        .with_context(|| format!("canonicalizing workspace `{}`", workspace_root.display()))?;
+    let mut out: Vec<String> = Vec::new();
+    for pattern in patterns {
+        let abs_pattern = package_dir.join(pattern);
+        let pattern_str = abs_pattern
+            .to_str()
+            .ok_or_else(|| anyhow!("non-utf8 glob pattern `{pattern}`"))?;
+        for entry in
+            glob::glob(pattern_str).with_context(|| format!("invalid glob pattern `{pattern}`"))?
+        {
+            let path = entry.with_context(|| format!("glob walk failed for `{pattern}`"))?;
+            if !path.is_file() {
+                continue;
+            }
+            let canonical = std::fs::canonicalize(&path)
+                .with_context(|| format!("canonicalizing `{}`", path.display()))?;
+            let stripped = canonical
+                .strip_prefix(&canonical_workspace)
+                .with_context(|| {
+                    format!(
+                        "glob result `{}` is outside the workspace `{}`",
+                        canonical.display(),
+                        canonical_workspace.display()
+                    )
+                })?;
+            let ws_rel = stripped
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            if !ws_rel.is_empty() {
+                out.push(ws_rel);
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
 /// Result of analyzing one target.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AnalysisResult {
     /// Declared command actions in the order the impl emitted them.
     pub actions: Vec<DeclaredAction>,
     /// Provider record returned by the impl (the impl's return value).
-    /// JSON shape so downstream rules can read field values without
-    /// re-evaluating starlark across analysis boundaries.
     pub provider: JsonValue,
     /// Workspace-relative outputs declared during this analysis.
     pub declared_outputs: Vec<String>,
@@ -214,23 +353,24 @@ pub struct AnalysisResult {
 /// Run a single target's rule impl and collect its declared actions
 /// and provider record.
 ///
-/// `srcs` is the resolved-against-the-workspace list of source paths
-/// (glob expansion is the caller's responsibility). `dep_providers`
-/// supplies the provider record each in-graph dependency already
-/// returned, in dependency declaration order; impls iterate it to
-/// gather things like swiftmodule search paths.
+/// `dep_providers` supplies the provider record each in-graph
+/// dependency already returned; impls iterate it to gather things
+/// like swiftmodule search paths.
 pub fn analyze_target(
     target: &GraphTarget,
-    srcs: &[String],
+    workspace_root: &Path,
     dep_providers: &[JsonValue],
-    _workspace: &Path,
 ) -> Result<AnalysisResult> {
     let source = include_str!("../prelude/apple.star");
     let build_dir = format!(".once/out/{}", target.label.id);
-    let store = AnalysisStore::new(build_dir.clone());
+    let store = AnalysisStore::new(
+        workspace_root.to_path_buf(),
+        target.label.package.clone(),
+        build_dir.clone(),
+    );
 
     let (store, result) = with_active_store(store, || {
-        analyze_in_starlark(source, target, srcs, dep_providers, &build_dir)
+        analyze_in_starlark(source, target, dep_providers, &build_dir)
     });
     let provider = result?;
     Ok(AnalysisResult {
@@ -240,10 +380,42 @@ pub fn analyze_target(
     })
 }
 
+/// Returns true if the rule for `kind` declares an `impl` callable in
+/// the prelude. The driver consults this before walking deps so
+/// placeholder rules don't trigger analysis of their library deps.
+pub fn rule_has_impl(kind: &str) -> Result<bool> {
+    let source = include_str!("../prelude/apple.star");
+    Module::with_temp_heap(|module| {
+        let ast = AstModule::parse(
+            "once//prelude/apple.star",
+            source.to_string(),
+            &Dialect::Standard,
+        )
+        .map_err(|error| anyhow!("prelude parse failed: {error:?}"))?;
+        let globals = globals_for_prelude();
+        let mut eval = Evaluator::new(&module);
+        eval.eval_module(ast, &globals)
+            .map_err(|error| anyhow!("prelude eval failed: {error:?}"))?;
+        let rules_value = module
+            .get("APPLE_RULES")
+            .context("prelude is missing APPLE_RULES export")?;
+        let rules = ListRef::from_value(rules_value).context("APPLE_RULES is not a list")?;
+        for rule in rules.iter() {
+            let dict = DictRef::from_value(rule)
+                .ok_or_else(|| anyhow!("APPLE_RULES entry is not a dict"))?;
+            let rule_kind = dict.get_str("kind").and_then(Value::unpack_str);
+            if rule_kind == Some(kind) {
+                let impl_value = dict.get_str("impl");
+                return Ok(impl_value.is_some_and(|value| !value.is_none()));
+            }
+        }
+        Ok(false)
+    })
+}
+
 fn analyze_in_starlark(
     source: &str,
     target: &GraphTarget,
-    srcs: &[String],
     dep_providers: &[JsonValue],
     build_dir: &str,
 ) -> Result<JsonValue> {
@@ -264,11 +436,9 @@ fn analyze_in_starlark(
         let rules = ListRef::from_value(rules_value).context("APPLE_RULES is not a list")?;
         let impl_value = find_impl_for_kind(rules, &target.kind)?;
         let Some(impl_value) = impl_value else {
-            // Rule with no impl falls back to placeholder behavior;
-            // the caller decides what to do (e.g. legacy shell scripts).
             return Ok(JsonValue::Null);
         };
-        let ctx = build_ctx(&eval, target, srcs, dep_providers, build_dir);
+        let ctx = build_ctx(&eval, target, dep_providers, build_dir);
         let provider = eval
             .eval_function(impl_value, &[ctx], &[])
             .map_err(|error| anyhow!("impl eval failed for {}: {error:?}", target.label.id))?;
@@ -297,7 +467,6 @@ fn find_impl_for_kind<'v>(rules: &ListRef<'v>, kind: &str) -> Result<Option<Valu
 fn build_ctx<'v>(
     eval: &Evaluator<'v, '_, '_>,
     target: &GraphTarget,
-    srcs: &[String],
     dep_providers: &[JsonValue],
     build_dir: &str,
 ) -> Value<'v> {
@@ -313,7 +482,7 @@ fn build_ctx<'v>(
         .map(|(key, value)| (key.clone(), attr_value_to_starlark(eval, value)))
         .collect();
     let attr = heap.alloc(AllocDict(attr_pairs));
-    let srcs_value = heap.alloc(srcs.to_vec());
+    let srcs_value = heap.alloc(target.srcs.clone());
     let dep_values: Vec<Value<'v>> = dep_providers
         .iter()
         .map(|provider| json_to_value(eval, provider))
@@ -408,15 +577,12 @@ fn value_to_json(value: Value<'_>) -> JsonValue {
         }
         return JsonValue::Object(map);
     }
-    // Fallback: render anything else as its string form so a misshaped
-    // provider record surfaces visibly instead of silently turning into
-    // null.
     JsonValue::String(value.to_string())
 }
 
 fn unpack_string_list(value: Value<'_>, field: &str) -> anyhow::Result<Vec<String>> {
     let list = ListRef::from_value(value).ok_or_else(|| {
-        anyhow::anyhow!(
+        anyhow!(
             "expected `{field}` to be a list of strings, got `{}`",
             value.get_type()
         )
@@ -424,7 +590,7 @@ fn unpack_string_list(value: Value<'_>, field: &str) -> anyhow::Result<Vec<Strin
     list.iter()
         .map(|item| {
             item.unpack_str().map(ToOwned::to_owned).ok_or_else(|| {
-                anyhow::anyhow!(
+                anyhow!(
                     "expected `{field}` entries to be strings, got `{}`",
                     item.get_type()
                 )
@@ -435,7 +601,7 @@ fn unpack_string_list(value: Value<'_>, field: &str) -> anyhow::Result<Vec<Strin
 
 fn unpack_string_dict(value: Value<'_>, field: &str) -> anyhow::Result<BTreeMap<String, String>> {
     let dict = DictRef::from_value(value).ok_or_else(|| {
-        anyhow::anyhow!(
+        anyhow!(
             "expected `{field}` to be a dict<string, string>, got `{}`",
             value.get_type()
         )
@@ -445,7 +611,7 @@ fn unpack_string_dict(value: Value<'_>, field: &str) -> anyhow::Result<BTreeMap<
         let key = key
             .unpack_str()
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                anyhow!(
                     "expected `{field}` keys to be strings, got `{}`",
                     key.get_type()
                 )
@@ -454,7 +620,7 @@ fn unpack_string_dict(value: Value<'_>, field: &str) -> anyhow::Result<BTreeMap<
         let value = value
             .unpack_str()
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                anyhow!(
                     "expected `{field}` values to be strings, got `{}`",
                     value.get_type()
                 )
@@ -470,6 +636,7 @@ mod tests {
     use super::*;
     use starlark::environment::Module;
     use starlark::syntax::{AstModule, Dialect};
+    use tempfile::TempDir;
 
     fn run(source: &str) -> starlark::Result<()> {
         Module::with_temp_heap(|module| {
@@ -481,11 +648,17 @@ mod tests {
         })
     }
 
+    fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
+        AnalysisStore::new(
+            workspace.to_path_buf(),
+            package.to_string(),
+            format!(".once/out/{package}"),
+        )
+    }
+
     #[test]
     fn schema_parse_path_resolves_native_globals_without_calling_them() {
-        // The functions are referenced but never invoked, matching
-        // what prelude schema parsing does with rule impls.
-        run("def _impl():\n    return xcrun_swiftc\n").unwrap();
+        run("def _impl():\n    return run_action\n").unwrap();
     }
 
     #[test]
@@ -495,11 +668,12 @@ mod tests {
 
     #[test]
     fn run_action_records_declarations_when_analysis_is_active() {
-        let store = AnalysisStore::new(".once/out/apps/ios/AppCore".to_string());
+        let tmp = TempDir::new().unwrap();
+        let store = store_for(tmp.path(), "apps/ios/AppCore");
         let (store, ()) = with_active_store(store, || {
             run(r#"
 run_action(
-    argv = ["xcrun", "swiftc", "-o", "AppCore.a"],
+    argv = ["swiftc", "-o", "AppCore.a"],
     inputs = ["apps/ios/AppCore/Sources/main.swift"],
     outputs = ["AppCore.a"],
     toolchain_identity = "id-1",
@@ -509,7 +683,7 @@ run_action(
             .unwrap();
         });
         assert_eq!(store.actions.len(), 1);
-        assert_eq!(store.actions[0].argv[0], "xcrun");
+        assert_eq!(store.actions[0].argv[0], "swiftc");
         assert_eq!(store.actions[0].outputs, vec!["AppCore.a".to_string()]);
         assert_eq!(
             store.actions[0].identifier.as_deref(),
@@ -519,7 +693,8 @@ run_action(
 
     #[test]
     fn declare_output_attaches_active_build_dir() {
-        let store = AnalysisStore::new(".once/out/apps/ios/AppCore".to_string());
+        let tmp = TempDir::new().unwrap();
+        let store = store_for(tmp.path(), "apps/ios/AppCore");
         let (store, ()) = with_active_store(store, || {
             run(r#"x = declare_output("AppCore.a")"#).unwrap();
         });
@@ -531,12 +706,38 @@ run_action(
 
     #[test]
     fn run_action_rejects_non_string_argv_entries() {
-        let store = AnalysisStore::new("d".to_string());
+        let tmp = TempDir::new().unwrap();
+        let store = store_for(tmp.path(), "p");
         let (_, err) = with_active_store(store, || {
             run(r#"run_action(argv = [1, "swiftc"])"#).unwrap_err()
         });
         let message = format!("{err:?}");
         assert!(message.contains("entries to be strings"), "{message}");
+    }
+
+    #[test]
+    fn glob_expands_against_active_package_directory() {
+        let tmp = TempDir::new().unwrap();
+        let pkg = tmp.path().join("apps/ios/AppCore/Sources");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("a.swift"), "").unwrap();
+        std::fs::write(pkg.join("b.swift"), "").unwrap();
+        std::fs::write(pkg.join("c.txt"), "").unwrap();
+
+        let store = store_for(tmp.path(), "apps/ios/AppCore");
+        let (store, ()) = with_active_store(store, || {
+            run(r#"
+matches = glob(["Sources/*.swift"])
+run_action(argv = ["echo"] + matches, outputs = ["out"])
+"#)
+            .unwrap();
+        });
+        assert_eq!(store.actions.len(), 1);
+        let argv = &store.actions[0].argv;
+        assert_eq!(argv[0], "echo");
+        assert!(argv[1..].iter().any(|p| p.ends_with("Sources/a.swift")));
+        assert!(argv[1..].iter().any(|p| p.ends_with("Sources/b.swift")));
+        assert!(!argv[1..].iter().any(|p| p.ends_with("Sources/c.txt")));
     }
 
     fn target(kind: &str) -> GraphTarget {
@@ -563,16 +764,8 @@ run_action(
 
     #[test]
     fn analyze_target_returns_null_provider_for_rules_without_impl() {
-        // apple_framework intentionally has no impl yet; analyzing it
-        // should be a no-op rather than an error so the caller can
-        // fall back to its placeholder path.
-        let result = analyze_target(
-            &target("apple_framework"),
-            &[],
-            &[],
-            std::path::Path::new("/tmp"),
-        )
-        .unwrap();
+        let tmp = TempDir::new().unwrap();
+        let result = analyze_target(&target("apple_framework"), tmp.path(), &[]).unwrap();
         assert!(result.actions.is_empty());
         assert_eq!(result.provider, JsonValue::Null);
         assert!(result.declared_outputs.is_empty());
@@ -580,17 +773,30 @@ run_action(
 
     #[test]
     fn analyze_target_errors_on_unknown_rule_kind() {
-        let err = analyze_target(
-            &target("mystery_rule"),
-            &[],
-            &[],
-            std::path::Path::new("/tmp"),
-        )
-        .unwrap_err()
-        .to_string();
+        let tmp = TempDir::new().unwrap();
+        let err = analyze_target(&target("mystery_rule"), tmp.path(), &[])
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("no rule found for kind `mystery_rule`"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn rule_has_impl_returns_true_for_apple_library() {
+        assert!(rule_has_impl("apple_library").unwrap());
+    }
+
+    #[test]
+    fn rule_has_impl_returns_false_for_placeholder_rules() {
+        assert!(!rule_has_impl("apple_framework").unwrap());
+        assert!(!rule_has_impl("apple_application").unwrap());
+        assert!(!rule_has_impl("apple_test_bundle").unwrap());
+    }
+
+    #[test]
+    fn rule_has_impl_returns_false_for_unknown_kind() {
+        assert!(!rule_has_impl("mystery_rule").unwrap());
     }
 }

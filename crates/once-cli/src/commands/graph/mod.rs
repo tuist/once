@@ -7,7 +7,6 @@
 
 mod action;
 mod analysis;
-mod apple;
 
 use std::collections::HashMap;
 use std::path::Path;

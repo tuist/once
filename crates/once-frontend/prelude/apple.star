@@ -34,24 +34,87 @@ def rule(kind, docs, attrs = [], deps = [], providers = [], capabilities = [], e
         "impl": impl,
     }
 
-# Rule implementations.
+# Generic host primitives provided by Rust:
+#   host_arch()                -> "arm64" | "x86_64" | ...
+#   host_os()                  -> "macos" | "linux" | ...
+#   host_which(name)           -> absolute path to a binary on PATH, or fails
+#   host_command(argv)         -> stdout string; fails on non-zero exit
+#   glob(patterns)             -> sorted, deduplicated workspace-relative file paths
+#                                 matching the patterns under the active package
+#   declare_output(name)       -> workspace-relative output path under the active build_dir
+#   run_action(argv=..., inputs=..., outputs=..., env={}, toolchain_identity=None, identifier=None)
 #
 # Each impl receives a `ctx` dict built by the Rust analysis pass with:
 #   ctx["label"]      -> {"package", "name", "id"}
 #   ctx["attr"]       -> typed attribute dict
-#   ctx["srcs"]       -> list of workspace-relative source paths (glob-expanded)
+#   ctx["srcs"]       -> raw glob patterns declared on the target (impl calls glob() to expand)
 #   ctx["deps"]       -> list of provider records returned by analyzed deps
 #   ctx["build_dir"]  -> workspace-relative output directory for this target
-#
-# Globals provided by Rust to impl callbacks:
-#   xcrun_swiftc(platform)        -> {"xcrun", "sdk", "identity"}
-#   apple_triple(platform, min_os) -> "<arch>-apple-<os><min><suffix>"
-#   declare_output(name)           -> workspace-relative output path
-#   run_action(argv=..., inputs=..., outputs=..., env={}, toolchain_identity=None, identifier=None)
 #
 # The impl returns a provider dict. Conventional keys downstream rules read:
 #   "swiftmodule_dir" -> directory holding the .swiftmodule (added to -I by consumers)
 #   "archive"         -> workspace-relative path to the .a archive
+
+# Apple-specific helpers implemented in starlark on top of the generic
+# primitives. Everything platform-specific (SDK names, triple format,
+# xcrun resolution, file-extension filtering) lives here, not in Rust.
+
+def _apple_sdk_name(platform):
+    if platform == "ios":
+        return "iphonesimulator"
+    if platform == "macos" or platform == "macosx":
+        return "macosx"
+    if platform == "tvos":
+        return "appletvsimulator"
+    if platform == "watchos":
+        return "watchsimulator"
+    if platform == "visionos" or platform == "xros":
+        return "xrsimulator"
+    fail("unsupported apple platform `" + platform + "`")
+
+def _apple_triple_os(platform):
+    if platform == "macos" or platform == "macosx":
+        return "macosx"
+    if platform == "ios":
+        return "ios"
+    if platform == "tvos":
+        return "tvos"
+    if platform == "watchos":
+        return "watchos"
+    if platform == "visionos" or platform == "xros":
+        return "xros"
+    return platform
+
+def _apple_triple_suffix(platform):
+    if platform == "macos" or platform == "macosx":
+        return ""
+    return "-simulator"
+
+def _apple_triple(platform, minimum_os):
+    arch = host_arch()
+    triple_os = _apple_triple_os(platform)
+    suffix = _apple_triple_suffix(platform)
+    return arch + "-apple-" + triple_os + minimum_os + suffix
+
+def _xcrun_swiftc(platform):
+    xcrun = host_which("xcrun")
+    sdk = _apple_sdk_name(platform)
+    swiftc_path = host_command([xcrun, "--sdk", sdk, "--find", "swiftc"]).strip()
+    version = host_command([xcrun, "--sdk", sdk, "swiftc", "--version"]).strip()
+    identity = "once.apple.swiftc.v1\x00" + swiftc_path + "\x00" + version
+    return (xcrun, sdk, identity)
+
+def _ends_with(value, suffix):
+    if len(value) < len(suffix):
+        return False
+    return value[len(value) - len(suffix):] == suffix
+
+def _filter_swift_sources(paths):
+    out = []
+    for path in paths:
+        if _ends_with(path, ".swift"):
+            out.append(path)
+    return out
 
 def _apple_library_impl(ctx):
     attrs = ctx["attr"]
@@ -64,8 +127,12 @@ def _apple_library_impl(ctx):
     enable_testing = attrs.get("enable_testing") or False
     library_evolution = attrs.get("library_evolution") or False
 
-    xcrun, sdk, swiftc_identity = xcrun_swiftc(platform)
-    triple = apple_triple(platform, minimum_os)
+    swift_srcs = _filter_swift_sources(glob(ctx["srcs"]))
+    if len(swift_srcs) == 0:
+        fail("apple_library " + ctx["label"]["id"] + " has no Swift sources; add `.swift` files matching `srcs`")
+
+    xcrun, sdk, swiftc_identity = _xcrun_swiftc(platform)
+    triple = _apple_triple(platform, minimum_os)
 
     archive = declare_output(module_name + ".a")
     swiftmodule = declare_output(module_name + ".swiftmodule")
@@ -106,12 +173,12 @@ def _apple_library_impl(ctx):
     for flag in swift_flags:
         argv.append(flag)
     argv.extend(["-o", archive])
-    for src in ctx["srcs"]:
+    for src in swift_srcs:
         argv.append(src)
 
     run_action(
         argv = argv,
-        inputs = ctx["srcs"],
+        inputs = swift_srcs,
         outputs = [archive, swiftmodule, swiftdoc],
         toolchain_identity = swiftc_identity,
         identifier = "swift_compile_" + module_name,

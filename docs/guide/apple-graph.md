@@ -115,25 +115,34 @@ change to a dep's source rebuilds dependents on next invocation.
 Rule logic lives in the starlark prelude alongside the schema. Each rule
 optionally declares an `impl = <callable>` that the analysis pass invokes with
 a `ctx` describing the target. `ctx["attr"]` carries typed attributes,
-`ctx["srcs"]` carries workspace-relative source paths (glob-expanded by the
-host), `ctx["deps"]` carries provider records returned by analyzed
-dependencies, and `ctx["build_dir"]` is the workspace-relative output
-directory. The impl composes the toolchain command line and declares actions
-through host-provided globals:
+`ctx["srcs"]` carries the raw glob patterns from the manifest,
+`ctx["deps"]` carries provider records returned by analyzed dependencies, and
+`ctx["build_dir"]` is the workspace-relative output directory.
 
-- `xcrun_swiftc(platform)` resolves the active `swiftc` and returns
-  `(xcrun_path, sdk_name, identity)`. The identity is folded into the action's
-  input digest so a swap of Xcode invalidates affected cache slots.
-- `apple_triple(platform, minimum_os)` renders the LLVM target triple for the
-  host architecture.
+The Rust side exposes only generic primitives; everything Apple-specific
+(SDK names, triple format, `xcrun` resolution, file-extension filtering)
+lives in `apple.star`:
+
+- `host_arch()`, `host_os()` report the host CPU and OS.
+- `host_which(name)` finds a binary on `PATH` and returns its absolute path.
+- `host_command(argv)` runs an arbitrary command and returns its stdout.
+- `glob(patterns)` expands a list of glob patterns against the active target's
+  package directory and returns sorted, deduplicated, workspace-relative file
+  paths.
 - `declare_output(name)` reserves a workspace-relative path under the target's
   `build_dir`.
 - `run_action(argv, inputs, outputs, env, toolchain_identity, identifier)`
-  records one command to execute.
+  records one command to execute. `toolchain_identity` is folded into the
+  action's input digest so a swap of Xcode (or whatever the prelude shelled
+  out to) invalidates affected cache slots.
 
-The impl returns a provider dict that downstream rules read from `ctx["deps"]`.
-For `apple_library` the provider carries `swiftmodule_dir` (so consumers can
-add it to `-I`) and `archive` (so future linking rules can reach the `.a`).
+The `apple_library` impl composes its swiftc command line by calling
+`host_which("xcrun")`, `host_command(...)` to resolve and version the active
+`swiftc`, then rendering a triple and walking dep provider records to gather
+`-I` search paths. The impl returns a provider dict that downstream rules read
+from `ctx["deps"]`; for `apple_library` the provider carries `swiftmodule_dir`
+(so consumers can add it to `-I`) and `archive` (so future linking rules can
+reach the `.a`).
 
 Script targets still execute through `once run` and the action cache. The
 bundle and test rules will migrate to starlark impls alongside their
