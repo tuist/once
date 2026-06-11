@@ -86,6 +86,12 @@ sudo apt-get update && sudo apt-get install -y libcap-ng-dev
   release notes. Rewrite with a comma, semicolon, or sentence break.
 - No roadmap-phase numbers in code or doc comments. Describe behavior,
   not milestones, since milestones rename and the comments rot.
+- No source code paths in user-facing docs. The website and release
+  notes describe what Once does and how to use it, never where the
+  code lives. Source paths rot under refactors, mean nothing to a
+  reader who isn't editing the repo, and leak implementation detail
+  through the public surface. Describe behavior, link to the
+  reference, or quote `once.toml` shapes instead.
 - Default to writing no comments. Add one only when the why is
   non-obvious.
 
