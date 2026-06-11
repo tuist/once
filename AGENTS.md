@@ -42,6 +42,40 @@ Keep the current CLI surface centered on:
 New build graph CLI, rule, and query surfaces should be introduced
 deliberately and documented in the relevant RFC or implementation plan.
 
+## Toolchain Rules
+
+Once exposes a doc-less surface for coding agents: an agent should be
+able to discover what rules exist, pull a runnable starter, validate a
+draft, and commit an edit using MCP tool calls alone, without reading
+prose docs. When adding support for a new toolchain (Android, JVM,
+Rust, etc.), mirror the shape already established for the Apple rules
+rather than inventing a parallel surface.
+
+Every new toolchain rule should preserve these invariants:
+
+- The rule is discoverable through `once_list_rules` and its full
+  contract is fetchable through `once_query_schema`.
+- The rule ships at least one runnable starter example as a real
+  directory under `crates/once-frontend/prelude/examples/<slug>/`
+  (manifest plus sources plus a `_meta.toml` with `name` and
+  `use_when`). The Starlark `rule(examples = [...])` declaration
+  references these by slug; inline TOML strings are not allowed.
+- Every example loads under the examples integration test
+  (`crates/once-frontend/tests/examples.rs`) without emitting any
+  diagnostics. If the rule has an `impl`, the example must build.
+- User-visible failures surface through the structured `Diagnostic`
+  shape (`code`, `target`, `attribute`, `repairs`). Validation lives
+  in `target_validator`; the editor in `manifest_editor` reuses the
+  same shape so retries are single-shot for the agent.
+- Every MCP tool has a matching `once query` or `once edit` CLI
+  subcommand so a human can reproduce what an agent does from the
+  terminal.
+
+The Apple rules under `crates/once-frontend/prelude/apple.star` and
+the examples under `crates/once-frontend/prelude/examples/` are the
+reference implementation. Treat them as the template when wiring a
+new toolchain.
+
 ## SDK API And Docs
 
 The `once` crate root and `crates/once/swift/Once.swift` are public SDK
