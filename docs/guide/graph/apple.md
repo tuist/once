@@ -159,16 +159,17 @@ existing build engineers have a familiar mental model.
 
 ## Agent workflows
 
-[`once mcp`](/reference/cli/mcp) speaks the Model Context Protocol over
-stdio so a coding agent (Claude Desktop, an IDE plug-in, an Anthropic
-SDK script) can inspect the graph directly. After the standard
-initialize handshake the server advertises three tools:
+[`once mcp`](/reference/cli/mcp) speaks the [Model Context
+Protocol](/reference/mcp) over stdio so a coding agent (Claude
+Desktop, an IDE plug-in, an Anthropic SDK script) can inspect the
+graph directly. After the standard initialize handshake the server
+advertises three tools:
 
-- `once_query_targets` — list every declared target, optionally
+- `once_query_targets`: list every declared target, optionally
   filtered by rule kind.
-- `once_query_capabilities` — return the capabilities a target
+- `once_query_capabilities`: return the capabilities a target
   exposes, with output groups and required inputs.
-- `once_query_schema` — return the typed contract for a rule kind.
+- `once_query_schema`: return the typed contract for a rule kind.
 
 Each tool returns the same JSON the corresponding
 [`once query`](/reference/cli/query) verb produces, so agents can plan

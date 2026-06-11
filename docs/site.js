@@ -38,6 +38,11 @@ export const site = {
           { text: "toolchain", link: "/reference/cli/toolchain" },
         ],
       },
+      {
+        text: "Protocols",
+        collapsed: false,
+        items: [{ text: "MCP", link: "/reference/mcp" }],
+      },
     ],
     "/": [
       { text: "Why", link: "/guide/why" },
