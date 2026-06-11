@@ -268,10 +268,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// host process env. Both `argv` and `env` participate in the
     /// cache key, so a different `DEVELOPER_DIR` resolves to a
     /// different cached result. Schema parsing returns `""`.
-    fn host_command<'v>(
-        argv: Value<'v>,
-        env: Option<Value<'v>>,
-    ) -> anyhow::Result<String> {
+    fn host_command<'v>(argv: Value<'v>, env: Option<Value<'v>>) -> anyhow::Result<String> {
         if !analysis_active() {
             return Ok(String::new());
         }
