@@ -1,0 +1,10 @@
+[[target]]
+name = "DefinesGuard"
+kind = "apple_library"
+srcs = ["DefinesGuard/Sources/*.swift"]
+
+[target.attrs]
+platform = "ios"
+minimum_os = "17.0"
+defines = ["ONCE_DEFINES_PRESENT"]
+emit_dsym = true

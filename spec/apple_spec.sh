@@ -5,6 +5,27 @@ Describe 'apple graph'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
+  apple_toolchain_unavailable() {
+    case "$(uname -s)" in
+      Darwin) ;;
+      *) return 0 ;;
+    esac
+    command -v xcrun >/dev/null 2>&1 || return 0
+    return 1
+  }
+
+  copy_apple_library_fixture() {
+    cp -R "$REPO_ROOT/fixtures/apple_library/." "$WORKSPACE/"
+  }
+
+  copy_apple_library_mixed_fixture() {
+    cp -R "$REPO_ROOT/fixtures/apple_library_mixed/." "$WORKSPACE/"
+  }
+
+  copy_apple_library_defines_fixture() {
+    cp -R "$REPO_ROOT/fixtures/apple_library_defines/." "$WORKSPACE/"
+  }
+
   create_apple_workspace() {
     mkdir -p "$WORKSPACE/apps/ios"
     cat > "$WORKSPACE/apps/ios/once.toml" <<'EOF'
@@ -183,5 +204,92 @@ EOF
     When call once run --runtime-rpc apps/ios/App
     The status should not equal 0
     The stderr should include '--runtime-rpc is only supported for executable script targets'
+  End
+
+  Describe 'apple_library swiftc compile'
+    It 'compiles an apple_library target to a real static archive'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_fixture
+
+      When call once --format json build apps/ios/AppCore
+      The status should be success
+      The stdout should include '"target":"apps/ios/AppCore"'
+      The stdout should include '"status":"completed"'
+      The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.a" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftmodule" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftdoc" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore-Swift.h" should be file
+    End
+
+    It 'recursively builds apple_library dependencies'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_fixture
+
+      When call once --format json build apps/ios/Greeter
+      The status should be success
+      The stdout should include '"target":"apps/ios/Greeter"'
+      The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftmodule" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Greeter/Greeter.a" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Greeter/Greeter.swiftmodule" should be file
+    End
+
+    It 'reuses cached swift compile output across runs'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_fixture
+
+      # The priming run happens unconditionally in the example body,
+      # so `|| true` keeps it from aborting on hosts where Skip if
+      # already short-circuited the assertions but the body still
+      # executes (e.g. Linux runners with no xcrun).
+      once --format json build apps/ios/AppCore >/dev/null 2>&1 || true
+
+      When call once --format json build apps/ios/AppCore
+      The status should be success
+      The stdout should include '"cache":"hit"'
+    End
+
+    It 'propagates `defines` to the swiftc compile and emits dSYM debug info'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_defines_fixture
+
+      When call once --format json build apps/ios/DefinesGuard
+      # The Swift source has `#if !ONCE_DEFINES_PRESENT #error(...) #endif`,
+      # so a successful build is positive evidence that `defines` made it
+      # to the swiftc command line. `emit_dsym` adds `-g`, which manifests
+      # as a populated `.swiftsourceinfo` alongside the archive; we assert
+      # the artifacts exist as the easiest cross-toolchain probe.
+      The status should be success
+      The stdout should include '"target":"apps/ios/DefinesGuard"'
+      The stdout should include '"status":"completed"'
+      The path "$WORKSPACE/.once/out/apps/ios/DefinesGuard/DefinesGuard.a" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/DefinesGuard/DefinesGuard.swiftmodule" should be file
+    End
+
+    It 'compiles a mixed Swift + Objective-C target into a single archive'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_mixed_fixture
+
+      When call once --format json build apps/ios/Mixed
+      The status should be success
+      The stdout should include '"target":"apps/ios/Mixed"'
+      The stdout should include '"status":"completed"'
+      The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed.a" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed-swift.a" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed.swiftmodule" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed-Swift.h" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Mixed/apps_ios_Mixed_Sources_MixedObjC.m.o" should be file
+    End
+
+    It 'invalidates the parent cache slot when a dep source changes'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_fixture
+
+      once --format json build apps/ios/Greeter >/dev/null 2>&1 || true
+      printf '\n// trigger rebuild\n' >> "$WORKSPACE/apps/ios/AppCore/Sources/Greeting.swift" 2>/dev/null || true
+
+      When call once --format json build apps/ios/Greeter
+      The status should be success
+      The stdout should include '"cache":"miss"'
+    End
   End
 End

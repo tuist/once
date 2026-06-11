@@ -4,6 +4,7 @@
 //! [`Target`] IR. TOML keeps cacheable script declarations literal
 //! and straightforward for humans and agents to patch.
 
+pub mod analysis;
 mod cache_provider;
 mod error;
 mod graph;

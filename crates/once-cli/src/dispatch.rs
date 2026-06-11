@@ -67,7 +67,7 @@ async fn run_command(
             remote,
             compute,
         } => {
-            dispatch_run(
+            Box::pin(dispatch_run(
                 workspace,
                 xdg,
                 output,
@@ -75,7 +75,7 @@ async fn run_command(
                 runtime_rpc,
                 runtime_rpc_socket,
                 remote.then_some(compute),
-            )
+            ))
             .await
         }
         Cmd::Exec {
@@ -110,38 +110,68 @@ async fn run_command(
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
             commands::graph::test(workspace, &cache, output, &target).await
         }
-        Cmd::Toolchain {
-            cmd: Some(cli::ToolchainCmd::Inspect { platform }),
-        } => commands::toolchain::inspect(workspace, output, platform.as_deref())
+        Cmd::Toolchain { cmd } => run_toolchain_command(workspace, output, cmd).await,
+        Cmd::Query { cmd } => run_query_command(workspace, output, cmd).await,
+        Cmd::Runtime { cmd } => run_runtime_command(cmd).await,
+        Cmd::Mcp {
+            workspace: workspace_override,
+        } => {
+            let mcp_workspace = workspace_override.unwrap_or_else(|| workspace.to_path_buf());
+            commands::mcp::serve(mcp_workspace)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Cmd::Reference { out } => crate::reference::generate(&out),
+    }
+}
+
+async fn run_toolchain_command(
+    workspace: &Path,
+    output: Output,
+    command: Option<cli::ToolchainCmd>,
+) -> Result<ExitCode> {
+    match command {
+        Some(cli::ToolchainCmd::Inspect { platform }) => {
+            commands::toolchain::inspect(workspace, output, platform.as_deref())
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        None => anyhow::bail!("toolchain subcommand required"),
+    }
+}
+
+async fn run_query_command(
+    workspace: &Path,
+    output: Output,
+    command: Option<cli::QueryCmd>,
+) -> Result<ExitCode> {
+    match command {
+        Some(cli::QueryCmd::Targets { kind }) => {
+            commands::query::targets(workspace, output, kind.as_deref())
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::Capabilities { target }) => {
+            commands::query::capabilities(workspace, output, &target)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::Schema { kind }) => commands::query::schema(workspace, output, &kind)
             .await
             .map(|()| ExitCode::SUCCESS),
-        Cmd::Toolchain { cmd: None } => anyhow::bail!("toolchain subcommand required"),
-        Cmd::Query {
-            cmd: Some(cli::QueryCmd::Targets { kind }),
-        } => commands::query::targets(workspace, output, kind.as_deref())
+        None => anyhow::bail!("query subcommand required"),
+    }
+}
+
+async fn run_runtime_command(command: Option<cli::RuntimeCmd>) -> Result<ExitCode> {
+    match command {
+        Some(cli::RuntimeCmd::Rpc {
+            session_dir,
+            socket,
+        }) => commands::runtime::rpc(&session_dir, socket.as_deref())
             .await
             .map(|()| ExitCode::SUCCESS),
-        Cmd::Query {
-            cmd: Some(cli::QueryCmd::Capabilities { target }),
-        } => commands::query::capabilities(workspace, output, &target)
-            .await
-            .map(|()| ExitCode::SUCCESS),
-        Cmd::Query {
-            cmd: Some(cli::QueryCmd::Schema { kind }),
-        } => commands::query::schema(workspace, output, &kind)
-            .await
-            .map(|()| ExitCode::SUCCESS),
-        Cmd::Query { cmd: None } => anyhow::bail!("query subcommand required"),
-        Cmd::Runtime {
-            cmd:
-                Some(cli::RuntimeCmd::Rpc {
-                    session_dir,
-                    socket,
-                }),
-        } => commands::runtime::rpc(&session_dir, socket.as_deref())
-            .await
-            .map(|()| ExitCode::SUCCESS),
-        Cmd::Runtime { cmd: None } => anyhow::bail!("runtime subcommand required"),
+        None => anyhow::bail!("runtime subcommand required"),
     }
 }
 

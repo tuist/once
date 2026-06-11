@@ -50,8 +50,8 @@ Replace the version in the URL with the Once release you want to use. The
 checksum is published next to the release asset and can also be computed
 locally with `swift package compute-checksum Once.xcframework.zip`.
 
-Add `crates/once/swift/Once.swift` from the matching Once repository tag
-to the Swift target that depends on `Once`. The wrapper imports the C
+Vendor the `Once.swift` wrapper that ships with the matching release tag
+into the Swift target that depends on `Once`. The wrapper imports the C
 module from the binary target and gives callers the high-level Swift API.
 
 ## OnceCache

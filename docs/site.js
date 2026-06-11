@@ -3,6 +3,7 @@ export const site = {
     "Once makes project automation cacheable, observable, and remotely executable.",
   nav: [
     { text: "Docs", link: "/" },
+    { text: "Reference", link: "/reference/" },
     {
       text: "Links",
       items: [
@@ -18,13 +19,36 @@ export const site = {
     },
   ],
   sidebar: {
+    "/reference/": [
+      { text: "Reference", link: "/reference/" },
+      {
+        text: "CLI",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/reference/cli/" },
+          { text: "auth", link: "/reference/cli/auth" },
+          { text: "build", link: "/reference/cli/build" },
+          { text: "cache", link: "/reference/cli/cache" },
+          { text: "exec", link: "/reference/cli/exec" },
+          { text: "mcp", link: "/reference/cli/mcp" },
+          { text: "query", link: "/reference/cli/query" },
+          { text: "run", link: "/reference/cli/run" },
+          { text: "runtime", link: "/reference/cli/runtime" },
+          { text: "test", link: "/reference/cli/test" },
+          { text: "toolchain", link: "/reference/cli/toolchain" },
+        ],
+      },
+      {
+        text: "MCP",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/reference/mcp/" },
+          { text: "Tools", link: "/reference/mcp/tools" },
+        ],
+      },
+    ],
     "/": [
       { text: "Why", link: "/guide/why" },
-      {
-        text: "Graph",
-        collapsed: false,
-        items: [{ text: "Apple", link: "/guide/apple-graph" }],
-      },
       {
         text: "Scripts",
         collapsed: false,
@@ -32,6 +56,14 @@ export const site = {
           { text: "Overview", link: "/guide/scripts/" },
           { text: "Caching", link: "/guide/scripts/caching" },
           { text: "Runtime", link: "/guide/scripts/runtime" },
+        ],
+      },
+      {
+        text: "Graph",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/guide/graph/" },
+          { text: "Apple", link: "/guide/graph/apple" },
         ],
       },
       {

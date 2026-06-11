@@ -1,0 +1,18 @@
+[[target]]
+name = "AppCore"
+kind = "apple_library"
+srcs = ["AppCore/Sources/*.swift"]
+
+[target.attrs]
+platform = "ios"
+minimum_os = "17.0"
+
+[[target]]
+name = "Greeter"
+kind = "apple_library"
+srcs = ["Greeter/Sources/*.swift"]
+deps = ["./AppCore"]
+
+[target.attrs]
+platform = "ios"
+minimum_os = "17.0"
