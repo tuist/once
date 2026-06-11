@@ -321,17 +321,23 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// any edit (including in starlark that produced it) invalidates
     /// downstream consumers.
     ///
-    /// Implementation note: the materialisation runs as `/bin/sh -c
-    /// printf '%s' <quoted_content> > <path>` so it goes through the
-    /// same `Action::RunCommand` path as every other declared action,
-    /// keeping execution and caching uniform.
+    /// Implementation note: the materialisation runs as `/bin/sh -c`
+    /// with the path bound to a shell variable first; the parent
+    /// directory is computed via the POSIX `${var%/*}` parameter
+    /// expansion. Passing `shell_quote(path)` directly inside
+    /// `$(dirname ...)` would re-tokenize the escaped quotes a path
+    /// like `a'b/c.h` ends up with, so binding once and dereferencing
+    /// twice keeps the action robust against single quotes in paths.
     #[allow(clippy::unnecessary_wraps)]
     fn write_file(path: &str, content: &str) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
         }
         let script = format!(
-            "set -eu\nmkdir -p \"$(dirname {path_arg})\"\nprintf '%s' {content_arg} > {path_arg}\n",
+            "set -eu\n\
+             __once_path={path_arg}\n\
+             case \"$__once_path\" in */*) mkdir -p \"${{__once_path%/*}}\" ;; esac\n\
+             printf '%s' {content_arg} > \"$__once_path\"\n",
             path_arg = shell_quote(path),
             content_arg = shell_quote(content),
         );
@@ -981,6 +987,123 @@ run_action(
         assert_eq!(cache.command(&argv, &env).unwrap(), "done");
 
         assert_eq!(std::fs::read_to_string(counter).unwrap(), "x");
+    }
+
+    /// Two calls with the same argv but different `env` must spawn the
+    /// process twice (no shared cache slot). This is what makes the
+    /// `xcode_developer_dir` pin partition Xcode toolchains correctly.
+    #[cfg(unix)]
+    #[test]
+    fn host_command_cache_keys_on_env() {
+        let tmp = TempDir::new().unwrap();
+        let counter = tmp.path().join("counter");
+        let cache = HostCache::default();
+        let argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "printf x >> \"$1\"; printf \"$ONCE_TEST_PIN\"".to_string(),
+            "sh".to_string(),
+            counter.display().to_string(),
+        ];
+        let mut env_a = BTreeMap::new();
+        env_a.insert("ONCE_TEST_PIN".to_string(), "a".to_string());
+        let mut env_b = BTreeMap::new();
+        env_b.insert("ONCE_TEST_PIN".to_string(), "b".to_string());
+
+        // Distinct env values land in distinct cache slots and the
+        // process is re-spawned for each, so the script's stdout
+        // reflects each env's pin value.
+        assert_eq!(cache.command(&argv, &env_a).unwrap(), "a");
+        assert_eq!(cache.command(&argv, &env_b).unwrap(), "b");
+        // Repeat the first call: the env_a slot is now warm and
+        // reuses the cached stdout without spawning the process.
+        assert_eq!(cache.command(&argv, &env_a).unwrap(), "a");
+
+        // Counter increments once per spawn: env_a (cold), env_b
+        // (cold), env_a (warm, no spawn) -> two ticks total.
+        assert_eq!(std::fs::read_to_string(counter).unwrap(), "xx");
+    }
+
+    #[test]
+    fn shell_quote_handles_empty_strings_quotes_and_specials() {
+        assert_eq!(shell_quote(""), "''");
+        // No special characters: single-quote wrap with no escapes.
+        assert_eq!(shell_quote("abc"), "'abc'");
+        // Single quote in the middle uses the close/escape/reopen form
+        // so the resulting word still expands to a single token.
+        assert_eq!(shell_quote("a'b"), "'a'\"'\"'b'");
+        // Backslashes, dollar signs, double quotes are inert inside the
+        // single-quoted POSIX form, so they pass through verbatim.
+        assert_eq!(shell_quote("$x \\n \"y\""), "'$x \\n \"y\"'");
+    }
+
+    /// [`write_file`] declares an action whose argv is
+    /// `["/bin/sh", "-c", script]`. The script must (a) bind the path
+    /// before computing its parent directory, (b) include the content
+    /// as the only `printf` argument, and (c) declare the path as the
+    /// only output.
+    #[test]
+    fn write_file_records_an_action_with_path_binding_and_content() {
+        let tmp = TempDir::new().unwrap();
+        let store = store_for(tmp.path(), "apps/ios/Mixed");
+        let (store, ()) = with_active_store(store, || {
+            run(r#"write_file(".once/out/apps/ios/Mixed/module.modulemap", "module Mixed { export * }\n")"#).unwrap();
+        });
+        assert_eq!(store.actions.len(), 1);
+        let action = &store.actions[0];
+        assert_eq!(
+            action.outputs,
+            vec![".once/out/apps/ios/Mixed/module.modulemap".to_string()]
+        );
+        assert_eq!(action.argv[0], "/bin/sh");
+        assert_eq!(action.argv[1], "-c");
+        let script = &action.argv[2];
+        assert!(script.contains("__once_path="), "{script}");
+        assert!(
+            script.contains("printf '%s' 'module Mixed { export * }"),
+            "{script}"
+        );
+        assert!(script.contains("> \"$__once_path\""), "{script}");
+        // The path is referenced via the binding, never inlined into
+        // the dirname call, so single quotes in the path can't escape
+        // the substitution.
+        assert!(!script.contains("$(dirname"), "{script}");
+    }
+
+    /// The end-to-end script the action declares must actually run and
+    /// produce the file on a real shell. This catches scripting bugs
+    /// that the structural assertions above would miss.
+    #[cfg(unix)]
+    #[test]
+    fn write_file_script_actually_creates_the_file() {
+        let tmp = TempDir::new().unwrap();
+        let nested = tmp.path().join("nested/dir/holds/output.txt");
+        // Use a path with a single quote in a parent dir to lock in
+        // the fix from the review thread: the script must survive
+        // quotes inside `__once_path` without re-tokenising.
+        let quoted = tmp.path().join("a'b").join("out.txt");
+        let store = AnalysisStore::new(tmp.path().to_path_buf(), String::new(), String::new());
+        let (store, ()) = with_active_store(store, || {
+            run(&format!(
+                r#"write_file({nested:?}, "hello\n")
+write_file({quoted:?}, "quoted\n")
+"#,
+                nested = nested.display().to_string(),
+                quoted = quoted.display().to_string(),
+            ))
+            .unwrap();
+        });
+        assert_eq!(store.actions.len(), 2);
+        for action in &store.actions {
+            let status = std::process::Command::new(&action.argv[0])
+                .arg(&action.argv[1])
+                .arg(&action.argv[2])
+                .status()
+                .expect("script should spawn");
+            assert!(status.success(), "script failed: {:?}", action.argv);
+        }
+        assert_eq!(std::fs::read_to_string(&nested).unwrap(), "hello\n");
+        assert_eq!(std::fs::read_to_string(&quoted).unwrap(), "quoted\n");
     }
 
     #[test]
