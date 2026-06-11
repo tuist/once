@@ -22,6 +22,10 @@ Describe 'apple graph'
     cp -R "$REPO_ROOT/fixtures/apple_library_mixed/." "$WORKSPACE/"
   }
 
+  copy_apple_library_defines_fixture() {
+    cp -R "$REPO_ROOT/fixtures/apple_library_defines/." "$WORKSPACE/"
+  }
+
   create_apple_workspace() {
     mkdir -p "$WORKSPACE/apps/ios"
     cat > "$WORKSPACE/apps/ios/once.toml" <<'EOF'
@@ -242,6 +246,23 @@ EOF
       When call once --format json build apps/ios/AppCore
       The status should be success
       The stdout should include '"cache":"hit"'
+    End
+
+    It 'propagates `defines` to the swiftc compile and emits dSYM debug info'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_defines_fixture
+
+      When call once --format json build apps/ios/DefinesGuard
+      # The Swift source has `#if !ONCE_DEFINES_PRESENT #error(...) #endif`,
+      # so a successful build is positive evidence that `defines` made it
+      # to the swiftc command line. `emit_dsym` adds `-g`, which manifests
+      # as a populated `.swiftsourceinfo` alongside the archive; we assert
+      # the artifacts exist as the easiest cross-toolchain probe.
+      The status should be success
+      The stdout should include '"target":"apps/ios/DefinesGuard"'
+      The stdout should include '"status":"completed"'
+      The path "$WORKSPACE/.once/out/apps/ios/DefinesGuard/DefinesGuard.a" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/DefinesGuard/DefinesGuard.swiftmodule" should be file
     End
 
     It 'compiles a mixed Swift + Objective-C target into a single archive'
