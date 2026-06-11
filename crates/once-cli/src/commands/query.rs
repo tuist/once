@@ -1,7 +1,8 @@
 //! `once query` - inspect the typed build graph.
 
 use std::fmt::Write as _;
-use std::path::Path;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -63,6 +64,99 @@ pub async fn schema(workspace: &Path, output: Output, kind: &str) -> Result<()> 
     write_body(output, || render_schema_human(&schema), &schema).await
 }
 
+#[derive(Debug, Serialize)]
+struct RuleSummary {
+    kind: String,
+    docs: String,
+    examples: Vec<RuleExampleSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct RuleExampleSummary {
+    slug: String,
+    name: String,
+    use_when: String,
+}
+
+impl From<once_frontend::RuleSchema> for RuleSummary {
+    fn from(schema: once_frontend::RuleSchema) -> Self {
+        Self {
+            kind: schema.kind,
+            docs: schema.docs,
+            examples: schema
+                .examples
+                .into_iter()
+                .map(|example| RuleExampleSummary {
+                    slug: example.slug,
+                    name: example.name,
+                    use_when: example.use_when,
+                })
+                .collect(),
+        }
+    }
+}
+
+pub async fn rules(output: Output) -> Result<()> {
+    let schemas = once_frontend::built_in_rule_schemas_result()?;
+    let summaries: Vec<RuleSummary> = schemas.into_iter().map(RuleSummary::from).collect();
+    write_body(output, || render_rules_human(&summaries), &summaries).await
+}
+
+pub async fn target(workspace: &Path, output: Output, target_id: &str) -> Result<()> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let target = graph
+        .into_iter()
+        .find(|target| target.label.id == target_id)
+        .with_context(|| format!("no target matches `{target_id}`"))?;
+    write_body(output, || render_target_human(&target), &target).await
+}
+
+pub async fn validate_target(output: Output, file: Option<PathBuf>) -> Result<()> {
+    let raw = read_json_input(file)?;
+    let input: ValidateTargetInput = serde_json::from_str(&raw)
+        .context("validate-target input is not valid JSON matching `{ \"target\": { ... } }`")?;
+    let schemas = once_frontend::built_in_rule_schemas_result()?;
+    let diagnostics = once_frontend::validate_target(&input.target, &schemas);
+    let result = if diagnostics.is_empty() {
+        ValidateResult::Valid { valid: true }
+    } else {
+        ValidateResult::Invalid {
+            valid: false,
+            diagnostics,
+        }
+    };
+    write_body(output, || render_validate_human(&result), &result).await
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ValidateTargetInput {
+    target: once_frontend::TargetSpec,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum ValidateResult {
+    Valid {
+        valid: bool,
+    },
+    Invalid {
+        valid: bool,
+        diagnostics: Vec<once_frontend::Diagnostic>,
+    },
+}
+
+pub(crate) fn read_json_input(file: Option<PathBuf>) -> Result<String> {
+    if let Some(path) = file {
+        std::fs::read_to_string(&path).with_context(|| format!("reading `{}`", path.display()))
+    } else {
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("reading JSON from stdin")?;
+        Ok(buf)
+    }
+}
+
 fn render_capabilities_human(target: &once_frontend::GraphTarget) -> String {
     let mut out = format!("{} ({})\n", target.label.id, target.kind);
     if target.capabilities.is_empty() {
@@ -122,6 +216,78 @@ fn render_schema_human(schema: &once_frontend::RuleSchema) -> String {
         }
     }
     out
+}
+
+fn render_rules_human(rules: &[RuleSummary]) -> String {
+    if rules.is_empty() {
+        return "rules: none\n".to_string();
+    }
+    let mut out = String::from("rules:\n");
+    for rule in rules {
+        writeln!(out, "  {}: {}", rule.kind, rule.docs).expect("writing to string cannot fail");
+        for example in &rule.examples {
+            writeln!(out, "    {} - {}", example.slug, example.use_when)
+                .expect("writing to string cannot fail");
+        }
+    }
+    out
+}
+
+fn render_target_human(target: &once_frontend::GraphTarget) -> String {
+    let mut out = format!("{} ({})\n", target.label.id, target.kind);
+    if !target.srcs.is_empty() {
+        writeln!(out, "srcs: {}", target.srcs.join(", ")).expect("writing to string cannot fail");
+    }
+    if !target.deps.is_empty() {
+        writeln!(out, "deps: {}", target.deps.join(", ")).expect("writing to string cannot fail");
+    }
+    if !target.attrs.is_empty() {
+        out.push_str("attrs:\n");
+        for (key, value) in &target.attrs {
+            writeln!(out, "  {key} = {value:?}").expect("writing to string cannot fail");
+        }
+    }
+    if !target.capabilities.is_empty() {
+        out.push_str("capabilities: ");
+        let names: Vec<&str> = target
+            .capabilities
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        out.push_str(&names.join(", "));
+        out.push('\n');
+    }
+    out
+}
+
+fn render_validate_human(result: &ValidateResult) -> String {
+    match result {
+        ValidateResult::Valid { .. } => "valid\n".to_string(),
+        ValidateResult::Invalid { diagnostics, .. } => {
+            let mut out = String::from("invalid:\n");
+            for diagnostic in diagnostics {
+                let scope = match (&diagnostic.target, &diagnostic.attribute) {
+                    (Some(t), Some(a)) => format!(" [{t}/{a}]"),
+                    (Some(t), None) => format!(" [{t}]"),
+                    (None, Some(a)) => format!(" [{a}]"),
+                    (None, None) => String::new(),
+                };
+                writeln!(
+                    out,
+                    "  {} ({}){}: {}",
+                    diagnostic.code,
+                    scope.trim(),
+                    scope,
+                    diagnostic.message
+                )
+                .expect("writing to string cannot fail");
+                for repair in &diagnostic.repairs {
+                    writeln!(out, "    - {repair}").expect("writing to string cannot fail");
+                }
+            }
+            out
+        }
+    }
 }
 
 fn render_targets_human(records: &[TargetRecord]) -> String {

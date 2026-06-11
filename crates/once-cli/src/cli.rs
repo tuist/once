@@ -8,12 +8,14 @@ use once_core::WorkspacePath;
 
 mod auth;
 mod cache;
+mod edit;
 mod query;
 mod runtime;
 mod toolchain;
 
 pub use auth::AuthCmd;
 pub use cache::{CacheActionCmd, CacheBlobCmd, CacheCmd};
+pub use edit::EditCmd;
 pub use query::QueryCmd;
 pub use runtime::RuntimeCmd;
 pub use toolchain::ToolchainCmd;
@@ -296,6 +298,19 @@ pub enum Cmd {
         cmd: Option<RuntimeCmd>,
     },
 
+    /// Mutate workspace manifests.
+    ///
+    /// `edit apply` runs a batch of `create` / `update` / `delete`
+    /// operations against a single `once.toml` atomically. The same
+    /// surface is exposed as the `once_apply_edit` MCP tool; the CLI
+    /// reads its input JSON from `--file` or stdin so humans can
+    /// reproduce what an agent did from the terminal.
+    #[command(arg_required_else_help = true)]
+    Edit {
+        #[command(subcommand)]
+        cmd: Option<EditCmd>,
+    },
+
     /// Expose Once's graph queries to a coding agent over MCP.
     ///
     /// Speaks the Model Context Protocol over stdio so an agent host
@@ -363,6 +378,13 @@ impl Cmd {
             }
             Self::Query { cmd } => {
                 let mut path = vec!["query"];
+                if let Some(cmd) = cmd {
+                    path.extend(cmd.surface_path());
+                }
+                path
+            }
+            Self::Edit { cmd } => {
+                let mut path = vec!["edit"];
                 if let Some(cmd) = cmd {
                     path.extend(cmd.surface_path());
                 }

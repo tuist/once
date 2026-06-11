@@ -9,11 +9,13 @@ repository.workspace = true
 [dependencies]
 anyhow.workspace = true
 glob.workspace = true
+include_dir = "0.7"
 serde.workspace = true
 serde_json.workspace = true
 starlark.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+toml_edit = "0.22"
 walkdir.workspace = true
 
 [dev-dependencies]

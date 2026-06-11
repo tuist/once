@@ -1,0 +1,2 @@
+name = "Apple library with mixed Swift and Objective-C"
+use_when = "Your library exposes Swift APIs that call into an existing Objective-C codebase through a bridging header."

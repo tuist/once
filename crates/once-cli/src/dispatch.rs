@@ -112,6 +112,7 @@ async fn run_command(
         }
         Cmd::Toolchain { cmd } => run_toolchain_command(workspace, output, cmd).await,
         Cmd::Query { cmd } => run_query_command(workspace, output, cmd).await,
+        Cmd::Edit { cmd } => run_edit_command(workspace, output, cmd).await,
         Cmd::Runtime { cmd } => run_runtime_command(cmd).await,
         Cmd::Mcp {
             workspace: workspace_override,
@@ -159,7 +160,33 @@ async fn run_query_command(
         Some(cli::QueryCmd::Schema { kind }) => commands::query::schema(workspace, output, &kind)
             .await
             .map(|()| ExitCode::SUCCESS),
+        Some(cli::QueryCmd::Rules) => commands::query::rules(output)
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Some(cli::QueryCmd::Target { target }) => {
+            commands::query::target(workspace, output, &target)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::ValidateTarget { file }) => {
+            commands::query::validate_target(output, file)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
         None => anyhow::bail!("query subcommand required"),
+    }
+}
+
+async fn run_edit_command(
+    workspace: &Path,
+    output: Output,
+    command: Option<cli::EditCmd>,
+) -> Result<ExitCode> {
+    match command {
+        Some(cli::EditCmd::Apply { file }) => commands::edit::apply(workspace, output, file)
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        None => anyhow::bail!("edit subcommand required"),
     }
 }
 

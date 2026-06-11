@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Subcommand;
 
 #[derive(Subcommand)]
@@ -20,6 +22,26 @@ pub enum QueryCmd {
         /// Rule kind, e.g. `apple_application`.
         kind: String,
     },
+
+    /// List every rule kind with its one-line docs and example slugs.
+    Rules,
+
+    /// Resolve a single target's full record (kind, srcs, deps, attrs, capabilities).
+    Target {
+        /// Target id, e.g. `apps/Hello/Hello`.
+        target: String,
+    },
+
+    /// Validate a proposed `[[target]]` table against its rule schema.
+    ///
+    /// Reads a JSON document matching the `once_validate_target` MCP
+    /// tool input shape (`{ "target": { ... } }`) from `--file` or, if
+    /// omitted, from stdin.
+    ValidateTarget {
+        /// Path to a JSON file. When omitted, the JSON document is read from stdin.
+        #[arg(long, value_name = "PATH")]
+        file: Option<PathBuf>,
+    },
 }
 
 impl QueryCmd {
@@ -28,6 +50,9 @@ impl QueryCmd {
             Self::Targets { .. } => vec!["targets"],
             Self::Capabilities { .. } => vec!["capabilities"],
             Self::Schema { .. } => vec!["schema"],
+            Self::Rules => vec!["rules"],
+            Self::Target { .. } => vec!["target"],
+            Self::ValidateTarget { .. } => vec!["validate-target"],
         }
     }
 }

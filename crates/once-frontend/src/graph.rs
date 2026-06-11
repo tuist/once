@@ -71,6 +71,12 @@ pub struct Diagnostic {
     pub code: String,
     /// Human-readable diagnostic message.
     pub message: String,
+    /// Canonical target id this diagnostic is scoped to, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Attribute name this diagnostic is scoped to, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribute: Option<String>,
     /// Suggested repairs that an agent can apply or present.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repairs: Vec<String>,
@@ -91,8 +97,34 @@ pub struct RuleSchema {
     pub providers: Vec<String>,
     /// Capabilities exposed by targets of this rule.
     pub capabilities: Vec<Capability>,
-    /// Example `once.toml` declarations.
-    pub examples: Vec<String>,
+    /// Runnable starter workspaces. Each example bundles the files an
+    /// agent or human needs to copy to get a working target of this
+    /// rule kind, along with a one-line "use this when..." hint.
+    pub examples: Vec<RuleExample>,
+}
+
+/// A runnable starter workspace for a rule. Resolved from the
+/// `prelude/examples/<slug>/` directory bundled into the binary.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuleExample {
+    /// Human-readable example title.
+    pub name: String,
+    /// Stable identifier used to reference this example.
+    pub slug: String,
+    /// One-line "use this when..." hint that helps callers choose
+    /// between examples for the same rule kind.
+    pub use_when: String,
+    /// Every file in the example bundle, sorted by path.
+    pub files: Vec<RuleExampleFile>,
+}
+
+/// A single file inside a [`RuleExample`].
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuleExampleFile {
+    /// Path relative to the example workspace root.
+    pub path: String,
+    /// File contents as a UTF-8 string.
+    pub contents: String,
 }
 
 /// Attribute metadata exposed by a rule schema.
@@ -177,6 +209,8 @@ fn graph_target_from_schema(target: &Target, schemas: &[RuleSchema]) -> GraphTar
         vec![Diagnostic {
             code: "unknown_rule_kind".to_string(),
             message: format!("target kind `{}` has no built-in schema", target.kind),
+            target: Some(target.id()),
+            attribute: None,
             repairs: Vec::new(),
         }]
     };
@@ -259,6 +293,16 @@ fn rule_schemas_from_value(value: Value<'_>) -> std::result::Result<Vec<RuleSche
 }
 
 fn rule_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<RuleSchema, String> {
+    let example_slugs = field_string_list(value, path, "examples")?;
+    let examples = example_slugs
+        .into_iter()
+        .enumerate()
+        .map(|(index, slug)| {
+            crate::examples::load_example(&slug).ok_or_else(|| {
+                format!("{path}.examples[{index}] references unknown example slug `{slug}`")
+            })
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(RuleSchema {
         kind: field_string(value, path, "kind")?,
         docs: field_string(value, path, "docs")?,
@@ -280,7 +324,7 @@ fn rule_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<R
                 capability_from_value(capability, &format!("{path}.capabilities[{index}]"))
             })
             .collect::<std::result::Result<Vec<_>, _>>()?,
-        examples: field_string_list(value, path, "examples")?,
+        examples,
     })
 }
 

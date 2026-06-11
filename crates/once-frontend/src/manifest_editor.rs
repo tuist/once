@@ -1,0 +1,672 @@
+//! Atomic editor for `once.toml` manifests.
+//!
+//! Callers describe their edit as a list of [`EditOperation`]s
+//! (`create`, `update`, `delete`) against a single manifest source
+//! string. [`apply_operations`] runs the whole list through
+//! `toml_edit`, preserving formatting and comments where it can, and
+//! returns either the new manifest body or a list of structured
+//! [`Diagnostic`]s explaining what went wrong.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value as JsonValue};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
+
+use crate::graph::Diagnostic;
+
+/// One mutation against the `[[target]]` array in a `once.toml`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum EditOperation {
+    /// Append a new `[[target]]` block. Fails if a target with the
+    /// same name already exists in the manifest.
+    Create { target: TargetSpec },
+    /// Replace the named fields of an existing `[[target]]`. Fields
+    /// left unset (`None`) are preserved as-is.
+    Update {
+        target_name: String,
+        #[serde(default)]
+        set: TargetUpdate,
+    },
+    /// Remove the named `[[target]]`.
+    Delete { target_name: String },
+}
+
+/// Full description of a target as the editor will write it.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct TargetSpec {
+    pub name: String,
+    pub kind: String,
+    #[serde(default)]
+    pub deps: Vec<String>,
+    #[serde(default)]
+    pub srcs: Vec<String>,
+    #[serde(default)]
+    pub attrs: JsonMap<String, JsonValue>,
+}
+
+/// Partial update for an existing target. Any field left as `None`
+/// keeps its current value; setting `attrs` to `Some(map)` replaces
+/// the whole attrs table (callers needing a merge must read, merge,
+/// then call update with the merged map).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct TargetUpdate {
+    pub name: Option<String>,
+    pub kind: Option<String>,
+    pub deps: Option<Vec<String>>,
+    pub srcs: Option<Vec<String>>,
+    pub attrs: Option<JsonMap<String, JsonValue>>,
+}
+
+/// Apply the operations against `toml_src` and return the resulting
+/// manifest body. Any operation failure aborts the whole batch and
+/// returns diagnostics; the input string is never partially modified.
+pub fn apply_operations(
+    toml_src: &str,
+    operations: &[EditOperation],
+) -> Result<String, Vec<Diagnostic>> {
+    let mut doc: DocumentMut = toml_src.parse().map_err(|err: toml_edit::TomlError| {
+        vec![Diagnostic {
+            code: "toml_parse_error".to_string(),
+            message: format!("could not parse `once.toml`: {err}"),
+            target: None,
+            attribute: None,
+            repairs: Vec::new(),
+        }]
+    })?;
+
+    ensure_target_array(&mut doc)?;
+
+    for op in operations {
+        apply_one(&mut doc, op)?;
+    }
+    Ok(doc.to_string())
+}
+
+fn ensure_target_array(doc: &mut DocumentMut) -> Result<(), Vec<Diagnostic>> {
+    if !doc.contains_key("target") {
+        doc.insert("target", Item::ArrayOfTables(ArrayOfTables::new()));
+        return Ok(());
+    }
+    if doc["target"].as_array_of_tables().is_none() {
+        return Err(vec![Diagnostic {
+            code: "invalid_target_section".to_string(),
+            message: "the top-level `target` key must be an array of tables (`[[target]]`)"
+                .to_string(),
+            target: None,
+            attribute: None,
+            repairs: vec!["delete the conflicting `target` value and let the editor re-create it as `[[target]]`".to_string()],
+        }]);
+    }
+    Ok(())
+}
+
+fn apply_one(doc: &mut DocumentMut, op: &EditOperation) -> Result<(), Vec<Diagnostic>> {
+    match op {
+        EditOperation::Create { target } => create(doc, target),
+        EditOperation::Update { target_name, set } => update(doc, target_name, set),
+        EditOperation::Delete { target_name } => delete(doc, target_name),
+    }
+}
+
+fn create(doc: &mut DocumentMut, spec: &TargetSpec) -> Result<(), Vec<Diagnostic>> {
+    if spec.name.trim().is_empty() {
+        return Err(vec![Diagnostic {
+            code: "target_name_required".to_string(),
+            message: "`create` operations must declare a non-empty `name`".to_string(),
+            target: None,
+            attribute: Some("name".to_string()),
+            repairs: Vec::new(),
+        }]);
+    }
+    if spec.kind.trim().is_empty() {
+        return Err(vec![Diagnostic {
+            code: "target_kind_required".to_string(),
+            message: "`create` operations must declare a non-empty `kind`".to_string(),
+            target: Some(spec.name.clone()),
+            attribute: Some("kind".to_string()),
+            repairs: Vec::new(),
+        }]);
+    }
+    if find_target_index(doc, &spec.name).is_some() {
+        return Err(vec![Diagnostic {
+            code: "target_already_exists".to_string(),
+            message: format!("a target named `{}` already exists", spec.name),
+            target: Some(spec.name.clone()),
+            attribute: None,
+            repairs: vec![format!(
+                "rename the new target, or `update` the existing `{}`",
+                spec.name
+            )],
+        }]);
+    }
+
+    let table = build_target_table(spec)?;
+    targets_mut(doc).push(table);
+    Ok(())
+}
+
+fn update(
+    doc: &mut DocumentMut,
+    target_name: &str,
+    set: &TargetUpdate,
+) -> Result<(), Vec<Diagnostic>> {
+    let Some(index) = find_target_index(doc, target_name) else {
+        return Err(vec![Diagnostic {
+            code: "target_not_found".to_string(),
+            message: format!("no target named `{target_name}` in this manifest"),
+            target: Some(target_name.to_string()),
+            attribute: None,
+            repairs: Vec::new(),
+        }]);
+    };
+
+    if let Some(new_name) = set.name.as_deref() {
+        if new_name.trim().is_empty() {
+            return Err(vec![Diagnostic {
+                code: "target_name_required".to_string(),
+                message: "`update.set.name` must be non-empty when present".to_string(),
+                target: Some(target_name.to_string()),
+                attribute: Some("name".to_string()),
+                repairs: Vec::new(),
+            }]);
+        }
+        if new_name != target_name && find_target_index(doc, new_name).is_some() {
+            return Err(vec![Diagnostic {
+                code: "target_already_exists".to_string(),
+                message: format!("renaming to `{new_name}` would clash with an existing target"),
+                target: Some(target_name.to_string()),
+                attribute: Some("name".to_string()),
+                repairs: Vec::new(),
+            }]);
+        }
+    }
+
+    let table = targets_mut(doc)
+        .get_mut(index)
+        .expect("find_target_index returned a valid index");
+    apply_update(table, set, target_name)
+}
+
+fn delete(doc: &mut DocumentMut, target_name: &str) -> Result<(), Vec<Diagnostic>> {
+    let Some(index) = find_target_index(doc, target_name) else {
+        return Err(vec![Diagnostic {
+            code: "target_not_found".to_string(),
+            message: format!("no target named `{target_name}` to delete"),
+            target: Some(target_name.to_string()),
+            attribute: None,
+            repairs: Vec::new(),
+        }]);
+    };
+    targets_mut(doc).remove(index);
+    Ok(())
+}
+
+fn apply_update(
+    table: &mut Table,
+    set: &TargetUpdate,
+    original_name: &str,
+) -> Result<(), Vec<Diagnostic>> {
+    if let Some(new_name) = &set.name {
+        table.insert("name", Item::Value(Value::from(new_name.as_str())));
+    }
+    if let Some(new_kind) = &set.kind {
+        if new_kind.trim().is_empty() {
+            return Err(vec![Diagnostic {
+                code: "target_kind_required".to_string(),
+                message: "`update.set.kind` must be non-empty when present".to_string(),
+                target: Some(original_name.to_string()),
+                attribute: Some("kind".to_string()),
+                repairs: Vec::new(),
+            }]);
+        }
+        table.insert("kind", Item::Value(Value::from(new_kind.as_str())));
+    }
+    if let Some(deps) = &set.deps {
+        table.insert("deps", Item::Value(Value::Array(string_array(deps))));
+    }
+    if let Some(srcs) = &set.srcs {
+        table.insert("srcs", Item::Value(Value::Array(string_array(srcs))));
+    }
+    if let Some(attrs) = &set.attrs {
+        let attrs_table = build_attrs_table(attrs, original_name)?;
+        table.insert("attrs", Item::Table(attrs_table));
+    }
+    Ok(())
+}
+
+fn build_target_table(spec: &TargetSpec) -> Result<Table, Vec<Diagnostic>> {
+    let mut table = Table::new();
+    table.set_implicit(false);
+    table.insert("name", Item::Value(Value::from(spec.name.as_str())));
+    table.insert("kind", Item::Value(Value::from(spec.kind.as_str())));
+    if !spec.deps.is_empty() {
+        table.insert("deps", Item::Value(Value::Array(string_array(&spec.deps))));
+    }
+    if !spec.srcs.is_empty() {
+        table.insert("srcs", Item::Value(Value::Array(string_array(&spec.srcs))));
+    }
+    if !spec.attrs.is_empty() {
+        let attrs_table = build_attrs_table(&spec.attrs, &spec.name)?;
+        table.insert("attrs", Item::Table(attrs_table));
+    }
+    Ok(table)
+}
+
+fn build_attrs_table(
+    attrs: &JsonMap<String, JsonValue>,
+    target_name: &str,
+) -> Result<Table, Vec<Diagnostic>> {
+    let mut attrs_table = Table::new();
+    attrs_table.set_implicit(false);
+    let mut sorted: BTreeMap<&String, &JsonValue> = BTreeMap::new();
+    for (key, value) in attrs {
+        sorted.insert(key, value);
+    }
+    for (key, value) in sorted {
+        let item = json_to_item(value).map_err(|err| {
+            vec![Diagnostic {
+                code: "attr_unrepresentable".to_string(),
+                message: format!("attribute `{key}` cannot be written to TOML: {err}"),
+                target: Some(target_name.to_string()),
+                attribute: Some(key.clone()),
+                repairs: Vec::new(),
+            }]
+        })?;
+        attrs_table.insert(key, item);
+    }
+    Ok(attrs_table)
+}
+
+fn string_array(values: &[String]) -> Array {
+    let mut array = Array::new();
+    for value in values {
+        array.push(value.as_str());
+    }
+    array
+}
+
+fn json_to_item(value: &JsonValue) -> Result<Item, String> {
+    Ok(match value {
+        JsonValue::Null => return Err("`null` has no TOML representation".to_string()),
+        JsonValue::Bool(b) => Item::Value(Value::from(*b)),
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Item::Value(Value::from(i))
+            } else if let Some(f) = n.as_f64() {
+                Item::Value(Value::from(f))
+            } else {
+                return Err(format!("number `{n}` is out of range"));
+            }
+        }
+        JsonValue::String(s) => Item::Value(Value::from(s.as_str())),
+        JsonValue::Array(items) => {
+            let mut array = Array::new();
+            for item in items {
+                let nested = json_to_value(item)?;
+                array.push(nested);
+            }
+            Item::Value(Value::Array(array))
+        }
+        JsonValue::Object(map) => {
+            let mut table = toml_edit::InlineTable::new();
+            for (key, value) in map {
+                let nested = json_to_value(value)?;
+                table.insert(key, nested);
+            }
+            Item::Value(Value::InlineTable(table))
+        }
+    })
+}
+
+fn json_to_value(value: &JsonValue) -> Result<Value, String> {
+    match json_to_item(value)? {
+        Item::Value(v) => Ok(v),
+        _ => Err("expected scalar or inline value".to_string()),
+    }
+}
+
+fn find_target_index(doc: &DocumentMut, name: &str) -> Option<usize> {
+    let targets = doc.get("target")?.as_array_of_tables()?;
+    targets.iter().position(|t| {
+        t.get("name")
+            .and_then(Item::as_str)
+            .is_some_and(|n| n == name)
+    })
+}
+
+fn targets_mut(doc: &mut DocumentMut) -> &mut ArrayOfTables {
+    doc["target"]
+        .as_array_of_tables_mut()
+        .expect("ensure_target_array guarantees the array exists")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn target(name: &str, kind: &str) -> TargetSpec {
+        TargetSpec {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn create_appends_target_to_empty_manifest() {
+        let out = apply_operations(
+            "",
+            &[EditOperation::Create {
+                target: target("Hello", "apple_library"),
+            }],
+        )
+        .expect("create");
+        assert!(out.contains("[[target]]"));
+        assert!(out.contains("name = \"Hello\""));
+        assert!(out.contains("kind = \"apple_library\""));
+    }
+
+    #[test]
+    fn create_preserves_existing_targets() {
+        let src = r#"
+[[target]]
+name = "Existing"
+kind = "apple_library"
+"#;
+        let out = apply_operations(
+            src,
+            &[EditOperation::Create {
+                target: target("Hello", "apple_library"),
+            }],
+        )
+        .expect("create");
+        assert!(out.contains("name = \"Existing\""));
+        assert!(out.contains("name = \"Hello\""));
+    }
+
+    #[test]
+    fn create_serializes_attrs_in_sorted_order() {
+        let mut spec = target("Hello", "apple_library");
+        spec.attrs.insert("platform".to_string(), json!("ios"));
+        spec.attrs.insert("minimum_os".to_string(), json!("17.0"));
+        let out = apply_operations("", &[EditOperation::Create { target: spec }]).expect("create");
+        let min = out.find("minimum_os").expect("minimum_os present");
+        let plat = out.find("platform").expect("platform present");
+        // Sorted: minimum_os comes before platform alphabetically.
+        assert!(
+            min < plat,
+            "attrs should serialize in sorted order, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn create_rejects_duplicate_target_names() {
+        let src = r#"
+[[target]]
+name = "Hello"
+kind = "apple_library"
+"#;
+        let diagnostics = apply_operations(
+            src,
+            &[EditOperation::Create {
+                target: target("Hello", "apple_library"),
+            }],
+        )
+        .expect_err("duplicate must fail");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "target_already_exists");
+        assert_eq!(diagnostics[0].target.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn create_rejects_empty_name() {
+        let diagnostics = apply_operations(
+            "",
+            &[EditOperation::Create {
+                target: target("", "apple_library"),
+            }],
+        )
+        .expect_err("missing name must fail");
+        assert_eq!(diagnostics[0].code, "target_name_required");
+        assert_eq!(diagnostics[0].attribute.as_deref(), Some("name"));
+    }
+
+    #[test]
+    fn update_replaces_only_set_fields() {
+        let src = r#"
+[[target]]
+name = "Hello"
+kind = "apple_library"
+srcs = ["Sources/**/*.swift"]
+
+[target.attrs]
+platform = "ios"
+"#;
+        let out = apply_operations(
+            src,
+            &[EditOperation::Update {
+                target_name: "Hello".to_string(),
+                set: TargetUpdate {
+                    deps: Some(vec!["./Other".to_string()]),
+                    ..Default::default()
+                },
+            }],
+        )
+        .expect("update");
+        assert!(out.contains("deps = [\"./Other\"]"));
+        assert!(out.contains("srcs = [\"Sources/**/*.swift\"]"));
+        assert!(out.contains("platform = \"ios\""));
+    }
+
+    #[test]
+    fn update_can_rename_target() {
+        let src = r#"
+[[target]]
+name = "Old"
+kind = "apple_library"
+"#;
+        let out = apply_operations(
+            src,
+            &[EditOperation::Update {
+                target_name: "Old".to_string(),
+                set: TargetUpdate {
+                    name: Some("New".to_string()),
+                    ..Default::default()
+                },
+            }],
+        )
+        .expect("update rename");
+        assert!(out.contains("name = \"New\""));
+        assert!(!out.contains("name = \"Old\""));
+    }
+
+    #[test]
+    fn update_replaces_attrs_table_when_set() {
+        let src = r#"
+[[target]]
+name = "Hello"
+kind = "apple_library"
+
+[target.attrs]
+platform = "ios"
+minimum_os = "17.0"
+"#;
+        let out = apply_operations(
+            src,
+            &[EditOperation::Update {
+                target_name: "Hello".to_string(),
+                set: TargetUpdate {
+                    attrs: Some({
+                        let mut m = JsonMap::new();
+                        m.insert("platform".to_string(), json!("macos"));
+                        m
+                    }),
+                    ..Default::default()
+                },
+            }],
+        )
+        .expect("update attrs");
+        assert!(out.contains("platform = \"macos\""));
+        assert!(!out.contains("minimum_os"));
+    }
+
+    #[test]
+    fn update_rejects_renaming_into_existing_target() {
+        let src = r#"
+[[target]]
+name = "A"
+kind = "apple_library"
+
+[[target]]
+name = "B"
+kind = "apple_library"
+"#;
+        let diagnostics = apply_operations(
+            src,
+            &[EditOperation::Update {
+                target_name: "A".to_string(),
+                set: TargetUpdate {
+                    name: Some("B".to_string()),
+                    ..Default::default()
+                },
+            }],
+        )
+        .expect_err("rename clash must fail");
+        assert_eq!(diagnostics[0].code, "target_already_exists");
+    }
+
+    #[test]
+    fn update_target_not_found_diagnoses_with_scope() {
+        let diagnostics = apply_operations(
+            "",
+            &[EditOperation::Update {
+                target_name: "Missing".to_string(),
+                set: TargetUpdate::default(),
+            }],
+        )
+        .expect_err("missing target must fail");
+        assert_eq!(diagnostics[0].code, "target_not_found");
+        assert_eq!(diagnostics[0].target.as_deref(), Some("Missing"));
+    }
+
+    #[test]
+    fn delete_removes_target() {
+        let src = r#"
+[[target]]
+name = "Hello"
+kind = "apple_library"
+
+[[target]]
+name = "Keep"
+kind = "apple_library"
+"#;
+        let out = apply_operations(
+            src,
+            &[EditOperation::Delete {
+                target_name: "Hello".to_string(),
+            }],
+        )
+        .expect("delete");
+        assert!(!out.contains("name = \"Hello\""));
+        assert!(out.contains("name = \"Keep\""));
+    }
+
+    #[test]
+    fn delete_target_not_found_diagnoses() {
+        let diagnostics = apply_operations(
+            "",
+            &[EditOperation::Delete {
+                target_name: "Missing".to_string(),
+            }],
+        )
+        .expect_err("delete missing must fail");
+        assert_eq!(diagnostics[0].code, "target_not_found");
+    }
+
+    #[test]
+    fn rejects_non_array_target_key() {
+        let src = "target = \"oops\"";
+        let diagnostics = apply_operations(
+            src,
+            &[EditOperation::Create {
+                target: target("Hello", "apple_library"),
+            }],
+        )
+        .expect_err("non-array target must fail");
+        assert_eq!(diagnostics[0].code, "invalid_target_section");
+    }
+
+    #[test]
+    fn batch_operations_apply_in_order() {
+        let src = r#"
+[[target]]
+name = "Old"
+kind = "apple_library"
+"#;
+        let out = apply_operations(
+            src,
+            &[
+                EditOperation::Delete {
+                    target_name: "Old".to_string(),
+                },
+                EditOperation::Create {
+                    target: target("New", "apple_library"),
+                },
+            ],
+        )
+        .expect("batch");
+        assert!(!out.contains("name = \"Old\""));
+        assert!(out.contains("name = \"New\""));
+    }
+
+    #[test]
+    fn batch_failure_does_not_partially_mutate_the_input() {
+        // Note: apply_operations returns either Ok(new_string) or Err; we
+        // never see a partial mutation because the caller still holds the
+        // original `toml_src`. This test pins that behavior.
+        let src = r#"
+[[target]]
+name = "Hello"
+kind = "apple_library"
+"#;
+        let diagnostics = apply_operations(
+            src,
+            &[
+                EditOperation::Delete {
+                    target_name: "Hello".to_string(),
+                },
+                EditOperation::Delete {
+                    target_name: "Hello".to_string(),
+                },
+            ],
+        )
+        .expect_err("second delete fails");
+        assert_eq!(diagnostics[0].code, "target_not_found");
+    }
+
+    #[test]
+    fn deserializes_edit_operation_from_json() {
+        let raw = json!({
+            "op": "create",
+            "target": {
+                "name": "Hello",
+                "kind": "apple_library",
+                "srcs": ["Sources/**/*.swift"],
+                "attrs": { "platform": "ios" }
+            }
+        });
+        let op: EditOperation = serde_json::from_value(raw).expect("deserialize");
+        match op {
+            EditOperation::Create { target } => {
+                assert_eq!(target.name, "Hello");
+                assert_eq!(target.kind, "apple_library");
+                assert_eq!(target.srcs, vec!["Sources/**/*.swift".to_string()]);
+                assert_eq!(target.attrs.get("platform"), Some(&json!("ios")));
+            }
+            other => panic!("expected Create, got {other:?}"),
+        }
+    }
+}

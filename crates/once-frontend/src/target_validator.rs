@@ -1,0 +1,343 @@
+//! Schema-only validation for a single `[[target]]` table.
+//!
+//! Given a [`TargetSpec`] (the shape the editor produces) and the
+//! workspace's rule registry, [`validate_target`] returns a list of
+//! [`Diagnostic`]s. An empty list means the target shape matches the
+//! rule's declared contract. The check is local: it does not resolve
+//! dep references or read other manifests.
+
+use serde_json::Value as JsonValue;
+
+use crate::graph::{AttrSchema, Diagnostic, RuleSchema};
+use crate::manifest_editor::TargetSpec;
+use crate::target_ref::validate_target_name;
+
+/// Validate `target` against `schemas`. Returns an empty `Vec` if the
+/// target's shape is acceptable to its rule kind.
+#[must_use]
+pub fn validate_target(target: &TargetSpec, schemas: &[RuleSchema]) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    if target.name.trim().is_empty() {
+        diagnostics.push(Diagnostic {
+            code: "target_name_required".to_string(),
+            message: "target `name` must not be empty".to_string(),
+            target: None,
+            attribute: Some("name".to_string()),
+            repairs: Vec::new(),
+        });
+    } else if let Err(err) = validate_target_name(&target.name) {
+        diagnostics.push(Diagnostic {
+            code: "invalid_target_name".to_string(),
+            message: err.to_string(),
+            target: Some(target.name.clone()),
+            attribute: Some("name".to_string()),
+            repairs: Vec::new(),
+        });
+    }
+
+    if target.kind.trim().is_empty() {
+        diagnostics.push(Diagnostic {
+            code: "target_kind_required".to_string(),
+            message: "target `kind` must not be empty".to_string(),
+            target: Some(target.name.clone()),
+            attribute: Some("kind".to_string()),
+            repairs: Vec::new(),
+        });
+        return diagnostics;
+    }
+
+    let Some(schema) = schemas.iter().find(|s| s.kind == target.kind) else {
+        diagnostics.push(Diagnostic {
+            code: "unknown_rule_kind".to_string(),
+            message: format!("rule kind `{}` is not registered", target.kind),
+            target: Some(target.name.clone()),
+            attribute: Some("kind".to_string()),
+            repairs: vec![suggest_known_kinds(schemas)],
+        });
+        return diagnostics;
+    };
+
+    for attr_schema in &schema.attrs {
+        if attr_schema.required && !target.attrs.contains_key(&attr_schema.name) {
+            diagnostics.push(Diagnostic {
+                code: "missing_required_attr".to_string(),
+                message: format!(
+                    "rule `{}` requires attribute `{}`",
+                    schema.kind, attr_schema.name
+                ),
+                target: Some(target.name.clone()),
+                attribute: Some(attr_schema.name.clone()),
+                repairs: Vec::new(),
+            });
+        }
+    }
+
+    for (attr_name, attr_value) in &target.attrs {
+        let Some(attr_schema) = schema.attrs.iter().find(|a| &a.name == attr_name) else {
+            diagnostics.push(Diagnostic {
+                code: "unknown_attr".to_string(),
+                message: format!(
+                    "rule `{}` does not declare attribute `{}`",
+                    schema.kind, attr_name
+                ),
+                target: Some(target.name.clone()),
+                attribute: Some(attr_name.clone()),
+                repairs: vec![suggest_known_attrs(schema)],
+            });
+            continue;
+        };
+        if let Err(err) = check_type(attr_value, &attr_schema.ty) {
+            diagnostics.push(Diagnostic {
+                code: "attr_type_mismatch".to_string(),
+                message: format!(
+                    "attribute `{}` expects type `{}`: {}",
+                    attr_name, attr_schema.ty, err
+                ),
+                target: Some(target.name.clone()),
+                attribute: Some(attr_name.clone()),
+                repairs: Vec::new(),
+            });
+        }
+    }
+
+    diagnostics
+}
+
+fn check_type(value: &JsonValue, ty: &str) -> Result<(), String> {
+    let ty = ty.trim();
+    if let Some(inner) = strip_wrapper(ty, "list<") {
+        let JsonValue::Array(items) = value else {
+            return Err(format!("expected an array, got {}", json_type(value)));
+        };
+        for (index, item) in items.iter().enumerate() {
+            check_type(item, inner).map_err(|err| format!("element [{index}]: {err}"))?;
+        }
+        return Ok(());
+    }
+    if let Some(inner) = strip_wrapper(ty, "map<") {
+        let JsonValue::Object(entries) = value else {
+            return Err(format!("expected a table, got {}", json_type(value)));
+        };
+        let (key_ty, value_ty) = split_map_params(inner)?;
+        if key_ty != "string" {
+            return Err(format!(
+                "map key type `{key_ty}` is not supported; TOML keys are always strings",
+            ));
+        }
+        for (key, sub) in entries {
+            check_type(sub, value_ty).map_err(|err| format!("entry `{key}`: {err}"))?;
+        }
+        return Ok(());
+    }
+    match ty {
+        "string" | "target" => match value {
+            JsonValue::String(_) => Ok(()),
+            _ => Err(format!("expected a string, got {}", json_type(value))),
+        },
+        "bool" => match value {
+            JsonValue::Bool(_) => Ok(()),
+            _ => Err(format!("expected a bool, got {}", json_type(value))),
+        },
+        "int" | "integer" => match value {
+            JsonValue::Number(n) if n.is_i64() => Ok(()),
+            _ => Err(format!("expected an integer, got {}", json_type(value))),
+        },
+        other => Err(format!(
+            "unknown attribute type `{other}` declared by rule schema"
+        )),
+    }
+}
+
+fn strip_wrapper<'a>(ty: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = ty.strip_prefix(prefix)?;
+    rest.strip_suffix('>')
+}
+
+fn split_map_params(inner: &str) -> Result<(&str, &str), String> {
+    let mut parts = inner.splitn(2, ',');
+    let key = parts
+        .next()
+        .ok_or_else(|| "missing map key type".to_string())?
+        .trim();
+    let value = parts
+        .next()
+        .ok_or_else(|| format!("map type `map<{inner}>` is missing the value type"))?
+        .trim();
+    Ok((key, value))
+}
+
+fn json_type(value: &JsonValue) -> &'static str {
+    match value {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "bool",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "table",
+    }
+}
+
+fn suggest_known_kinds(schemas: &[RuleSchema]) -> String {
+    let kinds: Vec<&str> = schemas.iter().map(|s| s.kind.as_str()).collect();
+    format!("known rule kinds: {}", kinds.join(", "))
+}
+
+fn suggest_known_attrs(schema: &RuleSchema) -> String {
+    if schema.attrs.is_empty() {
+        return format!("rule `{}` declares no attributes", schema.kind);
+    }
+    let names: Vec<&str> = schema
+        .attrs
+        .iter()
+        .map(|a: &AttrSchema| a.name.as_str())
+        .collect();
+    format!(
+        "attributes declared by rule `{}`: {}",
+        schema.kind,
+        names.join(", ")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::built_in_rule_schemas;
+    use serde_json::json;
+    use serde_json::Map as JsonMap;
+
+    fn schema_named(kind: &str) -> RuleSchema {
+        built_in_rule_schemas()
+            .into_iter()
+            .find(|s| s.kind == kind)
+            .expect("rule kind exists")
+    }
+
+    fn target(name: &str, kind: &str) -> TargetSpec {
+        TargetSpec {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn missing_required_attr_produces_diagnostic_with_attribute_scope() {
+        let schemas = vec![schema_named("apple_library")];
+        // apple_library requires `platform`.
+        let target = target("Hello", "apple_library");
+        let diagnostics = validate_target(&target, &schemas);
+        let missing = diagnostics
+            .iter()
+            .find(|d| {
+                d.code == "missing_required_attr" && d.attribute.as_deref() == Some("platform")
+            })
+            .expect("missing platform diagnostic");
+        assert_eq!(missing.target.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn unknown_kind_produces_diagnostic_with_repair() {
+        let schemas = built_in_rule_schemas();
+        let target = target("Hello", "mystery_rule");
+        let diagnostics = validate_target(&target, &schemas);
+        let unknown = diagnostics
+            .iter()
+            .find(|d| d.code == "unknown_rule_kind")
+            .expect("unknown_rule_kind diagnostic");
+        assert!(!unknown.repairs.is_empty());
+        assert!(unknown.repairs[0].contains("apple_library"));
+    }
+
+    #[test]
+    fn unknown_attr_lists_known_attrs_as_repair() {
+        let schemas = built_in_rule_schemas();
+        let mut t = target("Hello", "apple_library");
+        t.attrs.insert("platform".to_string(), json!("ios"));
+        t.attrs.insert("wat".to_string(), json!("nope"));
+        let diagnostics = validate_target(&t, &schemas);
+        let unknown = diagnostics
+            .iter()
+            .find(|d| d.code == "unknown_attr" && d.attribute.as_deref() == Some("wat"))
+            .expect("unknown wat diagnostic");
+        assert!(unknown.repairs[0].contains("platform"));
+    }
+
+    #[test]
+    fn type_mismatch_diagnoses_with_scope() {
+        let schemas = built_in_rule_schemas();
+        let mut t = target("Hello", "apple_library");
+        // platform should be a string; pass a number.
+        t.attrs.insert("platform".to_string(), json!(42));
+        let diagnostics = validate_target(&t, &schemas);
+        let mismatch = diagnostics
+            .iter()
+            .find(|d| d.code == "attr_type_mismatch" && d.attribute.as_deref() == Some("platform"))
+            .expect("mismatch diagnostic");
+        assert!(mismatch.message.contains("string"));
+        assert!(mismatch.message.contains("number"));
+    }
+
+    #[test]
+    fn list_of_strings_validates_each_element() {
+        let schemas = built_in_rule_schemas();
+        let mut t = target("Hello", "apple_library");
+        t.attrs.insert("platform".to_string(), json!("ios"));
+        // sdk_frameworks is list<string>. Pass a list with one bad entry.
+        t.attrs
+            .insert("sdk_frameworks".to_string(), json!(["UIKit", 42]));
+        let diagnostics = validate_target(&t, &schemas);
+        let mismatch = diagnostics
+            .iter()
+            .find(|d| d.attribute.as_deref() == Some("sdk_frameworks"))
+            .expect("mismatch diagnostic");
+        assert!(mismatch.message.contains("element [1]"));
+    }
+
+    #[test]
+    fn map_validates_value_type() {
+        let schemas = built_in_rule_schemas();
+        let mut t = target("Hello", "apple_application");
+        t.attrs.insert("platform".to_string(), json!("ios"));
+        t.attrs.insert("bundle_id".to_string(), json!("dev.once.X"));
+        // info_plist_substitutions is map<string,string>. Pass a bool value.
+        let mut subs = JsonMap::new();
+        subs.insert("KEY".to_string(), json!(true));
+        t.attrs.insert(
+            "info_plist_substitutions".to_string(),
+            JsonValue::Object(subs),
+        );
+        let diagnostics = validate_target(&t, &schemas);
+        let mismatch = diagnostics
+            .iter()
+            .find(|d| d.attribute.as_deref() == Some("info_plist_substitutions"))
+            .expect("mismatch diagnostic");
+        assert!(mismatch.message.contains("entry `KEY`"));
+    }
+
+    #[test]
+    fn valid_minimal_apple_library_returns_no_diagnostics() {
+        let schemas = built_in_rule_schemas();
+        let mut t = target("Hello", "apple_library");
+        t.attrs.insert("platform".to_string(), json!("ios"));
+        let diagnostics = validate_target(&t, &schemas);
+        assert!(
+            diagnostics.is_empty(),
+            "expected no diagnostics, got: {diagnostics:?}",
+        );
+    }
+
+    #[test]
+    fn empty_name_diagnoses_with_attribute_scope_only() {
+        let schemas = built_in_rule_schemas();
+        let mut t = target("", "apple_library");
+        t.attrs.insert("platform".to_string(), json!("ios"));
+        let diagnostics = validate_target(&t, &schemas);
+        let name_diag = diagnostics
+            .iter()
+            .find(|d| d.code == "target_name_required")
+            .expect("name diagnostic");
+        assert_eq!(name_diag.attribute.as_deref(), Some("name"));
+        assert!(name_diag.target.is_none());
+    }
+}
