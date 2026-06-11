@@ -54,9 +54,11 @@ command behavior.
 
 ## Capabilities
 
-Each rule declares which capabilities its targets expose: `build`,
-`run`, `test`. The CLI dispatches on capability, and every capability
-runs as a cacheable action through the same substrate scripts use.
+Each rule declares which capabilities its targets expose:
+[`build`](/reference/cli/build), [`run`](/reference/cli/run), and
+[`test`](/reference/cli/test). The CLI dispatches on capability, and
+every capability runs as a cacheable action through the same substrate
+scripts use.
 
 ```sh
 once query targets
@@ -66,5 +68,6 @@ once run  apps/ios/App
 once test apps/ios/AppTests
 ```
 
-`query` commands return structured JSON so agents and humans can ask
-what a target can do before any execution happens.
+[`query`](/reference/cli/query) commands return structured JSON so
+agents and humans can ask what a target can do before any execution
+happens.

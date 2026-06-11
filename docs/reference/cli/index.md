@@ -1,6 +1,6 @@
 # CLI Reference
 
-Generated from the `clap` definitions in `crates/once-cli/src/cli.rs`. Re-run `npm run build:reference` after touching that file so this section stays current.
+Every subcommand the `once` binary exposes, with its synopsis, options, and arguments. Use the sidebar to jump to a specific command.
 
 ## Commands
 
