@@ -8,6 +8,7 @@ Every subcommand the `once` binary exposes, with its synopsis, options, and argu
 - [`once build`](/reference/cli/build): Build a declared target
 - [`once cache`](/reference/cli/cache): Cache management
 - [`once exec`](/reference/cli/exec): Cache and execute a literal command (substrate escape hatch)
+- [`once mcp`](/reference/cli/mcp): Expose Once's graph queries to a coding agent over MCP
 - [`once query`](/reference/cli/query): Query the typed build graph
 - [`once run`](/reference/cli/run): Run a declared target action
 - [`once runtime`](/reference/cli/runtime): Runtime session inspection and control

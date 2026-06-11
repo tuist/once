@@ -296,6 +296,22 @@ pub enum Cmd {
         cmd: Option<RuntimeCmd>,
     },
 
+    /// Expose Once's graph queries to a coding agent over MCP.
+    ///
+    /// Speaks the Model Context Protocol over stdio so an agent host
+    /// (Claude Desktop, an IDE plug-in, the Anthropic SDK) can call
+    /// `once_query_targets`, `once_query_capabilities`, and
+    /// `once_query_schema` as tools and get JSON back without
+    /// scraping prose. Mounts inspection only; running actions and
+    /// querying cached outputs by digest are follow-up work.
+    Mcp {
+        /// Workspace root the MCP tools resolve targets against.
+        /// Defaults to the value of the global `-C/--directory` flag
+        /// (or the current directory).
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+    },
+
     /// Internal: emit the markdown CLI reference into `out`. Hidden
     /// from `--help` because it is a documentation build hook, not a
     /// user-facing verb. Drives `docs/reference/cli/*.md` so the
@@ -359,6 +375,7 @@ impl Cmd {
                 }
                 path
             }
+            Self::Mcp { .. } => vec!["mcp"],
             Self::Reference { .. } => vec!["reference"],
         }
     }

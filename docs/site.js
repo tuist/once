@@ -30,6 +30,7 @@ export const site = {
           { text: "build", link: "/reference/cli/build" },
           { text: "cache", link: "/reference/cli/cache" },
           { text: "exec", link: "/reference/cli/exec" },
+          { text: "mcp", link: "/reference/cli/mcp" },
           { text: "query", link: "/reference/cli/query" },
           { text: "run", link: "/reference/cli/run" },
           { text: "runtime", link: "/reference/cli/runtime" },

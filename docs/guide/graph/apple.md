@@ -157,16 +157,26 @@ existing build engineers have a familiar mental model.
 - **Header maps (`.hmap`)**: pure `module.modulemap` covers the
   common path; the binary `.hmap` writer is future work.
 
-## Agent workflows (planned)
+## Agent workflows
 
-The action cache and content-addressed storage already give every
-action a stable digest and addressable outputs. A planned MCP
-interface will expose this surface so coding agents can call a graph
-action with a returned id and later query the cached outputs, logs,
-and provider records by that id without re-running anything. Schema
-introspection, structured diagnostics, and the
-[`once query`](/reference/cli/query) commands above are designed to
-feed that surface.
+[`once mcp`](/reference/cli/mcp) speaks the Model Context Protocol over
+stdio so a coding agent (Claude Desktop, an IDE plug-in, an Anthropic
+SDK script) can inspect the graph directly. After the standard
+initialize handshake the server advertises three tools:
+
+- `once_query_targets` — list every declared target, optionally
+  filtered by rule kind.
+- `once_query_capabilities` — return the capabilities a target
+  exposes, with output groups and required inputs.
+- `once_query_schema` — return the typed contract for a rule kind.
+
+Each tool returns the same JSON the corresponding
+[`once query`](/reference/cli/query) verb produces, so agents can plan
+against the graph without scraping prose. Running graph actions
+through MCP and querying cached outputs, logs, and provider records
+by action digest is follow-up work; the action cache and
+content-addressed storage already key everything by stable digest,
+so the surface is ready for that capability when it lands.
 
 ## Prior art
 
