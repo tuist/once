@@ -205,6 +205,31 @@ def _unique_dirs(paths):
             out.append(directory)
     return out
 
+# Normalise a dep reference written in `[target.attrs]` (`./AppCore`,
+# `../web/Common`, or a root-relative `apps/ios/AppCore`) to the
+# absolute target id Once stores in `dep["label_id"]`. This keeps
+# `exported_deps` membership checks correct even when the manifest
+# author uses any of the three reference styles.
+def _resolve_dep_ref(ref, package):
+    if ref.startswith("./"):
+        rest = ref[2:]
+        if package:
+            return package + "/" + rest
+        return rest
+    if ref.startswith("../"):
+        slash = -1
+        for i in range(len(package)):
+            if package[i] == "/":
+                slash = i
+        if slash < 0:
+            # `../` from a top-level package resolves at the workspace
+            # root; drop the segment and keep walking.
+            return _resolve_dep_ref(ref[3:], "")
+        return _resolve_dep_ref(ref[3:], package[:slash])
+    # Root-relative reference. Once normalises top-level `deps` to this
+    # shape; the same convention applies here.
+    return ref
+
 # Accumulate a transitive list of strings from a field that every dep
 # provider exposes. Preserves order while removing duplicates: the
 # first occurrence wins. Mirrors the rules_swift / Buck2 convention of
@@ -261,10 +286,19 @@ def _apple_library_impl(ctx):
 
     deps = ctx["deps"]
     # Split deps into compile-visible (exported) and link-only.
+    # exported_deps entries come straight from `[target.attrs]` and may
+    # be `./Sibling`, `../web/Common`, or already root-relative; we
+    # normalise each one to the absolute id format `dep["label_id"]`
+    # carries so the membership check works regardless of how the
+    # manifest author wrote the reference.
+    package = ctx["label"]["package"]
+    exported_dep_ids = {}
+    for ref in exported_deps:
+        exported_dep_ids[_resolve_dep_ref(ref, package)] = True
     exported_dep_indices = []
     for index, dep in enumerate(deps):
         dep_label = dep.get("label_id")
-        if dep_label and dep_label in exported_deps:
+        if dep_label and dep_label in exported_dep_ids:
             exported_dep_indices.append(index)
 
     compile_swiftmodule_dirs = []
