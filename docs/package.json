@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "vitepress dev",
-    "build:reference": "cd .. && cargo build --release -p once-cli && rm -rf docs/reference/cli && ./target/release/once reference --out docs/reference/cli",
+    "build:reference": "cd .. && cargo build --release -p once-cli && rm -rf docs/reference/cli docs/reference/mcp/tools.md && ./target/release/once reference --out docs/reference",
     "build": "vitepress build",
     "preview": "vitepress preview",
     "deploy": "wrangler deploy"

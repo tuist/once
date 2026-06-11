@@ -202,11 +202,45 @@ fn text_content_str(text: &str) -> Value {
 }
 
 fn tool_definitions() -> Vec<Value> {
+    // The runtime `tools/list` reply is the wire projection of the
+    // shared catalog; the doc generator walks the same catalog so
+    // the reference page can't drift from the server's advertised
+    // surface.
+    tool_catalog()
+        .into_iter()
+        .map(|tool| {
+            json!({
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": tool.input_schema,
+            })
+        })
+        .collect()
+}
+
+/// A single MCP tool, structured so the same record drives the
+/// runtime `tools/list` reply and the generated reference page. The
+/// fields cover both surfaces: `description` is the one-liner the
+/// agent host sees in `tools/list`, `long_description` is the
+/// markdown body rendered below the input schema on the reference,
+/// and `example_return` is a JSON snippet shown as a worked example.
+pub struct ToolDefinition {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub long_description: &'static str,
+    pub input_schema: Value,
+    pub example_return: &'static str,
+}
+
+/// All tools `once mcp` exposes, in the same order they appear in
+/// `tools/list` and on the reference page.
+pub fn tool_catalog() -> Vec<ToolDefinition> {
     vec![
-        json!({
-            "name": "once_query_targets",
-            "description": "List every declared target in the workspace, optionally filtered by rule kind.",
-            "inputSchema": {
+        ToolDefinition {
+            name: "once_query_targets",
+            description: "List every declared target in the workspace, optionally filtered by rule kind.",
+            long_description: "Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, rule kind, dep edges, and the capabilities it exposes. The optional `kind` argument narrows results to a single rule.",
+            input_schema: json!({
                 "type": "object",
                 "properties": {
                     "kind": {
@@ -214,12 +248,14 @@ fn tool_definitions() -> Vec<Value> {
                         "description": "Restrict results to targets of this rule kind (e.g. `apple_library`)."
                     }
                 }
-            }
-        }),
-        json!({
-            "name": "once_query_capabilities",
-            "description": "Return the capabilities (`build`, `run`, `test`) a target exposes, with their output groups and required inputs.",
-            "inputSchema": {
+            }),
+            example_return: "[\n  { \"id\": \"apps/ios/AppCore\", \"package\": \"apps/ios\", \"name\": \"AppCore\",\n    \"kind\": \"apple_library\", \"deps\": [], \"capabilities\": [\"build\"] },\n  { \"id\": \"apps/ios/Greeter\", \"package\": \"apps/ios\", \"name\": \"Greeter\",\n    \"kind\": \"apple_library\", \"deps\": [\"apps/ios/AppCore\"],\n    \"capabilities\": [\"build\"] }\n]",
+        },
+        ToolDefinition {
+            name: "once_query_capabilities",
+            description: "Return the capabilities (`build`, `run`, `test`) a target exposes, with their output groups and required inputs.",
+            long_description: "Returns the same record `once query capabilities <target> --format json` emits: the target's id and kind plus one entry per capability with its output groups (what running the capability produces) and required outputs (what it depends on having built).",
+            input_schema: json!({
                 "type": "object",
                 "properties": {
                     "target": {
@@ -228,12 +264,14 @@ fn tool_definitions() -> Vec<Value> {
                     }
                 },
                 "required": ["target"]
-            }
-        }),
-        json!({
-            "name": "once_query_schema",
-            "description": "Return the typed contract for a rule kind: attributes, dep edges, providers, and capabilities.",
-            "inputSchema": {
+            }),
+            example_return: "{\n  \"id\": \"apps/ios/App\",\n  \"kind\": \"apple_application\",\n  \"capabilities\": [\n    { \"name\": \"build\", \"output_groups\": [\"bundle\", \"dsyms\"],\n      \"requires_outputs\": [] },\n    { \"name\": \"run\", \"output_groups\": [\"default\"],\n      \"requires_outputs\": [\"bundle\"] }\n  ]\n}",
+        },
+        ToolDefinition {
+            name: "once_query_schema",
+            description: "Return the typed contract for a rule kind: attributes, dep edges, providers, and capabilities.",
+            long_description: "Returns the rule schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the rule's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, and exposed capabilities.",
+            input_schema: json!({
                 "type": "object",
                 "properties": {
                     "kind": {
@@ -242,8 +280,9 @@ fn tool_definitions() -> Vec<Value> {
                     }
                 },
                 "required": ["kind"]
-            }
-        }),
+            }),
+            example_return: "{\n  \"kind\": \"apple_library\",\n  \"docs\": \"Mixed Swift, Objective-C, C, and C++ static library...\",\n  \"attrs\": [\n    { \"name\": \"platform\", \"ty\": \"string\", \"required\": true, \"configurable\": true },\n    { \"name\": \"sdk_frameworks\", \"ty\": \"list<string>\", \"required\": false, \"configurable\": true }\n  ],\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"archive\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"SwiftInfo\", \"CcInfo\"]\n}",
+        },
     ]
 }
 

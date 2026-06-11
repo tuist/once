@@ -6,6 +6,6 @@ the keyboard.
 
 - The [CLI Reference](/reference/cli/) covers every subcommand the
   `once` binary exposes, with its synopsis, options, and arguments.
-- The [MCP Reference](/reference/mcp) documents the Model Context
-  Protocol surface `once mcp` serves: transport, handshake, tool
-  catalog with input schemas, and an example session.
+- The [MCP Reference](/reference/mcp/) documents the Model Context
+  Protocol surface `once mcp` serves: transport, handshake, error
+  model, an example session, and the generated tool catalog.

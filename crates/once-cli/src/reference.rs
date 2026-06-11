@@ -39,6 +39,10 @@ pub fn generate(out: &Path) -> Result<ExitCode> {
     fs::create_dir_all(out)
         .with_context(|| format!("creating reference output dir `{}`", out.display()))?;
 
+    let cli_dir = out.join("cli");
+    fs::create_dir_all(&cli_dir)
+        .with_context(|| format!("creating reference cli dir `{}`", cli_dir.display()))?;
+
     let mut root = Cli::command();
     // `build()` resolves clap's deferred defaults (help template,
     // global args inherited from the parent, etc.) so what we read
@@ -51,8 +55,13 @@ pub fn generate(out: &Path) -> Result<ExitCode> {
     // already skips both.
 
     let bin_name = root.get_name().to_string();
-    write_command_files(out, &bin_name, &entries)?;
-    write_index(out, &bin_name, &entries)?;
+    write_command_files(&cli_dir, &bin_name, &entries)?;
+    write_index(&cli_dir, &bin_name, &entries)?;
+
+    let mcp_dir = out.join("mcp");
+    fs::create_dir_all(&mcp_dir)
+        .with_context(|| format!("creating reference mcp dir `{}`", mcp_dir.display()))?;
+    write_mcp_tools_page(&mcp_dir)?;
 
     Ok(ExitCode::SUCCESS)
 }
@@ -345,6 +354,37 @@ fn file_path_for(out: &Path, path: &[String]) -> PathBuf {
         }
     }
     buf
+}
+
+/// Render `mcp/tools.md` from the shared catalog so the reference
+/// page can't drift from the tools the server advertises in
+/// `tools/list`. Stable prose (transport, handshake, Claude Desktop
+/// wiring) stays hand-authored in `docs/reference/mcp/index.md`.
+fn write_mcp_tools_page(out: &Path) -> Result<()> {
+    let mut body = String::new();
+    writeln!(&mut body, "# MCP Tools\n").ok();
+    writeln!(
+        &mut body,
+        "Every tool the `once mcp` server advertises in `tools/list`, with the input schema it validates against and a worked example of what the call returns. The catalog is generated from the same record the runtime serves, so the names, descriptions, and schemas can't drift.\n"
+    )
+    .ok();
+    for tool in crate::commands::mcp::tool_catalog() {
+        let name = tool.name;
+        let description = tool.description;
+        writeln!(&mut body, "## `{name}`\n").ok();
+        writeln!(&mut body, "{description}\n").ok();
+        writeln!(&mut body, "{}\n", tool.long_description).ok();
+        let schema = serde_json::to_string_pretty(&tool.input_schema)
+            .unwrap_or_else(|_| tool.input_schema.to_string());
+        writeln!(&mut body, "**Input schema**\n").ok();
+        writeln!(&mut body, "```json\n{schema}\n```\n").ok();
+        writeln!(&mut body, "**Example return**\n").ok();
+        writeln!(&mut body, "```json\n{}\n```\n", tool.example_return).ok();
+    }
+    let path = out.join("tools.md");
+    fs::write(&path, body)
+        .with_context(|| format!("writing reference mcp tools page `{}`", path.display()))?;
+    Ok(())
 }
 
 fn write_index(out: &Path, bin: &str, entries: &[CommandEntry]) -> Result<()> {

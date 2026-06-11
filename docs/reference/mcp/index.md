@@ -1,0 +1,104 @@
+# MCP
+
+[`once mcp`](/reference/cli/mcp) runs a Model Context Protocol server
+over stdio so a coding agent (Claude Desktop, an IDE plug-in, an
+Anthropic SDK script) can inspect the typed build graph through the
+same JSON shapes [`once query`](/reference/cli/query) emits.
+
+This page covers transport, handshake, error model, an example
+session, and the Claude Desktop wiring. The [Tools](/reference/mcp/tools)
+page documents each tool's input schema and return shape; it's
+generated from the same record the server advertises in `tools/list`,
+so the catalog can't drift.
+
+## Transport
+
+Newline-delimited JSON over stdio. Each request is one line of
+JSON-RPC 2.0 in, each response is one line out. Notifications
+(messages with no `id`) get no reply.
+
+Spawn the server with the workspace as its working directory, or
+pass an explicit `--workspace <DIR>`:
+
+```sh
+once -C ~/code/MyApp mcp
+once mcp --workspace ~/code/MyApp
+```
+
+## Handshake
+
+MCP 2024-11-05. The expected sequence:
+
+1. Client → `initialize` request with its protocol version,
+   capabilities, and client info.
+2. Server → `initialize` result with protocol version `2024-11-05`,
+   the `tools` capability, and server info.
+3. Client → `notifications/initialized` (no reply).
+4. Client → `tools/list` to discover tools, then `tools/call` for
+   each invocation.
+
+```json
+{ "jsonrpc": "2.0", "id": 0, "method": "initialize",
+  "params": { "protocolVersion": "2024-11-05",
+              "capabilities": {},
+              "clientInfo": { "name": "claude-desktop", "version": "1.0" } } }
+```
+
+Server reply:
+
+```json
+{ "jsonrpc": "2.0", "id": 0,
+  "result": { "protocolVersion": "2024-11-05",
+              "capabilities": { "tools": {} },
+              "serverInfo": { "name": "once-mcp", "version": "0.0.0" } } }
+```
+
+## Error model
+
+| Surface                         | Where it lands                              |
+| ------------------------------- | ------------------------------------------- |
+| Parse error                     | JSON-RPC error, code `-32700`, id `null`    |
+| Unknown method                  | JSON-RPC error, code `-32601`               |
+| Malformed `tools/call` params   | JSON-RPC error, code `-32602`               |
+| Unknown tool                    | Tool result with `isError: true`            |
+| Missing argument                | Tool result with `isError: true`            |
+| No matching target or schema    | Tool result with `isError: true`            |
+
+Tool-level failures stay inside the JSON-RPC `result` envelope so the
+agent surfaces the message instead of treating the channel as broken.
+
+## Example session
+
+A complete client/server exchange:
+
+```text
+→ { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { … } }
+← { "jsonrpc": "2.0", "id": 0, "result": { … "capabilities": { "tools": {} } … } }
+→ { "jsonrpc": "2.0", "method": "notifications/initialized" }
+→ { "jsonrpc": "2.0", "id": 1, "method": "tools/list" }
+← { "jsonrpc": "2.0", "id": 1, "result": { "tools": [ … ] } }
+→ { "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+    "params": { "name": "once_query_targets", "arguments": {} } }
+← { "jsonrpc": "2.0", "id": 2,
+    "result": { "content": [ { "type": "text",
+                               "text": "[ … target list … ]" } ] } }
+```
+
+## Wiring into Claude Desktop
+
+Add an entry to your `claude_desktop_config.json` under `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "once": {
+      "command": "once",
+      "args": ["--workspace", "/absolute/path/to/your/project", "mcp"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop. The three tools appear under the `once`
+server in the connectors list and Claude can call them directly when
+planning against the graph.

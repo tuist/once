@@ -39,9 +39,12 @@ export const site = {
         ],
       },
       {
-        text: "Protocols",
+        text: "MCP",
         collapsed: false,
-        items: [{ text: "MCP", link: "/reference/mcp" }],
+        items: [
+          { text: "Overview", link: "/reference/mcp/" },
+          { text: "Tools", link: "/reference/mcp/tools" },
+        ],
       },
     ],
     "/": [

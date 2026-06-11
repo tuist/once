@@ -160,7 +160,7 @@ existing build engineers have a familiar mental model.
 ## Agent workflows
 
 [`once mcp`](/reference/cli/mcp) speaks the [Model Context
-Protocol](/reference/mcp) over stdio so a coding agent (Claude
+Protocol](/reference/mcp/) over stdio so a coding agent (Claude
 Desktop, an IDE plug-in, an Anthropic SDK script) can inspect the
 graph directly. After the standard initialize handshake the server
 advertises three tools:
