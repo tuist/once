@@ -1,37 +1,11 @@
 # Apple Graph
 
-Once is starting its build graph with Apple targets, following
-[RFC 0001: Once Build Graph](https://github.com/tuist/once/blob/main/rfcs/0001-build-graph.md).
-The first implementation models target declarations, rule schemas,
-capabilities, and local build, run, and test commands. `apple_library` is
-driven by a starlark rule implementation in the prelude and invokes a real
-`xcrun`-backed `swiftc` compile on macOS hosts. The other Apple rule kinds
-(`apple_framework`, `apple_application`, `apple_test_bundle`) keep their
-placeholder shell scripts until their toolchain plumbing lands.
-
-The model is informed by:
-
-- [Bazel rules_apple](https://github.com/bazelbuild/rules_apple), where
-  application rules handle linking and bundling while Swift and Objective-C
-  compilation live in language rules.
-- [Bazel apple_binary](https://docs.bazel.build/versions/3.0.0/be/objective-c.html#apple_binary),
-  which exposes Apple binary concepts such as platform type, minimum OS
-  version, SDK frameworks, SDK dylibs, weak SDK frameworks, link options, and
-  multi-architecture outputs.
-- [Buck2 apple_library](https://buck2.build/docs/prelude/rules/apple/apple_library/),
-  [apple_binary](https://buck2.build/docs/prelude/rules/apple/apple_binary/),
-  and [apple_bundle](https://buck2.build/docs/prelude/rules/apple/apple_bundle/),
-  which separate compile inputs, Apple toolchain selection, bundle assembly,
-  resources, asset catalogs, Info.plist values, entitlements, provisioning
-  profiles, and tests.
-
-Once adapts those concepts into typed graph data instead of copying the rule
-names or macro model. It is not Buck-compatible, Bazel-compatible, or a drop-in
-replacement for either tool. Users and agents declare graph targets in
-`once.toml`. Built-in Apple rule metadata is defined in Once's Starlark prelude,
-then lowered into typed Rust graph schemas. The graph is intentionally
-inspectable first, so agents and CLI users can ask what a target can do before
-broad execution exists.
+Build Swift, Objective-C, C, and C++ libraries, frameworks, applications,
+and test bundles from declarative `once.toml` targets. The Apple rules are
+the first kinds Once's typed build graph ships; today `apple_library`
+produces real static archives and Swift modules via `xcrun`-backed
+`swiftc` on macOS, with `apple_framework`, `apple_application`, and
+`apple_test_bundle` filling in as their toolchain plumbing lands.
 
 ## Targets
 
@@ -259,3 +233,30 @@ MCP interface so coding agents can call `run_action` with a returned id, then
 later query the cached outputs, logs, and provider records by that id without
 re-running anything. Schema introspection, structured diagnostics, and the
 graph queries above are designed to feed that surface.
+
+## Prior Art and Tracking
+
+The Apple rule set follows [RFC 0001: Once Build
+Graph](https://github.com/tuist/once/blob/main/rfcs/0001-build-graph.md)
+and adapts ideas from established Apple build tooling rather than
+copying its surface:
+
+- [Bazel rules_apple](https://github.com/bazelbuild/rules_apple), where
+  application rules handle linking and bundling while Swift and
+  Objective-C compilation live in dedicated language rules.
+- [Bazel apple_binary](https://docs.bazel.build/versions/3.0.0/be/objective-c.html#apple_binary),
+  which exposes Apple binary concepts such as platform type, minimum OS
+  version, SDK frameworks, SDK dylibs, weak SDK frameworks, link
+  options, and multi-architecture outputs.
+- [Buck2 apple_library](https://buck2.build/docs/prelude/rules/apple/apple_library/),
+  [apple_binary](https://buck2.build/docs/prelude/rules/apple/apple_binary/),
+  and [apple_bundle](https://buck2.build/docs/prelude/rules/apple/apple_bundle/),
+  which separate compile inputs, Apple toolchain selection, bundle
+  assembly, resources, asset catalogs, Info.plist values, entitlements,
+  provisioning profiles, and tests.
+
+Once is not Buck-compatible, Bazel-compatible, or a drop-in replacement
+for either tool; users and agents declare targets in `once.toml`,
+built-in rule metadata lives in the Starlark prelude, and the graph is
+intentionally inspectable first so agents and CLI users can ask what a
+target can do before broad execution exists.
