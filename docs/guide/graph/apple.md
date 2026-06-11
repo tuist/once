@@ -126,10 +126,11 @@ statements resolve. When `enable_modules = true`, the impl writes a
 automatically.
 
 The action cache key composes the resolved toolchain identity (swiftc,
-clang, or libtool — each with their `xcrun`-resolved path, version banner,
-and any `DEVELOPER_DIR` override), the source content digests, and the
-dep action digests. A swap of Xcode, a source edit, or a transitive dep
-change each invalidates exactly the affected cache slots.
+clang, or libtool; each carries its own `xcrun`-resolved path, version
+banner, and any `DEVELOPER_DIR` override), the source content digests,
+and the dep action digests. A swap of Xcode, a source edit, or a
+transitive dep change each invalidates exactly the affected cache
+slots.
 
 ### `apple_library` attribute reference
 
