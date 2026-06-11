@@ -13,9 +13,11 @@ Once has three layers:
    the action cache. See [Scripts](/guide/scripts/).
 2. **Script targets**: declared graph targets that wrap a script
    action so it participates alongside typed rules.
-3. **Build graph targets**: typed targets with rule schemas, typed
-   attributes, dep edges, capabilities, providers, and declared
-   outputs.
+3. **Build graph targets**: typed targets validated against a *rule
+   schema* (the contract for a kind: which attributes it accepts,
+   which providers each dep edge expects, which providers it emits,
+   and which capabilities it exposes), carrying typed attributes,
+   declared outputs, and structured diagnostics.
 
 Scripts are the migration ramp. Teams move into graph targets when
 they need stronger relationships, multiple capabilities, or richer

@@ -59,6 +59,11 @@ once query capabilities apps/ios/App
 once query schema apple_application
 ```
 
+`once query schema <kind>` returns the rule's typed contract: which
+attributes a target of that kind accepts, which providers each dep edge
+expects, which providers the rule emits, and which capabilities it
+exposes.
+
 Materialize a target with the build, run, and test
 [capabilities](/reference/cli/build):
 
@@ -165,10 +170,8 @@ feed that surface.
 
 ## Prior art
 
-The Apple rule set follows [RFC 0001: Once Build
-Graph](https://github.com/tuist/once/blob/main/rfcs/0001-build-graph.md)
-and adapts ideas from established Apple build tooling rather than
-copying its surface:
+The Apple rule set adapts ideas from established Apple build tooling
+rather than copying its surface:
 
 - [Bazel rules_apple](https://github.com/bazelbuild/rules_apple), where
   application rules handle linking and bundling while Swift and
@@ -184,8 +187,8 @@ copying its surface:
   assembly, resources, asset catalogs, Info.plist values,
   entitlements, provisioning profiles, and tests.
 
-Once is not Buck-compatible, Bazel-compatible, or a drop-in
-replacement for either tool; users and agents declare targets in
-`once.toml`, built-in rule metadata lives in the Starlark prelude, and
-the graph is intentionally inspectable first so agents and CLI users
-can ask what a target can do before broad execution exists.
+Once is not Buck-compatible, Bazel-compatible, or a drop-in replacement
+for either tool; users and agents declare targets in `once.toml`,
+built-in rule metadata lives in the Starlark prelude, and the graph is
+intentionally inspectable first so agents and CLI users can ask what a
+target can do before broad execution exists.
