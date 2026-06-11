@@ -21,17 +21,20 @@ export const site = {
     "/": [
       { text: "Why", link: "/guide/why" },
       {
-        text: "Graph",
-        collapsed: false,
-        items: [{ text: "Apple", link: "/guide/apple-graph" }],
-      },
-      {
         text: "Scripts",
         collapsed: false,
         items: [
           { text: "Overview", link: "/guide/scripts/" },
           { text: "Caching", link: "/guide/scripts/caching" },
           { text: "Runtime", link: "/guide/scripts/runtime" },
+        ],
+      },
+      {
+        text: "Graph",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/guide/graph/" },
+          { text: "Apple", link: "/guide/graph/apple" },
         ],
       },
       {
