@@ -243,6 +243,18 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: Option<RuntimeCmd>,
     },
+
+    /// Internal: emit the markdown CLI reference into `out`. Hidden
+    /// from `--help` because it is a documentation build hook, not a
+    /// user-facing verb. Drives `docs/reference/cli/*.md` so the
+    /// website's flag and synopsis sections never drift from the
+    /// real clap definitions.
+    #[command(hide = true, arg_required_else_help = true)]
+    Reference {
+        /// Directory to emit per-subcommand markdown files into.
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+    },
 }
 
 impl Cli {
@@ -295,6 +307,7 @@ impl Cmd {
                 }
                 path
             }
+            Self::Reference { .. } => vec!["reference"],
         }
     }
 }

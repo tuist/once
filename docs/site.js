@@ -3,6 +3,7 @@ export const site = {
     "Once makes project automation cacheable, observable, and remotely executable.",
   nav: [
     { text: "Docs", link: "/" },
+    { text: "Reference", link: "/reference/" },
     {
       text: "Links",
       items: [
@@ -18,6 +19,25 @@ export const site = {
     },
   ],
   sidebar: {
+    "/reference/": [
+      { text: "Reference", link: "/reference/" },
+      {
+        text: "CLI",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/reference/cli/" },
+          { text: "auth", link: "/reference/cli/auth" },
+          { text: "build", link: "/reference/cli/build" },
+          { text: "cache", link: "/reference/cli/cache" },
+          { text: "exec", link: "/reference/cli/exec" },
+          { text: "query", link: "/reference/cli/query" },
+          { text: "run", link: "/reference/cli/run" },
+          { text: "runtime", link: "/reference/cli/runtime" },
+          { text: "test", link: "/reference/cli/test" },
+          { text: "toolchain", link: "/reference/cli/toolchain" },
+        ],
+      },
+    ],
     "/": [
       { text: "Why", link: "/guide/why" },
       {

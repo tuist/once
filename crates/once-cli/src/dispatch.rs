@@ -142,6 +142,7 @@ async fn run_command(
             .await
             .map(|()| ExitCode::SUCCESS),
         Cmd::Runtime { cmd: None } => anyhow::bail!("runtime subcommand required"),
+        Cmd::Reference { out } => crate::reference::generate(&out),
     }
 }
 

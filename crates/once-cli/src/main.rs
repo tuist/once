@@ -6,6 +6,7 @@ mod cache_provider;
 mod cli;
 mod commands;
 mod dispatch;
+mod reference;
 mod render;
 
 use std::process::ExitCode;
