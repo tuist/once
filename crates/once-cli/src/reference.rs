@@ -179,109 +179,116 @@ fn positional_entry(arg: &Arg) -> PositionalEntry {
     }
 }
 
+fn render_command_page(bin: &str, entry: &CommandEntry) -> String {
+    let mut body = String::new();
+    let command_path = format!("{bin} {}", entry.path.join(" "));
+    writeln!(&mut body, "# `{command_path}`\n").ok();
+    if let Some(about) = &entry.about {
+        writeln!(&mut body, "{about}\n").ok();
+    }
+
+    let synopsis = build_synopsis(&command_path, entry);
+    writeln!(&mut body, "## Synopsis\n").ok();
+    writeln!(&mut body, "```text\n{synopsis}\n```\n").ok();
+
+    if let Some(long) = entry
+        .long_about
+        .as_deref()
+        .and_then(|l| trim_leading_about(l, entry.about.as_deref()))
+    {
+        writeln!(&mut body, "## Description\n").ok();
+        writeln!(&mut body, "{long}\n").ok();
+    }
+
+    render_arguments(&mut body, &entry.positionals);
+    render_options(&mut body, &entry.options);
+    render_subcommands(&mut body, bin, &entry.path, &entry.children);
+
+    body
+}
+
+/// Compose the synopsis line: command path, `[OPTIONS]` placeholder
+/// when flags exist, then each positional in declaration order, then
+/// a `<SUBCOMMAND>` placeholder if children exist.
+fn build_synopsis(command_path: &str, entry: &CommandEntry) -> String {
+    let mut synopsis = command_path.to_string();
+    if !entry.options.is_empty() {
+        synopsis.push_str(" [OPTIONS]");
+    }
+    for positional in &entry.positionals {
+        if positional.required {
+            write!(&mut synopsis, " <{}>", positional.name).ok();
+        } else {
+            write!(&mut synopsis, " [{}]", positional.name).ok();
+        }
+    }
+    if !entry.children.is_empty() {
+        synopsis.push_str(" <SUBCOMMAND>");
+    }
+    synopsis
+}
+
+fn render_arguments(body: &mut String, positionals: &[PositionalEntry]) {
+    if positionals.is_empty() {
+        return;
+    }
+    writeln!(body, "## Arguments\n").ok();
+    writeln!(body, "| Argument | Required | Description |").ok();
+    writeln!(body, "| --- | --- | --- |").ok();
+    for positional in positionals {
+        let required = if positional.required { "yes" } else { "no" };
+        let description = positional.description.as_deref().unwrap_or("");
+        let name = &positional.name;
+        writeln!(body, "| `<{name}>` | {required} | {description} |").ok();
+    }
+    body.push('\n');
+}
+
+fn render_options(body: &mut String, options: &[OptionEntry]) {
+    if options.is_empty() {
+        return;
+    }
+    writeln!(body, "## Options\n").ok();
+    writeln!(body, "| Flag | Value | Default | Description |").ok();
+    writeln!(body, "| --- | --- | --- | --- |").ok();
+    for opt in options {
+        let value = if opt.takes_value {
+            format!("`<{}>`", opt.value_name.as_deref().unwrap_or("VALUE"))
+        } else {
+            "(flag)".to_string()
+        };
+        let default = match opt.default.as_deref().filter(|d| !d.is_empty()) {
+            Some(d) => format!("`{d}`"),
+            None => String::new(),
+        };
+        let description = opt.description.as_deref().unwrap_or("");
+        let name = &opt.name;
+        writeln!(body, "| `{name}` | {value} | {default} | {description} |").ok();
+    }
+    body.push('\n');
+}
+
+fn render_subcommands(body: &mut String, bin: &str, path: &[String], children: &[String]) {
+    if children.is_empty() {
+        return;
+    }
+    writeln!(body, "## Subcommands\n").ok();
+    // Hoist `parent` to a local so every interpolation in the bullet
+    // line is an inline capture; mixing implicit captures and
+    // positional placeholders here is unnecessarily hard to read.
+    let parent = path.join(" ");
+    for child in children {
+        let mut child_path = path.to_vec();
+        child_path.push(child.clone());
+        let child_link = format!("/reference/cli/{}", child_path.join("/"));
+        writeln!(body, "- [`{bin} {parent} {child}`]({child_link})").ok();
+    }
+    body.push('\n');
+}
+
 fn write_command_files(out: &Path, bin: &str, entries: &[CommandEntry]) -> Result<()> {
     for entry in entries {
-        let mut body = String::new();
-        let command_path = format!("{bin} {}", entry.path.join(" "));
-        writeln!(&mut body, "# `{command_path}`\n").ok();
-        if let Some(about) = &entry.about {
-            writeln!(&mut body, "{about}\n").ok();
-        }
-
-        // Synopsis line: positional + a `[OPTIONS]` placeholder when
-        // there are any non-positional flags.
-        let mut synopsis = command_path.clone();
-        if !entry.options.is_empty() {
-            synopsis.push_str(" [OPTIONS]");
-        }
-        for positional in &entry.positionals {
-            if positional.required {
-                write!(&mut synopsis, " <{}>", positional.name).ok();
-            } else {
-                write!(&mut synopsis, " [{}]", positional.name).ok();
-            }
-        }
-        if !entry.children.is_empty() {
-            synopsis.push_str(" <SUBCOMMAND>");
-        }
-        writeln!(&mut body, "## Synopsis\n").ok();
-        writeln!(&mut body, "```text\n{synopsis}\n```\n").ok();
-
-        // clap's doc-comment derive copies the short summary into the
-        // long-about, so the first paragraph of `long_about` usually
-        // restates `about`. Render only the trailing prose so the
-        // page doesn't show the same sentence twice (the about line
-        // already prints above the synopsis).
-        if let Some(long) = entry
-            .long_about
-            .as_deref()
-            .and_then(|l| trim_leading_about(l, entry.about.as_deref()))
-        {
-            writeln!(&mut body, "## Description\n").ok();
-            writeln!(&mut body, "{long}\n").ok();
-        }
-
-        if !entry.positionals.is_empty() {
-            writeln!(&mut body, "## Arguments\n").ok();
-            writeln!(&mut body, "| Argument | Required | Description |").ok();
-            writeln!(&mut body, "| --- | --- | --- |").ok();
-            for positional in &entry.positionals {
-                writeln!(
-                    &mut body,
-                    "| `<{name}>` | {required} | {description} |",
-                    name = positional.name,
-                    required = if positional.required { "yes" } else { "no" },
-                    description = positional.description.as_deref().unwrap_or("")
-                )
-                .ok();
-            }
-            body.push('\n');
-        }
-
-        if !entry.options.is_empty() {
-            writeln!(&mut body, "## Options\n").ok();
-            writeln!(&mut body, "| Flag | Value | Default | Description |").ok();
-            writeln!(&mut body, "| --- | --- | --- | --- |").ok();
-            for opt in &entry.options {
-                let value = if opt.takes_value {
-                    format!("`<{}>`", opt.value_name.as_deref().unwrap_or("VALUE"))
-                } else {
-                    "(flag)".to_string()
-                };
-                let default = match opt.default.as_deref().filter(|d| !d.is_empty()) {
-                    Some(d) => format!("`{d}`"),
-                    None => String::new(),
-                };
-                writeln!(
-                    &mut body,
-                    "| `{name}` | {value} | {default} | {description} |",
-                    name = opt.name,
-                    value = value,
-                    default = default,
-                    description = opt.description.as_deref().unwrap_or("")
-                )
-                .ok();
-            }
-            body.push('\n');
-        }
-
-        if !entry.children.is_empty() {
-            writeln!(&mut body, "## Subcommands\n").ok();
-            for child in &entry.children {
-                let mut child_path = entry.path.clone();
-                child_path.push(child.clone());
-                let child_link = format!("/reference/cli/{}", child_path.join("/"));
-                writeln!(
-                    &mut body,
-                    "- [`{bin} {} {child}`]({child_link})",
-                    entry.path.join(" ")
-                )
-                .ok();
-                let _ = child_link;
-            }
-            body.push('\n');
-        }
-
+        let body = render_command_page(bin, entry);
         let path = file_path_for(out, &entry.path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -345,7 +352,7 @@ fn write_index(out: &Path, bin: &str, entries: &[CommandEntry]) -> Result<()> {
     writeln!(&mut body, "# CLI Reference\n").ok();
     writeln!(
         &mut body,
-        "Generated from the `clap` definitions in `crates/once-cli/src/cli.rs`. Re-run `npm run build:reference` after touching that file so this section stays current.\n"
+        "Every subcommand the `{bin}` binary exposes, with its synopsis, options, and arguments. Use the sidebar to jump to a specific command.\n"
     )
     .ok();
     writeln!(&mut body, "## Commands\n").ok();
@@ -364,4 +371,204 @@ fn write_index(out: &Path, bin: &str, entries: &[CommandEntry]) -> Result<()> {
     fs::write(&path, body)
         .with_context(|| format!("writing reference index `{}`", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::{Arg, Command};
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    // ---------- trim_leading_about ----------
+
+    #[test]
+    fn trim_leading_about_returns_none_when_long_matches_about_exactly() {
+        assert_eq!(
+            trim_leading_about("Build a target.", Some("Build a target.")),
+            None
+        );
+    }
+
+    #[test]
+    fn trim_leading_about_drops_the_summary_and_blank_separator() {
+        let long = "Build a target.\n\nExtra prose explaining the verb.";
+        assert_eq!(
+            trim_leading_about(long, Some("Build a target.")),
+            Some("Extra prose explaining the verb.")
+        );
+    }
+
+    #[test]
+    fn trim_leading_about_tolerates_about_without_trailing_period() {
+        // clap's doc-comment derive strips the trailing period from
+        // `about` even though `long_about` keeps it.
+        let long = "Build a target.\n\nThe long form.";
+        assert_eq!(
+            trim_leading_about(long, Some("Build a target")),
+            Some("The long form.")
+        );
+    }
+
+    #[test]
+    fn trim_leading_about_tolerates_long_without_trailing_period() {
+        let long = "Build a target\n\nThe long form.";
+        assert_eq!(
+            trim_leading_about(long, Some("Build a target.")),
+            Some("The long form.")
+        );
+    }
+
+    #[test]
+    fn trim_leading_about_keeps_the_whole_long_when_about_is_missing() {
+        let long = "Standalone prose with no about.";
+        assert_eq!(
+            trim_leading_about(long, None),
+            Some("Standalone prose with no about.")
+        );
+    }
+
+    #[test]
+    fn trim_leading_about_returns_none_for_empty_input() {
+        assert_eq!(trim_leading_about("", None), None);
+        assert_eq!(trim_leading_about("   \n  ", None), None);
+    }
+
+    // ---------- file_path_for ----------
+
+    #[test]
+    fn file_path_for_lays_top_level_commands_at_the_root() {
+        let out = Path::new("docs/reference/cli");
+        let got = file_path_for(out, &["build".to_string()]);
+        assert_eq!(got, PathBuf::from("docs/reference/cli/build.md"));
+    }
+
+    #[test]
+    fn file_path_for_nests_subcommands_under_their_parents() {
+        let out = Path::new("docs/reference/cli");
+        let got = file_path_for(out, &["cache".to_string(), "stats".to_string()]);
+        assert_eq!(got, PathBuf::from("docs/reference/cli/cache/stats.md"));
+    }
+
+    #[test]
+    fn file_path_for_handles_three_levels_of_nesting() {
+        let out = Path::new("docs/reference/cli");
+        let got = file_path_for(
+            out,
+            &["cache".to_string(), "action".to_string(), "get".to_string()],
+        );
+        assert_eq!(got, PathBuf::from("docs/reference/cli/cache/action/get.md"));
+    }
+
+    // ---------- walk ----------
+
+    fn synthetic_root() -> Command {
+        // Hand-built clap tree: one top-level visible command, one
+        // hidden command (must be skipped), one parent with a leaf
+        // child (must descend), and a final command with no children
+        // so the walker exits cleanly.
+        Command::new("once")
+            .subcommand(
+                Command::new("build")
+                    .about("Build a target")
+                    .long_about("Build a target.\n\nResolves and runs.")
+                    .arg(Arg::new("target").required(true)),
+            )
+            .subcommand(Command::new("internal-secret").about("Hidden").hide(true))
+            .subcommand(
+                Command::new("cache")
+                    .about("Cache management")
+                    .subcommand(Command::new("stats").about("Print cache stats")),
+            )
+    }
+
+    #[test]
+    fn walk_skips_hidden_subcommands_and_descends_into_children() {
+        let mut root = synthetic_root();
+        root.build();
+        let mut entries = Vec::new();
+        walk(&root, &mut Vec::new(), &mut entries, true);
+        let paths: Vec<Vec<String>> = entries.iter().map(|e| e.path.clone()).collect();
+        // `internal-secret` must not appear; `cache` parent and its
+        // `stats` child both do; `build` is a top-level entry.
+        assert!(paths.contains(&vec!["build".to_string()]));
+        assert!(paths.contains(&vec!["cache".to_string()]));
+        assert!(paths.contains(&vec!["cache".to_string(), "stats".to_string()]));
+        assert!(!paths
+            .iter()
+            .any(|p| p.contains(&"internal-secret".to_string())));
+    }
+
+    #[test]
+    fn walk_records_about_and_long_about_when_present() {
+        let mut root = synthetic_root();
+        root.build();
+        let mut entries = Vec::new();
+        walk(&root, &mut Vec::new(), &mut entries, true);
+        let build = entries
+            .iter()
+            .find(|e| e.path == ["build".to_string()])
+            .expect("build entry");
+        assert_eq!(build.about.as_deref(), Some("Build a target"));
+        assert_eq!(
+            build.long_about.as_deref(),
+            Some("Build a target.\n\nResolves and runs.")
+        );
+        // The `cache` parent records its single visible child so the
+        // page can link to it.
+        let cache = entries
+            .iter()
+            .find(|e| e.path == ["cache".to_string()])
+            .expect("cache entry");
+        assert_eq!(cache.children, vec!["stats".to_string()]);
+    }
+
+    // ---------- generate (end-to-end) ----------
+
+    #[test]
+    fn write_command_files_renders_synopsis_options_arguments_and_subcommands() {
+        let mut root = synthetic_root();
+        root.build();
+        let mut entries = Vec::new();
+        walk(&root, &mut Vec::new(), &mut entries, true);
+        let tmp = TempDir::new().unwrap();
+        write_command_files(tmp.path(), "once", &entries).unwrap();
+
+        let build = std::fs::read_to_string(tmp.path().join("build.md")).unwrap();
+        assert!(build.contains("# `once build`"));
+        assert!(build.contains("```text\nonce build <target>\n```"));
+        assert!(build.contains("## Description"));
+        // The about line still prints above the synopsis; only the
+        // trailing prose appears under Description.
+        assert!(build.contains("Resolves and runs."));
+        assert!(!build.contains("Build a target.\n\nResolves and runs."));
+
+        let cache = std::fs::read_to_string(tmp.path().join("cache.md")).unwrap();
+        assert!(cache.contains("## Subcommands"));
+        // Each child gets its own labelled link — the format-string
+        // cleanup keeps this in lockstep with the iteration variable.
+        assert!(cache.contains("- [`once cache stats`](/reference/cli/cache/stats)"));
+
+        let stats = std::fs::read_to_string(tmp.path().join("cache/stats.md")).unwrap();
+        assert!(stats.contains("# `once cache stats`"));
+    }
+
+    #[test]
+    fn write_index_lists_top_level_commands_in_sorted_order() {
+        let mut root = synthetic_root();
+        root.build();
+        let mut entries = Vec::new();
+        walk(&root, &mut Vec::new(), &mut entries, true);
+        let tmp = TempDir::new().unwrap();
+        write_index(tmp.path(), "once", &entries).unwrap();
+        let index = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
+        // No "Generated from … crates/once-cli/src/cli.rs" leak: the
+        // index page is user-facing copy, not a developer note.
+        assert!(!index.contains("crates/once-cli"));
+        assert!(!index.contains("build:reference"));
+        // Top-level commands appear in sort order.
+        let build_pos = index.find("once build").expect("build entry");
+        let cache_pos = index.find("once cache").expect("cache entry");
+        assert!(build_pos < cache_pos);
+    }
 }
