@@ -114,6 +114,14 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Cmd {
     /// Build a declared target.
+    ///
+    /// Resolves the target id against the workspace graph, ensures
+    /// every transitive dep is built first, and executes the target's
+    /// `build` capability through the action cache. Targets that
+    /// match a cached action key reuse the prior outputs; everything
+    /// else runs and lands its declared outputs in
+    /// `<workspace>/.once/out/<target>/`. Use `once query targets` to
+    /// list available ids.
     #[command(arg_required_else_help = true)]
     Build {
         /// Target id, e.g. `apps/ios/App` or `./App`.
@@ -150,6 +158,14 @@ pub enum Cmd {
     },
 
     /// Test a declared target.
+    ///
+    /// Builds the target's test bundle (recursively building deps as
+    /// needed) and executes its `test` capability. Test results and
+    /// coverage records land under
+    /// `<workspace>/.once/out/<target>/test/`. The action cache keys
+    /// on source content, toolchain identity, and dep digests, so
+    /// only the targets whose inputs changed re-run; the rest replay
+    /// their cached outcome.
     #[command(arg_required_else_help = true)]
     Test {
         /// Target id, e.g. `apps/ios/AppTests` or `./AppTests`.
@@ -210,6 +226,14 @@ pub enum Cmd {
     },
 
     /// Cache management.
+    ///
+    /// Inspect, read, and write the content-addressed cache that
+    /// every Once action runs through. `cache stats` reports counts
+    /// and on-disk size; `cache blob` and `cache action` expose the
+    /// CAS and action-result tables as primitives for debugging,
+    /// reproducibility checks, and external tooling. Useful for
+    /// answering "did this run hit the cache?" without scraping
+    /// command output.
     #[command(arg_required_else_help = true)]
     Cache {
         #[command(subcommand)]
@@ -217,6 +241,13 @@ pub enum Cmd {
     },
 
     /// Authenticate with a configured provider.
+    ///
+    /// Stores or revokes the credentials Once uses when talking to
+    /// remote cache providers (e.g. Tuist). `auth login` walks
+    /// through a provider's OAuth or token flow and saves the result
+    /// in the OS keychain; `auth logout` drops the stored token. The
+    /// cache provider configuration itself lives in workspace
+    /// `once.toml`.
     #[command(arg_required_else_help = true)]
     Auth {
         #[command(subcommand)]
@@ -224,6 +255,12 @@ pub enum Cmd {
     },
 
     /// Inspect the project toolchain contract.
+    ///
+    /// Reports the toolchains a project pins (Rust, Swift, mise) and
+    /// the resolved versions Once will use when running cacheable
+    /// scripts or graph actions. Pair with `once query schema` when
+    /// debugging "why did the cache miss?" questions where the
+    /// toolchain identity is suspect.
     #[command(arg_required_else_help = true)]
     Toolchain {
         #[command(subcommand)]
@@ -231,6 +268,14 @@ pub enum Cmd {
     },
 
     /// Query the typed build graph.
+    ///
+    /// Inspectable-first surface for humans and agents. `query
+    /// targets` lists every declared target id with its rule kind
+    /// and capabilities; `query capabilities` shows what a specific
+    /// target exposes (`build`, `run`, `test`); `query schema`
+    /// returns the typed attribute and provider shape for a rule.
+    /// All three respect `--format json` so consumers can plan
+    /// against the graph without scraping prose.
     #[command(arg_required_else_help = true)]
     Query {
         #[command(subcommand)]
@@ -238,6 +283,13 @@ pub enum Cmd {
     },
 
     /// Runtime session inspection and control.
+    ///
+    /// Drives the JSON-RPC control socket that an active `once run`
+    /// (or any cacheable action launched with `--runtime-rpc`) opens
+    /// for in-flight introspection. `runtime rpc` connects to a
+    /// session and forwards requests so dev loops and editors can
+    /// observe progress, attach probes, or steer execution without
+    /// restarting the underlying action.
     #[command(arg_required_else_help = true)]
     Runtime {
         #[command(subcommand)]

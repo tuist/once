@@ -8,6 +8,10 @@ Cache management
 once cache [OPTIONS] <SUBCOMMAND>
 ```
 
+## Description
+
+Inspect, read, and write the content-addressed cache that every Once action runs through. `cache stats` reports counts and on-disk size; `cache blob` and `cache action` expose the CAS and action-result tables as primitives for debugging, reproducibility checks, and external tooling. Useful for answering "did this run hit the cache?" without scraping command output.
+
 ## Options
 
 | Flag | Value | Default | Description |

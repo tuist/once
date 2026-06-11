@@ -8,6 +8,10 @@ Build a declared target
 once build [OPTIONS] [TARGET]
 ```
 
+## Description
+
+Resolves the target id against the workspace graph, ensures every transitive dep is built first, and executes the target's `build` capability through the action cache. Targets that match a cached action key reuse the prior outputs; everything else runs and lands its declared outputs in `<workspace>/.once/out/<target>/`. Use `once query targets` to list available ids.
+
 ## Arguments
 
 | Argument | Required | Description |

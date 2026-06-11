@@ -10,8 +10,6 @@ once run [OPTIONS] [TARGET]
 
 ## Description
 
-Run a declared target action.
-
 Finds the matching target and runs it through the action cache. Use `--remote` to ask a compute provider to execute the command.
 
 ## Arguments

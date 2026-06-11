@@ -8,6 +8,10 @@ Authenticate with a configured provider
 once auth [OPTIONS] <SUBCOMMAND>
 ```
 
+## Description
+
+Stores or revokes the credentials Once uses when talking to remote cache providers (e.g. Tuist). `auth login` walks through a provider's OAuth or token flow and saves the result in the OS keychain; `auth logout` drops the stored token. The cache provider configuration itself lives in workspace `once.toml`.
+
 ## Options
 
 | Flag | Value | Default | Description |

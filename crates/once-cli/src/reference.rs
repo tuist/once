@@ -207,7 +207,16 @@ fn write_command_files(out: &Path, bin: &str, entries: &[CommandEntry]) -> Resul
         writeln!(&mut body, "## Synopsis\n").ok();
         writeln!(&mut body, "```text\n{synopsis}\n```\n").ok();
 
-        if let Some(long) = &entry.long_about {
+        // clap's doc-comment derive copies the short summary into the
+        // long-about, so the first paragraph of `long_about` usually
+        // restates `about`. Render only the trailing prose so the
+        // page doesn't show the same sentence twice (the about line
+        // already prints above the synopsis).
+        if let Some(long) = entry
+            .long_about
+            .as_deref()
+            .and_then(|l| trim_leading_about(l, entry.about.as_deref()))
+        {
             writeln!(&mut body, "## Description\n").ok();
             writeln!(&mut body, "{long}\n").ok();
         }
@@ -282,6 +291,38 @@ fn write_command_files(out: &Path, bin: &str, entries: &[CommandEntry]) -> Resul
             .with_context(|| format!("writing reference page `{}`", path.display()))?;
     }
     Ok(())
+}
+
+/// Return the prose portion of a clap `long_about`, dropping the
+/// leading "about" sentence clap auto-prepends. Returns `None` when
+/// there is no extra prose past the summary.
+fn trim_leading_about<'a>(long: &'a str, about: Option<&str>) -> Option<&'a str> {
+    let trimmed = long.trim_start();
+    let trailing = match about {
+        Some(about) => {
+            // The leading summary may or may not end with a period; try
+            // both and pick whichever actually matched. After stripping,
+            // also peel off the blank line that separates the summary
+            // from the prose so we don't render a hanging newline.
+            let without_summary = trimmed
+                .strip_prefix(about)
+                .or_else(|| trimmed.strip_prefix(about.trim_end_matches('.')))
+                .or_else(|| {
+                    about
+                        .strip_suffix('.')
+                        .and_then(|stripped| trimmed.strip_prefix(stripped))
+                });
+            without_summary.map_or(trimmed, |rest| {
+                rest.trim_start_matches(|c: char| c == '.' || c.is_whitespace())
+            })
+        }
+        None => trimmed,
+    };
+    if trailing.is_empty() {
+        None
+    } else {
+        Some(trailing)
+    }
 }
 
 fn file_path_for(out: &Path, path: &[String]) -> PathBuf {

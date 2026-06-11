@@ -8,9 +8,9 @@
     "wrangler": "4.90.1"
   },
   "scripts": {
-    "dev": "npm run build:reference && vitepress dev",
+    "dev": "vitepress dev",
     "build:reference": "cd .. && cargo build --release -p once-cli && rm -rf docs/reference/cli && ./target/release/once reference --out docs/reference/cli",
-    "build": "npm run build:reference && vitepress build",
+    "build": "vitepress build",
     "preview": "vitepress preview",
     "deploy": "wrangler deploy"
   },

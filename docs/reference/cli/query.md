@@ -8,6 +8,10 @@ Query the typed build graph
 once query [OPTIONS] <SUBCOMMAND>
 ```
 
+## Description
+
+Inspectable-first surface for humans and agents. `query targets` lists every declared target id with its rule kind and capabilities; `query capabilities` shows what a specific target exposes (`build`, `run`, `test`); `query schema` returns the typed attribute and provider shape for a rule. All three respect `--format json` so consumers can plan against the graph without scraping prose.
+
 ## Options
 
 | Flag | Value | Default | Description |

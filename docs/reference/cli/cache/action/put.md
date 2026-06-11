@@ -10,8 +10,6 @@ once cache action put [OPTIONS] [ACTION]
 
 ## Description
 
-Store an action result.
-
 Identify the action either by passing its digest directly, or by declaring its inputs with `--input`; the same declaration can be used on `get` to read back the result.
 
 ## Arguments

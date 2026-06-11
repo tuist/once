@@ -10,8 +10,6 @@ once cache action get [OPTIONS] [ACTION]
 
 ## Description
 
-Fetch an action result.
-
 Identify the action either by passing its digest directly, or by declaring its inputs with `--input`; the same declaration must be used on `put` to write under the same key.
 
 ## Arguments

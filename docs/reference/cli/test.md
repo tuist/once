@@ -8,6 +8,10 @@ Test a declared target
 once test [OPTIONS] [TARGET]
 ```
 
+## Description
+
+Builds the target's test bundle (recursively building deps as needed) and executes its `test` capability. Test results and coverage records land under `<workspace>/.once/out/<target>/test/`. The action cache keys on source content, toolchain identity, and dep digests, so only the targets whose inputs changed re-run; the rest replay their cached outcome.
+
 ## Arguments
 
 | Argument | Required | Description |

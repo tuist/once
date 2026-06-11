@@ -8,6 +8,10 @@ Runtime session inspection and control
 once runtime [OPTIONS] <SUBCOMMAND>
 ```
 
+## Description
+
+Drives the JSON-RPC control socket that an active `once run` (or any cacheable action launched with `--runtime-rpc`) opens for in-flight introspection. `runtime rpc` connects to a session and forwards requests so dev loops and editors can observe progress, attach probes, or steer execution without restarting the underlying action.
+
 ## Options
 
 | Flag | Value | Default | Description |
