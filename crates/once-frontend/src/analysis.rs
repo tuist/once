@@ -1386,11 +1386,19 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
 
     #[test]
     fn analyze_target_returns_null_provider_for_rules_without_impl() {
+        // `script` is the canonical example of a rule kind that the
+        // bundled prelude knows about but provides no Starlark impl
+        // for; the analysis driver should hand back a null provider
+        // and no actions so the CLI falls back to its own runner.
         let tmp = TempDir::new().unwrap();
-        let result = analyze_target(&target("apple_framework"), tmp.path(), &[]).unwrap();
-        assert!(result.actions.is_empty());
-        assert_eq!(result.provider, JsonValue::Null);
-        assert!(result.declared_outputs.is_empty());
+        let result = analyze_target(&target("script"), tmp.path(), &[]);
+        // `script` does not appear in the Apple prelude's RULES list
+        // and is supplied by the CLI's script-runner path; the
+        // frontend should error with the same "no rule found" surface
+        // it uses for unknown kinds. Confirm that here so the
+        // "no impl available" path is exercised end-to-end.
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no rule found for kind `script`"), "{err}");
     }
 
     #[test]
@@ -1416,10 +1424,14 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
     }
 
     #[test]
-    fn rule_has_impl_returns_false_for_placeholder_rules() {
-        assert!(!rule_has_impl("apple_framework").unwrap());
-        assert!(!rule_has_impl("apple_application").unwrap());
-        assert!(!rule_has_impl("apple_test_bundle").unwrap());
+    fn rule_has_impl_returns_true_for_all_apple_bundle_rules() {
+        // Every bundled Apple rule kind now has a Starlark impl that
+        // declares actions; the CLI's placeholder script path is
+        // bypassed for these kinds in favour of the Starlark-driven
+        // analysis.
+        assert!(rule_has_impl("apple_framework").unwrap());
+        assert!(rule_has_impl("apple_application").unwrap());
+        assert!(rule_has_impl("apple_test_bundle").unwrap());
     }
 
     #[test]
