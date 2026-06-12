@@ -861,6 +861,21 @@ mod tests {
     #[test]
     fn run_test_targets_prefers_explicit_deduplicated_targets() {
         let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("spec")).unwrap();
+        std::fs::write(
+            tmp.path().join("spec/once.toml"),
+            r#"[[target]]
+name = "all"
+kind = "shellspec_test"
+srcs = ["all_spec.sh"]
+
+[[target]]
+name = "other"
+kind = "shellspec_test"
+srcs = ["other_spec.sh"]
+"#,
+        )
+        .unwrap();
         let targets = run_test_targets(
             tmp.path(),
             &json!({
