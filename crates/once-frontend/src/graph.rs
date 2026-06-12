@@ -11,6 +11,7 @@ use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 use starlark::values::Value;
 
+use crate::analysis::select_branches;
 use crate::error::{Error, Result};
 use crate::target::{AttrValue, Target};
 use crate::workspace::load_workspace;
@@ -31,7 +32,9 @@ pub struct TargetLabel {
 pub struct GraphTarget {
     /// Canonical target label.
     pub label: TargetLabel,
-    /// Rule kind such as `apple_application` or `script`.
+    /// Rule kind declared by the target manifest. Matched against the
+    /// prelude's `RULES` list to attach schema, capabilities, and
+    /// providers.
     pub kind: String,
     /// Canonical dependency target ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -171,7 +174,7 @@ impl From<&Target> for GraphTarget {
 
 fn graph_target_from_schema(target: &Target, schemas: &[RuleSchema]) -> GraphTarget {
     let schema = schemas.iter().find(|schema| schema.kind == target.kind);
-    let diagnostics = if schema.is_some() {
+    let mut diagnostics = if schema.is_some() {
         Vec::new()
     } else {
         vec![Diagnostic {
@@ -180,6 +183,26 @@ fn graph_target_from_schema(target: &Target, schemas: &[RuleSchema]) -> GraphTar
             repairs: Vec::new(),
         }]
     };
+    let attrs = graph_attrs(target);
+    if let Some(schema) = schema {
+        for attr_schema in &schema.attrs {
+            if attr_schema.configurable {
+                continue;
+            }
+            if let Some(value) = attrs.get(&attr_schema.name) {
+                if select_branches(value).is_some() {
+                    diagnostics.push(Diagnostic {
+                        code: "select_on_non_configurable_attr".to_string(),
+                        message: format!(
+                            "attribute `{}` is not configurable but uses `select()`",
+                            attr_schema.name
+                        ),
+                        repairs: Vec::new(),
+                    });
+                }
+            }
+        }
+    }
     GraphTarget {
         label: TargetLabel {
             package: target.package.clone(),
@@ -189,7 +212,7 @@ fn graph_target_from_schema(target: &Target, schemas: &[RuleSchema]) -> GraphTar
         kind: target.kind.clone(),
         deps: target.deps.clone(),
         srcs: target.srcs.clone(),
-        attrs: graph_attrs(target),
+        attrs,
         capabilities: schema
             .as_ref()
             .map_or_else(Vec::new, |schema| schema.capabilities.clone()),
@@ -215,7 +238,7 @@ fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
     parse_rule_schemas(PRELUDE_PATH, source)
 }
 
-/// Evaluate a Starlark prelude source and read its `APPLE_RULES` export.
+/// Evaluate a Starlark prelude source and read its `RULES` export.
 ///
 /// Split out from [`starlark_prelude_rule_schemas`] so the error paths
 /// (parse failure, missing export, wrong types) are reachable from tests
@@ -230,8 +253,8 @@ fn parse_rule_schemas(path: &str, source: &str) -> Result<Vec<RuleSchema>> {
         eval.eval_module(ast, &globals)
             .map_err(|error| prelude_error(path, error))?;
         let rules = module
-            .get("APPLE_RULES")
-            .ok_or_else(|| prelude_message(path, "missing APPLE_RULES export"))?;
+            .get("RULES")
+            .ok_or_else(|| prelude_message(path, "missing RULES export"))?;
         rule_schemas_from_value(rules).map_err(|message| prelude_message(path, &message))
     })
 }
@@ -251,10 +274,10 @@ fn prelude_message(path: &str, message: &str) -> Error {
 }
 
 fn rule_schemas_from_value(value: Value<'_>) -> std::result::Result<Vec<RuleSchema>, String> {
-    list(value, "APPLE_RULES")?
+    list(value, "RULES")?
         .iter()
         .enumerate()
-        .map(|(index, rule)| rule_schema_from_value(rule, &format!("APPLE_RULES[{index}]")))
+        .map(|(index, rule)| rule_schema_from_value(rule, &format!("RULES[{index}]")))
         .collect()
 }
 
@@ -495,22 +518,22 @@ mod tests {
 
     #[test]
     fn parse_rule_schemas_rejects_invalid_syntax() {
-        let err = parse_rule_schemas("test.star", "APPLE_RULES = [").unwrap_err();
+        let err = parse_rule_schemas("test.star", "RULES = [").unwrap_err();
         assert!(matches!(err, Error::Eval { .. }));
     }
 
     #[test]
-    fn parse_rule_schemas_requires_apple_rules_export() {
+    fn parse_rule_schemas_requires_rules_export() {
         let err = parse_rule_schemas("test.star", "OTHER = []").unwrap_err();
         match err {
-            Error::Eval { message, .. } => assert!(message.contains("missing APPLE_RULES export")),
+            Error::Eval { message, .. } => assert!(message.contains("missing RULES export")),
             other => panic!("expected Error::Eval, got {other:?}"),
         }
     }
 
     #[test]
     fn parse_rule_schemas_requires_list_export() {
-        let err = parse_rule_schemas("test.star", "APPLE_RULES = 7").unwrap_err();
+        let err = parse_rule_schemas("test.star", "RULES = 7").unwrap_err();
         match err {
             Error::Eval { message, .. } => assert!(message.contains("should be a list")),
             other => panic!("expected Error::Eval, got {other:?}"),
@@ -519,7 +542,7 @@ mod tests {
 
     #[test]
     fn parse_rule_schemas_reports_missing_rule_field() {
-        let err = parse_rule_schemas("test.star", r#"APPLE_RULES = [{"kind": "x"}]"#).unwrap_err();
+        let err = parse_rule_schemas("test.star", r#"RULES = [{"kind": "x"}]"#).unwrap_err();
         match err {
             Error::Eval { message, .. } => assert!(message.contains("is missing")),
             other => panic!("expected Error::Eval, got {other:?}"),
@@ -529,7 +552,7 @@ mod tests {
     #[test]
     fn parse_rule_schemas_accepts_minimal_valid_rule() {
         let source = r#"
-APPLE_RULES = [
+RULES = [
     {
         "kind": "demo",
         "docs": "Demo rule",
@@ -614,6 +637,60 @@ APPLE_RULES = [
     }
 
     #[test]
+    fn select_on_non_configurable_attribute_emits_a_diagnostic() {
+        // module_name is declared `configurable = False` in the
+        // prelude. A select() on it should surface a diagnostic, not
+        // be silently accepted.
+        let mut typed_attrs = BTreeMap::new();
+        let mut select_outer = BTreeMap::new();
+        let mut branches = BTreeMap::new();
+        branches.insert(
+            "default".to_string(),
+            AttrValue::String("Default".to_string()),
+        );
+        select_outer.insert("select".to_string(), AttrValue::Map(branches));
+        typed_attrs.insert("module_name".to_string(), AttrValue::Map(select_outer));
+        typed_attrs.insert(
+            "platform".to_string(),
+            AttrValue::String("ios".to_string()),
+        );
+        let target = Target {
+            package: "apps/ios".to_string(),
+            kind: "apple_library".to_string(),
+            name: "AppCore".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            typed_attrs,
+        };
+        let graph = graph_from_targets(&[target]);
+        let diag = graph[0]
+            .diagnostics
+            .iter()
+            .find(|d| d.code == "select_on_non_configurable_attr")
+            .expect("expected select_on_non_configurable_attr diagnostic");
+        assert!(diag.message.contains("module_name"), "{}", diag.message);
+    }
+
+    #[test]
+    fn apple_library_schema_exposes_multi_arch_attributes() {
+        let schema = built_in_rule_schema("apple_library").expect("apple_library schema");
+        let attr_names: Vec<&str> = schema
+            .attrs
+            .iter()
+            .map(|attr| attr.name.as_str())
+            .collect();
+        assert!(
+            attr_names.contains(&"archs"),
+            "apple_library should expose an archs attribute, got {attr_names:?}"
+        );
+        assert!(
+            attr_names.contains(&"mac_catalyst"),
+            "apple_library should expose a mac_catalyst attribute, got {attr_names:?}"
+        );
+    }
+
+    #[test]
     fn built_in_schema_contains_apple_rule_set() {
         let kinds = built_in_rule_schemas()
             .into_iter()
@@ -622,6 +699,7 @@ APPLE_RULES = [
         assert_eq!(
             kinds,
             vec![
+                "swift_macro",
                 "apple_library",
                 "apple_framework",
                 "apple_application",
