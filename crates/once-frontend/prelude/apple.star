@@ -1744,7 +1744,8 @@ RULES = [
             capability("build", ["default", "binary", "swiftmodule", "generated_sources"]),
         ],
         examples = [
-            "[[target]]\nname = \"AppKit\"\nkind = \"apple_library\"\nsrcs = [\"Sources/**/*.swift\"]\n\n[target.attrs]\nplatform = \"ios\"\nminimum_os = \"17.0\"",
+            "apple-library-minimal",
+            "apple-library-with-objc",
         ],
     ),
     rule(
@@ -1778,9 +1779,7 @@ RULES = [
         capabilities = [
             capability("build", ["default", "framework", "dsyms", "swiftmodule"]),
         ],
-        examples = [
-            "[[target]]\nname = \"AuthFramework\"\nkind = \"apple_framework\"\ndeps = [\"./AuthCore\"]\n\n[target.attrs]\nplatform = \"ios\"\nbundle_id = \"dev.once.Auth\"",
-        ],
+        examples = [],
     ),
     rule(
         kind = "apple_application",
@@ -1817,7 +1816,7 @@ RULES = [
             capability("run", ["default"], requires_outputs = ["bundle"]),
         ],
         examples = [
-            "[[target]]\nname = \"App\"\nkind = \"apple_application\"\ndeps = [\"./AppKit\"]\n\n[target.attrs]\nplatform = \"ios\"\nbundle_id = \"dev.once.App\"\nminimum_os = \"17.0\"",
+            "apple-application-minimal",
         ],
     ),
     rule(
@@ -1849,8 +1848,6 @@ RULES = [
             capability("build", ["default", "bundle", "dsyms"]),
             capability("test", ["default", "test_results", "coverage"], requires_outputs = ["bundle"]),
         ],
-        examples = [
-            "[[target]]\nname = \"AppTests\"\nkind = \"apple_test_bundle\"\ndeps = [\"./AppKit\"]\n\n[target.attrs]\nplatform = \"ios\"\ntest_host = \"./App\"",
-        ],
+        examples = [],
     ),
 ]

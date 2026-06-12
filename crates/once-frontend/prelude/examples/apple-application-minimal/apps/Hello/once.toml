@@ -1,0 +1,10 @@
+[[target]]
+name = "Hello"
+kind = "apple_application"
+srcs = ["Sources/**/*.swift"]
+
+[target.attrs]
+platform = "ios"
+bundle_id = "dev.once.Hello"
+minimum_os = "17.0"
+families = ["iphone"]

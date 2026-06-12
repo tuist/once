@@ -1,0 +1,10 @@
+[[target]]
+name = "Hello"
+kind = "apple_library"
+srcs = ["Sources/**/*.swift", "Sources/**/*.m"]
+
+[target.attrs]
+platform = "ios"
+minimum_os = "17.0"
+bridging_header = "Sources/Hello-Bridging-Header.h"
+exported_headers = ["Sources/Bridge.h"]
