@@ -169,13 +169,13 @@ existing build engineers have a familiar mental model.
 ## Configurable attributes
 
 Some attribute values depend on what you're building for. A library
-might want `IS_IOS` defined on iOS and `IS_MAC` on macOS, or different
+might link `UIKit` on iOS and `AppKit` on macOS, or pick different
 linker flags per architecture. Instead of duplicating the target,
 write the per-configuration value inline with `select`:
 
 ```toml
 [target.attrs]
-defines = { select = { ios = ["IS_IOS"], macos = ["IS_MAC"], default = [] } }
+sdk_frameworks = { select = { ios = ["UIKit"], macos = ["AppKit"] } }
 ```
 
 When the build resolves the target, it picks the branch whose key
