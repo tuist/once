@@ -108,7 +108,7 @@ async fn run_command(
         Cmd::Test { target } => {
             let target = resolve_required_target(workspace, target)?;
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
-            commands::graph::test(workspace, &cache, output, &target).await
+            Box::pin(commands::graph::test(workspace, &cache, output, &target)).await
         }
         Cmd::Toolchain { cmd } => run_toolchain_command(workspace, output, cmd).await,
         Cmd::Query { cmd } => run_query_command(workspace, output, cmd).await,

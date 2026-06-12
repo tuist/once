@@ -42,7 +42,7 @@ pub enum QueryCmd {
         changed_paths: Vec<String>,
     },
 
-    /// Read normalized once.test_results.v1 results for a target.
+    /// Read normalized `once.test_results.v1` results for a target.
     TestResults {
         /// Target id, e.g. `spec/cli_e2e`.
         target: String,
