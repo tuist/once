@@ -2,17 +2,9 @@
 
 XCTest bundle.
 
-::: warning Schema only
-The attribute and capability schema is wired up so manifests load
-and [`once query schema apple_test_bundle`](/reference/cli/query)
-inspects the contract, but no build actions run yet. Implementation
-is pending.
-:::
-
 ## Description
 
-Builds and runs XCTest-style test bundles, including app-hosted
-tests when a `test_host` is declared.
+Builds XCTest-style test bundles for an external runner.
 
 ## Attributes
 
@@ -33,12 +25,11 @@ tests when a `test_host` is declared.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable`, `apple_application` | Code under test and optional host application |
+| `deps` | `apple_linkable`, `apple_application`, `apple_swift_plugin` | Code under test, optional host application, and Swift compiler plugins |
 
 ## Providers
 
-The target will emit `apple_test_bundle` and `apple_bundle` once the
-implementation lands.
+The target emits `apple_test_bundle` and `apple_bundle`.
 
 ## Capabilities
 
@@ -46,3 +37,11 @@ implementation lands.
 | --- | --- | --- |
 | `build` | `default`, `bundle`, `dsyms` |  |
 | `test` | `default`, `test_results`, `coverage` | `bundle` |
+
+## Limitations
+
+App-hosted tests, resource bundling, asset catalogs, custom Info.plist
+templates, entitlements, destinations, test plans, and test runner
+environment variables are declared in the schema for graph
+compatibility but are not implemented yet. Non-empty values for those
+attrs fail analysis instead of being ignored.

@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
-use crate::graph::Diagnostic;
+use crate::graph::{built_in_rule_schemas_result, Diagnostic};
+use crate::target_validator::validate_target;
 
 /// One mutation against the `[[target]]` array in a `once.toml`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -142,6 +143,8 @@ fn create(doc: &mut DocumentMut, spec: &TargetSpec) -> Result<(), Vec<Diagnostic
         }]);
     }
 
+    validate_spec(spec)?;
+
     let table = build_target_table(spec)?;
     targets_mut(doc).push(table);
     Ok(())
@@ -186,7 +189,29 @@ fn update(
     let table = targets_mut(doc)
         .get_mut(index)
         .expect("find_target_index returned a valid index");
-    apply_update(table, set, target_name)
+    let mut updated = table.clone();
+    apply_update(&mut updated, set, target_name)?;
+    validate_spec(&target_spec_from_table(&updated))?;
+    *table = updated;
+    Ok(())
+}
+
+fn validate_spec(spec: &TargetSpec) -> Result<(), Vec<Diagnostic>> {
+    let schemas = built_in_rule_schemas_result().map_err(|err| {
+        vec![Diagnostic {
+            code: "rule_schema_load_failed".to_string(),
+            message: err.to_string(),
+            target: Some(spec.name.clone()),
+            attribute: Some("kind".to_string()),
+            repairs: Vec::new(),
+        }]
+    })?;
+    let diagnostics = validate_target(spec, &schemas);
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(diagnostics)
+    }
 }
 
 fn delete(doc: &mut DocumentMut, target_name: &str) -> Result<(), Vec<Diagnostic>> {
@@ -252,6 +277,91 @@ fn build_target_table(spec: &TargetSpec) -> Result<Table, Vec<Diagnostic>> {
         table.insert("attrs", Item::Table(attrs_table));
     }
     Ok(table)
+}
+
+fn target_spec_from_table(table: &Table) -> TargetSpec {
+    TargetSpec {
+        name: table
+            .get("name")
+            .and_then(Item::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        kind: table
+            .get("kind")
+            .and_then(Item::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        deps: string_vec_from_item(table.get("deps")),
+        srcs: string_vec_from_item(table.get("srcs")),
+        attrs: attrs_from_item(table.get("attrs")),
+    }
+}
+
+fn string_vec_from_item(item: Option<&Item>) -> Vec<String> {
+    item.and_then(Item::as_array)
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|value| value.as_str().map(ToString::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn attrs_from_item(item: Option<&Item>) -> JsonMap<String, JsonValue> {
+    let Some(Item::Table(table)) = item else {
+        return JsonMap::new();
+    };
+    table
+        .iter()
+        .filter_map(|(key, value)| json_from_item(value).map(|value| (key.to_string(), value)))
+        .collect()
+}
+
+fn json_from_item(item: &Item) -> Option<JsonValue> {
+    match item {
+        Item::Value(value) => json_from_value(value),
+        Item::Table(table) => Some(JsonValue::Object(
+            table
+                .iter()
+                .filter_map(|(key, value)| {
+                    json_from_item(value).map(|value| (key.to_string(), value))
+                })
+                .collect(),
+        )),
+        _ => None,
+    }
+}
+
+fn json_from_value(value: &Value) -> Option<JsonValue> {
+    if let Some(value) = value.as_bool() {
+        return Some(JsonValue::Bool(value));
+    }
+    if let Some(value) = value.as_integer() {
+        return Some(JsonValue::Number(value.into()));
+    }
+    if let Some(value) = value.as_float() {
+        return serde_json::Number::from_f64(value).map(JsonValue::Number);
+    }
+    if let Some(value) = value.as_str() {
+        return Some(JsonValue::String(value.to_string()));
+    }
+    if let Some(array) = value.as_array() {
+        return Some(JsonValue::Array(
+            array.iter().filter_map(json_from_value).collect(),
+        ));
+    }
+    if let Some(table) = value.as_inline_table() {
+        return Some(JsonValue::Object(
+            table
+                .iter()
+                .filter_map(|(key, value)| {
+                    json_from_value(value).map(|value| (key.to_string(), value))
+                })
+                .collect(),
+        ));
+    }
+    None
 }
 
 fn build_attrs_table(
@@ -348,11 +458,13 @@ mod tests {
     use serde_json::json;
 
     fn target(name: &str, kind: &str) -> TargetSpec {
-        TargetSpec {
+        let mut spec = TargetSpec {
             name: name.to_string(),
             kind: kind.to_string(),
             ..Default::default()
-        }
+        };
+        spec.attrs.insert("platform".to_string(), json!("ios"));
+        spec
     }
 
     #[test]
@@ -423,15 +535,22 @@ kind = "apple_library"
 
     #[test]
     fn create_rejects_empty_name() {
-        let diagnostics = apply_operations(
-            "",
-            &[EditOperation::Create {
-                target: target("", "apple_library"),
-            }],
-        )
-        .expect_err("missing name must fail");
+        let mut spec = target("", "apple_library");
+        spec.attrs.insert("platform".to_string(), json!("ios"));
+        let diagnostics = apply_operations("", &[EditOperation::Create { target: spec }])
+            .expect_err("missing name must fail");
         assert_eq!(diagnostics[0].code, "target_name_required");
         assert_eq!(diagnostics[0].attribute.as_deref(), Some("name"));
+    }
+
+    #[test]
+    fn create_validates_against_rule_schema() {
+        let mut spec = target("Hello", "apple_library");
+        spec.attrs.clear();
+        let diagnostics = apply_operations("", &[EditOperation::Create { target: spec }])
+            .expect_err("missing platform must fail");
+        assert_eq!(diagnostics[0].code, "missing_required_attr");
+        assert_eq!(diagnostics[0].attribute.as_deref(), Some("platform"));
     }
 
     #[test]
@@ -467,6 +586,9 @@ platform = "ios"
 [[target]]
 name = "Old"
 kind = "apple_library"
+
+[target.attrs]
+platform = "ios"
 "#;
         let out = apply_operations(
             src,
@@ -511,6 +633,31 @@ minimum_os = "17.0"
         .expect("update attrs");
         assert!(out.contains("platform = \"macos\""));
         assert!(!out.contains("minimum_os"));
+    }
+
+    #[test]
+    fn update_validates_merged_target_against_rule_schema() {
+        let src = r#"
+[[target]]
+name = "Hello"
+kind = "apple_library"
+
+[target.attrs]
+platform = "ios"
+"#;
+        let diagnostics = apply_operations(
+            src,
+            &[EditOperation::Update {
+                target_name: "Hello".to_string(),
+                set: TargetUpdate {
+                    attrs: Some(JsonMap::new()),
+                    ..Default::default()
+                },
+            }],
+        )
+        .expect_err("removing required platform must fail");
+        assert_eq!(diagnostics[0].code, "missing_required_attr");
+        assert_eq!(diagnostics[0].attribute.as_deref(), Some("platform"));
     }
 
     #[test]

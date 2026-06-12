@@ -2,17 +2,10 @@
 
 Apple application bundle.
 
-::: warning Schema only
-The attribute and capability schema is wired up so manifests load
-and [`once query schema apple_application`](/reference/cli/query)
-inspects the contract, but no build actions run yet. Implementation
-is pending.
-:::
-
 ## Description
 
-Builds an Apple application bundle with resources, Info.plist
-metadata, and signing inputs.
+Builds an Apple application bundle with a generated Info.plist,
+linked dependencies, embedded frameworks, and ad-hoc signing.
 
 ## Attributes
 
@@ -38,12 +31,11 @@ metadata, and signing inputs.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable`, `apple_framework`, `apple_resource` | Libraries, frameworks, and resources embedded in the app |
+| `deps` | `apple_linkable`, `apple_framework`, `apple_resource`, `apple_swift_plugin` | Libraries, frameworks, resources, and Swift compiler plugins embedded in the app |
 
 ## Providers
 
-The target will emit `apple_application` and `apple_bundle` once the
-implementation lands.
+The target emits `apple_application` and `apple_bundle`.
 
 ## Capabilities
 
@@ -51,3 +43,11 @@ implementation lands.
 | --- | --- | --- |
 | `build` | `default`, `bundle`, `dsyms` |  |
 | `run` | `default` | `bundle` |
+
+## Limitations
+
+Resource bundling, asset catalogs, custom Info.plist templates,
+entitlements, provisioning profiles, and non-ad-hoc signing are
+declared in the schema for graph compatibility but are not implemented
+yet. Non-empty values for those attrs fail analysis instead of being
+ignored.

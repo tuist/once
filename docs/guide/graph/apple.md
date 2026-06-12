@@ -11,8 +11,8 @@ automatically. The bundle, app, and test-host kinds
 ([`apple_framework`](/reference/prelude/apple_framework),
 [`apple_application`](/reference/prelude/apple_application),
 [`apple_test_bundle`](/reference/prelude/apple_test_bundle)) are
-declared as inspectable schemas; their build implementations are not
-yet wired up.
+implemented as Starlark graph rules that declare cacheable build
+actions.
 
 For the per-rule attribute, dep, provider, and capability tables see
 the [Prelude reference](/reference/prelude/).

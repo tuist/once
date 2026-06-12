@@ -43,7 +43,7 @@ merge them with `lipo`.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable`, `apple_resource` | Libraries, frameworks, or resources consumed by this library |
+| `deps` | `apple_linkable`, `apple_resource`, `apple_swift_plugin` | Libraries, frameworks, resources, or Swift compiler plugins consumed by this library |
 
 A dep that exposes a `plugin_dylib` provider field (see
 [`swift_macro`](/reference/prelude/swift_macro)) is auto-detected and

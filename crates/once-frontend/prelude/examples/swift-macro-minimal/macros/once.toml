@@ -1,0 +1,7 @@
+[[target]]
+name = "Stringify"
+kind = "swift_macro"
+srcs = ["Stringify/Sources/*.swift"]
+
+[target.attrs]
+minimum_os = "13.0"

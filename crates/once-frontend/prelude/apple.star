@@ -503,6 +503,39 @@ def _resolve_attrs(attrs, label_id, non_configurable):
         out[key] = _resolve_select(value, tokens, label_id, key)
     return out
 
+def _attr_has_value(value):
+    if value == None:
+        return False
+    if type(value) == "string" and value == "":
+        return False
+    if type(value) == "list" and len(value) == 0:
+        return False
+    if type(value) == "dict" and len(value) == 0:
+        return False
+    return True
+
+def _reject_unsupported_attrs(attrs, label_id, keys):
+    for key in keys:
+        if key in attrs and _attr_has_value(attrs.get(key)):
+            fail(label_id + ": attribute `" + key + "` is declared but not implemented by this rule yet")
+
+def _select_mentions_any(branches, tokens):
+    for key in branches.keys():
+        for part in key.split(":"):
+            if part in tokens:
+                return True
+    return False
+
+def _reject_multi_arch_selects(attrs, label_id, archs):
+    if len(archs) <= 1:
+        return
+    arch_tokens = {}
+    for arch in archs:
+        arch_tokens[arch] = True
+    for key, value in attrs.items():
+        if _is_select_shape(value) and _select_mentions_any(value["select"], arch_tokens):
+            fail(label_id + ": attribute `" + key + "` cannot select on architecture when `archs` contains multiple values")
+
 def _apple_library_impl(ctx):
     attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["module_name"])
     platform = attrs["platform"]
@@ -537,6 +570,7 @@ def _apple_library_impl(ctx):
 
     archs_attr = attrs.get("archs") or []
     archs = archs_attr if len(archs_attr) > 0 else [host_arch()]
+    _reject_multi_arch_selects(ctx["attr"], ctx["label"]["id"], archs)
     mac_catalyst = attrs.get("mac_catalyst") or False
     if mac_catalyst and platform != "macos" and platform != "macosx":
         fail("apple_library " + ctx["label"]["id"] + " sets mac_catalyst = true but platform = `" + platform + "`; mac_catalyst requires platform = macos")
@@ -1157,6 +1191,7 @@ def _collect_dep_compile_inputs(deps, build_dir):
 
 def _apple_framework_impl(ctx):
     attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
+    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["headers", "exported_headers", "resources", "asset_catalogs", "privacy_manifest"])
     platform = attrs["platform"]
     minimum_os = attrs.get("minimum_os") or "13.0"
     target_sdk_version = attrs.get("target_sdk_version") or minimum_os
@@ -1348,6 +1383,9 @@ def shell_quote_for_action(path):
 
 def _apple_application_impl(ctx):
     attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
+    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["resources", "asset_catalogs", "info_plist", "info_plist_substitutions", "entitlements", "provisioning_profile"])
+    if attrs.get("signing") and attrs.get("signing") != "ad_hoc":
+        fail(ctx["label"]["id"] + ": attribute `signing` only supports `ad_hoc` today")
     platform = attrs["platform"]
     bundle_id = attrs["bundle_id"]
     minimum_os = attrs.get("minimum_os") or "13.0"
@@ -1559,6 +1597,7 @@ def _apple_application_impl(ctx):
 
 def _apple_test_bundle_impl(ctx):
     attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
+    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["test_host", "resources", "asset_catalogs", "info_plist", "entitlements", "destination", "test_plan", "test_env"])
     platform = attrs["platform"]
     minimum_os = attrs.get("minimum_os") or "13.0"
     target_sdk_version = attrs.get("target_sdk_version") or minimum_os
@@ -1702,14 +1741,16 @@ RULES = [
         capabilities = [
             capability("build", ["default", "plugin_dylib", "swiftmodule"]),
         ],
-        examples = [],
+        examples = [
+            "swift-macro-minimal",
+        ],
     ),
     rule(
         kind = "apple_library",
         docs = "Compiles Swift, Objective-C, C, and C++ sources into a linkable Apple module.",
         impl = _apple_library_impl,
         attrs = [
-            attr("platform", "string", required = True, docs = "Apple platform such as ios, macos, tvos, watchos, or visionos"),
+            attr("platform", "string", required = True, docs = "Apple platform such as ios, macos, tvos, watchos, or visionos", configurable = False),
             attr("minimum_os", "string", docs = "Minimum supported OS version (deployment target)"),
             attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
             attr("module_name", "string", docs = "Compiled module name. Defaults to the target name", configurable = False),
@@ -1725,9 +1766,9 @@ RULES = [
             attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled for dependent tests"),
             attr("library_evolution", "bool", default = "false", docs = "Emit stable Swift module interfaces for binary compatibility"),
             attr("emit_dsym", "bool", default = "false", docs = "Emit DWARF debug info so downstream rules can extract a `.dSYM` bundle"),
-            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS (always uses macosx)"),
-            attr("archs", "list<string>", default = "[]", docs = "Target architectures (`arm64`, `x86_64`, `arm64e`, `arm64_32`). Empty defaults to the host arch; multi-arch fans out per-arch compiles and combines them with `lipo`"),
-            attr("mac_catalyst", "bool", default = "false", docs = "Build the iOSMac (Mac Catalyst) variant. Requires `platform = macos`; rewrites the triple to `<arch>-apple-ios<minOS>-macabi`"),
+            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS (always uses macosx)", configurable = False),
+            attr("archs", "list<string>", default = "[]", docs = "Target architectures (`arm64`, `x86_64`, `arm64e`, `arm64_32`). Empty defaults to the host arch; multi-arch fans out per-arch compiles and combines them with `lipo`", configurable = False),
+            attr("mac_catalyst", "bool", default = "false", docs = "Build the iOSMac (Mac Catalyst) variant. Requires `platform = macos`; rewrites the triple to `<arch>-apple-ios<minOS>-macabi`", configurable = False),
             attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
             attr("alwayslink", "bool", default = "false", docs = "Hint to downstream linker rules to force-load this archive (`-Wl,-force_load`)"),
             attr("exported_deps", "list<string>", default = "[]", docs = "Target IDs from `deps` whose module interface flows through to consumers' compile path"),
@@ -1735,7 +1776,7 @@ RULES = [
             attr("enable_modules", "bool", default = "false", docs = "Emit a `module.modulemap` for `exported_headers` and pass `-fmodules` to Clang so consumers can `import` the module instead of #importing each header"),
         ],
         deps = [
-            dep("deps", ["apple_linkable", "apple_resource"], "Libraries, frameworks, or resources consumed by this library"),
+            dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin"], "Libraries, frameworks, resources, or Swift compiler plugins consumed by this library"),
         ],
         providers = ["apple_linkable", "apple_module"],
         capabilities = [
@@ -1751,10 +1792,10 @@ RULES = [
         docs = "Builds a dynamic Apple framework bundle (`Foo.framework/Foo` dylib) with module metadata and resources.",
         impl = _apple_framework_impl,
         attrs = [
-            attr("platform", "string", required = True, docs = "Apple platform for the framework"),
+            attr("platform", "string", required = True, docs = "Apple platform for the framework", configurable = False),
             attr("minimum_os", "string", docs = "Minimum supported OS version"),
             attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
-            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS"),
+            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS", configurable = False),
             attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
             attr("bundle_id", "string", docs = "Framework bundle identifier"),
             attr("product_name", "string", docs = "Framework product name. Defaults to the target name", configurable = False),
@@ -1771,24 +1812,26 @@ RULES = [
             attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
         ],
         deps = [
-            dep("deps", ["apple_linkable", "apple_resource"], "Libraries and resources linked or embedded by the framework"),
+            dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin"], "Libraries, resources, or Swift compiler plugins linked or embedded by the framework"),
         ],
         providers = ["apple_linkable", "apple_framework", "apple_bundle"],
         capabilities = [
             capability("build", ["default", "framework", "dsyms", "swiftmodule"]),
         ],
-        examples = [],
+        examples = [
+            "apple-framework-minimal",
+        ],
     ),
     rule(
         kind = "apple_application",
         docs = "Builds an Apple application bundle (`Foo.app`) with the Mach-O executable, embedded frameworks, Info.plist, and ad-hoc codesign.",
         impl = _apple_application_impl,
         attrs = [
-            attr("platform", "string", required = True, docs = "Apple platform for the application"),
+            attr("platform", "string", required = True, docs = "Apple platform for the application", configurable = False),
             attr("bundle_id", "string", required = True, docs = "Application bundle identifier"),
             attr("minimum_os", "string", docs = "Minimum supported OS version"),
             attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
-            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS"),
+            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS", configurable = False),
             attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
             attr("families", "list<string>", default = "[]", docs = "Supported device families, such as iphone or ipad"),
             attr("product_name", "string", docs = "Application product name. Defaults to the target name", configurable = False),
@@ -1806,7 +1849,7 @@ RULES = [
             attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
         ],
         deps = [
-            dep("deps", ["apple_linkable", "apple_framework", "apple_resource"], "Libraries, frameworks, and resources embedded in the app"),
+            dep("deps", ["apple_linkable", "apple_framework", "apple_resource", "apple_swift_plugin"], "Libraries, frameworks, resources, and Swift compiler plugins embedded in the app"),
         ],
         providers = ["apple_application", "apple_bundle"],
         capabilities = [
@@ -1822,10 +1865,10 @@ RULES = [
         docs = "Builds an XCTest bundle (`Foo.xctest`) linked against XCTest. The runner that executes the bundle is provided externally; this rule only assembles the bundle.",
         impl = _apple_test_bundle_impl,
         attrs = [
-            attr("platform", "string", required = True, docs = "Apple platform for the tests"),
+            attr("platform", "string", required = True, docs = "Apple platform for the tests", configurable = False),
             attr("minimum_os", "string", docs = "Minimum supported OS version"),
             attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
-            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS"),
+            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS", configurable = False),
             attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
             attr("product_name", "string", docs = "Test bundle product name. Defaults to the target name", configurable = False),
             attr("test_host", "target", docs = "Application target hosting the test bundle"),
@@ -1839,13 +1882,15 @@ RULES = [
             attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
         ],
         deps = [
-            dep("deps", ["apple_linkable", "apple_application"], "Code under test and optional host application"),
+            dep("deps", ["apple_linkable", "apple_application", "apple_swift_plugin"], "Code under test, optional host application, and Swift compiler plugins"),
         ],
         providers = ["apple_test_bundle", "apple_bundle"],
         capabilities = [
             capability("build", ["default", "bundle", "dsyms"]),
             capability("test", ["default", "test_results", "coverage"], requires_outputs = ["bundle"]),
         ],
-        examples = [],
+        examples = [
+            "apple-test-bundle-minimal",
+        ],
     ),
 ]

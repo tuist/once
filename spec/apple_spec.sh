@@ -122,8 +122,6 @@ deps = ["./AppCore"]
 platform = "ios"
 sdk_variant = "simulator"
 minimum_os = "17.0"
-test_host = "./App"
-test_plan = "App.xctestplan"
 EOF
   }
 

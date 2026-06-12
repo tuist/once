@@ -2,18 +2,10 @@
 
 Apple framework bundle.
 
-::: warning Schema only
-The attribute and capability schema is wired up so manifests load
-and [`once query schema apple_framework`](/reference/cli/query)
-inspects the contract, but no build actions run yet. Implementation
-is pending.
-:::
-
 ## Description
 
-Builds an Apple framework product with module metadata and optional
-resources, asset catalogs, privacy manifests, headers, and debug
-symbol outputs.
+Builds an Apple framework product with module metadata, a generated
+Info.plist, and ad-hoc signing.
 
 ## Attributes
 
@@ -35,15 +27,22 @@ symbol outputs.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable`, `apple_resource` | Libraries and resources linked or embedded by the framework |
+| `deps` | `apple_linkable`, `apple_resource`, `apple_swift_plugin` | Libraries, resources, and Swift compiler plugins linked or embedded by the framework |
 
 ## Providers
 
-The target will emit `apple_linkable`, `apple_framework`, and
-`apple_bundle` once the implementation lands.
+The target emits `apple_linkable`, `apple_framework`, and
+`apple_bundle`.
 
 ## Capabilities
 
 | Capability | Output groups |
 | --- | --- |
 | `build` | `default`, `framework`, `dsyms`, `swiftmodule` |
+
+## Limitations
+
+Header packaging, resource bundling, asset catalogs, and privacy
+manifests are declared in the schema for graph compatibility but are
+not implemented yet. Non-empty values for those attrs fail analysis
+instead of being ignored.

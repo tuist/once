@@ -1,0 +1,2 @@
+name = "Minimal Swift Testing bundle"
+use_when = "You want a modern Swift Testing target without a host application."
