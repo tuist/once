@@ -1,0 +1,10 @@
+[[target]]
+name = "Consumer"
+kind = "apple_library"
+srcs = ["Consumer/Sources/*.swift"]
+deps = ["macros/Stringify"]
+
+[target.attrs]
+platform = "macos"
+minimum_os = "13.0"
+sdk_variant = "device"
