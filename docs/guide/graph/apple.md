@@ -168,30 +168,40 @@ existing build engineers have a familiar mental model.
 
 ## Configurable attributes
 
-Attributes marked `configurable = True` in the rule schema accept a
-`select` value that resolves at analysis time against the target's
-configuration. The TOML shape is a one-key table:
+Some attribute values depend on what you're building for. A library
+might want `IS_IOS` defined on iOS and `IS_MAC` on macOS, or different
+linker flags per architecture. Instead of duplicating the target,
+write the per-configuration value inline with `select`:
 
 ```toml
 [target.attrs]
 defines = { select = { ios = ["IS_IOS"], macos = ["IS_MAC"], default = [] } }
 ```
 
-Active tokens for Apple targets come from the resolved literal values
-of `platform`, `sdk_variant`, each entry of `archs`, and the literal
-token `mac_catalyst` when that attribute is true. Branch keys can
-combine tokens with `:` (e.g. `ios:simulator`); when several branches
-match the most specific (longest) key wins. A `default` branch is
-selected when nothing else matches. The four input attributes that
-feed the configuration (`platform`, `sdk_variant`, `archs`,
-`mac_catalyst`) cannot themselves use `select`. The schema layer
-emits a `select_on_non_configurable_attr` diagnostic for `select` on
-any other attribute the rule marks `configurable = False`.
+When the build resolves the target, it picks the branch whose key
+matches the active configuration. A branch key can be:
 
-This is a minimal model: branch keys are platform, arch, variant, and
-the literal `mac_catalyst` token. Bazel-style constraint values,
-exec/target splits, and platform transitions are not yet part of the
-surface and can layer on later without changing the manifest syntax.
+- a platform: `ios`, `macos`, `tvos`, `watchos`, `visionos`
+- an architecture from `archs`: `arm64`, `x86_64`, `arm64e`, ...
+- an SDK variant: `simulator` or `device`
+- the literal token `mac_catalyst` when `mac_catalyst = true`
+- a combination joined with `:`, such as `ios:simulator`
+- `default`, used when no other branch matches
+
+When more than one branch matches (e.g. both `ios` and `ios:simulator`
+on an iOS simulator build) the most specific one wins.
+
+Two kinds of attributes cannot use `select`:
+
+- The attributes that decide which branch is picked: `platform`,
+  `sdk_variant`, `archs`, and `mac_catalyst`. They have to be literal
+  values.
+- Attributes the rule marks as non-configurable. Trying to use
+  `select` on those surfaces a graph loading error.
+
+The surface is intentionally small for now. Richer configuration
+models (constraint settings, exec/target splits, platform
+transitions) can layer on later without changing the TOML shape.
 
 ## Prior art
 
