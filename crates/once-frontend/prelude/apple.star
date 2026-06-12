@@ -1499,7 +1499,21 @@ def _apple_application_impl(ctx):
             dep_framework_files[framework_path] = dep.get("framework_files") or []
     for framework_path in dep_framework_paths:
         framework_basename = _basename(framework_path)
+        source_files = dep_framework_files.get(framework_path) or []
+        # Declare every file that lands in the embedded framework so
+        # the Once runner preserves them. Map each source file
+        # (`<build_dir>/<fw>/<sub>`) to its embedded path
+        # (`<app>/Frameworks/<fw>/<sub>`) by stripping the framework
+        # path prefix.
+        framework_prefix = framework_path + "/"
+        embed_outputs = []
+        for source in source_files:
+            if source.startswith(framework_prefix):
+                rel = source[len(framework_prefix):]
+                embed_outputs.append(declare_output(app_dir + "/Frameworks/" + framework_basename + "/" + rel))
         embedded_stamp = declare_output(app_dir + "/Frameworks/" + framework_basename + "/_CodeSignature/CodeResources")
+        if embedded_stamp not in embed_outputs:
+            embed_outputs.append(embedded_stamp)
         embed_script = (
             "set -e; mkdir -p " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks") + "; " +
             # Remove any prior copy so a re-run starts from a clean
@@ -1509,11 +1523,11 @@ def _apple_application_impl(ctx):
             "cp -R " + shell_quote_for_action(framework_path) + " " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks/") + "; " +
             codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks/" + framework_basename)
         )
-        embed_inputs = list(dep_framework_files.get(framework_path) or [])
+        embed_inputs = list(source_files)
         run_action(
             argv = ["/bin/sh", "-c", embed_script],
             inputs = embed_inputs,
-            outputs = [embedded_stamp],
+            outputs = embed_outputs,
             env = cs_env,
             toolchain_identity = cs_identity,
             identifier = "apple_application_embed_" + framework_basename,
@@ -1563,6 +1577,13 @@ def _apple_test_bundle_impl(ctx):
     xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
     triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
 
+    # XCTest lives in the platform's developer-frameworks tree, not
+    # the SDK's default search path. Resolve `<platform>/Developer/
+    # Library/Frameworks` via xcrun and add it as `-F`/`-rpath` so the
+    # linker finds the framework and dyld locates it at runtime.
+    platform_path = host_command([xcrun, "--sdk", sdk, "--show-sdk-platform-path"], env = xcrun_env).strip()
+    xctest_framework_dir = platform_path + "/Developer/Library/Frameworks"
+
     bundle_dir = product_name + ".xctest"
     test_binary = declare_output(bundle_dir + "/" + product_name)
     info_plist = declare_output(bundle_dir + "/Info.plist")
@@ -1582,18 +1603,31 @@ def _apple_test_bundle_impl(ctx):
         plugin_dylibs,
     ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
 
+    # An XCTest bundle is a Mach-O loadable bundle; swiftc takes
+    # `-emit-library` and the linker `-bundle` flag is plumbed through
+    # `-Xlinker`. The XCTest framework lives under the platform's
+    # `Developer/Library/Frameworks`; add it to both the framework
+    # search path (`-F`) and the dyld rpath so the test runner can
+    # load it at simulator launch time.
     swift_argv = [
         xcrun,
         "--sdk",
         sdk,
         "swiftc",
         "-emit-library",
-        "-bundle",
         "-module-name",
         module_name,
         "-target",
         triple,
         "-parse-as-library",
+        "-Xlinker",
+        "-bundle",
+        "-F",
+        xctest_framework_dir,
+        "-Xlinker",
+        "-rpath",
+        "-Xlinker",
+        xctest_framework_dir,
         "-framework",
         "XCTest",
         "-o",

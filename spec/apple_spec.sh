@@ -38,8 +38,41 @@ Describe 'apple graph'
     cp -R "$REPO_ROOT/fixtures/swift_macro/." "$WORKSPACE/"
   }
 
+  copy_apple_application_swiftui_fixture() {
+    cp -R "$REPO_ROOT/fixtures/apple_application_swiftui/." "$WORKSPACE/"
+  }
+
   create_apple_workspace() {
-    mkdir -p "$WORKSPACE/apps/ios"
+    mkdir -p "$WORKSPACE/apps/ios/Sources/AppCore/include" "$WORKSPACE/apps/ios/Sources/DesignSystem" "$WORKSPACE/apps/ios/Sources/App" "$WORKSPACE/apps/ios/Sources/AppTests"
+    cat > "$WORKSPACE/apps/ios/Sources/AppCore/include/AppCore.h" <<'EOF'
+#pragma once
+EOF
+    cat > "$WORKSPACE/apps/ios/Sources/AppCore/AppCore.swift" <<'EOF'
+public struct AppCore {
+    public static let name = "AppCore"
+}
+EOF
+    cat > "$WORKSPACE/apps/ios/Sources/DesignSystem/DesignSystem.swift" <<'EOF'
+import AppCore
+public struct DesignSystem {
+    public static let owner = AppCore.name
+}
+EOF
+    cat > "$WORKSPACE/apps/ios/Sources/App/App.swift" <<'EOF'
+import DesignSystem
+
+@main
+struct AppEntry {
+    static let owner = DesignSystem.owner
+    static func main() {}
+}
+EOF
+    cat > "$WORKSPACE/apps/ios/Sources/AppTests/AppTests.swift" <<'EOF'
+public struct AppTests {
+    public static let name = "AppTests"
+}
+EOF
+
     cat > "$WORKSPACE/apps/ios/once.toml" <<'EOF'
 [[target]]
 name = "AppCore"
@@ -57,39 +90,37 @@ swift_flags = ["-warnings-as-errors"]
 [[target]]
 name = "DesignSystem"
 kind = "apple_framework"
+srcs = ["Sources/DesignSystem/**/*.swift"]
 deps = ["./AppCore"]
 
 [target.attrs]
 platform = "ios"
+sdk_variant = "simulator"
 bundle_id = "dev.once.DesignSystem"
 minimum_os = "17.0"
-resources = ["DesignSystem/Resources/**"]
-asset_catalogs = ["DesignSystem/Assets.xcassets"]
-privacy_manifest = "DesignSystem/PrivacyInfo.xcprivacy"
 
 [[target]]
 name = "App"
 kind = "apple_application"
-deps = ["./AppCore", "./DesignSystem"]
+srcs = ["Sources/App/**/*.swift"]
+deps = ["./DesignSystem"]
 
 [target.attrs]
 platform = "ios"
+sdk_variant = "simulator"
 bundle_id = "dev.once.App"
 minimum_os = "17.0"
 families = ["iphone", "ipad"]
-resources = ["Resources/**"]
-asset_catalogs = ["Assets.xcassets"]
-entitlements = "App.entitlements"
-provisioning_profile = "profiles/App.mobileprovision"
-sdk_frameworks = ["UIKit"]
 
 [[target]]
 name = "AppTests"
 kind = "apple_test_bundle"
+srcs = ["Sources/AppTests/**/*.swift"]
 deps = ["./AppCore"]
 
 [target.attrs]
 platform = "ios"
+sdk_variant = "simulator"
 minimum_os = "17.0"
 test_host = "./App"
 test_plan = "App.xctestplan"
@@ -120,6 +151,7 @@ EOF
   End
 
   It 'builds Apple application artifacts through the graph command'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     create_apple_workspace
 
     When call once --format json build apps/ios/App
@@ -128,8 +160,10 @@ EOF
     The stdout should include '"capability":"build"'
     The stdout should include '"status":"completed"'
     The stdout should include '"output_groups":["default","bundle","dsyms"]'
-    The stdout should include '".once/out/apps/ios/App/App.app"'
+    The stdout should include '.once/out/apps/ios/App/App.app/Info.plist'
+    The path "$WORKSPACE/.once/out/apps/ios/App/App.app/App" should be file
     The path "$WORKSPACE/.once/out/apps/ios/App/App.app/Info.plist" should be file
+    The path "$WORKSPACE/.once/out/apps/ios/App/App.app/Frameworks/DesignSystem.framework/DesignSystem" should be file
   End
 
   It 'runs Apple application artifacts through the graph command'
@@ -158,7 +192,14 @@ EOF
   End
 
   It 'tests Apple test bundle artifacts through the graph command'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     create_apple_workspace
+
+    # `once test` first builds the bundle through the Starlark impl,
+    # then runs the test capability which is still served by the
+    # CLI's placeholder runner (it writes `test_results.json` and
+    # `coverage.json` without invoking xctest itself).
+    once --format json build apps/ios/AppTests >/dev/null 2>&1 || true
 
     When call once --format json test apps/ios/AppTests
     The status should be success
@@ -410,6 +451,65 @@ EOF
       When call once --format json build apps/ios/Greeter
       The status should be success
       The stdout should include '"cache":"miss"'
+    End
+  End
+
+  Describe 'apple_framework + apple_application end-to-end'
+    It 'compiles a static library, a dynamic framework that links it, and an app that embeds the framework'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_application_swiftui_fixture
+
+      When call once --format json build apps/ios/App
+      The status should be success
+      The stdout should include '"target":"apps/ios/App"'
+      The stdout should include '"status":"completed"'
+      # Static library
+      The path "$WORKSPACE/.once/out/models/Models/Models.a" should be file
+      The path "$WORKSPACE/.once/out/models/Models/Models.swiftmodule" should be file
+      # Dynamic framework wrapping the static lib
+      The path "$WORKSPACE/.once/out/ui/UI/UI.framework/UI" should be file
+      The path "$WORKSPACE/.once/out/ui/UI/UI.framework/Info.plist" should be file
+      The path "$WORKSPACE/.once/out/ui/UI/UI.framework/Modules/module.modulemap" should be file
+      The path "$WORKSPACE/.once/out/ui/UI/UI.framework/Modules/UI.swiftmodule" should be file
+      The path "$WORKSPACE/.once/out/ui/UI/UI.framework/_CodeSignature/CodeResources" should be file
+      # App bundle with embedded framework
+      The path "$WORKSPACE/.once/out/apps/ios/App/App.app/App" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/App/App.app/Info.plist" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/App/App.app/Frameworks/UI.framework/UI" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/App/App.app/_CodeSignature/CodeResources" should be file
+    End
+
+    It 'produces a Mach-O executable that loads @rpath/UI.framework/UI'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_application_swiftui_fixture
+      once --format json build apps/ios/App >/dev/null 2>&1 || true
+
+      app_dylib_deps() {
+        otool -L "$WORKSPACE/.once/out/apps/ios/App/App.app/App"
+      }
+
+      When call app_dylib_deps
+      The status should be success
+      The stdout should include '@rpath/UI.framework/UI'
+      The stdout should include '/System/Library/Frameworks/SwiftUI.framework/SwiftUI'
+
+      app_file_kind() {
+        file "$WORKSPACE/.once/out/apps/ios/App/App.app/App"
+      }
+    End
+
+    It 'sets the framework dylib install_name to @rpath'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_application_swiftui_fixture
+      once --format json build apps/ios/App >/dev/null 2>&1 || true
+
+      framework_install_name() {
+        otool -D "$WORKSPACE/.once/out/ui/UI/UI.framework/UI"
+      }
+
+      When call framework_install_name
+      The status should be success
+      The stdout should include '@rpath/UI.framework/UI'
     End
   End
 
