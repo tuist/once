@@ -1,12 +1,12 @@
 # Apple Graph
 
-Build Swift, Objective-C, C, and C++ libraries, frameworks, applications,
-and test bundles from declarative `once.toml` targets. `apple_library`
-drives `xcrun`-backed `swiftc` and `clang` on macOS to produce real static
-archives, Swift modules, ObjC interop headers, and (when requested) clang
-modulemaps. `apple_framework`, `apple_application`, and `apple_test_bundle`
-declare the bundle, app, and test-host kinds and run through the same
-action cache.
+Build Swift, Objective-C, C, and C++ static libraries from declarative
+`once.toml` targets. `apple_library` drives `xcrun`-backed `swiftc` and
+`clang` on macOS to produce real static archives, Swift modules, ObjC
+interop headers, and (when requested) clang modulemaps. The bundle, app,
+and test-host kinds (`apple_framework`, `apple_application`,
+`apple_test_bundle`) are declared as inspectable schemas; their build
+implementations are not yet wired up.
 
 ## Targets
 
@@ -36,10 +36,23 @@ references resolve from the package that owns the manifest.
 
 ## Rules
 
+Implemented:
+
 - `apple_library`: Swift, Objective-C, C, and C++ static library with
-  Swift module emission, bridging headers, modulemap generation,
-  `exported_deps`, transitive provider propagation, and configurable
-  Xcode and SDK selection.
+  Swift module emission, bridging headers, modulemap and header-map
+  generation, `exported_deps`, transitive provider propagation, and
+  configurable Xcode and SDK selection. Multi-arch builds fan out
+  per-arch compiles and combine them with `lipo`; Mac Catalyst is
+  available through `mac_catalyst = true`.
+- `swift_macro`: Swift compiler-plugin dylib built for the host. Any
+  `apple_library` dep edge that points at a `swift_macro` target picks
+  up `-load-plugin-library <dylib>` automatically. The macro itself
+  links against a swift-syntax checkout the user provides via `deps`.
+
+Declared, awaiting implementation. The schema is inspectable via
+`once query schema <kind>` and rejects malformed manifests, but no
+build actions run yet:
+
 - `apple_framework`: framework bundle metadata, resources, asset
   catalogs, privacy manifests, headers, and debug symbol outputs.
 - `apple_application`: application bundle metadata, device families,
@@ -100,7 +113,13 @@ Dep `swiftmodule` directories are forwarded as `-I` search paths so
 `import` statements resolve. With `enable_modules = true` the impl
 writes a `module.modulemap` from `exported_headers` and propagates
 it through the provider so consumers pick up
-`-fmodule-map-file=<path>` automatically.
+`-fmodule-map-file=<path>` automatically. Alongside the modulemap the
+impl also writes a binary header map (`<module_name>.hmap`) that maps
+each exported header's basename and `<module_name>/<basename>` form to
+its workspace-relative path, and threads the hmap into both clang and
+swiftc invocations through `-I`. This covers the `#include "Foo.h"`
+and `#include <Module/Foo.h>` lookup styles a pure modulemap doesn't
+help with.
 
 The action cache key composes the resolved toolchain identity (each
 of swiftc, clang, and libtool carries its own `xcrun`-resolved path,
@@ -114,7 +133,10 @@ cache slots.
 - **Platform and triple**: `platform` (required), `minimum_os`
   (deployment target), `target_sdk_version` (build-time SDK; defaults
   to `minimum_os`), `sdk_variant` (`simulator` or `device`; macOS
-  ignores it).
+  ignores it), `archs` (target architectures; empty defaults to the
+  host arch, multi-arch fans out per-arch compiles and combines them
+  with `lipo -create`), `mac_catalyst` (build the iOSMac variant;
+  requires `platform = macos`).
 - **Toolchain pin**: `xcode_developer_dir` overlays `DEVELOPER_DIR`
   on every `xcrun` call and folds into the cache identity.
 - **Sources and headers**: `srcs` (globs), `headers`,
@@ -144,40 +166,32 @@ It carries:
 The shape mirrors `SwiftInfo` and `CcInfo` from the Bazel rules so
 existing build engineers have a familiar mental model.
 
-## Not yet implemented
+## Configurable attributes
 
-- **Multi-arch and `lipo`**: targets compile against the host arch
-  only; universal archives and Mac Catalyst wait on a per-arch fan-out.
-- **`select()` / configurable attributes / platform transitions**:
-  attrs are marked `configurable = True` in the prelude, but there is
-  no `select()` runtime yet, so the flag is aspirational. This is the
-  platform model epic.
-- **Swift macros (`plugins`)**: blocked on a `swift_macro` rule that
-  produces the loadable plugin binaries.
-- **Header maps (`.hmap`)**: pure `module.modulemap` covers the
-  common path; the binary `.hmap` writer is future work.
+Attributes marked `configurable = True` in the rule schema accept a
+`select` value that resolves at analysis time against the target's
+configuration. The TOML shape is a one-key table:
 
-## Agent workflows
+```toml
+[target.attrs]
+defines = { select = { ios = ["IS_IOS"], macos = ["IS_MAC"], default = [] } }
+```
 
-[`once mcp`](/reference/cli/mcp) speaks the [Model Context
-Protocol](/reference/mcp/) over stdio so a coding agent (Claude
-Desktop, an IDE plug-in, an Anthropic SDK script) can inspect the
-graph directly. After the standard initialize handshake the server
-advertises three tools:
+Active tokens for Apple targets come from the resolved literal values
+of `platform`, `sdk_variant`, each entry of `archs`, and the literal
+token `mac_catalyst` when that attribute is true. Branch keys can
+combine tokens with `:` (e.g. `ios:simulator`); when several branches
+match the most specific (longest) key wins. A `default` branch is
+selected when nothing else matches. The four input attributes that
+feed the configuration (`platform`, `sdk_variant`, `archs`,
+`mac_catalyst`) cannot themselves use `select`. The schema layer
+emits a `select_on_non_configurable_attr` diagnostic for `select` on
+any other attribute the rule marks `configurable = False`.
 
-- `once_query_targets`: list every declared target, optionally
-  filtered by rule kind.
-- `once_query_capabilities`: return the capabilities a target
-  exposes, with output groups and required inputs.
-- `once_query_schema`: return the typed contract for a rule kind.
-
-Each tool returns the same JSON the corresponding
-[`once query`](/reference/cli/query) verb produces, so agents can plan
-against the graph without scraping prose. Running graph actions
-through MCP and querying cached outputs, logs, and provider records
-by action digest is follow-up work; the action cache and
-content-addressed storage already key everything by stable digest,
-so the surface is ready for that capability when it lands.
+This is a minimal model: branch keys are platform, arch, variant, and
+the literal `mac_catalyst` token. Bazel-style constraint values,
+exec/target splits, and platform transitions are not yet part of the
+surface and can layer on later without changing the manifest syntax.
 
 ## Prior art
 
