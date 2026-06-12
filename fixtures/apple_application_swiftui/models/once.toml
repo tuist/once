@@ -1,0 +1,9 @@
+[[target]]
+name = "Models"
+kind = "apple_library"
+srcs = ["Models/Sources/*.swift"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+minimum_os = "17.0"

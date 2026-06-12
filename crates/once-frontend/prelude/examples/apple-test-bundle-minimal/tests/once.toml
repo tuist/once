@@ -1,0 +1,9 @@
+[[target]]
+name = "AppTests"
+kind = "apple_test_bundle"
+srcs = ["AppTests/Sources/*.swift"]
+
+[target.attrs]
+platform = "ios"
+minimum_os = "17.0"
+sdk_variant = "simulator"

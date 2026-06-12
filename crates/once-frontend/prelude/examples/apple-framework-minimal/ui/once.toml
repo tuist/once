@@ -1,0 +1,10 @@
+[[target]]
+name = "UI"
+kind = "apple_framework"
+srcs = ["UI/Sources/*.swift"]
+
+[target.attrs]
+platform = "ios"
+minimum_os = "17.0"
+sdk_variant = "simulator"
+bundle_id = "dev.once.UI"

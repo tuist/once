@@ -1,7 +1,7 @@
 //! `once edit` - mutate workspace manifests.
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -35,11 +35,7 @@ pub async fn apply(workspace: &Path, output: Output, file: Option<PathBuf>) -> R
     let input: ApplyInput = serde_json::from_str(&raw).context(
         "apply input is not valid JSON matching `{ \"package\": \"...\", \"operations\": [...] }`",
     )?;
-    let package_dir = if input.package.is_empty() {
-        workspace.to_path_buf()
-    } else {
-        workspace.join(&input.package)
-    };
+    let package_dir = resolve_package_dir(workspace, &input.package)?;
     let manifest_path = package_dir.join(once_frontend::TOML_BUILD_FILE_NAME);
     let existing = match std::fs::read_to_string(&manifest_path) {
         Ok(src) => src,
@@ -69,6 +65,24 @@ pub async fn apply(workspace: &Path, output: Output, file: Option<PathBuf>) -> R
         },
     };
     write_body(output, || render_apply_human(&result), &result).await
+}
+
+pub(crate) fn resolve_package_dir(workspace: &Path, package: &str) -> Result<PathBuf> {
+    if package.is_empty() {
+        return Ok(workspace.to_path_buf());
+    }
+    let package_path = Path::new(package);
+    if package_path.is_absolute()
+        || package_path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        anyhow::bail!("package must be a relative path inside the workspace");
+    }
+    Ok(workspace.join(package_path))
 }
 
 fn render_apply_human(result: &ApplyResult) -> String {
@@ -111,4 +125,31 @@ async fn write_body<T: Serialize>(
     out.write_all(body.as_bytes()).await?;
     out.flush().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn package_dir_rejects_absolute_paths() {
+        let err = resolve_package_dir(Path::new("/workspace"), "/tmp/outside").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("relative path inside the workspace"));
+    }
+
+    #[test]
+    fn package_dir_rejects_parent_traversal() {
+        let err = resolve_package_dir(Path::new("/workspace"), "../outside").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("relative path inside the workspace"));
+    }
+
+    #[test]
+    fn package_dir_accepts_relative_package() {
+        let path = resolve_package_dir(Path::new("/workspace"), "apps/Hello").unwrap();
+        assert_eq!(path, Path::new("/workspace/apps/Hello"));
+    }
 }

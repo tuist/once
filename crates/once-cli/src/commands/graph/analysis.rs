@@ -614,7 +614,7 @@ def _impl(ctx):
     )
     return {"out": out}
 
-APPLE_RULES = [rule("test_rule", impl = _impl)]
+RULES = [rule("test_rule", impl = _impl)]
 "#;
         let workspace = tempfile::tempdir().unwrap();
         let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));

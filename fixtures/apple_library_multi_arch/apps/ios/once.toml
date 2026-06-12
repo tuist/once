@@ -1,0 +1,10 @@
+[[target]]
+name = "Universal"
+kind = "apple_library"
+srcs = ["Universal/Sources/*.swift"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+minimum_os = "17.0"
+archs = ["arm64", "x86_64"]

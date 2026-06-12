@@ -1,12 +1,21 @@
 # Apple Graph
 
-Build Swift, Objective-C, C, and C++ libraries, frameworks, applications,
-and test bundles from declarative `once.toml` targets. `apple_library`
-drives `xcrun`-backed `swiftc` and `clang` on macOS to produce real static
-archives, Swift modules, ObjC interop headers, and (when requested) clang
-modulemaps. `apple_framework`, `apple_application`, and `apple_test_bundle`
-declare the bundle, app, and test-host kinds and run through the same
-action cache.
+Once builds Swift, Objective-C, C, and C++ targets for Apple
+platforms from declarative `once.toml` manifests.
+[`apple_library`](/reference/prelude/apple_library) drives
+`xcrun`-backed `swiftc` and `clang` on macOS to produce real static
+archives, Swift modules, ObjC interop headers, modulemaps, and
+header maps. [`swift_macro`](/reference/prelude/swift_macro) compiles
+Swift compiler-plugin dylibs that `apple_library` deps pick up
+automatically. The bundle, app, and test-host kinds
+([`apple_framework`](/reference/prelude/apple_framework),
+[`apple_application`](/reference/prelude/apple_application),
+[`apple_test_bundle`](/reference/prelude/apple_test_bundle)) are
+implemented as Starlark graph rules that declare cacheable build
+actions.
+
+For the per-rule attribute, dep, provider, and capability tables see
+the [Prelude reference](/reference/prelude/).
 
 ## Targets
 
@@ -14,40 +23,18 @@ Package manifests declare targets with one canonical shape:
 
 ```toml
 [[target]]
-name = "App"
-kind = "apple_application"
-deps = ["./AppCore"]
+name = "AppCore"
+kind = "apple_library"
+srcs = ["Sources/**/*.swift"]
 
 [target.attrs]
 platform = "ios"
-bundle_id = "dev.once.App"
 minimum_os = "17.0"
-families = ["iphone", "ipad"]
-resources = ["Resources/**"]
-asset_catalogs = ["Assets.xcassets"]
-info_plist = "Info.plist"
-entitlements = "App.entitlements"
-provisioning_profile = "profiles/App.mobileprovision"
 sdk_frameworks = ["UIKit"]
 ```
 
 Dependency references are root-relative by default. `./` and `../`
 references resolve from the package that owns the manifest.
-
-## Rules
-
-- `apple_library`: Swift, Objective-C, C, and C++ static library with
-  Swift module emission, bridging headers, modulemap generation,
-  `exported_deps`, transitive provider propagation, and configurable
-  Xcode and SDK selection.
-- `apple_framework`: framework bundle metadata, resources, asset
-  catalogs, privacy manifests, headers, and debug symbol outputs.
-- `apple_application`: application bundle metadata, device families,
-  resources, asset catalogs, Info.plist substitutions, entitlements,
-  provisioning profile, signing policy, and SDK frameworks.
-- `apple_test_bundle`: XCTest bundle metadata, optional test host,
-  resources, asset catalogs, Info.plist, entitlements, destination,
-  test plan, and test environment.
 
 ## Commands
 
@@ -55,129 +42,61 @@ Inspect the graph with [`once query`](/reference/cli/query):
 
 ```sh
 once query targets
-once query capabilities apps/ios/App
-once query schema apple_application
+once query capabilities apps/ios/AppCore
+once query schema apple_library
 ```
 
-`once query schema <kind>` returns the rule's typed contract: which
-attributes a target of that kind accepts, which providers each dep edge
-expects, which providers the rule emits, and which capabilities it
-exposes.
+`once query schema <kind>` returns the same typed contract the
+[Prelude reference](/reference/prelude/) documents: which attributes
+a target of that kind accepts, which providers each dep edge expects,
+which providers the rule emits, and which capabilities it exposes.
 
-Materialize a target with the build, run, and test
-[capabilities](/reference/cli/build):
+Materialize a target with the [`once build`](/reference/cli/build)
+capability:
 
 ```sh
-once build apps/ios/App
-once run  apps/ios/App
-once test apps/ios/AppTests
+once build apps/ios/AppCore
 ```
 
-Outputs land under `.once/out/<target>/`. `apple_library` writes the
-static archive, the Swift module triple (`.swiftmodule`, `.swiftdoc`,
-generated `-Swift.h`), and any clang object files. `apple_application`
-writes the `.app` bundle and dSYMs; `apple_test_bundle` writes test
-results and coverage records.
+Outputs land under `.once/out/<target>/`. The per-rule reference
+pages list the exact paths each rule emits.
 
-## `apple_library` compile
+## Configurable attributes
 
-`apple_library` routes every source file through the driver that
-matches its extension:
+Some attribute values depend on what you're building for. A library
+might link `UIKit` on iOS and `AppKit` on macOS, or pick different
+linker flags per architecture. Instead of duplicating the target,
+write the per-configuration value inline with `select`:
 
-- **Swift sources** go through `xcrun --sdk <sdk> swiftc
-  -emit-library -static -emit-module`. A `bridging_header` plumbs in
-  via `-import-objc-header` so Swift can see ObjC symbols.
-- **ObjC, C, and C++ sources** each become an independent
-  `xcrun --sdk <sdk> clang -c` action that writes one `.o` per
-  source. The clang invocation pulls the SDK sysroot from
-  `xcrun --show-sdk-path`, targets the active triple, and enables
-  ARC for ObjC.
-- **Mixed-language libraries** combine the Swift-only archive and
-  the per-source clang objects with `xcrun libtool -static`.
-  Swift-only or clang-only libraries skip the merge.
+```toml
+[target.attrs]
+sdk_frameworks = { select = { ios = ["UIKit"], macos = ["AppKit"] } }
+```
 
-Dep `swiftmodule` directories are forwarded as `-I` search paths so
-`import` statements resolve. With `enable_modules = true` the impl
-writes a `module.modulemap` from `exported_headers` and propagates
-it through the provider so consumers pick up
-`-fmodule-map-file=<path>` automatically.
+When the build resolves the target, it picks the branch whose key
+matches the active configuration. A branch key can be:
 
-The action cache key composes the resolved toolchain identity (each
-of swiftc, clang, and libtool carries its own `xcrun`-resolved path,
-version banner, and any `DEVELOPER_DIR` override), the source content
-digests, and each dep's action digest. A swap of Xcode, a source
-edit, or a transitive dep change invalidates exactly the affected
-cache slots.
+- a platform: `ios`, `macos`, `tvos`, `watchos`, `visionos`
+- an architecture from `archs`: `arm64`, `x86_64`, `arm64e`, ...
+- an SDK variant: `simulator` or `device`
+- the literal token `mac_catalyst` when `mac_catalyst = true`
+- a combination joined with `:`, such as `ios:simulator`
+- `default`, used when no other branch matches
 
-### `apple_library` attributes
+When more than one branch matches (e.g. both `ios` and `ios:simulator`
+on an iOS simulator build) the most specific one wins.
 
-- **Platform and triple**: `platform` (required), `minimum_os`
-  (deployment target), `target_sdk_version` (build-time SDK; defaults
-  to `minimum_os`), `sdk_variant` (`simulator` or `device`; macOS
-  ignores it).
-- **Toolchain pin**: `xcode_developer_dir` overlays `DEVELOPER_DIR`
-  on every `xcrun` call and folds into the cache identity.
-- **Sources and headers**: `srcs` (globs), `headers`,
-  `exported_headers`, `bridging_header`.
-- **Compile flags**: `module_name`, `swift_flags`, `clang_flags`,
-  `defines` (propagated transitively), `enable_testing`,
-  `library_evolution`, `enable_modules`, `emit_dsym`.
-- **Link inputs (propagated transitively)**: `sdk_frameworks`,
-  `weak_sdk_frameworks`, `sdk_dylibs`, `linkopts`, `alwayslink`.
-- **Dep edges**: `deps` (linked), `exported_deps` (linked and
-  re-exposed to consumers at compile time).
+Two kinds of attributes cannot use `select`:
 
-### Provider record
+- The attributes that decide which branch is picked: `platform`,
+  `sdk_variant`, `archs`, and `mac_catalyst`. They have to be literal
+  values.
+- Attributes the rule marks as non-configurable. Trying to use
+  `select` on those surfaces a graph loading error.
 
-`apple_library` returns a record consumers read through `ctx["deps"]`.
-It carries:
-
-- the direct outputs (`swiftmodule_dir`, `archive`, `objc_header`,
-  `modulemap`);
-- the headers this target re-exposes (`exported_headers`,
-  `exported_header_dirs`);
-- transitive lists for everything downstream rules will need to
-  compose their own link line: archives, swiftmodule directories
-  (gated by `exported_deps`), SDK frameworks, sdk dylibs, linkopts,
-  defines, modulemaps, and the always-link archive subset.
-
-The shape mirrors `SwiftInfo` and `CcInfo` from the Bazel rules so
-existing build engineers have a familiar mental model.
-
-## Not yet implemented
-
-- **Multi-arch and `lipo`**: targets compile against the host arch
-  only; universal archives and Mac Catalyst wait on a per-arch fan-out.
-- **`select()` / configurable attributes / platform transitions**:
-  attrs are marked `configurable = True` in the prelude, but there is
-  no `select()` runtime yet, so the flag is aspirational. This is the
-  platform model epic.
-- **Swift macros (`plugins`)**: blocked on a `swift_macro` rule that
-  produces the loadable plugin binaries.
-- **Header maps (`.hmap`)**: pure `module.modulemap` covers the
-  common path; the binary `.hmap` writer is future work.
-
-## Agent workflows
-
-[`once mcp`](/reference/cli/mcp) speaks the [Model Context
-Protocol](/reference/mcp/) over stdio so a coding agent (Claude
-Desktop, an IDE plug-in, an Anthropic SDK script) can inspect the
-graph directly. After the standard initialize handshake the server
-advertises three tools:
-
-- `once_query_targets`: list every declared target, optionally
-  filtered by rule kind.
-- `once_query_capabilities`: return the capabilities a target
-  exposes, with output groups and required inputs.
-- `once_query_schema`: return the typed contract for a rule kind.
-
-Each tool returns the same JSON the corresponding
-[`once query`](/reference/cli/query) verb produces, so agents can plan
-against the graph without scraping prose. Running graph actions
-through MCP and querying cached outputs, logs, and provider records
-by action digest is follow-up work; the action cache and
-content-addressed storage already key everything by stable digest,
-so the surface is ready for that capability when it lands.
+The surface is intentionally small for now. Richer configuration
+models (constraint settings, exec/target splits, platform
+transitions) can layer on later without changing the TOML shape.
 
 ## Prior art
 
@@ -198,8 +117,8 @@ rather than copying its surface:
   assembly, resources, asset catalogs, Info.plist values,
   entitlements, provisioning profiles, and tests.
 
-Once is not Buck-compatible, Bazel-compatible, or a drop-in replacement
-for either tool; users and agents declare targets in `once.toml`,
-built-in rule metadata lives in the Starlark prelude, and the graph is
-intentionally inspectable first so agents and CLI users can ask what a
-target can do before broad execution exists.
+Once is not Buck-compatible, Bazel-compatible, or a drop-in
+replacement for either tool; users and agents declare targets in
+`once.toml`, built-in rule metadata lives in the Starlark prelude,
+and the graph is intentionally inspectable first so agents and CLI
+users can ask what a target can do before broad execution exists.

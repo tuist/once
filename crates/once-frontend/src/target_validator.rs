@@ -87,21 +87,76 @@ pub fn validate_target(target: &TargetSpec, schemas: &[RuleSchema]) -> Vec<Diagn
             });
             continue;
         };
-        if let Err(err) = check_type(attr_value, &attr_schema.ty) {
-            diagnostics.push(Diagnostic {
-                code: "attr_type_mismatch".to_string(),
-                message: format!(
-                    "attribute `{}` expects type `{}`: {}",
-                    attr_name, attr_schema.ty, err
-                ),
-                target: Some(target.name.clone()),
-                attribute: Some(attr_name.clone()),
-                repairs: Vec::new(),
-            });
-        }
+        validate_attr(target, attr_name, attr_value, attr_schema, &mut diagnostics);
     }
 
     diagnostics
+}
+
+fn validate_attr(
+    target: &TargetSpec,
+    attr_name: &str,
+    attr_value: &JsonValue,
+    attr_schema: &AttrSchema,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if let Some(branches) = select_branches(attr_value) {
+        validate_select_attr(target, attr_name, attr_schema, branches, diagnostics);
+    } else if let Err(err) = check_type(attr_value, &attr_schema.ty) {
+        diagnostics.push(type_mismatch(target, attr_name, &attr_schema.ty, &err));
+    }
+}
+
+fn validate_select_attr(
+    target: &TargetSpec,
+    attr_name: &str,
+    attr_schema: &AttrSchema,
+    branches: &serde_json::Map<String, JsonValue>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if !attr_schema.configurable {
+        diagnostics.push(Diagnostic {
+            code: "select_on_non_configurable_attr".to_string(),
+            message: format!("attribute `{attr_name}` is not configurable but uses `select()`"),
+            target: Some(target.name.clone()),
+            attribute: Some(attr_name.to_string()),
+            repairs: Vec::new(),
+        });
+        return;
+    }
+    for (branch, branch_value) in branches {
+        if let Err(err) = check_type(branch_value, &attr_schema.ty) {
+            diagnostics.push(type_mismatch(
+                target,
+                attr_name,
+                &attr_schema.ty,
+                &format!("select branch `{branch}`: {err}"),
+            ));
+        }
+    }
+}
+
+fn type_mismatch(target: &TargetSpec, attr_name: &str, ty: &str, err: &str) -> Diagnostic {
+    Diagnostic {
+        code: "attr_type_mismatch".to_string(),
+        message: format!("attribute `{attr_name}` expects type `{ty}`: {err}"),
+        target: Some(target.name.clone()),
+        attribute: Some(attr_name.to_string()),
+        repairs: Vec::new(),
+    }
+}
+
+fn select_branches(value: &JsonValue) -> Option<&serde_json::Map<String, JsonValue>> {
+    let JsonValue::Object(map) = value else {
+        return None;
+    };
+    if map.len() != 1 {
+        return None;
+    }
+    let Some(JsonValue::Object(branches)) = map.get("select") else {
+        return None;
+    };
+    Some(branches)
 }
 
 fn check_type(value: &JsonValue, ty: &str) -> Result<(), String> {
@@ -313,6 +368,55 @@ mod tests {
             .find(|d| d.attribute.as_deref() == Some("info_plist_substitutions"))
             .expect("mismatch diagnostic");
         assert!(mismatch.message.contains("entry `KEY`"));
+    }
+
+    #[test]
+    fn configurable_select_validates_each_branch_value() {
+        let schemas = built_in_rule_schemas();
+        let mut t = target("Hello", "apple_library");
+        t.attrs.insert("platform".to_string(), json!("ios"));
+        t.attrs.insert(
+            "sdk_frameworks".to_string(),
+            json!({ "select": { "ios": ["UIKit"], "default": [] } }),
+        );
+        let diagnostics = validate_target(&t, &schemas);
+        assert!(
+            diagnostics.is_empty(),
+            "expected select value to validate, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn configurable_select_reports_branch_type_mismatch() {
+        let schemas = built_in_rule_schemas();
+        let mut t = target("Hello", "apple_library");
+        t.attrs.insert("platform".to_string(), json!("ios"));
+        t.attrs.insert(
+            "sdk_frameworks".to_string(),
+            json!({ "select": { "ios": "UIKit" } }),
+        );
+        let diagnostics = validate_target(&t, &schemas);
+        let mismatch = diagnostics
+            .iter()
+            .find(|d| d.code == "attr_type_mismatch")
+            .expect("branch mismatch diagnostic");
+        assert!(mismatch.message.contains("select branch `ios`"));
+    }
+
+    #[test]
+    fn select_on_non_configurable_attr_reports_specific_code() {
+        let schemas = built_in_rule_schemas();
+        let mut t = target("Hello", "apple_library");
+        t.attrs.insert(
+            "platform".to_string(),
+            json!({ "select": { "default": "ios" } }),
+        );
+        let diagnostics = validate_target(&t, &schemas);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|d| d.code == "select_on_non_configurable_attr")
+            .expect("non-configurable select diagnostic");
+        assert_eq!(diagnostic.attribute.as_deref(), Some("platform"));
     }
 
     #[test]

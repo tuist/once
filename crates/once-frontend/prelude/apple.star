@@ -107,8 +107,12 @@ def _apple_triple_suffix(platform, sdk_variant):
         return ""
     return "-simulator"
 
-def _apple_triple(platform, minimum_os, sdk_variant):
-    arch = host_arch()
+def _apple_triple(platform, minimum_os, sdk_variant, arch, mac_catalyst):
+    # Mac Catalyst surfaces as `<arch>-apple-ios<minOS>-macabi` no
+    # matter which platform the manifest set; the iOS triple is what
+    # swiftc and clang expect for the iOSMac variant of macOS.
+    if mac_catalyst:
+        return arch + "-apple-ios" + minimum_os + "-macabi"
     triple_os = _apple_triple_os(platform)
     suffix = _apple_triple_suffix(platform, sdk_variant)
     return arch + "-apple-" + triple_os + minimum_os + suffix
@@ -174,6 +178,28 @@ def _xcrun_libtool(platform, sdk_variant, xcode_developer_dir):
     identity = "once.apple.libtool.v1\x00" + libtool_path + "\x00" + (xcode_developer_dir or "")
     return (xcrun, sdk, identity, env)
 
+def _xcrun_lipo(platform, sdk_variant, xcode_developer_dir):
+    xcrun = host_which("xcrun")
+    sdk = _apple_sdk_name(platform, sdk_variant)
+    env = _xcrun_env(xcode_developer_dir)
+    lipo_path = host_command([xcrun, "--sdk", sdk, "--find", "lipo"], env = env).strip()
+    identity = "once.apple.lipo.v1\x00" + lipo_path + "\x00" + (xcode_developer_dir or "")
+    return (xcrun, sdk, identity, env)
+
+def _xcrun_codesign(xcode_developer_dir):
+    xcrun = host_which("xcrun")
+    env = _xcrun_env(xcode_developer_dir)
+    codesign_path = host_command([xcrun, "--find", "codesign"], env = env).strip()
+    identity = "once.apple.codesign.v1\x00" + codesign_path + "\x00" + (xcode_developer_dir or "")
+    return (xcrun, codesign_path, identity, env)
+
+def _xcrun_actool(xcode_developer_dir):
+    xcrun = host_which("xcrun")
+    env = _xcrun_env(xcode_developer_dir)
+    actool_path = host_command([xcrun, "--find", "actool"], env = env).strip()
+    identity = "once.apple.actool.v1\x00" + actool_path + "\x00" + (xcode_developer_dir or "")
+    return (xcrun, actool_path, identity, env)
+
 def _package_relative(ctx, path):
     if not path:
         return path
@@ -204,6 +230,135 @@ def _unique_dirs(paths):
             seen[directory] = True
             out.append(directory)
     return out
+
+def _basename(path):
+    idx = -1
+    for i in range(len(path)):
+        if path[i] == "/":
+            idx = i
+    if idx < 0:
+        return path
+    return path[idx + 1:]
+
+# --- Apple header map (.hmap) byte construction ---------------------
+#
+# Clang reads `.hmap` files via `-I <foo.hmap>`. The format is defined
+# in LLVM's `clang/include/clang/Lex/HeaderMapTypes.h`. Layout (all
+# little-endian on the platforms Once targets):
+#
+#   offset  size   field
+#   ------  ----   -----
+#     0      4     magic         = 0x68616D70
+#     4      2     version       = 1
+#     6      2     reserved      = 0
+#     8      4     strings_off
+#    12      4     num_entries
+#    16      4     num_buckets   (power of two)
+#    20      4     max_value_len
+#    24    12*N    buckets[N]    each { key_off, prefix_off, suffix_off }
+#    ...     ?     string table  starts with a single 0 byte
+#
+# A bucket whose `key_off` is 0 is empty. Each `(key, value)` pair is
+# stored with `value` in the bucket's `prefix_off` and an empty suffix;
+# clang resolves a lookup by concatenating prefix + suffix, so an
+# empty suffix means the value reads back verbatim. Keys hash
+# case-insensitively (sum of lowercase byte * 13) and collisions are
+# resolved by linear probing.
+
+def _u32_le(value):
+    return [
+        value & 0xFF,
+        (value >> 8) & 0xFF,
+        (value >> 16) & 0xFF,
+        (value >> 24) & 0xFF,
+    ]
+
+def _u16_le(value):
+    return [
+        value & 0xFF,
+        (value >> 8) & 0xFF,
+    ]
+
+def _hmap_hash(key):
+    lowered = key.lower()
+    result = 0
+    for ch in lowered.elems():
+        result = (result + ord(ch) * 13) & 0xFFFFFFFF
+    return result
+
+def _next_power_of_two(value):
+    size = 1
+    for _ in range(64):
+        if size >= value:
+            return size
+        size = size * 2
+    fail("hmap bucket count overflowed 2^64")
+
+def _serialize_hmap(entries):
+    # Build the string table. Offset 0 holds a single 0 byte so that
+    # bucket slot 0 unambiguously means "empty".
+    strings = [0]
+    offset_for = {}
+
+    def intern(string):
+        if string in offset_for:
+            return offset_for[string]
+        offset = len(strings)
+        for ch in string.elems():
+            strings.append(ord(ch))
+        strings.append(0)
+        offset_for[string] = offset
+        return offset
+
+    entry_count = len(entries)
+    raw_capacity = entry_count * 2
+    if raw_capacity < 1:
+        raw_capacity = 1
+    num_buckets = _next_power_of_two(raw_capacity)
+
+    buckets = []
+    for _ in range(num_buckets):
+        buckets.append((0, 0, 0))
+    max_value_len = 0
+
+    for key, value in entries.items():
+        key_off = intern(key)
+        prefix_off = intern(value)
+        suffix_off = intern("")
+        if len(value) > max_value_len:
+            max_value_len = len(value)
+        idx = _hmap_hash(key) & (num_buckets - 1)
+        placed = False
+        for _ in range(num_buckets):
+            if buckets[idx][0] == 0:
+                buckets[idx] = (key_off, prefix_off, suffix_off)
+                placed = True
+                break
+            idx = (idx + 1) & (num_buckets - 1)
+        if not placed:
+            fail("hmap bucket array filled unexpectedly")
+
+    HEADER_SIZE = 24
+    BUCKET_SIZE = 12
+    strings_off = HEADER_SIZE + num_buckets * BUCKET_SIZE
+
+    out = []
+    out.extend(_u32_le(0x68616D70))
+    out.extend(_u16_le(1))
+    out.extend(_u16_le(0))
+    out.extend(_u32_le(strings_off))
+    out.extend(_u32_le(entry_count))
+    out.extend(_u32_le(num_buckets))
+    out.extend(_u32_le(max_value_len))
+    for bucket in buckets:
+        out.extend(_u32_le(bucket[0]))
+        out.extend(_u32_le(bucket[1]))
+        out.extend(_u32_le(bucket[2]))
+    out.extend(strings)
+    return out
+
+def _write_hmap(path, entries):
+    write_bytes(path, _serialize_hmap(entries))
 
 # Normalise a dep reference written in `[target.attrs]` (`./AppCore`,
 # `../web/Common`, or a root-relative `apps/ios/AppCore`) to the
@@ -248,8 +403,141 @@ def _collect_transitive(deps, key, own_values):
                 out.append(value)
     return out
 
+# A select-shape attribute value is a dict with exactly one `select`
+# key whose value is itself a dict from configuration tokens to
+# branches:
+#
+#   defines = { select = { ios = ["FOO"], default = [] } }
+#
+# `_is_select_shape` detects that shape so the resolver can fan out
+# without conflating it with regular `dict` attribute values.
+
+def _is_select_shape(value):
+    if type(value) != "dict":
+        return False
+    if len(value) != 1:
+        return False
+    inner = value.get("select")
+    if inner == None:
+        return False
+    return type(inner) == "dict"
+
+# Active configuration tokens for an Apple target. Selects match
+# against these tokens: `platform` ("ios", "macos", ...), `sdk_variant`
+# ("simulator", "device"), each entry of `archs` ("arm64", "x86_64",
+# ...), and the literal token `mac_catalyst` when the attribute is on.
+#
+# The four input attributes themselves cannot be selects (there is no
+# way to resolve a select on `platform` because the resolver needs
+# `platform` to decide). `_apple_config_tokens` fails loudly if any of
+# them is a select-shape dict instead of resolving to a misleading
+# empty token list.
+
+def _apple_config_tokens(attrs, label_id):
+    for input_key in ["platform", "sdk_variant", "archs", "mac_catalyst"]:
+        if _is_select_shape(attrs.get(input_key)):
+            fail(label_id + ": attribute `" + input_key + "` cannot use select() because the configuration depends on it")
+
+    tokens = []
+    platform = attrs.get("platform")
+    if platform and type(platform) == "string":
+        tokens.append(platform)
+    sdk_variant = attrs.get("sdk_variant")
+    if sdk_variant and type(sdk_variant) == "string":
+        tokens.append(sdk_variant)
+    archs = attrs.get("archs")
+    if archs == None or (type(archs) == "list" and len(archs) == 0):
+        archs = [host_arch()]
+    if type(archs) == "list":
+        for arch in archs:
+            if type(arch) == "string" and arch not in tokens:
+                tokens.append(arch)
+    if attrs.get("mac_catalyst"):
+        tokens.append("mac_catalyst")
+    return tokens
+
+def _select_branch_for_tokens(branches, tokens, label_id, attr_name):
+    matching = []
+    for key in branches.keys():
+        if key == "default":
+            continue
+        match = True
+        for part in key.split(":"):
+            if part not in tokens:
+                match = False
+                break
+        if match:
+            matching.append(key)
+    if len(matching) == 0:
+        if "default" in branches:
+            return "default"
+        fail(label_id + ": select() on `" + attr_name + "` has no branch matching the configuration and no `default` (branches: " + str(branches.keys()) + ")")
+    if len(matching) == 1:
+        return matching[0]
+    # Prefer the most specific (longest) key when several match. This
+    # lets `ios:simulator` beat a bare `ios` branch when both are
+    # eligible.
+    longest = matching[0]
+    for key in matching:
+        if len(key) > len(longest):
+            longest = key
+    return longest
+
+def _resolve_select(value, tokens, label_id, attr_name):
+    if _is_select_shape(value):
+        branches = value["select"]
+        key = _select_branch_for_tokens(branches, tokens, label_id, attr_name)
+        return _resolve_select(branches[key], tokens, label_id, attr_name)
+    if type(value) == "list":
+        return [_resolve_select(item, tokens, label_id, attr_name) for item in value]
+    if type(value) == "dict":
+        return {k: _resolve_select(v, tokens, label_id, attr_name) for k, v in value.items()}
+    return value
+
+def _resolve_attrs(attrs, label_id, non_configurable):
+    tokens = _apple_config_tokens(attrs, label_id)
+    out = {}
+    for key, value in attrs.items():
+        if key in non_configurable and _is_select_shape(value):
+            fail(label_id + ": attribute `" + key + "` is not configurable but uses select()")
+        out[key] = _resolve_select(value, tokens, label_id, key)
+    return out
+
+def _attr_has_value(value):
+    if value == None:
+        return False
+    if type(value) == "string" and value == "":
+        return False
+    if type(value) == "list" and len(value) == 0:
+        return False
+    if type(value) == "dict" and len(value) == 0:
+        return False
+    return True
+
+def _reject_unsupported_attrs(attrs, label_id, keys):
+    for key in keys:
+        if key in attrs and _attr_has_value(attrs.get(key)):
+            fail(label_id + ": attribute `" + key + "` is declared but not implemented by this rule yet")
+
+def _select_mentions_any(branches, tokens):
+    for key in branches.keys():
+        for part in key.split(":"):
+            if part in tokens:
+                return True
+    return False
+
+def _reject_multi_arch_selects(attrs, label_id, archs):
+    if len(archs) <= 1:
+        return
+    arch_tokens = {}
+    for arch in archs:
+        arch_tokens[arch] = True
+    for key, value in attrs.items():
+        if _is_select_shape(value) and _select_mentions_any(value["select"], arch_tokens):
+            fail(label_id + ": attribute `" + key + "` cannot select on architecture when `archs` contains multiple values")
+
 def _apple_library_impl(ctx):
-    attrs = ctx["attr"]
+    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["module_name"])
     platform = attrs["platform"]
     minimum_os = attrs.get("minimum_os") or "13.0"
     target_sdk_version = attrs.get("target_sdk_version") or minimum_os
@@ -280,8 +568,15 @@ def _apple_library_impl(ctx):
     if len(swift_srcs) == 0 and len(objc_srcs) == 0 and len(c_srcs) == 0 and len(cxx_srcs) == 0:
         fail("apple_library " + ctx["label"]["id"] + " has no compilable sources (.swift/.m/.mm/.c/.cc)")
 
+    archs_attr = attrs.get("archs") or []
+    archs = archs_attr if len(archs_attr) > 0 else [host_arch()]
+    _reject_multi_arch_selects(ctx["attr"], ctx["label"]["id"], archs)
+    mac_catalyst = attrs.get("mac_catalyst") or False
+    if mac_catalyst and platform != "macos" and platform != "macosx":
+        fail("apple_library " + ctx["label"]["id"] + " sets mac_catalyst = true but platform = `" + platform + "`; mac_catalyst requires platform = macos")
+    is_universal = len(archs) > 1
+
     xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
-    triple = _apple_triple(platform, target_sdk_version, sdk_variant)
     archive = declare_output(module_name + ".a")
 
     deps = ctx["deps"]
@@ -321,6 +616,19 @@ def _apple_library_impl(ctx):
         for m in dep.get("transitive_modulemaps") or []:
             if m not in dep_modulemaps:
                 dep_modulemaps.append(m)
+    dep_hmaps = []
+    for dep in deps:
+        for h in dep.get("transitive_hmaps") or []:
+            if h not in dep_hmaps:
+                dep_hmaps.append(h)
+    # Swift macro deps surface a `plugin_dylib` field. Pass each as a
+    # `-load-plugin-library` to swiftc so the host loads the macro
+    # implementation at compile time.
+    plugin_dylibs = []
+    for dep in deps:
+        dylib = dep.get("plugin_dylib")
+        if dylib and dylib not in plugin_dylibs:
+            plugin_dylibs.append(dylib)
 
     # Own exported headers as workspace-relative paths, plus the
     # dirs we expose to consumers.
@@ -349,6 +657,23 @@ def _apple_library_impl(ctx):
         modulemap_lines.append("")
         write_file(modulemap_path, "\n".join(modulemap_lines))
 
+    # Header map generation: cover the `#include "Foo.h"` and
+    # `#include <Module/Foo.h>` lookup styles that a pure modulemap
+    # doesn't help with. Each entry maps to the header's workspace-
+    # relative path so consumers resolve them without listing
+    # individual `-I` flags per source tree. Gated behind the same
+    # `enable_modules` switch as modulemap generation so the two
+    # surfaces toggle together.
+    hmap_path = ""
+    if enable_modules and len(own_exported_headers) > 0:
+        hmap_path = declare_output(module_name + ".hmap")
+        hmap_entries = {}
+        for header in own_exported_headers:
+            base = _basename(header)
+            hmap_entries[base] = header
+            hmap_entries[module_name + "/" + base] = header
+        _write_hmap(hmap_path, hmap_entries)
+
     exported_deps_records = [deps[i] for i in exported_dep_indices]
     transitive_swiftmodule_dirs = _collect_transitive(
         exported_deps_records,
@@ -370,6 +695,11 @@ def _apple_library_impl(ctx):
         "transitive_modulemaps",
         [modulemap_path] if modulemap_path else [],
     )
+    transitive_hmaps = _collect_transitive(
+        exported_deps_records,
+        "transitive_hmaps",
+        [hmap_path] if hmap_path else [],
+    )
     transitive_archives = _collect_transitive(deps, "transitive_archives", [archive])
     transitive_sdk_frameworks = _collect_transitive(deps, "transitive_sdk_frameworks", sdk_frameworks)
     transitive_weak_sdk_frameworks = _collect_transitive(deps, "transitive_weak_sdk_frameworks", weak_sdk_frameworks)
@@ -378,204 +708,254 @@ def _apple_library_impl(ctx):
     transitive_defines = _collect_transitive(deps, "transitive_defines", defines)
     transitive_alwayslink_archives = _collect_transitive(deps, "transitive_alwayslink_archives", [archive] if alwayslink else [])
 
-    # --- Swift compile -----------------------------------------------
-    # When there are no Swift sources, skip the swiftc action entirely
-    # and emit the archive from the clang side via libtool.
-    swift_objc_header = declare_output(module_name + "-Swift.h") if len(swift_srcs) > 0 else ""
-    swiftmodule = declare_output(module_name + ".swiftmodule") if len(swift_srcs) > 0 else ""
-    swiftdoc = declare_output(module_name + ".swiftdoc") if len(swift_srcs) > 0 else ""
-
-    # Swift output: either the final archive (Swift-only) or an
-    # intermediate that libtool will merge with the clang objects.
+    # --- Per-arch compile pipeline -----------------------------------
+    # When a target requests a single architecture (the default,
+    # `host_arch()`), the per-arch archive is the final archive
+    # directly and no lipo step runs. With more than one arch each
+    # compile emits a per-arch archive and a final `lipo -create`
+    # action combines them.
     swift_only = len(objc_srcs) == 0 and len(c_srcs) == 0 and len(cxx_srcs) == 0
-    swift_archive = archive if swift_only else (declare_output(module_name + "-swift.a") if len(swift_srcs) > 0 else "")
+    per_arch_archives = []
+    swift_objc_header_holder = [""]
 
-    if len(swift_srcs) > 0:
-        swift_argv = [
-            xcrun,
-            "--sdk",
-            sdk,
-            "swiftc",
-            "-emit-library",
-            "-static",
-            "-emit-module",
-            "-module-name",
-            module_name,
-            "-emit-module-path",
-            swiftmodule,
-            "-emit-objc-header",
-            "-emit-objc-header-path",
-            swift_objc_header,
-            "-target",
-            triple,
-            "-parse-as-library",
-        ]
-        if emit_dsym:
-            swift_argv.append("-g")
-        if enable_testing:
-            swift_argv.append("-enable-testing")
-        if library_evolution:
-            swift_argv.append("-enable-library-evolution")
-        if bridging_header:
-            swift_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
-        for framework in sdk_frameworks:
-            swift_argv.extend(["-framework", framework])
-        for framework in weak_sdk_frameworks:
-            swift_argv.extend(["-weak_framework", framework])
-        for dep_dir in compile_swiftmodule_dirs:
-            swift_argv.extend(["-I", dep_dir])
-        # Header search paths flow through `-Xcc -I` so swiftc's
-        # underlying Clang invocation (for bridging headers + ObjC
-        # interop) can locate dep headers.
-        for hdir in compile_header_dirs:
-            swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
-        # Feed each dep's modulemap to swiftc's underlying Clang so
-        # `import` of a clang-module dep resolves without manual
-        # `-fmodule-map-file` from the user.
-        for mmap in dep_modulemaps:
-            swift_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
-        if enable_modules:
-            swift_argv.extend(["-Xcc", "-fmodules"])
-        for define in defines:
-            swift_argv.extend(["-D", define])
-        for flag in swift_flags:
-            swift_argv.append(flag)
-        swift_argv.extend(["-o", swift_archive])
-        for src in swift_srcs:
-            swift_argv.append(src)
+    def _compile_for_arch(arch):
+        triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, mac_catalyst)
+        arch_suffix = "-" + arch if is_universal else ""
 
-        swift_inputs = list(swift_srcs)
-        if bridging_header:
-            swift_inputs.append(_package_relative(ctx, bridging_header))
-        # The bridging header may #include other headers, so feed
-        # each exported header through as an action input too.
-        for h in own_exported_headers:
-            if h not in swift_inputs:
-                swift_inputs.append(h)
+        per_arch_archive = declare_output(module_name + arch_suffix + ".a") if is_universal else archive
+        if is_universal:
+            swiftmodule = declare_output(module_name + ".swiftmodule/" + arch + ".swiftmodule") if len(swift_srcs) > 0 else ""
+            swiftdoc = declare_output(module_name + ".swiftmodule/" + arch + ".swiftdoc") if len(swift_srcs) > 0 else ""
+        else:
+            swiftmodule = declare_output(module_name + ".swiftmodule") if len(swift_srcs) > 0 else ""
+            swiftdoc = declare_output(module_name + ".swiftdoc") if len(swift_srcs) > 0 else ""
+        swift_objc_header = declare_output(module_name + arch_suffix + "-Swift.h") if len(swift_srcs) > 0 else ""
+        swift_objc_header_holder[0] = swift_objc_header
 
-        run_action(
-            argv = swift_argv,
-            inputs = swift_inputs,
-            outputs = [swift_archive, swiftmodule, swiftdoc, swift_objc_header],
-            env = xcrun_env,
-            toolchain_identity = swiftc_identity,
-            identifier = "swift_compile_" + module_name,
-        )
+        # Swift output: per_arch_archive for swift-only, else
+        # an intermediate that libtool merges with the clang objects.
+        swift_archive = per_arch_archive if swift_only else (declare_output(module_name + "-swift" + arch_suffix + ".a") if len(swift_srcs) > 0 else "")
 
-    # --- C / ObjC / C++ compile --------------------------------------
-    clang_objects = []
-    if len(objc_srcs) > 0 or len(c_srcs) > 0 or len(cxx_srcs) > 0:
-        clang_xcrun, clang_sdk, sdk_path, clang_identity, clang_env = _xcrun_clang(platform, sdk_variant, xcode_developer_dir)
-
-        def clang_object_name(src):
-            # Sanitise the source path into a stable .o filename under
-            # the build dir: `apps/ios/AppCore/Sources/A.m` →
-            # `apps_ios_AppCore_Sources_A.m.o`. The full path keeps
-            # collisions impossible without forcing a tree mkdir.
-            sanitised = src.replace("/", "_")
-            return declare_output(sanitised + ".o")
-
-        def compile_with_clang(src, language):
-            obj = clang_object_name(src)
-            argv = [
-                clang_xcrun,
+        if len(swift_srcs) > 0:
+            swift_argv = [
+                xcrun,
                 "--sdk",
-                clang_sdk,
-                "clang" if language != "c++" else "clang++",
-                "-c",
-                "-x",
-                language,
-                "-arch",
-                host_arch(),
-                "-isysroot",
-                sdk_path,
+                sdk,
+                "swiftc",
+                "-emit-library",
+                "-static",
+                "-emit-module",
+                "-module-name",
+                module_name,
+                "-emit-module-path",
+                swiftmodule,
+                "-emit-objc-header",
+                "-emit-objc-header-path",
+                swift_objc_header,
                 "-target",
                 triple,
-                "-o",
-                obj,
+                "-parse-as-library",
             ]
-            if language == "objective-c" or language == "objective-c++":
-                argv.append("-fobjc-arc")
             if emit_dsym:
-                argv.append("-g")
-            if enable_modules:
-                argv.append("-fmodules")
+                swift_argv.append("-g")
+            if enable_testing:
+                swift_argv.append("-enable-testing")
+            if library_evolution:
+                swift_argv.append("-enable-library-evolution")
+            if bridging_header:
+                swift_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
             for framework in sdk_frameworks:
-                argv.extend(["-framework", framework])
-            for hdir in own_exported_header_dirs:
-                argv.extend(["-I", hdir])
+                swift_argv.extend(["-framework", framework])
+            for framework in weak_sdk_frameworks:
+                swift_argv.extend(["-weak_framework", framework])
+            for dep_dir in compile_swiftmodule_dirs:
+                swift_argv.extend(["-I", dep_dir])
+            # Header search paths flow through `-Xcc -I` so swiftc's
+            # underlying Clang invocation (for bridging headers + ObjC
+            # interop) can locate dep headers.
             for hdir in compile_header_dirs:
-                argv.extend(["-I", hdir])
+                swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+            # Feed each dep's modulemap to swiftc's underlying Clang so
+            # `import` of a clang-module dep resolves without manual
+            # `-fmodule-map-file` from the user.
             for mmap in dep_modulemaps:
-                argv.append("-fmodule-map-file=" + mmap)
+                swift_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
+            # Header maps flow through Clang's `-I` search, so the bridging
+            # header (and any dep ObjC interop) can resolve `#include "Foo.h"`
+            # without enumerating include directories.
+            if hmap_path:
+                swift_argv.extend(["-Xcc", "-I", "-Xcc", hmap_path])
+            for hmap in dep_hmaps:
+                swift_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
+            if enable_modules:
+                swift_argv.extend(["-Xcc", "-fmodules"])
+            for dylib in plugin_dylibs:
+                swift_argv.extend(["-load-plugin-library", dylib])
             for define in defines:
-                argv.append("-D" + define)
-            for flag in clang_flags:
-                argv.append(flag)
-            argv.append(src)
-            inputs = [src]
+                swift_argv.extend(["-D", define])
+            for flag in swift_flags:
+                swift_argv.append(flag)
+            swift_argv.extend(["-o", swift_archive])
+            for src in swift_srcs:
+                swift_argv.append(src)
+
+            swift_inputs = list(swift_srcs)
+            if bridging_header:
+                swift_inputs.append(_package_relative(ctx, bridging_header))
+            # The bridging header may #include other headers, so feed
+            # each exported header through as an action input too.
             for h in own_exported_headers:
-                if h not in inputs:
-                    inputs.append(h)
+                if h not in swift_inputs:
+                    swift_inputs.append(h)
+            # Plugin dylibs participate in the action's input digest so
+            # rebuilding the macro invalidates the consumer compile.
+            for dylib in plugin_dylibs:
+                if dylib not in swift_inputs:
+                    swift_inputs.append(dylib)
+
             run_action(
-                argv = argv,
-                inputs = inputs,
-                outputs = [obj],
-                env = clang_env,
-                toolchain_identity = clang_identity,
-                identifier = "clang_compile_" + module_name + "_" + src.replace("/", "_"),
+                argv = swift_argv,
+                inputs = swift_inputs,
+                outputs = [swift_archive, swiftmodule, swiftdoc, swift_objc_header],
+                env = xcrun_env,
+                toolchain_identity = swiftc_identity,
+                identifier = "swift_compile_" + module_name + arch_suffix,
             )
-            clang_objects.append(obj)
 
-        for src in objc_srcs:
-            compile_with_clang(src, "objective-c")
-        for src in c_srcs:
-            compile_with_clang(src, "c")
-        for src in cxx_srcs:
-            compile_with_clang(src, "c++")
+        arch_clang_objects = []
+        if len(objc_srcs) > 0 or len(c_srcs) > 0 or len(cxx_srcs) > 0:
+            clang_xcrun, clang_sdk, sdk_path, clang_identity, clang_env = _xcrun_clang(platform, sdk_variant, xcode_developer_dir)
 
-    # --- libtool merge ----------------------------------------------
-    # Combine the swift-only archive plus clang objects into the final
-    # archive. Only needed when there is at least one non-Swift input
-    # alongside Swift; Swift-only and C-only libraries produce the
-    # final archive directly.
-    if not swift_only and len(swift_srcs) > 0:
-        libtool_xcrun, libtool_sdk, libtool_identity, libtool_env = _xcrun_libtool(platform, sdk_variant, xcode_developer_dir)
-        libtool_argv = [
-            libtool_xcrun,
-            "--sdk",
-            libtool_sdk,
-            "libtool",
-            "-static",
-            "-o",
-            archive,
-            swift_archive,
-        ]
-        libtool_argv.extend(clang_objects)
-        libtool_inputs = [swift_archive]
-        libtool_inputs.extend(clang_objects)
+            def compile_with_clang(src, language):
+                # Sanitise the source path into a stable .o filename
+                # under the build dir: `apps/ios/AppCore/Sources/A.m`
+                # → `apps_ios_AppCore_Sources_A.m.o` (with `-<arch>`
+                # appended for universal builds).
+                sanitised = src.replace("/", "_")
+                obj = declare_output(sanitised + arch_suffix + ".o")
+                argv = [
+                    clang_xcrun,
+                    "--sdk",
+                    clang_sdk,
+                    "clang" if language != "c++" else "clang++",
+                    "-c",
+                    "-x",
+                    language,
+                    "-arch",
+                    arch,
+                    "-isysroot",
+                    sdk_path,
+                    "-target",
+                    triple,
+                    "-o",
+                    obj,
+                ]
+                if language == "objective-c" or language == "objective-c++":
+                    argv.append("-fobjc-arc")
+                if emit_dsym:
+                    argv.append("-g")
+                if enable_modules:
+                    argv.append("-fmodules")
+                for framework in sdk_frameworks:
+                    argv.extend(["-framework", framework])
+                for hdir in own_exported_header_dirs:
+                    argv.extend(["-I", hdir])
+                for hdir in compile_header_dirs:
+                    argv.extend(["-I", hdir])
+                for mmap in dep_modulemaps:
+                    argv.append("-fmodule-map-file=" + mmap)
+                if hmap_path:
+                    argv.extend(["-I", hmap_path])
+                for hmap in dep_hmaps:
+                    argv.extend(["-I", hmap])
+                for define in defines:
+                    argv.append("-D" + define)
+                for flag in clang_flags:
+                    argv.append(flag)
+                argv.append(src)
+                inputs = [src]
+                for h in own_exported_headers:
+                    if h not in inputs:
+                        inputs.append(h)
+                run_action(
+                    argv = argv,
+                    inputs = inputs,
+                    outputs = [obj],
+                    env = clang_env,
+                    toolchain_identity = clang_identity,
+                    identifier = "clang_compile_" + module_name + arch_suffix + "_" + sanitised,
+                )
+                arch_clang_objects.append(obj)
+
+            for src in objc_srcs:
+                compile_with_clang(src, "objective-c")
+            for src in c_srcs:
+                compile_with_clang(src, "c")
+            for src in cxx_srcs:
+                compile_with_clang(src, "c++")
+
+        # Libtool merge into per_arch_archive. Only needed when there
+        # is at least one non-Swift input alongside Swift; Swift-only
+        # and C-only libraries already wrote into per_arch_archive.
+        if not swift_only and len(swift_srcs) > 0:
+            libtool_xcrun, libtool_sdk, libtool_identity, libtool_env = _xcrun_libtool(platform, sdk_variant, xcode_developer_dir)
+            libtool_argv = [
+                libtool_xcrun,
+                "--sdk",
+                libtool_sdk,
+                "libtool",
+                "-static",
+                "-o",
+                per_arch_archive,
+                swift_archive,
+            ]
+            libtool_argv.extend(arch_clang_objects)
+            libtool_inputs = [swift_archive]
+            libtool_inputs.extend(arch_clang_objects)
+            run_action(
+                argv = libtool_argv,
+                inputs = libtool_inputs,
+                outputs = [per_arch_archive],
+                env = libtool_env,
+                toolchain_identity = libtool_identity,
+                identifier = "libtool_merge_" + module_name + arch_suffix,
+            )
+        elif len(swift_srcs) == 0 and len(arch_clang_objects) > 0:
+            libtool_xcrun, libtool_sdk, libtool_identity, libtool_env = _xcrun_libtool(platform, sdk_variant, xcode_developer_dir)
+            libtool_argv = [libtool_xcrun, "--sdk", libtool_sdk, "libtool", "-static", "-o", per_arch_archive]
+            libtool_argv.extend(arch_clang_objects)
+            run_action(
+                argv = libtool_argv,
+                inputs = list(arch_clang_objects),
+                outputs = [per_arch_archive],
+                env = libtool_env,
+                toolchain_identity = libtool_identity,
+                identifier = "libtool_archive_" + module_name + arch_suffix,
+            )
+
+        return per_arch_archive
+
+    for arch in archs:
+        per_arch_archives.append(_compile_for_arch(arch))
+
+    # --- lipo merge --------------------------------------------------
+    # For universal builds, combine the per-arch archives into the
+    # final fat archive. Single-arch builds skip this entirely; the
+    # one per-arch archive already wrote into `archive` directly.
+    if is_universal:
+        lipo_xcrun, lipo_sdk, lipo_identity, lipo_env = _xcrun_lipo(platform, sdk_variant, xcode_developer_dir)
+        lipo_argv = [lipo_xcrun, "--sdk", lipo_sdk, "lipo", "-create", "-output", archive]
+        lipo_argv.extend(per_arch_archives)
         run_action(
-            argv = libtool_argv,
-            inputs = libtool_inputs,
+            argv = lipo_argv,
+            inputs = list(per_arch_archives),
             outputs = [archive],
-            env = libtool_env,
-            toolchain_identity = libtool_identity,
-            identifier = "libtool_merge_" + module_name,
+            env = lipo_env,
+            toolchain_identity = lipo_identity,
+            identifier = "lipo_" + module_name,
         )
-    elif len(swift_srcs) == 0 and len(clang_objects) > 0:
-        # No Swift at all: ar the clang objects directly into the
-        # final archive.
-        libtool_xcrun, libtool_sdk, libtool_identity, libtool_env = _xcrun_libtool(platform, sdk_variant, xcode_developer_dir)
-        libtool_argv = [libtool_xcrun, "--sdk", libtool_sdk, "libtool", "-static", "-o", archive]
-        libtool_argv.extend(clang_objects)
-        run_action(
-            argv = libtool_argv,
-            inputs = list(clang_objects),
-            outputs = [archive],
-            env = libtool_env,
-            toolchain_identity = libtool_identity,
-            identifier = "libtool_archive_" + module_name,
-        )
+
+    swift_objc_header = swift_objc_header_holder[0]
 
     return {
         "label_id": ctx["label"]["id"],
@@ -586,10 +966,12 @@ def _apple_library_impl(ctx):
         "exported_headers": own_exported_headers,
         "exported_header_dirs": own_exported_header_dirs,
         "modulemap": modulemap_path,
+        "hmap": hmap_path,
         "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
         "transitive_exported_headers": transitive_exported_headers,
         "transitive_exported_header_dirs": transitive_exported_header_dirs,
         "transitive_modulemaps": transitive_modulemaps,
+        "transitive_hmaps": transitive_hmaps,
         "transitive_archives": transitive_archives,
         "transitive_alwayslink_archives": transitive_alwayslink_archives,
         "transitive_sdk_frameworks": transitive_sdk_frameworks,
@@ -599,13 +981,776 @@ def _apple_library_impl(ctx):
         "transitive_defines": transitive_defines,
     }
 
-APPLE_RULES = [
+def _swift_macro_impl(ctx):
+    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["module_name"])
+    minimum_os = attrs.get("minimum_os") or "13.0"
+    xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
+    module_name = attrs.get("module_name") or ctx["label"]["name"]
+    swift_flags = attrs.get("swift_flags") or []
+
+    all_srcs = glob(ctx["srcs"])
+    swift_srcs = _filter_swift_sources(all_srcs)
+    if len(swift_srcs) == 0:
+        fail("swift_macro " + ctx["label"]["id"] + " has no Swift sources (.swift)")
+
+    # Swift macros are host-loaded compiler plugins. They always build
+    # for macOS in the simulator-equivalent SDK; macOS ignores the
+    # variant anyway.
+    xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc("macos", "simulator", xcode_developer_dir)
+    triple = _apple_triple("macos", minimum_os, "simulator", host_arch(), False)
+
+    plugin_dylib = declare_output("lib" + module_name + ".dylib")
+    plugin_swiftmodule = declare_output(module_name + ".swiftmodule")
+
+    deps = ctx["deps"]
+
+    # Aggregate dep archives, swiftmodule search paths, frameworks, and
+    # linkopts so the plugin links against a real swift-syntax
+    # checkout the user provides via `deps`.
+    dep_swiftmodule_dirs = []
+    for dep in deps:
+        for d in dep.get("transitive_swiftmodule_dirs") or []:
+            if d and d != ctx["build_dir"] and d not in dep_swiftmodule_dirs:
+                dep_swiftmodule_dirs.append(d)
+    dep_archives = []
+    for dep in deps:
+        for ar in dep.get("transitive_archives") or []:
+            if ar and ar not in dep_archives:
+                dep_archives.append(ar)
+    dep_sdk_frameworks = []
+    for dep in deps:
+        for fw in dep.get("transitive_sdk_frameworks") or []:
+            if fw and fw not in dep_sdk_frameworks:
+                dep_sdk_frameworks.append(fw)
+    dep_linkopts = []
+    for dep in deps:
+        for opt in dep.get("transitive_linkopts") or []:
+            if opt and opt not in dep_linkopts:
+                dep_linkopts.append(opt)
+
+    swift_argv = [
+        xcrun,
+        "--sdk",
+        sdk,
+        "swiftc",
+        "-emit-library",
+        "-emit-module",
+        "-module-name",
+        module_name,
+        "-emit-module-path",
+        plugin_swiftmodule,
+        "-target",
+        triple,
+        "-parse-as-library",
+        "-o",
+        plugin_dylib,
+    ]
+    for d in dep_swiftmodule_dirs:
+        swift_argv.extend(["-I", d])
+    for fw in dep_sdk_frameworks:
+        swift_argv.extend(["-framework", fw])
+    for flag in swift_flags:
+        swift_argv.append(flag)
+    for src in swift_srcs:
+        swift_argv.append(src)
+    # Dep archives appear as positional inputs; swiftc forwards
+    # unknown-extension inputs to the linker.
+    for ar in dep_archives:
+        swift_argv.append(ar)
+    for opt in dep_linkopts:
+        swift_argv.extend(["-Xlinker", opt])
+
+    swift_inputs = list(swift_srcs)
+    for ar in dep_archives:
+        if ar not in swift_inputs:
+            swift_inputs.append(ar)
+
+    run_action(
+        argv = swift_argv,
+        inputs = swift_inputs,
+        outputs = [plugin_dylib, plugin_swiftmodule],
+        env = xcrun_env,
+        toolchain_identity = swiftc_identity,
+        identifier = "swift_macro_compile_" + module_name,
+    )
+
+    return {
+        "label_id": ctx["label"]["id"],
+        "plugin_dylib": plugin_dylib,
+        "plugin_module_name": module_name,
+    }
+
+# --- Bundle helpers ----------------------------------------------------
+#
+# `_render_plist` emits a deterministic XML property list from a flat
+# string-valued dict. Sufficient for the Info.plist payloads framework
+# and application bundles need; richer types (arrays, bools) layer on
+# through small per-key templates.
+
+def _render_plist(entries, bool_entries = {}, array_entries = {}):
+    lines = [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">",
+        "<plist version=\"1.0\">",
+        "<dict>",
+    ]
+    for key in sorted(entries.keys()):
+        lines.append("\t<key>" + key + "</key>")
+        lines.append("\t<string>" + entries[key] + "</string>")
+    for key in sorted(bool_entries.keys()):
+        lines.append("\t<key>" + key + "</key>")
+        lines.append("\t<true/>" if bool_entries[key] else "\t<false/>")
+    for key in sorted(array_entries.keys()):
+        lines.append("\t<key>" + key + "</key>")
+        lines.append("\t<array>")
+        for item in array_entries[key]:
+            # The dict shape signals an integer (e.g. UIDeviceFamily); a
+            # bare string is wrapped as a <string>.
+            if type(item) == "dict" and "integer" in item:
+                lines.append("\t\t<integer>" + str(item["integer"]) + "</integer>")
+            else:
+                lines.append("\t\t<string>" + str(item) + "</string>")
+        lines.append("\t</array>")
+    lines.append("</dict>")
+    lines.append("</plist>")
+    lines.append("")
+    return "\n".join(lines)
+
+def _collect_dep_compile_inputs(deps, build_dir):
+    """Aggregate compile-visible inputs from dep providers.
+
+    Returns (swiftmodule_dirs, header_dirs, modulemaps, hmaps, archives,
+    framework_search_dirs, framework_module_names, sdk_frameworks,
+    sdk_dylibs, linkopts, plugin_dylibs).
+    """
+    swiftmodule_dirs = []
+    header_dirs = []
+    modulemaps = []
+    hmaps = []
+    archives = []
+    framework_search_dirs = []
+    framework_module_names = []
+    sdk_frameworks = []
+    sdk_dylibs = []
+    linkopts = []
+    plugin_dylibs = []
+    for dep in deps:
+        for d in dep.get("transitive_swiftmodule_dirs") or []:
+            if d and d != build_dir and d not in swiftmodule_dirs:
+                swiftmodule_dirs.append(d)
+        for h in dep.get("transitive_exported_header_dirs") or []:
+            if h and h not in header_dirs:
+                header_dirs.append(h)
+        for m in dep.get("transitive_modulemaps") or []:
+            if m and m not in modulemaps:
+                modulemaps.append(m)
+        for h in dep.get("transitive_hmaps") or []:
+            if h and h not in hmaps:
+                hmaps.append(h)
+        for ar in dep.get("transitive_archives") or []:
+            if ar and ar not in archives:
+                archives.append(ar)
+        framework_path = dep.get("framework_path")
+        if framework_path:
+            framework_parent = _parent_dir(framework_path)
+            if framework_parent and framework_parent not in framework_search_dirs:
+                framework_search_dirs.append(framework_parent)
+            module_name = dep.get("framework_module_name")
+            if module_name and module_name not in framework_module_names:
+                framework_module_names.append(module_name)
+            # The framework's Modules/ directory hosts the swiftmodule
+            # consumers need on their `-I` search path.
+            modules_dir = framework_path + "/Modules"
+            if modules_dir not in swiftmodule_dirs:
+                swiftmodule_dirs.append(modules_dir)
+        for fw in dep.get("transitive_sdk_frameworks") or []:
+            if fw and fw not in sdk_frameworks:
+                sdk_frameworks.append(fw)
+        for dy in dep.get("transitive_sdk_dylibs") or []:
+            if dy and dy not in sdk_dylibs:
+                sdk_dylibs.append(dy)
+        for opt in dep.get("transitive_linkopts") or []:
+            if opt and opt not in linkopts:
+                linkopts.append(opt)
+        plugin_dylib = dep.get("plugin_dylib")
+        if plugin_dylib and plugin_dylib not in plugin_dylibs:
+            plugin_dylibs.append(plugin_dylib)
+    return (
+        swiftmodule_dirs,
+        header_dirs,
+        modulemaps,
+        hmaps,
+        archives,
+        framework_search_dirs,
+        framework_module_names,
+        sdk_frameworks,
+        sdk_dylibs,
+        linkopts,
+        plugin_dylibs,
+    )
+
+def _apple_framework_impl(ctx):
+    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
+    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["headers", "exported_headers", "resources", "asset_catalogs", "privacy_manifest"])
+    platform = attrs["platform"]
+    minimum_os = attrs.get("minimum_os") or "13.0"
+    target_sdk_version = attrs.get("target_sdk_version") or minimum_os
+    sdk_variant = attrs.get("sdk_variant") or "simulator"
+    xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
+    product_name = attrs.get("product_name") or ctx["label"]["name"]
+    module_name = attrs.get("module_name") or product_name
+    bundle_id = attrs.get("bundle_id") or ("dev.once." + product_name)
+    sdk_frameworks_attr = attrs.get("sdk_frameworks") or []
+    weak_sdk_frameworks = attrs.get("weak_sdk_frameworks") or []
+    sdk_dylibs_attr = attrs.get("sdk_dylibs") or []
+    linkopts = attrs.get("linkopts") or []
+    swift_flags = attrs.get("swift_flags") or []
+
+    all_srcs = glob(ctx["srcs"])
+    swift_srcs = _filter_swift_sources(all_srcs)
+    if len(swift_srcs) == 0:
+        fail("apple_framework " + ctx["label"]["id"] + " has no Swift sources (.swift)")
+
+    # MVP: single host architecture. Multi-arch fan-out for frameworks
+    # lands in a follow-up; today the same machinery as `apple_library`
+    # can be wired in but the demo path doesn't need it.
+    arch = host_arch()
+    xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
+    triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
+
+    framework_dir = product_name + ".framework"
+    dylib = declare_output(framework_dir + "/" + product_name)
+    swiftmodule = declare_output(framework_dir + "/Modules/" + module_name + ".swiftmodule")
+    swiftdoc = declare_output(framework_dir + "/Modules/" + module_name + ".swiftdoc")
+    modulemap = declare_output(framework_dir + "/Modules/module.modulemap")
+    info_plist = declare_output(framework_dir + "/Info.plist")
+
+    deps = ctx["deps"]
+    (
+        compile_swiftmodule_dirs,
+        compile_header_dirs,
+        dep_modulemaps,
+        dep_hmaps,
+        dep_archives,
+        framework_search_dirs,
+        framework_module_names,
+        dep_sdk_frameworks,
+        dep_sdk_dylibs,
+        dep_linkopts,
+        plugin_dylibs,
+    ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
+
+    swift_argv = [
+        xcrun,
+        "--sdk",
+        sdk,
+        "swiftc",
+        "-emit-library",
+        "-emit-module",
+        "-module-name",
+        module_name,
+        "-emit-module-path",
+        swiftmodule,
+        "-target",
+        triple,
+        "-parse-as-library",
+        "-Xlinker",
+        "-install_name",
+        "-Xlinker",
+        "@rpath/" + framework_dir + "/" + product_name,
+        "-o",
+        dylib,
+    ]
+    for d in compile_swiftmodule_dirs:
+        swift_argv.extend(["-I", d])
+    for hdir in compile_header_dirs:
+        swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+    for mmap in dep_modulemaps:
+        swift_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
+    for hmap in dep_hmaps:
+        swift_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
+    for d in framework_search_dirs:
+        swift_argv.extend(["-F", d])
+    for fw in framework_module_names:
+        swift_argv.extend(["-framework", fw])
+    for fw in sdk_frameworks_attr:
+        swift_argv.extend(["-framework", fw])
+    for fw in dep_sdk_frameworks:
+        if fw not in sdk_frameworks_attr:
+            swift_argv.extend(["-framework", fw])
+    for fw in weak_sdk_frameworks:
+        swift_argv.extend(["-weak_framework", fw])
+    for dy in sdk_dylibs_attr:
+        swift_argv.extend(["-l" + dy])
+    for dy in dep_sdk_dylibs:
+        if dy not in sdk_dylibs_attr:
+            swift_argv.extend(["-l" + dy])
+    for opt in linkopts:
+        swift_argv.append(opt)
+    for opt in dep_linkopts:
+        if opt not in linkopts:
+            swift_argv.append(opt)
+    for dylib_path in plugin_dylibs:
+        swift_argv.extend(["-load-plugin-library", dylib_path])
+    for flag in swift_flags:
+        swift_argv.append(flag)
+    for src in swift_srcs:
+        swift_argv.append(src)
+    for ar in dep_archives:
+        swift_argv.append(ar)
+
+    swift_inputs = list(swift_srcs)
+    for ar in dep_archives:
+        if ar not in swift_inputs:
+            swift_inputs.append(ar)
+    for d in plugin_dylibs:
+        if d not in swift_inputs:
+            swift_inputs.append(d)
+
+    run_action(
+        argv = swift_argv,
+        inputs = swift_inputs,
+        outputs = [dylib, swiftmodule, swiftdoc],
+        env = xcrun_env,
+        toolchain_identity = swiftc_identity,
+        identifier = "apple_framework_compile_" + module_name,
+    )
+
+    # No `module * { export * }` line: that requires an umbrella
+    # header declaration, and the bundled framework relies on the
+    # Swift compiler reading the `.swiftmodule` in this same Modules/
+    # directory rather than on an inferred ObjC submodule.
+    write_file(modulemap, "framework module " + module_name + " {\n    export *\n}\n")
+
+    plist_entries = {
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleExecutable": product_name,
+        "CFBundleIdentifier": bundle_id,
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": product_name,
+        "CFBundlePackageType": "FMWK",
+        "CFBundleShortVersionString": "1.0",
+        "CFBundleVersion": "1",
+        "MinimumOSVersion": minimum_os,
+    }
+    write_file(info_plist, _render_plist(plist_entries))
+
+    # Ad-hoc codesign so iOS simulator's dyld accepts the dylib when
+    # the embedding app loads it.
+    cs_xcrun, codesign_path, cs_identity, cs_env = _xcrun_codesign(xcode_developer_dir)
+    cs_stamp = declare_output(framework_dir + "/_CodeSignature/CodeResources")
+    cs_script = "set -e; " + codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(ctx["build_dir"] + "/" + framework_dir)
+    run_action(
+        argv = ["/bin/sh", "-c", cs_script],
+        inputs = [dylib, info_plist, modulemap, swiftmodule],
+        outputs = [cs_stamp],
+        env = cs_env,
+        toolchain_identity = cs_identity,
+        identifier = "apple_framework_codesign_" + module_name,
+    )
+
+    own_swiftmodule_dir = ctx["build_dir"] + "/" + framework_dir + "/Modules"
+    transitive_archives = _collect_transitive(deps, "transitive_archives", [])
+    transitive_swiftmodule_dirs = _collect_transitive(deps, "transitive_swiftmodule_dirs", [own_swiftmodule_dir])
+    transitive_sdk_frameworks = _collect_transitive(deps, "transitive_sdk_frameworks", sdk_frameworks_attr)
+    transitive_weak_sdk_frameworks = _collect_transitive(deps, "transitive_weak_sdk_frameworks", weak_sdk_frameworks)
+    transitive_sdk_dylibs = _collect_transitive(deps, "transitive_sdk_dylibs", sdk_dylibs_attr)
+    transitive_linkopts = _collect_transitive(deps, "transitive_linkopts", linkopts)
+    transitive_frameworks = _collect_transitive(deps, "transitive_frameworks", [ctx["build_dir"] + "/" + framework_dir])
+
+    framework_files = [dylib, swiftmodule, swiftdoc, modulemap, info_plist, cs_stamp]
+
+    return {
+        "label_id": ctx["label"]["id"],
+        "framework_path": ctx["build_dir"] + "/" + framework_dir,
+        "framework_module_name": module_name,
+        "framework_files": framework_files,
+        "swiftmodule_dir": own_swiftmodule_dir,
+        "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
+        "transitive_archives": transitive_archives,
+        "transitive_frameworks": transitive_frameworks,
+        "transitive_sdk_frameworks": transitive_sdk_frameworks,
+        "transitive_weak_sdk_frameworks": transitive_weak_sdk_frameworks,
+        "transitive_sdk_dylibs": transitive_sdk_dylibs,
+        "transitive_linkopts": transitive_linkopts,
+    }
+
+def shell_quote_for_action(path):
+    # Single-quote the path and escape any embedded single quotes by
+    # closing, escaping with double-quoted apostrophe, and reopening.
+    escaped = path.replace("'", "'\"'\"'")
+    return "'" + escaped + "'"
+
+def _apple_application_impl(ctx):
+    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
+    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["resources", "asset_catalogs", "info_plist", "info_plist_substitutions", "entitlements", "provisioning_profile"])
+    if attrs.get("signing") and attrs.get("signing") != "ad_hoc":
+        fail(ctx["label"]["id"] + ": attribute `signing` only supports `ad_hoc` today")
+    platform = attrs["platform"]
+    bundle_id = attrs["bundle_id"]
+    minimum_os = attrs.get("minimum_os") or "13.0"
+    target_sdk_version = attrs.get("target_sdk_version") or minimum_os
+    sdk_variant = attrs.get("sdk_variant") or "simulator"
+    xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
+    product_name = attrs.get("product_name") or ctx["label"]["name"]
+    families = attrs.get("families") or ["iphone"]
+    sdk_frameworks_attr = attrs.get("sdk_frameworks") or []
+    weak_sdk_frameworks = attrs.get("weak_sdk_frameworks") or []
+    sdk_dylibs_attr = attrs.get("sdk_dylibs") or []
+    linkopts = attrs.get("linkopts") or []
+    swift_flags = attrs.get("swift_flags") or []
+
+    all_srcs = glob(ctx["srcs"])
+    swift_srcs = _filter_swift_sources(all_srcs)
+    if len(swift_srcs) == 0:
+        fail("apple_application " + ctx["label"]["id"] + " has no Swift sources (.swift)")
+
+    arch = host_arch()
+    xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
+    triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
+
+    app_dir = product_name + ".app"
+    executable = declare_output(app_dir + "/" + product_name)
+    info_plist = declare_output(app_dir + "/Info.plist")
+
+    deps = ctx["deps"]
+    (
+        compile_swiftmodule_dirs,
+        compile_header_dirs,
+        dep_modulemaps,
+        dep_hmaps,
+        dep_archives,
+        framework_search_dirs,
+        framework_module_names,
+        dep_sdk_frameworks,
+        dep_sdk_dylibs,
+        dep_linkopts,
+        plugin_dylibs,
+    ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
+
+    swift_argv = [
+        xcrun,
+        "--sdk",
+        sdk,
+        "swiftc",
+        "-module-name",
+        product_name,
+        "-target",
+        triple,
+        "-parse-as-library",
+        "-Xlinker",
+        "-rpath",
+        "-Xlinker",
+        "@executable_path/Frameworks",
+        "-o",
+        executable,
+    ]
+    for d in compile_swiftmodule_dirs:
+        swift_argv.extend(["-I", d])
+    for hdir in compile_header_dirs:
+        swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+    for mmap in dep_modulemaps:
+        swift_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
+    for hmap in dep_hmaps:
+        swift_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
+    for d in framework_search_dirs:
+        swift_argv.extend(["-F", d])
+    for fw in framework_module_names:
+        swift_argv.extend(["-framework", fw])
+    for fw in sdk_frameworks_attr:
+        swift_argv.extend(["-framework", fw])
+    for fw in dep_sdk_frameworks:
+        if fw not in sdk_frameworks_attr:
+            swift_argv.extend(["-framework", fw])
+    for fw in weak_sdk_frameworks:
+        swift_argv.extend(["-weak_framework", fw])
+    for dy in sdk_dylibs_attr:
+        swift_argv.extend(["-l" + dy])
+    for dy in dep_sdk_dylibs:
+        if dy not in sdk_dylibs_attr:
+            swift_argv.extend(["-l" + dy])
+    for opt in linkopts:
+        swift_argv.append(opt)
+    for opt in dep_linkopts:
+        if opt not in linkopts:
+            swift_argv.append(opt)
+    for dylib_path in plugin_dylibs:
+        swift_argv.extend(["-load-plugin-library", dylib_path])
+    for flag in swift_flags:
+        swift_argv.append(flag)
+    for src in swift_srcs:
+        swift_argv.append(src)
+    for ar in dep_archives:
+        swift_argv.append(ar)
+
+    swift_inputs = list(swift_srcs)
+    for ar in dep_archives:
+        if ar not in swift_inputs:
+            swift_inputs.append(ar)
+    for d in plugin_dylibs:
+        if d not in swift_inputs:
+            swift_inputs.append(d)
+
+    run_action(
+        argv = swift_argv,
+        inputs = swift_inputs,
+        outputs = [executable],
+        env = xcrun_env,
+        toolchain_identity = swiftc_identity,
+        identifier = "apple_application_compile_" + product_name,
+    )
+
+    plist_entries = {
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleExecutable": product_name,
+        "CFBundleIdentifier": bundle_id,
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": product_name,
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": "1.0",
+        "CFBundleVersion": "1",
+        "MinimumOSVersion": minimum_os,
+        "DTPlatformName": sdk,
+    }
+    bool_entries = {"LSRequiresIPhoneOS": True}
+    device_family_codes = []
+    for family in families:
+        if family == "iphone":
+            device_family_codes.append({"integer": 1})
+        elif family == "ipad":
+            device_family_codes.append({"integer": 2})
+    array_entries = {"UIDeviceFamily": device_family_codes}
+    write_file(info_plist, _render_plist(plist_entries, bool_entries, array_entries))
+
+    # Embed each transitive dep framework into App.app/Frameworks/.
+    # Each framework is copied as a whole bundle directory and
+    # individually ad-hoc codesigned so the app's dyld loads them
+    # without rejecting the signature.
+    cs_xcrun, codesign_path, cs_identity, cs_env = _xcrun_codesign(xcode_developer_dir)
+    embedded_stamps = []
+    dep_framework_paths = []
+    dep_framework_files = {}
+    for dep in deps:
+        framework_path = dep.get("framework_path")
+        if framework_path and framework_path not in dep_framework_paths:
+            dep_framework_paths.append(framework_path)
+            dep_framework_files[framework_path] = dep.get("framework_files") or []
+    for framework_path in dep_framework_paths:
+        framework_basename = _basename(framework_path)
+        source_files = dep_framework_files.get(framework_path) or []
+        # Declare every file that lands in the embedded framework so
+        # the Once runner preserves them. Map each source file
+        # (`<build_dir>/<fw>/<sub>`) to its embedded path
+        # (`<app>/Frameworks/<fw>/<sub>`) by stripping the framework
+        # path prefix.
+        framework_prefix = framework_path + "/"
+        embed_outputs = []
+        for source in source_files:
+            if source.startswith(framework_prefix):
+                rel = source[len(framework_prefix):]
+                embed_outputs.append(declare_output(app_dir + "/Frameworks/" + framework_basename + "/" + rel))
+        embedded_stamp = declare_output(app_dir + "/Frameworks/" + framework_basename + "/_CodeSignature/CodeResources")
+        if embedded_stamp not in embed_outputs:
+            embed_outputs.append(embedded_stamp)
+        embed_script = (
+            "set -e; mkdir -p " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks") + "; " +
+            # Remove any prior copy so a re-run starts from a clean
+            # state; codesign --force inside the tree would otherwise
+            # carry stale signatures forward.
+            "rm -rf " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks/" + framework_basename) + "; " +
+            "cp -R " + shell_quote_for_action(framework_path) + " " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks/") + "; " +
+            codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks/" + framework_basename)
+        )
+        embed_inputs = list(source_files)
+        run_action(
+            argv = ["/bin/sh", "-c", embed_script],
+            inputs = embed_inputs,
+            outputs = embed_outputs,
+            env = cs_env,
+            toolchain_identity = cs_identity,
+            identifier = "apple_application_embed_" + framework_basename,
+        )
+        embedded_stamps.append(embedded_stamp)
+
+    # Ad-hoc codesign the .app bundle itself. Must run after embedded
+    # frameworks land so their signature is included in the bundle's
+    # resource envelope.
+    app_cs_stamp = declare_output(app_dir + "/_CodeSignature/CodeResources")
+    cs_inputs = [executable, info_plist]
+    for stamp in embedded_stamps:
+        cs_inputs.append(stamp)
+    cs_script = "set -e; " + codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir)
+    run_action(
+        argv = ["/bin/sh", "-c", cs_script],
+        inputs = cs_inputs,
+        outputs = [app_cs_stamp],
+        env = cs_env,
+        toolchain_identity = cs_identity,
+        identifier = "apple_application_codesign_" + product_name,
+    )
+
+    return {
+        "label_id": ctx["label"]["id"],
+        "app_path": ctx["build_dir"] + "/" + app_dir,
+        "bundle_id": bundle_id,
+    }
+
+def _apple_test_bundle_impl(ctx):
+    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
+    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["test_host", "resources", "asset_catalogs", "info_plist", "entitlements", "destination", "test_plan", "test_env"])
+    platform = attrs["platform"]
+    minimum_os = attrs.get("minimum_os") or "13.0"
+    target_sdk_version = attrs.get("target_sdk_version") or minimum_os
+    sdk_variant = attrs.get("sdk_variant") or "simulator"
+    xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
+    product_name = attrs.get("product_name") or ctx["label"]["name"]
+    module_name = product_name
+    swift_flags = attrs.get("swift_flags") or []
+
+    all_srcs = glob(ctx["srcs"])
+    swift_srcs = _filter_swift_sources(all_srcs)
+    if len(swift_srcs) == 0:
+        fail("apple_test_bundle " + ctx["label"]["id"] + " has no Swift sources (.swift)")
+
+    arch = host_arch()
+    xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
+    triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
+
+    # XCTest lives in the platform's developer-frameworks tree, not
+    # the SDK's default search path. Resolve `<platform>/Developer/
+    # Library/Frameworks` via xcrun and add it as `-F`/`-rpath` so the
+    # linker finds the framework and dyld locates it at runtime.
+    platform_path = host_command([xcrun, "--sdk", sdk, "--show-sdk-platform-path"], env = xcrun_env).strip()
+    xctest_framework_dir = platform_path + "/Developer/Library/Frameworks"
+
+    bundle_dir = product_name + ".xctest"
+    test_binary = declare_output(bundle_dir + "/" + product_name)
+    info_plist = declare_output(bundle_dir + "/Info.plist")
+
+    deps = ctx["deps"]
+    (
+        compile_swiftmodule_dirs,
+        compile_header_dirs,
+        dep_modulemaps,
+        dep_hmaps,
+        dep_archives,
+        framework_search_dirs,
+        framework_module_names,
+        dep_sdk_frameworks,
+        dep_sdk_dylibs,
+        dep_linkopts,
+        plugin_dylibs,
+    ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
+
+    # An XCTest bundle is a Mach-O loadable bundle; swiftc takes
+    # `-emit-library` and the linker `-bundle` flag is plumbed through
+    # `-Xlinker`. The XCTest framework lives under the platform's
+    # `Developer/Library/Frameworks`; add it to both the framework
+    # search path (`-F`) and the dyld rpath so the test runner can
+    # load it at simulator launch time.
+    swift_argv = [
+        xcrun,
+        "--sdk",
+        sdk,
+        "swiftc",
+        "-emit-library",
+        "-module-name",
+        module_name,
+        "-target",
+        triple,
+        "-parse-as-library",
+        "-Xlinker",
+        "-bundle",
+        "-F",
+        xctest_framework_dir,
+        "-Xlinker",
+        "-rpath",
+        "-Xlinker",
+        xctest_framework_dir,
+        "-framework",
+        "XCTest",
+        "-o",
+        test_binary,
+    ]
+    for d in compile_swiftmodule_dirs:
+        swift_argv.extend(["-I", d])
+    for d in framework_search_dirs:
+        swift_argv.extend(["-F", d])
+    for fw in framework_module_names:
+        swift_argv.extend(["-framework", fw])
+    for fw in dep_sdk_frameworks:
+        swift_argv.extend(["-framework", fw])
+    for dy in dep_sdk_dylibs:
+        swift_argv.extend(["-l" + dy])
+    for opt in dep_linkopts:
+        swift_argv.append(opt)
+    for flag in swift_flags:
+        swift_argv.append(flag)
+    for src in swift_srcs:
+        swift_argv.append(src)
+    for ar in dep_archives:
+        swift_argv.append(ar)
+
+    swift_inputs = list(swift_srcs)
+    for ar in dep_archives:
+        if ar not in swift_inputs:
+            swift_inputs.append(ar)
+
+    run_action(
+        argv = swift_argv,
+        inputs = swift_inputs,
+        outputs = [test_binary],
+        env = xcrun_env,
+        toolchain_identity = swiftc_identity,
+        identifier = "apple_test_bundle_compile_" + module_name,
+    )
+
+    plist_entries = {
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleExecutable": product_name,
+        "CFBundleIdentifier": "dev.once.tests." + product_name,
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": product_name,
+        "CFBundlePackageType": "BNDL",
+        "CFBundleShortVersionString": "1.0",
+        "CFBundleVersion": "1",
+        "MinimumOSVersion": minimum_os,
+    }
+    write_file(info_plist, _render_plist(plist_entries))
+
+    return {
+        "label_id": ctx["label"]["id"],
+        "test_bundle_path": ctx["build_dir"] + "/" + bundle_dir,
+    }
+
+RULES = [
+    rule(
+        kind = "swift_macro",
+        docs = "Compiles a Swift compiler-plugin dylib that consumers load via `-load-plugin-library` at compile time.",
+        impl = _swift_macro_impl,
+        attrs = [
+            attr("minimum_os", "string", docs = "Minimum macOS version for the host plugin"),
+            attr("module_name", "string", docs = "Compiled module name. Defaults to the target name", configurable = False),
+            attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
+            attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
+        ],
+        deps = [
+            dep("deps", ["apple_linkable"], "Libraries the plugin links against (typically a swift-syntax checkout)"),
+        ],
+        providers = ["apple_swift_plugin"],
+        capabilities = [
+            capability("build", ["default", "plugin_dylib", "swiftmodule"]),
+        ],
+        examples = [
+            "swift-macro-minimal",
+        ],
+    ),
     rule(
         kind = "apple_library",
         docs = "Compiles Swift, Objective-C, C, and C++ sources into a linkable Apple module.",
         impl = _apple_library_impl,
         attrs = [
-            attr("platform", "string", required = True, docs = "Apple platform such as ios, macos, tvos, watchos, or visionos"),
+            attr("platform", "string", required = True, docs = "Apple platform such as ios, macos, tvos, watchos, or visionos", configurable = False),
             attr("minimum_os", "string", docs = "Minimum supported OS version (deployment target)"),
             attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
             attr("module_name", "string", docs = "Compiled module name. Defaults to the target name", configurable = False),
@@ -621,7 +1766,9 @@ APPLE_RULES = [
             attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled for dependent tests"),
             attr("library_evolution", "bool", default = "false", docs = "Emit stable Swift module interfaces for binary compatibility"),
             attr("emit_dsym", "bool", default = "false", docs = "Emit DWARF debug info so downstream rules can extract a `.dSYM` bundle"),
-            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS (always uses macosx)"),
+            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS (always uses macosx)", configurable = False),
+            attr("archs", "list<string>", default = "[]", docs = "Target architectures (`arm64`, `x86_64`, `arm64e`, `arm64_32`). Empty defaults to the host arch; multi-arch fans out per-arch compiles and combines them with `lipo`", configurable = False),
+            attr("mac_catalyst", "bool", default = "false", docs = "Build the iOSMac (Mac Catalyst) variant. Requires `platform = macos`; rewrites the triple to `<arch>-apple-ios<minOS>-macabi`", configurable = False),
             attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
             attr("alwayslink", "bool", default = "false", docs = "Hint to downstream linker rules to force-load this archive (`-Wl,-force_load`)"),
             attr("exported_deps", "list<string>", default = "[]", docs = "Target IDs from `deps` whose module interface flows through to consumers' compile path"),
@@ -629,7 +1776,7 @@ APPLE_RULES = [
             attr("enable_modules", "bool", default = "false", docs = "Emit a `module.modulemap` for `exported_headers` and pass `-fmodules` to Clang so consumers can `import` the module instead of #importing each header"),
         ],
         deps = [
-            dep("deps", ["apple_linkable", "apple_resource"], "Libraries, frameworks, or resources consumed by this library"),
+            dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin"], "Libraries, frameworks, resources, or Swift compiler plugins consumed by this library"),
         ],
         providers = ["apple_linkable", "apple_module"],
         capabilities = [
@@ -642,12 +1789,17 @@ APPLE_RULES = [
     ),
     rule(
         kind = "apple_framework",
-        docs = "Builds an Apple framework product with module metadata and optional resources.",
+        docs = "Builds a dynamic Apple framework bundle (`Foo.framework/Foo` dylib) with module metadata and resources.",
+        impl = _apple_framework_impl,
         attrs = [
-            attr("platform", "string", required = True, docs = "Apple platform for the framework"),
+            attr("platform", "string", required = True, docs = "Apple platform for the framework", configurable = False),
             attr("minimum_os", "string", docs = "Minimum supported OS version"),
+            attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
+            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS", configurable = False),
+            attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
             attr("bundle_id", "string", docs = "Framework bundle identifier"),
             attr("product_name", "string", docs = "Framework product name. Defaults to the target name", configurable = False),
+            attr("module_name", "string", docs = "Swift module name. Defaults to `product_name`"),
             attr("headers", "list<string>", default = "[]", docs = "Headers packaged with the framework"),
             attr("exported_headers", "list<string>", default = "[]", docs = "Headers exported to downstream consumers"),
             attr("resources", "list<string>", default = "[]", docs = "Resource glob patterns bundled into the framework"),
@@ -655,23 +1807,32 @@ APPLE_RULES = [
             attr("privacy_manifest", "string", docs = "Privacy manifest placed in the framework bundle"),
             attr("sdk_frameworks", "list<string>", default = "[]", docs = "Apple SDK frameworks linked by name"),
             attr("weak_sdk_frameworks", "list<string>", default = "[]", docs = "Apple SDK frameworks linked weakly"),
+            attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple SDK dynamic libraries linked by name"),
+            attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
+            attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
         ],
         deps = [
-            dep("deps", ["apple_linkable", "apple_resource"], "Libraries and resources linked or embedded by the framework"),
+            dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin"], "Libraries, resources, or Swift compiler plugins linked or embedded by the framework"),
         ],
         providers = ["apple_linkable", "apple_framework", "apple_bundle"],
         capabilities = [
             capability("build", ["default", "framework", "dsyms", "swiftmodule"]),
         ],
-        examples = [],
+        examples = [
+            "apple-framework-minimal",
+        ],
     ),
     rule(
         kind = "apple_application",
-        docs = "Builds an Apple application bundle with resources, Info.plist metadata, and signing inputs.",
+        docs = "Builds an Apple application bundle (`Foo.app`) with the Mach-O executable, embedded frameworks, Info.plist, and ad-hoc codesign.",
+        impl = _apple_application_impl,
         attrs = [
-            attr("platform", "string", required = True, docs = "Apple platform for the application"),
+            attr("platform", "string", required = True, docs = "Apple platform for the application", configurable = False),
             attr("bundle_id", "string", required = True, docs = "Application bundle identifier"),
             attr("minimum_os", "string", docs = "Minimum supported OS version"),
+            attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
+            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS", configurable = False),
+            attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
             attr("families", "list<string>", default = "[]", docs = "Supported device families, such as iphone or ipad"),
             attr("product_name", "string", docs = "Application product name. Defaults to the target name", configurable = False),
             attr("resources", "list<string>", default = "[]", docs = "Resource and asset catalog glob patterns"),
@@ -684,9 +1845,11 @@ APPLE_RULES = [
             attr("sdk_frameworks", "list<string>", default = "[]", docs = "Apple SDK frameworks linked by name"),
             attr("weak_sdk_frameworks", "list<string>", default = "[]", docs = "Apple SDK frameworks linked weakly"),
             attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple SDK dynamic libraries linked by name"),
+            attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
+            attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
         ],
         deps = [
-            dep("deps", ["apple_linkable", "apple_framework", "apple_resource"], "Libraries, frameworks, and resources embedded in the app"),
+            dep("deps", ["apple_linkable", "apple_framework", "apple_resource", "apple_swift_plugin"], "Libraries, frameworks, resources, and Swift compiler plugins embedded in the app"),
         ],
         providers = ["apple_application", "apple_bundle"],
         capabilities = [
@@ -699,10 +1862,15 @@ APPLE_RULES = [
     ),
     rule(
         kind = "apple_test_bundle",
-        docs = "Builds and runs XCTest-style test bundles, including app-hosted tests when declared.",
+        docs = "Builds an XCTest bundle (`Foo.xctest`) linked against XCTest. The runner that executes the bundle is provided externally; this rule only assembles the bundle.",
+        impl = _apple_test_bundle_impl,
         attrs = [
-            attr("platform", "string", required = True, docs = "Apple platform for the tests"),
+            attr("platform", "string", required = True, docs = "Apple platform for the tests", configurable = False),
             attr("minimum_os", "string", docs = "Minimum supported OS version"),
+            attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
+            attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS", configurable = False),
+            attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
+            attr("product_name", "string", docs = "Test bundle product name. Defaults to the target name", configurable = False),
             attr("test_host", "target", docs = "Application target hosting the test bundle"),
             attr("resources", "list<string>", default = "[]", docs = "Resource glob patterns bundled into the test bundle"),
             attr("asset_catalogs", "list<string>", default = "[]", docs = "Asset catalog paths compiled into the test bundle"),
@@ -711,15 +1879,18 @@ APPLE_RULES = [
             attr("destination", "string", docs = "Simulator, device, or local destination selector"),
             attr("test_plan", "string", docs = "XCTest plan path"),
             attr("test_env", "map<string,string>", default = "{}", docs = "Environment variables passed to the test runner"),
+            attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
         ],
         deps = [
-            dep("deps", ["apple_linkable", "apple_application"], "Code under test and optional host application"),
+            dep("deps", ["apple_linkable", "apple_application", "apple_swift_plugin"], "Code under test, optional host application, and Swift compiler plugins"),
         ],
         providers = ["apple_test_bundle", "apple_bundle"],
         capabilities = [
             capability("build", ["default", "bundle", "dsyms"]),
             capability("test", ["default", "test_results", "coverage"], requires_outputs = ["bundle"]),
         ],
-        examples = [],
+        examples = [
+            "apple-test-bundle-minimal",
+        ],
     ),
 ]

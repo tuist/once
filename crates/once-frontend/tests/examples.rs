@@ -102,6 +102,20 @@ fn every_schema_example_carries_meta() {
     }
 }
 
+#[test]
+fn every_impl_backed_rule_has_a_schema_example() {
+    let schemas = built_in_rule_schemas_result().expect("built-in rule schemas load");
+    for schema in &schemas {
+        if once_frontend::analysis::rule_has_impl(&schema.kind).expect("rule impl lookup") {
+            assert!(
+                !schema.examples.is_empty(),
+                "impl-backed rule `{}` has no bundled starter example",
+                schema.kind
+            );
+        }
+    }
+}
+
 fn materialize(root: &Path, example: &once_frontend::RuleExample) {
     for file in &example.files {
         let path = root.join(&file.path);

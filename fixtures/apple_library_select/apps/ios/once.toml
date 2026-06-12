@@ -1,0 +1,11 @@
+[[target]]
+name = "Selecty"
+kind = "apple_library"
+srcs = ["Selecty/Sources/*.swift"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+minimum_os = "17.0"
+defines = { select = { "ios:simulator" = ["SIM_BUILD"], "ios:device" = ["DEVICE_BUILD"], default = [] } }
+sdk_frameworks = { select = { ios = ["UIKit"], macos = ["AppKit"], default = [] } }

@@ -39,6 +39,18 @@ export const site = {
         ],
       },
       {
+        text: "Prelude",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/reference/prelude/" },
+          { text: "apple_library", link: "/reference/prelude/apple_library" },
+          { text: "swift_macro", link: "/reference/prelude/swift_macro" },
+          { text: "apple_framework", link: "/reference/prelude/apple_framework" },
+          { text: "apple_application", link: "/reference/prelude/apple_application" },
+          { text: "apple_test_bundle", link: "/reference/prelude/apple_test_bundle" },
+        ],
+      },
+      {
         text: "MCP",
         collapsed: false,
         items: [

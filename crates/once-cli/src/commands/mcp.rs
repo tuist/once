@@ -238,11 +238,7 @@ fn apply_edit_to_package(
     package: &str,
     operations: &[once_frontend::EditOperation],
 ) -> Result<Value> {
-    let package_dir = if package.is_empty() {
-        workspace.to_path_buf()
-    } else {
-        workspace.join(package)
-    };
+    let package_dir = crate::commands::edit::resolve_package_dir(workspace, package)?;
     let manifest_path = package_dir.join(once_frontend::TOML_BUILD_FILE_NAME);
     let existing = match std::fs::read_to_string(&manifest_path) {
         Ok(src) => src,
@@ -809,6 +805,7 @@ mod tests {
                 target: once_frontend::TargetSpec {
                     name: "Hello".to_string(),
                     kind: "apple_library".to_string(),
+                    attrs: serde_json::Map::from_iter([("platform".to_string(), json!("ios"))]),
                     ..Default::default()
                 },
             }],
