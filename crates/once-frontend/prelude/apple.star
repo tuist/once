@@ -1702,9 +1702,7 @@ RULES = [
         capabilities = [
             capability("build", ["default", "plugin_dylib", "swiftmodule"]),
         ],
-        examples = [
-            "[[target]]\nname = \"StringifyMacro\"\nkind = \"swift_macro\"\nsrcs = [\"Sources/**/*.swift\"]\ndeps = [\"//third_party/swift-syntax:SwiftSyntax\", \"//third_party/swift-syntax:SwiftCompilerPlugin\"]",
-        ],
+        examples = [],
     ),
     rule(
         kind = "apple_library",

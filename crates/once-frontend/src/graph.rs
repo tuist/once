@@ -231,6 +231,8 @@ fn graph_target_from_schema(target: &Target, schemas: &[RuleSchema]) -> GraphTar
                             "attribute `{}` is not configurable but uses `select()`",
                             attr_schema.name
                         ),
+                        target: Some(target.id()),
+                        attribute: Some(attr_schema.name.clone()),
                         repairs: Vec::new(),
                     });
                 }
