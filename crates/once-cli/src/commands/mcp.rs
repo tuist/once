@@ -130,9 +130,13 @@ impl Server {
         let result = match call.name.as_str() {
             "once_query_targets" => self.tool_query_targets(&call.arguments),
             "once_query_capabilities" => self.tool_query_capabilities(&call.arguments),
-            // Schema queries don't need a workspace because they
+            "once_get_target" => self.tool_get_target(&call.arguments),
+            "once_apply_edit" => self.tool_apply_edit(&call.arguments),
+            // Rule registry queries don't need a workspace because they
             // read from the compiled-in rule prelude.
             "once_query_schema" => tool_query_schema(&call.arguments),
+            "once_list_rules" => tool_list_rules(),
+            "once_validate_target" => tool_validate_target(&call.arguments),
             other => Err(anyhow::anyhow!("unknown tool `{other}`")),
         };
         match result {
@@ -166,6 +170,33 @@ impl Server {
             .with_context(|| format!("no target matches `{target_id}`"))?;
         Ok(serde_json::to_value(CapabilityView::from(target))?)
     }
+
+    fn tool_get_target(&self, args: &Value) -> Result<Value> {
+        let target_id = args
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing `target` argument"))?;
+        let graph =
+            once_frontend::load_graph_workspace(&self.workspace).context("loading graph")?;
+        let target = graph
+            .into_iter()
+            .find(|target| target.label.id == target_id)
+            .with_context(|| format!("no target matches `{target_id}`"))?;
+        Ok(serde_json::to_value(target)?)
+    }
+
+    fn tool_apply_edit(&self, args: &Value) -> Result<Value> {
+        let package = args
+            .get("package")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing `package` argument"))?;
+        let raw_ops = args
+            .get("operations")
+            .ok_or_else(|| anyhow::anyhow!("missing `operations` argument"))?;
+        let operations: Vec<once_frontend::EditOperation> = serde_json::from_value(raw_ops.clone())
+            .map_err(|err| anyhow::anyhow!("invalid `operations`: {err}"))?;
+        apply_edit_to_package(&self.workspace, package, &operations)
+    }
 }
 
 fn tool_query_schema(args: &Value) -> Result<Value> {
@@ -178,6 +209,97 @@ fn tool_query_schema(args: &Value) -> Result<Value> {
         .find(|schema| schema.kind == kind)
         .with_context(|| format!("no built-in rule schema matches `{kind}`"))?;
     Ok(serde_json::to_value(schema)?)
+}
+
+fn tool_list_rules() -> Result<Value> {
+    let schemas = once_frontend::built_in_rule_schemas_result()?;
+    let summaries: Vec<RuleSummary> = schemas.into_iter().map(RuleSummary::from).collect();
+    Ok(serde_json::to_value(summaries)?)
+}
+
+fn tool_validate_target(args: &Value) -> Result<Value> {
+    let raw_target = args
+        .get("target")
+        .ok_or_else(|| anyhow::anyhow!("missing `target` argument"))?
+        .clone();
+    let spec: once_frontend::TargetSpec = serde_json::from_value(raw_target)
+        .map_err(|err| anyhow::anyhow!("invalid `target`: {err}"))?;
+    let schemas = once_frontend::built_in_rule_schemas_result()?;
+    let diagnostics = once_frontend::validate_target(&spec, &schemas);
+    if diagnostics.is_empty() {
+        Ok(json!({ "valid": true }))
+    } else {
+        Ok(json!({ "valid": false, "diagnostics": diagnostics }))
+    }
+}
+
+fn apply_edit_to_package(
+    workspace: &std::path::Path,
+    package: &str,
+    operations: &[once_frontend::EditOperation],
+) -> Result<Value> {
+    let package_dir = if package.is_empty() {
+        workspace.to_path_buf()
+    } else {
+        workspace.join(package)
+    };
+    let manifest_path = package_dir.join(once_frontend::TOML_BUILD_FILE_NAME);
+    let existing = match std::fs::read_to_string(&manifest_path) {
+        Ok(src) => src,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "reading `{}`: {err}",
+                manifest_path.display()
+            ));
+        }
+    };
+    match once_frontend::apply_operations(&existing, operations) {
+        Ok(new_src) => {
+            std::fs::create_dir_all(&package_dir).with_context(|| {
+                format!("creating package directory `{}`", package_dir.display())
+            })?;
+            std::fs::write(&manifest_path, &new_src)
+                .with_context(|| format!("writing `{}`", manifest_path.display()))?;
+            Ok(json!({
+                "applied": true,
+                "path": manifest_path.to_string_lossy(),
+            }))
+        }
+        Err(diagnostics) => Ok(json!({ "applied": false, "diagnostics": diagnostics })),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct RuleSummary {
+    kind: String,
+    docs: String,
+    examples: Vec<RuleExampleSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct RuleExampleSummary {
+    slug: String,
+    name: String,
+    use_when: String,
+}
+
+impl From<once_frontend::RuleSchema> for RuleSummary {
+    fn from(schema: once_frontend::RuleSchema) -> Self {
+        Self {
+            kind: schema.kind,
+            docs: schema.docs,
+            examples: schema
+                .examples
+                .into_iter()
+                .map(|example| RuleExampleSummary {
+                    slug: example.slug,
+                    name: example.name,
+                    use_when: example.use_when,
+                })
+                .collect(),
+        }
+    }
 }
 
 fn tool_error(id: Value, message: &str) -> JsonRpcResponse {
@@ -234,6 +356,7 @@ pub struct ToolDefinition {
 
 /// All tools `once mcp` exposes, in the same order they appear in
 /// `tools/list` and on the reference page.
+#[allow(clippy::too_many_lines)]
 pub fn tool_catalog() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
@@ -269,8 +392,8 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_query_schema",
-            description: "Return the typed contract for a rule kind: attributes, dep edges, providers, and capabilities.",
-            long_description: "Returns the rule schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the rule's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, and exposed capabilities.",
+            description: "Return the typed contract for a rule kind: attributes, dep edges, providers, capabilities, and runnable starter examples.",
+            long_description: "Returns the rule schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the rule's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a list of runnable starter examples. Each example bundles a slug, a one-line `use_when` hint, and the full file tree (`once.toml` plus source files) a caller would copy to get a working target.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -281,7 +404,70 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 },
                 "required": ["kind"]
             }),
-            example_return: "{\n  \"kind\": \"apple_library\",\n  \"docs\": \"Mixed Swift, Objective-C, C, and C++ static library...\",\n  \"attrs\": [\n    { \"name\": \"platform\", \"ty\": \"string\", \"required\": true, \"configurable\": true },\n    { \"name\": \"sdk_frameworks\", \"ty\": \"list<string>\", \"required\": false, \"configurable\": true }\n  ],\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"archive\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"SwiftInfo\", \"CcInfo\"]\n}",
+            example_return: "{\n  \"kind\": \"apple_library\",\n  \"docs\": \"Mixed Swift, Objective-C, C, and C++ static library...\",\n  \"attrs\": [\n    { \"name\": \"platform\", \"ty\": \"string\", \"required\": true, \"configurable\": true }\n  ],\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"archive\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"apple_linkable\", \"apple_module\"],\n  \"examples\": [\n    {\n      \"slug\": \"apple-library-minimal\",\n      \"name\": \"Minimal Apple library\",\n      \"use_when\": \"...\",\n      \"files\": [\n        { \"path\": \"apps/Hello/once.toml\", \"contents\": \"[[target]]\\nname = \\\"Hello\\\"\\nkind = \\\"apple_library\\\"\\n...\" }\n      ]\n    }\n  ]\n}",
+        },
+        ToolDefinition {
+            name: "once_list_rules",
+            description: "List every rule kind the registry knows about, with its one-line docs and example slugs.",
+            long_description: "Lightweight discovery entry point. Returns one entry per rule kind containing the rule's documentation and the slugs of its bundled starter examples. Use this to discover what kinds of targets are buildable in the workspace before calling `once_query_schema` for the full contract of a chosen rule.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {}
+            }),
+            example_return: "[\n  {\n    \"kind\": \"apple_library\",\n    \"docs\": \"Mixed Swift, Objective-C, C, and C++ static library...\",\n    \"examples\": [\n      { \"slug\": \"apple-library-minimal\", \"name\": \"Minimal Apple library\", \"use_when\": \"...\" }\n    ]\n  }\n]",
+        },
+        ToolDefinition {
+            name: "once_get_target",
+            description: "Return the resolved view of a single target: rule kind, srcs, deps, typed attrs, capabilities, providers.",
+            long_description: "Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one target id. Includes the target's typed attribute values (with the types declared by its rule schema), the capabilities it exposes, the providers it emits, and any diagnostics emitted while loading the manifest. Use this before editing a target to learn its current shape.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Canonical target id, e.g. `apps/Hello/Hello`."
+                    }
+                },
+                "required": ["target"]
+            }),
+            example_return: "{\n  \"label\": { \"package\": \"apps/Hello\", \"name\": \"Hello\", \"id\": \"apps/Hello/Hello\" },\n  \"kind\": \"apple_library\",\n  \"srcs\": [\"Sources/**/*.swift\"],\n  \"deps\": [],\n  \"attrs\": { \"platform\": \"ios\", \"minimum_os\": \"17.0\" },\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\", \"binary\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"apple_linkable\", \"apple_module\"]\n}",
+        },
+        ToolDefinition {
+            name: "once_validate_target",
+            description: "Validate a proposed `[[target]]` table against its rule schema. Returns structured diagnostics instead of prose.",
+            long_description: "Schema-only validation: checks that the target declares a known rule kind, every required attribute is present, every declared attribute is known to the rule and matches the rule's declared type, and the target name is well-formed. The check is local; it does not resolve dep references or read other manifests. Returns `{ valid: true }` on success or `{ valid: false, diagnostics: [...] }` where each diagnostic carries a stable `code`, the offending `target` id, the offending `attribute` when applicable, and `repairs` an agent can apply.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "object",
+                        "description": "Raw `[[target]]` table shape with `name`, `kind`, optional `deps`, `srcs`, and `attrs`."
+                    }
+                },
+                "required": ["target"]
+            }),
+            example_return: "{\n  \"valid\": false,\n  \"diagnostics\": [\n    {\n      \"code\": \"missing_required_attr\",\n      \"message\": \"rule `apple_library` requires attribute `platform`\",\n      \"target\": \"Hello\",\n      \"attribute\": \"platform\"\n    }\n  ]\n}",
+        },
+        ToolDefinition {
+            name: "once_apply_edit",
+            description: "Apply a batch of `create` / `update` / `delete` operations to one `once.toml` atomically.",
+            long_description: "Reads the manifest at `<workspace>/<package>/once.toml` (creating it if missing), applies the batch of operations against the in-memory document, and writes the result back only if every operation succeeds. Returns `{ applied: true, path: <manifest path> }` on success or `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `once_validate_target`. The original file is never partially modified.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "package": {
+                        "type": "string",
+                        "description": "Package directory relative to the workspace root, e.g. `apps/Hello`. Use `\"\"` for the root manifest."
+                    },
+                    "operations": {
+                        "type": "array",
+                        "description": "Ordered list of operations. Each is `{ op: \"create\", target: {...} }`, `{ op: \"update\", target_name: \"...\", set: {...} }`, or `{ op: \"delete\", target_name: \"...\" }`.",
+                        "items": { "type": "object" }
+                    }
+                },
+                "required": ["package", "operations"]
+            }),
+            example_return: "{\n  \"applied\": true,\n  \"path\": \"apps/Hello/once.toml\"\n}",
         },
     ]
 }
@@ -448,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_advertises_the_three_query_tools() {
+    fn tools_list_advertises_the_full_tool_surface() {
         let tmp = TempDir::new().unwrap();
         let response = server(tmp.path().to_path_buf()).dispatch(request("tools/list", json!({})));
         let names: Vec<String> = response.result.unwrap()["tools"]
@@ -463,6 +649,10 @@ mod tests {
                 "once_query_targets".to_string(),
                 "once_query_capabilities".to_string(),
                 "once_query_schema".to_string(),
+                "once_list_rules".to_string(),
+                "once_get_target".to_string(),
+                "once_validate_target".to_string(),
+                "once_apply_edit".to_string(),
             ]
         );
     }
@@ -539,5 +729,157 @@ mod tests {
             .collect();
         assert!(attr_names.contains(&"platform"));
         assert!(attr_names.contains(&"sdk_frameworks"));
+    }
+
+    #[test]
+    fn query_schema_inlines_example_files() {
+        let value = tool_query_schema(&json!({ "kind": "apple_library" })).unwrap();
+        let examples = value["examples"].as_array().expect("examples is an array");
+        assert!(
+            !examples.is_empty(),
+            "apple_library should advertise at least one example"
+        );
+        let minimal = examples
+            .iter()
+            .find(|e| e["slug"] == "apple-library-minimal")
+            .expect("apple-library-minimal example present");
+        assert!(!minimal["name"].as_str().unwrap().is_empty());
+        assert!(!minimal["use_when"].as_str().unwrap().is_empty());
+        let files = minimal["files"].as_array().expect("files is an array");
+        assert!(files
+            .iter()
+            .any(|f| f["path"] == "apps/Hello/once.toml"
+                && !f["contents"].as_str().unwrap().is_empty()));
+    }
+
+    #[test]
+    fn list_rules_includes_every_known_rule() {
+        let value = tool_list_rules().unwrap();
+        let kinds: Vec<&str> = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["kind"].as_str().unwrap())
+            .collect();
+        assert!(kinds.contains(&"apple_library"));
+        assert!(kinds.contains(&"apple_application"));
+        // The list summarizes; full schema lives behind once_query_schema.
+        assert!(value.as_array().unwrap()[0].get("attrs").is_none());
+    }
+
+    #[test]
+    fn validate_target_returns_valid_for_minimal_apple_library() {
+        let value = tool_validate_target(&json!({
+            "target": {
+                "name": "Hello",
+                "kind": "apple_library",
+                "attrs": { "platform": "ios" }
+            }
+        }))
+        .unwrap();
+        assert_eq!(value["valid"], true);
+    }
+
+    #[test]
+    fn validate_target_returns_structured_diagnostics_on_failure() {
+        let value = tool_validate_target(&json!({
+            "target": {
+                "name": "Hello",
+                "kind": "apple_library"
+            }
+        }))
+        .unwrap();
+        assert_eq!(value["valid"], false);
+        let diagnostics = value["diagnostics"].as_array().unwrap();
+        let missing = diagnostics
+            .iter()
+            .find(|d| d["code"] == "missing_required_attr")
+            .expect("missing_required_attr diagnostic");
+        assert_eq!(missing["target"], "Hello");
+        assert_eq!(missing["attribute"], "platform");
+    }
+
+    #[test]
+    fn apply_edit_creates_manifest_when_missing() {
+        let tmp = TempDir::new().unwrap();
+        let result = apply_edit_to_package(
+            tmp.path(),
+            "apps/Hello",
+            &[once_frontend::EditOperation::Create {
+                target: once_frontend::TargetSpec {
+                    name: "Hello".to_string(),
+                    kind: "apple_library".to_string(),
+                    ..Default::default()
+                },
+            }],
+        )
+        .unwrap();
+        assert_eq!(result["applied"], true);
+        let written = std::fs::read_to_string(tmp.path().join("apps/Hello/once.toml")).unwrap();
+        assert!(written.contains("name = \"Hello\""));
+    }
+
+    #[test]
+    fn apply_edit_returns_diagnostics_on_failure_without_writing() {
+        let tmp = TempDir::new().unwrap();
+        let result = apply_edit_to_package(
+            tmp.path(),
+            "apps/Hello",
+            &[once_frontend::EditOperation::Delete {
+                target_name: "Missing".to_string(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(result["applied"], false);
+        assert_eq!(result["diagnostics"][0]["code"], "target_not_found");
+        // Nothing should have been written when the batch failed.
+        assert!(!tmp.path().join("apps/Hello/once.toml").exists());
+    }
+
+    #[test]
+    fn get_target_returns_resolved_target_record() {
+        let tmp = TempDir::new().unwrap();
+        let pkg = tmp.path().join("apps/Hello");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("once.toml"),
+            "[[target]]\nname = \"Hello\"\nkind = \"apple_library\"\n[target.attrs]\nplatform = \"ios\"\n",
+        )
+        .unwrap();
+        let value = server(tmp.path().to_path_buf())
+            .tool_get_target(&json!({ "target": "apps/Hello/Hello" }))
+            .unwrap();
+        assert_eq!(value["label"]["id"], "apps/Hello/Hello");
+        assert_eq!(value["kind"], "apple_library");
+        assert_eq!(value["attrs"]["platform"], "ios");
+    }
+
+    #[test]
+    fn apply_edit_then_get_target_round_trips_through_disk() {
+        let tmp = TempDir::new().unwrap();
+        let server = server(tmp.path().to_path_buf());
+        // 1) Create a target via apply_edit.
+        let create = server
+            .tool_apply_edit(&json!({
+                "package": "apps/Hello",
+                "operations": [
+                    {
+                        "op": "create",
+                        "target": {
+                            "name": "Hello",
+                            "kind": "apple_library",
+                            "attrs": { "platform": "ios" }
+                        }
+                    }
+                ]
+            }))
+            .unwrap();
+        assert_eq!(create["applied"], true);
+        // 2) Read it back via get_target.
+        let target = server
+            .tool_get_target(&json!({ "target": "apps/Hello/Hello" }))
+            .unwrap();
+        assert_eq!(target["label"]["id"], "apps/Hello/Hello");
+        assert_eq!(target["kind"], "apple_library");
     }
 }
