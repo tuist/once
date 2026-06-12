@@ -165,6 +165,7 @@ EOF
   End
 
   It 'runs Apple application artifacts through the graph command'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     create_apple_workspace
 
     When call once --format json run apps/ios/App
