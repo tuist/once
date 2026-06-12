@@ -650,10 +650,7 @@ RULES = [
         );
         select_outer.insert("select".to_string(), AttrValue::Map(branches));
         typed_attrs.insert("module_name".to_string(), AttrValue::Map(select_outer));
-        typed_attrs.insert(
-            "platform".to_string(),
-            AttrValue::String("ios".to_string()),
-        );
+        typed_attrs.insert("platform".to_string(), AttrValue::String("ios".to_string()));
         let target = Target {
             package: "apps/ios".to_string(),
             kind: "apple_library".to_string(),
@@ -675,11 +672,7 @@ RULES = [
     #[test]
     fn apple_library_schema_exposes_multi_arch_attributes() {
         let schema = built_in_rule_schema("apple_library").expect("apple_library schema");
-        let attr_names: Vec<&str> = schema
-            .attrs
-            .iter()
-            .map(|attr| attr.name.as_str())
-            .collect();
+        let attr_names: Vec<&str> = schema.attrs.iter().map(|attr| attr.name.as_str()).collect();
         assert!(
             attr_names.contains(&"archs"),
             "apple_library should expose an archs attribute, got {attr_names:?}"

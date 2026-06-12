@@ -459,8 +459,7 @@ fn shell_quote(value: &str) -> String {
 /// `base64 -d` in a generated shell script, so we need round-tripping
 /// fidelity, not a fancy MIME-line-wrapped form.
 fn base64_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut chunks = bytes.chunks_exact(3);
     for chunk in &mut chunks {
@@ -731,8 +730,8 @@ fn parse_rule_impls(source: &'static str) -> Result<RuleImpls> {
         let rules = ListRef::from_value(rules_value).context("RULES is not a list")?;
         let mut by_kind = BTreeMap::new();
         for rule in rules.iter() {
-            let dict = DictRef::from_value(rule)
-                .ok_or_else(|| anyhow!("RULES entry is not a dict"))?;
+            let dict =
+                DictRef::from_value(rule).ok_or_else(|| anyhow!("RULES entry is not a dict"))?;
             let Some(rule_kind) = dict.get_str("kind").and_then(Value::unpack_str) else {
                 continue;
             };
@@ -801,8 +800,7 @@ pub fn select_branches(value: &AttrValue) -> Option<&BTreeMap<String, AttrValue>
 
 fn find_impl_for_kind<'v>(rules: &ListRef<'v>, kind: &str) -> Result<Option<Value<'v>>> {
     for rule in rules.iter() {
-        let dict =
-            DictRef::from_value(rule).ok_or_else(|| anyhow!("RULES entry is not a dict"))?;
+        let dict = DictRef::from_value(rule).ok_or_else(|| anyhow!("RULES entry is not a dict"))?;
         let rule_kind = dict.get_str("kind").and_then(Value::unpack_str);
         if rule_kind == Some(kind) {
             let impl_value = dict
@@ -967,9 +965,8 @@ fn unpack_byte_list(value: Value<'_>, field: &str) -> anyhow::Result<Vec<u8>> {
                     item.get_type()
                 )
             })?;
-            u8::try_from(int).map_err(|_| {
-                anyhow!("expected `{field}` entries to be in 0..=255, got `{int}`")
-            })
+            u8::try_from(int)
+                .map_err(|_| anyhow!("expected `{field}` entries to be in 0..=255, got `{int}`"))
         })
         .collect()
 }
@@ -1268,7 +1265,7 @@ write_file({quoted:?}, "quoted\n")
         let store = AnalysisStore::new(tmp.path().to_path_buf(), String::new(), String::new());
         let (store, ()) = with_active_store(store, || {
             run(&format!(
-                r#"write_bytes({path:?}, [0, 1, 2, 255, 0, 128, 64])"#,
+                r"write_bytes({path:?}, [0, 1, 2, 255, 0, 128, 64])",
                 path = out.display().to_string(),
             ))
             .unwrap();
@@ -1470,7 +1467,9 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
             // analysis store, so this evaluates cleanly.
             eval.eval_module(ast, &globals)
                 .map_err(|error| format!("eval: {error:?}"))?;
-            let result = module.get("result").ok_or_else(|| "missing result".to_string())?;
+            let result = module
+                .get("result")
+                .ok_or_else(|| "missing result".to_string())?;
             Ok(result
                 .unpack_str()
                 .ok_or_else(|| "result was not a string".to_string())?
