@@ -642,12 +642,23 @@ impl AnalysisEngine {
         workspace_root: &Path,
         dep_providers: &[JsonValue],
     ) -> Result<AnalysisResult> {
+        self.analyze_target_capability(target, workspace_root, dep_providers, "build")
+    }
+
+    pub fn analyze_target_capability(
+        &self,
+        target: &GraphTarget,
+        workspace_root: &Path,
+        dep_providers: &[JsonValue],
+        capability: &str,
+    ) -> Result<AnalysisResult> {
         analyze_target_with_host_cache(
             self.source,
             self.host_cache.clone(),
             target,
             workspace_root,
             dep_providers,
+            capability,
         )
     }
 }
@@ -685,6 +696,7 @@ fn analyze_target_with_host_cache(
     target: &GraphTarget,
     workspace_root: &Path,
     dep_providers: &[JsonValue],
+    capability: &str,
 ) -> Result<AnalysisResult> {
     let build_dir = format!(".once/out/{}", target.label.id);
     let store = AnalysisStore::with_host_cache(
@@ -695,7 +707,7 @@ fn analyze_target_with_host_cache(
     );
 
     let (store, result) = with_active_store(store, || {
-        analyze_in_starlark(source, target, dep_providers, &build_dir)
+        analyze_in_starlark(source, target, dep_providers, &build_dir, capability)
     });
     let provider = result?;
     Ok(AnalysisResult {
@@ -750,6 +762,7 @@ fn analyze_in_starlark(
     target: &GraphTarget,
     dep_providers: &[JsonValue],
     build_dir: &str,
+    capability: &str,
 ) -> Result<JsonValue> {
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse(
@@ -770,7 +783,7 @@ fn analyze_in_starlark(
         let Some(impl_value) = impl_value else {
             return Ok(JsonValue::Null);
         };
-        let ctx = build_ctx(&eval, target, dep_providers, build_dir);
+        let ctx = build_ctx(&eval, target, dep_providers, build_dir, capability);
         let provider = eval
             .eval_function(impl_value, &[ctx], &[])
             .map_err(|error| anyhow!("impl eval failed for {}: {error:?}", target.label.id))?;
@@ -820,6 +833,7 @@ fn build_ctx<'v>(
     target: &GraphTarget,
     dep_providers: &[JsonValue],
     build_dir: &str,
+    capability: &str,
 ) -> Value<'v> {
     let heap = eval.heap();
     let label = heap.alloc(AllocDict([
@@ -845,6 +859,7 @@ fn build_ctx<'v>(
         ("srcs", srcs_value),
         ("deps", deps),
         ("build_dir", heap.alloc(build_dir.to_string())),
+        ("capability", heap.alloc(capability.to_string())),
     ]))
 }
 

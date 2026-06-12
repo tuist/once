@@ -57,10 +57,31 @@ pub async fn test(
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let target = require_target(&graph, target_id)?;
-    ensure_capability(&target, "test")?;
+    let test_capability = ensure_capability(&target, "test")?;
     let session = analysis::BuildSession::new(workspace, cache, &graph)?;
-    let _ = build_target(workspace, cache, &target, &session).await?;
-    let record = run_target_capability(workspace, cache, &target, "test").await?;
+    if !test_capability.requires_outputs.is_empty()
+        && target
+            .capabilities
+            .iter()
+            .any(|capability| capability.name == "build")
+    {
+        let _ = build_target(workspace, cache, &target, &session).await?;
+    }
+    let record = if let Some(outcome) = session.run_with_impl(&target, "test").await? {
+        CapabilityRunRecord {
+            target: target.label.id.clone(),
+            kind: target.kind.clone(),
+            capability: test_capability.name.clone(),
+            status: "completed",
+            action_digest: outcome.action_digest.to_string(),
+            cache: outcome.cache_tag,
+            output_groups: test_capability.output_groups.clone(),
+            required_outputs: test_capability.requires_outputs.clone(),
+            outputs: outcome.outputs,
+        }
+    } else {
+        run_target_capability(workspace, cache, &target, "test").await?
+    };
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }

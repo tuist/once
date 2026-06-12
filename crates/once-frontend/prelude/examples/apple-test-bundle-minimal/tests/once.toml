@@ -4,6 +4,7 @@ kind = "apple_test_bundle"
 srcs = ["AppTests/Sources/*.swift"]
 
 [target.attrs]
-platform = "ios"
+platform = "macos"
 minimum_os = "17.0"
-sdk_variant = "simulator"
+swift_testing = true
+labels = ["swift-testing"]

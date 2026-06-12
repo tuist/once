@@ -168,6 +168,19 @@ async fn run_query_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
+        Some(cli::QueryCmd::Tests) => commands::query::tests(workspace, output)
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Some(cli::QueryCmd::AffectedTests { changed_paths }) => {
+            commands::query::affected_tests(workspace, output, &changed_paths)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::TestResults { target }) => {
+            commands::query::test_results(workspace, output, &target)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
         Some(cli::QueryCmd::ValidateTarget { file }) => {
             commands::query::validate_target(output, file)
                 .await

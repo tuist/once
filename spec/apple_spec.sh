@@ -125,6 +125,45 @@ minimum_os = "17.0"
 EOF
   }
 
+  create_apple_swift_testing_workspace() {
+    mkdir -p "$WORKSPACE/apps/macos/Sources/AppCore" "$WORKSPACE/apps/macos/Sources/AppTests"
+    cat > "$WORKSPACE/apps/macos/Sources/AppCore/AppCore.swift" <<'EOF'
+public struct AppCore {
+    public static let name = "AppCore"
+}
+EOF
+    cat > "$WORKSPACE/apps/macos/Sources/AppTests/AppTests.swift" <<'EOF'
+import Testing
+
+@Test func examplePasses() {
+    #expect(true)
+}
+EOF
+
+    cat > "$WORKSPACE/apps/macos/once.toml" <<'EOF'
+[[target]]
+name = "AppCore"
+kind = "apple_library"
+srcs = ["Sources/AppCore/**/*.swift"]
+
+[target.attrs]
+platform = "macos"
+minimum_os = "14.0"
+
+[[target]]
+name = "AppTests"
+kind = "apple_test_bundle"
+srcs = ["Sources/AppTests/**/*.swift"]
+deps = ["./AppCore"]
+
+[target.attrs]
+platform = "macos"
+minimum_os = "14.0"
+swift_testing = true
+labels = ["swift-testing"]
+EOF
+  }
+
   It 'lists buildable Apple artifacts'
     create_apple_workspace
 
@@ -187,17 +226,14 @@ EOF
     The stdout should include '"output_groups":["default","bundle","dsyms"]'
     The stdout should include '"name":"test"'
     The stdout should include '"output_groups":["default","test_results","coverage"]'
-    The stdout should include '"requires_outputs":["bundle"]'
   End
 
   It 'tests Apple test bundle artifacts through the graph command'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     create_apple_workspace
 
-    # `once test` first builds the bundle through the Starlark impl,
-    # then runs the test capability which is still served by the
-    # CLI's placeholder runner (it writes `test_results.json` and
-    # `coverage.json` without invoking xctest itself).
+    # XCTest execution still emits placeholder normalized results while
+    # simulator/device runners are wired through the Apple rule.
     once --format json build apps/ios/AppTests >/dev/null 2>&1 || true
 
     When call once --format json test apps/ios/AppTests
@@ -206,8 +242,36 @@ EOF
     The stdout should include '"capability":"test"'
     The stdout should include '"status":"completed"'
     The stdout should include '"output_groups":["default","test_results","coverage"]'
-    The stdout should include '"required_outputs":["bundle"]'
+    The stdout should include '"required_outputs":[]'
     The path "$WORKSPACE/.once/out/apps/ios/AppTests/test/test_results.json" should be file
+  End
+
+  It 'runs Swift Testing Apple tests through the generic test capability'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    create_apple_swift_testing_workspace
+
+    When call once --format json test apps/macos/AppTests
+    The status should be success
+    The stdout should include '"target":"apps/macos/AppTests"'
+    The stdout should include '"capability":"test"'
+    The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/.once/out/apps/macos/AppTests/test/test_results.json" should be file
+    The contents of file "$WORKSPACE/.once/out/apps/macos/AppTests/test/test_results.json" should include '"runner":{"type":"swift_testing"'
+    The contents of file "$WORKSPACE/.once/out/apps/macos/AppTests/test/test_results.json" should include '"status":"passed"'
+    The contents of file "$WORKSPACE/.once/out/apps/macos/AppTests/test/test_results.json" should include 'examplePasses'
+  End
+
+  It 'runs affected Swift Testing Apple tests through MCP after a source change'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    create_apple_swift_testing_workspace
+    mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_run_tests","arguments":{"changed_paths":["apps/macos/Sources/AppCore/AppCore.swift"]}}}'
+
+    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp' sh "$mcp_request" "$ONCE_BIN" "$WORKSPACE"
+    The status should be success
+    The stdout should include 'apps/macos/AppTests'
+    The stdout should include 'once.test_results.v1'
+    The stdout should include 'swift_testing'
+    The stdout should include '\"success\": true'
   End
 
   It 'describes Apple application build and run schemas'

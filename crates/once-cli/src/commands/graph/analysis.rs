@@ -113,6 +113,25 @@ impl BuildSession {
         Ok(Some(outcome))
     }
 
+    pub(super) async fn run_with_impl(
+        &self,
+        target: &GraphTarget,
+        capability: &str,
+    ) -> Result<Option<BuildOutcome>> {
+        if !self.analyzer.rule_has_impl(&target.kind) {
+            return Ok(None);
+        }
+
+        let analysis = self
+            .analyzer
+            .analyze_target_capability(target, &self.workspace, &[], capability)
+            .with_context(|| format!("analysing {}", target.label.id))?;
+        let outcome = run_declared_actions(&self.workspace, &self.cache, target, analysis, &[])
+            .await
+            .with_context(|| format!("executing {capability} for {}", target.label.id))?;
+        Ok(Some(outcome))
+    }
+
     fn reachable_impl_targets(&self, target: &GraphTarget) -> HashSet<String> {
         let mut reachable = HashSet::new();
         let mut stack = vec![target.label.id.clone()];
