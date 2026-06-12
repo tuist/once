@@ -253,6 +253,7 @@ fn run_test_targets(workspace: &std::path::Path, args: &Value) -> Result<Vec<Str
     if !targets.is_empty() {
         targets.sort();
         targets.dedup();
+        validate_test_targets(workspace, &targets)?;
         return Ok(targets);
     }
 
@@ -280,7 +281,27 @@ fn run_test_targets(workspace: &std::path::Path, args: &Value) -> Result<Vec<Str
     if targets.is_empty() {
         anyhow::bail!("no test targets matched the requested inputs");
     }
+    validate_test_targets(workspace, &targets)?;
     Ok(targets)
+}
+
+fn validate_test_targets(workspace: &std::path::Path, targets: &[String]) -> Result<()> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    for target_id in targets {
+        crate::commands::query::target_id_path(target_id)?;
+        let target = graph
+            .iter()
+            .find(|target| target.label.id == *target_id)
+            .with_context(|| format!("no target matches `{target_id}`"))?;
+        if !target
+            .capabilities
+            .iter()
+            .any(|capability| capability.name == "test")
+        {
+            anyhow::bail!("target `{target_id}` does not expose the test capability");
+        }
+    }
+    Ok(())
 }
 
 fn run_test_target(workspace: &std::path::Path, target: &str) -> Result<Value> {

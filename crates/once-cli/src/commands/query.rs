@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -162,7 +162,7 @@ pub(crate) fn affected_tests_value(
 }
 
 pub async fn test_results(workspace: &Path, output: Output, target_id: &str) -> Result<()> {
-    let path = workspace.join(test_results_path(target_id));
+    let path = workspace.join(test_results_path(target_id)?);
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("reading `{}`", path.display()))?;
     let value: serde_json::Value =
@@ -171,7 +171,7 @@ pub async fn test_results(workspace: &Path, output: Output, target_id: &str) -> 
 }
 
 pub(crate) fn test_results_value(workspace: &Path, target_id: &str) -> Result<serde_json::Value> {
-    let path = workspace.join(test_results_path(target_id));
+    let path = workspace.join(test_results_path(target_id)?);
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("reading `{}`", path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("parsing `{}`", path.display()))
@@ -331,7 +331,7 @@ fn test_records(workspace: &Path, graph: &[once_frontend::GraphTarget]) -> Vec<T
                     .and_then(|info| info.pointer("/outputs/results"))
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string)
-                    .or_else(|| Some(test_results_path(&target.label.id))),
+                    .or_else(|| test_results_path_string(&target.label.id).ok()),
             }
         })
         .collect()
@@ -490,8 +490,32 @@ fn provider_string_list(provider: &serde_json::Value, key: &str) -> Vec<String> 
         .unwrap_or_default()
 }
 
-fn test_results_path(target_id: &str) -> String {
-    format!(".once/out/{target_id}/test/test_results.json")
+fn test_results_path(target_id: &str) -> Result<PathBuf> {
+    Ok(PathBuf::from(".once")
+        .join("out")
+        .join(target_id_path(target_id)?)
+        .join("test")
+        .join("test_results.json"))
+}
+
+fn test_results_path_string(target_id: &str) -> Result<String> {
+    Ok(test_results_path(target_id)?
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/"))
+}
+
+pub(crate) fn target_id_path(target_id: &str) -> Result<PathBuf> {
+    let mut path = PathBuf::new();
+    for segment in target_id.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." || segment.contains('\\') {
+            return Err(anyhow!("invalid target id `{target_id}`"));
+        }
+        path.push(segment);
+    }
+    if path.as_os_str().is_empty() {
+        return Err(anyhow!("invalid target id `{target_id}`"));
+    }
+    Ok(path)
 }
 
 fn has_capability(target: &once_frontend::GraphTarget, name: &str) -> bool {

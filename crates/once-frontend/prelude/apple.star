@@ -621,7 +621,8 @@ def _shellspec_test_impl(ctx):
     if "/" not in shellspec:
         shellspec_exec = host_which(shellspec)
 
-    runner_args = [shellspec_exec] + args + srcs
+    spec_srcs = [src for src in srcs if src.endswith("_spec.sh")]
+    runner_args = [shellspec_exec] + args + spec_srcs
 
     script = """set -eu
 mkdir -p {test_dir}
@@ -669,7 +670,7 @@ exit "$status"
         results = _shell_literal(results),
         native_results = _shell_literal(native_results),
         command = _shell_words(runner_args),
-        specs = _shell_words(srcs),
+        specs = _shell_words(spec_srcs),
         target = ctx["label"]["id"],
     )
     run_action(
