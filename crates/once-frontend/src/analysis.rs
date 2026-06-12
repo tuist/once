@@ -1567,6 +1567,24 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
         );
     }
 
+    /// `_resolve_attrs` must reject `select()` on attributes the rule
+    /// schema marks non-configurable (e.g. `module_name`). Without
+    /// this guard, a select on `module_name` would silently resolve
+    /// against the configuration and the build would proceed with a
+    /// rewritten module name, defeating the schema's intent.
+    #[test]
+    fn prelude_resolve_attrs_rejects_select_on_non_configurable_attr() {
+        let err = eval_prelude_function(
+            "_resolve_attrs",
+            r#"({"platform": "ios", "module_name": {"select": {"ios": "X", "default": "Y"}}}, "tgt", ["module_name"])"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("attribute `module_name` is not configurable but uses select()"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn select_branches_detects_canonical_shape() {
         let value = select_attr_value(&[("ios", AttrValue::String("yes".to_string()))]);

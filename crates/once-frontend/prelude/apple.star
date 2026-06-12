@@ -480,15 +480,17 @@ def _resolve_select(value, tokens, label_id, attr_name):
         return {k: _resolve_select(v, tokens, label_id, attr_name) for k, v in value.items()}
     return value
 
-def _resolve_attrs(attrs, label_id):
+def _resolve_attrs(attrs, label_id, non_configurable):
     tokens = _apple_config_tokens(attrs, label_id)
     out = {}
     for key, value in attrs.items():
+        if key in non_configurable and _is_select_shape(value):
+            fail(label_id + ": attribute `" + key + "` is not configurable but uses select()")
         out[key] = _resolve_select(value, tokens, label_id, key)
     return out
 
 def _apple_library_impl(ctx):
-    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"])
+    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["module_name"])
     platform = attrs["platform"]
     minimum_os = attrs.get("minimum_os") or "13.0"
     target_sdk_version = attrs.get("target_sdk_version") or minimum_os
@@ -932,7 +934,7 @@ def _apple_library_impl(ctx):
     }
 
 def _swift_macro_impl(ctx):
-    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"])
+    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["module_name"])
     minimum_os = attrs.get("minimum_os") or "13.0"
     xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
     module_name = attrs.get("module_name") or ctx["label"]["name"]
