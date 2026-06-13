@@ -154,14 +154,6 @@ pub enum Cmd {
         #[arg(long, value_name = "PROVIDER", default_value = "microsandbox")]
         compute: String,
 
-        /// Apple destination kind for graph-backed Apple app runs.
-        #[arg(long, value_name = "KIND", requires = "destination_id")]
-        destination_kind: Option<String>,
-
-        /// Apple destination id returned by `once query apple-destinations`.
-        #[arg(long, value_name = "ID", requires = "destination_kind")]
-        destination_id: Option<String>,
-
         /// Target id, e.g. `examples/hello/hello` or `./hello`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,

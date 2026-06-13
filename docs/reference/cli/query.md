@@ -30,6 +30,4 @@ Inspectable-first surface for humans and agents. `query targets` lists every dec
 - [`once query rules`](/reference/cli/query/rules)
 - [`once query target`](/reference/cli/query/target)
 - [`once query validate-target`](/reference/cli/query/validate-target)
-- [`once query apple-destinations`](/reference/cli/query/apple-destinations)
-- [`once query validate-apple-destination`](/reference/cli/query/validate-apple-destination)
 

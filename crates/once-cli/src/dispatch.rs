@@ -66,19 +66,7 @@ async fn run_command(
             runtime_rpc_socket,
             remote,
             compute,
-            destination_kind,
-            destination_id,
         } => {
-            let destination = match (destination_kind, destination_id) {
-                (Some(kind), Some(id)) => Some(commands::apple::AppleDestinationSelector {
-                    kind: commands::apple::parse_destination_kind(&kind)?,
-                    id,
-                }),
-                (None, None) => None,
-                _ => {
-                    anyhow::bail!("--destination-kind and --destination-id must be passed together")
-                }
-            };
             Box::pin(dispatch_run(
                 workspace,
                 xdg,
@@ -87,7 +75,6 @@ async fn run_command(
                 runtime_rpc,
                 runtime_rpc_socket,
                 remote.then_some(compute),
-                destination,
             ))
             .await
         }
@@ -200,24 +187,6 @@ async fn run_query_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
-        Some(cli::QueryCmd::AppleDestinations { include_devices }) => {
-            commands::query::apple_destinations(output, include_devices)
-                .await
-                .map(|()| ExitCode::SUCCESS)
-        }
-        Some(cli::QueryCmd::ValidateAppleDestination {
-            target,
-            destination_kind,
-            destination_id,
-        }) => commands::query::validate_apple_destination(
-            workspace,
-            output,
-            &target,
-            &destination_kind,
-            &destination_id,
-        )
-        .await
-        .map(|()| ExitCode::SUCCESS),
         None => anyhow::bail!("query subcommand required"),
     }
 }
@@ -342,7 +311,6 @@ async fn dispatch_run(
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
     remote: Option<String>,
-    destination: Option<commands::apple::AppleDestinationSelector>,
 ) -> Result<ExitCode> {
     let resolved_target = resolve_required_target(workspace, target.clone())?;
     if commands::graph::supports(workspace, &resolved_target, "run")? {
@@ -352,34 +320,8 @@ async fn dispatch_run(
         if remote.is_some() {
             anyhow::bail!("--remote is only supported for executable script targets");
         }
-        if let Some(selector) = destination.clone() {
-            if selector.kind != commands::apple::AppleDestinationKind::Simulator {
-                anyhow::bail!("once run only supports Apple simulator destinations today");
-            }
-            let validation =
-                commands::apple::validate_destination(workspace, &resolved_target, selector)?;
-            if !validation.valid {
-                let message = validation
-                    .diagnostics
-                    .iter()
-                    .map(|diagnostic| diagnostic.message.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                anyhow::bail!("Apple destination validation failed: {message}");
-            }
-        }
         let cache = crate::cache_provider::resolve(workspace, xdg)?;
-        return commands::graph::run(
-            workspace,
-            &cache,
-            output,
-            &resolved_target,
-            commands::graph::RunArgs { destination },
-        )
-        .await;
-    }
-    if destination.is_some() {
-        anyhow::bail!("Apple destinations are only supported for graph-backed run targets");
+        return commands::graph::run(workspace, &cache, output, &resolved_target).await;
     }
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     run_target_command(

@@ -1,5 +1,5 @@
 ---
-title: feat: Add Apple run capability
+title: "feat: Add Apple run capability"
 type: feat
 status: active
 date: 2026-06-12
@@ -12,7 +12,7 @@ origin: docs/brainstorms/2026-06-12-apple-run-capability-requirements.md
 
 `once run` should launch Apple application targets instead of writing a placeholder run record. The plan separates cacheable build work from uncached local run side effects, adds machine-readable destination discovery, expands explicit device signing support, and reuses Once runtime sessions for Apple lifecycle events, logs, and diagnostics.
 
-The first supported matrix is an iOS application on an iOS simulator and a tethered iOS device. Other Apple destinations should fail early with structured unsupported-destination diagnostics until they are intentionally added.
+The first supported matrix is an iOS application on an iOS simulator and a tethered iOS device. Other destinations should fail early with structured unsupported-destination diagnostics until they are intentionally added.
 
 ## Problem Frame
 
@@ -46,7 +46,7 @@ Apple application rules already expose a `run` capability, but graph `run` curre
 - `crates/once-cli/src/commands/run/session.rs` and `crates/once-cli/src/commands/runtime/session.rs` define runtime session files, logs, events, and JSON-RPC-backed queries for script-backed sessions.
 - `crates/once-cli/src/commands/runtime/server.rs` exposes `runtime.describe`, `events.query`, `logs.query`, and `logs.stream`.
 - `crates/once-cli/src/cli/query.rs`, `crates/once-cli/src/commands/query.rs`, and `crates/once-cli/src/commands/mcp.rs` are the existing machine-readable query/MCP pattern to mirror for destination discovery.
-- `crates/once-frontend/prelude/apple.star` defines `apple_application`, current app build, ad-hoc codesigning, declared but rejected provisioning and entitlements attrs, and the existing `run` capability metadata.
+- `crates/once-frontend/prelude/apple.star` defines `apple_application`, current app build, ad-hoc codesigning, and declared but rejected provisioning and entitlements attrs.
 - `crates/once-frontend/src/target_validator.rs` and `crates/once-frontend/src/manifest_editor.rs` are the validation and repair surfaces to keep agent retries structured.
 - `spec/apple_spec.sh` covers Apple graph behavior and currently asserts placeholder run output.
 
@@ -67,11 +67,11 @@ Apple application rules already expose a `run` capability, but graph `run` curre
 ## Key Technical Decisions
 
 - **Split build from run orchestration:** Graph Apple `run` should call the existing cacheable build path, then execute a local uncached Apple run orchestrator for preflight, install, launch, session creation, and logs. This satisfies R7 while preserving cache value.
-- **Keep Apple launch logic out of generic graph action construction:** Generic graph capability execution should continue to work for build/test placeholders, while `apple_application` run gets a typed Apple path. This avoids turning all graph capabilities into Apple-specific code.
-- **Use `once query` plus MCP for host destination discovery:** Destination enumeration and selector validation are read-only inspection surfaces, matching existing agent-ready graph queries and satisfying R9 without overloading `once run` output.
-- **Require stable identifiers for destinations:** Use simulator UDIDs and device/CoreDevice identifiers rather than names for reproducible runs. Human names can appear as display fields only.
-- **Keep live destination state out of manifests:** Manifests and frontend validation should describe static Apple run compatibility and signing contracts. Simulator UDIDs, CoreDevice identifiers, and live availability belong to CLI query/run adapters.
-- **Use per-run Apple analysis configuration for destination variants:** `--destination-kind simulator|device` should produce an analysis configuration that sets the Apple SDK variant for the target and transitive Apple deps before Starlark build analysis. Implementers should not mutate manifests, duplicate targets, or rely on a simulator-built bundle for device launch.
+- **Keep Apple launch logic out of generic graph action construction:** Generic graph capability execution should continue to work for build/test placeholders, while Apple runtime launch behavior belongs to Apple runner rules. This avoids turning all graph capabilities into Apple-specific code.
+- **Model runtime selection through rules:** Simulator and device concepts should live in Apple prelude runner rules, not in Once core CLI flags or MCP tools.
+- **Require stable identifiers inside runner rules:** Apple runner rules may use simulator UDIDs and device/CoreDevice identifiers rather than names for reproducible runs. Human names can appear as display fields only.
+- **Keep live destination state out of app manifests:** Application manifests describe buildable Apple bundles. Runtime selection belongs to runner targets or private local runner configuration.
+- **Let runner rules drive Apple analysis configuration:** An Apple runner rule should produce the analysis configuration that sets the Apple SDK variant for the target and transitive Apple deps before Starlark build analysis. Implementers should not mutate manifests, duplicate targets, or rely on a simulator-built bundle for device launch.
 - **Own explicit signing inputs in the Apple rule/run surface:** Device runs should not auto-discover or mutate developer accounts. The build/signing path should accept declared identity/profile/entitlement inputs and preflight them before install.
 - **Split portable signing policy from local signing material:** Manifests may declare portable signing mode, entitlements file, bundle ID, and optional provisioning profile reference. Machine-local material such as certificate fingerprint, keychain scope, provisioning profile path, and physical destination ID should come from CLI args or private local config, not source-controlled manifests.
 - **Keep device signing local-only:** Device signing is a local run side effect. The cacheable build may produce a device-compatible unsigned or ad-hoc intermediate bundle, but embedding provisioning profiles and invoking a developer identity must run outside the remote/action cache. Signed device bundles, embedded provisioning profiles, signing diagnostics, and signing tool outputs must not be uploaded to remote cache providers or stored in shared CAS records.
@@ -81,12 +81,7 @@ Apple application rules already expose a `run` capability, but graph `run` curre
 
 ### Automation Contracts
 
-Automation-facing destination selection uses explicit kind plus stable ID everywhere:
-
-- `--destination-kind simulator|device`
-- `--destination-id <stable-id>`
-
-Destination discovery returns a `selector` object that can be passed directly to validation or run. Display names are human-only and must never be required for automation.
+Automation-facing runtime selection should happen through typed runner targets. The runner target carries any prelude-specific selector fields, and agents discover those fields through `once query schema` rather than through core destination commands. Display names are human-only and must never be required for automation.
 
 Initial explicit signing inputs:
 
@@ -94,15 +89,15 @@ Initial explicit signing inputs:
 - Local-only run inputs or private config: signing identity fingerprint, optional keychain scope, and optional provisioning profile path when the manifest reference is not resolvable from the local profile store.
 - Diagnostics and runtime events must redact local paths, unrelated keychain/profile metadata, certificate common names where possible, and raw provisioning profile contents.
 
-Per-run destination configuration, implemented in Starlark-facing analysis:
+Per-run runtime configuration, implemented by Apple runner rules:
 
-- Simulator destination maps to Apple SDK variant `simulator`.
-- Device destination maps to Apple SDK variant `device`.
-- The run orchestrator passes this configuration into graph analysis before build. Starlark rules validate target/dependency compatibility and signing requirements for the requested variant. If a target or dependency cannot be configured for the requested variant, the run fails before build with a structured diagnostic.
+- A simulator runner maps to Apple SDK variant `simulator`.
+- A device runner maps to Apple SDK variant `device`.
+- The runner passes this configuration into graph analysis before build. Starlark rules validate target/dependency compatibility and signing requirements for the requested variant. If a target or dependency cannot be configured for the requested variant, the run fails before build with a structured diagnostic.
 
 ### Apple Run Diagnostic Contract
 
-All Apple destination, validation, run, signing, install, launch, and observation failures use the same structured diagnostic shape across CLI JSON, CLI TOON, MCP, and runtime events.
+All destination, validation, run, signing, install, launch, and observation failures use the same structured diagnostic shape across CLI JSON, CLI TOON, MCP, and runtime events.
 
 Fields:
 
@@ -129,11 +124,11 @@ MCP runtime and destination tools must validate opaque session IDs, reject path-
 
 ### Resolved During Planning
 
-- **Which Apple destinations are in scope first?** iOS simulator and tethered iOS device. Other destinations return unsupported diagnostics.
+- **Which destinations are in scope first?** iOS simulator and tethered iOS device. Other destinations return unsupported diagnostics.
 - **Should install/launch use the action cache?** No. Build is cacheable; preflight, install, launch, and session/log observation are uncached per invocation.
 - **Which tooling should the first implementation target?** `simctl` for simulator, `devicectl` for device. Use JSON/file output when available and capture redacted diagnostics by default.
 - **Should automatic provisioning be included?** No. Explicit signing inputs only, with no Apple Developer account mutation.
-- **What is the automation-facing destination selector?** `--destination-kind simulator|device` plus `--destination-id <stable-id>`.
+- **What is the automation-facing destination selector?** A typed Apple runner target with schema-declared selector attrs.
 - **What is the initial signing contract?** Portable manifest attrs are `signing`, `entitlements`, `provisioning_profile`, and `bundle_id`; machine-local identity/profile material comes from CLI args or private local config.
 - **How does a destination drive the build variant?** The run orchestrator passes per-run Apple analysis configuration into graph analysis before build.
 
@@ -206,7 +201,7 @@ flowchart TB
 - Agents can query the `apple_application` schema and see the new attrs, defaults, capability metadata, and examples.
 - Invalid device signing declarations fail before run with structured diagnostics.
 
-- [x] **Unit 2: Add Apple destination discovery surfaces**
+- [x] **Unit 2: Add destination discovery surfaces**
 
 **Goal:** Let users and agents discover or validate host-visible simulator and device destination selectors before invoking `once run`.
 
@@ -231,7 +226,7 @@ flowchart TB
 - Test: `spec/cli_surface_spec.sh`
 
 **Approach:**
-- Add a query subcommand and matching MCP tool that return machine-readable Apple destination records.
+- Add a query subcommand and matching MCP tool that return machine-readable destination records.
 - Add a side-effect-free destination selector validation surface for CLI and MCP. The response should include `valid`, `target`, `destination`, `diagnostics`, and `repairs`.
 - Validation must not inspect Apple rule attrs, choose build variants, validate signing requirements, boot simulators, install apps, launch apps, mutate signing state, or create runtime sessions. Build-system-specific compatibility remains in Starlark.
 - Normalize records around stable ID, kind, platform, runtime or OS version, display name, availability, support status, and structured reasons when unsupported.
@@ -345,13 +340,13 @@ flowchart TB
 - Test: `spec/run_spec.sh`
 
 **Approach:**
-- Add destination-selection inputs to `once run` in a way that preserves existing script-target behavior.
-- Add `--destination-kind` and `--destination-id` to `once run` for graph Apple runs. Missing either field fails before build or launch side effects with a structured `missing_destination_selector` diagnostic.
-- Route `apple_application` `run` through a typed Apple run orchestrator instead of `run_target_capability`.
+- Add an Apple runner rule that depends on an `apple_application` bundle provider and exposes `run`.
+- Keep runtime selector attrs on the runner rule, so agents discover the contract with `once query schema` and Once core does not grow Apple-specific run flags.
+- Route the runner rule through typed Starlark-owned launch behavior instead of generic graph action construction.
 - Preserve the existing graph build path and record whether the build was a cache hit or miss separately from launch status.
 - Reuse or expose the existing graph build outcome so the Apple run orchestrator receives provider data, declared outputs, action digest, and cache hit or miss. The orchestrator must consume the `apple_application` provider for `app_path` and `bundle_id`; it must not infer bundle paths from target names or output conventions.
-- Map CLI destination kind to the configured build variant before analysis. If the target's static attrs force an incompatible `sdk_variant` or platform, fail before build or install with a structured diagnostic.
-- Add a per-run Apple analysis configuration API rather than mutating target attrs or manifests. The configuration must apply consistently to transitive Apple deps before Starlark analysis so device runs do not reuse simulator-built dependencies.
+- Map runner attrs to the configured build variant before analysis. If the target's static attrs force an incompatible `sdk_variant` or platform, fail before build or install with a structured diagnostic.
+- Add a runner-provided Apple analysis configuration API rather than mutating target attrs or manifests. The configuration must apply consistently to transitive Apple deps before Starlark analysis so device runs do not reuse simulator-built dependencies.
 - Wrap destination resolution, build, preflight, install, and launch in one structured failure boundary so build failures also produce the Apple run machine record.
 - Keep `--remote` unsupported for Apple run side effects, with a structured `remote_apple_run_unsupported` diagnostic in JSON, TOON, and MCP-visible output.
 - Replace the placeholder run action only for real Apple application runs. Leave generic fallback behavior available where still needed.
@@ -365,7 +360,7 @@ flowchart TB
 - Happy path: repeated Apple run with a cached build still invokes install and launch orchestration again.
 - Happy path: device destination passes `sdk_variant = device` through analysis for the app and transitive Apple deps.
 - Error path: `--remote` with Apple run fails before launch side effects.
-- Error path: missing destination selector fails with actionable structured output.
+- Error path: invalid or missing runner selector attrs fail with actionable structured output.
 - Error path: Apple run fails structurally when the build provider lacks `app_path` or `bundle_id`.
 - Error path: compile or build failure returns the Apple run machine record with phase `build`, diagnostics, and session behavior matching the contract.
 - Error path: non-zero `once run --format json` still writes the structured run record with diagnostics to stdout, so agents do not need stderr to choose the next command.
@@ -548,7 +543,7 @@ flowchart TB
 ## Sources & References
 
 - Origin document: [docs/brainstorms/2026-06-12-apple-run-capability-requirements.md](../brainstorms/2026-06-12-apple-run-capability-requirements.md)
-- Build graph RFC: [rfcs/0001-build-graph.md](../../rfcs/0001-build-graph.md)
+- Build graph RFC: RFC 0001, Build graph
 - Apple app rule reference: [docs/reference/prelude/apple_application.md](../reference/prelude/apple_application.md)
 - Apple graph guide: [docs/guide/graph/apple.md](../guide/graph/apple.md)
 - Apple, running apps on simulator or device: https://developer.apple.com/documentation/xcode/running-your-app-in-simulator-or-on-a-device
