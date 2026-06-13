@@ -2830,7 +2830,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -2842,7 +2842,7 @@ dependencies = [
  "bazel-remote-apis",
  "blake3",
  "hex",
- "reqwest 0.12.28",
+ "reqwest 0.13.4",
  "schlussel",
  "serde",
  "serde_json",
@@ -2885,7 +2885,7 @@ dependencies = [
  "jsonwebtoken",
  "microsandbox",
  "once-cas",
- "reqwest 0.12.28",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
  "tempfile",
