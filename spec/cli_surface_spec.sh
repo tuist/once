@@ -43,6 +43,8 @@ Describe 'once --list'
     The stdout should include 'query'
     The stdout should include 'runtime'
     The stdout should include '--list'
+    The stdout should include 'required; option; Provider reference'
+    The stdout should include 'positional; Target id'
   End
 
   It 'prints a subtree when run under a namespace command'
