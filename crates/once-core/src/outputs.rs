@@ -1,11 +1,15 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use once_cas::{ActionResult, CacheProvider, Digest};
+use tokio::task::JoinSet;
 
 use crate::directory_blob::{capture_directory_blob, is_directory_blob, restore_directory_blob};
 use crate::file_blob::{capture_file_blob, restore_file_blob, FILE_BLOB_MAGIC};
 use crate::{Error, OutputSymlinkMode, Result, WorkspacePath};
+
+const RESTORE_PREFETCH_CONCURRENCY: usize = 16;
 
 /// Materialize every cached output blob to its declared workspace path.
 /// On cache hit this is what makes a downstream action see a file the
@@ -15,22 +19,155 @@ pub(crate) async fn restore(
     workspace_root: &Path,
     cache: &CacheProvider,
 ) -> Result<()> {
-    for (rel, digest) in &result.outputs {
-        let abs = workspace_root.join(rel);
-        let bytes = cache.get_blob(digest).await?;
+    let staging = RestoreStagingDir::create(workspace_root)?;
+    let prefetched = prefetch_output_blobs(result, cache, staging.path()).await?;
+    for output in prefetched {
+        let PrefetchedOutput { rel, blob_path, .. } = output;
+        let bytes = tokio::fs::read(&blob_path)
+            .await
+            .map_err(|source| Error::RestoreOutput {
+                path: rel.clone(),
+                source,
+            })?;
+        let abs = workspace_root.join(&rel);
         if is_directory_blob(&bytes) {
-            restore_directory_blob(rel, &abs, &bytes)?;
+            restore_directory_blob(&rel, &abs, &bytes)?;
             continue;
         }
         if bytes.starts_with(FILE_BLOB_MAGIC) {
-            restore_file_blob(rel, &abs, &bytes)?;
+            restore_file_blob(&rel, &abs, &bytes)?;
             continue;
         }
         // TODO: Remove this raw-blob compatibility branch only after an
         // action cache version bump makes old file outputs unreachable.
-        restore_legacy_file(rel, &abs, &bytes).await?;
+        restore_legacy_file(&rel, &abs, &bytes).await?;
     }
     Ok(())
+}
+
+async fn prefetch_output_blobs(
+    result: &ActionResult,
+    cache: &CacheProvider,
+    staging_dir: &Path,
+) -> Result<Vec<PrefetchedOutput>> {
+    let outputs = result
+        .outputs
+        .iter()
+        .enumerate()
+        .map(|(index, (rel, digest))| (index, rel.clone(), *digest))
+        .collect::<Vec<_>>();
+
+    let mut tasks = JoinSet::new();
+    let mut next = 0;
+    while next < outputs.len() && next < RESTORE_PREFETCH_CONCURRENCY {
+        let (index, rel, digest) = outputs[next].clone();
+        spawn_prefetch(&mut tasks, cache.clone(), staging_dir, index, rel, digest);
+        next += 1;
+    }
+
+    let mut blobs: Vec<Option<PrefetchedOutput>> = (0..outputs.len()).map(|_| None).collect();
+    while let Some(joined) = tasks.join_next().await {
+        let output = joined.map_err(|source| Error::RestoreOutput {
+            path: "cached output prefetch".to_string(),
+            source: std::io::Error::other(source.to_string()),
+        })??;
+        let index = output.index;
+        blobs[index] = Some(output);
+        if next < outputs.len() {
+            let (index, rel, digest) = outputs[next].clone();
+            spawn_prefetch(&mut tasks, cache.clone(), staging_dir, index, rel, digest);
+            next += 1;
+        }
+    }
+    blobs
+        .into_iter()
+        .enumerate()
+        .map(|(index, output)| {
+            output.ok_or_else(|| Error::RestoreOutput {
+                path: format!("cached output prefetch[{index}]"),
+                source: std::io::Error::other("prefetch task did not produce an output"),
+            })
+        })
+        .collect()
+}
+
+fn spawn_prefetch(
+    tasks: &mut JoinSet<Result<PrefetchedOutput>>,
+    cache: CacheProvider,
+    staging_dir: &Path,
+    index: usize,
+    rel: String,
+    digest: Digest,
+) {
+    let blob_path = staging_dir.join(format!("{index}.blob"));
+    tasks.spawn(async move {
+        let bytes = cache.get_blob(&digest).await?;
+        tokio::fs::write(&blob_path, bytes)
+            .await
+            .map_err(|source| Error::RestoreOutput {
+                path: rel.clone(),
+                source,
+            })?;
+        Ok(PrefetchedOutput {
+            index,
+            rel,
+            blob_path,
+        })
+    });
+}
+
+struct PrefetchedOutput {
+    index: usize,
+    rel: String,
+    blob_path: PathBuf,
+}
+
+struct RestoreStagingDir {
+    path: PathBuf,
+}
+
+impl RestoreStagingDir {
+    fn create(workspace_root: &Path) -> Result<Self> {
+        let parent = workspace_root.join(".once/tmp");
+        std::fs::create_dir_all(&parent).map_err(|source| Error::RestoreOutput {
+            path: parent.display().to_string(),
+            source,
+        })?;
+        for attempt in 0..100 {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let path = parent.join(format!("restore-{}-{nanos}-{attempt}", std::process::id()));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(source) => {
+                    return Err(Error::RestoreOutput {
+                        path: path.display().to_string(),
+                        source,
+                    });
+                }
+            }
+        }
+        Err(Error::RestoreOutput {
+            path: parent.display().to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "could not allocate unique restore staging directory",
+            ),
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for RestoreStagingDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
 }
 
 async fn restore_legacy_file(rel: &str, abs: &Path, bytes: &[u8]) -> Result<()> {
@@ -209,5 +346,80 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o755);
+    }
+
+    #[tokio::test]
+    async fn restore_materializes_multiple_cached_outputs() {
+        let (_tmp, workspace, cache) = workspace_and_cache();
+        let first = cache.put_blob(b"first").await.unwrap();
+        let second = cache.put_blob(b"second").await.unwrap();
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::from([
+                ("out/first.txt".to_string(), first),
+                ("out/nested/second.txt".to_string(), second),
+            ]),
+        };
+
+        restore(&result, &workspace, &cache).await.unwrap();
+
+        assert_eq!(
+            std::fs::read(workspace.join("out/first.txt")).unwrap(),
+            b"first"
+        );
+        assert_eq!(
+            std::fs::read(workspace.join("out/nested/second.txt")).unwrap(),
+            b"second"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_materializes_outputs_beyond_prefetch_window() {
+        let (_tmp, workspace, cache) = workspace_and_cache();
+        let mut outputs = BTreeMap::new();
+        for index in 0..RESTORE_PREFETCH_CONCURRENCY + 3 {
+            let content = format!("output-{index}");
+            let digest = cache.put_blob(content.as_bytes()).await.unwrap();
+            outputs.insert(format!("out/output-{index:02}.txt"), digest);
+        }
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs,
+        };
+
+        restore(&result, &workspace, &cache).await.unwrap();
+
+        for index in 0..RESTORE_PREFETCH_CONCURRENCY + 3 {
+            assert_eq!(
+                std::fs::read_to_string(workspace.join(format!("out/output-{index:02}.txt")))
+                    .unwrap(),
+                format!("output-{index}")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_prefetches_before_materializing_outputs() {
+        let (_tmp, workspace, cache) = workspace_and_cache();
+        let first = cache.put_blob(b"first").await.unwrap();
+        let missing = Digest::of_bytes(b"missing");
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::from([
+                ("out/first.txt".to_string(), first),
+                ("out/missing.txt".to_string(), missing),
+            ]),
+        };
+
+        let err = restore(&result, &workspace, &cache).await.unwrap_err();
+
+        assert!(matches!(err, Error::Cas(once_cas::Error::BlobNotFound(_))));
+        assert!(!workspace.join("out/first.txt").exists());
     }
 }
