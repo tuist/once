@@ -512,7 +512,7 @@ fn test_results_path_string(target_id: &str) -> Result<String> {
 pub(crate) fn target_id_path(target_id: &str) -> Result<PathBuf> {
     let mut path = PathBuf::new();
     for segment in target_id.split('/') {
-        if segment.is_empty() || segment == "." || segment == ".." || segment.contains('\\') {
+        if !is_safe_target_id_segment(segment) {
             return Err(anyhow!("invalid target id `{target_id}`"));
         }
         path.push(segment);
@@ -521,6 +521,15 @@ pub(crate) fn target_id_path(target_id: &str) -> Result<PathBuf> {
         return Err(anyhow!("invalid target id `{target_id}`"));
     }
     Ok(path)
+}
+
+fn is_safe_target_id_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
 }
 
 fn has_capability(target: &once_frontend::GraphTarget, name: &str) -> bool {
@@ -785,5 +794,29 @@ mod tests {
             workspace_relative_path_string(Path::new("apps/ios/App.swift")),
             "apps/ios/App.swift"
         );
+    }
+
+    #[test]
+    fn target_id_path_accepts_only_path_safe_segments() {
+        assert_eq!(
+            target_id_path("apps/ios/AppTests").unwrap(),
+            PathBuf::from("apps").join("ios").join("AppTests")
+        );
+
+        for target_id in [
+            "",
+            ".",
+            "..",
+            "apps/../Secret",
+            "apps//Tests",
+            "apps\\Tests",
+            "apps/ios/App Tests",
+            "apps/ios/App;rm",
+        ] {
+            assert!(
+                target_id_path(target_id).is_err(),
+                "{target_id} should fail"
+            );
+        }
     }
 }

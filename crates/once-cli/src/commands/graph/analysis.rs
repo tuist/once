@@ -122,19 +122,50 @@ impl BuildSession {
             return Ok(None);
         }
 
+        let dep_outcomes = self.build_direct_impl_deps(target).await?;
+        let mut dep_providers = Vec::with_capacity(dep_outcomes.len());
+        let mut dep_action_digests = Vec::with_capacity(dep_outcomes.len());
+        for (dep_id, outcome) in dep_outcomes {
+            dep_action_digests.push((dep_id, outcome.action_digest));
+            dep_providers.push(outcome.provider);
+        }
+
         let analysis = self
             .analyzer
-            .analyze_target_capability(target, &self.workspace, &[], capability)
+            .analyze_target_capability(target, &self.workspace, &dep_providers, capability)
             .with_context(|| format!("analysing {}", target.label.id))?;
-        let outcome = run_declared_actions(&self.workspace, &self.cache, target, analysis, &[])
-            .await
-            .with_context(|| format!("executing {capability} for {}", target.label.id))?;
+        let outcome = run_declared_actions(
+            &self.workspace,
+            &self.cache,
+            target,
+            analysis,
+            &dep_action_digests,
+        )
+        .await
+        .with_context(|| format!("executing {capability} for {}", target.label.id))?;
         Ok(Some(outcome))
     }
 
     fn reachable_impl_targets(&self, target: &GraphTarget) -> HashSet<String> {
+        self.reachable_impl_targets_from([target.label.id.clone()])
+    }
+
+    fn reachable_impl_deps(&self, target: &GraphTarget) -> HashSet<String> {
+        let roots = target.deps.iter().filter_map(|dep_id| {
+            let dep = self.targets.get(dep_id)?;
+            self.analyzer
+                .rule_has_impl(&dep.kind)
+                .then(|| dep_id.clone())
+        });
+        self.reachable_impl_targets_from(roots)
+    }
+
+    fn reachable_impl_targets_from(
+        &self,
+        roots: impl IntoIterator<Item = String>,
+    ) -> HashSet<String> {
         let mut reachable = HashSet::new();
-        let mut stack = vec![target.label.id.clone()];
+        let mut stack = roots.into_iter().collect::<Vec<_>>();
         while let Some(target_id) = stack.pop() {
             // Check membership before insert so the owned `target_id`
             // moves into the set instead of being cloned.
@@ -158,11 +189,56 @@ impl BuildSession {
         reachable
     }
 
+    async fn build_direct_impl_deps(
+        &self,
+        target: &GraphTarget,
+    ) -> Result<Vec<(String, BuildOutcome)>> {
+        let reachable = self.reachable_impl_deps(target);
+        if reachable.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let direct_deps = target
+            .deps
+            .iter()
+            .filter(|dep_id| reachable.contains(*dep_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let retained = direct_deps.iter().cloned().collect::<HashSet<_>>();
+        let mut outcomes = self
+            .build_reachable_retaining(&target.label.id, &reachable, &retained)
+            .await?;
+        direct_deps
+            .into_iter()
+            .map(|dep_id| {
+                let outcome = outcomes
+                    .remove(&dep_id)
+                    .with_context(|| format!("missing build outcome for dependency `{dep_id}`"))?;
+                Ok((dep_id, outcome))
+            })
+            .collect()
+    }
+
     async fn build_reachable(
         &self,
         root_id: &str,
         reachable: &HashSet<String>,
     ) -> Result<BuildOutcome> {
+        let retained = HashSet::from([root_id.to_string()]);
+        let mut outcomes = self
+            .build_reachable_retaining(root_id, reachable, &retained)
+            .await?;
+        outcomes
+            .remove(root_id)
+            .with_context(|| format!("missing build outcome for `{root_id}`"))
+    }
+
+    async fn build_reachable_retaining(
+        &self,
+        root_id: &str,
+        reachable: &HashSet<String>,
+        retained: &HashSet<String>,
+    ) -> Result<HashMap<String, BuildOutcome>> {
         let mut remaining_deps: HashMap<String, usize> = HashMap::new();
         let mut dependents: HashMap<String, Vec<String>> = HashMap::new();
         for target_id in reachable {
@@ -192,6 +268,9 @@ impl BuildSession {
             .iter()
             .map(|(target_id, deps)| (target_id.clone(), deps.len()))
             .collect();
+        for target_id in retained {
+            *remaining_readers.entry(target_id.clone()).or_default() += 1;
+        }
 
         let mut ready = remaining_deps
             .iter()
@@ -241,9 +320,7 @@ impl BuildSession {
             )?;
         }
 
-        outcomes
-            .remove(root_id)
-            .with_context(|| format!("missing build outcome for `{root_id}`"))
+        Ok(outcomes)
     }
 
     fn spawn_ready(
@@ -597,6 +674,22 @@ mod tests {
     }
 
     fn test_target(name: &str, deps: &[&str], script: &str) -> GraphTarget {
+        target_with_capabilities(
+            name,
+            deps,
+            &[],
+            &["build"],
+            [("script".to_string(), AttrValue::String(script.to_string()))],
+        )
+    }
+
+    fn target_with_capabilities(
+        name: &str,
+        deps: &[&str],
+        srcs: &[&str],
+        capabilities: &[&str],
+        attrs: impl IntoIterator<Item = (String, AttrValue)>,
+    ) -> GraphTarget {
         GraphTarget {
             label: TargetLabel {
                 package: String::new(),
@@ -605,13 +698,16 @@ mod tests {
             },
             kind: "test_rule".to_string(),
             deps: deps.iter().map(|dep| (*dep).to_string()).collect(),
-            srcs: Vec::new(),
-            attrs: BTreeMap::from([("script".to_string(), AttrValue::String(script.to_string()))]),
-            capabilities: vec![Capability {
-                name: "build".to_string(),
-                output_groups: Vec::new(),
-                requires_outputs: Vec::new(),
-            }],
+            srcs: srcs.iter().map(|src| (*src).to_string()).collect(),
+            attrs: attrs.into_iter().collect(),
+            capabilities: capabilities
+                .iter()
+                .map(|capability| Capability {
+                    name: (*capability).to_string(),
+                    output_groups: Vec::new(),
+                    requires_outputs: Vec::new(),
+                })
+                .collect(),
             providers: Vec::new(),
             diagnostics: Vec::new(),
         }
@@ -654,5 +750,60 @@ RULES = [rule("test_rule", impl = _impl)]
             "expected sibling deps to run concurrently, elapsed {elapsed:?}"
         );
         assert_eq!(outcome.outputs, vec![".once/out/Root/Root.txt".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn capability_runs_are_salted_by_dependency_action_digests() {
+        static TEST_PRELUDE: &str = r#"
+def rule(kind, impl = None):
+    return {"kind": kind, "impl": impl}
+
+def _impl(ctx):
+    out = declare_output(ctx["label"]["name"] + "-" + ctx["capability"] + ".txt")
+    if ctx["capability"] == "test":
+        run_action(
+            argv = ["/bin/sh", "-c", "printf test > \"$1\"", "sh", out],
+            outputs = [out],
+            identifier = ctx["label"]["name"] + "-test",
+        )
+        return {"out": out}
+    srcs = glob(ctx["srcs"])
+    run_action(
+        argv = ["/bin/sh", "-c", "cat \"$1\" > \"$2\"", "sh", srcs[0], out],
+        inputs = srcs,
+        outputs = [out],
+        identifier = ctx["label"]["name"] + "-build",
+    )
+    return {"out": out}
+
+RULES = [rule("test_rule", impl = _impl)]
+"#;
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("dep.txt"), b"one").unwrap();
+        let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+        let graph = vec![
+            target_with_capabilities("Dep", &[], &["dep.txt"], &["build"], []),
+            target_with_capabilities("Root", &["Dep"], &[], &["test"], []),
+        ];
+        let analyzer = AnalysisEngine::from_source(TEST_PRELUDE).unwrap();
+
+        let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
+        let first = session
+            .run_with_impl(&graph[1], "test")
+            .await
+            .unwrap()
+            .unwrap();
+
+        std::fs::write(workspace.path().join("dep.txt"), b"two").unwrap();
+        let analyzer = AnalysisEngine::from_source(TEST_PRELUDE).unwrap();
+        let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
+        let second = session
+            .run_with_impl(&graph[1], "test")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_ne!(first.action_digest, second.action_digest);
     }
 }
