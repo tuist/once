@@ -64,10 +64,8 @@ Returns the same record `once query capabilities <target> --format json` emits: 
   "id": "apps/ios/App",
   "kind": "apple_application",
   "capabilities": [
-    { "name": "build", "output_groups": ["bundle", "dsyms"],
-      "requires_outputs": [] },
-    { "name": "run", "output_groups": ["default"],
-      "requires_outputs": ["bundle"] }
+    { "name": "build", "output_groups": ["default", "bundle", "dsyms"],
+      "requires_outputs": [] }
   ]
 }
 ```
@@ -185,118 +183,17 @@ Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one 
 }
 ```
 
-## `once_query_apple_destinations`
-
-List Apple run destinations visible on the local machine.
-
-Returns the same record shape as `once query apple-destinations --format json`: one entry per local Apple simulator destination with a stable selector, display metadata, availability, and support status. Physical device enumeration is intentionally not exposed through MCP because it may leak personal device metadata. Use the CLI-only `once query apple-destinations --include-devices` path from a trusted terminal when device inventory is needed.
-
-**Input schema**
-
-```json
-{
-  "additionalProperties": false,
-  "properties": {},
-  "type": "object"
-}
-```
-
-**Example return**
-
-```json
-[
-  {
-    "selector": { "destination_kind": "simulator", "destination_id": "SIM-UDID" },
-    "display_name": "iPhone 16",
-    "platform": "ios",
-    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-18-0",
-    "os_version": "18.0",
-    "available": true,
-    "support": { "supported": true }
-  }
-]
-```
-
-## `once_validate_apple_destination`
-
-Validate that an Apple destination selector resolves locally without launching anything.
-
-Side-effect-free local validation for a destination selector. It verifies that the target id exists and that the selected destination is present, available, and supported by the local destination adapter. Rule-specific compatibility, build variant selection, and signing validation remain in Starlark and the Apple run implementation, not this Rust host query.
-
-**Input schema**
-
-```json
-{
-  "properties": {
-    "destination_id": {
-      "description": "Stable id returned by once_query_apple_destinations.",
-      "type": "string"
-    },
-    "destination_kind": {
-      "description": "Destination kind.",
-      "enum": [
-        "simulator"
-      ],
-      "type": "string"
-    },
-    "target": {
-      "description": "Canonical target id the destination will be used with.",
-      "type": "string"
-    }
-  },
-  "required": [
-    "target",
-    "destination_kind",
-    "destination_id"
-  ],
-  "type": "object"
-}
-```
-
-**Example return**
-
-```json
-{
-  "valid": false,
-  "target": "apps/ios/App",
-  "destination": { "destination_kind": "simulator", "destination_id": "MISSING" },
-  "diagnostics": [
-    {
-      "code": "destination_unavailable",
-      "severity": "error",
-      "phase": "validation",
-      "target": "apps/ios/App",
-      "destination": { "destination_kind": "simulator", "destination_id": "MISSING" },
-      "message": "selected Apple destination was not found",
-      "repairs": ["Run `once query apple-destinations` and use a returned selector"]
-    }
-  ],
-  "repairs": ["Run `once query apple-destinations` and use a returned selector"]
-}
-```
-
 ## `once_run_target`
 
 Run a target through the same action path as `once run`.
 
-Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes `once run --format json` for a target and returns the structured run record. For Apple application targets, pass `destination_kind: "simulator"` and a `destination_id` returned by `once_query_apple_destinations` to install and launch the built app on that simulator. The tool has the same side effects as the CLI: it may build dependencies, write `.once/out` outputs, boot a simulator, install an app, and launch it.
+Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes `once run --format json` for a target and returns the structured run record. The tool has the same side effects as the CLI: it may build dependencies, write `.once/out` outputs, install software, or launch a process.
 
 **Input schema**
 
 ```json
 {
   "properties": {
-    "destination_id": {
-      "description": "Optional Apple destination id returned by once_query_apple_destinations.",
-      "type": "string"
-    },
-    "destination_kind": {
-      "description": "Optional Apple destination kind for Apple app runs.",
-      "enum": [
-        "simulator"
-      ],
-      "type": "string"
-    },
     "target": {
       "description": "Canonical target id to run.",
       "type": "string"
@@ -313,12 +210,12 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 
 ```json
 {
-  "target": "apps/ios/App",
-  "kind": "apple_application",
+  "target": "tools/demo/LaunchApp",
+  "kind": "script",
   "capability": "run",
   "status": "completed",
   "cache": "miss",
-  "outputs": [".once/out/apps/ios/App/run"]
+  "outputs": [".once/out/tools/demo/LaunchApp/run"]
 }
 ```
 

@@ -1872,7 +1872,6 @@ RULES = [
         providers = ["apple_application", "apple_bundle"],
         capabilities = [
             capability("build", ["default", "bundle", "dsyms"]),
-            capability("run", ["default"], requires_outputs = ["bundle"]),
         ],
         examples = [
             "apple-application-minimal",

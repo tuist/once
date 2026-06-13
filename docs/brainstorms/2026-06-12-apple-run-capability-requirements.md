@@ -34,14 +34,14 @@ flowchart TB
 
 **Run Behavior**
 - R1. `once run` on an Apple application target must build the required bundle before launching it.
-- R2. A run must target an explicit Apple destination, with simulator and physical device destinations supported in the first slice.
+- R2. A run must target an explicit destination, with simulator and physical device destinations supported in the first slice.
 - R3. Simulator runs must install and launch the built application on the selected simulator.
 - R4. Device runs must sign, install, and launch the built application on the selected physical device.
 - R5. A successful run must report the launched bundle, bundle identifier, destination, process or launch identifier when available, runtime session location, and supported runtime interfaces in structured output.
 - R6. Failed runs must surface structured diagnostics that distinguish build failure, destination selection failure, signing failure, install failure, launch failure, and runtime observation failure.
 - R7. Build outputs may be reused from cache, but install, launch, and runtime session creation must execute on every `once run` invocation.
 - R8. Destination selection must drive a compatible Apple build variant before launch, or fail before install with a structured diagnostic when the target configuration cannot produce a runnable bundle for that destination.
-- R9. Users and agents must be able to enumerate or validate available Apple destinations through a machine-readable interface before running.
+- R9. Users and agents must be able to enumerate or validate available destinations through a machine-readable interface before running.
 - R10. The first implementation must declare its supported platform and destination matrix. At minimum, it must support an iOS simulator and a tethered iOS device, with structured unsupported-destination diagnostics for the rest.
 
 **Device Signing**

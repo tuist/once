@@ -19,14 +19,11 @@ use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::{Format, Output};
-use crate::commands::apple::AppleDestinationSelector;
 use crate::commands::util::cache_tag;
 use crate::render;
 
 #[derive(Debug, Clone, Default)]
-pub struct RunArgs {
-    pub destination: Option<AppleDestinationSelector>,
-}
+pub struct RunArgs {}
 
 #[derive(Debug, Serialize)]
 struct CapabilityRunRecord {
@@ -153,7 +150,8 @@ async fn run_target_capability(
 ) -> Result<CapabilityRunRecord> {
     let capability = ensure_capability(target, capability_name)?;
     let outputs = action::output_paths(target, capability_name)?;
-    let action = action::action_for(target, capability_name, &outputs, args.destination.as_ref())?;
+    let _ = args;
+    let action = action::action_for(target, capability_name, &outputs)?;
     let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
         .await
         .with_context(|| format!("executing {capability_name} for {}", target.label.id))?;

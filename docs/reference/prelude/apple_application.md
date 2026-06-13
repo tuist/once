@@ -43,7 +43,6 @@ The target emits `apple_application` and `apple_bundle`.
 | Capability | Output groups | Requires |
 | --- | --- | --- |
 | `build` | `default`, `bundle`, `dsyms` |  |
-| `run` | `default` | `bundle` |
 
 ## Limitations
 
