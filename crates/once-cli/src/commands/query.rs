@@ -449,11 +449,7 @@ fn expanded_target_inputs(workspace: &Path, target: &once_frontend::GraphTarget)
                 continue;
             }
             if let Ok(relative) = entry.strip_prefix(workspace) {
-                inputs.push(
-                    relative
-                        .to_string_lossy()
-                        .replace(std::path::MAIN_SEPARATOR, "/"),
-                );
+                inputs.push(workspace_relative_path_string(relative));
             }
         }
     }
@@ -463,6 +459,15 @@ fn expanded_target_inputs(workspace: &Path, target: &once_frontend::GraphTarget)
     inputs.sort();
     inputs.dedup();
     inputs
+}
+
+fn workspace_relative_path_string(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    if std::path::MAIN_SEPARATOR == '/' {
+        path.into_owned()
+    } else {
+        path.replace(std::path::MAIN_SEPARATOR, "/")
+    }
 }
 
 fn metadata_provider(
@@ -771,6 +776,14 @@ mod tests {
                 deps: Vec::new(),
                 capabilities: vec!["build".to_string(), "run".to_string()],
             }]
+        );
+    }
+
+    #[test]
+    fn workspace_relative_path_string_preserves_slash_separated_paths() {
+        assert_eq!(
+            workspace_relative_path_string(Path::new("apps/ios/App.swift")),
+            "apps/ios/App.swift"
         );
     }
 }
