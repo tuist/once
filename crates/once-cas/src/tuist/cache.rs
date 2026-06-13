@@ -928,13 +928,25 @@ mod tests {
     }
 
     #[test]
-    fn sha256_digest_matches_reapi_shape() {
-        let digest = sha256_digest(b"hello").unwrap();
-        assert_eq!(
-            digest.hash,
-            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-        );
-        assert_eq!(digest.size_bytes, 5);
+    fn sha256_digest_matches_stable_vectors() {
+        let cases = [
+            (
+                b"".as_slice(),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                0,
+            ),
+            (
+                b"hello".as_slice(),
+                "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+                5,
+            ),
+        ];
+
+        for (bytes, hash, size_bytes) in cases {
+            let digest = sha256_digest(bytes).unwrap();
+            assert_eq!(digest.hash, hash);
+            assert_eq!(digest.size_bytes, size_bytes);
+        }
     }
 
     #[test]
