@@ -317,20 +317,27 @@ fn run_test_target(workspace: &std::path::Path, target: &str) -> Result<Value> {
         .with_context(|| format!("running `{}` test {target}`", exe.display()))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let record = if stdout.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_str(&stdout).unwrap_or_else(|_| Value::String(stdout.clone()))
-    };
+    let (record, record_parse_error) = parse_test_run_record(&stdout);
     let results = crate::commands::query::test_results_value(workspace, target).ok();
     Ok(json!({
         "target": target,
         "exit_code": output.status.code().unwrap_or(-1),
         "success": output.status.success(),
         "record": record,
+        "record_parse_error": record_parse_error,
         "results": results,
         "stderr": stderr,
     }))
+}
+
+fn parse_test_run_record(stdout: &str) -> (Value, Option<String>) {
+    if stdout.is_empty() {
+        return (Value::Null, None);
+    }
+    match serde_json::from_str(stdout) {
+        Ok(value) => (value, None),
+        Err(err) => (Value::String(stdout.to_string()), Some(err.to_string())),
+    }
 }
 
 fn tool_query_schema(args: &Value) -> Result<Value> {
@@ -886,6 +893,14 @@ srcs = ["other_spec.sh"]
         )
         .unwrap();
         assert_eq!(targets, vec!["spec/all", "spec/other"]);
+    }
+
+    #[test]
+    fn parse_test_run_record_preserves_json_error_context() {
+        let (record, error) = parse_test_run_record("{not json");
+
+        assert_eq!(record, Value::String("{not json".to_string()));
+        assert!(error.unwrap().contains("line"));
     }
 
     #[test]
