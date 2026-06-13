@@ -24,7 +24,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Run the MCP server until stdin closes.
-pub async fn serve(workspace: PathBuf) -> Result<()> {
+pub async fn serve(workspace: PathBuf, _allow_run: bool) -> Result<()> {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();

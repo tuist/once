@@ -74,9 +74,9 @@ Returns the same record `once query capabilities <target> --format json` emits: 
 
 ## `once_query_schema`
 
-Return the typed contract for a rule kind: attributes, dep edges, providers, and capabilities.
+Return the typed contract for a rule kind: attributes, dep edges, providers, capabilities, and runnable starter examples.
 
-Returns the rule schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the rule's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, and exposed capabilities.
+Returns the rule schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the rule's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a list of runnable starter examples. Each example bundles a slug, a one-line `use_when` hint, and the full file tree (`once.toml` plus source files) a caller would copy to get a working target.
 
 **Input schema**
 
@@ -102,11 +102,302 @@ Returns the rule schema (the typed contract a target of that kind must match) as
   "kind": "apple_library",
   "docs": "Mixed Swift, Objective-C, C, and C++ static library...",
   "attrs": [
-    { "name": "platform", "ty": "string", "required": true, "configurable": true },
-    { "name": "sdk_frameworks", "ty": "list<string>", "required": false, "configurable": true }
+    { "name": "platform", "ty": "string", "required": true, "configurable": true }
   ],
   "capabilities": [ { "name": "build", "output_groups": ["archive"], "requires_outputs": [] } ],
-  "providers": ["SwiftInfo", "CcInfo"]
+  "providers": ["apple_linkable", "apple_module"],
+  "examples": [
+    {
+      "slug": "apple-library-minimal",
+      "name": "Minimal Apple library",
+      "use_when": "...",
+      "files": [
+        { "path": "apps/Hello/once.toml", "contents": "[[target]]\nname = \"Hello\"\nkind = \"apple_library\"\n..." }
+      ]
+    }
+  ]
+}
+```
+
+## `once_list_rules`
+
+List every rule kind the registry knows about, with its one-line docs and example slugs.
+
+Lightweight discovery entry point. Returns one entry per rule kind containing the rule's documentation and the slugs of its bundled starter examples. Use this to discover what kinds of targets are buildable in the workspace before calling `once_query_schema` for the full contract of a chosen rule.
+
+**Input schema**
+
+```json
+{
+  "properties": {},
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+[
+  {
+    "kind": "apple_library",
+    "docs": "Mixed Swift, Objective-C, C, and C++ static library...",
+    "examples": [
+      { "slug": "apple-library-minimal", "name": "Minimal Apple library", "use_when": "..." }
+    ]
+  }
+]
+```
+
+## `once_get_target`
+
+Return the resolved view of a single target: rule kind, srcs, deps, typed attrs, capabilities, providers.
+
+Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one target id. Includes the target's typed attribute values (with the types declared by its rule schema), the capabilities it exposes, the providers it emits, and any diagnostics emitted while loading the manifest. Use this before editing a target to learn its current shape.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "target": {
+      "description": "Canonical target id, e.g. `apps/Hello/Hello`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "label": { "package": "apps/Hello", "name": "Hello", "id": "apps/Hello/Hello" },
+  "kind": "apple_library",
+  "srcs": ["Sources/**/*.swift"],
+  "deps": [],
+  "attrs": { "platform": "ios", "minimum_os": "17.0" },
+  "capabilities": [ { "name": "build", "output_groups": ["default", "binary"], "requires_outputs": [] } ],
+  "providers": ["apple_linkable", "apple_module"]
+}
+```
+
+## `once_query_apple_destinations`
+
+List Apple run destinations visible on the local machine.
+
+Returns the same record shape as `once query apple-destinations --format json`: one entry per local Apple simulator destination with a stable selector, display metadata, availability, and support status. Physical device enumeration is intentionally not exposed through MCP because it may leak personal device metadata. Use the CLI-only `once query apple-destinations --include-devices` path from a trusted terminal when device inventory is needed.
+
+**Input schema**
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+[
+  {
+    "selector": { "destination_kind": "simulator", "destination_id": "SIM-UDID" },
+    "display_name": "iPhone 16",
+    "platform": "ios",
+    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-18-0",
+    "os_version": "18.0",
+    "available": true,
+    "support": { "supported": true }
+  }
+]
+```
+
+## `once_validate_apple_destination`
+
+Validate that an Apple destination selector resolves locally without launching anything.
+
+Side-effect-free local validation for a destination selector. It verifies that the target id exists and that the selected destination is present, available, and supported by the local destination adapter. Rule-specific compatibility, build variant selection, and signing validation remain in Starlark and the Apple run implementation, not this Rust host query.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "destination_id": {
+      "description": "Stable id returned by once_query_apple_destinations.",
+      "type": "string"
+    },
+    "destination_kind": {
+      "description": "Destination kind.",
+      "enum": [
+        "simulator"
+      ],
+      "type": "string"
+    },
+    "target": {
+      "description": "Canonical target id the destination will be used with.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target",
+    "destination_kind",
+    "destination_id"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "valid": false,
+  "target": "apps/ios/App",
+  "destination": { "destination_kind": "simulator", "destination_id": "MISSING" },
+  "diagnostics": [
+    {
+      "code": "destination_unavailable",
+      "severity": "error",
+      "phase": "validation",
+      "target": "apps/ios/App",
+      "destination": { "destination_kind": "simulator", "destination_id": "MISSING" },
+      "message": "selected Apple destination was not found",
+      "repairs": ["Run `once query apple-destinations` and use a returned selector"]
+    }
+  ],
+  "repairs": ["Run `once query apple-destinations` and use a returned selector"]
+}
+```
+
+## `once_run_target`
+
+Run a target through the same action path as `once run`.
+
+Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes `once run --format json` for a target and returns the structured run record. For Apple application targets, pass `destination_kind: "simulator"` and a `destination_id` returned by `once_query_apple_destinations` to install and launch the built app on that simulator. The tool has the same side effects as the CLI: it may build dependencies, write `.once/out` outputs, boot a simulator, install an app, and launch it.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "destination_id": {
+      "description": "Optional Apple destination id returned by once_query_apple_destinations.",
+      "type": "string"
+    },
+    "destination_kind": {
+      "description": "Optional Apple destination kind for Apple app runs.",
+      "enum": [
+        "simulator"
+      ],
+      "type": "string"
+    },
+    "target": {
+      "description": "Canonical target id to run.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "target": "apps/ios/App",
+  "kind": "apple_application",
+  "capability": "run",
+  "status": "completed",
+  "cache": "miss",
+  "outputs": [".once/out/apps/ios/App/run"]
+}
+```
+
+## `once_validate_target`
+
+Validate a proposed `[[target]]` table against its rule schema. Returns structured diagnostics instead of prose.
+
+Schema-only validation: checks that the target declares a known rule kind, every required attribute is present, every declared attribute is known to the rule and matches the rule's declared type, and the target name is well-formed. The check is local; it does not resolve dep references or read other manifests. Returns `{ valid: true }` on success or `{ valid: false, diagnostics: [...] }` where each diagnostic carries a stable `code`, the offending `target` id, the offending `attribute` when applicable, and `repairs` an agent can apply.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "target": {
+      "description": "Raw `[[target]]` table shape with `name`, `kind`, optional `deps`, `srcs`, and `attrs`.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "valid": false,
+  "diagnostics": [
+    {
+      "code": "missing_required_attr",
+      "message": "rule `apple_library` requires attribute `platform`",
+      "target": "Hello",
+      "attribute": "platform"
+    }
+  ]
+}
+```
+
+## `once_apply_edit`
+
+Apply a batch of `create` / `update` / `delete` operations to one `once.toml` atomically.
+
+Reads the manifest at `<workspace>/<package>/once.toml` (creating it if missing), applies the batch of operations against the in-memory document, and writes the result back only if every operation succeeds. Returns `{ applied: true, path: <manifest path> }` on success or `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `once_validate_target`. The original file is never partially modified.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "operations": {
+      "description": "Ordered list of operations. Each is `{ op: \"create\", target: {...} }`, `{ op: \"update\", target_name: \"...\", set: {...} }`, or `{ op: \"delete\", target_name: \"...\" }`.",
+      "items": {
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "package": {
+      "description": "Package directory relative to the workspace root, e.g. `apps/Hello`. Use `\"\"` for the root manifest.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "package",
+    "operations"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "applied": true,
+  "path": "apps/Hello/once.toml"
 }
 ```
 

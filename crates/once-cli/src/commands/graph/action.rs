@@ -17,6 +17,8 @@ use once_core::{Action, OutputSymlinkMode, ResourceRequest, WorkspacePath};
 use once_frontend::{AttrValue, GraphTarget};
 use serde::Serialize;
 
+use crate::commands::apple::{AppleDestinationKind, AppleDestinationSelector};
+
 #[derive(Debug, Serialize)]
 struct AppleArtifactManifest<'a> {
     target: &'a str,
@@ -32,20 +34,27 @@ pub(super) fn action_for(
     target: &GraphTarget,
     capability: &str,
     outputs: &[WorkspacePath],
+    destination: Option<&AppleDestinationSelector>,
 ) -> Result<Action> {
+    let mut env = BTreeMap::new();
+    let simulator_run =
+        target.kind == "apple_application" && capability == "run" && destination.is_some();
+    if simulator_run {
+        env.insert("ONCE_RUN_NONCE".to_string(), run_nonce().to_string());
+    }
     Ok(Action::RunCommand {
         argv: vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
-            action_script(target, capability, outputs)?,
+            action_script(target, capability, outputs, destination)?,
         ],
-        env: BTreeMap::new(),
+        env,
         cwd: None,
         input_digest: None,
         outputs: outputs.to_vec(),
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
-        timeout_ms: None,
+        timeout_ms: simulator_run.then_some(120_000),
         remote: None,
     })
 }
@@ -99,6 +108,7 @@ fn action_script(
     target: &GraphTarget,
     capability: &str,
     outputs: &[WorkspacePath],
+    destination: Option<&AppleDestinationSelector>,
 ) -> Result<String> {
     let manifest = AppleArtifactManifest {
         target: &target.label.id,
@@ -116,7 +126,7 @@ fn action_script(
         .join(" ");
     let script = match capability {
         "build" => build_script(target, &manifest_json, &output_paths),
-        "run" => run_script(target, &manifest_json, &output_paths),
+        "run" => run_script(target, &manifest_json, &output_paths, destination)?,
         "test" => test_script(target, &manifest_json, &output_paths),
         other => anyhow::bail!("unsupported graph capability `{other}`"),
     };
@@ -275,7 +285,17 @@ printf 'dSYM for %s\n' {target_text} > {dsym_info_path}
     )
 }
 
-fn run_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -> String {
+fn run_script(
+    target: &GraphTarget,
+    manifest_json: &str,
+    output_paths: &str,
+    destination: Option<&AppleDestinationSelector>,
+) -> Result<String> {
+    if target.kind == "apple_application" {
+        if let Some(destination) = destination {
+            return simulator_run_script(target, manifest_json, output_paths, destination);
+        }
+    }
     let product = product_name(target);
     let root = run_root(target);
     let bundle = format!("{product}.app");
@@ -292,14 +312,72 @@ fn run_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -> 
         .to_string(),
     );
     let prepare_outputs = prepare_outputs_script(output_paths);
-    format!(
+    let nonce = run_nonce();
+    Ok(format!(
         r"set -eu
+# once-run-nonce {nonce}
 {prepare_outputs}
 test -d {bundle_path}
 {write_manifest}
 printf '%s\n' {run_record} > {run_json}
 ",
-    )
+    ))
+}
+
+fn run_nonce() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
+fn simulator_run_script(
+    target: &GraphTarget,
+    manifest_json: &str,
+    output_paths: &str,
+    destination: &AppleDestinationSelector,
+) -> Result<String> {
+    if destination.kind != AppleDestinationKind::Simulator {
+        anyhow::bail!("apple_application run only supports simulator destinations today");
+    }
+    let product = product_name(target);
+    let root = run_root(target);
+    let bundle_id = string_attr(target, "bundle_id").with_context(|| {
+        format!(
+            "apple_application {} is missing `bundle_id`",
+            target.label.id
+        )
+    })?;
+    let bundle = format!("{product}.app");
+    let bundle_path = shell_quote(&format!("{}/{bundle}", build_root(target)));
+    let manifest_path = shell_quote(&format!("{root}/manifest.json"));
+    let write_manifest = write_manifest_cmd(&manifest_path, manifest_json);
+    let run_json = shell_quote(&format!("{root}/run.json"));
+    let destination_id = shell_quote(&destination.id);
+    let bundle_id_arg = shell_quote(&bundle_id);
+    let run_record = shell_quote(
+        &serde_json::json!({
+            "target": target.label.id,
+            "bundle": bundle,
+            "bundle_id": bundle_id,
+            "destination": destination,
+            "status": "launched",
+        })
+        .to_string(),
+    );
+    let prepare_outputs = prepare_outputs_script(output_paths);
+    Ok(format!(
+        r"set -eu
+{prepare_outputs}
+test -d {bundle_path}
+{write_manifest}
+xcrun simctl boot {destination_id} >/dev/null 2>&1 || true
+xcrun simctl bootstatus {destination_id} -b
+xcrun simctl install {destination_id} {bundle_path}
+xcrun simctl launch {destination_id} {bundle_id_arg}
+printf '%s\n' {run_record} > {run_json}
+",
+    ))
 }
 
 fn test_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -> String {
@@ -364,14 +442,14 @@ fn test_root(target: &GraphTarget) -> String {
 }
 
 fn product_name(target: &GraphTarget) -> String {
-    target
-        .attrs
-        .get("product_name")
-        .and_then(|value| match value {
-            AttrValue::String(value) => Some(value.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| target.label.name.clone())
+    string_attr(target, "product_name").unwrap_or_else(|| target.label.name.clone())
+}
+
+fn string_attr(target: &GraphTarget, name: &str) -> Option<String> {
+    target.attrs.get(name).and_then(|value| match value {
+        AttrValue::String(value) => Some(value.clone()),
+        _ => None,
+    })
 }
 
 /// Emit the command that writes the artifact manifest.
@@ -413,6 +491,13 @@ mod tests {
     use once_frontend::{Capability, TargetLabel};
 
     fn graph_target(kind: &str, name: &str) -> GraphTarget {
+        let mut attrs = BTreeMap::new();
+        if kind == "apple_application" {
+            attrs.insert(
+                "bundle_id".to_string(),
+                AttrValue::String("dev.once.App".to_string()),
+            );
+        }
         GraphTarget {
             label: TargetLabel {
                 package: "apps/ios".to_string(),
@@ -422,7 +507,7 @@ mod tests {
             kind: kind.to_string(),
             deps: Vec::new(),
             srcs: Vec::new(),
-            attrs: BTreeMap::new(),
+            attrs,
             capabilities: vec![Capability {
                 name: "build".to_string(),
                 output_groups: Vec::new(),
@@ -524,11 +609,52 @@ mod tests {
     fn run_script_guards_on_built_bundle() {
         let target = graph_target("apple_application", "App");
 
-        let script = run_script(&target, "{}", "'.once/out/apps/ios/App/run'");
+        let script = run_script(&target, "{}", "'.once/out/apps/ios/App/run'", None).unwrap();
 
         assert!(script.contains("test -d '.once/out/apps/ios/App/App.app'"));
         assert!(script.contains(r#""status":"launched""#));
         assert!(script.contains("> '.once/out/apps/ios/App/run/run.json'"));
+    }
+
+    #[test]
+    fn simulator_run_script_installs_and_launches_app() {
+        let target = graph_target("apple_application", "App");
+        let destination = AppleDestinationSelector {
+            kind: AppleDestinationKind::Simulator,
+            id: "SIM-1".to_string(),
+        };
+
+        let script = run_script(
+            &target,
+            "{}",
+            "'.once/out/apps/ios/App/run'",
+            Some(&destination),
+        )
+        .unwrap();
+
+        assert!(script.contains("xcrun simctl boot 'SIM-1'"));
+        assert!(script.contains("xcrun simctl install 'SIM-1' '.once/out/apps/ios/App/App.app'"));
+        assert!(script.contains("xcrun simctl launch 'SIM-1' 'dev.once.App'"));
+        assert!(script.contains(
+            r#""destination":{"destination_id":"SIM-1","destination_kind":"simulator"}"#
+        ));
+    }
+
+    #[test]
+    fn simulator_run_action_has_nonce_and_timeout() {
+        let target = graph_target("apple_application", "App");
+        let outputs = output_paths(&target, "run").unwrap();
+        let destination = AppleDestinationSelector {
+            kind: AppleDestinationKind::Simulator,
+            id: "SIM-1".to_string(),
+        };
+
+        let Action::RunCommand {
+            env, timeout_ms, ..
+        } = action_for(&target, "run", &outputs, Some(&destination)).unwrap();
+
+        assert!(env.contains_key("ONCE_RUN_NONCE"));
+        assert_eq!(timeout_ms, Some(120_000));
     }
 
     #[test]
@@ -654,7 +780,7 @@ mod tests {
             outputs: action_outputs,
             input_digest,
             ..
-        } = action_for(&target, "build", &outputs).unwrap();
+        } = action_for(&target, "build", &outputs, None).unwrap();
         assert_eq!(argv[0], "/bin/sh");
         assert_eq!(argv[1], "-c");
         assert!(argv[2].contains("manifest.json"));
@@ -666,7 +792,7 @@ mod tests {
     fn manifest_is_single_quoted_not_heredoc() {
         let target = graph_target("apple_library", "AppCore");
         let outputs = output_paths(&target, "build").unwrap();
-        let script = action_script(&target, "build", &outputs).unwrap();
+        let script = action_script(&target, "build", &outputs, None).unwrap();
 
         // The manifest is written through the same single-quote escaping as
         // every other value, so no heredoc terminator can appear in the body.
@@ -690,7 +816,9 @@ mod tests {
     #[test]
     fn action_script_rejects_unknown_capability() {
         let target = graph_target("apple_library", "AppCore");
-        let err = action_script(&target, "lint", &[]).unwrap_err().to_string();
+        let err = action_script(&target, "lint", &[], None)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("unsupported graph capability `lint`"));
     }
 }

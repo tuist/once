@@ -154,6 +154,14 @@ pub enum Cmd {
         #[arg(long, value_name = "PROVIDER", default_value = "microsandbox")]
         compute: String,
 
+        /// Apple destination kind for graph-backed Apple app runs.
+        #[arg(long, value_name = "KIND", requires = "destination_id")]
+        destination_kind: Option<String>,
+
+        /// Apple destination id returned by `once query apple-destinations`.
+        #[arg(long, value_name = "ID", requires = "destination_kind")]
+        destination_id: Option<String>,
+
         /// Target id, e.g. `examples/hello/hello` or `./hello`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
@@ -317,14 +325,18 @@ pub enum Cmd {
     /// (Claude Desktop, an IDE plug-in, the Anthropic SDK) can call
     /// `once_query_targets`, `once_query_capabilities`, and
     /// `once_query_schema` as tools and get JSON back without
-    /// scraping prose. Mounts inspection only; running actions and
-    /// querying cached outputs by digest are follow-up work.
+    /// scraping prose. Mounts inspection tools by default; pass
+    /// `--allow-run` to expose side-effectful target execution.
     Mcp {
         /// Workspace root the MCP tools resolve targets against.
         /// Defaults to the value of the global `-C/--directory` flag
         /// (or the current directory).
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+
+        /// Advertise and allow the side-effectful `once_run_target` tool.
+        #[arg(long)]
+        allow_run: bool,
     },
 
     /// Internal: emit the markdown CLI reference into `out`. Hidden

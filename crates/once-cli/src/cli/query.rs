@@ -58,6 +58,28 @@ pub enum QueryCmd {
         #[arg(long, value_name = "PATH")]
         file: Option<PathBuf>,
     },
+
+    /// List available Apple run destinations.
+    AppleDestinations {
+        /// Include physical devices. Simulator destinations are listed by default.
+        #[arg(long)]
+        include_devices: bool,
+    },
+
+    /// Validate that an Apple destination selector resolves locally.
+    ValidateAppleDestination {
+        /// Target id the destination will be used with.
+        #[arg(long)]
+        target: String,
+
+        /// Destination kind: `simulator` or `device`.
+        #[arg(long)]
+        destination_kind: String,
+
+        /// Stable destination id returned by `query apple-destinations`.
+        #[arg(long)]
+        destination_id: String,
+    },
 }
 
 impl QueryCmd {
@@ -72,6 +94,8 @@ impl QueryCmd {
             Self::AffectedTests { .. } => vec!["affected-tests"],
             Self::TestResults { .. } => vec!["test-results"],
             Self::ValidateTarget { .. } => vec!["validate-target"],
+            Self::AppleDestinations { .. } => vec!["apple-destinations"],
+            Self::ValidateAppleDestination { .. } => vec!["validate-apple-destination"],
         }
     }
 }
