@@ -81,9 +81,10 @@ fn file_writer(
 }
 
 fn file_filter() -> EnvFilter {
-    EnvFilter::try_from_env("ONCE_LOG")
-        .or_else(|_| EnvFilter::try_from_default_env())
-        .unwrap_or_else(|_| EnvFilter::new(INTERNAL_DEFAULT_FILTER))
+    file_filter_from_env(
+        env::var("ONCE_LOG").ok().as_deref(),
+        env::var("RUST_LOG").ok().as_deref(),
+    )
 }
 
 fn stderr_filter(verbose: u8) -> EnvFilter {
@@ -93,42 +94,176 @@ fn stderr_filter(verbose: u8) -> EnvFilter {
         2 => "debug",
         _ => "trace",
     };
-    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default))
+    stderr_filter_from_env(env::var("RUST_LOG").ok().as_deref(), default)
+}
+
+fn file_filter_from_env(once_log: Option<&str>, rust_log: Option<&str>) -> EnvFilter {
+    once_log
+        .and_then(|filter| EnvFilter::try_new(filter).ok())
+        .or_else(|| rust_log.and_then(|filter| EnvFilter::try_new(filter).ok()))
+        .unwrap_or_else(|| EnvFilter::new(INTERNAL_DEFAULT_FILTER))
+}
+
+fn stderr_filter_from_env(rust_log: Option<&str>, default: &str) -> EnvFilter {
+    rust_log
+        .and_then(|filter| EnvFilter::try_new(filter).ok())
+        .unwrap_or_else(|| EnvFilter::new(default))
 }
 
 fn log_dir() -> std::io::Result<PathBuf> {
-    platform_log_dir().ok_or_else(|| {
+    log_dir_from(platform_log_dir())
+}
+
+fn log_dir_from(platform_dir: Option<PathBuf>) -> std::io::Result<PathBuf> {
+    platform_dir.ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "no platform log directory")
     })
 }
 
 #[cfg(target_os = "macos")]
 fn platform_log_dir() -> Option<PathBuf> {
-    home_dir().map(|home| home.join("Library").join("Logs").join("Once"))
+    platform_log_dir_from(home_dir())
+}
+
+#[cfg(target_os = "macos")]
+fn platform_log_dir_from(home: Option<PathBuf>) -> Option<PathBuf> {
+    home.map(|home| home.join("Library").join("Logs").join("Once"))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn platform_log_dir() -> Option<PathBuf> {
-    xdg_state_home()
-        .or_else(|| home_dir().map(|home| home.join(".local").join("state")))
+    platform_log_dir_from(xdg_state_home(), home_dir())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn platform_log_dir_from(xdg_state: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+    xdg_state
+        .or_else(|| home.map(|home| home.join(".local").join("state")))
         .map(|state| state.join("once").join("logs"))
 }
 
 #[cfg(windows)]
 fn platform_log_dir() -> Option<PathBuf> {
-    env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|local| local.join("Once").join("Logs"))
+    platform_log_dir_from(env::var_os("LOCALAPPDATA").map(PathBuf::from))
+}
+
+#[cfg(windows)]
+fn platform_log_dir_from(local_app_data: Option<PathBuf>) -> Option<PathBuf> {
+    local_app_data.map(|local| local.join("Once").join("Logs"))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn xdg_state_home() -> Option<PathBuf> {
-    env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
+    xdg_state_home_from(env::var_os("XDG_STATE_HOME").map(PathBuf::from))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn xdg_state_home_from(raw: Option<PathBuf>) -> Option<PathBuf> {
+    raw.filter(|path| path.is_absolute())
 }
 
 #[cfg(unix)]
 fn home_dir() -> Option<PathBuf> {
     env::var_os("HOME").map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tracing_subscriber::filter::LevelFilter;
+
+    #[test]
+    fn file_filter_prefers_once_log_over_rust_log() {
+        let filter = file_filter_from_env(Some("once=trace"), Some("once=warn"));
+        assert_eq!(filter.max_level_hint(), Some(LevelFilter::TRACE));
+    }
+
+    #[test]
+    fn file_filter_falls_back_to_rust_log() {
+        let filter = file_filter_from_env(None, Some("once=info"));
+        assert_eq!(filter.max_level_hint(), Some(LevelFilter::INFO));
+    }
+
+    #[test]
+    fn file_filter_uses_internal_default() {
+        let filter = file_filter_from_env(None, None);
+        assert_eq!(filter.max_level_hint(), Some(LevelFilter::DEBUG));
+    }
+
+    #[test]
+    fn stderr_filter_prefers_rust_log_over_verbose_default() {
+        let filter = stderr_filter_from_env(Some("once=trace"), "warn");
+        assert_eq!(filter.max_level_hint(), Some(LevelFilter::TRACE));
+    }
+
+    #[test]
+    fn stderr_filter_uses_verbose_default() {
+        let filter = stderr_filter_from_env(None, "info");
+        assert_eq!(filter.max_level_hint(), Some(LevelFilter::INFO));
+    }
+
+    #[test]
+    fn log_dir_errors_without_platform_directory() {
+        let error = log_dir_from(None).expect_err("missing log dir should error");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn log_dir_returns_platform_directory() {
+        let expected = PathBuf::from("/tmp/once-logs");
+        assert_eq!(log_dir_from(Some(expected.clone())).unwrap(), expected);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn platform_log_dir_uses_macos_library_logs() {
+        assert_eq!(
+            platform_log_dir_from(Some(PathBuf::from("/Users/test"))).unwrap(),
+            PathBuf::from("/Users/test/Library/Logs/Once")
+        );
+    }
+
+    #[test]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn platform_log_dir_uses_xdg_state_home() {
+        assert_eq!(
+            platform_log_dir_from(
+                Some(PathBuf::from("/state")),
+                Some(PathBuf::from("/home/test"))
+            )
+            .unwrap(),
+            PathBuf::from("/state/once/logs")
+        );
+    }
+
+    #[test]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn platform_log_dir_falls_back_to_home_state() {
+        assert_eq!(
+            platform_log_dir_from(None, Some(PathBuf::from("/home/test"))).unwrap(),
+            PathBuf::from("/home/test/.local/state/once/logs")
+        );
+    }
+
+    #[test]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn xdg_state_home_requires_absolute_path() {
+        assert_eq!(
+            xdg_state_home_from(Some(PathBuf::from("relative/state"))),
+            None
+        );
+        assert_eq!(
+            xdg_state_home_from(Some(PathBuf::from("/absolute/state"))).unwrap(),
+            PathBuf::from("/absolute/state")
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn platform_log_dir_uses_local_app_data() {
+        assert_eq!(
+            platform_log_dir_from(Some(PathBuf::from(r"C:\Users\test\AppData\Local"))).unwrap(),
+            PathBuf::from(r"C:\Users\test\AppData\Local\Once\Logs")
+        );
+    }
 }
