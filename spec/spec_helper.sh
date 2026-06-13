@@ -24,8 +24,10 @@ setup_workspace() {
   XDG_DATA_HOME="$WORKSPACE/.xdg/data"
   XDG_CONFIG_HOME="$WORKSPACE/.xdg/config"
   XDG_RUNTIME_DIR="$WORKSPACE/.xdg/runtime"
-  mkdir -p "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR"
-  export WORKSPACE XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR
+  SPEC_ORIGINAL_HOME="${HOME:-}"
+  HOME="$WORKSPACE/.home"
+  mkdir -p "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR" "$HOME"
+  export WORKSPACE XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR HOME SPEC_ORIGINAL_HOME
 }
 
 cleanup_workspace() {
@@ -33,11 +35,28 @@ cleanup_workspace() {
     rm -rf "$WORKSPACE"
     unset WORKSPACE
   fi
-  unset XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR
+  if [ -n "${SPEC_ORIGINAL_HOME:-}" ]; then
+    HOME="$SPEC_ORIGINAL_HOME"
+    export HOME
+  else
+    unset HOME
+  fi
+  unset XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR SPEC_ORIGINAL_HOME
 }
 
 once() {
   "$ONCE_BIN" -C "$WORKSPACE" "$@"
+}
+
+once_log_dir() {
+  case "$(uname -s)" in
+    Darwin)
+      printf '%s\n' "$HOME/Library/Logs/Once"
+      ;;
+    *)
+      printf '%s\n' "$XDG_STATE_HOME/once/logs"
+      ;;
+  esac
 }
 
 microsandbox_specs_disabled() {

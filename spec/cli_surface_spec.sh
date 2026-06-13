@@ -79,4 +79,15 @@ Describe 'once exec -e'
     The status should not equal 0
     The stderr should include 'KEY=VALUE'
   End
+
+  It 'logs argument parsing failures to an internal session log'
+    When call once exec -e MALFORMED -- /bin/sh -c 'true'
+    The status should not equal 0
+    The stderr should include 'KEY=VALUE'
+    log_dir="$(once_log_dir)"
+    log_file="$(find "$log_dir" -type f -name '*.log' | sort | head -n 1)"
+    The path "$log_file" should be file
+    The contents of file "$log_file" should include '"message":"argument parsing stopped"'
+    The contents of file "$log_file" should include '"session_id"'
+  End
 End

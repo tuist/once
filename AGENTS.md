@@ -96,6 +96,21 @@ the pull request description.
 - Shellspec (`spec/*.sh`) covers the CLI's external contract end to
   end. Run `mise exec -- shellspec` after a release build.
 
+## Internal Logging
+
+Every `once` CLI invocation creates a UUIDv7 session log under the
+platform log directory. On Linux this follows XDG state directory
+conventions; on macOS logs land under `~/Library/Logs/Once` so they are
+visible from Console.app.
+
+Use `tracing` for internal execution logs instead of printing debug
+information to stdout or stderr. Log enough structured context to
+reconstruct execution: command surface, target ids, action digests,
+cache hit or miss decisions, remote provider choices, retry attempts,
+durations, and failure causes. Do not log secrets, auth tokens, full
+environment dumps, or command arguments that may contain credentials.
+Prefer fields over string interpolation so logs stay queryable.
+
 ## Toolchain
 
 The repo pins `rust = "1.88"` in `mise.toml` and the workspace
