@@ -735,20 +735,22 @@ RULES = [rule("test_rule", impl = _impl)]
         let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
         let graph = vec![
             test_target("Root", &["LeafA", "LeafB"], "printf root > \"$1\""),
-            test_target("LeafA", &[], "sleep 0.7; printf a > \"$1\""),
-            test_target("LeafB", &[], "sleep 0.7; printf b > \"$1\""),
+            test_target(
+                "LeafA",
+                &[],
+                "mkdir -p sync; : > sync/LeafA; i=0; while [ ! -f sync/LeafB ]; do i=$((i + 1)); [ \"$i\" -le 50 ] || exit 42; sleep 0.1; done; printf a > \"$1\"",
+            ),
+            test_target(
+                "LeafB",
+                &[],
+                "mkdir -p sync; : > sync/LeafB; i=0; while [ ! -f sync/LeafA ]; do i=$((i + 1)); [ \"$i\" -le 50 ] || exit 42; sleep 0.1; done; printf b > \"$1\"",
+            ),
         ];
         let analyzer = AnalysisEngine::from_source(TEST_PRELUDE).unwrap();
         let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
 
-        let started = std::time::Instant::now();
         let outcome = session.build_with_impl(&graph[0]).await.unwrap().unwrap();
-        let elapsed = started.elapsed();
 
-        assert!(
-            elapsed < std::time::Duration::from_millis(1_200),
-            "expected sibling deps to run concurrently, elapsed {elapsed:?}"
-        );
         assert_eq!(outcome.outputs, vec![".once/out/Root/Root.txt".to_string()]);
     }
 
