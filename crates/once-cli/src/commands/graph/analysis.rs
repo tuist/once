@@ -358,8 +358,19 @@ async fn run_declared_actions(
             })?;
         let exit_code = outcome.result.exit_code;
         if exit_code != 0 {
+            let stderr = match outcome.result.stderr {
+                Some(digest) => {
+                    String::from_utf8_lossy(&cache.get_blob(&digest).await?).to_string()
+                }
+                None => String::new(),
+            };
+            let detail = if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {}", stderr.trim())
+            };
             anyhow::bail!(
-                "{identifier_for_error} ({index}) failed for {} with exit code {exit_code}",
+                "{identifier_for_error} ({index}) failed for {} with exit code {exit_code}{detail}",
                 target.label.id,
             );
         }

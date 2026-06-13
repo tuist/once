@@ -26,6 +26,8 @@ Finds the matching target and runs it through the action cache. Use `--remote` t
 | `--runtime-rpc-socket` | `<RUNTIME_RPC_SOCKET>` |  | Runtime RPC socket path. Defaults to `.once/runtime/<session>/control.sock` |
 | `--remote` | (flag) | `false` | Run the target's action on a compute provider |
 | `--compute` | `<PROVIDER>` | `microsandbox` | Compute provider used with --remote |
+| `--destination-kind` | `<KIND>` |  | Apple destination kind for graph-backed Apple app runs |
+| `--destination-id` | `<ID>` |  | Apple destination id returned by `once query apple-destinations` |
 | `-C, --directory` | `<DIR>` |  | Project root. Defaults to the current directory; the cache lives under `<project>/.once/`. Mirrors `make -C` |
 | `--format` | `<FORMAT>` | `human` | Output format for Once's structured data (`cache stats`, `run`/`exec` trailers). Defaults to a human-readable rendering; pass `json` or `toon` to get machine-parseable output for scripting and for agent consumers |
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |

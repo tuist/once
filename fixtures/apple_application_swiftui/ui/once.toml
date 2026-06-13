@@ -2,7 +2,7 @@
 name = "UI"
 kind = "apple_framework"
 srcs = ["UI/Sources/*.swift"]
-deps = ["models/Models"]
+deps = ["../models/Models"]
 
 [target.attrs]
 platform = "ios"

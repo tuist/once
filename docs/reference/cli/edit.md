@@ -1,26 +1,28 @@
-# `once mcp`
+# `once edit`
 
-Expose Once's graph queries to a coding agent over MCP
+Mutate workspace manifests
 
 ## Synopsis
 
 ```text
-once mcp [OPTIONS]
+once edit [OPTIONS] <SUBCOMMAND>
 ```
 
 ## Description
 
-Speaks the Model Context Protocol over stdio so an agent host (Claude Desktop, an IDE plug-in, the Anthropic SDK) can call `once_query_targets`, `once_query_capabilities`, and `once_query_schema` as tools and get JSON back without scraping prose. Mounts inspection tools by default; pass `--allow-run` to expose side-effectful target execution.
+`edit apply` runs a batch of `create` / `update` / `delete` operations against a single `once.toml` atomically. The same surface is exposed as the `once_apply_edit` MCP tool; the CLI reads its input JSON from `--file` or stdin so humans can reproduce what an agent did from the terminal.
 
 ## Options
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
-| `--workspace` | `<DIR>` |  | Workspace root the MCP tools resolve targets against. Defaults to the value of the global `-C/--directory` flag (or the current directory) |
-| `--allow-run` | (flag) | `false` | Advertise and allow the side-effectful `once_run_target` tool |
 | `-C, --directory` | `<DIR>` |  | Project root. Defaults to the current directory; the cache lives under `<project>/.once/`. Mirrors `make -C` |
 | `--format` | `<FORMAT>` | `human` | Output format for Once's structured data (`cache stats`, `run`/`exec` trailers). Defaults to a human-readable rendering; pass `json` or `toon` to get machine-parseable output for scripting and for agent consumers |
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |
 | `-q, --quiet` | (flag) | `false` | Suppress human-mode success and progress trailers. Errors and the structured envelope of `--format json`/`toon` still print. Mirrors the `-q` flag of common build tools |
 | `--list` | (flag) | `false` | Print the command surface at the current command depth |
+
+## Subcommands
+
+- [`once edit apply`](/reference/cli/edit/apply)
 

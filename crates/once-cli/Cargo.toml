@@ -22,15 +22,13 @@ console.workspace = true
 glob.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 toml.workspace = true
 toon-rust.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 walkdir.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
 
 [lints]
 workspace = true

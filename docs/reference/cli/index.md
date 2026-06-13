@@ -7,6 +7,7 @@ Every subcommand the `once` binary exposes, with its synopsis, options, and argu
 - [`once auth`](/reference/cli/auth): Authenticate with a configured provider
 - [`once build`](/reference/cli/build): Build a declared target
 - [`once cache`](/reference/cli/cache): Cache management
+- [`once edit`](/reference/cli/edit): Mutate workspace manifests
 - [`once exec`](/reference/cli/exec): Cache and execute a literal command (substrate escape hatch)
 - [`once mcp`](/reference/cli/mcp): Expose Once's graph queries to a coding agent over MCP
 - [`once query`](/reference/cli/query): Query the typed build graph

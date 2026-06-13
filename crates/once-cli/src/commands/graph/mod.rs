@@ -19,8 +19,14 @@ use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::{Format, Output};
+use crate::commands::apple::AppleDestinationSelector;
 use crate::commands::util::cache_tag;
 use crate::render;
+
+#[derive(Debug, Clone, Default)]
+pub struct RunArgs {
+    pub destination: Option<AppleDestinationSelector>,
+}
 
 #[derive(Debug, Serialize)]
 struct CapabilityRunRecord {
@@ -60,7 +66,8 @@ pub async fn test(
     ensure_capability(&target, "test")?;
     let session = analysis::BuildSession::new(workspace, cache, &graph)?;
     let _ = build_target(workspace, cache, &target, &session).await?;
-    let record = run_target_capability(workspace, cache, &target, "test").await?;
+    let record =
+        run_target_capability(workspace, cache, &target, "test", &RunArgs::default()).await?;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -70,13 +77,14 @@ pub async fn run(
     cache: &CacheProvider,
     output: Output,
     target_id: &str,
+    args: RunArgs,
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let target = require_target(&graph, target_id)?;
     ensure_capability(&target, "run")?;
     let session = analysis::BuildSession::new(workspace, cache, &graph)?;
     let _ = build_target(workspace, cache, &target, &session).await?;
-    let record = run_target_capability(workspace, cache, &target, "run").await?;
+    let record = run_target_capability(workspace, cache, &target, "run", &args).await?;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -122,7 +130,7 @@ async fn build_target(
             outputs,
         })
     } else {
-        run_target_capability(workspace, cache, target, "build").await
+        run_target_capability(workspace, cache, target, "build", &RunArgs::default()).await
     }
 }
 
@@ -141,19 +149,30 @@ async fn run_target_capability(
     cache: &CacheProvider,
     target: &GraphTarget,
     capability_name: &str,
+    args: &RunArgs,
 ) -> Result<CapabilityRunRecord> {
     let capability = ensure_capability(target, capability_name)?;
     let outputs = action::output_paths(target, capability_name)?;
-    let action = action::action_for(target, capability_name, &outputs)?;
+    let action = action::action_for(target, capability_name, &outputs, args.destination.as_ref())?;
     let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
         .await
         .with_context(|| format!("executing {capability_name} for {}", target.label.id))?;
     if outcome.result.exit_code != 0 {
+        let stderr = match outcome.result.stderr {
+            Some(digest) => String::from_utf8_lossy(&cache.get_blob(&digest).await?).to_string(),
+            None => String::new(),
+        };
+        let detail = if stderr.trim().is_empty() {
+            String::new()
+        } else {
+            format!(": {}", stderr.trim())
+        };
         anyhow::bail!(
-            "{} failed for {} with exit code {}",
+            "{} failed for {} with exit code {}{}",
             capability_name,
             target.label.id,
-            outcome.result.exit_code
+            outcome.result.exit_code,
+            detail,
         );
     }
     let cache = cache_tag(outcome.cache);

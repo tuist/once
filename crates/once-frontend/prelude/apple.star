@@ -1120,7 +1120,7 @@ def _collect_dep_compile_inputs(deps, build_dir):
     """Aggregate compile-visible inputs from dep providers.
 
     Returns (swiftmodule_dirs, header_dirs, modulemaps, hmaps, archives,
-    framework_search_dirs, framework_module_names, sdk_frameworks,
+    framework_search_dirs, framework_module_names, framework_files, sdk_frameworks,
     sdk_dylibs, linkopts, plugin_dylibs).
     """
     swiftmodule_dirs = []
@@ -1130,6 +1130,7 @@ def _collect_dep_compile_inputs(deps, build_dir):
     archives = []
     framework_search_dirs = []
     framework_module_names = []
+    framework_files = []
     sdk_frameworks = []
     sdk_dylibs = []
     linkopts = []
@@ -1152,6 +1153,9 @@ def _collect_dep_compile_inputs(deps, build_dir):
                 archives.append(ar)
         framework_path = dep.get("framework_path")
         if framework_path:
+            for f in dep.get("framework_files") or []:
+                if f and f not in framework_files:
+                    framework_files.append(f)
             framework_parent = _parent_dir(framework_path)
             if framework_parent and framework_parent not in framework_search_dirs:
                 framework_search_dirs.append(framework_parent)
@@ -1183,6 +1187,7 @@ def _collect_dep_compile_inputs(deps, build_dir):
         archives,
         framework_search_dirs,
         framework_module_names,
+        framework_files,
         sdk_frameworks,
         sdk_dylibs,
         linkopts,
@@ -1234,6 +1239,7 @@ def _apple_framework_impl(ctx):
         dep_archives,
         framework_search_dirs,
         framework_module_names,
+        dep_framework_files,
         dep_sdk_frameworks,
         dep_sdk_dylibs,
         dep_linkopts,
@@ -1303,6 +1309,9 @@ def _apple_framework_impl(ctx):
     for ar in dep_archives:
         if ar not in swift_inputs:
             swift_inputs.append(ar)
+    for f in dep_framework_files:
+        if f not in swift_inputs:
+            swift_inputs.append(f)
     for d in plugin_dylibs:
         if d not in swift_inputs:
             swift_inputs.append(d)
@@ -1383,7 +1392,7 @@ def shell_quote_for_action(path):
 
 def _apple_application_impl(ctx):
     attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
-    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["resources", "asset_catalogs", "info_plist", "info_plist_substitutions", "entitlements", "provisioning_profile"])
+    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["resources", "asset_catalogs", "info_plist", "info_plist_substitutions", "entitlements", "provisioning_profile", "signing_identity"])
     if attrs.get("signing") and attrs.get("signing") != "ad_hoc":
         fail(ctx["label"]["id"] + ": attribute `signing` only supports `ad_hoc` today")
     platform = attrs["platform"]
@@ -1422,6 +1431,7 @@ def _apple_application_impl(ctx):
         dep_archives,
         framework_search_dirs,
         framework_module_names,
+        dep_framework_files,
         dep_sdk_frameworks,
         dep_sdk_dylibs,
         dep_linkopts,
@@ -1487,6 +1497,9 @@ def _apple_application_impl(ctx):
     for ar in dep_archives:
         if ar not in swift_inputs:
             swift_inputs.append(ar)
+    for f in dep_framework_files:
+        if f not in swift_inputs:
+            swift_inputs.append(f)
     for d in plugin_dylibs:
         if d not in swift_inputs:
             swift_inputs.append(d)
@@ -1636,6 +1649,7 @@ def _apple_test_bundle_impl(ctx):
         dep_archives,
         framework_search_dirs,
         framework_module_names,
+        dep_framework_files,
         dep_sdk_frameworks,
         dep_sdk_dylibs,
         dep_linkopts,
@@ -1695,6 +1709,9 @@ def _apple_test_bundle_impl(ctx):
     for ar in dep_archives:
         if ar not in swift_inputs:
             swift_inputs.append(ar)
+    for f in dep_framework_files:
+        if f not in swift_inputs:
+            swift_inputs.append(f)
 
     run_action(
         argv = swift_argv,
@@ -1841,6 +1858,7 @@ RULES = [
             attr("info_plist_substitutions", "map<string,string>", default = "{}", docs = "Values substituted into the generated Info.plist"),
             attr("entitlements", "string", docs = "Entitlements plist path"),
             attr("provisioning_profile", "string", docs = "Provisioning profile label or path used for signing"),
+            attr("signing_identity", "string", docs = "Local signing identity selector used for development device signing"),
             attr("signing", "string", default = "ad_hoc", docs = "Signing mode or policy name"),
             attr("sdk_frameworks", "list<string>", default = "[]", docs = "Apple SDK frameworks linked by name"),
             attr("weak_sdk_frameworks", "list<string>", default = "[]", docs = "Apple SDK frameworks linked weakly"),

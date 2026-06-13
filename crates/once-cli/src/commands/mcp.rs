@@ -16,21 +16,24 @@
 //! aren't worth bundling with the initial inspection-only ramp.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use crate::commands::apple::{self, AppleDestinationSelector};
+
 /// MCP protocol version we negotiate.
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Run the MCP server until stdin closes.
-pub async fn serve(workspace: PathBuf) -> Result<()> {
+pub async fn serve(workspace: PathBuf, allow_run: bool) -> Result<()> {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();
-    let server = Server::new(workspace);
+    let server = Server::new(workspace, allow_run);
 
     while let Some(line) = reader.next_line().await? {
         if line.trim().is_empty() {
@@ -54,6 +57,7 @@ pub async fn serve(workspace: PathBuf) -> Result<()> {
 /// State the dispatcher needs to answer requests.
 struct Server {
     workspace: PathBuf,
+    allow_run: bool,
 }
 
 #[derive(Debug)]
@@ -63,8 +67,11 @@ enum DispatchOutcome {
 }
 
 impl Server {
-    fn new(workspace: PathBuf) -> Self {
-        Self { workspace }
+    fn new(workspace: PathBuf, allow_run: bool) -> Self {
+        Self {
+            workspace,
+            allow_run,
+        }
     }
 
     fn dispatch_line(&self, line: &str) -> DispatchOutcome {
@@ -103,7 +110,9 @@ impl Server {
                 }),
             ),
             "notifications/initialized" => JsonRpcResponse::ok(id, Value::Null),
-            "tools/list" => JsonRpcResponse::ok(id, json!({ "tools": tool_definitions() })),
+            "tools/list" => {
+                JsonRpcResponse::ok(id, json!({ "tools": tool_definitions(self.allow_run) }))
+            }
             "tools/call" => self.handle_tool_call(id, request.params),
             other => JsonRpcResponse::error(
                 id,
@@ -131,6 +140,14 @@ impl Server {
             "once_query_targets" => self.tool_query_targets(&call.arguments),
             "once_query_capabilities" => self.tool_query_capabilities(&call.arguments),
             "once_get_target" => self.tool_get_target(&call.arguments),
+            "once_query_apple_destinations" => tool_query_apple_destinations(&call.arguments),
+            "once_validate_apple_destination" => {
+                self.tool_validate_apple_destination(&call.arguments)
+            }
+            "once_run_target" if self.allow_run => self.tool_run_target(&call.arguments),
+            "once_run_target" => Err(anyhow::anyhow!(
+                "tool `once_run_target` requires starting `once mcp --allow-run`"
+            )),
             "once_apply_edit" => self.tool_apply_edit(&call.arguments),
             // Rule registry queries don't need a workspace because they
             // read from the compiled-in rule prelude.
@@ -196,6 +213,118 @@ impl Server {
         let operations: Vec<once_frontend::EditOperation> = serde_json::from_value(raw_ops.clone())
             .map_err(|err| anyhow::anyhow!("invalid `operations`: {err}"))?;
         apply_edit_to_package(&self.workspace, package, &operations)
+    }
+
+    fn tool_validate_apple_destination(&self, args: &Value) -> Result<Value> {
+        let args: ValidateAppleDestinationArgs = serde_json::from_value(tool_args(args))?;
+        ensure_mcp_simulator(args.destination_kind)?;
+        let selector = AppleDestinationSelector {
+            kind: args.destination_kind,
+            id: args.destination_id,
+        };
+        let validation = apple::validate_destination(&self.workspace, &args.target, selector)?;
+        Ok(serde_json::to_value(validation)?)
+    }
+
+    fn tool_run_target(&self, args: &Value) -> Result<Value> {
+        let args: RunTargetArgs = serde_json::from_value(tool_args(args))?;
+        let mut command = std::process::Command::new(std::env::current_exe()?);
+        command
+            .arg("-C")
+            .arg(&self.workspace)
+            .arg("--format")
+            .arg("json")
+            .arg("run");
+        if let Some(destination_kind) = args.destination_kind {
+            ensure_mcp_simulator(destination_kind)?;
+            let destination_id = args.destination_id.ok_or_else(|| {
+                anyhow::anyhow!("`destination_id` is required when `destination_kind` is set")
+            })?;
+            command
+                .arg("--destination-kind")
+                .arg(destination_kind_name(destination_kind))
+                .arg("--destination-id")
+                .arg(destination_id);
+        } else if args.destination_id.is_some() {
+            anyhow::bail!("`destination_kind` is required when `destination_id` is set");
+        }
+        let output = output_with_timeout(command.arg(args.target), Duration::from_secs(180))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("once run failed: {}", stderr.trim());
+        }
+        let stdout = String::from_utf8(output.stdout)?;
+        Ok(serde_json::from_str(stdout.trim())?)
+    }
+}
+
+fn output_with_timeout(
+    command: &mut std::process::Command,
+    timeout: Duration,
+) -> Result<std::process::Output> {
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(child.wait_with_output()?);
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("once run timed out after {} seconds", timeout.as_secs());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn tool_query_apple_destinations(args: &Value) -> Result<Value> {
+    let _: QueryAppleDestinationsArgs = serde_json::from_value(tool_args(args))?;
+    Ok(serde_json::to_value(apple::list_destinations(false)?)?)
+}
+
+fn tool_args(args: &Value) -> Value {
+    if args.is_null() {
+        json!({})
+    } else {
+        args.clone()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QueryAppleDestinationsArgs {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ValidateAppleDestinationArgs {
+    target: String,
+    destination_kind: apple::AppleDestinationKind,
+    destination_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunTargetArgs {
+    target: String,
+    destination_kind: Option<apple::AppleDestinationKind>,
+    destination_id: Option<String>,
+}
+
+fn destination_kind_name(kind: apple::AppleDestinationKind) -> &'static str {
+    match kind {
+        apple::AppleDestinationKind::Simulator => "simulator",
+        apple::AppleDestinationKind::Device => "device",
+    }
+}
+
+fn ensure_mcp_simulator(kind: apple::AppleDestinationKind) -> Result<()> {
+    if kind == apple::AppleDestinationKind::Simulator {
+        Ok(())
+    } else {
+        anyhow::bail!("MCP Apple destination tools only support simulator destinations today")
     }
 }
 
@@ -319,13 +448,14 @@ fn text_content_str(text: &str) -> Value {
     json!({ "type": "text", "text": text })
 }
 
-fn tool_definitions() -> Vec<Value> {
+fn tool_definitions(allow_run: bool) -> Vec<Value> {
     // The runtime `tools/list` reply is the wire projection of the
     // shared catalog; the doc generator walks the same catalog so
     // the reference page can't drift from the server's advertised
     // surface.
     tool_catalog()
         .into_iter()
+        .filter(|tool| allow_run || tool.name != "once_run_target")
         .map(|tool| {
             json!({
                 "name": tool.name,
@@ -427,6 +557,67 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 "required": ["target"]
             }),
             example_return: "{\n  \"label\": { \"package\": \"apps/Hello\", \"name\": \"Hello\", \"id\": \"apps/Hello/Hello\" },\n  \"kind\": \"apple_library\",\n  \"srcs\": [\"Sources/**/*.swift\"],\n  \"deps\": [],\n  \"attrs\": { \"platform\": \"ios\", \"minimum_os\": \"17.0\" },\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\", \"binary\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"apple_linkable\", \"apple_module\"]\n}",
+        },
+        ToolDefinition {
+            name: "once_query_apple_destinations",
+            description: "List Apple run destinations visible on the local machine.",
+            long_description: "Returns the same record shape as `once query apple-destinations --format json`: one entry per local Apple simulator destination with a stable selector, display metadata, availability, and support status. Physical device enumeration is intentionally not exposed through MCP because it may leak personal device metadata. Use the CLI-only `once query apple-destinations --include-devices` path from a trusted terminal when device inventory is needed.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            example_return: "[\n  {\n    \"selector\": { \"destination_kind\": \"simulator\", \"destination_id\": \"SIM-UDID\" },\n    \"display_name\": \"iPhone 16\",\n    \"platform\": \"ios\",\n    \"runtime\": \"com.apple.CoreSimulator.SimRuntime.iOS-18-0\",\n    \"os_version\": \"18.0\",\n    \"available\": true,\n    \"support\": { \"supported\": true }\n  }\n]",
+        },
+        ToolDefinition {
+            name: "once_validate_apple_destination",
+            description: "Validate that an Apple destination selector resolves locally without launching anything.",
+            long_description: "Side-effect-free local validation for a destination selector. It verifies that the target id exists and that the selected destination is present, available, and supported by the local destination adapter. Rule-specific compatibility, build variant selection, and signing validation remain in Starlark and the Apple run implementation, not this Rust host query.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Canonical target id the destination will be used with."
+                    },
+                    "destination_kind": {
+                        "type": "string",
+                        "enum": ["simulator"],
+                        "description": "Destination kind."
+                    },
+                    "destination_id": {
+                        "type": "string",
+                        "description": "Stable id returned by once_query_apple_destinations."
+                    }
+                },
+                "required": ["target", "destination_kind", "destination_id"]
+            }),
+            example_return: "{\n  \"valid\": false,\n  \"target\": \"apps/ios/App\",\n  \"destination\": { \"destination_kind\": \"simulator\", \"destination_id\": \"MISSING\" },\n  \"diagnostics\": [\n    {\n      \"code\": \"destination_unavailable\",\n      \"severity\": \"error\",\n      \"phase\": \"validation\",\n      \"target\": \"apps/ios/App\",\n      \"destination\": { \"destination_kind\": \"simulator\", \"destination_id\": \"MISSING\" },\n      \"message\": \"selected Apple destination was not found\",\n      \"repairs\": [\"Run `once query apple-destinations` and use a returned selector\"]\n    }\n  ],\n  \"repairs\": [\"Run `once query apple-destinations` and use a returned selector\"]\n}",
+        },
+        ToolDefinition {
+            name: "once_run_target",
+            description: "Run a target through the same action path as `once run`.",
+            long_description: "Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes `once run --format json` for a target and returns the structured run record. For Apple application targets, pass `destination_kind: \"simulator\"` and a `destination_id` returned by `once_query_apple_destinations` to install and launch the built app on that simulator. The tool has the same side effects as the CLI: it may build dependencies, write `.once/out` outputs, boot a simulator, install an app, and launch it.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Canonical target id to run."
+                    },
+                    "destination_kind": {
+                        "type": "string",
+                        "enum": ["simulator"],
+                        "description": "Optional Apple destination kind for Apple app runs."
+                    },
+                    "destination_id": {
+                        "type": "string",
+                        "description": "Optional Apple destination id returned by once_query_apple_destinations."
+                    }
+                },
+                "required": ["target"]
+            }),
+            example_return: "{\n  \"target\": \"apps/ios/App\",\n  \"kind\": \"apple_application\",\n  \"capability\": \"run\",\n  \"status\": \"completed\",\n  \"cache\": \"miss\",\n  \"outputs\": [\".once/out/apps/ios/App/run\"]\n}",
         },
         ToolDefinition {
             name: "once_validate_target",
@@ -605,7 +796,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn server(workspace: PathBuf) -> Server {
-        Server::new(workspace)
+        Server::new(workspace, false)
+    }
+
+    fn run_server(workspace: PathBuf) -> Server {
+        Server::new(workspace, true)
     }
 
     fn request(method: &str, params: Value) -> JsonRpcRequest {
@@ -630,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_advertises_the_full_tool_surface() {
+    fn tools_list_omits_run_tool_by_default() {
         let tmp = TempDir::new().unwrap();
         let response = server(tmp.path().to_path_buf()).dispatch(request("tools/list", json!({})));
         let names: Vec<String> = response.result.unwrap()["tools"]
@@ -647,10 +842,42 @@ mod tests {
                 "once_query_schema".to_string(),
                 "once_list_rules".to_string(),
                 "once_get_target".to_string(),
+                "once_query_apple_destinations".to_string(),
+                "once_validate_apple_destination".to_string(),
                 "once_validate_target".to_string(),
                 "once_apply_edit".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn tools_list_advertises_run_tool_when_allowed() {
+        let tmp = TempDir::new().unwrap();
+        let response =
+            run_server(tmp.path().to_path_buf()).dispatch(request("tools/list", json!({})));
+        let names: Vec<String> = response.result.unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(names.contains(&"once_run_target".to_string()));
+    }
+
+    #[test]
+    fn run_tool_requires_allow_run() {
+        let tmp = TempDir::new().unwrap();
+        let response = server(tmp.path().to_path_buf()).dispatch(request(
+            "tools/call",
+            json!({ "name": "once_run_target", "arguments": { "target": "App" } }),
+        ));
+        let result = response.result.expect("result");
+
+        assert_eq!(result["isError"], true);
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-run"));
     }
 
     #[test]
@@ -678,6 +905,44 @@ mod tests {
         assert_eq!(result["isError"], true);
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("missing `target`"));
+    }
+
+    #[test]
+    fn query_apple_destinations_rejects_physical_device_arg() {
+        let error = tool_query_apple_destinations(&json!({ "include_devices": true }))
+            .expect_err("include_devices is not exposed through MCP");
+
+        assert!(error
+            .to_string()
+            .contains("unknown field `include_devices`"));
+    }
+
+    #[test]
+    fn validate_apple_destination_rejects_unknown_kind_as_typed_args() {
+        let tmp = TempDir::new().unwrap();
+        let error = server(tmp.path().to_path_buf())
+            .tool_validate_apple_destination(&json!({
+                "target": "apps/ios/App",
+                "destination_kind": "mac",
+                "destination_id": "D1"
+            }))
+            .expect_err("destination_kind is a typed enum");
+
+        assert!(error.to_string().contains("unknown variant `mac`"));
+    }
+
+    #[test]
+    fn validate_apple_destination_rejects_devices_in_mcp() {
+        let tmp = TempDir::new().unwrap();
+        let error = server(tmp.path().to_path_buf())
+            .tool_validate_apple_destination(&json!({
+                "target": "apps/ios/App",
+                "destination_kind": "device",
+                "destination_id": "D1"
+            }))
+            .expect_err("physical devices are not exposed through MCP by default");
+
+        assert!(error.to_string().contains("only support simulator"));
     }
 
     #[test]

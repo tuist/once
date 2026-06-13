@@ -9,6 +9,7 @@ use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::{Format, Output};
+use crate::commands::apple::{self, AppleDestinationKind, AppleDestinationSelector};
 use crate::render;
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -126,6 +127,36 @@ pub async fn validate_target(output: Output, file: Option<PathBuf>) -> Result<()
         }
     };
     write_body(output, || render_validate_human(&result), &result).await
+}
+
+pub async fn apple_destinations(output: Output, include_devices: bool) -> Result<()> {
+    let destinations = apple::list_destinations(include_devices)?;
+    write_body(
+        output,
+        || render_apple_destinations_human(&destinations),
+        &destinations,
+    )
+    .await
+}
+
+pub async fn validate_apple_destination(
+    workspace: &Path,
+    output: Output,
+    target: &str,
+    destination_kind: &str,
+    destination_id: &str,
+) -> Result<()> {
+    let selector = AppleDestinationSelector {
+        kind: apple::parse_destination_kind(destination_kind)?,
+        id: destination_id.to_string(),
+    };
+    let validation = apple::validate_destination(workspace, target, selector)?;
+    write_body(
+        output,
+        || render_apple_destination_validation_human(&validation),
+        &validation,
+    )
+    .await
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -288,6 +319,57 @@ fn render_validate_human(result: &ValidateResult) -> String {
             out
         }
     }
+}
+
+fn render_apple_destinations_human(destinations: &[apple::AppleDestination]) -> String {
+    if destinations.is_empty() {
+        return "apple destinations: none\n".to_string();
+    }
+    let mut out = String::from("apple destinations:\n");
+    for destination in destinations {
+        let kind = match destination.selector.kind {
+            AppleDestinationKind::Simulator => "simulator",
+            AppleDestinationKind::Device => "device",
+        };
+        let name = destination.display_name.as_deref().unwrap_or("unnamed");
+        let availability = if destination.available {
+            "available"
+        } else {
+            "unavailable"
+        };
+        writeln!(
+            out,
+            "  {kind} {} ({name}, {}, {availability})",
+            destination.selector.id, destination.platform
+        )
+        .expect("writing to string cannot fail");
+        if !destination.support.supported {
+            let reason = destination
+                .support
+                .reason
+                .as_deref()
+                .unwrap_or("unsupported");
+            writeln!(out, "    unsupported: {reason}").expect("writing to string cannot fail");
+        }
+    }
+    out
+}
+
+fn render_apple_destination_validation_human(
+    validation: &apple::AppleDestinationValidation,
+) -> String {
+    if validation.valid {
+        return "valid\n".to_string();
+    }
+    let mut out = String::from("invalid:\n");
+    for diagnostic in &validation.diagnostics {
+        writeln!(out, "  {}: {}", diagnostic.code, diagnostic.message)
+            .expect("writing to string cannot fail");
+        for repair in &diagnostic.repairs {
+            writeln!(out, "    - {repair}").expect("writing to string cannot fail");
+        }
+    }
+    out
 }
 
 fn render_targets_human(records: &[TargetRecord]) -> String {
