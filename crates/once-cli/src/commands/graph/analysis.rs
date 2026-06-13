@@ -330,7 +330,7 @@ async fn run_declared_actions(
     let AnalysisResult {
         actions, provider, ..
     } = analysis;
-    let mut terminal_digest = None;
+    let mut action_digests = Vec::new();
     let mut last_cache_tag = "miss";
     let mut all_outputs: Vec<String> = Vec::new();
     for (index, declared) in actions.into_iter().enumerate() {
@@ -363,17 +363,32 @@ async fn run_declared_actions(
                 target.label.id,
             );
         }
-        terminal_digest = Some(outcome.action);
+        action_digests.push(outcome.action);
         last_cache_tag = crate::commands::util::cache_tag(outcome.cache);
     }
-    let action_digest = terminal_digest
-        .unwrap_or_else(|| Digest::of_bytes(format!("empty:{}", target.label.id).as_bytes()));
+    let action_digest = compose_target_action_digest(&target.label.id, &action_digests);
     Ok(BuildOutcome {
         provider,
         action_digest,
         outputs: all_outputs,
         cache_tag: last_cache_tag,
     })
+}
+
+fn compose_target_action_digest(target_id: &str, action_digests: &[Digest]) -> Digest {
+    match action_digests {
+        [] => Digest::of_bytes(format!("empty:{target_id}").as_bytes()),
+        [digest] => *digest,
+        _ => {
+            let mut builder = InputDigestBuilder::new(b"once.target.actions.v1\0");
+            builder.push_bytes(target_id.as_bytes());
+            for (index, digest) in action_digests.iter().enumerate() {
+                let key = format!("action:{index}");
+                builder.push_keyed(key.as_bytes(), digest);
+            }
+            builder.finish()
+        }
+    }
 }
 
 /// Convert a single declared action into a cacheable [`Action`].
@@ -575,6 +590,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn target_action_digest_preserves_single_action_digest() {
+        let action = Digest::of_bytes(b"action");
+
+        assert_eq!(compose_target_action_digest("Root", &[action]), action);
+    }
+
+    #[test]
+    fn target_action_digest_includes_all_declared_actions_in_order() {
+        let first = Digest::of_bytes(b"first");
+        let second = Digest::of_bytes(b"second");
+        let changed_second = Digest::of_bytes(b"changed-second");
+
+        let original = compose_target_action_digest("Root", &[first, second]);
+        let changed = compose_target_action_digest("Root", &[first, changed_second]);
+        let reordered = compose_target_action_digest("Root", &[second, first]);
+
+        assert_ne!(original, changed);
+        assert_ne!(original, reordered);
     }
 
     fn test_target(name: &str, deps: &[&str], script: &str) -> GraphTarget {
