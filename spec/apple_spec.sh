@@ -42,130 +42,16 @@ Describe 'apple graph'
     cp -R "$REPO_ROOT/fixtures/apple_application_swiftui/." "$WORKSPACE/"
   }
 
-  create_apple_workspace() {
-    mkdir -p "$WORKSPACE/apps/ios/Sources/AppCore/include" "$WORKSPACE/apps/ios/Sources/DesignSystem" "$WORKSPACE/apps/ios/Sources/App" "$WORKSPACE/apps/ios/Sources/AppTests"
-    cat > "$WORKSPACE/apps/ios/Sources/AppCore/include/AppCore.h" <<'EOF'
-#pragma once
-EOF
-    cat > "$WORKSPACE/apps/ios/Sources/AppCore/AppCore.swift" <<'EOF'
-public struct AppCore {
-    public static let name = "AppCore"
-}
-EOF
-    cat > "$WORKSPACE/apps/ios/Sources/DesignSystem/DesignSystem.swift" <<'EOF'
-import AppCore
-public struct DesignSystem {
-    public static let owner = AppCore.name
-}
-EOF
-    cat > "$WORKSPACE/apps/ios/Sources/App/App.swift" <<'EOF'
-import DesignSystem
-
-@main
-struct AppEntry {
-    static let owner = DesignSystem.owner
-    static func main() {}
-}
-EOF
-    cat > "$WORKSPACE/apps/ios/Sources/AppTests/AppTests.swift" <<'EOF'
-public struct AppTests {
-    public static let name = "AppTests"
-}
-EOF
-
-    cat > "$WORKSPACE/apps/ios/once.toml" <<'EOF'
-[[target]]
-name = "AppCore"
-kind = "apple_library"
-srcs = ["Sources/AppCore/**/*.swift"]
-
-[target.attrs]
-platform = "ios"
-minimum_os = "17.0"
-headers = ["Sources/AppCore/include/AppCore.h"]
-exported_headers = ["Sources/AppCore/include/AppCore.h"]
-sdk_frameworks = ["Foundation"]
-swift_flags = ["-warnings-as-errors"]
-
-[[target]]
-name = "DesignSystem"
-kind = "apple_framework"
-srcs = ["Sources/DesignSystem/**/*.swift"]
-deps = ["./AppCore"]
-
-[target.attrs]
-platform = "ios"
-sdk_variant = "simulator"
-bundle_id = "dev.once.DesignSystem"
-minimum_os = "17.0"
-
-[[target]]
-name = "App"
-kind = "apple_application"
-srcs = ["Sources/App/**/*.swift"]
-deps = ["./DesignSystem"]
-
-[target.attrs]
-platform = "ios"
-sdk_variant = "simulator"
-bundle_id = "dev.once.App"
-minimum_os = "17.0"
-families = ["iphone", "ipad"]
-
-[[target]]
-name = "AppTests"
-kind = "apple_test_bundle"
-srcs = ["Sources/AppTests/**/*.swift"]
-deps = ["./AppCore"]
-
-[target.attrs]
-platform = "ios"
-sdk_variant = "simulator"
-minimum_os = "17.0"
-EOF
+  copy_apple_graph_fixture() {
+    cp -R "$REPO_ROOT/fixtures/apple_graph/." "$WORKSPACE/"
   }
 
-  create_apple_swift_testing_workspace() {
-    mkdir -p "$WORKSPACE/apps/macos/Sources/AppCore" "$WORKSPACE/apps/macos/Sources/AppTests"
-    cat > "$WORKSPACE/apps/macos/Sources/AppCore/AppCore.swift" <<'EOF'
-public struct AppCore {
-    public static let name = "AppCore"
-}
-EOF
-    cat > "$WORKSPACE/apps/macos/Sources/AppTests/AppTests.swift" <<'EOF'
-import Testing
-
-@Test func examplePasses() {
-    #expect(true)
-}
-EOF
-
-    cat > "$WORKSPACE/apps/macos/once.toml" <<'EOF'
-[[target]]
-name = "AppCore"
-kind = "apple_library"
-srcs = ["Sources/AppCore/**/*.swift"]
-
-[target.attrs]
-platform = "macos"
-minimum_os = "14.0"
-
-[[target]]
-name = "AppTests"
-kind = "apple_test_bundle"
-srcs = ["Sources/AppTests/**/*.swift"]
-deps = ["./AppCore"]
-
-[target.attrs]
-platform = "macos"
-minimum_os = "14.0"
-swift_testing = true
-labels = ["swift-testing"]
-EOF
+  copy_apple_swift_testing_fixture() {
+    cp -R "$REPO_ROOT/fixtures/apple_swift_testing/." "$WORKSPACE/"
   }
 
   It 'lists buildable Apple artifacts'
-    create_apple_workspace
+    copy_apple_graph_fixture
 
     When call once query targets
     The status should be success
@@ -176,7 +62,7 @@ EOF
   End
 
   It 'exposes runnable Apple application artifacts'
-    create_apple_workspace
+    copy_apple_graph_fixture
 
     When call once --format json query capabilities apps/ios/App
     The status should be success
@@ -189,7 +75,7 @@ EOF
 
   It 'builds Apple application artifacts through the graph command'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
-    create_apple_workspace
+    copy_apple_graph_fixture
 
     When call once --format json build apps/ios/App
     The status should be success
@@ -205,7 +91,7 @@ EOF
 
   It 'runs Apple application artifacts through the graph command'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
-    create_apple_workspace
+    copy_apple_graph_fixture
 
     When call once --format json run apps/ios/App
     The status should be success
@@ -217,7 +103,7 @@ EOF
   End
 
   It 'exposes testable Apple test bundle artifacts'
-    create_apple_workspace
+    copy_apple_graph_fixture
 
     When call once --format json query capabilities apps/ios/AppTests
     The status should be success
@@ -230,7 +116,7 @@ EOF
 
   It 'tests Apple test bundle artifacts through the graph command'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
-    create_apple_workspace
+    copy_apple_graph_fixture
 
     # XCTest execution still emits placeholder normalized results while
     # simulator/device runners are wired through the Apple rule.
@@ -248,7 +134,7 @@ EOF
 
   It 'runs Swift Testing Apple tests through the generic test capability'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
-    create_apple_swift_testing_workspace
+    copy_apple_swift_testing_fixture
 
     When call once --format json test apps/macos/AppTests
     The status should be success
@@ -263,7 +149,7 @@ EOF
 
   It 'runs affected Swift Testing Apple tests through MCP after a source change'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
-    create_apple_swift_testing_workspace
+    copy_apple_swift_testing_fixture
     mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_run_tests","arguments":{"changed_paths":["apps/macos/Sources/AppCore/AppCore.swift"]}}}'
 
     When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp' sh "$mcp_request" "$ONCE_BIN" "$WORKSPACE"
@@ -291,7 +177,7 @@ EOF
   End
 
   It 'errors when building a target id that does not match'
-    create_apple_workspace
+    copy_apple_graph_fixture
 
     When call once build apps/ios/Missing
     The status should not equal 0
@@ -299,7 +185,7 @@ EOF
   End
 
   It 'errors when a capability is not exposed by the target'
-    create_apple_workspace
+    copy_apple_graph_fixture
 
     When call once test apps/ios/App
     The status should not equal 0
@@ -307,7 +193,7 @@ EOF
   End
 
   It 'rejects --remote for graph run targets'
-    create_apple_workspace
+    copy_apple_graph_fixture
 
     When call once run --remote apps/ios/App
     The status should not equal 0
@@ -315,7 +201,7 @@ EOF
   End
 
   It 'rejects --runtime-rpc for graph run targets'
-    create_apple_workspace
+    copy_apple_graph_fixture
 
     When call once run --runtime-rpc apps/ios/App
     The status should not equal 0

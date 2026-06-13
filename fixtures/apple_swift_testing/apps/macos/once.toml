@@ -1,0 +1,20 @@
+[[target]]
+name = "AppCore"
+kind = "apple_library"
+srcs = ["Sources/AppCore/**/*.swift"]
+
+[target.attrs]
+platform = "macos"
+minimum_os = "14.0"
+
+[[target]]
+name = "AppTests"
+kind = "apple_test_bundle"
+srcs = ["Sources/AppTests/**/*.swift"]
+deps = ["./AppCore"]
+
+[target.attrs]
+platform = "macos"
+minimum_os = "14.0"
+swift_testing = true
+labels = ["swift-testing"]
