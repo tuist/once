@@ -67,7 +67,7 @@ pub async fn test(
     {
         let _ = build_target(workspace, cache, &target, &session).await?;
     }
-    let record = if let Some(outcome) = session.run_with_impl(&target, "test").await? {
+    let record = if let Some(outcome) = session.run_with_analysis(&target, "test").await? {
         CapabilityRunRecord {
             target: target.label.id.clone(),
             kind: target.kind.clone(),
@@ -110,9 +110,9 @@ fn require_target(graph: &[GraphTarget], target_id: &str) -> Result<GraphTarget>
         .with_context(|| format!("no target matches `{target_id}`"))
 }
 
-/// Build a target, walking deps first. If the target's rule has an
-/// `impl` callable, we execute the actions the impl declares; otherwise
-/// we fall back to the placeholder shell scripts in [`action`].
+/// Build a target, walking deps first. Analysis-backed rules execute
+/// the actions declared by Starlark; other rules fall back to the
+/// placeholder shell scripts in [`action`].
 async fn build_target(
     workspace: &Path,
     cache: &CacheProvider,
@@ -120,7 +120,7 @@ async fn build_target(
     session: &analysis::BuildSession,
 ) -> Result<CapabilityRunRecord> {
     let capability = ensure_capability(target, "build")?;
-    if let Some(outcome) = session.build_with_impl(target).await? {
+    if let Some(outcome) = session.build_with_analysis(target).await? {
         // Destructure the outcome so `outputs` moves into the record
         // instead of being cloned. `action_digest` is `Copy`,
         // `cache_tag` is `&'static str`, and `provider` is dropped on
