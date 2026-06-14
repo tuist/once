@@ -36,7 +36,6 @@ The target emits `apple_test_bundle` and `apple_bundle`.
 | Capability | Output groups | Requires |
 | --- | --- | --- |
 | `build` | `default`, `bundle`, `dsyms` |  |
-| `test` | `default`, `test_results`, `coverage` | `bundle` |
 
 ## Limitations
 

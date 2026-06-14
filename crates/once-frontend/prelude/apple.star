@@ -1904,7 +1904,6 @@ RULES = [
         providers = ["apple_test_bundle", "apple_bundle"],
         capabilities = [
             capability("build", ["default", "bundle", "dsyms"]),
-            capability("test", ["default", "test_results", "coverage"], requires_outputs = ["bundle"]),
         ],
         examples = [
             "apple-test-bundle-minimal",

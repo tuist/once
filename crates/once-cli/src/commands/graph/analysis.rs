@@ -6,9 +6,9 @@
 //! `DeclaredAction`s plus a provider record; we materialise each
 //! declared command as a cacheable `Action`, run it through
 //! `once_core::run_with_cache`, and pass the resulting provider down
-//! to consumers. When the rule has no `impl` declared in the prelude
-//! (the bundle and test rules at present) the driver returns `None`
-//! so the caller can fall back to its placeholder path.
+//! to consumers. When the rule has no `impl` declared in the prelude,
+//! the driver returns `None` so the caller can fall back to its generic
+//! marker action.
 //!
 //! This module has no Apple-specific logic: it consults the prelude
 //! via `rule_has_impl` to know which kinds run through analysis, and
@@ -96,14 +96,14 @@ impl BuildSession {
 
     /// Build a target and the impl-backed portion of its dependency
     /// closure. Returns `Ok(None)` when the target's own rule has no
-    /// impl, allowing callers to fall back to placeholder actions.
+    /// impl, allowing callers to fall back to generic marker actions.
     pub(super) async fn build_with_impl(
         &self,
         target: &GraphTarget,
     ) -> Result<Option<BuildOutcome>> {
         if !self.analyzer.rule_has_impl(&target.kind) {
-            // Placeholder rules keep their existing shell scripts; we
-            // don't walk their deps because the placeholder doesn't
+            // Capability-only rules keep their generic marker action; we
+            // don't walk their deps because that fallback doesn't
             // consume them yet.
             return Ok(None);
         }

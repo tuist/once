@@ -707,7 +707,7 @@ fn analyze_target_with_host_cache(
 
 /// Returns true if the rule for `kind` declares an `impl` callable in
 /// the prelude. The driver consults this before walking deps so
-/// placeholder rules don't trigger analysis of their library deps.
+/// capability-only rules don't trigger analysis of their deps.
 pub fn rule_has_impl(kind: &str) -> Result<bool> {
     Ok(AnalysisEngine::new()?.rule_has_impl(kind))
 }
@@ -1423,7 +1423,7 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
     #[test]
     fn rule_has_impl_returns_true_for_all_apple_bundle_rules() {
         // Every bundled Apple rule kind now has a Starlark impl that
-        // declares actions; the CLI's placeholder script path is
+        // declares actions; the CLI's generic fallback action is
         // bypassed for these kinds in favour of the Starlark-driven
         // analysis.
         assert!(rule_has_impl("apple_framework").unwrap());

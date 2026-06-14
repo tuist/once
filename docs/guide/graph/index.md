@@ -65,8 +65,9 @@ Today the built-in prelude covers one platform family:
 Each rule declares which capabilities its targets expose:
 [`build`](/reference/cli/build), [`run`](/reference/cli/run), and
 [`test`](/reference/cli/test). A library might expose `build`; an
-application might expose both `build` and `run`; a test bundle might
-expose `build` and `test`.
+application artifact might expose `build`; a runner rule might consume
+that artifact and expose `run`; and a test runner rule might expose
+`test`.
 
 The CLI dispatches on capability, and every capability runs through the
 same action substrate scripts use. Build actions can replay from cache
@@ -79,7 +80,7 @@ once query targets
 once query schema apple_library
 once build apps/ios/AppCore
 once run  tools/demo/LaunchApp
-once test apps/ios/AppTests
+once test tools/tests/RunAppTests
 ```
 
 [`query`](/reference/cli/query) commands return structured JSON so
