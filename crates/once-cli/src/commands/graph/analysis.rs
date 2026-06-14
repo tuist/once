@@ -614,6 +614,49 @@ mod tests {
     use once_frontend::analysis::DeclaredAction;
     use once_frontend::{AttrValue, Capability, TargetLabel};
 
+    static GRAPH_TEST_PRELUDE: &str = r#"
+def rule(kind, impl = None):
+    return {"kind": kind, "impl": impl}
+
+def _impl(ctx):
+    out = declare_output(ctx["label"]["name"] + "-" + ctx["capability"] + ".txt")
+    srcs = glob(ctx["srcs"])
+    if "script" in ctx["attr"]:
+        run_action(
+            argv = ["/bin/sh", "-c", ctx["attr"]["script"], "sh", out],
+            inputs = srcs,
+            outputs = [out],
+            identifier = ctx["label"]["name"] + "-" + ctx["capability"],
+        )
+        return {"target": ctx["label"]["name"], "out": out}
+
+    if ctx["capability"] == "test":
+        run_action(
+            argv = ["/bin/sh", "-c", "printf test > \"$1\"", "sh", out],
+            outputs = [out],
+            identifier = ctx["label"]["name"] + "-test",
+        )
+    elif len(srcs) > 0:
+        run_action(
+            argv = ["/bin/sh", "-c", "cat \"$1\" > \"$2\"", "sh", srcs[0], out],
+            inputs = srcs,
+            outputs = [out],
+            identifier = ctx["label"]["name"] + "-build",
+        )
+    else:
+        run_action(
+            argv = ["/bin/sh", "-c", "printf " + ctx["label"]["name"] + " > \"$1\"", "sh", out],
+            outputs = [out],
+            identifier = ctx["label"]["name"] + "-build",
+        )
+    return {"target": ctx["label"]["name"], "out": out}
+
+RULES = [
+    rule("test_rule", impl = _impl),
+    rule("metadata_rule"),
+]
+"#;
+
     #[test]
     fn shell_quote_escapes_single_quotes() {
         assert_eq!(shell_quote("A'B"), "'A'\"'\"'B'");
@@ -696,6 +739,16 @@ mod tests {
     }
 
     #[test]
+    fn target_action_digest_for_empty_actions_is_target_specific() {
+        let root = compose_target_action_digest("Root", &[]);
+        let same_root = compose_target_action_digest("Root", &[]);
+        let other = compose_target_action_digest("Other", &[]);
+
+        assert_eq!(root, same_root);
+        assert_ne!(root, other);
+    }
+
+    #[test]
     fn target_action_digest_includes_all_declared_actions_in_order() {
         let first = Digest::of_bytes(b"first");
         let second = Digest::of_bytes(b"second");
@@ -717,6 +770,19 @@ mod tests {
             &["build"],
             [("script".to_string(), AttrValue::String(script.into()))],
         )
+    }
+
+    fn target_of_kind(
+        kind: &str,
+        name: &str,
+        deps: &[&str],
+        srcs: &[&str],
+        capabilities: &[&str],
+        attrs: impl IntoIterator<Item = (String, AttrValue)>,
+    ) -> GraphTarget {
+        let mut target = target_with_capabilities(name, deps, srcs, capabilities, attrs);
+        target.kind = kind.to_string();
+        target
     }
 
     fn target_with_capabilities(
@@ -749,6 +815,58 @@ mod tests {
         }
     }
 
+    #[test]
+    fn reachable_impl_deps_walks_only_impl_backed_direct_deps() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+        let graph = vec![
+            target_with_capabilities(
+                "Root",
+                &["DirectImpl", "DirectMetadata"],
+                &[],
+                &["test"],
+                [],
+            ),
+            target_with_capabilities("DirectImpl", &["TransitiveImpl"], &[], &["build"], []),
+            target_with_capabilities("TransitiveImpl", &[], &[], &["build"], []),
+            target_of_kind(
+                "metadata_rule",
+                "DirectMetadata",
+                &["HiddenImpl"],
+                &[],
+                &["build"],
+                [],
+            ),
+            target_with_capabilities("HiddenImpl", &[], &[], &["build"], []),
+        ];
+        let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
+        let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
+
+        let reachable = session.reachable_impl_deps(&graph[0]);
+
+        assert!(reachable.contains("DirectImpl"));
+        assert!(reachable.contains("TransitiveImpl"));
+        assert!(!reachable.contains("DirectMetadata"));
+        assert!(!reachable.contains("HiddenImpl"));
+    }
+
+    #[tokio::test]
+    async fn run_with_impl_returns_none_for_rules_without_impl() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+        let graph = vec![
+            target_of_kind("metadata_rule", "Root", &["Dep"], &[], &["test"], []),
+            target_with_capabilities("Dep", &[], &[], &["build"], []),
+        ];
+        let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
+        let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
+
+        let outcome = session.run_with_impl(&graph[0], "test").await.unwrap();
+
+        assert!(outcome.is_none());
+        assert!(!workspace.path().join(".once/out/Dep").exists());
+    }
+
     #[cfg(unix)]
     fn parallel_leaf_script(marker: &str, peer: &str, output: &str) -> String {
         format!(
@@ -768,21 +886,6 @@ printf {output} > "$1"
     #[cfg(unix)]
     #[tokio::test]
     async fn independent_dependencies_run_in_parallel() {
-        static TEST_PRELUDE: &str = r#"
-def rule(kind, impl = None):
-    return {"kind": kind, "impl": impl}
-
-def _impl(ctx):
-    out = declare_output(ctx["label"]["name"] + ".txt")
-    run_action(
-        argv = ["/bin/sh", "-c", ctx["attr"]["script"], "sh", out],
-        outputs = [out],
-        identifier = ctx["label"]["name"],
-    )
-    return {"out": out}
-
-RULES = [rule("test_rule", impl = _impl)]
-"#;
         let workspace = tempfile::tempdir().unwrap();
         let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
         let graph = vec![
@@ -790,41 +893,58 @@ RULES = [rule("test_rule", impl = _impl)]
             test_target("LeafA", &[], parallel_leaf_script("LeafA", "LeafB", "a")),
             test_target("LeafB", &[], parallel_leaf_script("LeafB", "LeafA", "b")),
         ];
-        let analyzer = AnalysisEngine::from_source(TEST_PRELUDE).unwrap();
+        let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
         let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
 
         let outcome = session.build_with_impl(&graph[0]).await.unwrap().unwrap();
 
-        assert_eq!(outcome.outputs, vec![".once/out/Root/Root.txt".to_string()]);
+        assert_eq!(
+            outcome.outputs,
+            vec![".once/out/Root/Root-build.txt".to_string()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn build_direct_impl_deps_returns_only_direct_deps_in_declared_order() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+        let graph = vec![
+            target_with_capabilities("Root", &["Second", "Metadata", "First"], &[], &["test"], []),
+            target_with_capabilities("Second", &["Shared"], &[], &["build"], []),
+            target_of_kind("metadata_rule", "Metadata", &[], &[], &["build"], []),
+            target_with_capabilities("First", &["Shared"], &[], &["build"], []),
+            target_with_capabilities("Shared", &[], &[], &["build"], []),
+        ];
+        let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
+        let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
+
+        let outcomes = session.build_direct_impl_deps(&graph[0]).await.unwrap();
+        let outcome_ids = outcomes
+            .iter()
+            .map(|(target_id, _)| target_id.as_str())
+            .collect::<Vec<_>>();
+        let provider_targets = outcomes
+            .iter()
+            .map(|(_, outcome)| outcome.provider["target"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(outcome_ids, vec!["Second", "First"]);
+        assert_eq!(provider_targets, vec!["Second", "First"]);
+        assert_eq!(
+            outcomes[0].1.outputs,
+            vec![".once/out/Second/Second-build.txt".to_string()]
+        );
+        assert!(workspace
+            .path()
+            .join(".once/out/Shared/Shared-build.txt")
+            .is_file());
+        assert!(!workspace.path().join(".once/out/Metadata").exists());
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn capability_runs_are_salted_by_dependency_action_digests() {
-        static TEST_PRELUDE: &str = r#"
-def rule(kind, impl = None):
-    return {"kind": kind, "impl": impl}
-
-def _impl(ctx):
-    out = declare_output(ctx["label"]["name"] + "-" + ctx["capability"] + ".txt")
-    if ctx["capability"] == "test":
-        run_action(
-            argv = ["/bin/sh", "-c", "printf test > \"$1\"", "sh", out],
-            outputs = [out],
-            identifier = ctx["label"]["name"] + "-test",
-        )
-        return {"out": out}
-    srcs = glob(ctx["srcs"])
-    run_action(
-        argv = ["/bin/sh", "-c", "cat \"$1\" > \"$2\"", "sh", srcs[0], out],
-        inputs = srcs,
-        outputs = [out],
-        identifier = ctx["label"]["name"] + "-build",
-    )
-    return {"out": out}
-
-RULES = [rule("test_rule", impl = _impl)]
-"#;
         let workspace = tempfile::tempdir().unwrap();
         std::fs::write(workspace.path().join("dep.txt"), b"one").unwrap();
         let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
@@ -832,7 +952,7 @@ RULES = [rule("test_rule", impl = _impl)]
             target_with_capabilities("Dep", &[], &["dep.txt"], &["build"], []),
             target_with_capabilities("Root", &["Dep"], &[], &["test"], []),
         ];
-        let analyzer = AnalysisEngine::from_source(TEST_PRELUDE).unwrap();
+        let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
 
         let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
         let first = session
@@ -842,7 +962,7 @@ RULES = [rule("test_rule", impl = _impl)]
             .unwrap();
 
         std::fs::write(workspace.path().join("dep.txt"), b"two").unwrap();
-        let analyzer = AnalysisEngine::from_source(TEST_PRELUDE).unwrap();
+        let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
         let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
         let second = session
             .run_with_impl(&graph[1], "test")
