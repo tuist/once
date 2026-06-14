@@ -13,6 +13,7 @@ mod server;
 pub use server::rpc;
 pub(crate) use supervisor::{logs_session, start_session, status_session, stop_session};
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -62,7 +63,7 @@ pub async fn stop(workspace: &Path, output: Output, session: &str) -> Result<Exi
     Ok(ExitCode::SUCCESS)
 }
 
-pub async fn supervise(workspace: &Path, session_dir: &Path, target: &str) -> Result<ExitCode> {
+pub fn supervise(workspace: &Path, session_dir: &Path, target: &str) -> Result<ExitCode> {
     supervisor::supervise_session(workspace, session_dir, target)?;
     Ok(ExitCode::SUCCESS)
 }
@@ -92,10 +93,10 @@ fn render_start_human(record: &supervisor::RuntimeSessionRecord) -> String {
 fn render_status_human(record: &supervisor::RuntimeSessionRecord) -> String {
     let mut out = render_start_human(record);
     if let Some(pid) = record.pid {
-        out.push_str(&format!("pid: {pid}\n"));
+        let _ = writeln!(out, "pid: {pid}");
     }
     if let Some(code) = record.exit_code {
-        out.push_str(&format!("exit: {code}\n"));
+        let _ = writeln!(out, "exit: {code}");
     }
     out
 }

@@ -245,7 +245,7 @@ async fn run_runtime_command(
         Some(cli::RuntimeCmd::Supervise {
             session_dir,
             target,
-        }) => commands::runtime::supervise(workspace, &session_dir, &target).await,
+        }) => commands::runtime::supervise(workspace, &session_dir, &target),
         None => anyhow::bail!("runtime subcommand required"),
     }
 }
