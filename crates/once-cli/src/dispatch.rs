@@ -113,7 +113,7 @@ async fn run_command(
         Cmd::Toolchain { cmd } => run_toolchain_command(workspace, output, cmd).await,
         Cmd::Query { cmd } => run_query_command(workspace, output, cmd).await,
         Cmd::Edit { cmd } => run_edit_command(workspace, output, cmd).await,
-        Cmd::Runtime { cmd } => run_runtime_command(cmd).await,
+        Cmd::Runtime { cmd } => run_runtime_command(workspace, output, cmd).await,
         Cmd::Mcp {
             workspace: workspace_override,
             allow_run,
@@ -204,14 +204,48 @@ async fn run_edit_command(
     }
 }
 
-async fn run_runtime_command(command: Option<cli::RuntimeCmd>) -> Result<ExitCode> {
+async fn run_runtime_command(
+    workspace: &Path,
+    output: Output,
+    command: Option<cli::RuntimeCmd>,
+) -> Result<ExitCode> {
     match command {
+        Some(cli::RuntimeCmd::Start { target }) => {
+            let target = resolve_required_target(workspace, target)?;
+            commands::runtime::start(workspace, output, &target).await
+        }
+        Some(cli::RuntimeCmd::Status { session }) => {
+            commands::runtime::status(workspace, output, &session).await
+        }
+        Some(cli::RuntimeCmd::Logs {
+            session,
+            source,
+            cursor,
+            limit,
+        }) => {
+            commands::runtime::logs(
+                workspace,
+                output,
+                &session,
+                source.as_deref(),
+                cursor.as_deref(),
+                limit,
+            )
+            .await
+        }
+        Some(cli::RuntimeCmd::Stop { session }) => {
+            commands::runtime::stop(workspace, output, &session).await
+        }
         Some(cli::RuntimeCmd::Rpc {
             session_dir,
             socket,
         }) => commands::runtime::rpc(&session_dir, socket.as_deref())
             .await
             .map(|()| ExitCode::SUCCESS),
+        Some(cli::RuntimeCmd::Supervise {
+            session_dir,
+            target,
+        }) => commands::runtime::supervise(workspace, &session_dir, &target).await,
         None => anyhow::bail!("runtime subcommand required"),
     }
 }

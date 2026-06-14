@@ -130,13 +130,16 @@ once mcp
 ```
 
 Running is side-effectful. It can build code, write outputs, install
-software, or launch a process, so Once only advertises the run tool when
-the server is started with an explicit opt-in:
+software, or launch a process, so Once only advertises runtime session
+tools when the server is started with an explicit opt-in:
 
 ```sh
 once mcp --allow-run
 ```
 
-With that opt-in, agents can call `once_run_target` with the same target
-id the CLI accepts. Without it, the MCP surface remains read-oriented and
-the run tool is not listed.
+With that opt-in, agents can call `once_start_target` with the same
+target id the CLI accepts. The call returns a runtime session id
+immediately, then the agent can use `once_runtime_status`,
+`once_runtime_logs`, and `once_stop_runtime` to follow or stop the run.
+Without it, the MCP surface remains read-oriented and the runtime tools
+are not listed.

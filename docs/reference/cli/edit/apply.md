@@ -10,7 +10,7 @@ once edit apply [OPTIONS]
 
 ## Description
 
-Reads a JSON document matching the `once_apply_edit` MCP tool input shape (`{ "package": "...", "operations": [...] }`) from `--file` or, if omitted, from stdin. On success, the manifest is rewritten and the resolved path is printed. On failure, structured diagnostics are emitted and the manifest is left untouched.
+Reads `{ "package": "...", "operations": [...] }` from `--file` or, if omitted, from stdin. On success, the manifest is rewritten and the resolved path is printed. On failure, structured diagnostics are emitted and the manifest is left untouched.
 
 ## Options
 

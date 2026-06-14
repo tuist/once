@@ -10,7 +10,7 @@ once edit [OPTIONS] <SUBCOMMAND>
 
 ## Description
 
-`edit apply` runs a batch of `create` / `update` / `delete` operations against a single `once.toml` atomically. The same surface is exposed as the `once_apply_edit` MCP tool; the CLI reads its input JSON from `--file` or stdin so humans can reproduce what an agent did from the terminal.
+`edit apply` runs a batch of `create` / `update` / `delete` operations against a single `once.toml` atomically. The CLI reads its input JSON from `--file` or stdin and emits structured diagnostics for failed edits.
 
 ## Options
 

@@ -50,9 +50,8 @@ pub enum QueryCmd {
 
     /// Validate a proposed `[[target]]` table against its rule schema.
     ///
-    /// Reads a JSON document matching the `once_validate_target` MCP
-    /// tool input shape (`{ "target": { ... } }`) from `--file` or, if
-    /// omitted, from stdin.
+    /// Reads `{ "target": { ... } }` from `--file` or, if omitted,
+    /// from stdin.
     ValidateTarget {
         /// Path to a JSON file. When omitted, the JSON document is read from stdin.
         #[arg(long, value_name = "PATH")]

@@ -183,11 +183,127 @@ Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one 
 }
 ```
 
-## `once_run_target`
+## `once_query_tests`
 
-Run a target through the same action path as `once run`.
+List targets that expose Once's generic test capability.
 
-Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes `once run --format json` for a target and returns the structured run record. The tool has the same side effects as the CLI: it may build dependencies, write `.once/out` outputs, install software, or launch a process.
+Returns every target with a `test` capability, including its rule kind, dependencies, runner type when the rule exposes `once_test_info`, labels, and normalized result path. Use this as the agent-native test discovery entry point before running or filtering tests.
+
+**Input schema**
+
+```json
+{
+  "properties": {},
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+[
+  {
+    "id": "spec/cli_e2e",
+    "kind": "shellspec_test",
+    "deps": [],
+    "runner": "shellspec",
+    "labels": ["e2e"],
+    "results_path": ".once/out/spec/cli_e2e/test/test_results.json"
+  }
+]
+```
+
+## `once_query_affected_tests`
+
+Return test targets likely affected by a set of changed workspace paths.
+
+Maps changed paths to test targets using generic graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. The query does not know about ShellSpec, Python, Android, or any native runner.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "changed_paths": {
+      "description": "Workspace-relative changed paths. An empty list returns every test target.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+[
+  {
+    "id": "spec/cli_e2e",
+    "kind": "shellspec_test",
+    "reasons": ["changed test input `spec/cli_spec.sh`"]
+  }
+]
+```
+
+## `once_run_tests`
+
+Run test targets by id, or run tests affected by changed workspace paths.
+
+Executes Once's generic `test` capability for either explicit `target` / `targets` or the targets selected by `changed_paths`. This is the MCP-native edit verification loop for coding harnesses: call `once_query_affected_tests` to preview selection, call `once_run_tests` to execute, then read the normalized `once.test_results.v1` results included in each run record. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "changed_paths": {
+      "description": "Workspace-relative changed paths. Used only when no explicit target is supplied; an empty list runs every discovered test target.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "target": {
+      "description": "Single canonical target id to run, e.g. `spec/cli_e2e`.",
+      "type": "string"
+    },
+    "targets": {
+      "description": "Canonical target ids to run. Used with `target`, this is deduplicated before execution.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "runs": [
+    {
+      "target": "spec/cli_e2e",
+      "exit_code": 0,
+      "success": true,
+      "record": { "target": "spec/cli_e2e", "capability": "test" },
+      "results": { "schema": "once.test_results.v1", "status": "passed" },
+      "stderr": ""
+    }
+  ]
+}
+```
+
+## `once_query_test_results`
+
+Read normalized once.test_results.v1 results for a target.
+
+Reads the normalized result file produced by the target's `test` capability. This is the stable agent-facing interface for pass/fail summaries, case-level failures, attempts, and artifacts; callers should not scrape native runner stdout or stderr.
 
 **Input schema**
 
@@ -195,7 +311,7 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 {
   "properties": {
     "target": {
-      "description": "Canonical target id to run.",
+      "description": "Canonical target id, e.g. `spec/cli_e2e`.",
       "type": "string"
     }
   },
@@ -210,12 +326,164 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 
 ```json
 {
+  "schema": "once.test_results.v1",
+  "target": "spec/cli_e2e",
+  "status": "passed",
+  "summary": { "total": 2, "passed": 2, "failed": 0 },
+  "cases": []
+}
+```
+
+## `once_start_target`
+
+Start a target in a persisted runtime session and return its session id.
+
+Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Starts `once run` under a runtime supervisor, persists stdout and stderr under `.once/runtime/<session_id>/`, and returns immediately with the session record. Use the runtime status, logs, and stop tools to follow the process.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "target": {
+      "description": "Target id to start, e.g. `tools/demo/LaunchApp` or `./LaunchApp`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "session_id": "tools-demo-LaunchApp-123-1812345678901",
   "target": "tools/demo/LaunchApp",
-  "kind": "script",
-  "capability": "run",
-  "status": "completed",
-  "cache": "miss",
-  "outputs": [".once/out/tools/demo/LaunchApp/run"]
+  "status": "starting",
+  "session_dir": ".once/runtime/tools-demo-LaunchApp-123-1812345678901",
+  "stdout": ".once/runtime/tools-demo-LaunchApp-123-1812345678901/stdout.log",
+  "stderr": ".once/runtime/tools-demo-LaunchApp-123-1812345678901/stderr.log"
+}
+```
+
+## `once_runtime_status`
+
+Return the latest persisted status for a runtime session.
+
+Reads `.once/runtime/<session_id>/session.json` and returns the supervisor's latest status. Status values include `starting`, `running`, `stopping`, `stopped`, `exited`, and `failed`.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "session_id": {
+      "description": "Session id returned by `once_start_target`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "session_id": "tools-demo-LaunchApp-123-1812345678901",
+  "target": "tools/demo/LaunchApp",
+  "status": "running",
+  "pid": 4242
+}
+```
+
+## `once_runtime_logs`
+
+Read stdout or stderr records for a runtime session.
+
+Reads persisted line-oriented stdout and stderr records from a runtime session. Pass `source` to restrict to `stdout` or `stderr`, and pass a previous `cursor` to read only newer records.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "cursor": {
+      "description": "Cursor returned by a previous log record.",
+      "type": "string"
+    },
+    "limit": {
+      "description": "Maximum number of records to return.",
+      "type": "integer"
+    },
+    "session_id": {
+      "description": "Session id returned by `once_start_target`.",
+      "type": "string"
+    },
+    "source": {
+      "description": "`stdout` or `stderr`.",
+      "enum": [
+        "stdout",
+        "stderr"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "session_id": "tools-demo-LaunchApp-123-1812345678901",
+  "records": [
+    { "cursor": "stdout:000000000000", "source": "stdout", "level": "info", "message": "ready" }
+  ]
+}
+```
+
+## `once_stop_runtime`
+
+Request that a runtime session stop.
+
+Writes a stop request into the runtime session directory. The supervisor observes the request, kills the child process, and updates `session.json` to `stopped`.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "session_id": {
+      "description": "Session id returned by `once_start_target`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "session_id": "tools-demo-LaunchApp-123-1812345678901",
+  "target": "tools/demo/LaunchApp",
+  "status": "stopping"
 }
 ```
 

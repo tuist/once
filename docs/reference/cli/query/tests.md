@@ -1,22 +1,17 @@
-# `once query validate-target`
+# `once query tests`
 
-Validate a proposed `[[target]]` table against its rule schema
+List targets that expose the generic test capability
 
 ## Synopsis
 
 ```text
-once query validate-target [OPTIONS]
+once query tests [OPTIONS]
 ```
-
-## Description
-
-Reads `{ "target": { ... } }` from `--file` or, if omitted, from stdin.
 
 ## Options
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
-| `--file` | `<PATH>` |  | Path to a JSON file. When omitted, the JSON document is read from stdin |
 | `-C, --directory` | `<DIR>` |  | Project root. Defaults to the current directory; the cache lives under `<project>/.once/`. Mirrors `make -C` |
 | `--format` | `<FORMAT>` | `human` | Output format for Once's structured data (`cache stats`, `run`/`exec` trailers). Defaults to a human-readable rendering; pass `json` or `toon` to get machine-parseable output for scripting and for agent consumers |
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |

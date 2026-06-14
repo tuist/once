@@ -12,6 +12,10 @@
 //! Test invocation is intentionally available as a first write-capable
 //! tool because coding harnesses need a short discover, filter, run,
 //! inspect loop after editing files.
+//!
+//! Runtime invocation is opt-in because it is side-effectful. When enabled,
+//! tools start persisted runtime sessions and return session ids agents can use
+//! to query status, read logs, or stop the process later.
 
 use std::path::PathBuf;
 
@@ -24,11 +28,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Run the MCP server until stdin closes.
-pub async fn serve(workspace: PathBuf, _allow_run: bool) -> Result<()> {
+pub async fn serve(workspace: PathBuf, allow_run: bool) -> Result<()> {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();
-    let server = Server::new(workspace);
+    let server = Server::new(workspace, allow_run);
 
     while let Some(line) = reader.next_line().await? {
         if line.trim().is_empty() {
@@ -52,6 +56,7 @@ pub async fn serve(workspace: PathBuf, _allow_run: bool) -> Result<()> {
 /// State the dispatcher needs to answer requests.
 struct Server {
     workspace: PathBuf,
+    allow_run: bool,
 }
 
 #[derive(Debug)]
@@ -61,8 +66,11 @@ enum DispatchOutcome {
 }
 
 impl Server {
-    fn new(workspace: PathBuf) -> Self {
-        Self { workspace }
+    fn new(workspace: PathBuf, allow_run: bool) -> Self {
+        Self {
+            workspace,
+            allow_run,
+        }
     }
 
     fn dispatch_line(&self, line: &str) -> DispatchOutcome {
@@ -101,7 +109,9 @@ impl Server {
                 }),
             ),
             "notifications/initialized" => JsonRpcResponse::ok(id, Value::Null),
-            "tools/list" => JsonRpcResponse::ok(id, json!({ "tools": tool_definitions() })),
+            "tools/list" => {
+                JsonRpcResponse::ok(id, json!({ "tools": tool_definitions(self.allow_run) }))
+            }
             "tools/call" => self.handle_tool_call(id, request.params),
             other => JsonRpcResponse::error(
                 id,
@@ -133,6 +143,16 @@ impl Server {
             "once_query_affected_tests" => self.tool_query_affected_tests(&call.arguments),
             "once_run_tests" => self.tool_run_tests(&call.arguments),
             "once_query_test_results" => self.tool_query_test_results(&call.arguments),
+            "once_start_target" if self.allow_run => self.tool_start_target(&call.arguments),
+            "once_runtime_status" if self.allow_run => self.tool_runtime_status(&call.arguments),
+            "once_runtime_logs" if self.allow_run => self.tool_runtime_logs(&call.arguments),
+            "once_stop_runtime" if self.allow_run => self.tool_stop_runtime(&call.arguments),
+            "once_start_target"
+            | "once_runtime_status"
+            | "once_runtime_logs"
+            | "once_stop_runtime" => Err(anyhow::anyhow!(
+                "runtime tools require starting `once mcp --allow-run`"
+            )),
             "once_apply_edit" => self.tool_apply_edit(&call.arguments),
             // Rule registry queries don't need a workspace because they
             // read from the compiled-in rule prelude.
@@ -234,6 +254,42 @@ impl Server {
             runs.push(run_test_target(&self.workspace, &target)?);
         }
         Ok(json!({ "runs": runs }))
+    }
+
+    fn tool_start_target(&self, args: &Value) -> Result<Value> {
+        let args: StartTargetArgs = serde_json::from_value(tool_args(args))?;
+        let target = once_frontend::normalize_cli_target(&self.workspace, &args.target)
+            .context("resolving target argument")?;
+        Ok(serde_json::to_value(
+            crate::commands::runtime::start_session(&self.workspace, &target)?,
+        )?)
+    }
+
+    fn tool_runtime_status(&self, args: &Value) -> Result<Value> {
+        let args: RuntimeSessionArgs = serde_json::from_value(tool_args(args))?;
+        Ok(serde_json::to_value(
+            crate::commands::runtime::status_session(&self.workspace, &args.session_id)?,
+        )?)
+    }
+
+    fn tool_runtime_logs(&self, args: &Value) -> Result<Value> {
+        let args: RuntimeLogsArgs = serde_json::from_value(tool_args(args))?;
+        Ok(serde_json::to_value(
+            crate::commands::runtime::logs_session(
+                &self.workspace,
+                &args.session_id,
+                args.source.as_deref(),
+                args.cursor.as_deref(),
+                args.limit,
+            )?,
+        )?)
+    }
+
+    fn tool_stop_runtime(&self, args: &Value) -> Result<Value> {
+        let args: RuntimeSessionArgs = serde_json::from_value(tool_args(args))?;
+        Ok(serde_json::to_value(
+            crate::commands::runtime::stop_session(&self.workspace, &args.session_id)?,
+        )?)
     }
 }
 
@@ -338,6 +394,38 @@ fn parse_test_run_record(stdout: &str) -> (Value, Option<String>) {
         Ok(value) => (value, None),
         Err(err) => (Value::String(stdout.to_string()), Some(err.to_string())),
     }
+}
+
+fn tool_args(args: &Value) -> Value {
+    if args.is_null() {
+        json!({})
+    } else {
+        args.clone()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartTargetArgs {
+    target: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeSessionArgs {
+    session_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeLogsArgs {
+    session_id: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 fn tool_query_schema(args: &Value) -> Result<Value> {
@@ -460,13 +548,14 @@ fn text_content_str(text: &str) -> Value {
     json!({ "type": "text", "text": text })
 }
 
-fn tool_definitions() -> Vec<Value> {
+fn tool_definitions(allow_run: bool) -> Vec<Value> {
     // The runtime `tools/list` reply is the wire projection of the
     // shared catalog; the doc generator walks the same catalog so
     // the reference page can't drift from the server's advertised
     // surface.
     tool_catalog()
         .into_iter()
+        .filter(|tool| allow_run || !is_runtime_tool(tool.name))
         .map(|tool| {
             json!({
                 "name": tool.name,
@@ -475,6 +564,13 @@ fn tool_definitions() -> Vec<Value> {
             })
         })
         .collect()
+}
+
+fn is_runtime_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "once_start_target" | "once_runtime_status" | "once_runtime_logs" | "once_stop_runtime"
+    )
 }
 
 /// A single MCP tool, structured so the same record drives the
@@ -525,7 +621,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 },
                 "required": ["target"]
             }),
-            example_return: "{\n  \"id\": \"apps/ios/App\",\n  \"kind\": \"apple_application\",\n  \"capabilities\": [\n    { \"name\": \"build\", \"output_groups\": [\"bundle\", \"dsyms\"],\n      \"requires_outputs\": [] },\n    { \"name\": \"run\", \"output_groups\": [\"default\"],\n      \"requires_outputs\": [\"bundle\"] }\n  ]\n}",
+            example_return: "{\n  \"id\": \"apps/ios/App\",\n  \"kind\": \"apple_application\",\n  \"capabilities\": [\n    { \"name\": \"build\", \"output_groups\": [\"default\", \"bundle\", \"dsyms\"],\n      \"requires_outputs\": [] }\n  ]\n}",
         },
         ToolDefinition {
             name: "once_query_schema",
@@ -635,6 +731,83 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 "required": ["target"]
             }),
             example_return: "{\n  \"schema\": \"once.test_results.v1\",\n  \"target\": \"spec/cli_e2e\",\n  \"status\": \"passed\",\n  \"summary\": { \"total\": 2, \"passed\": 2, \"failed\": 0 },\n  \"cases\": []\n}",
+        },
+        ToolDefinition {
+            name: "once_start_target",
+            description: "Start a target in a persisted runtime session and return its session id.",
+            long_description: "Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Starts `once run` under a runtime supervisor, persists stdout and stderr under `.once/runtime/<session_id>/`, and returns immediately with the session record. Use the runtime status, logs, and stop tools to follow the process.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Target id to start, e.g. `tools/demo/LaunchApp` or `./LaunchApp`."
+                    }
+                },
+                "required": ["target"]
+            }),
+            example_return: "{\n  \"session_id\": \"tools-demo-LaunchApp-123-1812345678901\",\n  \"target\": \"tools/demo/LaunchApp\",\n  \"status\": \"starting\",\n  \"session_dir\": \".once/runtime/tools-demo-LaunchApp-123-1812345678901\",\n  \"stdout\": \".once/runtime/tools-demo-LaunchApp-123-1812345678901/stdout.log\",\n  \"stderr\": \".once/runtime/tools-demo-LaunchApp-123-1812345678901/stderr.log\"\n}",
+        },
+        ToolDefinition {
+            name: "once_runtime_status",
+            description: "Return the latest persisted status for a runtime session.",
+            long_description: "Reads `.once/runtime/<session_id>/session.json` and returns the supervisor's latest status. Status values include `starting`, `running`, `stopping`, `stopped`, `exited`, and `failed`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session id returned by `once_start_target`."
+                    }
+                },
+                "required": ["session_id"]
+            }),
+            example_return: "{\n  \"session_id\": \"tools-demo-LaunchApp-123-1812345678901\",\n  \"target\": \"tools/demo/LaunchApp\",\n  \"status\": \"running\",\n  \"pid\": 4242\n}",
+        },
+        ToolDefinition {
+            name: "once_runtime_logs",
+            description: "Read stdout or stderr records for a runtime session.",
+            long_description: "Reads persisted line-oriented stdout and stderr records from a runtime session. Pass `source` to restrict to `stdout` or `stderr`, and pass a previous `cursor` to read only newer records.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session id returned by `once_start_target`."
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["stdout", "stderr"],
+                        "description": "`stdout` or `stderr`."
+                    },
+                    "cursor": {
+                        "type": "string",
+                        "description": "Cursor returned by a previous log record."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of records to return."
+                    }
+                },
+                "required": ["session_id"]
+            }),
+            example_return: "{\n  \"session_id\": \"tools-demo-LaunchApp-123-1812345678901\",\n  \"records\": [\n    { \"cursor\": \"stdout:000000000000\", \"source\": \"stdout\", \"level\": \"info\", \"message\": \"ready\" }\n  ]\n}",
+        },
+        ToolDefinition {
+            name: "once_stop_runtime",
+            description: "Request that a runtime session stop.",
+            long_description: "Writes a stop request into the runtime session directory. The supervisor observes the request, kills the child process, and updates `session.json` to `stopped`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session id returned by `once_start_target`."
+                    }
+                },
+                "required": ["session_id"]
+            }),
+            example_return: "{\n  \"session_id\": \"tools-demo-LaunchApp-123-1812345678901\",\n  \"target\": \"tools/demo/LaunchApp\",\n  \"status\": \"stopping\"\n}",
         },
         ToolDefinition {
             name: "once_validate_target",
@@ -813,7 +986,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn server(workspace: PathBuf) -> Server {
-        Server::new(workspace)
+        Server::new(workspace, false)
+    }
+
+    fn run_server(workspace: PathBuf) -> Server {
+        Server::new(workspace, true)
     }
 
     fn request(method: &str, params: Value) -> JsonRpcRequest {
@@ -863,6 +1040,39 @@ mod tests {
                 "once_apply_edit".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn tools_list_advertises_runtime_tools_when_allowed() {
+        let tmp = TempDir::new().unwrap();
+        let response =
+            run_server(tmp.path().to_path_buf()).dispatch(request("tools/list", json!({})));
+        let names: Vec<String> = response.result.unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(names.contains(&"once_start_target".to_string()));
+        assert!(names.contains(&"once_runtime_status".to_string()));
+        assert!(names.contains(&"once_runtime_logs".to_string()));
+        assert!(names.contains(&"once_stop_runtime".to_string()));
+    }
+
+    #[test]
+    fn runtime_tools_require_allow_run() {
+        let tmp = TempDir::new().unwrap();
+        let response = server(tmp.path().to_path_buf()).dispatch(request(
+            "tools/call",
+            json!({ "name": "once_start_target", "arguments": { "target": "App" } }),
+        ));
+        let result = response.result.expect("result");
+
+        assert_eq!(result["isError"], true);
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-run"));
     }
 
     #[test]
