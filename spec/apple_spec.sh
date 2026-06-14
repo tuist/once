@@ -58,7 +58,7 @@ Describe 'apple graph'
     The stdout should include 'apps/ios/AppCore (apple_library) [build]'
     The stdout should include 'apps/ios/DesignSystem (apple_framework) [build]'
     The stdout should include 'apps/ios/App (apple_application) [build]'
-    The stdout should include 'apps/ios/AppTests (apple_test_bundle) [build, test]'
+    The stdout should include 'apps/ios/AppTests (apple_test_bundle) [build]'
   End
 
   It 'exposes build-only Apple application artifacts'
@@ -165,11 +165,12 @@ Describe 'apple graph'
     The stdout should not include 'run: default'
   End
 
-  It 'describes Apple test bundle build and test schemas'
+  It 'describes Apple test bundle build schema'
     When call once query schema apple_test_bundle
     The status should be success
     The stdout should include 'apple_test_bundle'
-    The stdout should include 'test: default, test_results, coverage'
+    The stdout should include 'build: default, bundle, dsyms'
+    The stdout should not include 'test: default'
   End
 
   It 'errors when building a target id that does not match'

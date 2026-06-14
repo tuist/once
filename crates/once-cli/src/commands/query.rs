@@ -771,7 +771,7 @@ mod tests {
         let records = target_records(
             vec![
                 target("apps/ios/App", "apple_application", &["build", "run"]),
-                target("apps/ios/AppTests", "apple_test_bundle", &["build", "test"]),
+                target("apps/ios/AppTests", "apple_test_bundle", &["build"]),
             ],
             Some("apple_application"),
         );

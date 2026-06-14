@@ -10,7 +10,7 @@ once test [OPTIONS] [TARGET]
 
 ## Description
 
-Builds the target's test bundle (recursively building deps as needed) and executes its `test` capability. Test results and coverage records land under `<workspace>/.once/out/<target>/test/`. The action cache keys on source content, toolchain identity, and dep digests, so only the targets whose inputs changed re-run; the rest replay their cached outcome.
+Builds the target as needed, then executes its `test` capability through the action cache. Output paths and result groups are owned by the rule that exposes the capability.
 
 ## Arguments
 

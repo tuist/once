@@ -110,9 +110,9 @@ fn require_target(graph: &[GraphTarget], target_id: &str) -> Result<GraphTarget>
         .with_context(|| format!("no target matches `{target_id}`"))
 }
 
-/// Build a target, walking deps first. Analysis-backed rules execute
-/// the actions declared by Starlark; other rules fall back to the
-/// placeholder shell scripts in [`action`].
+/// Build a target, walking deps first. If the target's rule has an `impl`
+/// callable, execute the actions the impl declares; otherwise fall back to the
+/// generic marker action in [`action`].
 async fn build_target(
     workspace: &Path,
     cache: &CacheProvider,
