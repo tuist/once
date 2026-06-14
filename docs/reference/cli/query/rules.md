@@ -1,22 +1,12 @@
-# `once test`
+# `once query rules`
 
-Test a declared target
+List every rule kind with its one-line docs and example slugs
 
 ## Synopsis
 
 ```text
-once test [OPTIONS] [TARGET]
+once query rules [OPTIONS]
 ```
-
-## Description
-
-Builds the target as needed, then executes its `test` capability through the action cache. Output paths and result groups are owned by the rule that exposes the capability.
-
-## Arguments
-
-| Argument | Required | Description |
-| --- | --- | --- |
-| `<TARGET>` | no | Target id, e.g. `apps/ios/AppTests` or `./AppTests` |
 
 ## Options
 

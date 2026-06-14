@@ -22,6 +22,7 @@ linked dependencies, embedded frameworks, and ad-hoc signing.
 | `info_plist_substitutions` | map&lt;string,string&gt; | no | `{}` | Values substituted into the generated Info.plist |
 | `entitlements` | string | no |  | Entitlements plist path |
 | `provisioning_profile` | string | no |  | Provisioning profile label or path used for signing |
+| `signing_identity` | string | no |  | Local signing identity selector used for development device signing |
 | `signing` | string | no | `ad_hoc` | Signing mode or policy name |
 | `sdk_frameworks` | list&lt;string&gt; | no | `[]` | Apple SDK frameworks linked by name |
 | `weak_sdk_frameworks` | list&lt;string&gt; | no | `[]` | Apple SDK frameworks linked weakly |
@@ -42,12 +43,11 @@ The target emits `apple_application` and `apple_bundle`.
 | Capability | Output groups | Requires |
 | --- | --- | --- |
 | `build` | `default`, `bundle`, `dsyms` |  |
-| `run` | `default` | `bundle` |
 
 ## Limitations
 
 Resource bundling, asset catalogs, custom Info.plist templates,
-entitlements, provisioning profiles, and non-ad-hoc signing are
+entitlements, provisioning profiles, signing identities, and non-ad-hoc signing are
 declared in the schema for graph compatibility but are not implemented
 yet. Non-empty values for those attrs fail analysis instead of being
 ignored.

@@ -116,9 +116,10 @@ async fn run_command(
         Cmd::Runtime { cmd } => run_runtime_command(cmd).await,
         Cmd::Mcp {
             workspace: workspace_override,
+            allow_run,
         } => {
             let mcp_workspace = workspace_override.unwrap_or_else(|| workspace.to_path_buf());
-            commands::mcp::serve(mcp_workspace)
+            commands::mcp::serve(mcp_workspace, allow_run)
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
@@ -307,7 +308,14 @@ async fn dispatch_run(
             anyhow::bail!("--remote is only supported for executable script targets");
         }
         let cache = crate::cache_provider::resolve(workspace, xdg)?;
-        return commands::graph::run(workspace, &cache, output, &resolved_target).await;
+        return commands::graph::run(
+            workspace,
+            &cache,
+            output,
+            &resolved_target,
+            commands::graph::RunArgs::default(),
+        )
+        .await;
     }
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     run_target_command(

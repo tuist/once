@@ -1,22 +1,18 @@
-# `once test`
+# `once query target`
 
-Test a declared target
+Resolve a single target's full record (kind, srcs, deps, attrs, capabilities)
 
 ## Synopsis
 
 ```text
-once test [OPTIONS] [TARGET]
+once query target [OPTIONS] <TARGET>
 ```
-
-## Description
-
-Builds the target as needed, then executes its `test` capability through the action cache. Output paths and result groups are owned by the rule that exposes the capability.
 
 ## Arguments
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<TARGET>` | no | Target id, e.g. `apps/ios/AppTests` or `./AppTests` |
+| `<TARGET>` | yes | Target id, e.g. `apps/Hello/Hello` |
 
 ## Options
 

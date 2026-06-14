@@ -27,4 +27,7 @@ Inspectable-first surface for humans and agents. `query targets` lists every dec
 - [`once query targets`](/reference/cli/query/targets)
 - [`once query capabilities`](/reference/cli/query/capabilities)
 - [`once query schema`](/reference/cli/query/schema)
+- [`once query rules`](/reference/cli/query/rules)
+- [`once query target`](/reference/cli/query/target)
+- [`once query validate-target`](/reference/cli/query/validate-target)
 

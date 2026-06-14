@@ -1,27 +1,22 @@
-# `once test`
+# `once edit apply`
 
-Test a declared target
+Apply a batch of operations to one `once.toml` atomically
 
 ## Synopsis
 
 ```text
-once test [OPTIONS] [TARGET]
+once edit apply [OPTIONS]
 ```
 
 ## Description
 
-Builds the target as needed, then executes its `test` capability through the action cache. Output paths and result groups are owned by the rule that exposes the capability.
-
-## Arguments
-
-| Argument | Required | Description |
-| --- | --- | --- |
-| `<TARGET>` | no | Target id, e.g. `apps/ios/AppTests` or `./AppTests` |
+Reads a JSON document matching the `once_apply_edit` MCP tool input shape (`{ "package": "...", "operations": [...] }`) from `--file` or, if omitted, from stdin. On success, the manifest is rewritten and the resolved path is printed. On failure, structured diagnostics are emitted and the manifest is left untouched.
 
 ## Options
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
+| `--file` | `<PATH>` |  | Path to a JSON file. When omitted, the JSON document is read from stdin |
 | `-C, --directory` | `<DIR>` |  | Project root. Defaults to the current directory; the cache lives under `<project>/.once/`. Mirrors `make -C` |
 | `--format` | `<FORMAT>` | `human` | Output format for Once's structured data (`cache stats`, `run`/`exec` trailers). Defaults to a human-readable rendering; pass `json` or `toon` to get machine-parseable output for scripting and for agent consumers |
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |

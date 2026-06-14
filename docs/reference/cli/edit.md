@@ -1,22 +1,16 @@
-# `once test`
+# `once edit`
 
-Test a declared target
+Mutate workspace manifests
 
 ## Synopsis
 
 ```text
-once test [OPTIONS] [TARGET]
+once edit [OPTIONS] <SUBCOMMAND>
 ```
 
 ## Description
 
-Builds the target as needed, then executes its `test` capability through the action cache. Output paths and result groups are owned by the rule that exposes the capability.
-
-## Arguments
-
-| Argument | Required | Description |
-| --- | --- | --- |
-| `<TARGET>` | no | Target id, e.g. `apps/ios/AppTests` or `./AppTests` |
+`edit apply` runs a batch of `create` / `update` / `delete` operations against a single `once.toml` atomically. The same surface is exposed as the `once_apply_edit` MCP tool; the CLI reads its input JSON from `--file` or stdin so humans can reproduce what an agent did from the terminal.
 
 ## Options
 
@@ -27,4 +21,8 @@ Builds the target as needed, then executes its `test` capability through the act
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |
 | `-q, --quiet` | (flag) | `false` | Suppress human-mode success and progress trailers. Errors and the structured envelope of `--format json`/`toon` still print. Mirrors the `-q` flag of common build tools |
 | `--list` | (flag) | `false` | Print the command surface at the current command depth |
+
+## Subcommands
+
+- [`once edit apply`](/reference/cli/edit/apply)
 
