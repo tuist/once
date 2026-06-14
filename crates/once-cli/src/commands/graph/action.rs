@@ -33,18 +33,13 @@ pub(super) fn action_for(
     capability: &str,
     outputs: &[WorkspacePath],
 ) -> Result<Action> {
-    let mut env = BTreeMap::new();
-    let uncached_run = capability == "run";
-    if uncached_run {
-        env.insert("ONCE_RUN_NONCE".to_string(), run_nonce().to_string());
-    }
     Ok(Action::RunCommand {
         argv: vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
             action_script(target, capability, outputs)?,
         ],
-        env,
+        env: BTreeMap::new(),
         cwd: None,
         input_digest: None,
         outputs: outputs.to_vec(),
@@ -297,23 +292,14 @@ fn run_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -> 
         .to_string(),
     );
     let prepare_outputs = prepare_outputs_script(output_paths);
-    let nonce = run_nonce();
     format!(
         r"set -eu
-# once-run-nonce {nonce}
 {prepare_outputs}
 test -d {bundle_path}
 {write_manifest}
 printf '%s\n' {run_record} > {run_json}
 ",
     )
-}
-
-fn run_nonce() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
 }
 
 fn test_script(target: &GraphTarget, manifest_json: &str, output_paths: &str) -> String {
@@ -541,19 +527,6 @@ mod tests {
         assert!(script.contains("test -d '.once/out/apps/ios/App/App.app'"));
         assert!(script.contains(r#""status":"launched""#));
         assert!(script.contains("> '.once/out/apps/ios/App/run/run.json'"));
-    }
-
-    #[test]
-    fn run_action_has_nonce() {
-        let target = graph_target("apple_application", "App");
-        let outputs = output_paths(&target, "run").unwrap();
-
-        let Action::RunCommand {
-            env, timeout_ms, ..
-        } = action_for(&target, "run", &outputs).unwrap();
-
-        assert!(env.contains_key("ONCE_RUN_NONCE"));
-        assert_eq!(timeout_ms, None);
     }
 
     #[test]
