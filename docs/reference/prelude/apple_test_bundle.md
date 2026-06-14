@@ -1,10 +1,10 @@
 # `apple_test_bundle`
 
-XCTest bundle.
+Apple test bundle.
 
 ## Description
 
-Builds XCTest-style test bundles for an external runner.
+Builds Apple test targets and can run Swift Testing tests through the generic Once test capability.
 
 ## Attributes
 
@@ -20,6 +20,8 @@ Builds XCTest-style test bundles for an external runner.
 | `destination` | string | no |  | Simulator, device, or local destination selector |
 | `test_plan` | string | no |  | XCTest plan path |
 | `test_env` | map&lt;string,string&gt; | no | `{}` | Environment variables passed to the test runner |
+| `swift_testing` | bool | no | `false` | Run sources that use Swift Testing (`import Testing`) through the generic Once test capability |
+| `labels` | list&lt;string&gt; | no | `[]` | Agent-readable labels used for filtering or policy |
 
 ## Dep edges
 
@@ -29,19 +31,20 @@ Builds XCTest-style test bundles for an external runner.
 
 ## Providers
 
-The target emits `apple_test_bundle` and `apple_bundle`.
+The target emits `apple_test_bundle`, `apple_bundle`, and `once_test_info`.
 
 ## Capabilities
 
 | Capability | Output groups | Requires |
 | --- | --- | --- |
 | `build` | `default`, `bundle`, `dsyms` |  |
-| `test` | `default`, `test_results`, `coverage` | `bundle` |
+| `test` | `default`, `test_results`, `coverage` |  |
 
 ## Limitations
 
 App-hosted tests, resource bundling, asset catalogs, custom Info.plist
-templates, entitlements, destinations, test plans, and test runner
-environment variables are declared in the schema for graph
-compatibility but are not implemented yet. Non-empty values for those
-attrs fail analysis instead of being ignored.
+templates, entitlements, destinations, and test plans are declared in
+the schema for graph compatibility but are not implemented yet.
+Non-empty values for those attrs fail analysis instead of being
+ignored. Swift Testing execution currently supports macOS logic tests;
+simulator and device runners will use the XCTest bundle path later.

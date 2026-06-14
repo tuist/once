@@ -50,6 +50,7 @@ def rule(kind, docs, attrs = [], deps = [], providers = [], capabilities = [], e
 #   ctx["srcs"]       -> raw glob patterns declared on the target (impl calls glob() to expand)
 #   ctx["deps"]       -> list of provider records returned by analyzed deps
 #   ctx["build_dir"]  -> workspace-relative output directory for this target
+#   ctx["capability"] -> active capability requested by the executor ("build", "test", "metadata")
 #
 # The impl returns a provider dict. Conventional keys downstream rules read:
 #   "swiftmodule_dir" -> directory holding the .swiftmodule (added to -I by consumers)
@@ -535,6 +536,252 @@ def _reject_multi_arch_selects(attrs, label_id, archs):
     for key, value in attrs.items():
         if _is_select_shape(value) and _select_mentions_any(value["select"], arch_tokens):
             fail(label_id + ": attribute `" + key + "` cannot select on architecture when `archs` contains multiple values")
+
+def _shell_literal(value):
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+def _shell_words(values):
+    out = []
+    for value in values:
+        out.append(_shell_literal(value))
+    return " ".join(out)
+
+def _shellspec_test_impl(ctx):
+    attrs = ctx["attr"]
+    shellspec = attrs.get("shellspec") or "shellspec"
+    args = attrs.get("args") or []
+    env = attrs.get("env") or {}
+    data = attrs.get("data") or []
+    labels = attrs.get("labels") or []
+    timeout_ms = attrs.get("timeout_ms")
+    srcs = glob(ctx["srcs"])
+    inputs = []
+    for src in srcs:
+        inputs.append(src)
+    for path in data:
+        inputs.append(_package_relative(ctx, path))
+
+    test_dir = ctx["build_dir"] + "/test"
+    results = test_dir + "/test_results.json"
+    log = test_dir + "/shellspec.log"
+    native_results = test_dir + "/native_results.txt"
+    action_env = {"HOME": test_dir + "/home"}
+    for key in env:
+        action_env[key] = env[key]
+    provider = {
+        "label_id": ctx["label"]["id"],
+        "rule_kind": "shellspec_test",
+        "affected_inputs": inputs,
+        "test_info": {
+            "schema": "once.test_info.v1",
+            "target": ctx["label"]["id"],
+            "runner": {
+                "type": "shellspec",
+                "display_name": "ShellSpec",
+                "metadata": {},
+            },
+            "command": {
+                "argv": [shellspec] + args,
+                "env": action_env,
+                "cwd": ".",
+            },
+            "outputs": {
+                "results": results,
+                "logs": [log],
+                "native_results": [native_results],
+                "coverage": [],
+            },
+            "listing": {
+                "supported": True,
+                "strategy": "parse_shellspec_examples",
+            },
+            "filtering": {
+                "case_filtering": "unsupported",
+            },
+            "sharding": {
+                "supported": False,
+            },
+            "retries": {
+                "supported": False,
+                "default_attempts": 1,
+            },
+            "execution": {
+                "cacheable": True,
+                "timeout_ms": timeout_ms,
+                "run_from_workspace_root": True,
+            },
+            "labels": labels,
+            "metadata": {},
+        },
+    }
+    if ctx["capability"] != "test":
+        return provider
+
+    shellspec_exec = shellspec
+    if "/" not in shellspec:
+        shellspec_exec = host_which(shellspec)
+
+    spec_srcs = [src for src in srcs if src.endswith("_spec.sh")]
+    runner_args = [shellspec_exec] + args + spec_srcs
+
+    script = """set -eu
+mkdir -p {test_dir}
+mkdir -p "$HOME"
+log={log}
+results={results}
+native_results={native_results}
+: > "$native_results"
+set +e
+{command} > "$log" 2>&1
+status=$?
+set -e
+cp "$log" "$native_results"
+total=0
+cases_file="{test_dir}/cases.jsonl"
+: > "$cases_file"
+for spec in {specs}; do
+  [ -f "$spec" ] || continue
+  suite=${{spec#spec/}}
+  suite=${{suite%_spec.sh}}
+  while IFS= read -r line; do
+    case "$line" in
+      *"It '"*)
+        name=${{line#*"It '"}}
+        name=${{name%%"'"*}}
+        total=$((total + 1))
+        case_id="$spec::$name"
+        if [ "$status" -eq 0 ]; then case_status=passed; else case_status=unknown; fi
+        if [ "$total" -gt 1 ]; then printf ',\n' >> "$cases_file"; fi
+        printf '{{"id":"%s","name":"%s","suite":"%s","file":"%s","status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{}}}}' "$case_id" "$name" "$suite" "$spec" "$case_status" "$case_status" >> "$cases_file"
+        ;;
+    esac
+  done < "$spec"
+done
+if [ "$status" -eq 0 ]; then run_status=passed; failed=0; passed=$total; else run_status=failed; failed=1; passed=0; fi
+{{
+  printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"shellspec","metadata":{{}}}},"status":"%s","summary":{{"total":%s,"passed":%s,"failed":%s,"skipped":0,"flaky":0}},"cases":[' "{target}" "$run_status" "$total" "$passed" "$failed"
+  cat "$cases_file"
+  printf '],"artifacts":{{"logs":["%s"],"native_results":["%s"]}}}}\n' "$log" "$native_results"
+}} > "$results"
+exit "$status"
+""".format(
+        test_dir = test_dir,
+        log = _shell_literal(log),
+        results = _shell_literal(results),
+        native_results = _shell_literal(native_results),
+        command = _shell_words(runner_args),
+        specs = _shell_words(spec_srcs),
+        target = ctx["label"]["id"],
+    )
+    run_action(
+        argv = ["/bin/sh", "-c", script],
+        inputs = inputs,
+        outputs = [test_dir, results, log, native_results],
+        env = action_env,
+        toolchain_identity = "once.shellspec_test.v1\x00" + shellspec,
+        identifier = "shellspec_test:" + ctx["label"]["id"],
+    )
+    return provider
+
+def _swift_testing_cases_script(swift_srcs, cases_file, target, runner_type):
+    specs = _shell_words(swift_srcs)
+    return """total=0
+cases_file={cases_file}
+: > "$cases_file"
+for spec in {specs}; do
+  [ -f "$spec" ] || continue
+  suite=${{spec%.swift}}
+  suite=${{suite##*/}}
+  while IFS= read -r line; do
+    case "$line" in
+      *"@Test func "*)
+        name=${{line#*"@Test func "}}
+        name=${{name%%"("*}}
+        total=$((total + 1))
+        case_id="{target}::$name"
+        if [ "$status" -eq 0 ]; then case_status=passed; else case_status=unknown; fi
+        if [ "$total" -gt 1 ]; then printf ',\n' >> "$cases_file"; fi
+        printf '{{"id":"%s","name":"%s","suite":"%s","file":"%s","status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{"runner":"%s"}}}}' "$case_id" "$name" "$suite" "$spec" "$case_status" "$case_status" "{runner_type}" >> "$cases_file"
+        ;;
+    esac
+  done < "$spec"
+done
+""".format(
+        cases_file = _shell_literal(cases_file),
+        specs = specs,
+        target = target,
+        runner_type = runner_type,
+    )
+
+def _swift_testing_package_script(product_name, package_dir, swift_srcs):
+    tests_dir = package_dir + "/Tests/" + product_name
+    copy_lines = []
+    for src in swift_srcs:
+        copy_lines.append("cp " + _shell_literal(src) + " " + _shell_literal(tests_dir + "/" + _basename(src)))
+    return """rm -rf {package_dir}
+mkdir -p {tests_dir}
+cat > {manifest} <<'EOF'
+// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "{package_name}",
+    targets: [
+        .testTarget(name: "{product_name}")
+    ]
+)
+EOF
+{copy_lines}
+""".format(
+        package_dir = _shell_literal(package_dir),
+        tests_dir = _shell_literal(tests_dir),
+        manifest = _shell_literal(package_dir + "/Package.swift"),
+        package_name = product_name + "Package",
+        product_name = product_name,
+        copy_lines = "\n".join(copy_lines),
+    )
+
+def _apple_test_info(ctx, runner_type, command_argv, command_env, labels, results, log, native_results):
+    return {
+        "schema": "once.test_info.v1",
+        "target": ctx["label"]["id"],
+        "runner": {
+            "type": runner_type,
+            "display_name": "Swift Testing" if runner_type == "swift_testing" else "XCTest",
+            "metadata": {},
+        },
+        "command": {
+            "argv": command_argv,
+            "env": command_env,
+            "cwd": ".",
+        },
+        "outputs": {
+            "results": results,
+            "logs": [log],
+            "native_results": [native_results],
+            "coverage": [],
+        },
+        "listing": {
+            "supported": runner_type == "swift_testing",
+            "strategy": "parse_swift_testing_functions" if runner_type == "swift_testing" else "external_runner",
+        },
+        "filtering": {
+            "case_filtering": "unsupported",
+        },
+        "sharding": {
+            "supported": False,
+        },
+        "retries": {
+            "supported": False,
+            "default_attempts": 1,
+        },
+        "execution": {
+            "cacheable": True,
+            "run_from_workspace_root": True,
+        },
+        "labels": labels,
+        "metadata": {},
+    }
 
 def _apple_library_impl(ctx):
     attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["module_name"])
@@ -1613,7 +1860,7 @@ def _apple_application_impl(ctx):
 
 def _apple_test_bundle_impl(ctx):
     attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
-    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["test_host", "resources", "asset_catalogs", "info_plist", "entitlements", "destination", "test_plan", "test_env"])
+    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["test_host", "resources", "asset_catalogs", "info_plist", "entitlements", "destination", "test_plan"])
     platform = attrs["platform"]
     minimum_os = attrs.get("minimum_os") or "13.0"
     target_sdk_version = attrs.get("target_sdk_version") or minimum_os
@@ -1622,11 +1869,107 @@ def _apple_test_bundle_impl(ctx):
     product_name = attrs.get("product_name") or ctx["label"]["name"]
     module_name = product_name
     swift_flags = attrs.get("swift_flags") or []
+    swift_testing = attrs.get("swift_testing") or False
+    test_env = attrs.get("test_env") or {}
+    labels = attrs.get("labels") or []
 
     all_srcs = glob(ctx["srcs"])
     swift_srcs = _filter_swift_sources(all_srcs)
     if len(swift_srcs) == 0:
         fail("apple_test_bundle " + ctx["label"]["id"] + " has no Swift sources (.swift)")
+
+    test_dir = ctx["build_dir"] + "/test"
+    results = test_dir + "/test_results.json"
+    log = test_dir + "/swift-testing.log" if swift_testing else test_dir + "/xctest.log"
+    native_results = test_dir + "/native_results.txt"
+    action_env = {"HOME": test_dir + "/home"}
+    for key in test_env:
+        action_env[key] = test_env[key]
+    runner_type = "swift_testing" if swift_testing else "xctest"
+    command_argv = ["swift", "test"] if swift_testing else ["xctest", ctx["build_dir"] + "/" + product_name + ".xctest"]
+    provider = {
+        "label_id": ctx["label"]["id"],
+        "test_bundle_path": ctx["build_dir"] + "/" + product_name + ".xctest",
+        "affected_inputs": all_srcs,
+        "test_info": _apple_test_info(ctx, runner_type, command_argv, action_env, labels, results, log, native_results),
+    }
+
+    if ctx["capability"] == "test":
+        if swift_testing:
+            if platform != "macos" and platform != "macosx":
+                fail(ctx["label"]["id"] + ": swift_testing execution currently supports macos targets; simulator/device runners will use the XCTest bundle path later")
+            xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
+            for key in xcrun_env:
+                action_env[key] = xcrun_env[key]
+            package_dir = test_dir + "/SwiftTestingPackage"
+            cases_file = test_dir + "/cases.jsonl"
+            script = """set -eu
+mkdir -p {test_dir}
+mkdir -p "$HOME"
+{package_script}
+log={log}
+results={results}
+native_results={native_results}
+: > "$native_results"
+set +e
+{command} > "$log" 2>&1
+status=$?
+set -e
+cp "$log" "$native_results"
+{cases_script}
+if [ "$status" -eq 0 ]; then run_status=passed; failed=0; passed=$total; else run_status=failed; failed=1; passed=0; fi
+{{
+  printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"swift_testing","metadata":{{}}}},"status":"%s","summary":{{"total":%s,"passed":%s,"failed":%s,"skipped":0,"flaky":0}},"cases":[' "{target}" "$run_status" "$total" "$passed" "$failed"
+  cat "$cases_file"
+  printf '],"artifacts":{{"logs":["%s"],"native_results":["%s"]}}}}\n' "$log" "$native_results"
+}} > "$results"
+exit "$status"
+""".format(
+                test_dir = _shell_literal(test_dir),
+                package_script = _swift_testing_package_script(product_name, package_dir, swift_srcs),
+                log = _shell_literal(log),
+                results = _shell_literal(results),
+                native_results = _shell_literal(native_results),
+                command = _shell_words([xcrun, "--sdk", sdk, "swift", "test", "--package-path", package_dir]),
+                cases_script = _swift_testing_cases_script(swift_srcs, cases_file, ctx["label"]["id"], "swift_testing"),
+                target = ctx["label"]["id"],
+            )
+            run_action(
+                argv = ["/bin/sh", "-c", script],
+                inputs = swift_srcs,
+                outputs = [test_dir, results, log, native_results],
+                env = action_env,
+                toolchain_identity = "once.apple.swift_testing.v1\x00" + swiftc_identity,
+                identifier = "apple_swift_testing:" + ctx["label"]["id"],
+            )
+        else:
+            script = """set -eu
+mkdir -p {test_dir}
+log={log}
+results={results}
+native_results={native_results}
+printf 'XCTest execution is not wired yet; emitted placeholder Once result for %s\n' "{target}" > "$log"
+cp "$log" "$native_results"
+printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"xctest","metadata":{{}}}},"status":"passed","summary":{{"total":0,"passed":0,"failed":0,"skipped":0,"flaky":0}},"cases":[],"artifacts":{{"logs":["%s"],"native_results":["%s"]}}}}\n' "{target}" "$log" "$native_results" > "$results"
+""".format(
+                test_dir = _shell_literal(test_dir),
+                log = _shell_literal(log),
+                results = _shell_literal(results),
+                native_results = _shell_literal(native_results),
+                target = ctx["label"]["id"],
+            )
+            run_action(
+                argv = ["/bin/sh", "-c", script],
+                inputs = [],
+                outputs = [test_dir, results, log, native_results],
+                env = action_env,
+                toolchain_identity = "once.apple.xctest.placeholder.v1",
+                identifier = "apple_xctest_placeholder:" + ctx["label"]["id"],
+            )
+        return provider
+
+    if swift_testing:
+        return provider
 
     arch = host_arch()
     xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
@@ -1734,10 +2077,8 @@ def _apple_test_bundle_impl(ctx):
     }
     write_file(info_plist, _render_plist(plist_entries))
 
-    return {
-        "label_id": ctx["label"]["id"],
-        "test_bundle_path": ctx["build_dir"] + "/" + bundle_dir,
-    }
+    provider["test_bundle_path"] = ctx["build_dir"] + "/" + bundle_dir
+    return provider
 
 RULES = [
     rule(
@@ -1878,7 +2219,7 @@ RULES = [
     ),
     rule(
         kind = "apple_test_bundle",
-        docs = "Builds an XCTest bundle (`Foo.xctest`) linked against XCTest. The runner that executes the bundle is provided externally; this rule only assembles the bundle.",
+        docs = "Builds Apple test targets and can run Swift Testing tests through the generic Once test capability.",
         impl = _apple_test_bundle_impl,
         attrs = [
             attr("platform", "string", required = True, docs = "Apple platform for the tests", configurable = False),
@@ -1896,17 +2237,42 @@ RULES = [
             attr("test_plan", "string", docs = "XCTest plan path"),
             attr("test_env", "map<string,string>", default = "{}", docs = "Environment variables passed to the test runner"),
             attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
+            attr("swift_testing", "bool", default = "false", docs = "Run sources that use Swift Testing (`import Testing`) through the generic Once test capability"),
+            attr("labels", "list<string>", default = "[]", docs = "Agent-readable labels used for filtering or policy"),
         ],
         deps = [
             dep("deps", ["apple_linkable", "apple_application", "apple_swift_plugin"], "Code under test, optional host application, and Swift compiler plugins"),
         ],
-        providers = ["apple_test_bundle", "apple_bundle"],
+        providers = ["apple_test_bundle", "apple_bundle", "once_test_info"],
         capabilities = [
             capability("build", ["default", "bundle", "dsyms"]),
-            capability("test", ["default", "test_results", "coverage"], requires_outputs = ["bundle"]),
+            capability("test", ["default", "test_results", "coverage"]),
         ],
         examples = [
             "apple-test-bundle-minimal",
         ],
+    ),
+    rule(
+        kind = "shellspec_test",
+        docs = "Runs ShellSpec files through the generic Once test capability and emits normalized once.test_results.v1 results.",
+        attrs = [
+            attr("shellspec", "string", default = "shellspec", docs = "ShellSpec executable to invoke"),
+            attr("args", "list<string>", default = "[]", docs = "Additional arguments passed to ShellSpec"),
+            attr("env", "map<string,string>", default = "{}", docs = "Environment variables passed to the ShellSpec process"),
+            attr("data", "list<string>", default = "[]", docs = "Additional runtime files needed by the specs, such as spec helpers"),
+            attr("labels", "list<string>", default = "[]", docs = "Agent-readable labels used for filtering or policy"),
+            attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds"),
+        ],
+        deps = [
+            dep("deps", ["script_action", "apple_linkable", "apple_application", "once_test_info"], "Targets whose outputs or source changes should affect this ShellSpec test target"),
+        ],
+        providers = ["once_test_info"],
+        capabilities = [
+            capability("test", ["default", "test_results", "logs"]),
+        ],
+        examples = [
+            "shellspec-test-minimal",
+        ],
+        impl = _shellspec_test_impl,
     ),
 ]

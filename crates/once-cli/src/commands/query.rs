@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -19,6 +19,23 @@ struct TargetRecord {
     kind: String,
     deps: Vec<String>,
     capabilities: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TestTargetRecord {
+    id: String,
+    kind: String,
+    deps: Vec<String>,
+    runner: Option<String>,
+    labels: Vec<String>,
+    results_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AffectedTestRecord {
+    id: String,
+    kind: String,
+    reasons: Vec<String>,
 }
 
 pub async fn targets(workspace: &Path, output: Output, kind: Option<&str>) -> Result<()> {
@@ -109,6 +126,55 @@ pub async fn target(workspace: &Path, output: Output, target_id: &str) -> Result
         .find(|target| target.label.id == target_id)
         .with_context(|| format!("no target matches `{target_id}`"))?;
     write_body(output, || render_target_human(&target), &target).await
+}
+
+pub async fn tests(workspace: &Path, output: Output) -> Result<()> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let records = test_records(workspace, &graph);
+    write_body(output, || render_tests_human(&records), &records).await
+}
+
+pub(crate) fn tests_value(workspace: &Path) -> Result<serde_json::Value> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    Ok(serde_json::to_value(test_records(workspace, &graph))?)
+}
+
+pub async fn affected_tests(
+    workspace: &Path,
+    output: Output,
+    changed_paths: &[String],
+) -> Result<()> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let records = affected_test_records(workspace, &graph, changed_paths);
+    write_body(output, || render_affected_tests_human(&records), &records).await
+}
+
+pub(crate) fn affected_tests_value(
+    workspace: &Path,
+    changed_paths: &[String],
+) -> Result<serde_json::Value> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    Ok(serde_json::to_value(affected_test_records(
+        workspace,
+        &graph,
+        changed_paths,
+    ))?)
+}
+
+pub async fn test_results(workspace: &Path, output: Output, target_id: &str) -> Result<()> {
+    let path = workspace.join(test_results_path(target_id)?);
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading `{}`", path.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parsing `{}`", path.display()))?;
+    write_body(output, || render_test_results_human(&value), &value).await
+}
+
+pub(crate) fn test_results_value(workspace: &Path, target_id: &str) -> Result<serde_json::Value> {
+    let path = workspace.join(test_results_path(target_id)?);
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading `{}`", path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("parsing `{}`", path.display()))
 }
 
 pub async fn validate_target(output: Output, file: Option<PathBuf>) -> Result<()> {
@@ -228,6 +294,309 @@ fn render_rules_human(rules: &[RuleSummary]) -> String {
         for example in &rule.examples {
             writeln!(out, "    {} - {}", example.slug, example.use_when)
                 .expect("writing to string cannot fail");
+        }
+    }
+    out
+}
+
+fn test_records(workspace: &Path, graph: &[once_frontend::GraphTarget]) -> Vec<TestTargetRecord> {
+    graph
+        .iter()
+        .filter(|target| has_capability(target, "test"))
+        .map(|target| {
+            let test_info = metadata_test_info(workspace, target);
+            TestTargetRecord {
+                id: target.label.id.clone(),
+                kind: target.kind.clone(),
+                deps: target.deps.clone(),
+                runner: test_info
+                    .as_ref()
+                    .and_then(|info| info.pointer("/runner/type"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                labels: test_info
+                    .as_ref()
+                    .and_then(|info| info.get("labels"))
+                    .and_then(serde_json::Value::as_array)
+                    .map(|labels| {
+                        labels
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                results_path: test_info
+                    .as_ref()
+                    .and_then(|info| info.pointer("/outputs/results"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| test_results_path_string(&target.label.id).ok()),
+            }
+        })
+        .collect()
+}
+
+fn affected_test_records(
+    workspace: &Path,
+    graph: &[once_frontend::GraphTarget],
+    changed_paths: &[String],
+) -> Vec<AffectedTestRecord> {
+    let changed: Vec<String> = changed_paths
+        .iter()
+        .map(|path| path.trim_start_matches("./").to_string())
+        .collect();
+    let targets = graph
+        .iter()
+        .map(|target| (target.label.id.as_str(), target))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    graph
+        .iter()
+        .filter(|target| has_capability(target, "test"))
+        .filter_map(|target| {
+            let mut reasons = Vec::new();
+            if changed.is_empty() {
+                reasons.push("no changed paths supplied; include test target".to_string());
+            }
+            for path in &changed {
+                if target_owns_path(workspace, target, path) {
+                    reasons.push(format!("changed test input `{path}`"));
+                }
+                for dep_id in &target.deps {
+                    if let Some(owner) = dependency_owning_path(
+                        workspace,
+                        &targets,
+                        dep_id,
+                        path,
+                        &mut std::collections::BTreeSet::new(),
+                    ) {
+                        reasons.push(format!("changed dependency `{owner}` input `{path}`"));
+                    }
+                }
+            }
+            reasons.sort();
+            reasons.dedup();
+            (!reasons.is_empty()).then(|| AffectedTestRecord {
+                id: target.label.id.clone(),
+                kind: target.kind.clone(),
+                reasons,
+            })
+        })
+        .collect()
+}
+
+fn metadata_test_info(
+    workspace: &Path,
+    target: &once_frontend::GraphTarget,
+) -> Option<serde_json::Value> {
+    if !target
+        .providers
+        .iter()
+        .any(|provider| provider == "once_test_info")
+    {
+        return None;
+    }
+    metadata_provider(workspace, target)?
+        .get("test_info")
+        .cloned()
+}
+
+fn target_owns_path(workspace: &Path, target: &once_frontend::GraphTarget, changed: &str) -> bool {
+    expanded_target_inputs(workspace, target)
+        .iter()
+        .any(|input| input == changed)
+}
+
+fn dependency_owning_path(
+    workspace: &Path,
+    targets: &std::collections::BTreeMap<&str, &once_frontend::GraphTarget>,
+    target_id: &str,
+    changed: &str,
+    visited: &mut std::collections::BTreeSet<String>,
+) -> Option<String> {
+    if !visited.insert(target_id.to_string()) {
+        return None;
+    }
+    let target = targets.get(target_id)?;
+    if target_owns_path(workspace, target, changed) {
+        return Some(target.label.id.clone());
+    }
+    for dep_id in &target.deps {
+        if let Some(owner) = dependency_owning_path(workspace, targets, dep_id, changed, visited) {
+            return Some(owner);
+        }
+    }
+    None
+}
+
+fn expanded_target_inputs(workspace: &Path, target: &once_frontend::GraphTarget) -> Vec<String> {
+    let mut inputs = Vec::new();
+    let package_dir = if target.label.package.is_empty() {
+        workspace.to_path_buf()
+    } else {
+        workspace.join(&target.label.package)
+    };
+    for pattern in &target.srcs {
+        let abs_pattern = package_dir.join(pattern);
+        let Some(pattern) = abs_pattern.to_str() else {
+            continue;
+        };
+        let Ok(entries) = glob::glob(pattern) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.is_file() {
+                continue;
+            }
+            if let Ok(relative) = entry.strip_prefix(workspace) {
+                inputs.push(workspace_relative_path_string(relative));
+            }
+        }
+    }
+    if let Some(provider) = metadata_provider(workspace, target) {
+        inputs.extend(provider_string_list(&provider, "affected_inputs"));
+    }
+    inputs.sort();
+    inputs.dedup();
+    inputs
+}
+
+fn workspace_relative_path_string(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    if std::path::MAIN_SEPARATOR == '/' {
+        path.into_owned()
+    } else {
+        path.replace(std::path::MAIN_SEPARATOR, "/")
+    }
+}
+
+fn metadata_provider(
+    workspace: &Path,
+    target: &once_frontend::GraphTarget,
+) -> Option<serde_json::Value> {
+    let analyzer = once_frontend::analysis::AnalysisEngine::new().ok()?;
+    let analysis = analyzer
+        .analyze_target_capability(target, workspace, &[], "metadata")
+        .ok()?;
+    Some(analysis.provider)
+}
+
+fn provider_string_list(provider: &serde_json::Value, key: &str) -> Vec<String> {
+    provider
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn test_results_path(target_id: &str) -> Result<PathBuf> {
+    Ok(PathBuf::from(".once")
+        .join("out")
+        .join(target_id_path(target_id)?)
+        .join("test")
+        .join("test_results.json"))
+}
+
+fn test_results_path_string(target_id: &str) -> Result<String> {
+    Ok(test_results_path(target_id)?
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/"))
+}
+
+pub(crate) fn target_id_path(target_id: &str) -> Result<PathBuf> {
+    let mut path = PathBuf::new();
+    for segment in target_id.split('/') {
+        if !is_safe_target_id_segment(segment) {
+            return Err(anyhow!("invalid target id `{target_id}`"));
+        }
+        path.push(segment);
+    }
+    if path.as_os_str().is_empty() {
+        return Err(anyhow!("invalid target id `{target_id}`"));
+    }
+    Ok(path)
+}
+
+fn is_safe_target_id_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+}
+
+fn has_capability(target: &once_frontend::GraphTarget, name: &str) -> bool {
+    target
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == name)
+}
+
+fn render_tests_human(records: &[TestTargetRecord]) -> String {
+    if records.is_empty() {
+        return "tests: none\n".to_string();
+    }
+    let mut out = String::from("tests:\n");
+    for record in records {
+        let runner = record.runner.as_deref().unwrap_or("unknown");
+        writeln!(out, "  {} ({}) runner={runner}", record.id, record.kind)
+            .expect("writing to string cannot fail");
+        if let Some(results_path) = &record.results_path {
+            writeln!(out, "    results: {results_path}").expect("writing to string cannot fail");
+        }
+        if !record.labels.is_empty() {
+            writeln!(out, "    labels: {}", record.labels.join(", "))
+                .expect("writing to string cannot fail");
+        }
+    }
+    out
+}
+
+fn render_affected_tests_human(records: &[AffectedTestRecord]) -> String {
+    if records.is_empty() {
+        return "affected tests: none\n".to_string();
+    }
+    let mut out = String::from("affected tests:\n");
+    for record in records {
+        writeln!(out, "  {} ({})", record.id, record.kind).expect("writing to string cannot fail");
+        for reason in &record.reasons {
+            writeln!(out, "    - {reason}").expect("writing to string cannot fail");
+        }
+    }
+    out
+}
+
+fn render_test_results_human(value: &serde_json::Value) -> String {
+    let target = value
+        .get("target")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("<unknown>");
+    let status = value
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let mut out = format!("test results: {target} {status}\n");
+    if let Some(summary) = value.get("summary") {
+        writeln!(out, "summary: {summary}").expect("writing to string cannot fail");
+    }
+    if let Some(cases) = value.get("cases").and_then(serde_json::Value::as_array) {
+        for case in cases {
+            let id = case
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<unknown>");
+            let status = case
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            writeln!(out, "  {status} {id}").expect("writing to string cannot fail");
         }
     }
     out
@@ -417,5 +786,37 @@ mod tests {
                 capabilities: vec!["build".to_string(), "run".to_string()],
             }]
         );
+    }
+
+    #[test]
+    fn workspace_relative_path_string_preserves_slash_separated_paths() {
+        assert_eq!(
+            workspace_relative_path_string(Path::new("apps/ios/App.swift")),
+            "apps/ios/App.swift"
+        );
+    }
+
+    #[test]
+    fn target_id_path_accepts_only_path_safe_segments() {
+        assert_eq!(
+            target_id_path("apps/ios/AppTests").unwrap(),
+            PathBuf::from("apps").join("ios").join("AppTests")
+        );
+
+        for target_id in [
+            "",
+            ".",
+            "..",
+            "apps/../Secret",
+            "apps//Tests",
+            "apps\\Tests",
+            "apps/ios/App Tests",
+            "apps/ios/App;rm",
+        ] {
+            assert!(
+                target_id_path(target_id).is_err(),
+                "{target_id} should fail"
+            );
+        }
     }
 }
