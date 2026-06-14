@@ -1431,6 +1431,16 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
     }
 
     #[test]
+    fn apple_library_swift_compile_is_split_into_module_and_archive_actions() {
+        let source = include_str!("../prelude/apple.star");
+
+        assert!(source.contains("identifier = \"swift_module_compile_"));
+        assert!(source.contains("outputs = [swiftmodule, swiftdoc, swift_objc_header]"));
+        assert!(source.contains("identifier = \"swift_archive_compile_"));
+        assert!(source.contains("outputs = [swift_archive]"));
+    }
+
+    #[test]
     fn rule_has_impl_returns_true_for_swift_macro() {
         assert!(rule_has_impl("swift_macro").unwrap());
     }

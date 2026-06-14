@@ -984,67 +984,56 @@ def _apple_library_impl(ctx):
         swift_archive = per_arch_archive if swift_only else (declare_output(module_name + "-swift" + arch_suffix + ".a") if len(swift_srcs) > 0 else "")
 
         if len(swift_srcs) > 0:
-            swift_argv = [
+            swift_base_argv = [
                 xcrun,
                 "--sdk",
                 sdk,
                 "swiftc",
-                "-emit-library",
-                "-static",
-                "-emit-module",
                 "-module-name",
                 module_name,
-                "-emit-module-path",
-                swiftmodule,
-                "-emit-objc-header",
-                "-emit-objc-header-path",
-                swift_objc_header,
                 "-target",
                 triple,
                 "-parse-as-library",
             ]
             if emit_dsym:
-                swift_argv.append("-g")
+                swift_base_argv.append("-g")
             if enable_testing:
-                swift_argv.append("-enable-testing")
+                swift_base_argv.append("-enable-testing")
             if library_evolution:
-                swift_argv.append("-enable-library-evolution")
+                swift_base_argv.append("-enable-library-evolution")
             if bridging_header:
-                swift_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
+                swift_base_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
             for framework in sdk_frameworks:
-                swift_argv.extend(["-framework", framework])
+                swift_base_argv.extend(["-framework", framework])
             for framework in weak_sdk_frameworks:
-                swift_argv.extend(["-weak_framework", framework])
+                swift_base_argv.extend(["-weak_framework", framework])
             for dep_dir in compile_swiftmodule_dirs:
-                swift_argv.extend(["-I", dep_dir])
+                swift_base_argv.extend(["-I", dep_dir])
             # Header search paths flow through `-Xcc -I` so swiftc's
             # underlying Clang invocation (for bridging headers + ObjC
             # interop) can locate dep headers.
             for hdir in compile_header_dirs:
-                swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+                swift_base_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
             # Feed each dep's modulemap to swiftc's underlying Clang so
             # `import` of a clang-module dep resolves without manual
             # `-fmodule-map-file` from the user.
             for mmap in dep_modulemaps:
-                swift_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
+                swift_base_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
             # Header maps flow through Clang's `-I` search, so the bridging
             # header (and any dep ObjC interop) can resolve `#include "Foo.h"`
             # without enumerating include directories.
             if hmap_path:
-                swift_argv.extend(["-Xcc", "-I", "-Xcc", hmap_path])
+                swift_base_argv.extend(["-Xcc", "-I", "-Xcc", hmap_path])
             for hmap in dep_hmaps:
-                swift_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
+                swift_base_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
             if enable_modules:
-                swift_argv.extend(["-Xcc", "-fmodules"])
+                swift_base_argv.extend(["-Xcc", "-fmodules"])
             for dylib in plugin_dylibs:
-                swift_argv.extend(["-load-plugin-library", dylib])
+                swift_base_argv.extend(["-load-plugin-library", dylib])
             for define in defines:
-                swift_argv.extend(["-D", define])
+                swift_base_argv.extend(["-D", define])
             for flag in swift_flags:
-                swift_argv.append(flag)
-            swift_argv.extend(["-o", swift_archive])
-            for src in swift_srcs:
-                swift_argv.append(src)
+                swift_base_argv.append(flag)
 
             swift_inputs = list(swift_srcs)
             if bridging_header:
@@ -1060,13 +1049,40 @@ def _apple_library_impl(ctx):
                 if dylib not in swift_inputs:
                     swift_inputs.append(dylib)
 
+            swift_module_argv = list(swift_base_argv)
+            swift_module_argv.extend([
+                "-static",
+                "-emit-module",
+                "-emit-module-path",
+                swiftmodule,
+                "-emit-objc-header",
+                "-emit-objc-header-path",
+                swift_objc_header,
+            ])
+            for src in swift_srcs:
+                swift_module_argv.append(src)
+
             run_action(
-                argv = swift_argv,
+                argv = swift_module_argv,
                 inputs = swift_inputs,
-                outputs = [swift_archive, swiftmodule, swiftdoc, swift_objc_header],
+                outputs = [swiftmodule, swiftdoc, swift_objc_header],
                 env = xcrun_env,
                 toolchain_identity = swiftc_identity,
-                identifier = "swift_compile_" + module_name + arch_suffix,
+                identifier = "swift_module_compile_" + module_name + arch_suffix,
+            )
+
+            swift_archive_argv = list(swift_base_argv)
+            swift_archive_argv.extend(["-emit-library", "-static", "-o", swift_archive])
+            for src in swift_srcs:
+                swift_archive_argv.append(src)
+
+            run_action(
+                argv = swift_archive_argv,
+                inputs = swift_inputs,
+                outputs = [swift_archive],
+                env = xcrun_env,
+                toolchain_identity = swiftc_identity,
+                identifier = "swift_archive_compile_" + module_name + arch_suffix,
             )
 
         arch_clang_objects = []
