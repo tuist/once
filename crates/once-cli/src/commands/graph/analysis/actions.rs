@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -8,7 +9,6 @@ use once_core::{
 use once_frontend::analysis::{AnalysisResult, DeclaredAction};
 use once_frontend::GraphTarget;
 
-use super::script::wrap_in_script;
 use super::BuildOutcome;
 
 /// Materialise each declared action through the action cache, then
@@ -97,7 +97,7 @@ fn declared_to_action(
                 .with_context(|| format!("invalid declared output path `{path}`"))
         })
         .collect::<Result<Vec<_>>>()?;
-    let script = wrap_in_script(&declared.argv, &declared.outputs);
+    let script = declared_action_script(&declared.argv, &declared.outputs);
     let DeclaredAction { env, .. } = declared;
     Ok(Action::RunCommand {
         argv: vec!["/bin/sh".into(), "-c".into(), script],
@@ -110,6 +110,43 @@ fn declared_to_action(
         timeout_ms: None,
         remote: None,
     })
+}
+
+fn declared_action_script(argv: &[String], outputs: &[String]) -> String {
+    let mut script = String::from("set -eu\n");
+    for dir in output_parent_dirs(outputs) {
+        script.push_str("mkdir -p ");
+        push_shell_literal(&mut script, dir);
+        script.push('\n');
+    }
+    push_shell_words(&mut script, argv);
+    script.push('\n');
+    script
+}
+
+fn output_parent_dirs(outputs: &[String]) -> BTreeSet<&str> {
+    outputs
+        .iter()
+        .filter_map(|output| {
+            let parent = Path::new(output).parent()?.to_str()?;
+            (!parent.is_empty()).then_some(parent)
+        })
+        .collect()
+}
+
+fn push_shell_words(out: &mut String, words: &[String]) {
+    for (index, word) in words.iter().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        push_shell_literal(out, word);
+    }
+}
+
+fn push_shell_literal(out: &mut String, value: &str) {
+    out.push('\'');
+    out.push_str(&value.replace('\'', "'\"'\"'"));
+    out.push('\'');
 }
 
 fn compose_input_digest(
@@ -160,6 +197,40 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+
+    #[test]
+    fn shell_literal_escapes_single_quotes() {
+        let mut out = String::new();
+
+        push_shell_literal(&mut out, "A'B");
+
+        assert_eq!(out, "'A'\"'\"'B'");
+    }
+
+    #[test]
+    fn shell_literal_handles_empty_string() {
+        let mut out = String::new();
+
+        push_shell_literal(&mut out, "");
+
+        assert_eq!(out, "''");
+    }
+
+    #[test]
+    fn declared_action_script_prepares_each_output_parent_once() {
+        let outputs = vec![
+            ".once/out/x/A.a".to_string(),
+            ".once/out/x/A.swiftmodule".to_string(),
+            ".once/out/x/sub/B.swiftdoc".to_string(),
+        ];
+
+        let script = declared_action_script(&["swiftc".to_string(), "-o".to_string()], &outputs);
+
+        assert!(script.contains("mkdir -p '.once/out/x'\n"));
+        assert!(script.contains("mkdir -p '.once/out/x/sub'\n"));
+        assert_eq!(script.matches("mkdir -p '.once/out/x'\n").count(), 1);
+        assert!(script.ends_with("'swiftc' '-o'\n"));
+    }
 
     #[test]
     fn input_digest_changes_with_toolchain_identity() {

@@ -17,7 +17,6 @@
 
 mod actions;
 mod scheduler;
-mod script;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
