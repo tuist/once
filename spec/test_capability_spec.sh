@@ -26,76 +26,11 @@ Describe 'test capability'
       fi
     done
     IFS="$old_ifs"
-    mkdir -p "$WORKSPACE/spec"
-    cat > "$WORKSPACE/once.toml" <<EOF
-[[target]]
-name = "cli_e2e"
-kind = "shellspec_test"
-srcs = ["spec/**/*_spec.sh"]
-
-[target.attrs]
-shellspec = "$shellspec_bin"
-data = ["spec/spec_helper.sh"]
-labels = ["e2e", "shell"]
-env = { PATH = "$clean_path", ONCE_BIN = "$ONCE_BIN" }
-EOF
-    cat > "$WORKSPACE/spec/spec_helper.sh" <<'EOF'
-#shellcheck shell=bash
-
-setup_nested_workspace() {
-  NESTED_WORKSPACE="$(mktemp -d -t once-nested-spec.XXXXXX)"
-  export NESTED_WORKSPACE
-}
-
-cleanup_nested_workspace() {
-  if [ -n "${NESTED_WORKSPACE:-}" ] && [ -d "$NESTED_WORKSPACE" ]; then
-    rm -rf "$NESTED_WORKSPACE"
-    unset NESTED_WORKSPACE
-  fi
-}
-
-once_under_test() {
-  "$ONCE_BIN" -C "$NESTED_WORKSPACE" "$@"
-}
-EOF
-    printf '%s\n' \
-      '#shellcheck shell=bash' \
-      '' \
-      "Describe 'once cli surface'" \
-      "  Include './spec/spec_helper.sh'" \
-      "  BeforeEach 'setup_nested_workspace'" \
-      "  AfterEach 'cleanup_nested_workspace'" \
-      '' \
-      "  It 'lists commands'" \
-      '    When call once_under_test --list' \
-      '    The status should be success' \
-      "    The stdout should include 'test'" \
-      "    The stdout should include 'query'" \
-      '  End' \
-      'End' \
-      > "$WORKSPACE/spec/cli_surface_spec.sh"
-    printf '%s\n' \
-      '#shellcheck shell=bash' \
-      '' \
-      "Describe 'once graph query'" \
-      "  Include './spec/spec_helper.sh'" \
-      "  BeforeEach 'setup_nested_workspace'" \
-      "  AfterEach 'cleanup_nested_workspace'" \
-      '' \
-      "  It 'lists declared targets'" \
-      '    {' \
-      "      printf '%s\\n' '[['target']]'" \
-      "      printf '%s\\n' 'name = \"smoke\"'" \
-      "      printf '%s\\n' 'kind = \"shellspec_test\"'" \
-      "      printf '%s\\n' 'srcs = [\"spec/**/*_spec.sh\"]'" \
-      '    } > "$NESTED_WORKSPACE/once.toml"' \
-      '' \
-      '    When call once_under_test query targets' \
-      '    The status should be success' \
-      "    The stdout should include 'smoke (shellspec_test) [test]'" \
-      '  End' \
-      'End' \
-      > "$WORKSPACE/spec/graph_query_spec.sh"
+    cp -R "$REPO_ROOT/fixtures/shellspec_test/." "$WORKSPACE/"
+    sed -e "s|__SHELLSPEC_BIN__|$shellspec_bin|g" \
+      -e "s|__CLEAN_PATH__|$clean_path|g" \
+      -e "s|__ONCE_BIN__|$ONCE_BIN|g" \
+      "$REPO_ROOT/fixtures/shellspec_test/once.toml" > "$WORKSPACE/once.toml"
   }
 
   It 'discovers shellspec test targets through the generic test query'

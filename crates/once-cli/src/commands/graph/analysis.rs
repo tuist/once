@@ -673,13 +673,13 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    fn test_target(name: &str, deps: &[&str], script: &str) -> GraphTarget {
+    fn test_target(name: &str, deps: &[&str], script: impl Into<String>) -> GraphTarget {
         target_with_capabilities(
             name,
             deps,
             &[],
             &["build"],
-            [("script".to_string(), AttrValue::String(script.to_string()))],
+            [("script".to_string(), AttrValue::String(script.into()))],
         )
     }
 
@@ -714,6 +714,22 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn parallel_leaf_script(marker: &str, peer: &str, output: &str) -> String {
+        format!(
+            r#"mkdir -p sync
+: > sync/{marker}
+i=0
+while [ ! -f sync/{peer} ]; do
+  i=$((i + 1))
+  [ "$i" -le 50 ] || exit 42
+  sleep 0.1
+done
+printf {output} > "$1"
+"#
+        )
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn independent_dependencies_run_in_parallel() {
         static TEST_PRELUDE: &str = r#"
@@ -735,16 +751,8 @@ RULES = [rule("test_rule", impl = _impl)]
         let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
         let graph = vec![
             test_target("Root", &["LeafA", "LeafB"], "printf root > \"$1\""),
-            test_target(
-                "LeafA",
-                &[],
-                "mkdir -p sync; : > sync/LeafA; i=0; while [ ! -f sync/LeafB ]; do i=$((i + 1)); [ \"$i\" -le 50 ] || exit 42; sleep 0.1; done; printf a > \"$1\"",
-            ),
-            test_target(
-                "LeafB",
-                &[],
-                "mkdir -p sync; : > sync/LeafB; i=0; while [ ! -f sync/LeafA ]; do i=$((i + 1)); [ \"$i\" -le 50 ] || exit 42; sleep 0.1; done; printf b > \"$1\"",
-            ),
+            test_target("LeafA", &[], parallel_leaf_script("LeafA", "LeafB", "a")),
+            test_target("LeafB", &[], parallel_leaf_script("LeafB", "LeafA", "b")),
         ];
         let analyzer = AnalysisEngine::from_source(TEST_PRELUDE).unwrap();
         let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
