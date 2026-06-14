@@ -378,14 +378,12 @@ fn test_root(target: &GraphTarget) -> String {
 }
 
 fn product_name(target: &GraphTarget) -> String {
-    string_attr(target, "product_name").unwrap_or_else(|| target.label.name.clone())
-}
-
-fn string_attr(target: &GraphTarget, name: &str) -> Option<String> {
-    target.attrs.get(name).and_then(|value| match value {
-        AttrValue::String(value) => Some(value.clone()),
-        _ => None,
-    })
+    target
+        .attrs
+        .get("product_name")
+        .and_then(AttrValue::as_str)
+        .unwrap_or(&target.label.name)
+        .to_string()
 }
 
 /// Emit the command that writes the artifact manifest.
@@ -427,13 +425,6 @@ mod tests {
     use once_frontend::{Capability, TargetLabel};
 
     fn graph_target(kind: &str, name: &str) -> GraphTarget {
-        let mut attrs = BTreeMap::new();
-        if kind == "apple_application" {
-            attrs.insert(
-                "bundle_id".to_string(),
-                AttrValue::String("dev.once.App".to_string()),
-            );
-        }
         GraphTarget {
             label: TargetLabel {
                 package: "apps/ios".to_string(),
@@ -443,7 +434,7 @@ mod tests {
             kind: kind.to_string(),
             deps: Vec::new(),
             srcs: Vec::new(),
-            attrs,
+            attrs: BTreeMap::new(),
             capabilities: vec![Capability {
                 name: "build".to_string(),
                 output_groups: Vec::new(),
