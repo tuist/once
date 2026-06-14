@@ -1,0 +1,8 @@
+[[target]]
+name = "cli_e2e"
+kind = "shellspec_test"
+srcs = ["spec/**/*_spec.sh"]
+
+[target.attrs]
+data = ["spec/spec_helper.sh"]
+labels = ["e2e", "shell"]

@@ -32,6 +32,22 @@ pub enum QueryCmd {
         target: String,
     },
 
+    /// List targets that expose the generic test capability.
+    Tests,
+
+    /// List test targets likely affected by changed workspace paths.
+    AffectedTests {
+        /// Changed workspace-relative path. Repeat for multiple paths.
+        #[arg(long = "changed-path", value_name = "PATH")]
+        changed_paths: Vec<String>,
+    },
+
+    /// Read normalized `once.test_results.v1` results for a target.
+    TestResults {
+        /// Target id, e.g. `spec/cli_e2e`.
+        target: String,
+    },
+
     /// Validate a proposed `[[target]]` table against its rule schema.
     ///
     /// Reads a JSON document matching the `once_validate_target` MCP
@@ -52,6 +68,9 @@ impl QueryCmd {
             Self::Schema { .. } => vec!["schema"],
             Self::Rules => vec!["rules"],
             Self::Target { .. } => vec!["target"],
+            Self::Tests => vec!["tests"],
+            Self::AffectedTests { .. } => vec!["affected-tests"],
+            Self::TestResults { .. } => vec!["test-results"],
             Self::ValidateTarget { .. } => vec!["validate-target"],
         }
     }

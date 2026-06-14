@@ -57,10 +57,31 @@ pub async fn test(
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let target = require_target(&graph, target_id)?;
-    ensure_capability(&target, "test")?;
+    let test_capability = ensure_capability(&target, "test")?;
     let session = analysis::BuildSession::new(workspace, cache, &graph)?;
-    let _ = build_target(workspace, cache, &target, &session).await?;
-    let record = run_target_capability(workspace, cache, &target, "test").await?;
+    if !test_capability.requires_outputs.is_empty()
+        && target
+            .capabilities
+            .iter()
+            .any(|capability| capability.name == "build")
+    {
+        let _ = build_target(workspace, cache, &target, &session).await?;
+    }
+    let record = if let Some(outcome) = session.run_with_analysis(&target, "test").await? {
+        CapabilityRunRecord {
+            target: target.label.id.clone(),
+            kind: target.kind.clone(),
+            capability: test_capability.name.clone(),
+            status: "completed",
+            action_digest: outcome.action_digest.to_string(),
+            cache: outcome.cache_tag,
+            output_groups: test_capability.output_groups.clone(),
+            required_outputs: test_capability.requires_outputs.clone(),
+            outputs: outcome.outputs,
+        }
+    } else {
+        run_target_capability(workspace, cache, &target, "test").await?
+    };
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -89,9 +110,9 @@ fn require_target(graph: &[GraphTarget], target_id: &str) -> Result<GraphTarget>
         .with_context(|| format!("no target matches `{target_id}`"))
 }
 
-/// Build a target, walking deps first. If the target's rule has an
-/// `impl` callable, we execute the actions the impl declares; otherwise
-/// we fall back to the placeholder shell scripts in [`action`].
+/// Build a target, walking deps first. Analysis-backed rules execute
+/// the actions declared by Starlark; other rules fall back to the
+/// placeholder shell scripts in [`action`].
 async fn build_target(
     workspace: &Path,
     cache: &CacheProvider,
@@ -99,7 +120,7 @@ async fn build_target(
     session: &analysis::BuildSession,
 ) -> Result<CapabilityRunRecord> {
     let capability = ensure_capability(target, "build")?;
-    if let Some(outcome) = session.build_with_impl(target).await? {
+    if let Some(outcome) = session.build_with_analysis(target).await? {
         // Destructure the outcome so `outputs` moves into the record
         // instead of being cloned. `action_digest` is `Copy`,
         // `cache_tag` is `&'static str`, and `provider` is dropped on

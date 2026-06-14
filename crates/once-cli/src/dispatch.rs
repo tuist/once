@@ -108,7 +108,7 @@ async fn run_command(
         Cmd::Test { target } => {
             let target = resolve_required_target(workspace, target)?;
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
-            commands::graph::test(workspace, &cache, output, &target).await
+            Box::pin(commands::graph::test(workspace, &cache, output, &target)).await
         }
         Cmd::Toolchain { cmd } => run_toolchain_command(workspace, output, cmd).await,
         Cmd::Query { cmd } => run_query_command(workspace, output, cmd).await,
@@ -165,6 +165,19 @@ async fn run_query_command(
             .map(|()| ExitCode::SUCCESS),
         Some(cli::QueryCmd::Target { target }) => {
             commands::query::target(workspace, output, &target)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::Tests) => commands::query::tests(workspace, output)
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Some(cli::QueryCmd::AffectedTests { changed_paths }) => {
+            commands::query::affected_tests(workspace, output, &changed_paths)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::TestResults { target }) => {
+            commands::query::test_results(workspace, output, &target)
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }

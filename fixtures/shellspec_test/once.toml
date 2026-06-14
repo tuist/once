@@ -1,0 +1,10 @@
+[[target]]
+name = "cli_e2e"
+kind = "shellspec_test"
+srcs = ["spec/**/*_spec.sh"]
+
+[target.attrs]
+shellspec = "__SHELLSPEC_BIN__"
+data = ["spec/spec_helper.sh"]
+labels = ["e2e", "shell"]
+env = { PATH = "__CLEAN_PATH__", ONCE_BIN = "__ONCE_BIN__" }

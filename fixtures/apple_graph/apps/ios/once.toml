@@ -1,0 +1,48 @@
+[[target]]
+name = "AppCore"
+kind = "apple_library"
+srcs = ["Sources/AppCore/**/*.swift"]
+
+[target.attrs]
+platform = "ios"
+minimum_os = "17.0"
+headers = ["Sources/AppCore/include/AppCore.h"]
+exported_headers = ["Sources/AppCore/include/AppCore.h"]
+sdk_frameworks = ["Foundation"]
+swift_flags = ["-warnings-as-errors"]
+
+[[target]]
+name = "DesignSystem"
+kind = "apple_framework"
+srcs = ["Sources/DesignSystem/**/*.swift"]
+deps = ["./AppCore"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+bundle_id = "dev.once.DesignSystem"
+minimum_os = "17.0"
+
+[[target]]
+name = "App"
+kind = "apple_application"
+srcs = ["Sources/App/**/*.swift"]
+deps = ["./DesignSystem"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+bundle_id = "dev.once.App"
+minimum_os = "17.0"
+families = ["iphone", "ipad"]
+
+[[target]]
+name = "AppTests"
+kind = "apple_test_bundle"
+srcs = ["Sources/AppTests/**/*.swift"]
+deps = ["./AppCore"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+minimum_os = "17.0"

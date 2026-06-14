@@ -9,11 +9,9 @@
 //! client sends a `notifications/initialized` and then `tools/list`
 //! to discover what we can do, then `tools/call` for each tool.
 //!
-//! Action invocation (call a graph action, get a digest back, query
-//! the cached outputs / logs / provider record by that digest later)
-//! is intentional follow-up work — that surface is read-write and
-//! needs design choices about cross-workspace cache lookups that
-//! aren't worth bundling with the initial inspection-only ramp.
+//! Test invocation is intentionally available as a first write-capable
+//! tool because coding harnesses need a short discover, filter, run,
+//! inspect loop after editing files.
 
 use std::path::PathBuf;
 
@@ -131,6 +129,10 @@ impl Server {
             "once_query_targets" => self.tool_query_targets(&call.arguments),
             "once_query_capabilities" => self.tool_query_capabilities(&call.arguments),
             "once_get_target" => self.tool_get_target(&call.arguments),
+            "once_query_tests" => self.tool_query_tests(),
+            "once_query_affected_tests" => self.tool_query_affected_tests(&call.arguments),
+            "once_run_tests" => self.tool_run_tests(&call.arguments),
+            "once_query_test_results" => self.tool_query_test_results(&call.arguments),
             "once_apply_edit" => self.tool_apply_edit(&call.arguments),
             // Rule registry queries don't need a workspace because they
             // read from the compiled-in rule prelude.
@@ -196,6 +198,145 @@ impl Server {
         let operations: Vec<once_frontend::EditOperation> = serde_json::from_value(raw_ops.clone())
             .map_err(|err| anyhow::anyhow!("invalid `operations`: {err}"))?;
         apply_edit_to_package(&self.workspace, package, &operations)
+    }
+
+    fn tool_query_tests(&self) -> Result<Value> {
+        crate::commands::query::tests_value(&self.workspace)
+    }
+
+    fn tool_query_affected_tests(&self, args: &Value) -> Result<Value> {
+        let changed_paths = args
+            .get("changed_paths")
+            .and_then(Value::as_array)
+            .map(|paths| {
+                paths
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        crate::commands::query::affected_tests_value(&self.workspace, &changed_paths)
+    }
+
+    fn tool_query_test_results(&self, args: &Value) -> Result<Value> {
+        let target_id = args
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing `target` argument"))?;
+        crate::commands::query::test_results_value(&self.workspace, target_id)
+    }
+
+    fn tool_run_tests(&self, args: &Value) -> Result<Value> {
+        let targets = run_test_targets(&self.workspace, args)?;
+        let mut runs = Vec::new();
+        for target in targets {
+            runs.push(run_test_target(&self.workspace, &target)?);
+        }
+        Ok(json!({ "runs": runs }))
+    }
+}
+
+fn run_test_targets(workspace: &std::path::Path, args: &Value) -> Result<Vec<String>> {
+    let mut targets = Vec::new();
+    if let Some(target) = args.get("target").and_then(Value::as_str) {
+        targets.push(target.to_string());
+    }
+    if let Some(raw_targets) = args.get("targets").and_then(Value::as_array) {
+        targets.extend(
+            raw_targets
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string),
+        );
+    }
+    if !targets.is_empty() {
+        targets.sort();
+        targets.dedup();
+        validate_test_targets(workspace, &targets)?;
+        return Ok(targets);
+    }
+
+    let changed_paths = args
+        .get("changed_paths")
+        .and_then(Value::as_array)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let affected = crate::commands::query::affected_tests_value(workspace, &changed_paths)?;
+    let mut targets = affected
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|record| record.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    targets.sort();
+    targets.dedup();
+    if targets.is_empty() {
+        anyhow::bail!("no test targets matched the requested inputs");
+    }
+    validate_test_targets(workspace, &targets)?;
+    Ok(targets)
+}
+
+fn validate_test_targets(workspace: &std::path::Path, targets: &[String]) -> Result<()> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    for target_id in targets {
+        crate::commands::query::target_id_path(target_id)?;
+        let target = graph
+            .iter()
+            .find(|target| target.label.id == *target_id)
+            .with_context(|| format!("no target matches `{target_id}`"))?;
+        if !target
+            .capabilities
+            .iter()
+            .any(|capability| capability.name == "test")
+        {
+            anyhow::bail!("target `{target_id}` does not expose the test capability");
+        }
+    }
+    Ok(())
+}
+
+fn run_test_target(workspace: &std::path::Path, target: &str) -> Result<Value> {
+    let exe = std::env::current_exe().context("resolving current once executable")?;
+    let output = std::process::Command::new(&exe)
+        .arg("-C")
+        .arg(workspace)
+        .arg("--format")
+        .arg("json")
+        .arg("test")
+        .arg(target)
+        .output()
+        .with_context(|| format!("running `{}` test {target}`", exe.display()))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let (record, record_parse_error) = parse_test_run_record(&stdout);
+    let results = crate::commands::query::test_results_value(workspace, target).ok();
+    Ok(json!({
+        "target": target,
+        "exit_code": output.status.code().unwrap_or(-1),
+        "success": output.status.success(),
+        "record": record,
+        "record_parse_error": record_parse_error,
+        "results": results,
+        "stderr": stderr,
+    }))
+}
+
+fn parse_test_run_record(stdout: &str) -> (Value, Option<String>) {
+    if stdout.is_empty() {
+        return (Value::Null, None);
+    }
+    match serde_json::from_str(stdout) {
+        Ok(value) => (value, None),
+        Err(err) => (Value::String(stdout.to_string()), Some(err.to_string())),
     }
 }
 
@@ -429,6 +570,73 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
             example_return: "{\n  \"label\": { \"package\": \"apps/Hello\", \"name\": \"Hello\", \"id\": \"apps/Hello/Hello\" },\n  \"kind\": \"apple_library\",\n  \"srcs\": [\"Sources/**/*.swift\"],\n  \"deps\": [],\n  \"attrs\": { \"platform\": \"ios\", \"minimum_os\": \"17.0\" },\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\", \"binary\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"apple_linkable\", \"apple_module\"]\n}",
         },
         ToolDefinition {
+            name: "once_query_tests",
+            description: "List targets that expose Once's generic test capability.",
+            long_description: "Returns every target with a `test` capability, including its rule kind, dependencies, runner type when the rule exposes `once_test_info`, labels, and normalized result path. Use this as the agent-native test discovery entry point before running or filtering tests.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {}
+            }),
+            example_return: "[\n  {\n    \"id\": \"spec/cli_e2e\",\n    \"kind\": \"shellspec_test\",\n    \"deps\": [],\n    \"runner\": \"shellspec\",\n    \"labels\": [\"e2e\"],\n    \"results_path\": \".once/out/spec/cli_e2e/test/test_results.json\"\n  }\n]",
+        },
+        ToolDefinition {
+            name: "once_query_affected_tests",
+            description: "Return test targets likely affected by a set of changed workspace paths.",
+            long_description: "Maps changed paths to test targets using generic graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. The query does not know about ShellSpec, Python, Android, or any native runner.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "changed_paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Workspace-relative changed paths. An empty list returns every test target."
+                    }
+                }
+            }),
+            example_return: "[\n  {\n    \"id\": \"spec/cli_e2e\",\n    \"kind\": \"shellspec_test\",\n    \"reasons\": [\"changed test input `spec/cli_spec.sh`\"]\n  }\n]",
+        },
+        ToolDefinition {
+            name: "once_run_tests",
+            description: "Run test targets by id, or run tests affected by changed workspace paths.",
+            long_description: "Executes Once's generic `test` capability for either explicit `target` / `targets` or the targets selected by `changed_paths`. This is the MCP-native edit verification loop for coding harnesses: call `once_query_affected_tests` to preview selection, call `once_run_tests` to execute, then read the normalized `once.test_results.v1` results included in each run record. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Single canonical target id to run, e.g. `spec/cli_e2e`."
+                    },
+                    "targets": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Canonical target ids to run. Used with `target`, this is deduplicated before execution."
+                    },
+                    "changed_paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Workspace-relative changed paths. Used only when no explicit target is supplied; an empty list runs every discovered test target."
+                    }
+                }
+            }),
+            example_return: "{\n  \"runs\": [\n    {\n      \"target\": \"spec/cli_e2e\",\n      \"exit_code\": 0,\n      \"success\": true,\n      \"record\": { \"target\": \"spec/cli_e2e\", \"capability\": \"test\" },\n      \"results\": { \"schema\": \"once.test_results.v1\", \"status\": \"passed\" },\n      \"stderr\": \"\"\n    }\n  ]\n}",
+        },
+        ToolDefinition {
+            name: "once_query_test_results",
+            description: "Read normalized once.test_results.v1 results for a target.",
+            long_description: "Reads the normalized result file produced by the target's `test` capability. This is the stable agent-facing interface for pass/fail summaries, case-level failures, attempts, and artifacts; callers should not scrape native runner stdout or stderr.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Canonical target id, e.g. `spec/cli_e2e`."
+                    }
+                },
+                "required": ["target"]
+            }),
+            example_return: "{\n  \"schema\": \"once.test_results.v1\",\n  \"target\": \"spec/cli_e2e\",\n  \"status\": \"passed\",\n  \"summary\": { \"total\": 2, \"passed\": 2, \"failed\": 0 },\n  \"cases\": []\n}",
+        },
+        ToolDefinition {
             name: "once_validate_target",
             description: "Validate a proposed `[[target]]` table against its rule schema. Returns structured diagnostics instead of prose.",
             long_description: "Schema-only validation: checks that the target declares a known rule kind, every required attribute is present, every declared attribute is known to the rule and matches the rule's declared type, and the target name is well-formed. The check is local; it does not resolve dep references or read other manifests. Returns `{ valid: true }` on success or `{ valid: false, diagnostics: [...] }` where each diagnostic carries a stable `code`, the offending `target` id, the offending `attribute` when applicable, and `repairs` an agent can apply.",
@@ -647,10 +855,52 @@ mod tests {
                 "once_query_schema".to_string(),
                 "once_list_rules".to_string(),
                 "once_get_target".to_string(),
+                "once_query_tests".to_string(),
+                "once_query_affected_tests".to_string(),
+                "once_run_tests".to_string(),
+                "once_query_test_results".to_string(),
                 "once_validate_target".to_string(),
                 "once_apply_edit".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn run_test_targets_prefers_explicit_deduplicated_targets() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("spec")).unwrap();
+        std::fs::write(
+            tmp.path().join("spec/once.toml"),
+            r#"[[target]]
+name = "all"
+kind = "shellspec_test"
+srcs = ["all_spec.sh"]
+
+[[target]]
+name = "other"
+kind = "shellspec_test"
+srcs = ["other_spec.sh"]
+"#,
+        )
+        .unwrap();
+        let targets = run_test_targets(
+            tmp.path(),
+            &json!({
+                "target": "spec/all",
+                "targets": ["spec/all", "spec/other"],
+                "changed_paths": ["src/lib.rs"]
+            }),
+        )
+        .unwrap();
+        assert_eq!(targets, vec!["spec/all", "spec/other"]);
+    }
+
+    #[test]
+    fn parse_test_run_record_preserves_json_error_context() {
+        let (record, error) = parse_test_run_record("{not json");
+
+        assert_eq!(record, Value::String("{not json".to_string()));
+        assert!(error.unwrap().contains("line"));
     }
 
     #[test]

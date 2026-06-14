@@ -743,6 +743,7 @@ RULES = [
                 "apple_framework",
                 "apple_application",
                 "apple_test_bundle",
+                "shellspec_test",
                 "script"
             ]
         );

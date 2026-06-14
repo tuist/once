@@ -1,0 +1,2 @@
+name = "Minimal ShellSpec test"
+use_when = "Use when modeling shell-based e2e tests that should run through Once's generic test capability."
