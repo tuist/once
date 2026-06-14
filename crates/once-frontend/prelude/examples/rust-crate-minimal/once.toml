@@ -1,0 +1,13 @@
+[[target]]
+name = "itoa-1.0.14"
+kind = "rust_crate"
+srcs = ["vendor/itoa-1.0.14/src/**/*.rs"]
+
+[target.attrs]
+package_name = "itoa"
+crate_name = "itoa"
+version = "1.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d75a2a4b1b190afb6f5425f10f6a8f959d2ea0b9c2b1d79553551850539e4674"
+crate_root = "vendor/itoa-1.0.14/src/lib.rs"
+edition = "2021"

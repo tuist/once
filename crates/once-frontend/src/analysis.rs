@@ -251,6 +251,18 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(host_os_str().to_string())
     }
 
+    /// Active workspace root as an absolute path. Schema parsing
+    /// returns `""`.
+    fn workspace_root() -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        with_store(|store| -> Result<String> {
+            let store = store.ok_or_else(|| anyhow!("workspace_root called outside analysis"))?;
+            Ok(store.workspace_root.to_string_lossy().into_owned())
+        })
+    }
+
     /// Find `name` on `PATH` and return its absolute path. Fails if
     /// the binary is not found. Schema parsing returns `""`.
     fn host_which(name: &str) -> anyhow::Result<String> {
@@ -445,6 +457,44 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         });
         Ok(NoneType)
     }
+
+    /// Decode TOML into Starlark dictionaries/lists/scalars. This is a
+    /// generic data-format primitive used by dependency resolvers; the
+    /// ecosystem-specific interpretation stays in Starlark.
+    fn toml_decode<'v>(src: &str, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
+        let value: toml::Value = toml::from_str(src)?;
+        Ok(toml_value_to_starlark(eval, value))
+    }
+
+    /// Decode JSON into Starlark dictionaries/lists/scalars. Dependency
+    /// resolvers use this for machine output from ecosystem-native
+    /// resolution commands such as `cargo metadata`.
+    fn json_decode<'v>(src: &str, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
+        let value: JsonValue = serde_json::from_str(src)?;
+        Ok(json_to_value(eval, &value))
+    }
+}
+
+fn toml_value_to_starlark<'v>(eval: &Evaluator<'v, '_, '_>, value: toml::Value) -> Value<'v> {
+    let heap = eval.heap();
+    match value {
+        toml::Value::String(value) => heap.alloc(value),
+        toml::Value::Integer(value) => heap.alloc(value),
+        toml::Value::Float(value) => heap.alloc(value),
+        toml::Value::Boolean(value) => Value::new_bool(value),
+        toml::Value::Array(values) => heap.alloc(
+            values
+                .into_iter()
+                .map(|value| toml_value_to_starlark(eval, value))
+                .collect::<Vec<_>>(),
+        ),
+        toml::Value::Table(values) => heap.alloc(AllocDict(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, toml_value_to_starlark(eval, value))),
+        )),
+        toml::Value::Datetime(value) => heap.alloc(value.to_string()),
+    }
 }
 
 fn shell_quote(value: &str) -> String {
@@ -515,13 +565,37 @@ fn host_os_str() -> &'static str {
 
 fn which_on_path(name: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
+    let candidates = which_candidate_names(name);
     for entry in std::env::split_paths(&paths) {
-        let candidate = entry.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
+        for candidate_name in &candidates {
+            let candidate = entry.join(candidate_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
     None
+}
+
+fn which_candidate_names(name: &str) -> Vec<String> {
+    if !cfg!(windows) || Path::new(name).extension().is_some() {
+        return vec![name.to_string()];
+    }
+    let mut candidates = vec![name.to_string()];
+    let path_ext = std::env::var_os("PATHEXT")
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into())
+        .to_string_lossy()
+        .into_owned();
+    for ext in path_ext.split(';') {
+        if ext.is_empty() {
+            continue;
+        }
+        candidates.push(format!("{name}{ext}"));
+        candidates.push(format!("{name}{}", ext.to_ascii_lowercase()));
+    }
+    candidates.sort();
+    candidates.dedup();
+    candidates
 }
 
 /// Expand `patterns` against `package` and return workspace-relative
@@ -612,8 +686,7 @@ pub struct AnalysisEngine {
 
 impl AnalysisEngine {
     pub fn new() -> Result<Self> {
-        let source = include_str!("../prelude/apple.star");
-        Self::from_source(source)
+        Self::from_source(BUILT_IN_PRELUDE)
     }
 
     pub fn from_source(source: &'static str) -> Result<Self> {
@@ -662,6 +735,13 @@ impl AnalysisEngine {
         )
     }
 }
+
+pub(crate) const BUILT_IN_PRELUDE: &str = concat!(
+    include_str!("../prelude/apple.star"),
+    "\n",
+    include_str!("../prelude/rust.star"),
+    "\nRULES = RULES + RUST_RULES\n",
+);
 
 /// Cached view of which rules declare executable impls.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -887,7 +967,7 @@ fn attr_value_to_starlark<'v>(eval: &Evaluator<'v, '_, '_>, value: &AttrValue) -
     }
 }
 
-fn json_to_value<'v>(eval: &Evaluator<'v, '_, '_>, json: &JsonValue) -> Value<'v> {
+pub(crate) fn json_to_value<'v>(eval: &Evaluator<'v, '_, '_>, json: &JsonValue) -> Value<'v> {
     let heap = eval.heap();
     match json {
         JsonValue::Null => Value::new_none(),
@@ -917,7 +997,7 @@ fn json_to_value<'v>(eval: &Evaluator<'v, '_, '_>, json: &JsonValue) -> Value<'v
     }
 }
 
-fn value_to_json(value: Value<'_>) -> JsonValue {
+pub(crate) fn value_to_json(value: Value<'_>) -> JsonValue {
     if value.is_none() {
         return JsonValue::Null;
     }
@@ -1428,6 +1508,13 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
     #[test]
     fn rule_has_impl_returns_true_for_apple_library() {
         assert!(rule_has_impl("apple_library").unwrap());
+    }
+
+    #[test]
+    fn rule_has_impl_returns_true_for_rust_rules() {
+        assert!(rule_has_impl("rust_library").unwrap());
+        assert!(rule_has_impl("rust_binary").unwrap());
+        assert!(rule_has_impl("rust_crate").unwrap());
     }
 
     #[test]

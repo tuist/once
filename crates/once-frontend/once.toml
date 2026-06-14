@@ -1,0 +1,15 @@
+[[target]]
+name = "once_frontend"
+kind = "rust_library"
+deps = ["cargo_dependencies"]
+srcs = ["src/**/*.rs", "prelude/**/*.star", "prelude/examples/**"]
+
+[target.attrs]
+crate_name = "once_frontend"
+crate_root = "src/lib.rs"
+edition = "2021"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-frontend"
+CARGO_PKG_NAME = "once-frontend"
+CARGO_PKG_VERSION = "0.0.0"

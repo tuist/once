@@ -1,0 +1,19 @@
+[[target]]
+name = "once_core"
+kind = "rust_library"
+deps = [
+  "crates/once-cas/once_cas",
+  "cargo_dependencies",
+]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "once_core"
+crate_root = "src/lib.rs"
+edition = "2021"
+features = ["default", "remote-microsandbox"]
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-core"
+CARGO_PKG_NAME = "once-core"
+CARGO_PKG_VERSION = "0.0.0"

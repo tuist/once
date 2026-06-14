@@ -269,9 +269,16 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
 }
 
 fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
-    const PRELUDE_PATH: &str = "once//prelude/apple.star";
-    let source = include_str!("../prelude/apple.star");
-    parse_rule_schemas(PRELUDE_PATH, source)
+    let mut schemas = parse_rule_schemas(
+        "once//prelude/apple.star",
+        include_str!("../prelude/apple.star"),
+    )?;
+    let rust_source = format!(
+        "{}\nRULES = RUST_RULES\n",
+        include_str!("../prelude/rust.star")
+    );
+    schemas.extend(parse_rule_schemas("once//prelude/rust.star", &rust_source)?);
+    Ok(schemas)
 }
 
 /// Evaluate a Starlark prelude source and read its `RULES` export.
@@ -739,7 +746,12 @@ RULES = [
                 "apple_application",
                 "apple_test_bundle",
                 "shellspec_test",
-                "script"
+                "cargo_dependencies",
+                "rust_library",
+                "rust_binary",
+                "rust_crate",
+                "rust_proc_macro",
+                "script",
             ]
         );
     }

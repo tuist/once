@@ -1,11 +1,7 @@
 [workspace]
 include = [
   "once.toml",
-  "crates/*/once.toml",
-]
-exclude = [
-  "crates/once-frontend/prelude/examples/**",
-  "fixtures/**",
+  "apps/*/once.toml",
 ]
 
 [[target]]
@@ -14,7 +10,7 @@ kind = "cargo_dependencies"
 srcs = [
   "Cargo.toml",
   "Cargo.lock",
-  "crates/*/Cargo.toml",
+  "apps/*/Cargo.toml",
 ]
 
 [target.attrs]

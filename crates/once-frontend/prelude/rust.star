@@ -1,0 +1,1367 @@
+def attr(name, ty, required = False, default = None, docs = "", configurable = True):
+    return {
+        "name": name,
+        "ty": ty,
+        "required": required,
+        "default": default,
+        "docs": docs,
+        "configurable": configurable,
+    }
+
+def dep(name, expected_providers, docs = ""):
+    return {
+        "name": name,
+        "expected_providers": expected_providers,
+        "docs": docs,
+    }
+
+def capability(name, output_groups, requires_outputs = []):
+    return {
+        "name": name,
+        "output_groups": output_groups,
+        "requires_outputs": requires_outputs,
+    }
+
+def rule(kind, docs, attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None):
+    return {
+        "kind": kind,
+        "docs": docs,
+        "attrs": attrs,
+        "deps": deps,
+        "providers": providers,
+        "capabilities": capabilities,
+        "examples": examples,
+        "impl": impl,
+    }
+
+def _ends_with(value, suffix):
+    if len(value) < len(suffix):
+        return False
+    return value[len(value) - len(suffix):] == suffix
+
+def _filter_by_extensions(paths, extensions):
+    out = []
+    for path in paths:
+        for ext in extensions:
+            if _ends_with(path, ext):
+                out.append(path)
+                break
+    return out
+
+def _package_relative(ctx, path):
+    if not path:
+        return path
+    if path.startswith("/") or path.startswith("."):
+        return path
+    package = ctx["label"]["package"]
+    if package:
+        return package + "/" + path
+    return path
+
+def _parent_dir(path):
+    idx = -1
+    for i in range(len(path)):
+        if path[i] == "/":
+            idx = i
+    if idx < 0:
+        return ""
+    return path[:idx]
+
+def _unique(values):
+    seen = {}
+    out = []
+    for value in values:
+        if value not in seen:
+            seen[value] = True
+            out.append(value)
+    return out
+
+def _shell_quote(value):
+    if not value:
+        return "''"
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+def _shell_join(argv):
+    return " ".join([_shell_quote(arg) for arg in argv])
+
+def _ascii_env_key(value):
+    upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    out = []
+    for ch in value.elems():
+        code = ord(ch)
+        if code >= ord("a") and code <= ord("z"):
+            out.append(upper[code - ord("a")])
+        elif (code >= ord("A") and code <= ord("Z")) or (code >= ord("0") and code <= ord("9")):
+            out.append(ch)
+        else:
+            out.append("_")
+    return "".join(out)
+
+def _rust_metadata_suffix(ctx):
+    return _ascii_env_key(ctx["label"]["id"])
+
+def _crate_name_from_label(ctx):
+    return ctx["label"]["name"].replace("-", "_").replace(".", "_")
+
+def _rust_attr(ctx, key, default):
+    value = ctx["attr"].get(key)
+    if value == None:
+        return default
+    return _rust_resolve_select(value, _rust_config_tokens(_rust_target_raw(ctx)), ctx["label"]["id"], key)
+
+def _rust_target_raw(ctx):
+    value = ctx["attr"].get("target")
+    if value == None:
+        return ""
+    return value
+
+def _is_select_shape(value):
+    if type(value) != type({}):
+        return False
+    if len(value) != 1:
+        return False
+    inner = value.get("select")
+    return type(inner) == type({})
+
+def _rust_config_tokens(target):
+    tokens = []
+    if target:
+        tokens.append(target)
+        if "apple-darwin" in target:
+            tokens.append("macos")
+        elif "linux" in target:
+            tokens.append("linux")
+        elif "windows" in target:
+            tokens.append("windows")
+        if target.startswith("aarch64") or target.startswith("arm64"):
+            tokens.extend(["arm64", "aarch64"])
+        elif target.startswith("x86_64"):
+            tokens.append("x86_64")
+    else:
+        os = host_os()
+        arch = host_arch()
+        tokens.append(os + "-" + arch)
+        tokens.append(os)
+        tokens.append(arch)
+        if arch == "arm64":
+            tokens.append(os + "-aarch64")
+            tokens.append("aarch64")
+    tokens.append("default")
+    return _unique(tokens)
+
+def _rust_select_branch(branches, tokens, label_id, attr_name):
+    for token in tokens:
+        if token in branches:
+            return token
+    fail(label_id + ": select() on `" + attr_name + "` has no branch matching the Rust configuration and no `default`")
+
+def _rust_resolve_select(value, tokens, label_id, attr_name):
+    if _is_select_shape(value):
+        branches = value["select"]
+        key = _rust_select_branch(branches, tokens, label_id, attr_name)
+        return _rust_resolve_select(branches[key], tokens, label_id, attr_name)
+    if type(value) == type([]):
+        return [_rust_resolve_select(item, tokens, label_id, attr_name) for item in value]
+    if type(value) == type({}):
+        return {k: _rust_resolve_select(v, tokens, label_id, attr_name) for k, v in value.items()}
+    return value
+
+def _rust_crate_name(ctx):
+    return _rust_attr(ctx, "crate_name", _crate_name_from_label(ctx))
+
+def _rust_crate_root(ctx, default_root):
+    return _package_relative(ctx, _rust_attr(ctx, "crate_root", default_root))
+
+def _rust_sources(ctx, crate_root):
+    srcs = _filter_by_extensions(glob(ctx["srcs"]), [".rs"])
+    if crate_root not in srcs:
+        srcs.append(crate_root)
+    return _unique(srcs)
+
+def _rust_extra_inputs(ctx):
+    return _rust_attr(ctx, "_extra_inputs", [])
+
+def _rust_target(ctx):
+    return _rust_target_raw(ctx)
+
+def _host_exe(name):
+    if host_os() == "windows":
+        return name + ".exe"
+    return name
+
+def _rustc_toolchain(target):
+    rustc_probe = host_which("rustc")
+    sysroot = host_command([rustc_probe, "--print", "sysroot"]).strip()
+    rustc = sysroot + "/bin/" + _host_exe("rustc")
+    version = host_command([rustc, "--version", "--verbose"]).strip()
+    host_triple = _rust_host_triple_from_version(version)
+    identity = "once.rust.rustc.v3\x00" + rustc + "\x00" + version + "\x00target\x00" + target
+    return (rustc, identity, host_triple)
+
+def _rust_host_triple_from_version(version):
+    for line in version.split("\n"):
+        if line.startswith("host: "):
+            return line[len("host: "):].strip()
+    return ""
+
+def _rust_linker(ctx, crate_type, target, host_triple):
+    if crate_type != "bin" and crate_type != "staticlib" and crate_type != "cdylib" and crate_type != "dylib" and crate_type != "proc-macro":
+        return ([], "")
+    linker = _rust_attr(ctx, "linker", "")
+    if not linker and host_os() != "windows" and (not target or target == host_triple):
+        linker = host_which("cc")
+    if not linker:
+        return ([], "")
+    return (["-C", "linker=" + linker], "\x00linker\x00" + linker + "\x00target\x00" + target)
+
+def _rust_features(ctx):
+    flags = []
+    features = []
+    features.extend(_rust_attr(ctx, "features", []))
+    features.extend(_rust_attr(ctx, "crate_features", []))
+    for feature in _unique(features):
+        flags.extend(["--cfg", "feature=\"" + feature + "\""])
+    return flags
+
+def _rust_user_flags(ctx):
+    return _rust_attr(ctx, "rustc_flags", [])
+
+def _rust_cap_lints(ctx):
+    value = _rust_attr(ctx, "cap_lints", "")
+    if value:
+        return ["--cap-lints", value]
+    return []
+
+def _rust_env(ctx):
+    env = {}
+    for key, value in _rust_attr(ctx, "env", {}).items():
+        env[key] = value
+    for key, value in _rust_attr(ctx, "rustc_env", {}).items():
+        env[key] = value
+    return env
+
+def _workspace_absolute(path):
+    if not path or path.startswith("/"):
+        return path
+    root = workspace_root()
+    if not root:
+        return path
+    return root + "/" + path
+
+def _rust_compile_env(ctx):
+    env = _rust_env(ctx)
+    manifest_dir = env.get("CARGO_MANIFEST_DIR")
+    if manifest_dir:
+        env["CARGO_MANIFEST_DIR"] = _workspace_absolute(_rust_manifest_dir(ctx, manifest_dir))
+    return env
+
+def _rust_manifest_dir(ctx, manifest_dir):
+    if not manifest_dir or manifest_dir.startswith("/"):
+        return manifest_dir
+    package = ctx["label"]["package"]
+    if manifest_dir == ".":
+        return package
+    if manifest_dir.startswith("./"):
+        suffix = manifest_dir[2:]
+        if package and suffix:
+            return package + "/" + suffix
+        return package or suffix
+    if package and (manifest_dir == package or manifest_dir.startswith(package + "/")):
+        return manifest_dir
+    return _package_relative(ctx, manifest_dir)
+
+def _rust_target_args(target):
+    if target:
+        return ["--target", target]
+    return []
+
+def _rust_cfg_env(rustc, target):
+    argv = [rustc, "--print", "cfg"]
+    argv.extend(_rust_target_args(target))
+    values = {}
+    flags = []
+    for line in host_command(argv).split("\n"):
+        if not line:
+            continue
+        if "=\"" in line and _ends_with(line, "\""):
+            parts = line.split("=\"")
+            key = parts[0]
+            value = parts[1][:len(parts[1]) - 1]
+            if key not in values:
+                values[key] = []
+            values[key].append(value)
+        else:
+            flags.append(line)
+    env = {}
+    for key, cfg_values in values.items():
+        env["CARGO_CFG_" + _ascii_env_key(key)] = ",".join(_unique(cfg_values))
+    for flag in flags:
+        env["CARGO_CFG_" + _ascii_env_key(flag)] = ""
+    return env
+
+def _rust_linker_flags(ctx):
+    flags = []
+    for flag in _rust_attr(ctx, "linker_flags", []):
+        flags.extend(["-C", "link-arg=" + flag])
+    return flags
+
+def _rust_aliases(ctx):
+    return _rust_attr(ctx, "crate_aliases", {})
+
+def _rust_dep_identity(dep):
+    return dep.get("label_id") or dep.get("package_name") or dep.get("crate_name") or ""
+
+def _rust_dep_matches(dep, name):
+    label_id = dep.get("label_id") or ""
+    if label_id == name:
+        return True
+    if label_id:
+        parts = label_id.split("/")
+        if parts[len(parts) - 1] == name:
+            return True
+    return dep.get("package_name") == name or dep.get("crate_name") == name
+
+def _rust_append_unique_dep(out, seen, dep):
+    identity = _rust_dep_identity(dep)
+    if not identity:
+        identity = "dep-" + str(len(out))
+    if identity in seen:
+        return
+    seen[identity] = True
+    out.append(dep)
+
+def _rust_select_dependency_set(dependency_sets, packages, label_id):
+    selected = []
+    seen = {}
+    for package in packages:
+        matches = []
+        for dependency_set in dependency_sets:
+            for dep in dependency_set.get("deps") or []:
+                if _rust_dep_matches(dep, package):
+                    matches.append(dep)
+        if len(matches) == 0:
+            fail(label_id + ": cargo dependency `" + package + "` was not found in cargo_dependencies deps")
+        if len(matches) > 1:
+            fail(label_id + ": cargo dependency `" + package + "` matched multiple cargo_dependencies entries")
+        _rust_append_unique_dep(selected, seen, matches[0])
+    return selected
+
+def _rust_cargo_package_name(ctx):
+    package = _rust_attr(ctx, "cargo_package", "")
+    if package:
+        return package
+    package = _rust_env(ctx).get("CARGO_PKG_NAME")
+    if package:
+        return package
+    return ""
+
+def _rust_resolved_deps(ctx):
+    direct = []
+    dependency_sets = []
+    seen = {}
+    for dep in ctx["deps"]:
+        if dep.get("dependency_set"):
+            dependency_sets.append(dep)
+        else:
+            _rust_append_unique_dep(direct, seen, dep)
+    package = _rust_cargo_package_name(ctx)
+    matched_package = False
+    if package:
+        for dependency_set in dependency_sets:
+            workspace_deps = dependency_set.get("workspace_deps") or {}
+            if package not in workspace_deps:
+                continue
+            matched_package = True
+            for dep in workspace_deps.get(package) or []:
+                _rust_append_unique_dep(direct, seen, dep)
+    if not matched_package:
+        for dependency_set in dependency_sets:
+            if dependency_set.get("workspace_deps"):
+                continue
+            for dep in dependency_set.get("deps") or []:
+                _rust_append_unique_dep(direct, seen, dep)
+    return direct
+
+def _rust_dep_crate_name(dep, aliases):
+    label_id = dep.get("label_id")
+    package_name = dep.get("package_name")
+    crate_name = dep.get("crate_name")
+    extern_name = dep.get("extern_name")
+    if label_id and label_id in aliases:
+        return aliases[label_id]
+    if label_id:
+        label_parts = label_id.split("/")
+        short_label = label_parts[len(label_parts) - 1]
+        if short_label in aliases:
+            return aliases[short_label]
+    if package_name and package_name in aliases:
+        return aliases[package_name]
+    if crate_name and crate_name in aliases:
+        return aliases[crate_name]
+    if extern_name:
+        return extern_name
+    return crate_name
+
+def _rust_dep_args(deps, aliases):
+    args = []
+    dirs = []
+    for dep in deps:
+        crate_name = _rust_dep_crate_name(dep, aliases)
+        rlib = dep.get("rlib")
+        artifact = rlib or dep.get("proc_macro")
+        if crate_name and artifact:
+            args.append("--extern=" + crate_name + "=" + artifact)
+            directory = _parent_dir(artifact)
+            if directory:
+                dirs.append(directory)
+        for transitive in dep.get("transitive_rlibs") or []:
+            directory = _parent_dir(transitive)
+            if directory:
+                dirs.append(directory)
+        for transitive in dep.get("transitive_proc_macros") or []:
+            directory = _parent_dir(transitive)
+            if directory:
+                dirs.append(directory)
+    for directory in _unique(dirs):
+        args.extend(["-L", "dependency=" + directory])
+    return args
+
+def _rust_builtin_extern_args(crate_type):
+    if crate_type == "proc-macro":
+        return ["--extern", "proc_macro"]
+    return []
+
+def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path):
+    env = _rust_compile_env(ctx)
+    for key, value in _rust_cfg_env(rustc, target).items():
+        if key not in env:
+            env[key] = value
+    for feature in _unique(_rust_attr(ctx, "features", []) + _rust_attr(ctx, "crate_features", [])):
+        env["CARGO_FEATURE_" + _ascii_env_key(feature)] = "1"
+    if not env.get("CARGO_MANIFEST_DIR"):
+        env["CARGO_MANIFEST_DIR"] = _workspace_absolute(_parent_dir(script_path))
+    if "DEBUG" not in env:
+        env["DEBUG"] = "true"
+    env["HOST"] = host_triple
+    if "NUM_JOBS" not in env:
+        env["NUM_JOBS"] = "1"
+    if "OPT_LEVEL" not in env:
+        env["OPT_LEVEL"] = "0"
+    env["OUT_DIR"] = _workspace_absolute(out_dir)
+    if "PROFILE" not in env:
+        env["PROFILE"] = "debug"
+    env["RUSTC"] = rustc
+    env["TARGET"] = target or host_triple
+    return env
+
+def _rust_manifest_links(ctx):
+    return _rust_env(ctx).get("CARGO_MANIFEST_LINKS") or ""
+
+def _rust_dep_metadata_key_shell(prefix):
+    printf = host_which("printf")
+    tr = host_which("tr")
+    return """key=${{value%%=*}}
+data=${{value#*=}}
+if [ "$key" != "$value" ]; then
+  key=$({printf} '%s' "$key" | {tr} '[:lower:].-' '[:upper:]__')
+  export {prefix}${{key}}="$data"
+fi
+""".format(prefix = prefix, printf = _shell_quote(printf), tr = _shell_quote(tr))
+
+def _rust_dep_metadata_exports(deps):
+    inputs = []
+    snippets = []
+    for dep in deps:
+        links = dep.get("links")
+        stdout = dep.get("build_script_stdout")
+        if not links or not stdout:
+            continue
+        inputs.append(stdout)
+        prefix = "DEP_" + _ascii_env_key(links) + "_"
+        snippets.append("""while IFS= read -r line; do
+  case "$line" in
+    cargo:rustc-*|cargo::rustc-*|cargo:rerun-if-*|cargo::rerun-if-*|cargo:warning=*|cargo::warning=*|cargo:error=*|cargo::error=*) ;;
+    cargo::metadata=*)
+      value=${{line#cargo::metadata=}}
+{metadata}
+      ;;
+    cargo:metadata=*)
+      value=${{line#cargo:metadata=}}
+{metadata}
+      ;;
+    cargo::*)
+      value=${{line#cargo::}}
+{metadata}
+      ;;
+    cargo:*)
+      value=${{line#cargo:}}
+{metadata}
+      ;;
+  esac
+done < {stdout}
+""".format(metadata = _rust_dep_metadata_key_shell(prefix), stdout = _shell_quote(_workspace_absolute(stdout))))
+    return ("\n".join(snippets), _unique(inputs))
+
+def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps):
+    build_script = _rust_attr(ctx, "build_script", "")
+    if not build_script:
+        return (None, [], {}, None)
+    script_path = _package_relative(ctx, build_script)
+    runner = declare_output(_rust_declared_output(ctx, "build-script" + _rust_output_extension("bin", "")))
+    out_dir = declare_output(_rust_declared_output(ctx, "build"))
+    stdout = declare_output(_rust_declared_output(ctx, "build-script.stdout"))
+    linker_args, linker_identity = _rust_linker(ctx, "bin", "", host_triple)
+    compile_argv = [
+        rustc,
+        "--crate-name", "build_script_build",
+        "--crate-type", "bin",
+        "--edition", edition,
+        "-C", "metadata=" + _rust_metadata_suffix(ctx) + "_BUILD",
+        script_path,
+        "-o", runner,
+    ]
+    compile_argv.extend(_rust_features(ctx))
+    compile_argv.extend(_rust_cap_lints(ctx))
+    compile_argv.extend(dep_args)
+    compile_argv.extend(linker_args)
+    run_action(
+        argv = compile_argv,
+        inputs = _unique([script_path] + dep_inputs + _rust_extra_inputs(ctx)),
+        outputs = [runner],
+        env = _rust_compile_env(ctx),
+        toolchain_identity = identity + linker_identity + "\x00build-script",
+        identifier = ctx["label"]["id"] + ":build-script-rustc",
+    )
+    run_env = _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path)
+    metadata_exports, metadata_inputs = _rust_dep_metadata_exports(deps)
+    run_script = _shell_quote(host_which("mkdir")) + " -p " + _shell_quote(run_env["OUT_DIR"]) + " && cd " + _shell_quote(run_env["CARGO_MANIFEST_DIR"]) + "\n" + metadata_exports + "\n" + _shell_quote(_workspace_absolute(runner)) + " > " + _shell_quote(_workspace_absolute(stdout))
+    run_action(
+        argv = [host_which("sh"), "-c", run_script],
+        inputs = _unique([runner] + metadata_inputs),
+        outputs = [out_dir, stdout],
+        env = run_env,
+        toolchain_identity = identity + "\x00build-script-run",
+        identifier = ctx["label"]["id"] + ":build-script",
+    )
+    compile_env = _rust_compile_env(ctx)
+    compile_env["OUT_DIR"] = _workspace_absolute(out_dir)
+    return (out_dir, [script_path, stdout], compile_env, stdout)
+
+def _rustc_with_build_script_args(argv, stdout):
+    script = """set -eu
+set -- {argv}
+while IFS= read -r line; do
+  case "$line" in
+    cargo:rustc-cfg=*|cargo::rustc-cfg=*)
+      value=${{line#cargo:rustc-cfg=}}
+      value=${{value#cargo::rustc-cfg=}}
+      set -- "$@" --cfg "$value"
+      ;;
+    cargo:rustc-check-cfg=*|cargo::rustc-check-cfg=*)
+      value=${{line#cargo:rustc-check-cfg=}}
+      value=${{value#cargo::rustc-check-cfg=}}
+      set -- "$@" --check-cfg "$value"
+      ;;
+    cargo:rustc-env=*|cargo::rustc-env=*)
+      value=${{line#cargo:rustc-env=}}
+      value=${{value#cargo::rustc-env=}}
+      export "$value"
+      ;;
+    cargo:rustc-link-arg=*|cargo::rustc-link-arg=*)
+      value=${{line#cargo:rustc-link-arg=}}
+      value=${{value#cargo::rustc-link-arg=}}
+      set -- "$@" -C "link-arg=$value"
+      ;;
+    cargo:rustc-link-lib=*|cargo::rustc-link-lib=*)
+      value=${{line#cargo:rustc-link-lib=}}
+      value=${{value#cargo::rustc-link-lib=}}
+      set -- "$@" -l "$value"
+      ;;
+    cargo:rustc-link-search=*|cargo::rustc-link-search=*)
+      value=${{line#cargo:rustc-link-search=}}
+      value=${{value#cargo::rustc-link-search=}}
+      set -- "$@" -L "$value"
+      ;;
+  esac
+done < {stdout}
+exec "$@"
+""".format(argv = _shell_join(argv), stdout = _shell_quote(stdout))
+    return [host_which("sh"), "-c", script]
+
+def _rust_dep_inputs(deps):
+    inputs = []
+    for dep in deps:
+        rlib = dep.get("rlib")
+        if rlib:
+            inputs.append(rlib)
+        proc_macro = dep.get("proc_macro")
+        if proc_macro:
+            inputs.append(proc_macro)
+        for transitive in dep.get("transitive_rlibs") or []:
+            inputs.append(transitive)
+        for transitive in dep.get("transitive_proc_macros") or []:
+            inputs.append(transitive)
+    return _unique(inputs)
+
+def _collect_transitive(deps, key, own_values):
+    out = []
+    for value in own_values:
+        out.append(value)
+    for dep in deps:
+        for value in dep.get(key) or []:
+            out.append(value)
+    return _unique(out)
+
+def _rust_output_extension(crate_type, target):
+    os_key = target or host_os()
+    if crate_type == "rlib":
+        return ".rlib"
+    if crate_type == "staticlib":
+        return ".lib" if "windows" in os_key else ".a"
+    if crate_type == "cdylib" or crate_type == "dylib" or crate_type == "proc-macro":
+        if "windows" in os_key:
+            return ".dll"
+        if "apple" in os_key or "darwin" in os_key or os_key == "macos":
+            return ".dylib"
+        return ".so"
+    if crate_type == "bin":
+        return ".exe" if "windows" in os_key else ""
+    return ""
+
+def _rust_output_name(ctx, crate_type):
+    crate_name = _rust_crate_name(ctx)
+    target = _rust_target(ctx)
+    if crate_type == "bin":
+        return crate_name + _rust_output_extension(crate_type, target)
+    if crate_type == "rlib" or crate_type == "staticlib" or crate_type == "cdylib" or crate_type == "dylib" or crate_type == "proc-macro":
+        prefix = "" if "windows" in (target or host_os()) and crate_type != "rlib" else "lib"
+        return prefix + crate_name + _rust_output_extension(crate_type, target)
+    return crate_name
+
+def _rust_declared_output(ctx, name):
+    prefix = ctx["attr"].get("_output_prefix") or ""
+    return prefix + name
+
+def _rust_compile(ctx, crate_type, default_root, output_name):
+    target = _rust_target(ctx)
+    rustc, identity, host_triple = _rustc_toolchain(target)
+    crate_name = _rust_crate_name(ctx)
+    edition = _rust_attr(ctx, "edition", "2021")
+    crate_root = _rust_crate_root(ctx, default_root)
+    srcs = _rust_sources(ctx, crate_root)
+    output = declare_output(_rust_declared_output(ctx, output_name))
+    aliases = _rust_aliases(ctx)
+    deps = _rust_resolved_deps(ctx)
+    dep_args = _rust_dep_args(deps, aliases)
+    dep_inputs = _rust_dep_inputs(deps)
+    build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps)
+    compile_env = build_env if build_env else _rust_compile_env(ctx)
+    linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
+    argv = [
+        rustc,
+        "--crate-name", crate_name,
+        "--crate-type", crate_type,
+        "--edition", edition,
+        "-C", "metadata=" + _rust_metadata_suffix(ctx),
+        crate_root,
+        "-o", output,
+    ]
+    argv.extend(_rust_target_args(target))
+    argv.extend(_rust_features(ctx))
+    argv.extend(_rust_user_flags(ctx))
+    argv.extend(_rust_cap_lints(ctx))
+    argv.extend(_rust_builtin_extern_args(crate_type))
+    argv.extend(dep_args)
+    argv.extend(linker_args)
+    argv.extend(_rust_linker_flags(ctx))
+    if build_stdout:
+        argv = _rustc_with_build_script_args(argv, build_stdout)
+    run_action(
+        argv = argv,
+        inputs = _unique(srcs + dep_inputs + build_inputs + _rust_extra_inputs(ctx)),
+        outputs = [output],
+        env = compile_env,
+        toolchain_identity = identity + linker_identity,
+        identifier = ctx["label"]["id"] + ":rustc",
+    )
+    provider = {
+        "label_id": ctx["label"]["id"],
+        "crate_name": crate_name,
+        "crate_type": crate_type,
+        "target": target,
+        "root": crate_root,
+        "out_dir": build_out_dir,
+        "links": _rust_manifest_links(ctx),
+        "build_script_stdout": build_stdout,
+        "rlib": output if crate_type == "rlib" else None,
+        "binary": output if crate_type == "bin" else None,
+        "staticlib": output if crate_type == "staticlib" else None,
+        "dylib": output if crate_type == "cdylib" or crate_type == "dylib" else None,
+        "proc_macro": output if crate_type == "proc-macro" else None,
+        "transitive_rlibs": _collect_transitive(deps, "transitive_rlibs", [output] if crate_type == "rlib" else []),
+        "transitive_proc_macros": _collect_transitive(deps, "transitive_proc_macros", [output] if crate_type == "proc-macro" else []),
+        "transitive_sources": _collect_transitive(deps, "transitive_sources", srcs),
+    }
+    return provider
+
+def _rust_library_impl(ctx):
+    crate_type = _rust_attr(ctx, "crate_type", "rlib")
+    return _rust_compile(ctx, crate_type, "src/lib.rs", _rust_output_name(ctx, crate_type))
+
+def _rust_binary_impl(ctx):
+    return _rust_compile(ctx, "bin", "src/main.rs", _rust_output_name(ctx, "bin"))
+
+def _rust_crate_impl(ctx):
+    provider = _rust_compile(ctx, "rlib", "src/lib.rs", _rust_output_name(ctx, "rlib"))
+    provider["package_name"] = _rust_attr(ctx, "package_name", ctx["label"]["name"])
+    provider["version"] = _rust_attr(ctx, "version", "")
+    provider["source"] = _rust_attr(ctx, "source", "")
+    provider["checksum"] = _rust_attr(ctx, "checksum", "")
+    return provider
+
+def _rust_proc_macro_impl(ctx):
+    provider = _rust_compile(ctx, "proc-macro", "src/lib.rs", _rust_output_name(ctx, "proc-macro"))
+    provider["package_name"] = _rust_attr(ctx, "package_name", ctx["label"]["name"])
+    provider["version"] = _rust_attr(ctx, "version", "")
+    provider["source"] = _rust_attr(ctx, "source", "")
+    provider["checksum"] = _rust_attr(ctx, "checksum", "")
+    return provider
+
+def _cargo_dependencies_impl(ctx):
+    resolved = _cargo_resolved_metadata(ctx)
+    deps, providers_by_name = _cargo_compile_resolved_specs(ctx, resolved["specs"])
+    workspace_deps = _cargo_workspace_deps(resolved["metadata"], providers_by_name)
+    packages = _rust_attr(ctx, "packages", [])
+    if packages:
+        deps = _rust_select_dependency_set([{"deps": deps}], packages, ctx["label"]["id"])
+        workspace_deps = _cargo_filter_workspace_deps(workspace_deps, deps)
+    return {
+        "dependency_set": True,
+        "deps": deps,
+        "packages": packages,
+        "workspace_deps": workspace_deps,
+    }
+
+def _cargo_metadata_inputs(ctx):
+    srcs = glob(ctx["srcs"])
+    if len(srcs) > 0:
+        return srcs
+    manifest = _package_relative(ctx, _rust_attr(ctx, "manifest", "Cargo.toml"))
+    lockfile = _package_relative(ctx, _rust_attr(ctx, "lockfile", "Cargo.lock"))
+    return _unique([manifest, lockfile])
+
+def _cargo_feature_args(ctx):
+    args = []
+    if _rust_attr(ctx, "no_default_features", False):
+        args.append("--no-default-features")
+    if _rust_attr(ctx, "all_features", False):
+        args.append("--all-features")
+    features = _rust_attr(ctx, "features", [])
+    if features:
+        args.extend(["--features", ",".join(features)])
+    return args
+
+def _cargo_resolved_metadata(ctx):
+    manifest = _package_relative(ctx, _rust_attr(ctx, "manifest", "Cargo.toml"))
+    vendor_dir = _trim_trailing_slash(_rust_attr(ctx, "vendor_dir", "third_party/rust/vendor"))
+    target = _rust_target(ctx)
+    _, _, host_triple = _rustc_toolchain(target)
+    cargo = host_which("cargo")
+    argv = [
+        cargo,
+        "metadata",
+        "--locked",
+        "--format-version", "1",
+        "--manifest-path", _workspace_absolute(manifest),
+    ]
+    filter_platform = target or host_triple
+    if filter_platform:
+        argv.extend(["--filter-platform", filter_platform])
+    argv.extend(_cargo_feature_args(ctx))
+    metadata_content = host_command(argv)
+    metadata = json_decode(metadata_content)
+    resolver_ctx = {
+        "attrs": {"vendor_dir": vendor_dir},
+    }
+    return {
+        "metadata": metadata,
+        "specs": _cargo_metadata_targets(resolver_ctx, metadata),
+    }
+
+def _cargo_ref_name(ref):
+    if ref.startswith("./"):
+        return ref[2:]
+    parts = ref.split("/")
+    return parts[len(parts) - 1]
+
+def _cargo_copy_attrs(attrs):
+    out = {}
+    for key, value in (attrs or {}).items():
+        out[key] = value
+    return out
+
+def _cargo_compile_resolved_specs(ctx, specs):
+    remaining = []
+    by_name = {}
+    for spec in specs:
+        remaining.append(spec)
+        by_name[spec["name"]] = spec
+    providers_by_name = {}
+    providers = []
+    metadata_inputs = _cargo_metadata_inputs(ctx)
+    for _ in range(len(specs) + 1):
+        if len(remaining) == 0:
+            break
+        next_remaining = []
+        progressed = False
+        for spec in remaining:
+            dep_providers = []
+            ready = True
+            for dep_ref in spec.get("deps") or []:
+                dep_name = _cargo_ref_name(dep_ref)
+                provider = providers_by_name.get(dep_name)
+                if provider == None:
+                    ready = False
+                    break
+                dep_providers.append(provider)
+            if not ready:
+                next_remaining.append(spec)
+                continue
+            provider = _cargo_compile_resolved_spec(ctx, spec, dep_providers, metadata_inputs)
+            providers_by_name[spec["name"]] = provider
+            providers.append(provider)
+            progressed = True
+        if not progressed:
+            names = [spec["name"] for spec in remaining]
+            fail(ctx["label"]["id"] + ": Cargo dependency graph has a cycle or missing dependency among " + ", ".join(names))
+        remaining = next_remaining
+    if len(remaining) > 0:
+        names = [spec["name"] for spec in remaining]
+        fail(ctx["label"]["id"] + ": Cargo dependency graph has a cycle or missing dependency among " + ", ".join(names))
+    return (providers, providers_by_name)
+
+def _cargo_compile_resolved_spec(ctx, spec, dep_providers, metadata_inputs):
+    attrs = _cargo_copy_attrs(spec.get("attrs") or {})
+    attrs["_output_prefix"] = spec["name"] + "/"
+    attrs["_extra_inputs"] = metadata_inputs
+    spec_ctx = {
+        "label": {
+            "package": ctx["label"]["package"],
+            "name": spec["name"],
+            "id": ctx["label"]["id"] + "/" + spec["name"],
+        },
+        "attr": attrs,
+        "deps": dep_providers,
+        "srcs": spec.get("srcs") or [],
+    }
+    if spec.get("kind") == "rust_proc_macro":
+        return _rust_proc_macro_impl(spec_ctx)
+    return _rust_crate_impl(spec_ctx)
+
+def _cargo_workspace_deps(metadata, providers_by_name):
+    packages = metadata.get("packages") or []
+    duplicate_counts = _cargo_duplicate_counts(packages)
+    _, id_to_target_name = _cargo_package_indexes(packages, duplicate_counts)
+    nodes = _cargo_resolve_nodes(metadata)
+    out = {}
+    for package in packages:
+        if package.get("source") != None:
+            continue
+        node = nodes.get(package.get("id")) or {}
+        dep_refs, aliases = _cargo_metadata_deps(node, id_to_target_name, False)
+        deps = []
+        seen = {}
+        for dep_ref in dep_refs:
+            dep_name = _cargo_ref_name(dep_ref)
+            provider = providers_by_name.get(dep_name)
+            if provider != None:
+                alias = aliases.get(dep_name)
+                if alias:
+                    provider = _cargo_provider_with_extern_name(provider, alias)
+                _rust_append_unique_dep(deps, seen, provider)
+        out[package["name"]] = deps
+    return out
+
+def _cargo_provider_with_extern_name(provider, extern_name):
+    out = {}
+    for key, value in provider.items():
+        out[key] = value
+    out["extern_name"] = extern_name
+    return out
+
+def _cargo_filter_workspace_deps(workspace_deps, deps):
+    allowed = {}
+    for dep in deps:
+        allowed[_rust_dep_identity(dep)] = True
+    out = {}
+    for package, package_deps in workspace_deps.items():
+        filtered = []
+        seen = {}
+        for dep in package_deps:
+            if _rust_dep_identity(dep) in allowed:
+                _rust_append_unique_dep(filtered, seen, dep)
+        out[package] = filtered
+    return out
+
+def _trim_trailing_slash(value):
+    if _ends_with(value, "/"):
+        return value[:len(value) - 1]
+    return value
+
+def _cargo_lock_content(ctx):
+    files = ctx["files"]
+    if "Cargo.lock" in files:
+        return files["Cargo.lock"]
+    for _, content in files.items():
+        return content
+    fail("cargo resolver requires a lockfile input")
+
+def _cargo_metadata_content(ctx):
+    files = ctx["files"]
+    for name in ["cargo-metadata.json", "metadata.json", "Cargo.metadata.json"]:
+        if name in files:
+            return files[name]
+    for name, content in files.items():
+        if _ends_with(name, ".json"):
+            return content
+    return None
+
+def _cargo_dep_ref(raw):
+    source = None
+    left = raw
+    if " (" in raw:
+        parts = raw.split(" (")
+        left = parts[0]
+        source = parts[1]
+        if _ends_with(source, ")"):
+            source = source[:len(source) - 1]
+    parts = left.split()
+    if len(parts) < 1:
+        fail("Cargo.lock dependency entry is empty")
+    return {
+        "name": parts[0],
+        "version": parts[1] if len(parts) > 1 else None,
+        "source": source,
+    }
+
+def _cargo_key(parts):
+    return "\x00".join(parts)
+
+def _cargo_source_suffix(source):
+    out = []
+    for ch in source.elems():
+        code = ord(ch)
+        if (code >= ord("a") and code <= ord("z")) or (code >= ord("A") and code <= ord("Z")) or (code >= ord("0") and code <= ord("9")) or ch == "_" or ch == "-" or ch == ".":
+            out.append(ch)
+        else:
+            out.append("_")
+    return "".join(out)
+
+def _cargo_duplicate_counts(packages):
+    counts = {}
+    for package in packages:
+        if package.get("source") == None:
+            continue
+        key = _cargo_key([package["name"], package["version"]])
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+def _cargo_target_name(package, duplicate_counts):
+    base = package["name"] + "-" + package["version"]
+    key = _cargo_key([package["name"], package["version"]])
+    if duplicate_counts.get(key, 0) <= 1:
+        return base
+    return base + "-" + _cargo_source_suffix(package.get("source") or "")
+
+def _cargo_index(packages, duplicate_counts):
+    by_name_version_source = {}
+    by_name_version = {}
+    by_name = {}
+    for package in packages:
+        source = package.get("source")
+        if source == None:
+            continue
+        target = _cargo_target_name(package, duplicate_counts)
+        nvs_key = _cargo_key([package["name"], package["version"], source])
+        nv_key = _cargo_key([package["name"], package["version"]])
+        by_name_version_source[nvs_key] = target
+        if nv_key not in by_name_version:
+            by_name_version[nv_key] = []
+        by_name_version[nv_key].append(target)
+        if package["name"] not in by_name:
+            by_name[package["name"]] = []
+        by_name[package["name"]].append(target)
+    return {
+        "by_name_version_source": by_name_version_source,
+        "by_name_version": by_name_version,
+        "by_name": by_name,
+    }
+
+def _cargo_single_match(matches, dep_name):
+    if len(matches) == 1:
+        return "./" + matches[0]
+    fail("Cargo.lock dependency `" + dep_name + "` is ambiguous across multiple packages; include version and source in the dependency entry")
+
+def _cargo_resolve_dep(dep, index):
+    name = dep["name"]
+    version = dep["version"]
+    source = dep["source"]
+    if version != None and source != None:
+        key = _cargo_key([name, version, source])
+        target = index["by_name_version_source"].get(key)
+        if target == None:
+            fail("Cargo.lock dependency `" + name + "` version `" + version + "` from `" + source + "` has no package entry")
+        return "./" + target
+    if version != None:
+        key = _cargo_key([name, version])
+        matches = index["by_name_version"].get(key)
+        if matches == None:
+            fail("Cargo.lock dependency `" + name + "` version `" + version + "` has no package entry")
+        return _cargo_single_match(matches, name)
+    matches = index["by_name"].get(name)
+    if matches == None:
+        fail("Cargo.lock dependency `" + name + "` has no package entry")
+    return _cargo_single_match(matches, name)
+
+def _cargo_resolver_impl(ctx):
+    metadata_content = _cargo_metadata_content(ctx)
+    if metadata_content != None:
+        return _cargo_metadata_resolver_impl(ctx, metadata_content)
+    lock = toml_decode(_cargo_lock_content(ctx))
+    packages = lock.get("package") or []
+    duplicate_counts = _cargo_duplicate_counts(packages)
+    index = _cargo_index(packages, duplicate_counts)
+    vendor_dir = _trim_trailing_slash(ctx["attrs"].get("vendor_dir") or "vendor")
+    targets = []
+    for package in packages:
+        if package.get("source") == None:
+            continue
+        name = _cargo_target_name(package, duplicate_counts)
+        source_root = vendor_dir + "/" + name
+        attrs = {
+            "package_name": package["name"],
+            "crate_name": package["name"].replace("-", "_"),
+            "version": package["version"],
+            "crate_root": source_root + "/src/lib.rs",
+            "edition": "2021",
+            "source": package.get("source") or "",
+            "cap_lints": "allow",
+        }
+        checksum = package.get("checksum")
+        if checksum != None:
+            attrs["checksum"] = checksum
+        deps = []
+        for raw_dep in package.get("dependencies") or []:
+            deps.append(_cargo_resolve_dep(_cargo_dep_ref(raw_dep), index))
+        targets.append({
+            "name": name,
+            "kind": "rust_crate",
+            "deps": deps,
+            "srcs": [source_root + "/src/**/*.rs"],
+            "attrs": attrs,
+        })
+    return targets
+
+def _cargo_package_root(package):
+    manifest = package.get("manifest_path") or ""
+    if manifest:
+        return _parent_dir(manifest)
+    return ""
+
+def _cargo_source_rel(package, target):
+    src = target.get("src_path") or ""
+    root = _cargo_package_root(package)
+    prefix = root + "/"
+    if root and src.startswith(prefix):
+        return src[len(prefix):]
+    return "src/lib.rs"
+
+def _cargo_source_glob(source_root, crate_root):
+    parent = _parent_dir(crate_root)
+    if parent.startswith(source_root + "/"):
+        rel_parent = parent[len(source_root) + 1:]
+        if rel_parent:
+            return source_root + "/" + rel_parent + "/**/*.rs"
+    return source_root + "/src/**/*.rs"
+
+def _cargo_library_target(package):
+    for target in package.get("targets") or []:
+        if "proc-macro" in (target.get("kind") or []) or "proc-macro" in (target.get("crate_types") or []):
+            return target
+    for target in package.get("targets") or []:
+        kinds = target.get("kind") or []
+        crate_types = target.get("crate_types") or []
+        if "lib" in kinds or "rlib" in crate_types or "lib" in crate_types:
+            return target
+    return None
+
+def _cargo_build_script_target(package):
+    for target in package.get("targets") or []:
+        if "custom-build" in (target.get("kind") or []):
+            return target
+    return None
+
+def _cargo_kind_for_target(target):
+    if "proc-macro" in (target.get("kind") or []) or "proc-macro" in (target.get("crate_types") or []):
+        return "rust_proc_macro"
+    return "rust_crate"
+
+def _cargo_package_indexes(packages, duplicate_counts):
+    by_id = {}
+    id_to_target_name = {}
+    for package in packages:
+        package_id = package.get("id")
+        if not package_id:
+            continue
+        by_id[package_id] = package
+        if package.get("source") != None:
+            id_to_target_name[package_id] = _cargo_target_name(package, duplicate_counts)
+    return (by_id, id_to_target_name)
+
+def _cargo_resolve_nodes(metadata):
+    nodes = {}
+    resolve = metadata.get("resolve") or {}
+    for node in resolve.get("nodes") or []:
+        nodes[node.get("id")] = node
+    return nodes
+
+def _cargo_dep_is_runtime(dep):
+    saw_kind = False
+    for kind in dep.get("dep_kinds") or []:
+        saw_kind = True
+        if kind.get("kind") == None:
+            return True
+    return not saw_kind
+
+def _cargo_dep_is_build(dep):
+    for kind in dep.get("dep_kinds") or []:
+        if kind.get("kind") == "build":
+            return True
+    return False
+
+def _cargo_metadata_deps(node, id_to_target_name, include_build):
+    deps = []
+    aliases = {}
+    for dep in node.get("deps") or []:
+        if not _cargo_dep_is_runtime(dep) and not (include_build and _cargo_dep_is_build(dep)):
+            continue
+        dep_id = dep.get("pkg")
+        target_name = id_to_target_name.get(dep_id)
+        if target_name == None:
+            continue
+        deps.append("./" + target_name)
+        local_name = dep.get("name")
+        if local_name:
+            aliases[target_name] = local_name
+    return (_unique(deps), aliases)
+
+def _cargo_version_components(version):
+    build_parts = version.split("+")
+    without_build = build_parts[0]
+    pre_parts = without_build.split("-")
+    core = pre_parts[0]
+    pre = "-".join(pre_parts[1:]) if len(pre_parts) > 1 else ""
+    core_parts = core.split(".")
+    return {
+        "major": core_parts[0] if len(core_parts) > 0 else "",
+        "minor": core_parts[1] if len(core_parts) > 1 else "",
+        "patch": core_parts[2] if len(core_parts) > 2 else "",
+        "pre": pre,
+    }
+
+def _cargo_package_authors(package):
+    return ":".join(package.get("authors") or [])
+
+def _cargo_package_field(package, key):
+    value = package.get(key)
+    if value == None:
+        return ""
+    return value
+
+def _cargo_rustc_env(package, target, source_root):
+    crate_name = target.get("name") or package["name"].replace("-", "_")
+    version = package["version"]
+    components = _cargo_version_components(version)
+    env = {
+        "CARGO_CRATE_NAME": crate_name,
+        "CARGO_MANIFEST_DIR": source_root,
+        "CARGO_PKG_AUTHORS": _cargo_package_authors(package),
+        "CARGO_PKG_DESCRIPTION": _cargo_package_field(package, "description"),
+        "CARGO_PKG_HOMEPAGE": _cargo_package_field(package, "homepage"),
+        "CARGO_PKG_LICENSE": _cargo_package_field(package, "license"),
+        "CARGO_PKG_LICENSE_FILE": _cargo_package_field(package, "license_file"),
+        "CARGO_PKG_NAME": package["name"],
+        "CARGO_PKG_README": _cargo_package_field(package, "readme"),
+        "CARGO_PKG_REPOSITORY": _cargo_package_field(package, "repository"),
+        "CARGO_PKG_RUST_VERSION": _cargo_package_field(package, "rust_version"),
+        "CARGO_PKG_VERSION": version,
+        "CARGO_PKG_VERSION_MAJOR": components["major"],
+        "CARGO_PKG_VERSION_MINOR": components["minor"],
+        "CARGO_PKG_VERSION_PATCH": components["patch"],
+        "CARGO_PKG_VERSION_PRE": components["pre"],
+    }
+    links = package.get("links")
+    if links != None:
+        env["CARGO_MANIFEST_LINKS"] = links
+    return env
+
+def _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases):
+    attrs = {
+        "package_name": package["name"],
+        "crate_name": target.get("name") or package["name"].replace("-", "_"),
+        "version": package["version"],
+        "crate_root": crate_root,
+        "edition": target.get("edition") or package.get("edition") or "2021",
+        "features": node.get("features") or [],
+        "source": package.get("source") or "",
+        "rustc_env": _cargo_rustc_env(package, target, source_root),
+        "cap_lints": "allow",
+    }
+    if aliases:
+        attrs["crate_aliases"] = aliases
+    build_script = _cargo_build_script_target(package)
+    if build_script != None:
+        attrs["build_script"] = source_root + "/" + _cargo_source_rel(package, build_script)
+    return attrs
+
+def _cargo_metadata_resolver_impl(ctx, metadata_content):
+    metadata = json_decode(metadata_content)
+    return _cargo_metadata_targets(ctx, metadata)
+
+def _cargo_metadata_targets(ctx, metadata):
+    packages = metadata.get("packages") or []
+    duplicate_counts = _cargo_duplicate_counts(packages)
+    package_by_id, id_to_target_name = _cargo_package_indexes(packages, duplicate_counts)
+    nodes = _cargo_resolve_nodes(metadata)
+    vendor_dir = _trim_trailing_slash(ctx["attrs"].get("vendor_dir") or "vendor")
+    targets = []
+    for package in packages:
+        if package.get("source") == None:
+            continue
+        target = _cargo_library_target(package)
+        if target == None:
+            continue
+        name = id_to_target_name.get(package.get("id")) or _cargo_target_name(package, duplicate_counts)
+        source_root = _cargo_vendor_source_root(vendor_dir, package, name)
+        rel_root = _cargo_source_rel(package, target)
+        crate_root = source_root + "/" + rel_root
+        node = nodes.get(package.get("id")) or {}
+        deps, aliases = _cargo_metadata_deps(node, id_to_target_name, _cargo_build_script_target(package) != None)
+        attrs = _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases)
+        checksum = package.get("checksum")
+        if checksum != None:
+            attrs["checksum"] = checksum
+        targets.append({
+            "name": name,
+            "kind": _cargo_kind_for_target(target),
+            "deps": deps,
+            "srcs": [_cargo_source_glob(source_root, crate_root)],
+            "attrs": attrs,
+        })
+    return targets
+
+def _cargo_vendor_source_root(vendor_dir, package, target_name):
+    versioned = vendor_dir + "/" + target_name
+    if _cargo_vendor_candidate_matches(versioned, package["version"]):
+        return versioned
+    bare = vendor_dir + "/" + package["name"]
+    if _cargo_vendor_candidate_matches(bare, package["version"]):
+        return bare
+    return versioned
+
+def _cargo_vendor_candidate_matches(candidate, version):
+    manifest = _workspace_absolute(candidate + "/Cargo.toml")
+    version_line = "version = \"" + version + "\""
+    script = "if test -f " + _shell_quote(manifest) + " && " + _shell_quote(host_which("grep")) + " -F " + _shell_quote(version_line) + " " + _shell_quote(manifest) + " >/dev/null 2>/dev/null; then printf yes; fi"
+    return host_command([host_which("sh"), "-c", script]).strip() == "yes"
+
+_RUST_COMMON_ATTRS = [
+    attr("crate_name", "string", docs = "Rust crate name passed to rustc. Defaults to the target name with `-` and `.` rewritten as `_`.", configurable = False),
+    attr("crate_root", "string", docs = "Package-relative path to lib.rs or main.rs. Defaults to src/lib.rs for libraries and src/main.rs for binaries.", configurable = False),
+    attr("edition", "string", default = "2021", docs = "Rust edition passed to rustc.", configurable = False),
+    attr("features", "list<string>", default = "[]", docs = "Cargo feature names lowered to rustc `--cfg feature=...` flags."),
+    attr("crate_features", "list<string>", default = "[]", docs = "Bazel-compatible alias for `features`."),
+    attr("target", "string", docs = "Rust target triple passed to `rustc --target`. Defaults to the host target.", configurable = False),
+    attr("env", "map<string, string>", default = "{}", docs = "Environment variables for rustc, matching Buck2's `env` attribute.", configurable = False),
+    attr("rustc_env", "map<string, string>", default = "{}", docs = "Bazel-compatible rustc environment variables.", configurable = False),
+    attr("rustc_flags", "list<string>", default = "[]", docs = "Additional rustc flags appended after Once-managed flags.", configurable = False),
+    attr("cap_lints", "string", docs = "Optional rustc lint cap passed as `--cap-lints`; generated Cargo dependencies use `allow` to match Cargo dependency builds.", configurable = False),
+    attr("linker", "string", docs = "Optional linker path passed as `-C linker=...`. Defaults to `cc` for host Unix binary-like targets and is omitted for cross targets unless set.", configurable = False),
+    attr("linker_flags", "list<string>", default = "[]", docs = "Additional linker flags lowered to `-C link-arg=...`.", configurable = False),
+    attr("crate_aliases", "map<string, string>", default = "{}", docs = "Map dependency label, package name, or crate name to the local extern crate name.", configurable = False),
+    attr("cargo_package", "string", docs = "Cargo package name used to select direct external deps from a cargo_dependencies dependency set. Defaults to CARGO_PKG_NAME when present.", configurable = False),
+    attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
+]
+
+RUST_RULES = [
+    rule(
+        kind = "cargo_dependencies",
+        docs = "Cacheable Cargo dependency set consumed by Rust targets. The rule reads Cargo.toml and Cargo.lock through `cargo metadata`, compiles resolved external crates as Once actions, and exposes them as one graph dependency.",
+        attrs = [
+            attr("manifest", "string", default = "Cargo.toml", docs = "Workspace-relative Cargo manifest path passed to `cargo metadata --manifest-path`.", configurable = False),
+            attr("lockfile", "string", default = "Cargo.lock", docs = "Workspace-relative Cargo lockfile path included in the dependency action key.", configurable = False),
+            attr("vendor_dir", "string", default = "third_party/rust/vendor", docs = "Workspace-relative directory containing vendored crate sources.", configurable = False),
+            attr("packages", "list<string>", default = "[]", docs = "Optional package names to expose from this dependency set. Defaults to all resolved external packages.", configurable = True),
+            attr("features", "list<string>", default = "[]", docs = "Cargo features passed to `cargo metadata --features`.", configurable = True),
+            attr("all_features", "bool", default = "false", docs = "Pass `--all-features` to Cargo metadata.", configurable = True),
+            attr("no_default_features", "bool", default = "false", docs = "Pass `--no-default-features` to Cargo metadata.", configurable = True),
+            attr("target", "string", docs = "Rust target triple passed to Cargo as `--filter-platform`. Defaults to the host target.", configurable = False),
+        ],
+        providers = ["rust_dependency_set"],
+        capabilities = [capability("build", [])],
+        examples = ["rust-binary-with-crate"],
+        impl = _cargo_dependencies_impl,
+    ),
+    rule(
+        kind = "rust_library",
+        docs = "Rust rlib compiled with rustc. Direct deps are passed through `--extern`; transitive rlibs are exposed as dependency search paths.",
+        attrs = _RUST_COMMON_ATTRS + [
+            attr("crate_type", "string", default = "rlib", docs = "Rust crate type for the library output. Defaults to `rlib`; final artifacts may use `staticlib`, `cdylib`, or `dylib`.", configurable = False),
+        ],
+        deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
+        providers = ["rust_crate"],
+        capabilities = [capability("build", ["library"])],
+        examples = ["rust-library-minimal"],
+        impl = _rust_library_impl,
+    ),
+    rule(
+        kind = "rust_binary",
+        docs = "Rust executable compiled with rustc from a main crate and Rust crate deps.",
+        attrs = _RUST_COMMON_ATTRS,
+        deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
+        providers = ["rust_binary"],
+        capabilities = [capability("build", ["binary"])],
+        examples = ["rust-binary-with-crate"],
+        impl = _rust_binary_impl,
+    ),
+    rule(
+        kind = "rust_crate",
+        docs = "Resolved third-party Rust crate lowered from Cargo package metadata into a normal Once Rust library target.",
+        attrs = _RUST_COMMON_ATTRS + [
+            attr("package_name", "string", required = True, docs = "Original Cargo package name."),
+            attr("version", "string", required = True, docs = "Resolved Cargo package version."),
+            attr("source", "string", docs = "Cargo source identifier, such as registry+https://github.com/rust-lang/crates.io-index.", configurable = False),
+            attr("checksum", "string", docs = "Cargo.lock checksum for registry packages.", configurable = False),
+        ],
+        deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Resolved Cargo package dependencies.")],
+        providers = ["rust_crate"],
+        capabilities = [capability("build", ["rlib"])],
+        examples = ["rust-crate-minimal"],
+        impl = _rust_crate_impl,
+    ),
+    rule(
+        kind = "rust_proc_macro",
+        docs = "Rust procedural macro compiled for the execution host and consumed through --extern by Rust targets.",
+        attrs = _RUST_COMMON_ATTRS + [
+            attr("package_name", "string", docs = "Original Cargo package name when the target was lowered from Cargo metadata."),
+            attr("version", "string", docs = "Resolved Cargo package version when the target was lowered from Cargo metadata."),
+            attr("source", "string", docs = "Cargo source identifier, such as registry+https://github.com/rust-lang/crates.io-index.", configurable = False),
+            attr("checksum", "string", docs = "Cargo.lock checksum for registry packages.", configurable = False),
+        ],
+        deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed by the procedural macro.")],
+        providers = ["rust_proc_macro"],
+        capabilities = [capability("build", ["proc_macro"])],
+        examples = ["rust-proc-macro-minimal"],
+        impl = _rust_proc_macro_impl,
+    ),
+]

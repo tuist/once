@@ -1,0 +1,8 @@
+[[target]]
+name = "identity"
+kind = "rust_proc_macro"
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "identity"
+edition = "2021"

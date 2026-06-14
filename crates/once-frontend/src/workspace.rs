@@ -2,11 +2,12 @@
 
 use std::path::{Path, PathBuf};
 
+use glob::Pattern;
 use walkdir::WalkDir;
 
 use crate::cache_provider::CacheProviderConfig;
 use crate::error::{Error, Result};
-use crate::manifest::{load_cache_provider_toml_str, load_toml_with};
+use crate::manifest::{load_cache_provider_toml_str, load_toml_with, load_workspace_toml_str};
 use crate::target::Target;
 use crate::TOML_BUILD_FILE_NAME;
 
@@ -26,6 +27,7 @@ pub fn load_file(path: &Path) -> Result<Vec<Target>> {
 /// Recursively scan `root` for `once.toml` files and return every
 /// script-like target they declare.
 pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
+    let scan = load_workspace_scan(root)?;
     let walker = WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -45,6 +47,15 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
             source,
         })?;
         if entry.file_type().is_file() && is_manifest_file(entry.file_name().to_str()) {
+            let rel_path = entry
+                .path()
+                .strip_prefix(root)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            if !scan.includes(&rel_path) {
+                continue;
+            }
             let parent = entry.path().parent().unwrap_or(root);
             let pkg = parent
                 .strip_prefix(root)
@@ -72,6 +83,54 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
         all.extend(targets);
     }
     Ok(all)
+}
+
+#[derive(Debug, Default)]
+struct WorkspaceScan {
+    include: Vec<Pattern>,
+    exclude: Vec<Pattern>,
+}
+
+impl WorkspaceScan {
+    fn includes(&self, path: &str) -> bool {
+        if self.exclude.iter().any(|pattern| pattern.matches(path)) {
+            return false;
+        }
+        self.include.is_empty() || self.include.iter().any(|pattern| pattern.matches(path))
+    }
+}
+
+fn load_workspace_scan(root: &Path) -> Result<WorkspaceScan> {
+    let path = root.join(TOML_BUILD_FILE_NAME);
+    let src = match std::fs::read_to_string(&path) {
+        Ok(src) => src,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(WorkspaceScan::default());
+        }
+        Err(source) => {
+            return Err(Error::Read {
+                path: path.display().to_string(),
+                source,
+            });
+        }
+    };
+    let raw = load_workspace_toml_str(TOML_BUILD_FILE_NAME, &src)?;
+    Ok(WorkspaceScan {
+        include: compile_patterns(TOML_BUILD_FILE_NAME, "workspace.include", &raw.include)?,
+        exclude: compile_patterns(TOML_BUILD_FILE_NAME, "workspace.exclude", &raw.exclude)?,
+    })
+}
+
+fn compile_patterns(path: &str, field: &str, values: &[String]) -> Result<Vec<Pattern>> {
+    values
+        .iter()
+        .map(|value| {
+            Pattern::new(value).map_err(|source| Error::Eval {
+                path: path.to_string(),
+                message: format!("invalid `{field}` glob `{value}`: {source}"),
+            })
+        })
+        .collect()
 }
 
 /// Load the workspace-level cache provider config from the root
@@ -102,4 +161,57 @@ pub fn load_cache_provider(root: &Path) -> Result<CacheProviderConfig> {
 
 fn is_manifest_file(name: Option<&str>) -> bool {
     matches!(name, Some(TOML_BUILD_FILE_NAME))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn root_workspace_scan_filters_manifest_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("once.toml"),
+            r#"
+[workspace]
+include = ["crates/*/once.toml"]
+exclude = ["crates/skip/once.toml"]
+"#,
+        );
+        write(
+            &tmp.path().join("crates/keep/once.toml"),
+            r#"
+[[target]]
+name = "keep"
+kind = "rust_library"
+"#,
+        );
+        write(
+            &tmp.path().join("crates/skip/once.toml"),
+            r#"
+[[target]]
+name = "skip"
+kind = "rust_library"
+"#,
+        );
+        write(
+            &tmp.path().join("fixtures/example/once.toml"),
+            r#"
+[[target]]
+name = "fixture"
+kind = "rust_library"
+"#,
+        );
+
+        let targets = load_workspace(tmp.path()).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id(), "crates/keep/keep");
+    }
 }

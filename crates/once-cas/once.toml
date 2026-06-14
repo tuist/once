@@ -1,0 +1,15 @@
+[[target]]
+name = "once_cas"
+kind = "rust_library"
+deps = ["cargo_dependencies"]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "once_cas"
+crate_root = "src/lib.rs"
+edition = "2021"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-cas"
+CARGO_PKG_NAME = "once-cas"
+CARGO_PKG_VERSION = "0.0.0"

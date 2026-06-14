@@ -12,8 +12,11 @@ Describe 'once query rules'
     The status should be success
     The stdout should include 'apple_library'
     The stdout should include 'apple_application'
+    The stdout should include 'rust_library'
+    The stdout should include 'rust_crate'
     The stdout should include 'apple-library-minimal'
     The stdout should include 'apple-application-minimal'
+    The stdout should include 'rust-library-minimal'
   End
 
   It 'emits structured JSON under --format json'
