@@ -25,6 +25,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// MCP protocol version we negotiate.
 const PROTOCOL_VERSION: &str = "2024-11-05";
+const RUN_TARGET_TIMEOUT_SECS: u64 = 3 * 60;
 
 /// Run the MCP server until stdin closes.
 pub async fn serve(workspace: PathBuf, allow_run: bool) -> Result<()> {
@@ -218,7 +219,10 @@ impl Server {
             .arg("--format")
             .arg("json")
             .arg("run");
-        let output = output_with_timeout(command.arg(args.target), Duration::from_secs(180))?;
+        let output = output_with_timeout(
+            command.arg(args.target),
+            Duration::from_secs(RUN_TARGET_TIMEOUT_SECS),
+        )?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("once run failed: {}", stderr.trim());
