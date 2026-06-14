@@ -56,8 +56,16 @@ impl RuntimeSession {
                 continue;
             };
             out.extend(content.lines().enumerate().filter_map(|(idx, line)| {
+                let cursor = format!("{source}:{idx:012}");
+                if query
+                    .cursor
+                    .as_deref()
+                    .is_some_and(|query_cursor| cursor.as_str() <= query_cursor)
+                {
+                    return None;
+                }
                 let record = json!({
-                    "cursor": format!("{source}:{idx:012}"),
+                    "cursor": cursor,
                     "source": source,
                     "level": if source == "stderr" { "error" } else { "info" },
                     "message": line,

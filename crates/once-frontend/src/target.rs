@@ -41,6 +41,16 @@ pub enum AttrValue {
     Map(BTreeMap<String, AttrValue>),
 }
 
+impl AttrValue {
+    #[must_use]
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(value) => Some(value),
+            _ => None,
+        }
+    }
+}
+
 impl PartialEq for AttrValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {

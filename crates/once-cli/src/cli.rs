@@ -161,13 +161,9 @@ pub enum Cmd {
 
     /// Test a declared target.
     ///
-    /// Builds the target's test bundle (recursively building deps as
-    /// needed) and executes its `test` capability. Test results and
-    /// coverage records land under
-    /// `<workspace>/.once/out/<target>/test/`. The action cache keys
-    /// on source content, toolchain identity, and dep digests, so
-    /// only the targets whose inputs changed re-run; the rest replay
-    /// their cached outcome.
+    /// Builds the target as needed, then executes its `test`
+    /// capability through the action cache. Output paths and result
+    /// groups are owned by the rule that exposes the capability.
     #[command(arg_required_else_help = true)]
     Test {
         /// Target id, e.g. `apps/ios/AppTests` or `./AppTests`.
@@ -286,12 +282,13 @@ pub enum Cmd {
 
     /// Runtime session inspection and control.
     ///
-    /// Drives the JSON-RPC control socket that an active `once run`
-    /// (or any cacheable action launched with `--runtime-rpc`) opens
-    /// for in-flight introspection. `runtime rpc` connects to a
-    /// session and forwards requests so dev loops and editors can
-    /// observe progress, attach probes, or steer execution without
-    /// restarting the underlying action.
+    /// Starts long-lived target runs under a small supervisor and
+    /// persists their stdout, stderr, and status under
+    /// `<workspace>/.once/runtime/<session>/`. `runtime status`,
+    /// `runtime logs`, and `runtime stop` let agents and humans
+    /// observe or stop a run after the original command has returned.
+    /// `runtime rpc` serves a JSON-RPC control socket for a session
+    /// that already has runtime metadata.
     #[command(arg_required_else_help = true)]
     Runtime {
         #[command(subcommand)]
@@ -301,10 +298,9 @@ pub enum Cmd {
     /// Mutate workspace manifests.
     ///
     /// `edit apply` runs a batch of `create` / `update` / `delete`
-    /// operations against a single `once.toml` atomically. The same
-    /// surface is exposed as the `once_apply_edit` MCP tool; the CLI
-    /// reads its input JSON from `--file` or stdin so humans can
-    /// reproduce what an agent did from the terminal.
+    /// operations against a single `once.toml` atomically. The CLI
+    /// reads its input JSON from `--file` or stdin and emits
+    /// structured diagnostics for failed edits.
     #[command(arg_required_else_help = true)]
     Edit {
         #[command(subcommand)]
@@ -317,14 +313,18 @@ pub enum Cmd {
     /// (Claude Desktop, an IDE plug-in, the Anthropic SDK) can call
     /// `once_query_targets`, `once_query_capabilities`, and
     /// `once_query_schema` as tools and get JSON back without
-    /// scraping prose. Mounts inspection only; running actions and
-    /// querying cached outputs by digest are follow-up work.
+    /// scraping prose. Mounts inspection tools by default; pass
+    /// `--allow-run` to expose side-effectful runtime session tools.
     Mcp {
         /// Workspace root the MCP tools resolve targets against.
         /// Defaults to the value of the global `-C/--directory` flag
         /// (or the current directory).
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+
+        /// Advertise and allow side-effectful runtime session tools.
+        #[arg(long)]
+        allow_run: bool,
     },
 
     /// Internal: emit the markdown CLI reference into `out`. Hidden

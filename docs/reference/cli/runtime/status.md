@@ -1,22 +1,18 @@
-# `once test`
+# `once runtime status`
 
-Test a declared target
+Show the latest status for a runtime session
 
 ## Synopsis
 
 ```text
-once test [OPTIONS] [TARGET]
+once runtime status [OPTIONS] <SESSION>
 ```
-
-## Description
-
-Builds the target as needed, then executes its `test` capability through the action cache. Output paths and result groups are owned by the rule that exposes the capability.
 
 ## Arguments
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<TARGET>` | no | Target id, e.g. `apps/ios/AppTests` or `./AppTests` |
+| `<SESSION>` | yes | Session id returned by `once runtime start` |
 
 ## Options
 

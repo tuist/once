@@ -6,10 +6,9 @@ use clap::Subcommand;
 pub enum EditCmd {
     /// Apply a batch of operations to one `once.toml` atomically.
     ///
-    /// Reads a JSON document matching the `once_apply_edit` MCP tool
-    /// input shape (`{ "package": "...", "operations": [...] }`) from
-    /// `--file` or, if omitted, from stdin. On success, the manifest
-    /// is rewritten and the resolved path is printed. On failure,
+    /// Reads `{ "package": "...", "operations": [...] }` from `--file`
+    /// or, if omitted, from stdin. On success, the manifest is
+    /// rewritten and the resolved path is printed. On failure,
     /// structured diagnostics are emitted and the manifest is left
     /// untouched.
     Apply {

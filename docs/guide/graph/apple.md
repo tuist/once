@@ -1,4 +1,4 @@
-# Apple Graph
+# Apple Prelude
 
 Once builds Swift, Objective-C, C, and C++ targets for Apple
 platforms from declarative `once.toml` manifests.
@@ -60,6 +60,23 @@ once build apps/ios/AppCore
 
 Outputs land under `.once/out/<target>/`. The per-rule reference
 pages list the exact paths each rule emits.
+
+## Running Apps
+
+`apple_application` produces an `.app` bundle. It is a build target, not
+a runtime selector. Simulator and device knowledge should live in Apple
+prelude rules that consume the app bundle provider and expose `run`, not
+in Once's core CLI.
+
+That keeps the graph shape explicit. The app rule answers "how do I
+build this bundle?" A future Apple runner rule can answer "how do I take
+that bundle and run it in this Apple runtime?" Once only dispatches the
+generic capability:
+
+```sh
+once build apps/ios/App
+once run tools/ios/LaunchApp
+```
 
 ## Configurable attributes
 

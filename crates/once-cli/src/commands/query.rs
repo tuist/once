@@ -762,7 +762,8 @@ mod tests {
         let rendered = render_schema_human(&schema);
         assert!(rendered.starts_with("apple_application: "));
         assert!(rendered.contains("bundle_id: string (required"));
-        assert!(rendered.contains("run: default"));
+        assert!(rendered.contains("build: default, bundle, dsyms"));
+        assert!(!rendered.contains("run: default"));
     }
 
     #[test]
@@ -770,7 +771,7 @@ mod tests {
         let records = target_records(
             vec![
                 target("apps/ios/App", "apple_application", &["build", "run"]),
-                target("apps/ios/AppTests", "apple_test_bundle", &["build", "test"]),
+                target("apps/ios/AppTests", "apple_test_bundle", &["build"]),
             ],
             Some("apple_application"),
         );

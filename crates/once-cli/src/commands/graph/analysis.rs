@@ -1,12 +1,14 @@
 //! Walks the graph in dependency order and executes declared actions
 //! for analysis-backed rules.
 //!
-//! For every target the driver calls the Starlark analysis function for
-//! that target kind. Analysis returns declared actions plus a provider
-//! record; this module materialises each command as a cacheable action,
-//! runs it through `once_core::run_with_cache`, and passes the provider
-//! down to consumers. Rule kinds without a Starlark implementation
-//! return `None` so the caller can use its Rust fallback path.
+//! For every target the driver calls [`once_frontend::analysis::analyze_target`].
+//! When the rule has an `impl` callable the analysis returns a list of
+//! `DeclaredAction`s plus a provider record; we materialise each
+//! declared command as a cacheable `Action`, run it through
+//! `once_core::run_with_cache`, and pass the resulting provider down
+//! to consumers. When the rule has no `impl` declared in the prelude,
+//! the driver returns `None` so the caller can fall back to its generic
+//! marker action.
 //!
 //! This module has no Apple-specific logic: it consults the prelude
 //! via `rule_has_impl` to know which kinds run through analysis, and
@@ -94,9 +96,9 @@ impl BuildSession {
         }
     }
 
-    /// Build a target and the analysis-backed portion of its dependency
-    /// closure. Returns `Ok(None)` when the target kind cannot be
-    /// analysed by Starlark.
+    /// Build a target and the impl-backed portion of its dependency
+    /// closure. Returns `Ok(None)` when the target's own rule has no
+    /// impl, allowing callers to fall back to generic marker actions.
     pub(super) async fn build_with_analysis(
         &self,
         target: &GraphTarget,

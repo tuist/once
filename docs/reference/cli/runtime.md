@@ -10,7 +10,7 @@ once runtime [OPTIONS] <SUBCOMMAND>
 
 ## Description
 
-Drives the JSON-RPC control socket that an active `once run` (or any cacheable action launched with `--runtime-rpc`) opens for in-flight introspection. `runtime rpc` connects to a session and forwards requests so dev loops and editors can observe progress, attach probes, or steer execution without restarting the underlying action.
+Starts long-lived target runs under a small supervisor and persists their stdout, stderr, and status under `<workspace>/.once/runtime/<session>/`. `runtime status`, `runtime logs`, and `runtime stop` let agents and humans observe or stop a run after the original command has returned. `runtime rpc` serves a JSON-RPC control socket for a session that already has runtime metadata.
 
 ## Options
 
@@ -24,5 +24,9 @@ Drives the JSON-RPC control socket that an active `once run` (or any cacheable a
 
 ## Subcommands
 
+- [`once runtime start`](/reference/cli/runtime/start)
+- [`once runtime status`](/reference/cli/runtime/status)
+- [`once runtime logs`](/reference/cli/runtime/logs)
+- [`once runtime stop`](/reference/cli/runtime/stop)
 - [`once runtime rpc`](/reference/cli/runtime/rpc)
 

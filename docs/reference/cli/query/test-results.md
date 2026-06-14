@@ -1,22 +1,18 @@
-# `once test`
+# `once query test-results`
 
-Test a declared target
+Read normalized `once.test_results.v1` results for a target
 
 ## Synopsis
 
 ```text
-once test [OPTIONS] [TARGET]
+once query test-results [OPTIONS] <TARGET>
 ```
-
-## Description
-
-Builds the target as needed, then executes its `test` capability through the action cache. Output paths and result groups are owned by the rule that exposes the capability.
 
 ## Arguments
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<TARGET>` | no | Target id, e.g. `apps/ios/AppTests` or `./AppTests` |
+| `<TARGET>` | yes | Target id, e.g. `spec/cli_e2e` |
 
 ## Options
 

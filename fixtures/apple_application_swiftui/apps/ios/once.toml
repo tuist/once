@@ -2,7 +2,7 @@
 name = "App"
 kind = "apple_application"
 srcs = ["App/Sources/*.swift"]
-deps = ["ui/UI"]
+deps = ["../../ui/UI"]
 
 [target.attrs]
 platform = "ios"
