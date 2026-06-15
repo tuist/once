@@ -58,7 +58,7 @@ Describe 'apple graph'
     The stdout should include 'apps/ios/AppCore (apple_library) [build]'
     The stdout should include 'apps/ios/DesignSystem (apple_framework) [build]'
     The stdout should include 'apps/ios/App (apple_application) [build]'
-    The stdout should include 'apps/ios/AppTests (apple_test_bundle) [build]'
+    The stdout should include 'apps/ios/AppTests (apple_test_bundle) [build, test]'
   End
 
   It 'exposes build-only Apple application artifacts'
@@ -170,7 +170,7 @@ Describe 'apple graph'
     The status should be success
     The stdout should include 'apple_test_bundle'
     The stdout should include 'build: default, bundle, dsyms'
-    The stdout should not include 'test: default'
+    The stdout should include 'test: default, test_results, coverage'
   End
 
   It 'errors when building a target id that does not match'
