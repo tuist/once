@@ -28,7 +28,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use starlark::environment::{Globals, GlobalsBuilder, Module};
 use starlark::eval::Evaluator;
@@ -43,7 +43,7 @@ use crate::graph::GraphTarget;
 use crate::target::AttrValue;
 
 /// A single command declared by a rule impl through `run_action`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DeclaredAction {
     pub argv: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -51,7 +51,10 @@ pub struct DeclaredAction {
     pub outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
-    #[serde(skip_serializing_if = "is_cacheable")]
+    #[serde(
+        default = "default_cacheable",
+        skip_serializing_if = "std::clone::Clone::clone"
+    )]
     pub cacheable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain_identity: Option<String>,
@@ -59,8 +62,8 @@ pub struct DeclaredAction {
     pub identifier: Option<String>,
 }
 
-fn is_cacheable(value: &bool) -> bool {
-    *value
+fn default_cacheable() -> bool {
+    true
 }
 
 /// Per-target collection of declared outputs, actions, and the host
@@ -434,9 +437,9 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         inputs: Option<Value<'v>>,
         outputs: Option<Value<'v>>,
         env: Option<Value<'v>>,
-        cacheable: Option<bool>,
         toolchain_identity: Option<String>,
         identifier: Option<String>,
+        cacheable: Option<bool>,
     ) -> anyhow::Result<NoneType> {
         let argv = unpack_string_list(argv, "argv")?;
         let inputs = inputs
@@ -1195,6 +1198,24 @@ run_action(
         });
         assert_eq!(store.actions.len(), 1);
         assert!(!store.actions[0].cacheable);
+    }
+
+    #[test]
+    fn declared_action_defaults_cacheable_when_omitted() {
+        let action: DeclaredAction = serde_json::from_value(serde_json::json!({
+            "argv": ["swiftc", "App.swift"],
+            "outputs": [".once/out/App.o"]
+        }))
+        .unwrap();
+
+        assert!(action.cacheable);
+        assert_eq!(
+            serde_json::to_value(&action).unwrap(),
+            serde_json::json!({
+                "argv": ["swiftc", "App.swift"],
+                "outputs": [".once/out/App.o"]
+            })
+        );
     }
 
     #[test]

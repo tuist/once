@@ -355,7 +355,13 @@ async fn dispatch_run(
             anyhow::bail!("--remote is only supported for executable script targets");
         }
         let cache = crate::cache_provider::resolve(workspace, xdg)?;
-        return commands::graph::run(workspace, &cache, output, &resolved_target).await;
+        return Box::pin(commands::graph::run(
+            workspace,
+            &cache,
+            output,
+            &resolved_target,
+        ))
+        .await;
     }
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     run_target_command(
