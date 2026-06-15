@@ -1,13 +1,14 @@
 # Caching
 
-Script files are the easiest way to make existing repository automation
-cacheable through Once without rewriting the implementation.
+Script files are the easiest adapter for bringing existing repository
+automation into Once's action model without rewriting the implementation.
 
 Most repositories already have a layer of shell, Node, Python, Ruby, or
 Elixir automation that does real work but lives outside the native build
 graph. Once lets those scripts stay where they are. The script file
 remains the source of truth, and Once learns just enough about it to
-cache it, inspect it, and schedule it safely.
+cache it, inspect it, and schedule it safely through the same action
+substrate typed graph rules use.
 
 ## Annotated Script Files
 

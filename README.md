@@ -10,11 +10,11 @@
 
 # Once
 
-Once makes project scripts cacheable, observable, and remotely executable. Declare the inputs, outputs, environment, and runtime contract once, then reuse the result locally, in CI, or on a compute provider.
+Once makes repository automation graph-aware, cacheable, observable, and remotely executable. Model work as targets with capabilities that lower into content-addressed actions. Existing scripts can join the same action model immediately through `once exec` or script targets, so teams can start without rewriting the automation they already have.
 
 ## Quick Start
 
-Describe a script with `# once` annotations:
+Start by adapting an existing script. Add a small contract that names the files, outputs, environment, and working directory that shape the action:
 
 ```sh
 #!/usr/bin/env bash
@@ -25,7 +25,7 @@ Describe a script with `# once` annotations:
 npm run build-assets
 ```
 
-Run it through the cache:
+Run it as a cached action:
 
 ```sh
 once exec -- bash scripts/build-assets.sh
@@ -37,6 +37,8 @@ Scripts can also run directly with a Once shebang:
 ```sh
 #!/usr/bin/env -S once exec -- bash
 ```
+
+When the workflow needs dependencies, multiple capabilities, typed validation, or agent-editable structure, move it into the build graph and let the rule lower the target into the same action substrate.
 
 ## Documentation
 

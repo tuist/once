@@ -1,10 +1,9 @@
-//! `once exec` - cache and execute a literal command or script file.
+//! `once exec` - execute a literal action through the cache.
 //!
-//! Substrate-level escape hatch: bypass the target graph and put any
-//! argv through the action cache. Useful for ad-hoc shell-outs and for
-//! exercising the cache directly. With `--script`, or when argv looks
-//! like `<runtime> <script> [args...]` and the file carries `once`
-//! headers, Once treats argv as a script execution request.
+//! Low-level action surface for direct commands, ad-hoc shell-outs, and
+//! script adapters. With `--script`, or when argv looks like `<runtime>
+//! <script> [args...]` and the file carries `once` headers, Once treats
+//! argv as a script execution request.
 //!
 //! Stdout always carries the wrapped program's stdout verbatim
 //! (transparency), regardless of `--format`. Stderr carries the

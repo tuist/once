@@ -468,7 +468,7 @@ fn list<'v>(value: Value<'v>, path: &str) -> std::result::Result<&'v ListRef<'v>
 fn script_schema() -> RuleSchema {
     RuleSchema {
         kind: "script".to_string(),
-        docs: "Migration target that wraps an annotated script action.".to_string(),
+        docs: "Adapter target that wraps existing executable automation.".to_string(),
         attrs: vec![
             attr(
                 "script_path",
