@@ -57,11 +57,11 @@ Describe 'apple graph'
     The status should be success
     The stdout should include 'apps/ios/AppCore (apple_library) [build]'
     The stdout should include 'apps/ios/DesignSystem (apple_framework) [build]'
-    The stdout should include 'apps/ios/App (apple_application) [build]'
+    The stdout should include 'apps/ios/App (apple_application) [build, run]'
     The stdout should include 'apps/ios/AppTests (apple_test_bundle) [build, test]'
   End
 
-  It 'exposes build-only Apple application artifacts'
+  It 'exposes runnable Apple application artifacts'
     copy_apple_graph_fixture
 
     When call once --format json query capabilities apps/ios/App
@@ -69,8 +69,8 @@ Describe 'apple graph'
     The stdout should include '"kind":"apple_application"'
     The stdout should include '"name":"build"'
     The stdout should include '"output_groups":["default","bundle","dsyms"]'
-    The stdout should not include '"name":"run"'
-    The stdout should not include '"requires_outputs":["bundle"]'
+    The stdout should include '"name":"run"'
+    The stdout should include '"requires_outputs":["bundle"]'
   End
 
   It 'builds Apple application artifacts through the graph command'
@@ -87,14 +87,6 @@ Describe 'apple graph'
     The path "$WORKSPACE/.once/out/apps/ios/App/App.app/App" should be file
     The path "$WORKSPACE/.once/out/apps/ios/App/App.app/Info.plist" should be file
     The path "$WORKSPACE/.once/out/apps/ios/App/App.app/Frameworks/DesignSystem.framework/DesignSystem" should be file
-  End
-
-  It 'rejects running Apple application artifacts through the graph command'
-    copy_apple_graph_fixture
-
-    When call once --format json run apps/ios/App
-    The status should not equal 0
-    The stderr should include 'running `apple_application` targets is not yet supported'
   End
 
   It 'exposes testable Apple test bundle artifacts'
@@ -162,7 +154,7 @@ Describe 'apple graph'
     The stdout should include 'provisioning_profile'
     The stdout should include 'asset_catalogs'
     The stdout should include 'build: default, bundle, dsyms'
-    The stdout should not include 'run: default'
+    The stdout should include 'run: default (requires: bundle)'
   End
 
   It 'describes Apple test bundle build schema'
@@ -189,20 +181,20 @@ Describe 'apple graph'
     The stderr should include 'does not expose `test`'
   End
 
-  It 'rejects --remote for non-runnable graph targets'
+  It 'rejects --remote for graph run targets before execution'
     copy_apple_graph_fixture
 
     When call once run --remote apps/ios/App
     The status should not equal 0
-    The stderr should include 'running `apple_application` targets is not yet supported'
+    The stderr should include '--remote is only supported for executable script targets'
   End
 
-  It 'rejects --runtime-rpc for non-runnable graph targets'
+  It 'rejects --runtime-rpc for graph run targets before execution'
     copy_apple_graph_fixture
 
     When call once run --runtime-rpc apps/ios/App
     The status should not equal 0
-    The stderr should include 'running `apple_application` targets is not yet supported'
+    The stderr should include '--runtime-rpc is only supported for executable script targets'
   End
 
   Describe 'apple_library swiftc compile'

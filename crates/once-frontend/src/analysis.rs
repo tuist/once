@@ -51,10 +51,16 @@ pub struct DeclaredAction {
     pub outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "is_cacheable")]
+    pub cacheable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain_identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,
+}
+
+fn is_cacheable(value: &bool) -> bool {
+    *value
 }
 
 /// Per-target collection of declared outputs, actions, and the host
@@ -361,6 +367,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             inputs: Vec::new(),
             outputs: vec![path.to_string()],
             env: BTreeMap::new(),
+            cacheable: true,
             // Folding the literal content into the toolchain identity
             // keeps the digest pinned to what the file should contain,
             // so changing the content alone invalidates the action.
@@ -403,6 +410,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             inputs: Vec::new(),
             outputs: vec![path.to_string()],
             env: BTreeMap::new(),
+            cacheable: true,
             toolchain_identity: Some(format!("once.write_bytes.v1\0{encoded}")),
             identifier: Some(format!("write_bytes:{path}")),
         };
@@ -418,14 +426,15 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// `argv`: list of strings; `inputs`: list of workspace-relative
     /// source paths to hash into the input digest; `outputs`: list of
     /// workspace-relative paths the action produces; `env`: optional
-    /// string->string dict; `toolchain_identity`: optional string
-    /// folded into the input digest; `identifier`: optional label for
-    /// diagnostics.
+    /// string->string dict; `cacheable`: optional bool, default true;
+    /// `toolchain_identity`: optional string folded into the input
+    /// digest; `identifier`: optional label for diagnostics.
     fn run_action<'v>(
         argv: Value<'v>,
         inputs: Option<Value<'v>>,
         outputs: Option<Value<'v>>,
         env: Option<Value<'v>>,
+        cacheable: Option<bool>,
         toolchain_identity: Option<String>,
         identifier: Option<String>,
     ) -> anyhow::Result<NoneType> {
@@ -447,6 +456,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             inputs,
             outputs,
             env,
+            cacheable: cacheable.unwrap_or(true),
             toolchain_identity,
             identifier,
         };
@@ -1166,6 +1176,25 @@ run_action(
             store.actions[0].identifier.as_deref(),
             Some("swift_compile")
         );
+        assert!(store.actions[0].cacheable);
+    }
+
+    #[test]
+    fn run_action_can_mark_declarations_uncacheable() {
+        let tmp = TempDir::new().unwrap();
+        let store = store_for(tmp.path(), "apps/ios/App");
+        let (store, ()) = with_active_store(store, || {
+            run(r#"
+run_action(
+    argv = ["open", ".once/out/apps/ios/App/App.app"],
+    outputs = [".once/out/apps/ios/App/run/run.json"],
+    cacheable = False,
+)
+"#)
+            .unwrap();
+        });
+        assert_eq!(store.actions.len(), 1);
+        assert!(!store.actions[0].cacheable);
     }
 
     #[test]

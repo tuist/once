@@ -14,6 +14,7 @@ def _impl(ctx):
             argv = ["/bin/sh", "-c", ctx["attr"]["script"], "sh", out],
             inputs = srcs,
             outputs = [out],
+            cacheable = not ("uncacheable" in ctx["attr"]),
             identifier = ctx["label"]["name"] + "-" + ctx["capability"],
         )
         return {"target": ctx["label"]["name"], "out": out}
@@ -194,6 +195,46 @@ async fn independent_dependencies_run_in_parallel() {
     assert_eq!(
         outcome.outputs,
         vec![".once/out/Root/Root-build.txt".to_string()]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn uncacheable_declared_actions_bypass_action_cache() {
+    let workspace = tempfile::tempdir().unwrap();
+    let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+    let graph = vec![target_with_capabilities(
+        "Root",
+        &[],
+        &[],
+        &["build"],
+        [
+            (
+                "script".to_string(),
+                AttrValue::String("printf x >> side_effect; printf run > \"$1\"".to_string()),
+            ),
+            ("uncacheable".to_string(), AttrValue::Bool(true)),
+        ],
+    )];
+    let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
+    let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
+
+    let first = session
+        .build_with_analysis(&graph[0])
+        .await
+        .unwrap()
+        .unwrap();
+    let second = session
+        .build_with_analysis(&graph[0])
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(first.cache_tag, "bypass");
+    assert_eq!(second.cache_tag, "bypass");
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("side_effect")).unwrap(),
+        "xx"
     );
 }
 

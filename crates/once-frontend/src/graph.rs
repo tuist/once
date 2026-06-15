@@ -538,7 +538,7 @@ mod tests {
     use crate::target::Target;
 
     #[test]
-    fn apple_application_exposes_build() {
+    fn apple_application_exposes_build_and_run() {
         let target = Target {
             package: "apps/ios".to_string(),
             kind: "apple_application".to_string(),
@@ -560,7 +560,7 @@ mod tests {
             .map(|capability| capability.name.as_str())
             .collect::<Vec<_>>();
         names.sort_unstable();
-        assert_eq!(names, vec!["build"]);
+        assert_eq!(names, vec!["build", "run"]);
     }
 
     #[test]
