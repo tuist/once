@@ -2,10 +2,10 @@
 
 ## Summary
 
-Once is expanding from cacheable scripts into build-system capabilities. Scripts
-remain the migration ramp: teams can make existing automation cacheable first,
-then move the same work into a typed build graph when they need richer target
-relationships, queries, diagnostics, and agent-driven edits.
+Once is expanding around a graph and action model for repository automation.
+Scripts remain the adapter for existing work: teams can make automation
+cacheable first, then move the same work into typed graph rules when they need
+richer target relationships, queries, diagnostics, and agent-driven edits.
 
 The first product slice should focus on Apple platforms. The goal is to model
 Apple libraries, frameworks, applications, application runs, and tests well
@@ -28,8 +28,8 @@ for coding agents from the beginning.
 - Run application targets through an explicit run capability that depends on
   build outputs.
 - Run tests through an explicit test capability with structured test results.
-- Keep scripts as first-class migration targets instead of replacing the
-  existing `once exec` workflow.
+- Keep scripts as first-class adapters into the action model instead of
+  replacing the existing `once exec` workflow.
 - Give agents schema introspection, structured graph operations, structured
   diagnostics, repair suggestions, and explanation queries.
 - Preserve Once's action cache, content-addressed storage, remote execution,
@@ -46,13 +46,16 @@ for coding agents from the beginning.
 
 ## Product Model
 
-Once has three layers:
+Once has a small set of durable concepts:
 
-1. Script actions: existing scripts with `# once` annotations, runnable through
-   `once exec`.
-2. Script targets: implicit or declared graph targets that wrap script actions.
-3. Build graph targets: typed targets with rule schemas, dependencies,
-   capabilities, providers, outputs, diagnostics, and queries.
+1. Targets: named units in the workspace.
+2. Capabilities: operations a target exposes, such as `build`, `run`, and
+   `test`.
+3. Actions: concrete executable work with inputs, outputs, environment,
+   platform requirements, and cache identity.
+4. Rules: typed logic that validates targets and lowers capabilities into
+   actions.
+5. Scripts: the least typed rule-backed adapter for existing executable files.
 
 The Apple platform is the first full build graph proving ground because it
 requires the system to model real build-system complexity: compile actions,
@@ -156,8 +159,8 @@ The initial Apple rule families should be small but real:
   metadata.
 - `apple_test_bundle`: builds and runs XCTest-style test bundles, including
   app-hosted tests when needed.
-- `script`: keeps existing annotated scripts available as graph targets during
-  migration.
+- `script`: keeps existing executable automation available as graph targets
+  during migration.
 
 The RFC does not require copying Bazel or Buck rule names or attributes. It
 requires studying their Apple rules for the provider boundaries and build
@@ -351,7 +354,7 @@ Suggested order:
    diagnostic models in Rust.
 2. Load canonical `once.toml` target declarations without changing existing
    script execution.
-3. Represent implicit script targets so scripts appear in graph queries.
+3. Represent script adapter targets so scripts appear in graph queries.
 4. Add schema introspection for a small built-in Apple rule set.
 5. Add `once query targets` and `once query capabilities`.
 6. Add configured graph and action graph placeholders for Apple build, run, and

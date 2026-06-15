@@ -13,12 +13,12 @@ operating across ten parallel worktrees redoes the same codegen step
 ten times because none of the workers know the others already paid
 for it.
 
-The `once cache` CLI exposes Once's content-addressed store
-directly to those scripts so they can stop. Declare the inputs that
-determine a result, ask the cache whether you have already produced
-that result, and either skip the work or restore the artifact. The
-script stays a script. The speedup comes from the same store that Once
-uses for declared script actions.
+The `once cache` CLI exposes Once's content-addressed store directly to
+those scripts so they can stop. Declare the inputs that determine a
+result, ask the cache whether you have already produced that result, and
+either skip the work or restore the artifact. The script stays a script.
+The speedup comes from the same store used by script adapters and typed
+graph rules.
 
 The surface is small. Two caches, mirroring the shape that Bazel and
 the [Remote Execution API](https://github.com/bazelbuild/remote-apis)

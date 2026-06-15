@@ -1,6 +1,6 @@
 # `once exec`
 
-Cache and execute a literal command (substrate escape hatch)
+Execute a literal action through the cache
 
 ## Synopsis
 
@@ -10,7 +10,7 @@ once exec [OPTIONS] [ARGV]
 
 ## Description
 
-Bypasses the target graph and puts any argv through the action cache. The cache key is the full argv, declared environment variables, optional working directory, and optional timeout. A second invocation with the same key reuses the captured stdout, stderr, and exit code. With `--script`, or when argv looks like `<runtime> <script> [args...]` and the file has `once` headers, Once applies script-aware parsing instead.
+Low-level action surface for direct commands and script adapters. The cache key is the full argv, declared environment variables, optional working directory, and optional timeout. A second invocation with the same key reuses the captured stdout, stderr, and exit code. With `--script`, or when argv looks like `<runtime> <script> [args...]` and the file has `once` headers, Once applies script-aware parsing instead.
 
 ## Arguments
 

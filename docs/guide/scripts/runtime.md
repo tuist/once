@@ -2,7 +2,7 @@
 
 Once exposes cache primitives at runtime through the `once cache` CLI.
 That gives ordinary scripts direct access to the same content-addressed
-store and action cache that Once uses for annotated script files.
+store and action cache that every Once action uses.
 
 Most repositories have a long tail of scripts that exist next to the
 build: test runners, codegen, dependency installs, environment
@@ -19,8 +19,8 @@ for it.
 
 Declare the inputs that determine a result, ask the cache whether you
 have already produced that result, and either skip the work or restore
-the artifact. The script stays a script. The speedup comes from the
-same store that Once uses for declared script actions.
+the artifact. The script stays a script. The speedup comes from the same
+store used by script adapters and typed graph rules.
 
 The surface is small: a content-addressed store of bytes, plus a map
 from an action's input digest to the result that input produced.

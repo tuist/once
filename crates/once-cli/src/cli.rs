@@ -78,7 +78,7 @@ pub const CLI_VERSION: &str = match option_env!("ONCE_VERSION") {
 #[command(
     name = "once",
     version = CLI_VERSION,
-    about = "Cacheable and remotely executable project scripts",
+    about = "Graph-aware, cacheable, remotely-executable repository automation",
     arg_required_else_help = true
 )]
 pub struct Cli {
@@ -131,10 +131,11 @@ pub enum Cmd {
         target: Option<String>,
     },
 
-    /// Run a declared target action.
+    /// Run a declared target.
     ///
-    /// Finds the matching target and runs it through the action cache.
-    /// Use `--remote` to ask a compute provider to execute the command.
+    /// Resolves the target id against the workspace graph and executes
+    /// its `run` capability through the action cache. Use `--remote`
+    /// to ask a compute provider to execute the command.
     #[command(arg_required_else_help = true)]
     Run {
         /// Serve a local JSON-RPC runtime control socket for this run.
@@ -171,10 +172,10 @@ pub enum Cmd {
         target: Option<String>,
     },
 
-    /// Cache and execute a literal command (substrate escape hatch).
+    /// Execute a literal action through the cache.
     ///
-    /// Bypasses the target graph and puts any argv through the action
-    /// cache. The cache key is the full argv, declared environment
+    /// Low-level action surface for direct commands and script
+    /// adapters. The cache key is the full argv, declared environment
     /// variables, optional working directory, and optional timeout. A
     /// second invocation with the same key reuses the captured stdout,
     /// stderr, and exit code. With `--script`, or when argv looks like
@@ -255,9 +256,9 @@ pub enum Cmd {
     /// Inspect the project toolchain contract.
     ///
     /// Reports the toolchains a project pins (Rust, Swift, mise) and
-    /// the resolved versions Once will use when running cacheable
-    /// scripts or graph actions. Pair with `once query schema` when
-    /// debugging "why did the cache miss?" questions where the
+    /// the resolved versions Once will use when running actions from
+    /// script adapters or graph rules. Pair with `once query schema`
+    /// when debugging "why did the cache miss?" questions where the
     /// toolchain identity is suspect.
     #[command(arg_required_else_help = true)]
     Toolchain {

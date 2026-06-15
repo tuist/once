@@ -1,8 +1,8 @@
 //! Once manifest frontend.
 //!
 //! Loads declarative `once.toml` package files into a shared
-//! [`Target`] IR. TOML keeps cacheable script declarations literal
-//! and straightforward for humans and agents to patch.
+//! [`Target`] IR. TOML keeps target declarations literal and
+//! straightforward for humans and agents to patch.
 
 pub mod analysis;
 mod cache_provider;
