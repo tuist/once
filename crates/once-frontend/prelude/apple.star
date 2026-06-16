@@ -552,6 +552,27 @@ def _json_escape(value):
 def _json_literal(value):
     return "\"" + _json_escape(value) + "\""
 
+_IOS_SIMULATOR_BOOTED_FILTER = "/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p"
+_IOS_SIMULATOR_SHUTDOWN_FILTER = "/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p"
+
+def _ios_simulator_selection_script(xcrun):
+    return """simulator_id="${{ONCE_APPLE_SIMULATOR_UDID:-}}"
+if [ -z "$simulator_id" ]; then
+  simulator_id=$({xcrun} simctl list devices booted | sed -n {booted_filter} | head -n 1)
+fi
+if [ -z "$simulator_id" ]; then
+  simulator_id=$({xcrun} simctl list devices available | sed -n {shutdown_filter} | head -n 1)
+fi
+if [ -z "$simulator_id" ]; then
+  echo "error: no booted or available iOS simulator found" >&2
+  exit 1
+fi
+""".format(
+        xcrun = _shell_literal(xcrun),
+        booted_filter = _shell_literal(_IOS_SIMULATOR_BOOTED_FILTER),
+        shutdown_filter = _shell_literal(_IOS_SIMULATOR_SHUTDOWN_FILTER),
+    )
+
 def _shellspec_test_impl(ctx):
     attrs = ctx["attr"]
     shellspec = attrs.get("shellspec") or "shellspec"
@@ -1649,17 +1670,7 @@ printf '%s\\n' {record_json} > {record}
     elif platform == "ios" and sdk_variant == "simulator":
         record_prefix = '{"schema":"once.run.v1","target":' + target_json + ',"kind":"apple_application","status":"launched","platform":' + platform_json + ',"sdk_variant":"simulator","bundle_id":' + bundle_json + ',"app_path":' + app_json + ',"simulator_id":"'
         record_suffix = '"}'
-        command = """simulator_id="${{ONCE_APPLE_SIMULATOR_UDID:-}}"
-if [ -z "$simulator_id" ]; then
-  simulator_id=$({xcrun} simctl list devices booted | sed -n '/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p' | head -n 1)
-fi
-if [ -z "$simulator_id" ]; then
-  simulator_id=$({xcrun} simctl list devices available | sed -n '/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p' | head -n 1)
-fi
-if [ -z "$simulator_id" ]; then
-  echo "error: no booted or available iOS simulator found" >&2
-  exit 1
-fi
+        command = _ios_simulator_selection_script(xcrun) + """
 {xcrun} simctl boot "$simulator_id" >> {log} 2>&1 || true
 {xcrun} simctl bootstatus "$simulator_id" -b >> {log} 2>&1
 {xcrun} simctl install "$simulator_id" {app} >> {log} 2>&1
@@ -2127,17 +2138,7 @@ def _apple_test_bundle_impl(ctx):
                 command = _shell_words([xcrun, "xctest", test_bundle_path]),
             )
         elif sdk_variant == "simulator":
-            runner_command = """simulator_id="${{ONCE_APPLE_SIMULATOR_UDID:-}}"
-if [ -z "$simulator_id" ]; then
-  simulator_id=$({xcrun} simctl list devices booted | sed -n '/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p' | head -n 1)
-fi
-if [ -z "$simulator_id" ]; then
-  simulator_id=$({xcrun} simctl list devices available | sed -n '/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p' | head -n 1)
-fi
-if [ -z "$simulator_id" ]; then
-  echo "error: no booted or available iOS simulator found" >&2
-  exit 1
-fi
+            runner_command = _ios_simulator_selection_script(xcrun) + """
 {xcrun} simctl boot "$simulator_id" >/dev/null 2>&1 || true
 {xcrun} simctl bootstatus "$simulator_id" -b
 tmpdir=$(mktemp -d "${{TMPDIR:-/tmp}}/once-xctest.XXXXXX")

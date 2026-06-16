@@ -1698,6 +1698,33 @@ RULES = [
         assert!(err.contains("no branch matching"), "{err}");
     }
 
+    #[test]
+    fn prelude_ios_simulator_selection_filters_to_iphone_and_ipad() {
+        let out = eval_prelude_function("_ios_simulator_selection_script", r#"("/usr/bin/xcrun")"#)
+            .unwrap();
+
+        assert!(out.contains("ONCE_APPLE_SIMULATOR_UDID"), "{out}");
+        assert!(out.contains("simctl list devices booted"), "{out}");
+        assert!(out.contains("simctl list devices available"), "{out}");
+        assert!(out.contains("/iPhone/ s/.*"), "{out}");
+        assert!(out.contains("/iPad/ s/.*"), "{out}");
+        assert!(out.contains("(Booted)"), "{out}");
+        assert!(out.contains("(Shutdown)"), "{out}");
+        assert!(!out.contains("sed -n 's/.*"), "{out}");
+    }
+
+    #[test]
+    fn prelude_ios_simulator_selection_helper_feeds_run_and_test_scripts() {
+        let source = include_str!("../prelude/apple.star");
+
+        assert_eq!(
+            source
+                .matches("_ios_simulator_selection_script(xcrun) +")
+                .count(),
+            2
+        );
+    }
+
     /// The prelude `_serialize_hmap` helper must lay out the
     /// header-map byte sequence correctly: 4-byte magic, version 1,
     /// reserved 0, the rest of the header, a power-of-two bucket
