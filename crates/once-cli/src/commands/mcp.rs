@@ -403,7 +403,16 @@ fn run_test_target(workspace: &std::path::Path, target: &str) -> Result<Value> {
 
 fn run_graph_target(workspace: &std::path::Path, capability: &str, target: &str) -> Result<Value> {
     let exe = std::env::current_exe().context("resolving current once executable")?;
-    let output = std::process::Command::new(&exe)
+    run_graph_target_with_exe(&exe, workspace, capability, target)
+}
+
+fn run_graph_target_with_exe(
+    exe: &std::path::Path,
+    workspace: &std::path::Path,
+    capability: &str,
+    target: &str,
+) -> Result<Value> {
+    let output = std::process::Command::new(exe)
         .arg("-C")
         .arg(workspace)
         .arg("--format")
@@ -1198,6 +1207,44 @@ srcs = ["other_spec.sh"]
 
         assert_eq!(record, Value::String("{not json".to_string()));
         assert!(error.unwrap().contains("line"));
+    }
+
+    #[cfg(unix)]
+    fn shell_literal(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn graph_target_runner_invokes_cli_and_parses_json_record() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("once-mock");
+        let args_path = tmp.path().join("args.txt");
+        let args_file = shell_literal(args_path.to_str().unwrap());
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {args_file}\nprintf '{{\"target\":\"%s\",\"capability\":\"%s\",\"status\":\"completed\"}}\\n' \"$6\" \"$5\"\n",
+        );
+        std::fs::write(&exe, script).unwrap();
+        let mut permissions = std::fs::metadata(&exe).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&exe, permissions).unwrap();
+
+        let build = run_graph_target_with_exe(&exe, tmp.path(), "build", "apps/App").unwrap();
+        assert_eq!(build["capability"], "build");
+        assert_eq!(build["success"], true);
+        assert_eq!(build["record"]["target"], "apps/App");
+        assert_eq!(build["record"]["capability"], "build");
+
+        let run = run_graph_target_with_exe(&exe, tmp.path(), "run", "apps/App").unwrap();
+        assert_eq!(run["capability"], "run");
+        assert_eq!(run["success"], true);
+        assert_eq!(run["record"]["target"], "apps/App");
+        assert_eq!(run["record"]["capability"], "run");
+
+        let args = std::fs::read_to_string(args_path).unwrap();
+        assert!(args.contains("--format\njson\nrun\napps/App\n"));
     }
 
     #[test]
