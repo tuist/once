@@ -131,8 +131,17 @@ async fn append_captured_output(
     let Some(digest) = digest else {
         return;
     };
-    let Ok(bytes) = cache.get_blob(digest).await else {
-        return;
+    let bytes = match cache.get_blob(digest).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            tracing::warn!(
+                output = name,
+                digest = %digest,
+                error = %err,
+                "failed to read captured declared action output"
+            );
+            return;
+        }
     };
     if bytes.is_empty() {
         return;
@@ -344,6 +353,61 @@ mod tests {
         assert!(workspace.path().join(".once/out/x/sub").is_dir());
         let Action::RunCommand { argv, .. } = action;
         assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn declared_action_failure_message_appends_captured_output() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let stdout = cache.put_blob(b"visible stdout").await.unwrap();
+        let stderr = cache.put_blob(b"visible stderr").await.unwrap();
+        let result = ActionResult {
+            exit_code: 7,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            outputs: BTreeMap::new(),
+        };
+
+        let message =
+            declared_action_failure_message(&cache, "target:action", 2, "target", 7, &result).await;
+
+        assert!(message.contains("target:action (2) failed for target with exit code 7"));
+        assert!(message.contains("stdout:\nvisible stdout"));
+        assert!(message.contains("stderr:\nvisible stderr"));
+    }
+
+    #[tokio::test]
+    async fn declared_action_failure_message_truncates_large_output() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let mut bytes = b"drop-me".to_vec();
+        bytes.extend(std::iter::repeat_n(b'x', FAILURE_OUTPUT_LIMIT));
+        let stdout = cache.put_blob(&bytes).await.unwrap();
+        let result = ActionResult {
+            exit_code: 1,
+            stdout: Some(stdout),
+            stderr: None,
+            outputs: BTreeMap::new(),
+        };
+
+        let message = declared_action_failure_message(&cache, "id", 0, "target", 1, &result).await;
+
+        assert!(message.contains("last 16384 bytes of stdout:\n"));
+        assert!(!message.contains("drop-me"));
+        assert!(message.ends_with(&"x".repeat(FAILURE_OUTPUT_LIMIT)));
+    }
+
+    #[tokio::test]
+    async fn append_captured_output_ignores_missing_digest_and_missing_blob() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let missing = Digest::of_bytes(b"missing");
+        let mut message = "base".to_string();
+
+        append_captured_output(&cache, &mut message, "stdout", None).await;
+        append_captured_output(&cache, &mut message, "stdout", Some(&missing)).await;
+
+        assert_eq!(message, "base");
     }
 
     #[cfg(unix)]
