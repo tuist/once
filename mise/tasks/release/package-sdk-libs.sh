@@ -4,6 +4,8 @@
 #USAGE flag "--version <version>" help="Version number to embed in the shared library"
 set -euo pipefail
 
+release_tasks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 target=""
 version="0.0.0"
 while (($# > 0)); do
@@ -64,13 +66,13 @@ target_suffix() {
 }
 
 cleanup() {
-  ./mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true
+  "${release_tasks_dir}/write-rust-release-manifests.sh" --clear >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
-./mise/tasks/release/prepare-rust-graph-deps.sh --target "${target}"
-./mise/tasks/release/write-rust-release-manifests.sh --target "${target}" --version "${version}"
+once_bin="$("${release_tasks_dir}/bootstrap-once.sh")"
+"${release_tasks_dir}/prepare-rust-graph-deps.sh" --target "${target}"
+"${release_tasks_dir}/write-rust-release-manifests.sh" --target "${target}" --version "${version}"
 
 suffix="$(target_suffix "${target}")"
 target_id="crates/once/once_cdylib_${suffix}"

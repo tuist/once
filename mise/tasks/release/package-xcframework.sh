@@ -3,6 +3,8 @@
 #USAGE flag "--version <version>" help="Version number to validate the release input"
 set -Eeuo pipefail
 
+release_tasks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 version=""
 while (($# > 0)); do
   case "$1" in
@@ -82,7 +84,7 @@ build_target() {
   local suffix target_id
   suffix="$(target_suffix "${target}")"
   target_id="crates/once/once_staticlib_${suffix}"
-  ./mise/tasks/release/write-rust-release-manifests.sh --target "${target}" --version "${version}"
+  "${release_tasks_dir}/write-rust-release-manifests.sh" --target "${target}" --version "${version}"
   if ! "${once_bin}" build "${target_id}" --format json --quiet; then
     echo "once build failed for ${target}" >&2
     exit 1
@@ -105,7 +107,7 @@ stage_dir=""
 keychain_path=""
 certificate_path=""
 cleanup() {
-  ./mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true
+  "${release_tasks_dir}/write-rust-release-manifests.sh" --clear >/dev/null 2>&1 || true
   if [[ -n "${certificate_path}" ]]; then
     rm -f "${certificate_path}"
   fi
@@ -119,8 +121,8 @@ cleanup() {
 trap cleanup EXIT
 
 rustup target add "${targets[@]}"
-once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
-./mise/tasks/release/prepare-rust-graph-deps.sh
+once_bin="$("${release_tasks_dir}/bootstrap-once.sh")"
+"${release_tasks_dir}/prepare-rust-graph-deps.sh"
 
 for target in "${targets[@]}"; do
   build_target "${target}"

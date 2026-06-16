@@ -4,6 +4,8 @@
 #USAGE flag "--version <version>" help="Version number to embed in the binary and asset name"
 set -euo pipefail
 
+release_tasks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 target=""
 version=""
 while (($# > 0)); do
@@ -39,7 +41,7 @@ target_suffix() {
 
 stage_dir=""
 cleanup() {
-  ./mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true
+  "${release_tasks_dir}/write-rust-release-manifests.sh" --clear >/dev/null 2>&1 || true
   if [[ -n "${stage_dir}" ]]; then
     rm -rf "${stage_dir}"
   fi
@@ -47,9 +49,9 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p dist
-once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
-./mise/tasks/release/prepare-rust-graph-deps.sh --target "${target}"
-./mise/tasks/release/write-rust-release-manifests.sh --target "${target}" --version "${version}"
+once_bin="$("${release_tasks_dir}/bootstrap-once.sh")"
+"${release_tasks_dir}/prepare-rust-graph-deps.sh" --target "${target}"
+"${release_tasks_dir}/write-rust-release-manifests.sh" --target "${target}" --version "${version}"
 
 # Windows uses the .exe suffix; everything else ships a bare binary.
 case "${target}" in
