@@ -1085,6 +1085,35 @@ mod tests {
         Server::new(workspace, true)
     }
 
+    fn seed_custom_rule_workspace(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("rules")).unwrap();
+        std::fs::write(
+            root.join("once.toml"),
+            "[rules]\npaths = [\"rules/*.star\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("rules/demo.star"),
+            r#"
+RULES = [
+    rule(
+        kind = "demo_rule",
+        docs = "Demo rule",
+        attrs = [
+            attr("message", "string", required = True, docs = "Message to emit"),
+        ],
+        deps = [],
+        providers = ["demo_provider"],
+        capabilities = [
+            capability("build", ["default"]),
+        ],
+    ),
+]
+"#,
+        )
+        .unwrap();
+    }
+
     fn request(method: &str, params: Value) -> JsonRpcRequest {
         JsonRpcRequest {
             jsonrpc: Some("2.0".to_string()),
@@ -1357,6 +1386,51 @@ srcs = ["other_spec.sh"]
         assert!(kinds.contains(&"apple_application"));
         // The list summarizes; full schema lives behind once_query_schema.
         assert!(value.as_array().unwrap()[0].get("attrs").is_none());
+    }
+
+    #[test]
+    fn mcp_tools_use_workspace_custom_rules() {
+        let tmp = TempDir::new().unwrap();
+        seed_custom_rule_workspace(tmp.path());
+
+        let schema = tool_query_schema(tmp.path(), &json!({ "kind": "demo_rule" })).unwrap();
+        assert_eq!(schema["kind"], "demo_rule");
+        assert_eq!(schema["providers"], json!(["demo_provider"]));
+
+        let rules = tool_list_rules(tmp.path()).unwrap();
+        assert!(rules
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule["kind"] == "demo_rule"));
+
+        let validation = tool_validate_target(
+            tmp.path(),
+            &json!({
+                "target": {
+                    "name": "Hello",
+                    "kind": "demo_rule",
+                    "attrs": { "message": "hello" }
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(validation["valid"], true);
+
+        let result = apply_edit_to_package(
+            tmp.path(),
+            "apps/Hello",
+            &[once_frontend::EditOperation::Create {
+                target: once_frontend::TargetSpec {
+                    name: "Hello".to_string(),
+                    kind: "demo_rule".to_string(),
+                    attrs: serde_json::Map::from_iter([("message".to_string(), json!("hello"))]),
+                    ..Default::default()
+                },
+            }],
+        )
+        .unwrap();
+        assert_eq!(result["applied"], true);
     }
 
     #[test]

@@ -23,6 +23,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -692,12 +693,23 @@ pub struct AnalysisResult {
 /// target. It caches cheap rule metadata and generic host lookups
 /// (`host_which`, `host_command`) while still evaluating each target's
 /// Starlark impl in an isolated module heap.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AnalysisEngine {
     source_path: Arc<str>,
     source: Arc<str>,
     rule_impls: RuleImpls,
     host_cache: HostCache,
+}
+
+impl fmt::Debug for AnalysisEngine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AnalysisEngine")
+            .field("source_path", &self.source_path)
+            .field("source_len", &self.source.len())
+            .field("rule_impls", &self.rule_impls)
+            .field("host_cache", &self.host_cache)
+            .finish()
+    }
 }
 
 impl AnalysisEngine {
@@ -1619,6 +1631,16 @@ RULES = [
         .unwrap();
 
         assert!(engine.rule_has_impl("custom_library"));
+    }
+
+    #[test]
+    fn analysis_engine_debug_omits_rule_source() {
+        let engine = AnalysisEngine::from_source("RULES = []\n# SECRET_RULE_SOURCE").unwrap();
+
+        let rendered = format!("{engine:?}");
+
+        assert!(rendered.contains("source_len"));
+        assert!(!rendered.contains("SECRET_RULE_SOURCE"));
     }
 
     #[test]

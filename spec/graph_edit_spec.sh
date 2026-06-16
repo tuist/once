@@ -6,6 +6,30 @@
 # these specs pin the CLI contract (exit codes, --format handling,
 # stdin and --file input).
 
+seed_custom_rule_workspace() {
+  mkdir -p "$WORKSPACE/rules"
+  cat > "$WORKSPACE/once.toml" <<'EOF'
+[rules]
+paths = ["rules/*.star"]
+EOF
+  cat > "$WORKSPACE/rules/demo.star" <<'EOF'
+RULES = [
+    rule(
+        kind = "demo_rule",
+        docs = "Demo rule",
+        attrs = [
+            attr("message", "string", required = True, docs = "Message to emit"),
+        ],
+        deps = [],
+        providers = ["demo_provider"],
+        capabilities = [
+            capability("build", ["default"]),
+        ],
+    ),
+]
+EOF
+}
+
 Describe 'once query rules'
   It 'lists every rule kind with its example slugs in human mode'
     When call "$ONCE_BIN" query rules
@@ -25,6 +49,50 @@ Describe 'once query rules'
     The stdout should include '"kind":"apple_library"'
     The stdout should include '"slug":"apple-library-minimal"'
     The stdout should include '"use_when"'
+  End
+End
+
+Describe 'workspace custom rule CLI surface'
+  BeforeEach 'setup_workspace'
+  AfterEach 'cleanup_workspace'
+
+  It 'includes custom rules in query rules'
+    seed_custom_rule_workspace
+    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query rules
+    The status should be success
+    The stdout should include '"kind":"demo_rule"'
+    The stdout should include '"docs":"Demo rule"'
+  End
+
+  It 'returns custom schemas from query schema'
+    seed_custom_rule_workspace
+    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query schema demo_rule
+    The status should be success
+    The stdout should include '"kind":"demo_rule"'
+    The stdout should include '"name":"message"'
+    The stdout should include '"required":true'
+  End
+
+  It 'validates drafts against custom schemas'
+    seed_custom_rule_workspace
+    cat > "$WORKSPACE/draft.json" <<'EOF'
+{"target":{"name":"Hello","kind":"demo_rule","attrs":{"message":"hello"}}}
+EOF
+    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query validate-target --file "$WORKSPACE/draft.json"
+    The status should be success
+    The stdout should include '"valid":true'
+  End
+
+  It 'applies edits against custom schemas'
+    seed_custom_rule_workspace
+    cat > "$WORKSPACE/edit.json" <<'EOF'
+{"package":"apps/Hello","operations":[{"op":"create","target":{"name":"Hello","kind":"demo_rule","attrs":{"message":"hello"}}}]}
+EOF
+    When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit apply --file "$WORKSPACE/edit.json"
+    The status should be success
+    The stdout should include '"applied":true'
+    The path "$WORKSPACE/apps/Hello/once.toml" should be file
+    The contents of file "$WORKSPACE/apps/Hello/once.toml" should include 'kind = "demo_rule"'
   End
 End
 

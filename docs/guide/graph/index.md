@@ -75,6 +75,9 @@ resolved relative to the project root, loaded in sorted order, and
 included in `once query rules`, `once query schema`, validation, MCP
 schema tools, and graph analysis.
 
+The `[rules]` table is only loaded from the root manifest. Package
+manifests that declare `[rules]` are rejected.
+
 ## Capabilities
 
 Each rule declares which capabilities its targets expose:
