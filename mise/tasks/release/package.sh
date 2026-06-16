@@ -28,8 +28,28 @@ if [[ -z "${target}" || -z "${version}" ]]; then
   exit 1
 fi
 
+if [[ ! "${version}" =~ ^[0-9]+[.][0-9]+[.][0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+  echo "--version must be a semantic version" >&2
+  exit 1
+fi
+
+target_suffix() {
+  printf '%s' "$1" | tr '.-' '__'
+}
+
+stage_dir=""
+cleanup() {
+  ./mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true
+  if [[ -n "${stage_dir}" ]]; then
+    rm -rf "${stage_dir}"
+  fi
+}
+trap cleanup EXIT
+
 mkdir -p dist
-ONCE_VERSION="${version}" cargo build --locked --release --target "${target}"
+once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
+./mise/tasks/release/prepare-rust-graph-deps.sh --target "${target}"
+./mise/tasks/release/write-rust-release-manifests.sh --target "${target}" --version "${version}"
 
 # Windows uses the .exe suffix; everything else ships a bare binary.
 case "${target}" in
@@ -41,9 +61,17 @@ case "${target}" in
     ;;
 esac
 
+suffix="$(target_suffix "${target}")"
+target_id="crates/once-cli/once_cli_${suffix}"
+"${once_bin}" build "${target_id}" --format json --quiet
+source=".once/out/${target_id}/${bin_name}"
+if [[ ! -f "${source}" ]]; then
+  echo "expected binary does not exist: ${source}" >&2
+  exit 1
+fi
+
 stage_dir="$(mktemp -d)"
-trap 'rm -rf "${stage_dir}"' EXIT
-cp "target/${target}/release/${bin_name}" "${stage_dir}/${bin_name}"
+cp "${source}" "${stage_dir}/${bin_name}"
 
 # tar.gz everywhere, modern Windows ships tar(1) and `mise install`'s
 # ubi backend handles either format. Keeping one extension across

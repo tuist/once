@@ -86,7 +86,21 @@ jobs:
           shared-key: release-build-${{ matrix.os }}
           cache-on-failure: true
           cache-bin: false
-      - run: mise exec -- cargo build --release
+      - name: Build release binary with Once
+        run: |
+          set -euo pipefail
+          once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
+          host_target="$(rustc -vV | sed -n 's/^host: //p')"
+          suffix="$(printf '%s' "${host_target}" | tr '.-' '__')"
+          target_id="crates/once-cli/once_cli_${suffix}"
+          trap './mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true' EXIT
+          ./mise/tasks/release/prepare-rust-graph-deps.sh --target "${host_target}"
+          ./mise/tasks/release/write-rust-release-manifests.sh --target "${host_target}" --version 0.0.0
+          "${once_bin}" build "${target_id}" --format json --quiet
+          mkdir -p target/release
+          cp ".once/out/${target_id}/once" target/release/once
+        env:
+          GH_TOKEN: ${{ github.token }}
       - uses: actions/upload-artifact@v7
         with:
           name: once-${{ matrix.os }}

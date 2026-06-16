@@ -3,6 +3,8 @@
 /.fabrik
 /.blick/runs/
 /vendor
+/third_party/rust/src/
+/third_party/rust/vendor/
 /packages/js/node_modules
 /packages/js/prebuilds
 /packages/ruby/prebuilds
