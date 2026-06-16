@@ -49,6 +49,13 @@ Describe 'release SDK packaging scripts'
       '    printf "%s\n" "{\"packages\":[]}"' \
       '    ;;' \
       'esac'
+    write_stub mise \
+      '#!/usr/bin/env bash' \
+      'if [ "$1" = exec ] && [ "$2" = -- ]; then' \
+      '  shift 2' \
+      '  exec "$@"' \
+      'fi' \
+      'exit 2'
     write_stub jq \
       '#!/usr/bin/env bash'
     write_stub once \

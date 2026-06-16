@@ -50,7 +50,7 @@ latest_release() {
 
 fallback_cargo_build() {
   echo "falling back to a Cargo-built bootstrap Once for this host" >&2
-  cargo build --locked --release --package once-cli >&2
+  mise exec -- cargo build --locked --release --package once-cli >&2
   case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
       printf '%s\n' "target/release/once.exe"
@@ -59,6 +59,21 @@ fallback_cargo_build() {
       printf '%s\n' "target/release/once"
       ;;
   esac
+}
+
+verify_checksum() {
+  local dir="$1"
+  local checksum_file="$2"
+  if command -v sha256sum >/dev/null 2>&1; then
+    (cd "${dir}" && sha256sum -c "${checksum_file}" >&2)
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    (cd "${dir}" && shasum -a 256 -c "${checksum_file}" >&2)
+    return
+  fi
+  echo "sha256sum or shasum is required to verify the Once release archive" >&2
+  return 1
 }
 
 if [[ -n "${ONCE_BIN:-}" ]]; then
@@ -108,12 +123,17 @@ fi
 mkdir -p "${cache_dir}"
 asset="once-${version}-${target}.tar.gz"
 archive="${cache_dir}/${asset}"
+checksum="${cache_dir}/${asset}.sha256"
 url="https://github.com/tuist/once/releases/download/${version}/${asset}"
 if command -v curl >/dev/null 2>&1 && curl -fL "${url}" -o "${archive}" >&2; then
-  tar -C "${cache_dir}" -xzf "${archive}"
-  if [[ -x "${binary}" ]]; then
-    printf '%s\n' "${binary}"
-    exit 0
+  if curl -fL "${url}.sha256" -o "${checksum}" >&2 && verify_checksum "${cache_dir}" "${asset}.sha256"; then
+    tar -C "${cache_dir}" -xzf "${archive}"
+    if [[ -x "${binary}" ]]; then
+      printf '%s\n' "${binary}"
+      exit 0
+    fi
+  else
+    echo "could not verify Once release archive checksum" >&2
   fi
 fi
 

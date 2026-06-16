@@ -22,7 +22,7 @@ if [[ -n "${target}" && ! "${target}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   exit 1
 fi
 
-for tool in cargo jq; do
+for tool in jq mise; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
     echo "${tool} is required" >&2
     exit 1
@@ -31,13 +31,13 @@ done
 
 rm -rf third_party/rust/vendor
 mkdir -p third_party/rust
-cargo vendor --locked --versioned-dirs third_party/rust/vendor >/tmp/once-cargo-vendor-config
+mise exec -- cargo vendor --locked --versioned-dirs third_party/rust/vendor >/tmp/once-cargo-vendor-config
 
 metadata_args=(metadata --locked --format-version 1)
 if [[ -n "${target}" ]]; then
   metadata_args+=(--filter-platform "${target}")
 fi
-metadata="$(cargo "${metadata_args[@]}")"
+metadata="$(mise exec -- cargo "${metadata_args[@]}")"
 schlussel_manifest="$(
   jq -r '
     .packages[]
