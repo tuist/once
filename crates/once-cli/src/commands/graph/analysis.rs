@@ -4,11 +4,10 @@
 //! For every target the driver calls [`once_frontend::analysis::analyze_target`].
 //! When the rule has an `impl` callable the analysis returns a list of
 //! `DeclaredAction`s plus a provider record; we materialise each
-//! declared command as a cacheable `Action`, run it through
-//! `once_core::run_with_cache`, and pass the resulting provider down
-//! to consumers. When the rule has no `impl` declared in the prelude,
-//! the driver returns `None` so the caller can fall back to its generic
-//! marker action.
+//! declared command according to its cache policy and pass the resulting
+//! provider down to consumers. When the rule has no `impl` declared in
+//! the prelude, the driver returns `None` so the caller can fall back to
+//! its generic marker action.
 //!
 //! This module has no Apple-specific logic: it consults the prelude
 //! via `rule_has_impl` to know which kinds run through analysis, and

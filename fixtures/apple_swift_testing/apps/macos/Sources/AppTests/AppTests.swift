@@ -1,5 +1,6 @@
+import AppCore
 import Testing
 
 @Test func examplePasses() {
-    #expect(true)
+    #expect(AppCore.name == "AppCore")
 }

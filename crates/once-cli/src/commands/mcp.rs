@@ -1,4 +1,4 @@
-//! `once mcp` — expose Once's graph queries over the Model Context
+//! `once mcp` exposes Once's graph queries over the Model Context
 //! Protocol so a coding agent can call `query_targets`,
 //! `query_capabilities`, and `query_schema` as MCP tools.
 //!
@@ -13,9 +13,10 @@
 //! tool because coding harnesses need a short discover, filter, run,
 //! inspect loop after editing files.
 //!
-//! Runtime invocation is opt-in because it is side-effectful. When enabled,
-//! tools start persisted runtime sessions and return session ids agents can use
-//! to query status, read logs, or stop the process later.
+//! Target execution is opt-in because it writes outputs and may trigger rule
+//! side effects. When enabled, tools can build, run, or start persisted runtime
+//! sessions and return session ids agents can use to query status, read logs,
+//! or stop the process later.
 
 use std::path::PathBuf;
 
@@ -143,15 +144,19 @@ impl Server {
             "once_query_affected_tests" => self.tool_query_affected_tests(&call.arguments),
             "once_run_tests" => self.tool_run_tests(&call.arguments),
             "once_query_test_results" => self.tool_query_test_results(&call.arguments),
+            "once_build_target" if self.allow_run => self.tool_build_target(&call.arguments),
+            "once_run_target" if self.allow_run => self.tool_run_target(&call.arguments),
             "once_start_target" if self.allow_run => self.tool_start_target(&call.arguments),
             "once_runtime_status" if self.allow_run => self.tool_runtime_status(&call.arguments),
             "once_runtime_logs" if self.allow_run => self.tool_runtime_logs(&call.arguments),
             "once_stop_runtime" if self.allow_run => self.tool_stop_runtime(&call.arguments),
-            "once_start_target"
+            "once_build_target"
+            | "once_run_target"
+            | "once_start_target"
             | "once_runtime_status"
             | "once_runtime_logs"
             | "once_stop_runtime" => Err(anyhow::anyhow!(
-                "runtime tools require starting `once mcp --allow-run`"
+                "execution tools require starting `once mcp --allow-run`"
             )),
             "once_apply_edit" => self.tool_apply_edit(&call.arguments),
             // Rule registry queries don't need a workspace because they
@@ -254,6 +259,16 @@ impl Server {
             runs.push(run_test_target(&self.workspace, &target)?);
         }
         Ok(json!({ "runs": runs }))
+    }
+
+    fn tool_build_target(&self, args: &Value) -> Result<Value> {
+        let args: TargetExecutionArgs = serde_json::from_value(tool_args(args))?;
+        run_graph_target(&self.workspace, "build", &args.target)
+    }
+
+    fn tool_run_target(&self, args: &Value) -> Result<Value> {
+        let args: TargetExecutionArgs = serde_json::from_value(tool_args(args))?;
+        run_graph_target(&self.workspace, "run", &args.target)
     }
 
     fn tool_start_target(&self, args: &Value) -> Result<Value> {
@@ -370,10 +385,10 @@ fn run_test_target(workspace: &std::path::Path, target: &str) -> Result<Value> {
         .arg("test")
         .arg(target)
         .output()
-        .with_context(|| format!("running `{}` test {target}`", exe.display()))?;
+        .with_context(|| format!("running `{}` test `{target}`", exe.display()))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let (record, record_parse_error) = parse_test_run_record(&stdout);
+    let (record, record_parse_error) = parse_json_record(&stdout);
     let results = crate::commands::query::test_results_value(workspace, target).ok();
     Ok(json!({
         "target": target,
@@ -386,7 +401,41 @@ fn run_test_target(workspace: &std::path::Path, target: &str) -> Result<Value> {
     }))
 }
 
-fn parse_test_run_record(stdout: &str) -> (Value, Option<String>) {
+fn run_graph_target(workspace: &std::path::Path, capability: &str, target: &str) -> Result<Value> {
+    let exe = std::env::current_exe().context("resolving current once executable")?;
+    run_graph_target_with_exe(&exe, workspace, capability, target)
+}
+
+fn run_graph_target_with_exe(
+    exe: &std::path::Path,
+    workspace: &std::path::Path,
+    capability: &str,
+    target: &str,
+) -> Result<Value> {
+    let output = std::process::Command::new(exe)
+        .arg("-C")
+        .arg(workspace)
+        .arg("--format")
+        .arg("json")
+        .arg(capability)
+        .arg(target)
+        .output()
+        .with_context(|| format!("running `{}` {capability} `{target}`", exe.display()))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let (record, record_parse_error) = parse_json_record(&stdout);
+    Ok(json!({
+        "target": target,
+        "capability": capability,
+        "exit_code": output.status.code().unwrap_or(-1),
+        "success": output.status.success(),
+        "record": record,
+        "record_parse_error": record_parse_error,
+        "stderr": stderr,
+    }))
+}
+
+fn parse_json_record(stdout: &str) -> (Value, Option<String>) {
     if stdout.is_empty() {
         return (Value::Null, None);
     }
@@ -402,6 +451,12 @@ fn tool_args(args: &Value) -> Value {
     } else {
         args.clone()
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TargetExecutionArgs {
+    target: String,
 }
 
 #[derive(Deserialize)]
@@ -549,13 +604,13 @@ fn text_content_str(text: &str) -> Value {
 }
 
 fn tool_definitions(allow_run: bool) -> Vec<Value> {
-    // The runtime `tools/list` reply is the wire projection of the
+    // The MCP `tools/list` reply is the wire projection of the
     // shared catalog; the doc generator walks the same catalog so
     // the reference page can't drift from the server's advertised
     // surface.
     tool_catalog()
         .into_iter()
-        .filter(|tool| allow_run || !is_runtime_tool(tool.name))
+        .filter(|tool| allow_run || !is_run_gated_tool(tool.name))
         .map(|tool| {
             json!({
                 "name": tool.name,
@@ -566,10 +621,15 @@ fn tool_definitions(allow_run: bool) -> Vec<Value> {
         .collect()
 }
 
-fn is_runtime_tool(name: &str) -> bool {
+fn is_run_gated_tool(name: &str) -> bool {
     matches!(
         name,
-        "once_start_target" | "once_runtime_status" | "once_runtime_logs" | "once_stop_runtime"
+        "once_build_target"
+            | "once_run_target"
+            | "once_start_target"
+            | "once_runtime_status"
+            | "once_runtime_logs"
+            | "once_stop_runtime"
     )
 }
 
@@ -621,7 +681,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 },
                 "required": ["target"]
             }),
-            example_return: "{\n  \"id\": \"apps/ios/App\",\n  \"kind\": \"apple_application\",\n  \"capabilities\": [\n    { \"name\": \"build\", \"output_groups\": [\"default\", \"bundle\", \"dsyms\"],\n      \"requires_outputs\": [] }\n  ]\n}",
+            example_return: "{\n  \"id\": \"apps/ios/App\",\n  \"kind\": \"apple_application\",\n  \"capabilities\": [\n    { \"name\": \"build\", \"output_groups\": [\"default\", \"bundle\", \"dsyms\"],\n      \"requires_outputs\": [] },\n    { \"name\": \"run\", \"output_groups\": [\"default\"],\n      \"requires_outputs\": [\"bundle\"] }\n  ]\n}",
         },
         ToolDefinition {
             name: "once_query_schema",
@@ -731,6 +791,38 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 "required": ["target"]
             }),
             example_return: "{\n  \"schema\": \"once.test_results.v1\",\n  \"target\": \"spec/cli_e2e\",\n  \"status\": \"passed\",\n  \"summary\": { \"total\": 2, \"passed\": 2, \"failed\": 0 },\n  \"cases\": []\n}",
+        },
+        ToolDefinition {
+            name: "once_build_target",
+            description: "Build a target by running its generic `build` capability.",
+            long_description: "Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once build <target> --format json`, so dependency traversal, rule-declared actions, cache policy, and output groups stay owned by the CLI and rule graph. The tool returns stdout parsed as JSON when possible, along with exit status and stderr. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Target id to build, e.g. `apps/ios/App` or `./App`."
+                    }
+                },
+                "required": ["target"]
+            }),
+            example_return: "{\n  \"target\": \"apps/ios/App\",\n  \"capability\": \"build\",\n  \"exit_code\": 0,\n  \"success\": true,\n  \"record\": {\n    \"target\": \"apps/ios/App\",\n    \"kind\": \"apple_application\",\n    \"capability\": \"build\",\n    \"cache\": \"miss\",\n    \"outputs\": [\".once/out/apps/ios/App/App.app\"]\n  },\n  \"stderr\": \"\"\n}",
+        },
+        ToolDefinition {
+            name: "once_run_target",
+            description: "Run a target by executing its generic `run` capability.",
+            long_description: "Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once run <target> --format json`, including any prerequisite build outputs declared by the target's `run` capability. Rule-declared execution policy is preserved, so uncacheable actions are executed instead of replayed from the action cache. The tool returns stdout parsed as JSON when possible, plus exit status and stderr.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Target id to run, e.g. `apps/ios/App` or `./App`."
+                    }
+                },
+                "required": ["target"]
+            }),
+            example_return: "{\n  \"target\": \"apps/ios/App\",\n  \"capability\": \"run\",\n  \"exit_code\": 0,\n  \"success\": true,\n  \"record\": {\n    \"target\": \"apps/ios/App\",\n    \"kind\": \"apple_application\",\n    \"capability\": \"run\",\n    \"cache\": \"bypass\",\n    \"outputs\": [\".once/out/apps/ios/App/run/run.json\"]\n  },\n  \"stderr\": \"\"\n}",
         },
         ToolDefinition {
             name: "once_start_target",
@@ -1053,6 +1145,8 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect();
+        assert!(names.contains(&"once_build_target".to_string()));
+        assert!(names.contains(&"once_run_target".to_string()));
         assert!(names.contains(&"once_start_target".to_string()));
         assert!(names.contains(&"once_runtime_status".to_string()));
         assert!(names.contains(&"once_runtime_logs".to_string()));
@@ -1060,19 +1154,21 @@ mod tests {
     }
 
     #[test]
-    fn runtime_tools_require_allow_run() {
+    fn execution_tools_require_allow_run() {
         let tmp = TempDir::new().unwrap();
-        let response = server(tmp.path().to_path_buf()).dispatch(request(
-            "tools/call",
-            json!({ "name": "once_start_target", "arguments": { "target": "App" } }),
-        ));
-        let result = response.result.expect("result");
+        for tool in ["once_build_target", "once_run_target", "once_start_target"] {
+            let response = server(tmp.path().to_path_buf()).dispatch(request(
+                "tools/call",
+                json!({ "name": tool, "arguments": { "target": "App" } }),
+            ));
+            let result = response.result.expect("result");
 
-        assert_eq!(result["isError"], true);
-        assert!(result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("--allow-run"));
+            assert_eq!(result["isError"], true);
+            assert!(result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("--allow-run"));
+        }
     }
 
     #[test]
@@ -1106,11 +1202,49 @@ srcs = ["other_spec.sh"]
     }
 
     #[test]
-    fn parse_test_run_record_preserves_json_error_context() {
-        let (record, error) = parse_test_run_record("{not json");
+    fn parse_json_record_preserves_error_context() {
+        let (record, error) = parse_json_record("{not json");
 
         assert_eq!(record, Value::String("{not json".to_string()));
         assert!(error.unwrap().contains("line"));
+    }
+
+    #[cfg(unix)]
+    fn shell_literal(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn graph_target_runner_invokes_cli_and_parses_json_record() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("once-mock");
+        let args_path = tmp.path().join("args.txt");
+        let args_file = shell_literal(args_path.to_str().unwrap());
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {args_file}\nprintf '{{\"target\":\"%s\",\"capability\":\"%s\",\"status\":\"completed\"}}\\n' \"$6\" \"$5\"\n",
+        );
+        std::fs::write(&exe, script).unwrap();
+        let mut permissions = std::fs::metadata(&exe).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&exe, permissions).unwrap();
+
+        let build = run_graph_target_with_exe(&exe, tmp.path(), "build", "apps/App").unwrap();
+        assert_eq!(build["capability"], "build");
+        assert_eq!(build["success"], true);
+        assert_eq!(build["record"]["target"], "apps/App");
+        assert_eq!(build["record"]["capability"], "build");
+
+        let run = run_graph_target_with_exe(&exe, tmp.path(), "run", "apps/App").unwrap();
+        assert_eq!(run["capability"], "run");
+        assert_eq!(run["success"], true);
+        assert_eq!(run["record"]["target"], "apps/App");
+        assert_eq!(run["record"]["capability"], "run");
+
+        let args = std::fs::read_to_string(args_path).unwrap();
+        assert!(args.contains("--format\njson\nrun\napps/App\n"));
     }
 
     #[test]

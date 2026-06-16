@@ -59,6 +59,12 @@ prose docs. When adding support for a new toolchain (Android, JVM,
 Rust, etc.), mirror the shape already established for the Apple rules
 rather than inventing a parallel surface.
 
+Rust code must stay toolchain-agnostic. Do not add Rust branches that
+recognize Apple, Android, JVM, Rust, or any other build system by name.
+Build system behavior belongs in rules. The Rust side should provide
+generic primitives, typed graph plumbing, validation surfaces, and
+execution policy that rules can compose to express their needs.
+
 Every new toolchain rule should preserve these invariants:
 
 - The rule is discoverable through `once_list_rules` and its full
