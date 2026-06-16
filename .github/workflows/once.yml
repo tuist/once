@@ -101,6 +101,7 @@ jobs:
           cp ".once/out/${target_id}/once" target/release/once
         env:
           GH_TOKEN: ${{ github.token }}
+          ONCE_BOOTSTRAP_SOURCE: source
       - uses: actions/upload-artifact@v7
         with:
           name: once-${{ matrix.os }}

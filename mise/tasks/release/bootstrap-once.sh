@@ -70,6 +70,19 @@ if [[ -n "${ONCE_BIN:-}" ]]; then
   exit 0
 fi
 
+case "${ONCE_BOOTSTRAP_SOURCE:-release}" in
+  release)
+    ;;
+  source)
+    fallback_cargo_build
+    exit 0
+    ;;
+  *)
+    echo "ONCE_BOOTSTRAP_SOURCE must be 'release' or 'source'" >&2
+    exit 1
+    ;;
+esac
+
 target="$(host_triple)"
 version="$(latest_release)"
 version="${version#v}"
