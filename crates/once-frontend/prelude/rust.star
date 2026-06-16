@@ -232,6 +232,18 @@ def _rust_user_flags(ctx):
 def _rust_encoded_rustflags(ctx):
     return "\x1f".join(_rust_user_flags(ctx))
 
+def _host_which_optional(name):
+    path = host_command([host_which("sh"), "-c", "command -v " + _shell_quote(name) + " 2>/dev/null || true"]).strip()
+    return path
+
+def _rust_tool_path(tools):
+    dirs = []
+    for tool in tools:
+        directory = _parent_dir(tool)
+        if directory:
+            dirs.append(directory)
+    return ":".join(_unique(dirs))
+
 def _rust_c_tool_env(target, host_triple):
     env = {}
     if host_os() == "windows" or target != host_triple:
@@ -242,6 +254,9 @@ def _rust_c_tool_env(target, host_triple):
     ar = host_which("ar")
     if ar:
         env["AR"] = ar
+    path = _rust_tool_path([cc, ar, _host_which_optional("as"), _host_which_optional("ld")])
+    if path:
+        env["PATH"] = path
     return env
 
 def _rust_cap_lints(ctx):

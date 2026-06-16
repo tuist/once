@@ -1909,8 +1909,10 @@ build_env = _rust_build_script_env(
 result = repr([
     tool_env.get("CC"),
     tool_env.get("AR"),
+    tool_env.get("PATH"),
     build_env.get("CC"),
     build_env.get("AR"),
+    build_env.get("PATH"),
 ])
 "#
         );
@@ -1921,8 +1923,17 @@ result = repr([
 
         assert!(std::path::Path::new(&values[0]).is_absolute());
         assert!(std::path::Path::new(&values[1]).is_absolute());
-        assert_eq!(values[0], values[2]);
-        assert_eq!(values[1], values[3]);
+        assert_eq!(values[0], values[3]);
+        assert_eq!(values[1], values[4]);
+        assert_eq!(values[2], values[5]);
+        for entry in values[2].split(':') {
+            assert!(std::path::Path::new(entry).is_absolute());
+        }
+        let cc_dir = std::path::Path::new(&values[0])
+            .parent()
+            .unwrap()
+            .to_string_lossy();
+        assert!(values[2].split(':').any(|entry| entry == cc_dir));
     }
 
     #[cfg(unix)]
@@ -1945,6 +1956,7 @@ env = _rust_c_tool_env(target, host_triple)
 result = repr([
     env.get("CC"),
     env.get("AR"),
+    env.get("PATH"),
     env.get("CC_" + target.replace("-", "_")),
     env.get("CC_" + target),
 ])
@@ -1954,7 +1966,7 @@ result = repr([
 
         let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
-        assert_eq!(out.unwrap(), "[None, None, None, None]");
+        assert_eq!(out.unwrap(), "[None, None, None, None, None]");
     }
 
     #[test]
