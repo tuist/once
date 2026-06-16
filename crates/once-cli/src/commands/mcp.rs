@@ -388,7 +388,7 @@ fn run_test_target(workspace: &std::path::Path, target: &str) -> Result<Value> {
         .with_context(|| format!("running `{}` test `{target}`", exe.display()))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let (record, record_parse_error) = parse_test_run_record(&stdout);
+    let (record, record_parse_error) = parse_json_record(&stdout);
     let results = crate::commands::query::test_results_value(workspace, target).ok();
     Ok(json!({
         "target": target,
@@ -423,7 +423,7 @@ fn run_graph_target_with_exe(
         .with_context(|| format!("running `{}` {capability} `{target}`", exe.display()))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let (record, record_parse_error) = parse_test_run_record(&stdout);
+    let (record, record_parse_error) = parse_json_record(&stdout);
     Ok(json!({
         "target": target,
         "capability": capability,
@@ -435,7 +435,7 @@ fn run_graph_target_with_exe(
     }))
 }
 
-fn parse_test_run_record(stdout: &str) -> (Value, Option<String>) {
+fn parse_json_record(stdout: &str) -> (Value, Option<String>) {
     if stdout.is_empty() {
         return (Value::Null, None);
     }
@@ -1202,8 +1202,8 @@ srcs = ["other_spec.sh"]
     }
 
     #[test]
-    fn parse_test_run_record_preserves_json_error_context() {
-        let (record, error) = parse_test_run_record("{not json");
+    fn parse_json_record_preserves_error_context() {
+        let (record, error) = parse_json_record("{not json");
 
         assert_eq!(record, Value::String("{not json".to_string()));
         assert!(error.unwrap().contains("line"));
