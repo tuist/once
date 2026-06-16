@@ -585,7 +585,7 @@ mod tests {
 
         let cache = std::fs::read_to_string(tmp.path().join("cache.md")).unwrap();
         assert!(cache.contains("## Subcommands"));
-        // Each child gets its own labelled link — the format-string
+        // Each child gets its own labelled link, and the format-string
         // cleanup keeps this in lockstep with the iteration variable.
         assert!(cache.contains("- [`once cache stats`](/reference/cli/cache/stats)"));
 

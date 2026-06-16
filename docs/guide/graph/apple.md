@@ -12,7 +12,8 @@ automatically. The bundle, app, and test-host kinds
 [`apple_application`](/reference/prelude/apple_application),
 [`apple_test_bundle`](/reference/prelude/apple_test_bundle)) are
 implemented as Starlark graph rules that declare cacheable build
-actions.
+actions. Runtime effects, such as launching an app, are also declared
+by rules and can opt out of action-cache replay.
 
 For the per-rule attribute, dep, provider, and capability tables see
 the [Prelude reference](/reference/prelude/).
@@ -63,19 +64,20 @@ pages list the exact paths each rule emits.
 
 ## Running Apps
 
-`apple_application` produces an `.app` bundle. It is a build target, not
-a runtime selector. Simulator and device knowledge should live in Apple
-prelude rules that consume the app bundle provider and expose `run`, not
-in Once's core CLI.
+`apple_application` produces an `.app` bundle and exposes `run`.
+`once run` first materializes the required bundle output, then executes
+the launch action declared by the Apple rule. That launch action is not
+cacheable, so each `once run` attempts a fresh launch instead of
+replaying an action-cache hit.
 
-That keeps the graph shape explicit. The app rule answers "how do I
-build this bundle?" A future Apple runner rule can answer "how do I take
-that bundle and run it in this Apple runtime?" Once only dispatches the
-generic capability:
+The Apple rule owns the platform behavior. macOS apps are launched with
+the host app launcher. iOS simulator apps use `simctl` to pick or boot a
+simulator, install the bundle, and launch the bundle identifier. Device
+launch support is not implemented yet.
 
 ```sh
 once build apps/ios/App
-once run tools/ios/LaunchApp
+once run apps/ios/App
 ```
 
 ## Configurable attributes

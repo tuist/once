@@ -42,7 +42,7 @@ def rule(kind, docs, attrs = [], deps = [], providers = [], capabilities = [], e
 #   glob(patterns)             -> sorted, deduplicated workspace-relative file paths
 #                                 matching the patterns under the active package
 #   declare_output(name)       -> workspace-relative output path under the active build_dir
-#   run_action(argv=..., inputs=..., outputs=..., env={}, toolchain_identity=None, identifier=None)
+#   run_action(argv=..., inputs=..., outputs=..., env={}, cacheable=True, toolchain_identity=None, identifier=None)
 #
 # Each impl receives a `ctx` dict built by the Rust analysis pass with:
 #   ctx["label"]      -> {"package", "name", "id"}
@@ -193,6 +193,14 @@ def _xcrun_codesign(xcode_developer_dir):
     codesign_path = host_command([xcrun, "--find", "codesign"], env = env).strip()
     identity = "once.apple.codesign.v1\x00" + codesign_path + "\x00" + (xcode_developer_dir or "")
     return (xcrun, codesign_path, identity, env)
+
+def _swift_testing_macros_plugin(xcrun, xcrun_env):
+    swiftc_path = host_command([xcrun, "--find", "swiftc"], env = xcrun_env).strip()
+    suffix = "/usr/bin/swiftc"
+    if not _ends_with(swiftc_path, suffix):
+        fail("unable to derive Swift toolchain path from swiftc at " + swiftc_path)
+    toolchain_dir = swiftc_path[:len(swiftc_path) - len(suffix)]
+    return toolchain_dir + "/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib"
 
 def _xcrun_actool(xcode_developer_dir):
     xcrun = host_which("xcrun")
@@ -546,6 +554,33 @@ def _shell_words(values):
         out.append(_shell_literal(value))
     return " ".join(out)
 
+def _json_escape(value):
+    return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+
+def _json_literal(value):
+    return "\"" + _json_escape(value) + "\""
+
+_IOS_SIMULATOR_BOOTED_FILTER = "/iPhone/ s/^.* (\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted)[[:space:]]*$/\\1/p; /iPad/ s/^.* (\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted)[[:space:]]*$/\\1/p"
+_IOS_SIMULATOR_SHUTDOWN_FILTER = "/iPhone/ s/^.* (\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown)[[:space:]]*$/\\1/p; /iPad/ s/^.* (\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown)[[:space:]]*$/\\1/p"
+
+def _ios_simulator_selection_script(xcrun):
+    return """simulator_id="${{ONCE_APPLE_SIMULATOR_UDID:-}}"
+if [ -z "$simulator_id" ]; then
+  simulator_id=$({xcrun} simctl list devices booted | sed -n {booted_filter} | head -n 1)
+fi
+if [ -z "$simulator_id" ]; then
+  simulator_id=$({xcrun} simctl list devices available | sed -n {shutdown_filter} | head -n 1)
+fi
+if [ -z "$simulator_id" ]; then
+  echo "error: no booted or available iOS simulator found" >&2
+  exit 1
+fi
+""".format(
+        xcrun = _shell_literal(xcrun),
+        booted_filter = _shell_literal(_IOS_SIMULATOR_BOOTED_FILTER),
+        shutdown_filter = _shell_literal(_IOS_SIMULATOR_SHUTDOWN_FILTER),
+    )
+
 def _shellspec_test_impl(ctx):
     attrs = ctx["attr"]
     shellspec = attrs.get("shellspec") or "shellspec"
@@ -711,34 +746,6 @@ done
         specs = specs,
         target = target,
         runner_type = runner_type,
-    )
-
-def _swift_testing_package_script(product_name, package_dir, swift_srcs):
-    tests_dir = package_dir + "/Tests/" + product_name
-    copy_lines = []
-    for src in swift_srcs:
-        copy_lines.append("cp " + _shell_literal(src) + " " + _shell_literal(tests_dir + "/" + _basename(src)))
-    return """rm -rf {package_dir}
-mkdir -p {tests_dir}
-cat > {manifest} <<'EOF'
-// swift-tools-version: 6.0
-import PackageDescription
-
-let package = Package(
-    name: "{package_name}",
-    targets: [
-        .testTarget(name: "{product_name}")
-    ]
-)
-EOF
-{copy_lines}
-""".format(
-        package_dir = _shell_literal(package_dir),
-        tests_dir = _shell_literal(tests_dir),
-        manifest = _shell_literal(package_dir + "/Package.swift"),
-        package_name = product_name + "Package",
-        product_name = product_name,
-        copy_lines = "\n".join(copy_lines),
     )
 
 def _apple_test_info(ctx, runner_type, command_argv, command_env, labels, results, log, native_results):
@@ -1653,6 +1660,51 @@ def shell_quote_for_action(path):
     escaped = path.replace("'", "'\"'\"'")
     return "'" + escaped + "'"
 
+def _apple_application_run_script(label_id, platform, sdk_variant, xcrun, app_path, bundle_id, run_dir, run_record, run_log):
+    target_json = _json_literal(label_id)
+    platform_json = _json_literal(platform)
+    bundle_json = _json_literal(bundle_id)
+    app_json = _json_literal(app_path)
+    if platform == "macos" or platform == "macosx":
+        record_json = '{"schema":"once.run.v1","target":' + target_json + ',"kind":"apple_application","status":"launched","platform":' + platform_json + ',"bundle_id":' + bundle_json + ',"app_path":' + app_json + '}'
+        command = """/usr/bin/open -n {app} >> {log} 2>&1
+printf '%s\\n' {record_json} > {record}
+""".format(
+            app = _shell_literal(app_path),
+            log = _shell_literal(run_log),
+            record_json = _shell_literal(record_json),
+            record = _shell_literal(run_record),
+        )
+    elif platform == "ios" and sdk_variant == "simulator":
+        record_prefix = '{"schema":"once.run.v1","target":' + target_json + ',"kind":"apple_application","status":"launched","platform":' + platform_json + ',"sdk_variant":"simulator","bundle_id":' + bundle_json + ',"app_path":' + app_json + ',"simulator_id":"'
+        record_suffix = '"}'
+        command = _ios_simulator_selection_script(xcrun) + """
+{xcrun} simctl boot "$simulator_id" >> {log} 2>&1 || true
+{xcrun} simctl bootstatus "$simulator_id" -b >> {log} 2>&1
+{xcrun} simctl install "$simulator_id" {app} >> {log} 2>&1
+{xcrun} simctl launch "$simulator_id" {bundle_id} >> {log} 2>&1
+printf '%s%s%s\\n' {record_prefix} "$simulator_id" {record_suffix} > {record}
+""".format(
+            xcrun = _shell_literal(xcrun),
+            log = _shell_literal(run_log),
+            app = _shell_literal(app_path),
+            bundle_id = _shell_literal(bundle_id),
+            record_prefix = _shell_literal(record_prefix),
+            record_suffix = _shell_literal(record_suffix),
+            record = _shell_literal(run_record),
+        )
+    else:
+        fail(label_id + ": apple_application run supports macos and ios simulator targets")
+    return """set -eu
+mkdir -p {run_dir}
+: > {log}
+{command}
+""".format(
+        run_dir = _shell_literal(run_dir),
+        log = _shell_literal(run_log),
+        command = command,
+    )
+
 def _apple_application_impl(ctx):
     attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
     _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["resources", "asset_catalogs", "info_plist", "info_plist_substitutions", "entitlements", "provisioning_profile", "signing_identity"])
@@ -1682,6 +1734,25 @@ def _apple_application_impl(ctx):
     triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
 
     app_dir = product_name + ".app"
+    app_path = ctx["build_dir"] + "/" + app_dir
+    if ctx["capability"] == "run":
+        run_dir = ctx["build_dir"] + "/run"
+        run_record = run_dir + "/run.json"
+        run_log = run_dir + "/run.log"
+        run_action(
+            argv = ["/bin/sh", "-c", _apple_application_run_script(ctx["label"]["id"], platform, sdk_variant, xcrun, app_path, bundle_id, run_dir, run_record, run_log)],
+            outputs = [run_dir, run_record, run_log],
+            env = xcrun_env,
+            cacheable = False,
+            toolchain_identity = "once.apple.application.run.v1\x00" + swiftc_identity,
+            identifier = "apple_application_run_" + product_name,
+        )
+        return {
+            "label_id": ctx["label"]["id"],
+            "app_path": app_path,
+            "bundle_id": bundle_id,
+        }
+
     executable = declare_output(app_dir + "/" + product_name)
     info_plist = declare_output(app_dir + "/Info.plist")
 
@@ -1867,7 +1938,7 @@ def _apple_application_impl(ctx):
 
     return {
         "label_id": ctx["label"]["id"],
-        "app_path": ctx["build_dir"] + "/" + app_dir,
+        "app_path": app_path,
         "bundle_id": bundle_id,
     }
 
@@ -1898,95 +1969,11 @@ def _apple_test_bundle_impl(ctx):
     action_env = {"HOME": test_dir + "/home"}
     for key in test_env:
         action_env[key] = test_env[key]
-    runner_type = "swift_testing" if swift_testing else "xctest"
-    command_argv = ["swift", "test"] if swift_testing else ["xctest", ctx["build_dir"] + "/" + product_name + ".xctest"]
-    provider = {
-        "label_id": ctx["label"]["id"],
-        "test_bundle_path": ctx["build_dir"] + "/" + product_name + ".xctest",
-        "affected_inputs": all_srcs,
-        "test_info": _apple_test_info(ctx, runner_type, command_argv, action_env, labels, results, log, native_results),
-    }
-
-    if ctx["capability"] == "test":
-        if swift_testing:
-            if platform != "macos" and platform != "macosx":
-                fail(ctx["label"]["id"] + ": swift_testing execution currently supports macos targets; simulator/device runners will use the XCTest bundle path later")
-            xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
-            for key in xcrun_env:
-                action_env[key] = xcrun_env[key]
-            package_dir = test_dir + "/SwiftTestingPackage"
-            cases_file = test_dir + "/cases.jsonl"
-            script = """set -eu
-mkdir -p {test_dir}
-mkdir -p "$HOME"
-{package_script}
-log={log}
-results={results}
-native_results={native_results}
-: > "$native_results"
-set +e
-{command} > "$log" 2>&1
-status=$?
-set -e
-cp "$log" "$native_results"
-{cases_script}
-if [ "$status" -eq 0 ]; then run_status=passed; failed=0; passed=$total; else run_status=failed; failed=1; passed=0; fi
-{{
-  printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"swift_testing","metadata":{{}}}},"status":"%s","summary":{{"total":%s,"passed":%s,"failed":%s,"skipped":0,"flaky":0}},"cases":[' "{target}" "$run_status" "$total" "$passed" "$failed"
-  cat "$cases_file"
-  printf '],"artifacts":{{"logs":["%s"],"native_results":["%s"]}}}}\n' "$log" "$native_results"
-}} > "$results"
-exit "$status"
-""".format(
-                test_dir = _shell_literal(test_dir),
-                package_script = _swift_testing_package_script(product_name, package_dir, swift_srcs),
-                log = _shell_literal(log),
-                results = _shell_literal(results),
-                native_results = _shell_literal(native_results),
-                command = _shell_words([xcrun, "--sdk", sdk, "swift", "test", "--package-path", package_dir]),
-                cases_script = _swift_testing_cases_script(swift_srcs, cases_file, ctx["label"]["id"], "swift_testing"),
-                target = ctx["label"]["id"],
-            )
-            run_action(
-                argv = ["/bin/sh", "-c", script],
-                inputs = swift_srcs,
-                outputs = [test_dir, results, log, native_results],
-                env = action_env,
-                toolchain_identity = "once.apple.swift_testing.v1\x00" + swiftc_identity,
-                identifier = "apple_swift_testing:" + ctx["label"]["id"],
-            )
-        else:
-            script = """set -eu
-mkdir -p {test_dir}
-log={log}
-results={results}
-native_results={native_results}
-printf 'XCTest execution is not wired yet; emitted placeholder Once result for %s\n' "{target}" > "$log"
-cp "$log" "$native_results"
-printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"xctest","metadata":{{}}}},"status":"passed","summary":{{"total":0,"passed":0,"failed":0,"skipped":0,"flaky":0}},"cases":[],"artifacts":{{"logs":["%s"],"native_results":["%s"]}}}}\n' "{target}" "$log" "$native_results" > "$results"
-""".format(
-                test_dir = _shell_literal(test_dir),
-                log = _shell_literal(log),
-                results = _shell_literal(results),
-                native_results = _shell_literal(native_results),
-                target = ctx["label"]["id"],
-            )
-            run_action(
-                argv = ["/bin/sh", "-c", script],
-                inputs = [],
-                outputs = [test_dir, results, log, native_results],
-                env = action_env,
-                toolchain_identity = "once.apple.xctest.placeholder.v1",
-                identifier = "apple_xctest_placeholder:" + ctx["label"]["id"],
-            )
-        return provider
-
-    if swift_testing:
-        return provider
-
     arch = host_arch()
     xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
     triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
+    for key in xcrun_env:
+        action_env[key] = xcrun_env[key]
 
     # XCTest lives in the platform's developer-frameworks tree, not
     # the SDK's default search path. Resolve `<platform>/Developer/
@@ -1994,10 +1981,25 @@ printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"xctes
     # linker finds the framework and dyld locates it at runtime.
     platform_path = host_command([xcrun, "--sdk", sdk, "--show-sdk-platform-path"], env = xcrun_env).strip()
     xctest_framework_dir = platform_path + "/Developer/Library/Frameworks"
+    xctest_usr_lib_dir = platform_path + "/Developer/usr/lib"
+    testing_macros_plugin = _swift_testing_macros_plugin(xcrun, xcrun_env)
 
     bundle_dir = product_name + ".xctest"
-    test_binary = declare_output(bundle_dir + "/" + product_name)
-    info_plist = declare_output(bundle_dir + "/Info.plist")
+    if platform == "macos" or platform == "macosx":
+        test_binary = declare_output(bundle_dir + "/Contents/MacOS/" + product_name)
+        info_plist = declare_output(bundle_dir + "/Contents/Info.plist")
+    else:
+        test_binary = declare_output(bundle_dir + "/" + product_name)
+        info_plist = declare_output(bundle_dir + "/Info.plist")
+    test_bundle_path = ctx["build_dir"] + "/" + bundle_dir
+    runner_type = "swift_testing" if swift_testing else "xctest"
+    command_argv = [xcrun, "xctest", test_bundle_path]
+    provider = {
+        "label_id": ctx["label"]["id"],
+        "test_bundle_path": test_bundle_path,
+        "affected_inputs": all_srcs,
+        "test_info": _apple_test_info(ctx, runner_type, command_argv, action_env, labels, results, log, native_results),
+    }
 
     deps = ctx["deps"]
     (
@@ -2036,17 +2038,37 @@ printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"xctes
         "-bundle",
         "-F",
         xctest_framework_dir,
+        "-L",
+        xctest_usr_lib_dir,
         "-Xlinker",
         "-rpath",
         "-Xlinker",
         xctest_framework_dir,
+        "-Xlinker",
+        "-rpath",
+        "-Xlinker",
+        xctest_usr_lib_dir,
         "-framework",
         "XCTest",
         "-o",
         test_binary,
     ]
+    if swift_testing:
+        swift_argv.extend([
+            "-framework",
+            "Testing",
+            "-lXCTestSwiftSupport",
+            "-load-plugin-library",
+            testing_macros_plugin,
+        ])
     for d in compile_swiftmodule_dirs:
         swift_argv.extend(["-I", d])
+    for hdir in compile_header_dirs:
+        swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+    for mmap in dep_modulemaps:
+        swift_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
+    for hmap in dep_hmaps:
+        swift_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
     for d in framework_search_dirs:
         swift_argv.extend(["-F", d])
     for fw in framework_module_names:
@@ -2057,6 +2079,8 @@ printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"xctes
         swift_argv.extend(["-l" + dy])
     for opt in dep_linkopts:
         swift_argv.append(opt)
+    for dylib_path in plugin_dylibs:
+        swift_argv.extend(["-load-plugin-library", dylib_path])
     for flag in swift_flags:
         swift_argv.append(flag)
     for src in swift_srcs:
@@ -2071,6 +2095,9 @@ printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"xctes
     for f in dep_framework_files:
         if f not in swift_inputs:
             swift_inputs.append(f)
+    for dylib_path in plugin_dylibs:
+        if dylib_path not in swift_inputs:
+            swift_inputs.append(dylib_path)
 
     run_action(
         argv = swift_argv,
@@ -2094,7 +2121,97 @@ printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"xctes
     }
     write_file(info_plist, _render_plist(plist_entries))
 
-    provider["test_bundle_path"] = ctx["build_dir"] + "/" + bundle_dir
+    cs_xcrun, codesign_path, cs_identity, cs_env = _xcrun_codesign(xcode_developer_dir)
+    if platform == "macos" or platform == "macosx":
+        test_cs_stamp = declare_output(bundle_dir + "/Contents/_CodeSignature/CodeResources")
+    else:
+        test_cs_stamp = declare_output(bundle_dir + "/_CodeSignature/CodeResources")
+    cs_script = "set -e; " + codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(test_bundle_path)
+    run_action(
+        argv = ["/bin/sh", "-c", cs_script],
+        inputs = [test_binary, info_plist],
+        outputs = [test_cs_stamp],
+        env = cs_env,
+        toolchain_identity = cs_identity,
+        identifier = "apple_test_bundle_codesign_" + module_name,
+    )
+
+    if ctx["capability"] == "test":
+        cases_file = test_dir + "/cases.jsonl"
+        if platform == "macos" or platform == "macosx":
+            runner_command = """DYLD_LIBRARY_PATH={usr_lib}${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}} DYLD_FALLBACK_FRAMEWORK_PATH={frameworks}${{DYLD_FALLBACK_FRAMEWORK_PATH:+:$DYLD_FALLBACK_FRAMEWORK_PATH}} {command}""".format(
+                usr_lib = _shell_literal(xctest_usr_lib_dir),
+                frameworks = _shell_literal(xctest_framework_dir),
+                command = _shell_words([xcrun, "xctest", test_bundle_path]),
+            )
+        elif sdk_variant == "simulator":
+            runner_command = _ios_simulator_selection_script(xcrun) + """
+{xcrun} simctl boot "$simulator_id" >/dev/null 2>&1 || true
+{xcrun} simctl bootstatus "$simulator_id" -b
+tmpdir=$(mktemp -d "${{TMPDIR:-/tmp}}/once-xctest.XXXXXX")
+trap 'rm -rf "$tmpdir"' EXIT
+cp -R {bundle} "$tmpdir/"
+find "$tmpdir/{bundle_name}" -type d -exec chmod 755 {{}} +
+find "$tmpdir/{bundle_name}" -type f -exec chmod 644 {{}} +
+chmod 755 "$tmpdir/{bundle_name}/{binary_name}"
+SIMCTL_CHILD_DYLD_LIBRARY_PATH={usr_lib} SIMCTL_CHILD_DYLD_FALLBACK_FRAMEWORK_PATH={frameworks} {xcrun} simctl spawn "$simulator_id" {xctest_agent} -XCTest All "$tmpdir/{bundle_name}"
+""".format(
+                xcrun = _shell_literal(xcrun),
+                bundle = _shell_literal(test_bundle_path),
+                bundle_name = bundle_dir,
+                binary_name = product_name,
+                usr_lib = _shell_literal(xctest_usr_lib_dir),
+                frameworks = _shell_literal(xctest_framework_dir),
+                xctest_agent = _shell_literal(platform_path + "/Developer/Library/Xcode/Agents/xctest"),
+            )
+        else:
+            fail(ctx["label"]["id"] + ": apple_test_bundle execution supports macos and simulator targets; device runners need xctestrun support")
+        script = """set -eu
+mkdir -p {test_dir}
+mkdir -p "$HOME"
+log={log}
+results={results}
+native_results={native_results}
+: > "$native_results"
+set +e
+(
+{runner_command}
+) > "$log" 2>&1
+status=$?
+set -e
+cp "$log" "$native_results"
+{cases_script}
+if [ "$status" -eq 0 ]; then run_status=passed; failed=0; passed=$total; else run_status=failed; failed=1; passed=0; fi
+{{
+  printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"%s","metadata":{{}}}},"status":"%s","summary":{{"total":%s,"passed":%s,"failed":%s,"skipped":0,"flaky":0}},"cases":[' "{target}" "{runner_type}" "$run_status" "$total" "$passed" "$failed"
+  cat "$cases_file"
+  printf '],"artifacts":{{"logs":["%s"],"native_results":["%s"]}}}}\n' "$log" "$native_results"
+}} > "$results"
+exit "$status"
+""".format(
+            test_dir = _shell_literal(test_dir),
+            log = _shell_literal(log),
+            results = _shell_literal(results),
+            native_results = _shell_literal(native_results),
+            runner_command = runner_command,
+            cases_script = _swift_testing_cases_script(swift_srcs, cases_file, ctx["label"]["id"], runner_type),
+            target = ctx["label"]["id"],
+            runner_type = runner_type,
+        )
+        test_inputs = [test_binary, info_plist, test_cs_stamp]
+        for src in swift_srcs:
+            if src not in test_inputs:
+                test_inputs.append(src)
+        run_action(
+            argv = ["/bin/sh", "-c", script],
+            inputs = test_inputs,
+            outputs = [test_dir, results, log, native_results],
+            env = action_env,
+            cacheable = False,
+            toolchain_identity = "once.apple." + runner_type + ".runner.v1\x00" + swiftc_identity,
+            identifier = "apple_" + runner_type + ":" + ctx["label"]["id"],
+        )
+
     return provider
 
 RULES = [
@@ -2229,6 +2346,7 @@ RULES = [
         providers = ["apple_application", "apple_bundle"],
         capabilities = [
             capability("build", ["default", "bundle", "dsyms"]),
+            capability("run", ["default"], ["bundle"]),
         ],
         examples = [
             "apple-application-minimal",

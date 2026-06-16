@@ -315,7 +315,8 @@ pub enum Cmd {
     /// `once_query_targets`, `once_query_capabilities`, and
     /// `once_query_schema` as tools and get JSON back without
     /// scraping prose. Mounts inspection tools by default; pass
-    /// `--allow-run` to expose side-effectful runtime session tools.
+    /// `--allow-run` to expose side-effectful build, run, and
+    /// runtime session tools.
     Mcp {
         /// Workspace root the MCP tools resolve targets against.
         /// Defaults to the value of the global `-C/--directory` flag
@@ -323,7 +324,7 @@ pub enum Cmd {
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
 
-        /// Advertise and allow side-effectful runtime session tools.
+        /// Advertise and allow side-effectful execution tools.
         #[arg(long)]
         allow_run: bool,
     },

@@ -28,7 +28,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use starlark::environment::{Globals, GlobalsBuilder, Module};
 use starlark::eval::Evaluator;
@@ -43,7 +43,7 @@ use crate::graph::GraphTarget;
 use crate::target::AttrValue;
 
 /// A single command declared by a rule impl through `run_action`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DeclaredAction {
     pub argv: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -51,10 +51,21 @@ pub struct DeclaredAction {
     pub outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    #[serde(default = "default_cacheable", skip_serializing_if = "is_true")]
+    pub cacheable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain_identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,
+}
+
+fn default_cacheable() -> bool {
+    true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// Per-target collection of declared outputs, actions, and the host
@@ -361,6 +372,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             inputs: Vec::new(),
             outputs: vec![path.to_string()],
             env: BTreeMap::new(),
+            cacheable: true,
             // Folding the literal content into the toolchain identity
             // keeps the digest pinned to what the file should contain,
             // so changing the content alone invalidates the action.
@@ -403,6 +415,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             inputs: Vec::new(),
             outputs: vec![path.to_string()],
             env: BTreeMap::new(),
+            cacheable: true,
             toolchain_identity: Some(format!("once.write_bytes.v1\0{encoded}")),
             identifier: Some(format!("write_bytes:{path}")),
         };
@@ -418,9 +431,9 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// `argv`: list of strings; `inputs`: list of workspace-relative
     /// source paths to hash into the input digest; `outputs`: list of
     /// workspace-relative paths the action produces; `env`: optional
-    /// string->string dict; `toolchain_identity`: optional string
-    /// folded into the input digest; `identifier`: optional label for
-    /// diagnostics.
+    /// string->string dict; `cacheable`: optional bool, default true;
+    /// `toolchain_identity`: optional string folded into the input
+    /// digest; `identifier`: optional label for diagnostics.
     fn run_action<'v>(
         argv: Value<'v>,
         inputs: Option<Value<'v>>,
@@ -428,6 +441,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         env: Option<Value<'v>>,
         toolchain_identity: Option<String>,
         identifier: Option<String>,
+        cacheable: Option<bool>,
     ) -> anyhow::Result<NoneType> {
         let argv = unpack_string_list(argv, "argv")?;
         let inputs = inputs
@@ -447,6 +461,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             inputs,
             outputs,
             env,
+            cacheable: cacheable.unwrap_or(true),
             toolchain_identity,
             identifier,
         };
@@ -1113,6 +1128,7 @@ mod tests {
     use super::*;
     use starlark::environment::Module;
     use starlark::syntax::{AstModule, Dialect};
+    use std::process::Command;
     use tempfile::TempDir;
 
     fn run(source: &str) -> starlark::Result<()> {
@@ -1165,6 +1181,43 @@ run_action(
         assert_eq!(
             store.actions[0].identifier.as_deref(),
             Some("swift_compile")
+        );
+        assert!(store.actions[0].cacheable);
+    }
+
+    #[test]
+    fn run_action_can_mark_declarations_uncacheable() {
+        let tmp = TempDir::new().unwrap();
+        let store = store_for(tmp.path(), "apps/ios/App");
+        let (store, ()) = with_active_store(store, || {
+            run(r#"
+run_action(
+    argv = ["open", ".once/out/apps/ios/App/App.app"],
+    outputs = [".once/out/apps/ios/App/run/run.json"],
+    cacheable = False,
+)
+"#)
+            .unwrap();
+        });
+        assert_eq!(store.actions.len(), 1);
+        assert!(!store.actions[0].cacheable);
+    }
+
+    #[test]
+    fn declared_action_defaults_cacheable_when_omitted() {
+        let action: DeclaredAction = serde_json::from_value(serde_json::json!({
+            "argv": ["swiftc", "App.swift"],
+            "outputs": [".once/out/App.o"]
+        }))
+        .unwrap();
+
+        assert!(action.cacheable);
+        assert_eq!(
+            serde_json::to_value(&action).unwrap(),
+            serde_json::json!({
+                "argv": ["swiftc", "App.swift"],
+                "outputs": [".once/out/App.o"]
+            })
         );
     }
 
@@ -1606,6 +1659,43 @@ RULES = [
         })
     }
 
+    fn eval_prelude_string_function(
+        function_name: &str,
+        call_source: &str,
+    ) -> std::result::Result<String, String> {
+        let prelude = include_str!("../prelude/apple.star");
+        let source = format!("{prelude}\nresult = {function_name}{call_source}\n");
+        Module::with_temp_heap(|module| {
+            let ast = AstModule::parse("test.star", source, &Dialect::Standard)
+                .map_err(|error| format!("parse: {error:?}"))?;
+            let globals = globals_for_prelude();
+            let mut eval = Evaluator::new(&module);
+            eval.eval_module(ast, &globals)
+                .map_err(|error| format!("eval: {error:?}"))?;
+            let result = module
+                .get("result")
+                .ok_or_else(|| "missing result".to_string())?;
+            Ok(result
+                .unpack_str()
+                .ok_or_else(|| "result was not a string".to_string())?
+                .to_string())
+        })
+    }
+
+    fn starlark_string_literal(value: &str) -> String {
+        serde_json::to_string(value).unwrap()
+    }
+
+    #[cfg(unix)]
+    fn write_executable(path: &Path, contents: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(path, contents).unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
     #[test]
     fn prelude_resolve_select_picks_matching_branch() {
         let out = eval_prelude_function(
@@ -1644,6 +1734,181 @@ RULES = [
         )
         .unwrap_err();
         assert!(err.contains("no branch matching"), "{err}");
+    }
+
+    #[test]
+    fn prelude_ios_simulator_selection_filters_to_iphone_and_ipad() {
+        let out = eval_prelude_string_function(
+            "_ios_simulator_selection_script",
+            r#"("/usr/bin/xcrun")"#,
+        )
+        .unwrap();
+
+        assert!(out.contains("ONCE_APPLE_SIMULATOR_UDID"), "{out}");
+        assert!(out.contains("simctl list devices booted"), "{out}");
+        assert!(out.contains("simctl list devices available"), "{out}");
+        assert!(out.contains("/iPhone/ s/^.*"), "{out}");
+        assert!(out.contains("/iPad/ s/^.*"), "{out}");
+        assert!(out.contains("(Booted)[[:space:]]*$"), "{out}");
+        assert!(out.contains("(Shutdown)[[:space:]]*$"), "{out}");
+        assert!(!out.contains("sed -n 's/.*"), "{out}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_ios_simulator_selection_script_picks_booted_ios_device() {
+        let tmp = TempDir::new().unwrap();
+        let xcrun = tmp.path().join("xcrun");
+        write_executable(
+            &xcrun,
+            r#"#!/bin/sh
+if [ "${1:-}" = "simctl" ] && [ "${2:-}" = "list" ] && [ "${3:-}" = "devices" ] && [ "${4:-}" = "booted" ]; then
+  printf '%s\n' '    Apple TV (AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA) (Booted)'
+  printf '%s\n' '    iPhone Preview (BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB) (Extra) (Booted)'
+  printf '%s\n' '    iPhone 15 Pro (11111111-1111-1111-1111-111111111111) (Booted)'
+  exit 0
+fi
+if [ "${1:-}" = "simctl" ] && [ "${2:-}" = "list" ] && [ "${3:-}" = "devices" ] && [ "${4:-}" = "available" ]; then
+  printf '%s\n' '    iPad Pro (22222222-2222-2222-2222-222222222222) (Shutdown)'
+  exit 0
+fi
+exit 1
+"#,
+        );
+        let call = format!(
+            "({})",
+            starlark_string_literal(&xcrun.display().to_string())
+        );
+        let selection_script =
+            eval_prelude_string_function("_ios_simulator_selection_script", &call).unwrap();
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("{selection_script}\nprintf '%s' \"$simulator_id\""))
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "11111111-1111-1111-1111-111111111111"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_ios_simulator_selection_script_errors_without_ios_device() {
+        let tmp = TempDir::new().unwrap();
+        let xcrun = tmp.path().join("xcrun");
+        write_executable(
+            &xcrun,
+            r#"#!/bin/sh
+if [ "${1:-}" = "simctl" ] && [ "${2:-}" = "list" ] && [ "${3:-}" = "devices" ]; then
+  printf '%s\n' '    Apple TV (AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA) (Booted)'
+  exit 0
+fi
+exit 1
+"#,
+        );
+        let call = format!(
+            "({})",
+            starlark_string_literal(&xcrun.display().to_string())
+        );
+        let selection_script =
+            eval_prelude_string_function("_ios_simulator_selection_script", &call).unwrap();
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("{selection_script}\nprintf '%s' \"$simulator_id\""))
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{output:?}");
+        assert!(String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("no booted or available iOS simulator found"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_swift_testing_macros_plugin_uses_swift_toolchain_path() {
+        let tmp = TempDir::new().unwrap();
+        let xcrun = tmp.path().join("xcrun");
+        let swiftc = tmp
+            .path()
+            .join("Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc");
+        std::fs::create_dir_all(swiftc.parent().unwrap()).unwrap();
+        write_executable(
+            &xcrun,
+            &format!(
+                r#"#!/bin/sh
+if [ "${{1:-}}" = "--find" ] && [ "${{2:-}}" = "swiftc" ]; then
+  printf '%s\n' {}
+  exit 0
+fi
+exit 1
+"#,
+                starlark_string_literal(&swiftc.display().to_string())
+            ),
+        );
+        let store = store_for(tmp.path(), "");
+        let call = format!(
+            "({}, {{}})",
+            starlark_string_literal(&xcrun.display().to_string())
+        );
+
+        let (_, out) = with_active_store(store, || {
+            eval_prelude_string_function("_swift_testing_macros_plugin", &call)
+        });
+
+        assert_eq!(
+            out.unwrap(),
+            tmp.path()
+                .join("Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib")
+                .display()
+                .to_string()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_swift_testing_macros_plugin_rejects_unexpected_swiftc_path() {
+        let tmp = TempDir::new().unwrap();
+        let xcrun = tmp.path().join("xcrun");
+        write_executable(
+            &xcrun,
+            r#"#!/bin/sh
+if [ "${1:-}" = "--find" ] && [ "${2:-}" = "swiftc" ]; then
+  printf '%s\n' '/tmp/swiftc'
+  exit 0
+fi
+exit 1
+"#,
+        );
+        let store = store_for(tmp.path(), "");
+        let call = format!(
+            "({}, {{}})",
+            starlark_string_literal(&xcrun.display().to_string())
+        );
+
+        let (_, err) = with_active_store(store, || {
+            eval_prelude_string_function("_swift_testing_macros_plugin", &call).unwrap_err()
+        });
+
+        assert!(
+            err.contains("unable to derive Swift toolchain path"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn prelude_ios_simulator_selection_helper_feeds_run_and_test_scripts() {
+        let source = include_str!("../prelude/apple.star");
+
+        assert_eq!(
+            source
+                .matches("_ios_simulator_selection_script(xcrun) +")
+                .count(),
+            2
+        );
     }
 
     /// The prelude `_serialize_hmap` helper must lay out the

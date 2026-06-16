@@ -65,7 +65,9 @@ Returns the same record `once query capabilities <target> --format json` emits: 
   "kind": "apple_application",
   "capabilities": [
     { "name": "build", "output_groups": ["default", "bundle", "dsyms"],
-      "requires_outputs": [] }
+      "requires_outputs": [] },
+    { "name": "run", "output_groups": ["default"],
+      "requires_outputs": ["bundle"] }
   ]
 }
 ```
@@ -331,6 +333,90 @@ Reads the normalized result file produced by the target's `test` capability. Thi
   "status": "passed",
   "summary": { "total": 2, "passed": 2, "failed": 0 },
   "cases": []
+}
+```
+
+## `once_build_target`
+
+Build a target by running its generic `build` capability.
+
+Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once build <target> --format json`, so dependency traversal, rule-declared actions, cache policy, and output groups stay owned by the CLI and rule graph. The tool returns stdout parsed as JSON when possible, along with exit status and stderr. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "target": {
+      "description": "Target id to build, e.g. `apps/ios/App` or `./App`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "target": "apps/ios/App",
+  "capability": "build",
+  "exit_code": 0,
+  "success": true,
+  "record": {
+    "target": "apps/ios/App",
+    "kind": "apple_application",
+    "capability": "build",
+    "cache": "miss",
+    "outputs": [".once/out/apps/ios/App/App.app"]
+  },
+  "stderr": ""
+}
+```
+
+## `once_run_target`
+
+Run a target by executing its generic `run` capability.
+
+Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once run <target> --format json`, including any prerequisite build outputs declared by the target's `run` capability. Rule-declared execution policy is preserved, so uncacheable actions are executed instead of replayed from the action cache. The tool returns stdout parsed as JSON when possible, plus exit status and stderr.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "target": {
+      "description": "Target id to run, e.g. `apps/ios/App` or `./App`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "target": "apps/ios/App",
+  "capability": "run",
+  "exit_code": 0,
+  "success": true,
+  "record": {
+    "target": "apps/ios/App",
+    "kind": "apple_application",
+    "capability": "run",
+    "cache": "bypass",
+    "outputs": [".once/out/apps/ios/App/run/run.json"]
+  },
+  "stderr": ""
 }
 ```
 

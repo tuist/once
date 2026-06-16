@@ -50,6 +50,169 @@ Describe 'apple graph'
     cp -R "$REPO_ROOT/fixtures/apple_swift_testing/." "$WORKSPACE/"
   }
 
+  create_mock_apple_run_fixture() {
+    mkdir -p "$WORKSPACE/bin" "$WORKSPACE/apps/ios/Sources/App"
+    cat > "$WORKSPACE/apps/ios/Sources/App/App.swift" <<'SWIFT'
+@main
+struct App {
+    static func main() {}
+}
+SWIFT
+    cat > "$WORKSPACE/apps/ios/once.toml" <<'TOML'
+[[target]]
+name = "App"
+kind = "apple_application"
+srcs = ["Sources/App/**/*.swift"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+bundle_id = "dev.once.App"
+minimum_os = "17.0"
+TOML
+    cat > "$WORKSPACE/bin/codesign" <<'SH'
+#!/bin/sh
+app=""
+for arg do
+  app="$arg"
+done
+mkdir -p "$app/_CodeSignature"
+: > "$app/_CodeSignature/CodeResources"
+SH
+    chmod +x "$WORKSPACE/bin/codesign"
+    cat > "$WORKSPACE/bin/xcrun" <<SH
+#!/bin/sh
+log='$WORKSPACE/xcrun.log'
+if [ "\${1:-}" = "--sdk" ]; then
+  shift 2
+fi
+case "\${1:-}" in
+  --find)
+    case "\${2:-}" in
+      swiftc) printf '%s\\n' "\$0" ;;
+      codesign) printf '%s\\n' '$WORKSPACE/bin/codesign' ;;
+      *) printf '%s\\n' "\$0" ;;
+    esac
+    ;;
+  swiftc)
+    if [ "\${2:-}" = "--version" ]; then
+      printf '%s\\n' 'Apple Swift version mock'
+      exit 0
+    fi
+    out=''
+    while [ "\$#" -gt 0 ]; do
+      if [ "\$1" = "-o" ]; then
+        shift
+        out="\${1:-}"
+        break
+      fi
+      shift
+    done
+    [ -n "\$out" ] || exit 2
+    mkdir -p "\$(dirname "\$out")"
+    printf '%s\\n' '#!/bin/sh' 'exit 0' > "\$out"
+    chmod 755 "\$out"
+    ;;
+  simctl)
+    printf '%s\\n' "\$*" >> "\$log"
+    if [ "\${2:-}" = "list" ] && [ "\${3:-}" = "devices" ] && [ "\${4:-}" = "booted" ]; then
+      printf '%s\\n' '    Apple TV (TV-DEVICE) (Booted)'
+      printf '%s\\n' '    iPhone 15 (11111111-1111-1111-1111-111111111111) (Booted)'
+    fi
+    ;;
+  *)
+    printf '%s\\n' "unexpected xcrun invocation: \$*" >&2
+    exit 1
+    ;;
+esac
+SH
+    chmod +x "$WORKSPACE/bin/xcrun"
+  }
+
+  create_mock_apple_test_fixture() {
+    mkdir -p "$WORKSPACE/toolchain/usr/bin" "$WORKSPACE/bin" "$WORKSPACE/apps/ios/Tests/AppTests" "$WORKSPACE/Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks" "$WORKSPACE/Platforms/iPhoneSimulator.platform/Developer/usr/lib"
+    cat > "$WORKSPACE/apps/ios/Tests/AppTests/AppTests.swift" <<'SWIFT'
+import Testing
+
+@Test func examplePasses() {}
+SWIFT
+    cat > "$WORKSPACE/apps/ios/once.toml" <<'TOML'
+[[target]]
+name = "AppTests"
+kind = "apple_test_bundle"
+srcs = ["Tests/AppTests/**/*.swift"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+minimum_os = "17.0"
+TOML
+    cat > "$WORKSPACE/bin/codesign" <<'SH'
+#!/bin/sh
+app=""
+for arg do
+  app="$arg"
+done
+mkdir -p "$app/_CodeSignature"
+: > "$app/_CodeSignature/CodeResources"
+SH
+    chmod +x "$WORKSPACE/bin/codesign"
+    cat > "$WORKSPACE/toolchain/usr/bin/xcrun" <<SH
+#!/bin/sh
+log='$WORKSPACE/xcrun.log'
+swiftc_path='$WORKSPACE/toolchain/usr/bin/swiftc'
+platform_path='$WORKSPACE/Platforms/iPhoneSimulator.platform'
+if [ "\${1:-}" = "--sdk" ]; then
+  shift 2
+fi
+case "\${1:-}" in
+  --find)
+    case "\${2:-}" in
+      swiftc) printf '%s\\n' "\$swiftc_path" ;;
+      codesign) printf '%s\\n' '$WORKSPACE/bin/codesign' ;;
+      *) printf '%s\\n' "\$0" ;;
+    esac
+    ;;
+  --show-sdk-platform-path)
+    printf '%s\\n' "\$platform_path"
+    ;;
+  swiftc)
+    if [ "\${2:-}" = "--version" ]; then
+      printf '%s\\n' 'Apple Swift version mock'
+      exit 0
+    fi
+    out=''
+    while [ "\$#" -gt 0 ]; do
+      if [ "\$1" = "-o" ]; then
+        shift
+        out="\${1:-}"
+        break
+      fi
+      shift
+    done
+    [ -n "\$out" ] || exit 2
+    mkdir -p "\$(dirname "\$out")"
+    printf '%s\\n' '#!/bin/sh' 'exit 0' > "\$out"
+    chmod 755 "\$out"
+    ;;
+  simctl)
+    printf '%s\\n' "\$*" >> "\$log"
+    if [ "\${2:-}" = "list" ] && [ "\${3:-}" = "devices" ] && [ "\${4:-}" = "booted" ]; then
+      printf '%s\\n' '    iPhone 15 (11111111-1111-1111-1111-111111111111) (Booted)'
+    fi
+    if [ "\${2:-}" = "list" ] && [ "\${3:-}" = "devices" ] && [ "\${4:-}" = "available" ]; then
+      printf '%s\\n' '    iPad Pro (22222222-2222-2222-2222-222222222222) (Shutdown)'
+    fi
+    ;;
+  *)
+    printf '%s\\n' "unexpected xcrun invocation: \$*" >&2
+    exit 1
+    ;;
+esac
+SH
+    chmod +x "$WORKSPACE/toolchain/usr/bin/xcrun"
+  }
+
   It 'lists buildable Apple artifacts'
     copy_apple_graph_fixture
 
@@ -57,11 +220,11 @@ Describe 'apple graph'
     The status should be success
     The stdout should include 'apps/ios/AppCore (apple_library) [build]'
     The stdout should include 'apps/ios/DesignSystem (apple_framework) [build]'
-    The stdout should include 'apps/ios/App (apple_application) [build]'
+    The stdout should include 'apps/ios/App (apple_application) [build, run]'
     The stdout should include 'apps/ios/AppTests (apple_test_bundle) [build, test]'
   End
 
-  It 'exposes build-only Apple application artifacts'
+  It 'exposes runnable Apple application artifacts'
     copy_apple_graph_fixture
 
     When call once --format json query capabilities apps/ios/App
@@ -69,8 +232,8 @@ Describe 'apple graph'
     The stdout should include '"kind":"apple_application"'
     The stdout should include '"name":"build"'
     The stdout should include '"output_groups":["default","bundle","dsyms"]'
-    The stdout should not include '"name":"run"'
-    The stdout should not include '"requires_outputs":["bundle"]'
+    The stdout should include '"name":"run"'
+    The stdout should include '"requires_outputs":["bundle"]'
   End
 
   It 'builds Apple application artifacts through the graph command'
@@ -89,12 +252,18 @@ Describe 'apple graph'
     The path "$WORKSPACE/.once/out/apps/ios/App/App.app/Frameworks/DesignSystem.framework/DesignSystem" should be file
   End
 
-  It 'rejects running Apple application artifacts through the graph command'
-    copy_apple_graph_fixture
+  It 'runs Apple application artifacts through the simulator launch path'
+    create_mock_apple_run_fixture
 
-    When call once --format json run apps/ios/App
-    The status should not equal 0
-    The stderr should include 'running `apple_application` targets is not yet supported'
+    When call env PATH="$WORKSPACE/bin:$PATH" "$ONCE_BIN" -C "$WORKSPACE" --format json run apps/ios/App
+    The status should be success
+    The stdout should include '"target":"apps/ios/App"'
+    The stdout should include '"capability":"run"'
+    The stdout should include '"cache":"bypass"'
+    The path "$WORKSPACE/.once/out/apps/ios/App/run/run.json" should be file
+    The contents of file "$WORKSPACE/.once/out/apps/ios/App/run/run.json" should include '"status":"launched"'
+    The contents of file "$WORKSPACE/.once/out/apps/ios/App/run/run.json" should include '"simulator_id":"11111111-1111-1111-1111-111111111111"'
+    The contents of file "$WORKSPACE/xcrun.log" should include 'simctl launch 11111111-1111-1111-1111-111111111111 dev.once.App'
   End
 
   It 'exposes testable Apple test bundle artifacts'
@@ -107,6 +276,19 @@ Describe 'apple graph'
     The stdout should include '"output_groups":["default","bundle","dsyms"]'
     The stdout should include '"name":"test"'
     The stdout should include '"output_groups":["default","test_results","coverage"]'
+  End
+
+  It 're-runs Apple test runner actions without using the action cache'
+    create_mock_apple_test_fixture
+
+    When call env PATH="$WORKSPACE/toolchain/usr/bin:$PATH" /bin/sh -c '"$1" -C "$2" --format json test apps/ios/AppTests
+"$1" -C "$2" --format json test apps/ios/AppTests
+printf "spawn_count=%s\n" "$(grep -c "simctl spawn" "$2/xcrun.log")"' sh "$ONCE_BIN" "$WORKSPACE"
+    The status should be success
+    The stdout should include '"target":"apps/ios/AppTests"'
+    The stdout should include '"capability":"test"'
+    The stdout should include '"cache":"bypass"'
+    The stdout should include 'spawn_count=2'
   End
 
   It 'tests Apple test bundle artifacts through the graph command'
@@ -162,7 +344,7 @@ Describe 'apple graph'
     The stdout should include 'provisioning_profile'
     The stdout should include 'asset_catalogs'
     The stdout should include 'build: default, bundle, dsyms'
-    The stdout should not include 'run: default'
+    The stdout should include 'run: default (requires: bundle)'
   End
 
   It 'describes Apple test bundle build schema'
@@ -189,20 +371,20 @@ Describe 'apple graph'
     The stderr should include 'does not expose `test`'
   End
 
-  It 'rejects --remote for non-runnable graph targets'
+  It 'rejects --remote for graph run targets before execution'
     copy_apple_graph_fixture
 
     When call once run --remote apps/ios/App
     The status should not equal 0
-    The stderr should include 'running `apple_application` targets is not yet supported'
+    The stderr should include '--remote is only supported for executable script targets'
   End
 
-  It 'rejects --runtime-rpc for non-runnable graph targets'
+  It 'rejects --runtime-rpc for graph run targets before execution'
     copy_apple_graph_fixture
 
     When call once run --runtime-rpc apps/ios/App
     The status should not equal 0
-    The stderr should include 'running `apple_application` targets is not yet supported'
+    The stderr should include '--runtime-rpc is only supported for executable script targets'
   End
 
   Describe 'apple_library swiftc compile'

@@ -4,7 +4,10 @@ Apple test bundle.
 
 ## Description
 
-Builds Apple test targets and can run Swift Testing tests through the generic Once test capability.
+Builds Apple test targets and can run XCTest or Swift Testing tests
+through the generic Once test capability. Swift Testing sources compile
+into the same `.xctest` bundle shape as XCTest tests; Once does not
+generate a Swift package wrapper for them.
 
 ## Attributes
 
@@ -46,5 +49,5 @@ App-hosted tests, resource bundling, asset catalogs, custom Info.plist
 templates, entitlements, destinations, and test plans are declared in
 the schema for graph compatibility but are not implemented yet.
 Non-empty values for those attrs fail analysis instead of being
-ignored. Swift Testing execution currently supports macOS logic tests;
-simulator and device runners will use the XCTest bundle path later.
+ignored. Test execution currently supports macOS logic tests and iOS
+simulator bundles. Device runners still need xctestrun support.

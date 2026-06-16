@@ -1,4 +1,6 @@
 use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use once_cas::{CacheProvider, Digest};
@@ -7,6 +9,7 @@ use once_core::{
 };
 use once_frontend::analysis::{AnalysisResult, DeclaredAction};
 use once_frontend::GraphTarget;
+use tokio::process::Command;
 
 use super::BuildOutcome;
 
@@ -32,6 +35,7 @@ pub(super) async fn run_declared_actions(
             .clone()
             .unwrap_or_else(|| "<anonymous>".to_string());
         all_outputs.extend(declared.outputs.iter().cloned());
+        let cacheable = declared.cacheable;
         let mut input_action_digests = dep_action_digests.to_vec();
         input_action_digests.extend(
             action_digests
@@ -46,23 +50,43 @@ pub(super) async fn run_declared_actions(
                     target.label.id,
                 )
             })?;
-        let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
-            .await
-            .with_context(|| {
-                format!(
-                    "executing action {index} for {} ({identifier_for_error})",
+        if cacheable {
+            let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
+                .await
+                .with_context(|| {
+                    format!(
+                        "executing action {index} for {} ({identifier_for_error})",
+                        target.label.id,
+                    )
+                })?;
+            let exit_code = outcome.result.exit_code;
+            if exit_code != 0 {
+                anyhow::bail!(
+                    "{identifier_for_error} ({index}) failed for {} with exit code {exit_code}",
                     target.label.id,
-                )
-            })?;
-        let exit_code = outcome.result.exit_code;
-        if exit_code != 0 {
-            anyhow::bail!(
-                "{identifier_for_error} ({index}) failed for {} with exit code {exit_code}",
-                target.label.id,
-            );
+                );
+            }
+            action_digests.push(outcome.action);
+            last_cache_tag = crate::commands::util::cache_tag(outcome.cache);
+        } else {
+            let action_digest = action.digest();
+            let exit_code = run_uncached_action(&action, workspace)
+                .await
+                .with_context(|| {
+                    format!(
+                        "executing action {index} for {} ({identifier_for_error})",
+                        target.label.id,
+                    )
+                })?;
+            if exit_code != 0 {
+                anyhow::bail!(
+                    "{identifier_for_error} ({index}) failed for {} with exit code {exit_code}",
+                    target.label.id,
+                );
+            }
+            action_digests.push(action_digest);
+            last_cache_tag = "bypass";
         }
-        action_digests.push(outcome.action);
-        last_cache_tag = crate::commands::util::cache_tag(outcome.cache);
     }
 
     Ok(BuildOutcome {
@@ -71,6 +95,63 @@ pub(super) async fn run_declared_actions(
         outputs: all_outputs,
         cache_tag: last_cache_tag,
     })
+}
+
+async fn run_uncached_action(action: &Action, workspace: &Path) -> Result<i32> {
+    match action {
+        Action::RunCommand {
+            argv,
+            env,
+            cwd,
+            timeout_ms,
+            outputs,
+            ..
+        } => {
+            let (program, rest) = argv
+                .split_first()
+                .ok_or_else(|| anyhow::anyhow!("declared action has empty argv"))?;
+            let mut command = Command::new(program);
+            command.args(rest);
+            command.env_clear();
+            for (key, value) in env {
+                command.env(key, value);
+            }
+            command.stdin(Stdio::null());
+            command.stdout(Stdio::null());
+            command.stderr(Stdio::piped());
+            command.current_dir(
+                cwd.as_ref()
+                    .map_or_else(|| workspace.to_path_buf(), |path| path.resolve(workspace)),
+            );
+            command.kill_on_drop(true);
+
+            let output = match timeout_ms {
+                Some(ms) => tokio::time::timeout(Duration::from_millis(*ms), command.output())
+                    .await
+                    .with_context(|| format!("declared action timed out after {ms}ms"))??,
+                None => command.output().await?,
+            };
+            if !output.status.success() {
+                let code = output.status.code().unwrap_or(-1);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("declared action exited with code {code}: {stderr}");
+            }
+            verify_declared_outputs(outputs, workspace)?;
+            Ok(output.status.code().unwrap_or(0))
+        }
+    }
+}
+
+fn verify_declared_outputs(outputs: &[WorkspacePath], workspace: &Path) -> Result<()> {
+    for output in outputs {
+        if !output.resolve(workspace).exists() {
+            anyhow::bail!(
+                "declared action completed without producing output `{}`",
+                output.as_str()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn compose_target_action_digest(target_id: &str, action_digests: &[Digest]) -> Digest {
@@ -197,6 +278,7 @@ mod tests {
                 ".once/out/x/sub/B.meta".to_string(),
             ],
             env: BTreeMap::new(),
+            cacheable: true,
             toolchain_identity: None,
             identifier: None,
         };
@@ -209,6 +291,100 @@ mod tests {
         assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uncached_action_executes_each_time() {
+        let workspace = tempfile::tempdir().unwrap();
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf x >> counter".to_string(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            outputs: Vec::new(),
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: None,
+        };
+
+        run_uncached_action(&action, workspace.path())
+            .await
+            .unwrap();
+        run_uncached_action(&action, workspace.path())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("counter")).unwrap(),
+            "xx"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uncached_action_succeeds_when_declared_output_exists() {
+        let workspace = tempfile::tempdir().unwrap();
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf ok > .once/out/result.txt".to_string(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            outputs: vec![WorkspacePath::try_from(".once/out/result.txt").unwrap()],
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: None,
+        };
+        std::fs::create_dir_all(workspace.path().join(".once/out")).unwrap();
+
+        let exit_code = run_uncached_action(&action, workspace.path())
+            .await
+            .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/result.txt")).unwrap(),
+            "ok"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uncached_action_errors_when_declared_output_is_missing() {
+        let workspace = tempfile::tempdir().unwrap();
+        let action = Action::RunCommand {
+            argv: vec!["/bin/sh".to_string(), "-c".to_string(), ":".to_string()],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            outputs: vec![WorkspacePath::try_from(".once/out/missing.txt").unwrap()],
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: None,
+        };
+
+        let err = run_uncached_action(&action, workspace.path())
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains(
+                "declared action completed without producing output `.once/out/missing.txt`"
+            ),
+            "{err}"
+        );
+    }
+
     #[test]
     fn input_digest_changes_with_toolchain_identity() {
         let workspace = tempfile::tempdir().unwrap();
@@ -218,6 +394,7 @@ mod tests {
             inputs: vec!["a.swift".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),
+            cacheable: true,
             toolchain_identity: Some("id-1".to_string()),
             identifier: None,
         };
@@ -239,6 +416,7 @@ mod tests {
             inputs: vec!["a.swift".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),
+            cacheable: true,
             toolchain_identity: None,
             identifier: None,
         };
