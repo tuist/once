@@ -1579,12 +1579,24 @@ RULES = [
         function_name: &str,
         call_source: &str,
     ) -> std::result::Result<String, String> {
+        let prelude = include_str!("../prelude/apple.star");
+        eval_prelude_function_in(prelude, function_name, call_source)
+    }
+
+    fn eval_prelude_function_in(
+        prelude: &str,
+        function_name: &str,
+        call_source: &str,
+    ) -> std::result::Result<String, String> {
+        let source = format!("{prelude}\nresult = repr({function_name}{call_source})\n");
+        eval_prelude_source_to_repr(source)
+    }
+
+    fn eval_prelude_source_to_repr(source: String) -> std::result::Result<String, String> {
         // Build a Starlark module that splices the prelude's source
         // inline and invokes the requested helper. Returning the
         // result as a string via `repr()` keeps the test independent
         // of starlark Value plumbing details.
-        let prelude = include_str!("../prelude/apple.star");
-        let source = format!("{prelude}\nresult = repr({function_name}{call_source})\n");
         Module::with_temp_heap(|module| {
             let ast = AstModule::parse("test.star", source, &Dialect::Standard)
                 .map_err(|error| format!("parse: {error:?}"))?;
@@ -1644,6 +1656,131 @@ RULES = [
         )
         .unwrap_err();
         assert!(err.contains("no branch matching"), "{err}");
+    }
+
+    #[test]
+    fn prelude_cargo_metadata_targets_preserve_rust_target() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let out = eval_prelude_function_in(
+            &prelude,
+            "_cargo_metadata_targets",
+            r###"({
+                "attrs": {
+                    "target": "x86_64-apple-darwin",
+                    "vendor_dir": "third_party/rust/vendor",
+                },
+            }, {
+                "packages": [{
+                    "id": "registry+https://github.com/rust-lang/crates.io-index#cpufeatures@0.2.17",
+                    "name": "cpufeatures",
+                    "version": "0.2.17",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index",
+                    "manifest_path": "/workspace/vendor/cpufeatures-0.2.17/Cargo.toml",
+                    "targets": [{
+                        "name": "cpufeatures",
+                        "kind": ["lib"],
+                        "crate_types": ["lib"],
+                        "src_path": "/workspace/vendor/cpufeatures-0.2.17/src/lib.rs",
+                        "edition": "2018",
+                    }],
+                }],
+                "resolve": {
+                    "nodes": [{
+                        "id": "registry+https://github.com/rust-lang/crates.io-index#cpufeatures@0.2.17",
+                        "features": [],
+                        "deps": [],
+                    }],
+                },
+            })"###,
+        )
+        .unwrap();
+
+        assert!(out.contains("\"target\": \"x86_64-apple-darwin\""), "{out}");
+    }
+
+    #[test]
+    fn prelude_cargo_metadata_targets_split_proc_macro_host_deps() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r###"{prelude}
+targets = _cargo_metadata_targets({{
+    "attrs": {{
+        "target": "x86_64-apple-darwin",
+        "vendor_dir": "third_party/rust/vendor",
+    }},
+}}, {{
+    "packages": [
+        {{
+            "id": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.45",
+            "name": "quote",
+            "version": "1.0.45",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "manifest_path": "/workspace/vendor/quote-1.0.45/Cargo.toml",
+            "targets": [{{
+                "name": "quote",
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "src_path": "/workspace/vendor/quote-1.0.45/src/lib.rs",
+                "edition": "2018",
+            }}],
+        }},
+        {{
+            "id": "registry+https://github.com/rust-lang/crates.io-index#linktime-proc-macro@0.2.0",
+            "name": "linktime-proc-macro",
+            "version": "0.2.0",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "manifest_path": "/workspace/vendor/linktime-proc-macro-0.2.0/Cargo.toml",
+            "targets": [{{
+                "name": "linktime_proc_macro",
+                "kind": ["proc-macro"],
+                "crate_types": ["proc-macro"],
+                "src_path": "/workspace/vendor/linktime-proc-macro-0.2.0/src/lib.rs",
+                "edition": "2021",
+            }}],
+        }},
+    ],
+    "resolve": {{
+        "nodes": [
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.45",
+                "features": [],
+                "deps": [],
+            }},
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#linktime-proc-macro@0.2.0",
+                "features": [],
+                "deps": [{{
+                    "name": "quote",
+                    "pkg": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.45",
+                    "dep_kinds": [{{"kind": None}}],
+                }}],
+            }},
+        ],
+    }},
+}})
+by_name = {{target["name"]: target for target in targets}}
+result = repr([
+    by_name["quote-1.0.45"]["attrs"].get("target"),
+    by_name["quote-1.0.45-host"]["attrs"].get("target"),
+    by_name["linktime-proc-macro-0.2.0"]["attrs"].get("target"),
+    by_name["linktime-proc-macro-0.2.0"]["deps"],
+])
+"###
+        );
+        let out = eval_prelude_source_to_repr(source).unwrap();
+
+        assert_eq!(
+            out,
+            "[\"x86_64-apple-darwin\", None, None, [\"./quote-1.0.45-host\"]]"
+        );
     }
 
     /// The prelude `_serialize_hmap` helper must lay out the
