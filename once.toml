@@ -15,7 +15,6 @@ srcs = [
   "Cargo.toml",
   "Cargo.lock",
   "crates/*/Cargo.toml",
-  "third_party/rust/src/formulas/**",
 ]
 
 [target.attrs]

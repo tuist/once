@@ -184,6 +184,9 @@ def _rust_source_inputs(ctx):
 def _rust_extra_inputs(ctx):
     return _rust_attr(ctx, "_extra_inputs", [])
 
+def _rust_build_script_inputs(ctx):
+    return _rust_attr(ctx, "_build_script_inputs", [])
+
 def _rust_target(ctx):
     return _rust_target_raw(ctx)
 
@@ -573,10 +576,11 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     run_env = _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path)
     metadata_exports, metadata_inputs = _rust_dep_metadata_exports(metadata_deps)
     stdout_abs = _shell_quote(_workspace_absolute(stdout))
-    run_script = _shell_quote(host_which("mkdir")) + " -p " + _shell_quote(run_env["OUT_DIR"]) + " && cd " + _shell_quote(run_env["CARGO_MANIFEST_DIR"]) + "\n" + metadata_exports + "\n" + _shell_quote(_workspace_absolute(runner)) + " > " + stdout_abs + " 2>&1 || { code=$?; " + _shell_quote(host_which("cat")) + " " + stdout_abs + " >&2; exit $code; }"
+    status_abs = _shell_quote(run_env["OUT_DIR"] + "/.once-build-script-status")
+    run_script = _shell_quote(host_which("mkdir")) + " -p " + _shell_quote(run_env["OUT_DIR"]) + " && cd " + _shell_quote(run_env["CARGO_MANIFEST_DIR"]) + "\n" + metadata_exports + "\n" + _shell_quote(host_which("rm")) + " -f " + status_abs + "\n{ " + _shell_quote(_workspace_absolute(runner)) + " 2>&1; " + _shell_quote(host_which("printf")) + " '%s' \"$?\" > " + status_abs + "; } | " + _shell_quote(host_which("tee")) + " " + stdout_abs + "\ncode=$(" + _shell_quote(host_which("cat")) + " " + status_abs + ")\n" + _shell_quote(host_which("rm")) + " -f " + status_abs + "\nexit \"$code\""
     run_action(
         argv = [host_which("sh"), "-c", run_script],
-        inputs = _unique([runner] + metadata_inputs + _rust_source_inputs(ctx)),
+        inputs = _unique([runner] + metadata_inputs + _rust_source_inputs(ctx) + _rust_build_script_inputs(ctx)),
         outputs = [out_dir, stdout],
         env = run_env,
         toolchain_identity = identity + "\x00build-script-run",
@@ -700,7 +704,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     dep_inputs = _rust_dep_inputs(deps)
     build_deps = ctx.get("build_deps")
     if build_deps == None:
-        build_deps = deps
+        build_deps = []
     build_dep_args = _rust_dep_args(build_deps, aliases)
     build_dep_inputs = _rust_dep_inputs(build_deps)
     build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps)
@@ -1122,7 +1126,7 @@ def _cargo_resolver_impl(ctx):
             "name": name,
             "kind": "rust_crate",
             "deps": deps,
-            "srcs": [_cargo_package_source_glob(source_root)],
+            "srcs": _cargo_package_source_globs(source_root),
             "attrs": attrs,
         })
     return targets
@@ -1149,8 +1153,12 @@ def _cargo_source_glob(source_root, crate_root):
             return source_root + "/" + rel_parent + "/**/*.rs"
     return source_root + "/src/**/*.rs"
 
-def _cargo_package_source_glob(source_root):
-    return source_root + "/**"
+def _cargo_package_source_globs(source_root):
+    return [
+        source_root + "/Cargo.toml",
+        source_root + "/build.rs",
+        source_root + "/src/**/*.rs",
+    ]
 
 def _cargo_library_target(package):
     for target in package.get("targets") or []:
@@ -1382,11 +1390,13 @@ def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, 
     checksum = package.get("checksum")
     if checksum != None:
         attrs["checksum"] = checksum
+    if attrs.get("build_script"):
+        attrs["_build_script_inputs"] = [source_root + "/**"]
     spec = {
         "name": name,
         "kind": kind,
         "deps": deps,
-        "srcs": [_cargo_package_source_glob(source_root)],
+        "srcs": _cargo_package_source_globs(source_root),
         "attrs": attrs,
     }
     if build_deps:

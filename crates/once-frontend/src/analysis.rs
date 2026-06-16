@@ -1791,7 +1791,7 @@ RULES = [
 
         assert!(out.contains("\"target\": \"x86_64-apple-darwin\""), "{out}");
         assert!(
-            out.contains("\"srcs\": [\"third_party/rust/vendor/cpufeatures-0.2.17/**\"]"),
+            out.contains("\"srcs\": [\"third_party/rust/vendor/cpufeatures-0.2.17/Cargo.toml\", \"third_party/rust/vendor/cpufeatures-0.2.17/build.rs\", \"third_party/rust/vendor/cpufeatures-0.2.17/src/**/*.rs\"]"),
             "{out}"
         );
     }
@@ -1874,6 +1874,144 @@ result = repr([
         assert_eq!(
             out,
             "[\"x86_64-apple-darwin\", None, None, [\"./quote-1.0.45-host\"]]"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_rust_build_script_metadata_deps_are_not_duplicated() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "build_script": "build.rs",
+        "crate_root": "src/lib.rs",
+    }},
+    "deps": [{{
+        "label_id": "third_party/rust/native",
+        "crate_name": "native",
+        "rlib": ".once/out/native/libnative.rlib",
+        "links": "native",
+        "build_script_stdout": ".once/out/native/build-script.stdout",
+    }}],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libapp.rlib")
+result = repr("ok")
+"#
+        );
+        let workspace = TempDir::new().unwrap();
+        let store = store_for(workspace.path(), "crates/app/app");
+
+        let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+        assert_eq!(out.unwrap(), "\"ok\"");
+        let script = store
+            .actions
+            .iter()
+            .find(|action| action.identifier.as_deref() == Some("crates/app/app:build-script"))
+            .and_then(|action| action.argv.get(2))
+            .unwrap();
+        assert_eq!(script.matches("done <").count(), 1, "{script}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_rust_build_script_env_encodes_rustflags() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r#"{prelude}
+rustc, _identity, host_triple = _rustc_toolchain("")
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "rustc_flags": ["-C", "opt-level=3"],
+    }},
+    "deps": [],
+    "srcs": [],
+}}
+env = _rust_build_script_env(
+    ctx,
+    rustc,
+    host_triple,
+    host_triple,
+    ".once/out/app/build",
+    "crates/app/build.rs",
+)
+result = repr(env.get("CARGO_ENCODED_RUSTFLAGS"))
+"#
+        );
+        let store = store_for(TempDir::new().unwrap().path(), "crates/app/app");
+
+        let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+        assert_eq!(out.unwrap(), "\"-C\\x1fopt-level=3\"");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_rust_proc_macro_compile_uses_host_target() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r#"{prelude}
+_rustc, _identity, host_triple = _rustc_toolchain("")
+def other_target(host_triple):
+    if host_triple == "aarch64-unknown-linux-gnu":
+        return "x86_64-unknown-linux-gnu"
+    return "aarch64-unknown-linux-gnu"
+ctx = {{
+    "label": {{
+        "package": "macros/stringify",
+        "name": "stringify",
+        "id": "macros/stringify",
+    }},
+    "attr": {{
+        "target": other_target(host_triple),
+        "crate_root": "src/lib.rs",
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "proc-macro", "src/lib.rs", "libstringify.so")
+result = repr("ok")
+"#
+        );
+        let store = store_for(TempDir::new().unwrap().path(), "macros/stringify");
+
+        let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+        assert_eq!(out.unwrap(), "\"ok\"");
+        let action = &store.actions[0];
+        assert!(
+            !action.argv.iter().any(|arg| arg == "--target"),
+            "{:?}",
+            action.argv
+        );
+        assert_eq!(
+            action.outputs,
+            vec![".once/out/macros/stringify/libstringify.so".to_string()]
         );
     }
 
