@@ -1897,7 +1897,8 @@ ctx = {{
     "attr": {{}},
     "srcs": [],
 }}
-env = _rust_build_script_env(
+tool_env = _rust_c_tool_env(host_triple, host_triple)
+build_env = _rust_build_script_env(
     ctx,
     rustc,
     host_triple,
@@ -1906,10 +1907,10 @@ env = _rust_build_script_env(
     "third_party/rust/vendor/pkg-1.0.0/build.rs",
 )
 result = repr([
-    env.get("CC"),
-    env.get("CC_" + host_triple.replace("-", "_")),
-    env.get("CC_" + host_triple),
-    env.get("AR"),
+    tool_env.get("CC"),
+    tool_env.get("AR"),
+    build_env.get("CC"),
+    build_env.get("AR"),
 ])
 "#
         );
@@ -1918,10 +1919,42 @@ result = repr([
         let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
         let values: Vec<String> = serde_json::from_str(&out.unwrap()).unwrap();
 
-        assert_eq!(values[0], values[1]);
-        assert_eq!(values[0], values[2]);
         assert!(std::path::Path::new(&values[0]).is_absolute());
-        assert!(std::path::Path::new(&values[3]).is_absolute());
+        assert!(std::path::Path::new(&values[1]).is_absolute());
+        assert_eq!(values[0], values[2]);
+        assert_eq!(values[1], values[3]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_rust_build_script_env_does_not_use_host_c_tool_for_cross_target() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r#"{prelude}
+_rustc, _identity, host_triple = _rustc_toolchain("")
+def other_target(host_triple):
+    if host_triple == "aarch64-unknown-linux-gnu":
+        return "x86_64-unknown-linux-gnu"
+    return "aarch64-unknown-linux-gnu"
+target = other_target(host_triple)
+env = _rust_c_tool_env(target, host_triple)
+result = repr([
+    env.get("CC"),
+    env.get("AR"),
+    env.get("CC_" + target.replace("-", "_")),
+    env.get("CC_" + target),
+])
+"#
+        );
+        let store = store_for(TempDir::new().unwrap().path(), "");
+
+        let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+        assert_eq!(out.unwrap(), "[None, None, None, None]");
     }
 
     #[test]

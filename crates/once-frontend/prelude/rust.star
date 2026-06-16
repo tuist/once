@@ -232,21 +232,16 @@ def _rust_user_flags(ctx):
 def _rust_encoded_rustflags(ctx):
     return "\x1f".join(_rust_user_flags(ctx))
 
-def _rust_target_env_keys(prefix, target):
-    keys = [prefix]
-    if target:
-        keys.append(prefix + "_" + target.replace("-", "_"))
-        keys.append(prefix + "_" + target)
-    return _unique(keys)
-
-def _rust_c_tool_env(target):
+def _rust_c_tool_env(target, host_triple):
     env = {}
-    if host_os() == "windows":
+    if host_os() == "windows" or target != host_triple:
         return env
-    for key in _rust_target_env_keys("CC", target):
-        env[key] = host_which("cc")
-    for key in _rust_target_env_keys("AR", target):
-        env[key] = host_which("ar")
+    cc = host_which("cc")
+    if cc:
+        env["CC"] = cc
+    ar = host_which("ar")
+    if ar:
+        env["AR"] = ar
     return env
 
 def _rust_cap_lints(ctx):
@@ -456,7 +451,7 @@ def _rust_builtin_extern_args(crate_type):
 
 def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path):
     env = _rust_compile_env(ctx)
-    for key, value in _rust_c_tool_env(target or host_triple).items():
+    for key, value in _rust_c_tool_env(target or host_triple, host_triple).items():
         if key not in env:
             env[key] = value
     for key, value in _rust_cfg_env(rustc, target).items():
