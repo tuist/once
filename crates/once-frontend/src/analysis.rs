@@ -1128,6 +1128,7 @@ mod tests {
     use super::*;
     use starlark::environment::Module;
     use starlark::syntax::{AstModule, Dialect};
+    use std::process::Command;
     use tempfile::TempDir;
 
     fn run(source: &str) -> starlark::Result<()> {
@@ -1658,6 +1659,43 @@ RULES = [
         })
     }
 
+    fn eval_prelude_string_function(
+        function_name: &str,
+        call_source: &str,
+    ) -> std::result::Result<String, String> {
+        let prelude = include_str!("../prelude/apple.star");
+        let source = format!("{prelude}\nresult = {function_name}{call_source}\n");
+        Module::with_temp_heap(|module| {
+            let ast = AstModule::parse("test.star", source, &Dialect::Standard)
+                .map_err(|error| format!("parse: {error:?}"))?;
+            let globals = globals_for_prelude();
+            let mut eval = Evaluator::new(&module);
+            eval.eval_module(ast, &globals)
+                .map_err(|error| format!("eval: {error:?}"))?;
+            let result = module
+                .get("result")
+                .ok_or_else(|| "missing result".to_string())?;
+            Ok(result
+                .unpack_str()
+                .ok_or_else(|| "result was not a string".to_string())?
+                .to_string())
+        })
+    }
+
+    fn starlark_string_literal(value: &str) -> String {
+        serde_json::to_string(value).unwrap()
+    }
+
+    #[cfg(unix)]
+    fn write_executable(path: &Path, contents: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(path, contents).unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
     #[test]
     fn prelude_resolve_select_picks_matching_branch() {
         let out = eval_prelude_function(
@@ -1700,17 +1738,165 @@ RULES = [
 
     #[test]
     fn prelude_ios_simulator_selection_filters_to_iphone_and_ipad() {
-        let out = eval_prelude_function("_ios_simulator_selection_script", r#"("/usr/bin/xcrun")"#)
-            .unwrap();
+        let out = eval_prelude_string_function(
+            "_ios_simulator_selection_script",
+            r#"("/usr/bin/xcrun")"#,
+        )
+        .unwrap();
 
         assert!(out.contains("ONCE_APPLE_SIMULATOR_UDID"), "{out}");
         assert!(out.contains("simctl list devices booted"), "{out}");
         assert!(out.contains("simctl list devices available"), "{out}");
-        assert!(out.contains("/iPhone/ s/.*"), "{out}");
-        assert!(out.contains("/iPad/ s/.*"), "{out}");
-        assert!(out.contains("(Booted)"), "{out}");
-        assert!(out.contains("(Shutdown)"), "{out}");
+        assert!(out.contains("/iPhone/ s/^.*"), "{out}");
+        assert!(out.contains("/iPad/ s/^.*"), "{out}");
+        assert!(out.contains("(Booted)[[:space:]]*$"), "{out}");
+        assert!(out.contains("(Shutdown)[[:space:]]*$"), "{out}");
         assert!(!out.contains("sed -n 's/.*"), "{out}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_ios_simulator_selection_script_picks_booted_ios_device() {
+        let tmp = TempDir::new().unwrap();
+        let xcrun = tmp.path().join("xcrun");
+        write_executable(
+            &xcrun,
+            r#"#!/bin/sh
+if [ "${1:-}" = "simctl" ] && [ "${2:-}" = "list" ] && [ "${3:-}" = "devices" ] && [ "${4:-}" = "booted" ]; then
+  printf '%s\n' '    Apple TV (AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA) (Booted)'
+  printf '%s\n' '    iPhone Preview (BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB) (Extra) (Booted)'
+  printf '%s\n' '    iPhone 15 Pro (11111111-1111-1111-1111-111111111111) (Booted)'
+  exit 0
+fi
+if [ "${1:-}" = "simctl" ] && [ "${2:-}" = "list" ] && [ "${3:-}" = "devices" ] && [ "${4:-}" = "available" ]; then
+  printf '%s\n' '    iPad Pro (22222222-2222-2222-2222-222222222222) (Shutdown)'
+  exit 0
+fi
+exit 1
+"#,
+        );
+        let call = format!(
+            "({})",
+            starlark_string_literal(&xcrun.display().to_string())
+        );
+        let selection_script =
+            eval_prelude_string_function("_ios_simulator_selection_script", &call).unwrap();
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("{selection_script}\nprintf '%s' \"$simulator_id\""))
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "11111111-1111-1111-1111-111111111111"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_ios_simulator_selection_script_errors_without_ios_device() {
+        let tmp = TempDir::new().unwrap();
+        let xcrun = tmp.path().join("xcrun");
+        write_executable(
+            &xcrun,
+            r#"#!/bin/sh
+if [ "${1:-}" = "simctl" ] && [ "${2:-}" = "list" ] && [ "${3:-}" = "devices" ]; then
+  printf '%s\n' '    Apple TV (AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA) (Booted)'
+  exit 0
+fi
+exit 1
+"#,
+        );
+        let call = format!(
+            "({})",
+            starlark_string_literal(&xcrun.display().to_string())
+        );
+        let selection_script =
+            eval_prelude_string_function("_ios_simulator_selection_script", &call).unwrap();
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("{selection_script}\nprintf '%s' \"$simulator_id\""))
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{output:?}");
+        assert!(String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("no booted or available iOS simulator found"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_swift_testing_macros_plugin_uses_swift_toolchain_path() {
+        let tmp = TempDir::new().unwrap();
+        let xcrun = tmp.path().join("xcrun");
+        let swiftc = tmp
+            .path()
+            .join("Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc");
+        std::fs::create_dir_all(swiftc.parent().unwrap()).unwrap();
+        write_executable(
+            &xcrun,
+            &format!(
+                r#"#!/bin/sh
+if [ "${{1:-}}" = "--find" ] && [ "${{2:-}}" = "swiftc" ]; then
+  printf '%s\n' {}
+  exit 0
+fi
+exit 1
+"#,
+                starlark_string_literal(&swiftc.display().to_string())
+            ),
+        );
+        let store = store_for(tmp.path(), "");
+        let call = format!(
+            "({}, {{}})",
+            starlark_string_literal(&xcrun.display().to_string())
+        );
+
+        let (_, out) = with_active_store(store, || {
+            eval_prelude_string_function("_swift_testing_macros_plugin", &call)
+        });
+
+        assert_eq!(
+            out.unwrap(),
+            tmp.path()
+                .join("Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib")
+                .display()
+                .to_string()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_swift_testing_macros_plugin_rejects_unexpected_swiftc_path() {
+        let tmp = TempDir::new().unwrap();
+        let xcrun = tmp.path().join("xcrun");
+        write_executable(
+            &xcrun,
+            r#"#!/bin/sh
+if [ "${1:-}" = "--find" ] && [ "${2:-}" = "swiftc" ]; then
+  printf '%s\n' '/tmp/swiftc'
+  exit 0
+fi
+exit 1
+"#,
+        );
+        let store = store_for(tmp.path(), "");
+        let call = format!(
+            "({}, {{}})",
+            starlark_string_literal(&xcrun.display().to_string())
+        );
+
+        let (_, err) = with_active_store(store, || {
+            eval_prelude_string_function("_swift_testing_macros_plugin", &call).unwrap_err()
+        });
+
+        assert!(
+            err.contains("unable to derive Swift toolchain path"),
+            "{err}"
+        );
     }
 
     #[test]

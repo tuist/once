@@ -129,6 +129,90 @@ SH
     chmod +x "$WORKSPACE/bin/xcrun"
   }
 
+  create_mock_apple_test_fixture() {
+    mkdir -p "$WORKSPACE/toolchain/usr/bin" "$WORKSPACE/bin" "$WORKSPACE/apps/ios/Tests/AppTests" "$WORKSPACE/Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks" "$WORKSPACE/Platforms/iPhoneSimulator.platform/Developer/usr/lib"
+    cat > "$WORKSPACE/apps/ios/Tests/AppTests/AppTests.swift" <<'SWIFT'
+import Testing
+
+@Test func examplePasses() {}
+SWIFT
+    cat > "$WORKSPACE/apps/ios/once.toml" <<'TOML'
+[[target]]
+name = "AppTests"
+kind = "apple_test_bundle"
+srcs = ["Tests/AppTests/**/*.swift"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+minimum_os = "17.0"
+TOML
+    cat > "$WORKSPACE/bin/codesign" <<'SH'
+#!/bin/sh
+app=""
+for arg do
+  app="$arg"
+done
+mkdir -p "$app/_CodeSignature"
+: > "$app/_CodeSignature/CodeResources"
+SH
+    chmod +x "$WORKSPACE/bin/codesign"
+    cat > "$WORKSPACE/toolchain/usr/bin/xcrun" <<SH
+#!/bin/sh
+log='$WORKSPACE/xcrun.log'
+swiftc_path='$WORKSPACE/toolchain/usr/bin/swiftc'
+platform_path='$WORKSPACE/Platforms/iPhoneSimulator.platform'
+if [ "\${1:-}" = "--sdk" ]; then
+  shift 2
+fi
+case "\${1:-}" in
+  --find)
+    case "\${2:-}" in
+      swiftc) printf '%s\\n' "\$swiftc_path" ;;
+      codesign) printf '%s\\n' '$WORKSPACE/bin/codesign' ;;
+      *) printf '%s\\n' "\$0" ;;
+    esac
+    ;;
+  --show-sdk-platform-path)
+    printf '%s\\n' "\$platform_path"
+    ;;
+  swiftc)
+    if [ "\${2:-}" = "--version" ]; then
+      printf '%s\\n' 'Apple Swift version mock'
+      exit 0
+    fi
+    out=''
+    while [ "\$#" -gt 0 ]; do
+      if [ "\$1" = "-o" ]; then
+        shift
+        out="\${1:-}"
+        break
+      fi
+      shift
+    done
+    [ -n "\$out" ] || exit 2
+    mkdir -p "\$(dirname "\$out")"
+    printf '%s\\n' '#!/bin/sh' 'exit 0' > "\$out"
+    chmod 755 "\$out"
+    ;;
+  simctl)
+    printf '%s\\n' "\$*" >> "\$log"
+    if [ "\${2:-}" = "list" ] && [ "\${3:-}" = "devices" ] && [ "\${4:-}" = "booted" ]; then
+      printf '%s\\n' '    iPhone 15 (11111111-1111-1111-1111-111111111111) (Booted)'
+    fi
+    if [ "\${2:-}" = "list" ] && [ "\${3:-}" = "devices" ] && [ "\${4:-}" = "available" ]; then
+      printf '%s\\n' '    iPad Pro (22222222-2222-2222-2222-222222222222) (Shutdown)'
+    fi
+    ;;
+  *)
+    printf '%s\\n' "unexpected xcrun invocation: \$*" >&2
+    exit 1
+    ;;
+esac
+SH
+    chmod +x "$WORKSPACE/toolchain/usr/bin/xcrun"
+  }
+
   It 'lists buildable Apple artifacts'
     copy_apple_graph_fixture
 
@@ -192,6 +276,19 @@ SH
     The stdout should include '"output_groups":["default","bundle","dsyms"]'
     The stdout should include '"name":"test"'
     The stdout should include '"output_groups":["default","test_results","coverage"]'
+  End
+
+  It 're-runs Apple test runner actions without using the action cache'
+    create_mock_apple_test_fixture
+
+    When call env PATH="$WORKSPACE/toolchain/usr/bin:$PATH" /bin/sh -c '"$1" -C "$2" --format json test apps/ios/AppTests
+"$1" -C "$2" --format json test apps/ios/AppTests
+printf "spawn_count=%s\n" "$(grep -c "simctl spawn" "$2/xcrun.log")"' sh "$ONCE_BIN" "$WORKSPACE"
+    The status should be success
+    The stdout should include '"target":"apps/ios/AppTests"'
+    The stdout should include '"capability":"test"'
+    The stdout should include '"cache":"bypass"'
+    The stdout should include 'spawn_count=2'
   End
 
   It 'tests Apple test bundle artifacts through the graph command'

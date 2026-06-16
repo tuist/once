@@ -560,8 +560,8 @@ def _json_escape(value):
 def _json_literal(value):
     return "\"" + _json_escape(value) + "\""
 
-_IOS_SIMULATOR_BOOTED_FILTER = "/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p"
-_IOS_SIMULATOR_SHUTDOWN_FILTER = "/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p"
+_IOS_SIMULATOR_BOOTED_FILTER = "/iPhone/ s/^.* (\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted)[[:space:]]*$/\\1/p; /iPad/ s/^.* (\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted)[[:space:]]*$/\\1/p"
+_IOS_SIMULATOR_SHUTDOWN_FILTER = "/iPhone/ s/^.* (\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown)[[:space:]]*$/\\1/p; /iPad/ s/^.* (\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown)[[:space:]]*$/\\1/p"
 
 def _ios_simulator_selection_script(xcrun):
     return """simulator_id="${{ONCE_APPLE_SIMULATOR_UDID:-}}"

@@ -324,6 +324,67 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uncached_action_succeeds_when_declared_output_exists() {
+        let workspace = tempfile::tempdir().unwrap();
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf ok > .once/out/result.txt".to_string(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            outputs: vec![WorkspacePath::try_from(".once/out/result.txt").unwrap()],
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: None,
+        };
+        std::fs::create_dir_all(workspace.path().join(".once/out")).unwrap();
+
+        let exit_code = run_uncached_action(&action, workspace.path())
+            .await
+            .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/result.txt")).unwrap(),
+            "ok"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uncached_action_errors_when_declared_output_is_missing() {
+        let workspace = tempfile::tempdir().unwrap();
+        let action = Action::RunCommand {
+            argv: vec!["/bin/sh".to_string(), "-c".to_string(), ":".to_string()],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            outputs: vec![WorkspacePath::try_from(".once/out/missing.txt").unwrap()],
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: None,
+        };
+
+        let err = run_uncached_action(&action, workspace.path())
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains(
+                "declared action completed without producing output `.once/out/missing.txt`"
+            ),
+            "{err}"
+        );
+    }
+
     #[test]
     fn input_digest_changes_with_toolchain_identity() {
         let workspace = tempfile::tempdir().unwrap();
