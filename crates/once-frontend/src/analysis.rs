@@ -1877,6 +1877,53 @@ result = repr([
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn prelude_rust_build_script_env_uses_absolute_c_tool_paths() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r#"{prelude}
+rustc, _identity, host_triple = _rustc_toolchain("")
+ctx = {{
+    "label": {{
+        "package": "third_party/rust/vendor/pkg-1.0.0",
+        "name": "pkg",
+        "id": "third_party/rust/vendor/pkg-1.0.0",
+    }},
+    "attr": {{}},
+    "srcs": [],
+}}
+env = _rust_build_script_env(
+    ctx,
+    rustc,
+    host_triple,
+    host_triple,
+    ".once/out/pkg/build",
+    "third_party/rust/vendor/pkg-1.0.0/build.rs",
+)
+result = repr([
+    env.get("CC"),
+    env.get("CC_" + host_triple.replace("-", "_")),
+    env.get("CC_" + host_triple),
+    env.get("AR"),
+])
+"#
+        );
+        let store = store_for(TempDir::new().unwrap().path(), "");
+
+        let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+        let values: Vec<String> = serde_json::from_str(&out.unwrap()).unwrap();
+
+        assert_eq!(values[0], values[1]);
+        assert_eq!(values[0], values[2]);
+        assert!(std::path::Path::new(&values[0]).is_absolute());
+        assert!(std::path::Path::new(&values[3]).is_absolute());
+    }
+
     #[test]
     fn prelude_ios_simulator_selection_filters_to_iphone_and_ipad() {
         let out = eval_prelude_string_function(
