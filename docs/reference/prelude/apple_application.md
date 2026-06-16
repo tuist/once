@@ -5,7 +5,9 @@ Apple application bundle.
 ## Description
 
 Builds an Apple application bundle with a generated Info.plist,
-linked dependencies, embedded frameworks, and ad-hoc signing.
+linked dependencies, embedded frameworks, and ad-hoc signing. The
+`run` capability builds the required bundle and then executes a
+rule-declared launch action that bypasses the action cache.
 
 ## Attributes
 
@@ -43,11 +45,21 @@ The target emits `apple_application` and `apple_bundle`.
 | Capability | Output groups | Requires |
 | --- | --- | --- |
 | `build` | `default`, `bundle`, `dsyms` |  |
+| `run` | `default` | `bundle` |
+
+## Running
+
+`once run` launches macOS apps with the host app launcher and iOS
+simulator apps with `simctl` boot, install, and launch. The launch
+action writes a run record under the target's output directory and is
+marked uncacheable by the rule, so repeated runs execute the launch
+again instead of replaying an action-cache hit. Device launch support
+is not implemented yet.
 
 ## Limitations
 
 Resource bundling, asset catalogs, custom Info.plist templates,
 entitlements, provisioning profiles, signing identities, and non-ad-hoc signing are
 declared in the schema for graph compatibility but are not implemented
-yet. Non-empty values for those attrs fail analysis instead of being
-ignored.
+yet. Device launch support is also not implemented yet. Non-empty
+values for unsupported attrs fail analysis instead of being ignored.

@@ -42,10 +42,11 @@ automation workflow to one provider.
 
 Once is the [narrow waist](https://en.wikipedia.org/wiki/Hourglass_model)
 between automation needs and the infrastructure that can make those
-workflows faster. Above Once, developers and agents describe actions:
-inputs, outputs, environment, working directory, runtime metadata, and the
-provider capabilities they need. Below Once, providers can supply local
-cache storage, shared cache storage, remote compute, or future execution
+workflows faster. Above Once, developers and agents describe targets,
+capabilities, and the actions those capabilities lower into: inputs,
+outputs, environment, working directory, runtime metadata, and the provider
+capabilities they need. Below Once, providers can supply local cache
+storage, shared cache storage, remote compute, or future execution
 surfaces.
 
 Keeping that waist small matters. The action contract should be simple
@@ -53,9 +54,10 @@ enough for agents to reason about, stable enough for providers to
 implement, and flexible enough for teams to keep using the tools they
 already have.
 
-We are starting with [scripts](/guide/scripts/) because scripts are
-everywhere, and they already encode real repository knowledge. But the
-model is not limited to scripts. Once is an interface for automation needs,
-with room to grow toward build-system integrations and agent-facing
-workflows where text and voice can become the way people declare what they
-want the system to run, cache, inspect, or parallelize.
+The durable model is not a script product with a graph attached. It is a
+graph and action system with a script adapter for the automation
+repositories already have. Scripts are everywhere, and they already encode
+real repository knowledge, so Once lets them enter the model immediately.
+When that work needs richer dependencies, multiple capabilities,
+structured diagnostics, or agent-driven edits, it can move into typed graph
+targets without changing the execution substrate underneath it.

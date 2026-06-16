@@ -275,11 +275,17 @@ fn render_schema_human(schema: &once_frontend::RuleSchema) -> String {
     if !schema.capabilities.is_empty() {
         out.push_str("capabilities:\n");
         for capability in &schema.capabilities {
+            let requires = if capability.requires_outputs.is_empty() {
+                String::new()
+            } else {
+                format!(" (requires: {})", capability.requires_outputs.join(", "))
+            };
             writeln!(
                 out,
-                "  {}: {}",
+                "  {}: {}{}",
                 capability.name,
-                capability.output_groups.join(", ")
+                capability.output_groups.join(", "),
+                requires
             )
             .expect("writing to string cannot fail");
         }
@@ -766,7 +772,7 @@ mod tests {
         assert!(rendered.starts_with("apple_application: "));
         assert!(rendered.contains("bundle_id: string (required"));
         assert!(rendered.contains("build: default, bundle, dsyms"));
-        assert!(!rendered.contains("run: default"));
+        assert!(rendered.contains("run: default (requires: bundle)"));
     }
 
     #[test]

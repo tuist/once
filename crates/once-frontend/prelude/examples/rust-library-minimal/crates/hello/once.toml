@@ -1,0 +1,8 @@
+[[target]]
+name = "hello"
+kind = "rust_library"
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "hello"
+edition = "2021"

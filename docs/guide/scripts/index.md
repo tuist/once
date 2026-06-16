@@ -1,8 +1,8 @@
 # Scripts
 
-Scripts are the first way Once makes cacheable actions concrete. Keep the
+Scripts are Once's adapter for existing executable automation. Keep the
 file, keep the implementation, and add a small contract that tells Once
-what the script reads, what it writes, and which host values affect the
+what the action reads, what it writes, and which host values affect the
 result.
 
 ## Why Scripts
@@ -14,12 +14,13 @@ execution model. A developer, CI job, or agent runs them again because
 there is no shared contract that says what changed.
 
 Once gives those scripts that contract without asking teams to move the
-implementation into a new build-system shape.
+implementation into a new build-system shape. A script is the least typed
+way to enter the same graph and action model that typed rules use.
 
-::: tip Scripts are the migration ramp
-Build systems can model cacheable workflows with rich dependency graphs.
-Once starts with the scripts you already have so teams can make them
-cacheable before moving the same work into typed build graph targets.
+::: tip Scripts are adapters
+Use scripts when the workflow is still one opaque executable action. Move
+the work into a typed graph rule when it needs dependencies, multiple
+capabilities, structured diagnostics, or agent-editable shape.
 :::
 
 ## How It Works

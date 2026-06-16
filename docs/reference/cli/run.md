@@ -1,6 +1,6 @@
 # `once run`
 
-Run a declared target action
+Run a declared target
 
 ## Synopsis
 
@@ -10,7 +10,7 @@ once run [OPTIONS] [TARGET]
 
 ## Description
 
-Finds the matching target and runs it through the action cache. Use `--remote` to ask a compute provider to execute the command.
+Resolves the target id against the workspace graph and executes its `run` capability through the action cache. Use `--remote` to ask a compute provider to execute the command.
 
 ## Arguments
 

@@ -33,4 +33,3 @@ Inspectable-first surface for humans and agents. `query targets` lists every dec
 - [`once query affected-tests`](/reference/cli/query/affected-tests)
 - [`once query test-results`](/reference/cli/query/test-results)
 - [`once query validate-target`](/reference/cli/query/validate-target)
-

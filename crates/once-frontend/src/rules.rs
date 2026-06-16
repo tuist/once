@@ -7,11 +7,11 @@ use crate::error::{Error, Result};
 use crate::manifest::load_rule_paths_toml_str;
 use crate::TOML_BUILD_FILE_NAME;
 
-pub(crate) const BUILT_IN_RULE_PATH: &str = "once//prelude/apple.star";
+pub(crate) const BUILT_IN_RULE_PATH: &str = "once//prelude/all.star";
 pub(crate) const COMBINED_RULE_PATH: &str = "once//rules/all.star";
 
 pub(crate) fn built_in_rule_source() -> &'static str {
-    include_str!("../prelude/apple.star")
+    crate::analysis::BUILT_IN_PRELUDE
 }
 
 pub(crate) fn combined_rule_source_for_workspace(root: &Path) -> Result<String> {

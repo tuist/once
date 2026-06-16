@@ -1,6 +1,6 @@
 export const site = {
   description:
-    "Once makes project automation cacheable, observable, and remotely executable.",
+    "Once makes repository automation graph-aware, cacheable, observable, and remotely executable.",
   nav: [
     { text: "Docs", link: "/" },
     { text: "Reference", link: "/reference/" },
@@ -48,6 +48,11 @@ export const site = {
           { text: "apple_framework", link: "/reference/prelude/apple_framework" },
           { text: "apple_application", link: "/reference/prelude/apple_application" },
           { text: "apple_test_bundle", link: "/reference/prelude/apple_test_bundle" },
+          { text: "cargo_dependencies", link: "/reference/prelude/cargo_dependencies" },
+          { text: "rust_library", link: "/reference/prelude/rust_library" },
+          { text: "rust_binary", link: "/reference/prelude/rust_binary" },
+          { text: "rust_crate", link: "/reference/prelude/rust_crate" },
+          { text: "rust_proc_macro", link: "/reference/prelude/rust_proc_macro" },
         ],
       },
       {
@@ -62,20 +67,21 @@ export const site = {
     "/": [
       { text: "Why", link: "/guide/why" },
       {
+        text: "Graph",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/guide/graph/" },
+          { text: "Apple", link: "/guide/graph/apple" },
+          { text: "Rust", link: "/guide/graph/rust" },
+        ],
+      },
+      {
         text: "Scripts",
         collapsed: false,
         items: [
           { text: "Overview", link: "/guide/scripts/" },
           { text: "Caching", link: "/guide/scripts/caching" },
           { text: "Runtime", link: "/guide/scripts/runtime" },
-        ],
-      },
-      {
-        text: "Graph",
-        collapsed: false,
-        items: [
-          { text: "Overview", link: "/guide/graph/" },
-          { text: "Apple", link: "/guide/graph/apple" },
         ],
       },
       {

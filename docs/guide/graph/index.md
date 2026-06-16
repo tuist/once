@@ -1,27 +1,28 @@
 # Graph
 
-The Once graph is a typed build model that sits above the cacheable
-script ramp. When teams need richer relationships than scripts can
-express, the same work moves into typed graph targets that carry
-schemas, dep edges, capabilities, and structured diagnostics.
+The Once graph is the product model for repository automation. Targets
+declare what exists in the workspace, capabilities describe what can be
+done with those targets, and rules lower each capability into
+content-addressed actions that can run locally, replay from cache, or move
+to a compute provider.
 
 ## Where the Graph Fits
 
-Once has three layers:
+Once has a small set of durable concepts:
 
-1. **Script actions**: annotated scripts that `once exec` runs through
-   the action cache. See [Scripts](/guide/scripts/).
-2. **Script targets**: declared graph targets that wrap a script
-   action so it participates alongside typed rules.
-3. **Build graph targets**: typed targets validated against a *rule
-   schema* (the contract for a kind: which attributes it accepts,
-   which providers each dep edge expects, which providers it emits,
-   and which capabilities it exposes), carrying typed attributes,
-   declared outputs, and structured diagnostics.
+1. **Targets**: named units in the workspace.
+2. **Capabilities**: operations a target exposes, such as `build`, `run`,
+   and `test`.
+3. **Actions**: concrete executable work with inputs, outputs,
+   environment, platform requirements, and cache identity.
+4. **Rules**: typed logic that validates targets and lowers capabilities
+   into actions.
+5. **Scripts**: the least typed rule-backed adapter for existing
+   executable files.
 
-Scripts are the migration ramp. Teams move into graph targets when
-they need stronger relationships, multiple capabilities, or richer
-diagnostics.
+Scripts are not outside the graph. They are the easiest way to enter it.
+Teams move from script targets into richer typed rules when they need
+stronger relationships, multiple capabilities, or structured diagnostics.
 
 ## Targets
 
@@ -84,10 +85,10 @@ that artifact and expose `run`; and a test runner rule might expose
 `test`.
 
 The CLI dispatches on capability, and every capability runs through the
-same action substrate scripts use. Build actions can replay from cache
-when their inputs match. Run and test actions may still produce cached
-outputs, but rules can declare side-effectful work that must happen for
-the requested invocation.
+same action substrate. Build actions can replay from cache when their
+inputs match. Run and test actions may still produce cached outputs, but
+rules can declare side-effectful work that must happen for the requested
+invocation.
 
 ```sh
 once query targets
@@ -144,16 +145,16 @@ once mcp
 ```
 
 Running is side-effectful. It can build code, write outputs, install
-software, or launch a process, so Once only advertises runtime session
+software, or launch a process, so Once only advertises execution
 tools when the server is started with an explicit opt-in:
 
 ```sh
 once mcp --allow-run
 ```
 
-With that opt-in, agents can call `once_start_target` with the same
-target id the CLI accepts. The call returns a runtime session id
-immediately, then the agent can use `once_runtime_status`,
-`once_runtime_logs`, and `once_stop_runtime` to follow or stop the run.
-Without it, the MCP surface remains read-oriented and the runtime tools
-are not listed.
+With that opt-in, agents can call `once_build_target`,
+`once_run_target`, or `once_start_target` with the same target id the
+CLI accepts. The start call returns a runtime session id immediately,
+then the agent can use `once_runtime_status`, `once_runtime_logs`, and
+`once_stop_runtime` to follow or stop the run. Without it, the MCP
+surface remains read-oriented and the execution tools are not listed.

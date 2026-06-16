@@ -1,0 +1,20 @@
+[[target]]
+name = "once"
+kind = "rust_binary"
+deps = [
+  "crates/once-cas/once_cas",
+  "crates/once-core/once_core",
+  "crates/once-frontend/once_frontend",
+  "cargo_dependencies",
+]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "once"
+crate_root = "src/main.rs"
+edition = "2021"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-cli"
+CARGO_PKG_NAME = "once-cli"
+CARGO_PKG_VERSION = "0.0.0"

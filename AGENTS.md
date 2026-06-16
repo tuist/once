@@ -42,6 +42,14 @@ Keep the current CLI surface centered on:
 New build graph CLI, rule, and query surfaces should be introduced
 deliberately and documented in the relevant RFC or implementation plan.
 
+Generic surfaces must stay ecosystem-neutral. CLI commands, Rust APIs,
+MCP tools, and shared graph/query records should not hardcode examples,
+field names, or behavior around one toolchain such as Apple, Cargo,
+npm, SwiftPM, or crates.io. Put ecosystem-specific behavior behind a
+resolver/rule parameter, Starlark rule implementation, or dedicated
+toolchain guide/reference page so future ecosystems can plug into the
+same shape instead of requiring parallel CLI or MCP surfaces.
+
 ## Toolchain Rules
 
 Once exposes a doc-less surface for coding agents: an agent should be
@@ -50,6 +58,12 @@ draft, and commit an edit using MCP tool calls alone, without reading
 prose docs. When adding support for a new toolchain (Android, JVM,
 Rust, etc.), mirror the shape already established for the Apple rules
 rather than inventing a parallel surface.
+
+Rust code must stay toolchain-agnostic. Do not add Rust branches that
+recognize Apple, Android, JVM, Rust, or any other build system by name.
+Build system behavior belongs in rules. The Rust side should provide
+generic primitives, typed graph plumbing, validation surfaces, and
+execution policy that rules can compose to express their needs.
 
 Every new toolchain rule should preserve these invariants:
 

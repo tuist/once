@@ -1,0 +1,19 @@
+[workspace]
+include = [
+  "once.toml",
+  "apps/*/once.toml",
+]
+
+[[target]]
+name = "cargo_dependencies"
+kind = "cargo_dependencies"
+srcs = [
+  "Cargo.toml",
+  "Cargo.lock",
+  "apps/*/Cargo.toml",
+]
+
+[target.attrs]
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+vendor_dir = "third_party/rust/vendor"

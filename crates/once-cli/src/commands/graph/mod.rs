@@ -1,9 +1,9 @@
 //! Graph capability commands for build, run, and test.
 //!
 //! This module owns command orchestration: resolving a target from the
-//! workspace graph, checking the requested capability, executing it through
-//! the action cache, and rendering the result. The translation from a target
-//! and capability into a cacheable action lives in [`action`].
+//! workspace graph, checking the requested capability, executing rule-declared
+//! or generic fallback actions, and rendering the result. The legacy
+//! capability fallback lives in [`action`].
 
 mod action;
 mod analysis;
@@ -96,7 +96,14 @@ pub async fn run(
     let target = require_target(&graph, target_id)?;
     let run_capability = ensure_capability(&target, "run")?;
     let session = analysis::BuildSession::new(workspace, cache, &graph)?;
-    let _ = build_target(workspace, cache, &target, &session).await?;
+    if !run_capability.requires_outputs.is_empty()
+        && target
+            .capabilities
+            .iter()
+            .any(|capability| capability.name == "build")
+    {
+        let _ = build_target(workspace, cache, &target, &session).await?;
+    }
     let record = if let Some(outcome) = session.run_with_analysis(&target, "run").await? {
         CapabilityRunRecord {
             target: target.label.id.clone(),

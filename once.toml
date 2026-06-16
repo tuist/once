@@ -1,1 +1,23 @@
+[workspace]
+include = [
+  "once.toml",
+  "crates/*/once.toml",
+]
+exclude = [
+  "crates/once-frontend/prelude/examples/**",
+  "fixtures/**",
+]
 
+[[target]]
+name = "cargo_dependencies"
+kind = "cargo_dependencies"
+srcs = [
+  "Cargo.toml",
+  "Cargo.lock",
+  "crates/*/Cargo.toml",
+]
+
+[target.attrs]
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+vendor_dir = "third_party/rust/vendor"

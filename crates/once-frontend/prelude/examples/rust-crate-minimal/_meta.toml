@@ -1,0 +1,2 @@
+name = "Rust crate minimal"
+use_when = "Use this when inspecting the lowered target shape for one resolved Cargo package."

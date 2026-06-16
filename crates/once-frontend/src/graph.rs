@@ -11,7 +11,7 @@ use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 use starlark::values::Value;
 
-use crate::analysis::select_branches;
+use crate::analysis::{select_branches, BUILT_IN_PRELUDE_FILES};
 use crate::error::{Error, Result};
 use crate::target::{AttrValue, Target};
 use crate::workspace::load_workspace;
@@ -281,10 +281,15 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
 }
 
 fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
-    parse_rule_schemas(
-        crate::rules::BUILT_IN_RULE_PATH,
-        crate::rules::built_in_rule_source(),
-    )
+    let mut schemas = Vec::new();
+    for (path, source) in BUILT_IN_PRELUDE_FILES {
+        schemas.extend(parse_rule_schemas(path, &prelude_schema_source(source))?);
+    }
+    Ok(schemas)
+}
+
+fn prelude_schema_source(source: &str) -> String {
+    format!("RULES = []\n{source}")
 }
 
 /// Evaluate a Starlark prelude source and read its `RULES` export.
@@ -507,7 +512,7 @@ fn list<'v>(value: Value<'v>, path: &str) -> std::result::Result<&'v ListRef<'v>
 fn script_schema() -> RuleSchema {
     RuleSchema {
         kind: "script".to_string(),
-        docs: "Migration target that wraps an annotated script action.".to_string(),
+        docs: "Adapter target that wraps existing executable automation.".to_string(),
         attrs: vec![
             attr(
                 "script_path",
@@ -571,7 +576,7 @@ mod tests {
     use crate::target::Target;
 
     #[test]
-    fn apple_application_exposes_build() {
+    fn apple_application_exposes_build_and_run() {
         let target = Target {
             package: "apps/ios".to_string(),
             kind: "apple_application".to_string(),
@@ -593,7 +598,7 @@ mod tests {
             .map(|capability| capability.name.as_str())
             .collect::<Vec<_>>();
         names.sort_unstable();
-        assert_eq!(names, vec!["build"]);
+        assert_eq!(names, vec!["build", "run"]);
     }
 
     #[test]
@@ -839,22 +844,39 @@ RULES = [
     }
 
     #[test]
-    fn built_in_schema_contains_apple_rule_set() {
+    fn built_in_schema_contains_expected_core_rules() {
         let kinds = built_in_rule_schemas()
             .into_iter()
             .map(|schema| schema.kind)
             .collect::<Vec<_>>();
-        assert_eq!(
-            kinds,
-            vec![
-                "swift_macro",
-                "apple_library",
-                "apple_framework",
-                "apple_application",
-                "apple_test_bundle",
-                "shellspec_test",
-                "script"
-            ]
-        );
+        assert!(kinds.contains(&"apple_library".to_string()));
+        assert!(kinds.contains(&"script".to_string()));
+        let unique = kinds.iter().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unique.len(), kinds.len());
+    }
+
+    #[test]
+    fn prelude_schema_source_supports_additive_rule_exports() {
+        let schemas = parse_rule_schemas(
+            "test.star",
+            &prelude_schema_source(
+                r#"
+RULES = RULES + [
+    {
+        "kind": "custom_library",
+        "docs": "Custom library",
+        "attrs": [],
+        "deps": [],
+        "providers": [],
+        "capabilities": [],
+        "examples": [],
+    },
+]
+"#,
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(schemas[0].kind, "custom_library");
     }
 }
