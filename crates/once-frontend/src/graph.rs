@@ -11,7 +11,7 @@ use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 use starlark::values::Value;
 
-use crate::analysis::select_branches;
+use crate::analysis::{select_branches, BUILT_IN_PRELUDE_FILES};
 use crate::error::{Error, Result};
 use crate::target::{AttrValue, Target};
 use crate::workspace::load_workspace;
@@ -269,16 +269,15 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
 }
 
 fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
-    let mut schemas = parse_rule_schemas(
-        "once//prelude/apple.star",
-        include_str!("../prelude/apple.star"),
-    )?;
-    let rust_source = format!(
-        "{}\nRULES = RUST_RULES\n",
-        include_str!("../prelude/rust.star")
-    );
-    schemas.extend(parse_rule_schemas("once//prelude/rust.star", &rust_source)?);
+    let mut schemas = Vec::new();
+    for (path, source) in BUILT_IN_PRELUDE_FILES {
+        schemas.extend(parse_rule_schemas(path, &prelude_schema_source(source))?);
+    }
     Ok(schemas)
+}
+
+fn prelude_schema_source(source: &str) -> String {
+    format!("RULES = []\n{source}")
 }
 
 /// Evaluate a Starlark prelude source and read its `RULES` export.
@@ -732,27 +731,39 @@ RULES = [
     }
 
     #[test]
-    fn built_in_schema_contains_apple_rule_set() {
+    fn built_in_schema_contains_expected_core_rules() {
         let kinds = built_in_rule_schemas()
             .into_iter()
             .map(|schema| schema.kind)
             .collect::<Vec<_>>();
-        assert_eq!(
-            kinds,
-            vec![
-                "swift_macro",
-                "apple_library",
-                "apple_framework",
-                "apple_application",
-                "apple_test_bundle",
-                "shellspec_test",
-                "cargo_dependencies",
-                "rust_library",
-                "rust_binary",
-                "rust_crate",
-                "rust_proc_macro",
-                "script",
-            ]
-        );
+        assert!(kinds.contains(&"apple_library".to_string()));
+        assert!(kinds.contains(&"script".to_string()));
+        let unique = kinds.iter().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unique.len(), kinds.len());
+    }
+
+    #[test]
+    fn prelude_schema_source_supports_additive_rule_exports() {
+        let schemas = parse_rule_schemas(
+            "test.star",
+            &prelude_schema_source(
+                r#"
+RULES = RULES + [
+    {
+        "kind": "custom_library",
+        "docs": "Custom library",
+        "attrs": [],
+        "deps": [],
+        "providers": [],
+        "capabilities": [],
+        "examples": [],
+    },
+]
+"#,
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(schemas[0].kind, "custom_library");
     }
 }

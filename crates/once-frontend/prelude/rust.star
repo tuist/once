@@ -1293,7 +1293,7 @@ _RUST_COMMON_ATTRS = [
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
 ]
 
-RUST_RULES = [
+RULES = RULES + [
     rule(
         kind = "cargo_dependencies",
         docs = "Cacheable Cargo dependency set consumed by Rust targets. The rule reads Cargo.toml and Cargo.lock through `cargo metadata`, compiles resolved external crates as Once actions, and exposes them as one graph dependency.",

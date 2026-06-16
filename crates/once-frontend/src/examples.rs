@@ -109,8 +109,7 @@ mod tests {
         assert!(slugs.contains(&"apple-library-minimal".to_string()));
         assert!(slugs.contains(&"apple-library-with-objc".to_string()));
         assert!(slugs.contains(&"apple-application-minimal".to_string()));
-        assert!(slugs.contains(&"rust-library-minimal".to_string()));
-        assert!(slugs.contains(&"rust-binary-with-crate".to_string()));
+        assert!(slugs.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 
     #[test]

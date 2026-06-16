@@ -345,8 +345,8 @@ deps = ["./AppKit"]
         let src = r#"
 [[target]]
 name = "core"
-kind = "rust_library"
-srcs = ["src/**/*.rs"]
+kind = "custom_library"
+srcs = ["src/**/*.custom"]
 
 [target.deps.select]
 macos = ["./mac_only"]
@@ -354,7 +354,7 @@ linux = ["./linux_only"]
 default = ["./portable"]
 
 [target.attrs]
-crate_name = "core"
+module_name = "core"
 "#;
         let targets =
             load_toml_with("crates/core/once.toml", src, Path::new("."), "crates/core").unwrap();

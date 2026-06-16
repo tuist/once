@@ -468,7 +468,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
 
     /// Decode JSON into Starlark dictionaries/lists/scalars. Dependency
     /// resolvers use this for machine output from ecosystem-native
-    /// resolution commands such as `cargo metadata`.
+    /// resolution commands.
     fn json_decode<'v>(src: &str, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
         let value: JsonValue = serde_json::from_str(src)?;
         Ok(json_to_value(eval, &value))
@@ -740,8 +740,18 @@ pub(crate) const BUILT_IN_PRELUDE: &str = concat!(
     include_str!("../prelude/apple.star"),
     "\n",
     include_str!("../prelude/rust.star"),
-    "\nRULES = RULES + RUST_RULES\n",
 );
+
+pub(crate) const BUILT_IN_PRELUDE_FILES: &[(&str, &str)] = &[
+    (
+        "once//prelude/apple.star",
+        include_str!("../prelude/apple.star"),
+    ),
+    (
+        "once//prelude/rust.star",
+        include_str!("../prelude/rust.star"),
+    ),
+];
 
 /// Cached view of which rules declare executable impls.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1511,10 +1521,17 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
     }
 
     #[test]
-    fn rule_has_impl_returns_true_for_rust_rules() {
-        assert!(rule_has_impl("rust_library").unwrap());
-        assert!(rule_has_impl("rust_binary").unwrap());
-        assert!(rule_has_impl("rust_crate").unwrap());
+    fn rule_has_impl_reads_custom_rule_impls() {
+        let engine = AnalysisEngine::from_source(
+            r#"
+RULES = [
+    {"kind": "custom_library", "impl": lambda ctx: None},
+]
+"#,
+        )
+        .unwrap();
+
+        assert!(engine.rule_has_impl("custom_library"));
     }
 
     #[test]

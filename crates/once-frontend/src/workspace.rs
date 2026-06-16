@@ -190,7 +190,7 @@ exclude = ["crates/skip/once.toml"]
             r#"
 [[target]]
 name = "keep"
-kind = "rust_library"
+kind = "custom_library"
 "#,
         );
         write(
@@ -198,7 +198,7 @@ kind = "rust_library"
             r#"
 [[target]]
 name = "skip"
-kind = "rust_library"
+kind = "custom_library"
 "#,
         );
         write(
@@ -206,7 +206,7 @@ kind = "rust_library"
             r#"
 [[target]]
 name = "fixture"
-kind = "rust_library"
+kind = "custom_library"
 "#,
         );
 

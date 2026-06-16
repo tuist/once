@@ -190,11 +190,11 @@ mod tests {
     fn declared_action_uses_direct_argv_and_creates_output_parents() {
         let workspace = tempfile::tempdir().unwrap();
         let declared = DeclaredAction {
-            argv: vec!["rustc".to_string(), "--version".to_string()],
+            argv: vec!["tool".to_string(), "--version".to_string()],
             inputs: Vec::new(),
             outputs: vec![
-                ".once/out/x/A.a".to_string(),
-                ".once/out/x/sub/B.swiftdoc".to_string(),
+                ".once/out/x/A.out".to_string(),
+                ".once/out/x/sub/B.meta".to_string(),
             ],
             env: BTreeMap::new(),
             toolchain_identity: None,
@@ -206,7 +206,7 @@ mod tests {
         assert!(workspace.path().join(".once/out/x").is_dir());
         assert!(workspace.path().join(".once/out/x/sub").is_dir());
         let Action::RunCommand { argv, .. } = action;
-        assert_eq!(argv, vec!["rustc".to_string(), "--version".to_string()]);
+        assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
     }
 
     #[test]
