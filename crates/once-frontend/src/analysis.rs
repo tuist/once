@@ -1758,7 +1758,7 @@ RULES = [
         let out = eval_prelude_function_in(
             &prelude,
             "_cargo_metadata_targets",
-            r###"({
+            r#"({
                 "attrs": {
                     "target": "x86_64-apple-darwin",
                     "vendor_dir": "third_party/rust/vendor",
@@ -1785,11 +1785,15 @@ RULES = [
                         "deps": [],
                     }],
                 },
-            })"###,
+            })"#,
         )
         .unwrap();
 
         assert!(out.contains("\"target\": \"x86_64-apple-darwin\""), "{out}");
+        assert!(
+            out.contains("\"srcs\": [\"third_party/rust/vendor/cpufeatures-0.2.17/**\"]"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -1800,7 +1804,7 @@ RULES = [
             include_str!("../prelude/rust.star")
         );
         let source = format!(
-            r###"{prelude}
+            r#"{prelude}
 targets = _cargo_metadata_targets({{
     "attrs": {{
         "target": "x86_64-apple-darwin",
@@ -1863,7 +1867,7 @@ result = repr([
     by_name["linktime-proc-macro-0.2.0"]["attrs"].get("target"),
     by_name["linktime-proc-macro-0.2.0"]["deps"],
 ])
-"###
+"#
         );
         let out = eval_prelude_source_to_repr(source).unwrap();
 
