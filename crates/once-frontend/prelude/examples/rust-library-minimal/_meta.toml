@@ -1,0 +1,2 @@
+name = "Minimal Rust library"
+use_when = "Start here for a first-party Rust rlib target with no external dependencies."

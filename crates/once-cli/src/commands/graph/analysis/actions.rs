@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -33,8 +32,15 @@ pub(super) async fn run_declared_actions(
             .clone()
             .unwrap_or_else(|| "<anonymous>".to_string());
         all_outputs.extend(declared.outputs.iter().cloned());
+        let mut input_action_digests = dep_action_digests.to_vec();
+        input_action_digests.extend(
+            action_digests
+                .iter()
+                .enumerate()
+                .map(|(prior_index, digest)| (format!("same-target:{prior_index}"), *digest)),
+        );
         let action =
-            declared_to_action(workspace, declared, dep_action_digests).with_context(|| {
+            declared_to_action(workspace, declared, &input_action_digests).with_context(|| {
                 format!(
                     "building action {index} for {} ({identifier_for_error})",
                     target.label.id,
@@ -88,6 +94,13 @@ fn declared_to_action(
     declared: DeclaredAction,
     dep_action_digests: &[(String, Digest)],
 ) -> Result<Action> {
+    tracing::trace!(
+        identifier = ?declared.identifier,
+        argv = ?declared.argv,
+        env = ?declared.env,
+        outputs = ?declared.outputs,
+        "declared graph action"
+    );
     let input_digest = compose_input_digest(workspace, &declared, dep_action_digests)?;
     let outputs = declared
         .outputs
@@ -97,10 +110,10 @@ fn declared_to_action(
                 .with_context(|| format!("invalid declared output path `{path}`"))
         })
         .collect::<Result<Vec<_>>>()?;
-    let script = declared_action_script(&declared.argv, &declared.outputs);
-    let DeclaredAction { env, .. } = declared;
+    ensure_output_parent_dirs(workspace, &outputs)?;
+    let DeclaredAction { argv, env, .. } = declared;
     Ok(Action::RunCommand {
-        argv: vec!["/bin/sh".into(), "-c".into(), script],
+        argv,
         env,
         cwd: None,
         input_digest: Some(input_digest),
@@ -112,41 +125,16 @@ fn declared_to_action(
     })
 }
 
-fn declared_action_script(argv: &[String], outputs: &[String]) -> String {
-    let mut script = String::from("set -eu\n");
-    for dir in output_parent_dirs(outputs) {
-        script.push_str("mkdir -p ");
-        push_shell_literal(&mut script, dir);
-        script.push('\n');
-    }
-    push_shell_words(&mut script, argv);
-    script.push('\n');
-    script
-}
-
-fn output_parent_dirs(outputs: &[String]) -> BTreeSet<&str> {
-    outputs
-        .iter()
-        .filter_map(|output| {
-            let parent = Path::new(output).parent()?.to_str()?;
-            (!parent.is_empty()).then_some(parent)
-        })
-        .collect()
-}
-
-fn push_shell_words(out: &mut String, words: &[String]) {
-    for (index, word) in words.iter().enumerate() {
-        if index > 0 {
-            out.push(' ');
+fn ensure_output_parent_dirs(workspace: &Path, outputs: &[WorkspacePath]) -> Result<()> {
+    for output in outputs {
+        let absolute = output.resolve(workspace);
+        if let Some(parent) = absolute.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("creating parent directory for output `{}`", output.as_str())
+            })?;
         }
-        push_shell_literal(out, word);
     }
-}
-
-fn push_shell_literal(out: &mut String, value: &str) {
-    out.push('\'');
-    out.push_str(&value.replace('\'', "'\"'\"'"));
-    out.push('\'');
+    Ok(())
 }
 
 fn compose_input_digest(
@@ -199,37 +187,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shell_literal_escapes_single_quotes() {
-        let mut out = String::new();
+    fn declared_action_uses_direct_argv_and_creates_output_parents() {
+        let workspace = tempfile::tempdir().unwrap();
+        let declared = DeclaredAction {
+            argv: vec!["tool".to_string(), "--version".to_string()],
+            inputs: Vec::new(),
+            outputs: vec![
+                ".once/out/x/A.out".to_string(),
+                ".once/out/x/sub/B.meta".to_string(),
+            ],
+            env: BTreeMap::new(),
+            toolchain_identity: None,
+            identifier: None,
+        };
 
-        push_shell_literal(&mut out, "A'B");
+        let action = declared_to_action(workspace.path(), declared, &[]).unwrap();
 
-        assert_eq!(out, "'A'\"'\"'B'");
-    }
-
-    #[test]
-    fn shell_literal_handles_empty_string() {
-        let mut out = String::new();
-
-        push_shell_literal(&mut out, "");
-
-        assert_eq!(out, "''");
-    }
-
-    #[test]
-    fn declared_action_script_prepares_each_output_parent_once() {
-        let outputs = vec![
-            ".once/out/x/A.a".to_string(),
-            ".once/out/x/A.swiftmodule".to_string(),
-            ".once/out/x/sub/B.swiftdoc".to_string(),
-        ];
-
-        let script = declared_action_script(&["swiftc".to_string(), "-o".to_string()], &outputs);
-
-        assert!(script.contains("mkdir -p '.once/out/x'\n"));
-        assert!(script.contains("mkdir -p '.once/out/x/sub'\n"));
-        assert_eq!(script.matches("mkdir -p '.once/out/x'\n").count(), 1);
-        assert!(script.ends_with("'swiftc' '-o'\n"));
+        assert!(workspace.path().join(".once/out/x").is_dir());
+        assert!(workspace.path().join(".once/out/x/sub").is_dir());
+        let Action::RunCommand { argv, .. } = action;
+        assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
     }
 
     #[test]

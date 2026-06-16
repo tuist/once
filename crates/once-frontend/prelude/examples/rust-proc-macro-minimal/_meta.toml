@@ -1,0 +1,2 @@
+name = "Minimal Rust procedural macro"
+use_when = "Use when a Rust crate exports a procedural macro consumed by other Rust targets."

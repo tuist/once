@@ -42,6 +42,14 @@ Keep the current CLI surface centered on:
 New build graph CLI, rule, and query surfaces should be introduced
 deliberately and documented in the relevant RFC or implementation plan.
 
+Generic surfaces must stay ecosystem-neutral. CLI commands, Rust APIs,
+MCP tools, and shared graph/query records should not hardcode examples,
+field names, or behavior around one toolchain such as Apple, Cargo,
+npm, SwiftPM, or crates.io. Put ecosystem-specific behavior behind a
+resolver/rule parameter, Starlark rule implementation, or dedicated
+toolchain guide/reference page so future ecosystems can plug into the
+same shape instead of requiring parallel CLI or MCP surfaces.
+
 ## Toolchain Rules
 
 Once exposes a doc-less surface for coding agents: an agent should be

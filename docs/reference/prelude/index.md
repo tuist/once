@@ -18,3 +18,16 @@ metadata at the keyboard.
   application bundle
 - [`apple_test_bundle`](/reference/prelude/apple_test_bundle): XCTest
   bundle assembled for an external runner
+
+## Rust rules
+
+- [`cargo_dependencies`](/reference/prelude/cargo_dependencies): cacheable
+  Cargo dependency set consumed by Rust targets
+- [`rust_library`](/reference/prelude/rust_library): Rust rlib consumed
+  by downstream Rust targets
+- [`rust_binary`](/reference/prelude/rust_binary): Rust executable built
+  from a main crate and Rust deps
+- [`rust_crate`](/reference/prelude/rust_crate): resolved third-party
+  Cargo package lowered into a Rust library target
+- [`rust_proc_macro`](/reference/prelude/rust_proc_macro): Rust
+  procedural macro compiled for Rust targets
