@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
-use crate::graph::{built_in_rule_schemas_result, Diagnostic};
+use crate::graph::{built_in_rule_schemas_result, Diagnostic, RuleSchema};
 use crate::target_validator::validate_target;
 
 /// One mutation against the `[[target]]` array in a `once.toml`.
@@ -67,6 +67,16 @@ pub fn apply_operations(
     toml_src: &str,
     operations: &[EditOperation],
 ) -> Result<String, Vec<Diagnostic>> {
+    let schemas = built_in_rule_schemas_result().map_err(|err| schema_load_diagnostic(&err))?;
+    apply_operations_with_schemas(toml_src, operations, &schemas)
+}
+
+/// Apply operations using the caller-provided rule schema set.
+pub fn apply_operations_with_schemas(
+    toml_src: &str,
+    operations: &[EditOperation],
+    schemas: &[RuleSchema],
+) -> Result<String, Vec<Diagnostic>> {
     let mut doc: DocumentMut = toml_src.parse().map_err(|err: toml_edit::TomlError| {
         vec![Diagnostic {
             code: "toml_parse_error".to_string(),
@@ -80,7 +90,7 @@ pub fn apply_operations(
     ensure_target_array(&mut doc)?;
 
     for op in operations {
-        apply_one(&mut doc, op)?;
+        apply_one(&mut doc, op, schemas)?;
     }
     Ok(doc.to_string())
 }
@@ -103,15 +113,23 @@ fn ensure_target_array(doc: &mut DocumentMut) -> Result<(), Vec<Diagnostic>> {
     Ok(())
 }
 
-fn apply_one(doc: &mut DocumentMut, op: &EditOperation) -> Result<(), Vec<Diagnostic>> {
+fn apply_one(
+    doc: &mut DocumentMut,
+    op: &EditOperation,
+    schemas: &[RuleSchema],
+) -> Result<(), Vec<Diagnostic>> {
     match op {
-        EditOperation::Create { target } => create(doc, target),
-        EditOperation::Update { target_name, set } => update(doc, target_name, set),
+        EditOperation::Create { target } => create(doc, target, schemas),
+        EditOperation::Update { target_name, set } => update(doc, target_name, set, schemas),
         EditOperation::Delete { target_name } => delete(doc, target_name),
     }
 }
 
-fn create(doc: &mut DocumentMut, spec: &TargetSpec) -> Result<(), Vec<Diagnostic>> {
+fn create(
+    doc: &mut DocumentMut,
+    spec: &TargetSpec,
+    schemas: &[RuleSchema],
+) -> Result<(), Vec<Diagnostic>> {
     if spec.name.trim().is_empty() {
         return Err(vec![Diagnostic {
             code: "target_name_required".to_string(),
@@ -143,7 +161,7 @@ fn create(doc: &mut DocumentMut, spec: &TargetSpec) -> Result<(), Vec<Diagnostic
         }]);
     }
 
-    validate_spec(spec)?;
+    validate_spec(spec, schemas)?;
 
     let table = build_target_table(spec)?;
     targets_mut(doc).push(table);
@@ -154,6 +172,7 @@ fn update(
     doc: &mut DocumentMut,
     target_name: &str,
     set: &TargetUpdate,
+    schemas: &[RuleSchema],
 ) -> Result<(), Vec<Diagnostic>> {
     let Some(index) = find_target_index(doc, target_name) else {
         return Err(vec![Diagnostic {
@@ -191,27 +210,28 @@ fn update(
         .expect("find_target_index returned a valid index");
     let mut updated = table.clone();
     apply_update(&mut updated, set, target_name)?;
-    validate_spec(&target_spec_from_table(&updated))?;
+    validate_spec(&target_spec_from_table(&updated), schemas)?;
     *table = updated;
     Ok(())
 }
 
-fn validate_spec(spec: &TargetSpec) -> Result<(), Vec<Diagnostic>> {
-    let schemas = built_in_rule_schemas_result().map_err(|err| {
-        vec![Diagnostic {
-            code: "rule_schema_load_failed".to_string(),
-            message: err.to_string(),
-            target: Some(spec.name.clone()),
-            attribute: Some("kind".to_string()),
-            repairs: Vec::new(),
-        }]
-    })?;
-    let diagnostics = validate_target(spec, &schemas);
+fn validate_spec(spec: &TargetSpec, schemas: &[RuleSchema]) -> Result<(), Vec<Diagnostic>> {
+    let diagnostics = validate_target(spec, schemas);
     if diagnostics.is_empty() {
         Ok(())
     } else {
         Err(diagnostics)
     }
+}
+
+fn schema_load_diagnostic(err: &crate::Error) -> Vec<Diagnostic> {
+    vec![Diagnostic {
+        code: "rule_schema_load_failed".to_string(),
+        message: err.to_string(),
+        target: None,
+        attribute: Some("kind".to_string()),
+        repairs: Vec::new(),
+    }]
 }
 
 fn delete(doc: &mut DocumentMut, target_name: &str) -> Result<(), Vec<Diagnostic>> {

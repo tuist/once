@@ -605,23 +605,47 @@ pub struct AnalysisResult {
 /// Starlark impl in an isolated module heap.
 #[derive(Debug, Clone)]
 pub struct AnalysisEngine {
-    source: &'static str,
+    source_path: Arc<str>,
+    source: Arc<str>,
     rule_impls: RuleImpls,
     host_cache: HostCache,
 }
 
 impl AnalysisEngine {
     pub fn new() -> Result<Self> {
-        let source = include_str!("../prelude/apple.star");
-        Self::from_source(source)
+        Self::from_source_with_path(
+            crate::rules::BUILT_IN_RULE_PATH,
+            crate::rules::built_in_rule_source(),
+        )
     }
 
-    pub fn from_source(source: &'static str) -> Result<Self> {
+    pub fn for_workspace(root: &Path) -> Result<Self> {
+        let source = crate::rules::combined_rule_source_for_workspace(root)?;
+        Self::from_source_with_path(crate::rules::COMBINED_RULE_PATH, source)
+    }
+
+    pub fn from_source(source: impl Into<Arc<str>>) -> Result<Self> {
+        Self::from_source_with_path(crate::rules::BUILT_IN_RULE_PATH, source)
+    }
+
+    fn from_source_with_path(
+        source_path: impl Into<Arc<str>>,
+        source: impl Into<Arc<str>>,
+    ) -> Result<Self> {
+        let source_path = source_path.into();
+        let source = source.into();
+        let rule_impls = parse_rule_impls(&source_path, &source)?;
         Ok(Self {
+            source_path,
             source,
-            rule_impls: parse_rule_impls(source)?,
+            rule_impls,
             host_cache: HostCache::default(),
         })
+    }
+
+    #[must_use]
+    pub fn rule_source(&self) -> &str {
+        &self.source
     }
 
     #[must_use]
@@ -653,7 +677,8 @@ impl AnalysisEngine {
         capability: &str,
     ) -> Result<AnalysisResult> {
         analyze_target_with_host_cache(
-            self.source,
+            &self.source_path,
+            &self.source,
             self.host_cache.clone(),
             target,
             workspace_root,
@@ -691,7 +716,8 @@ pub fn analyze_target(
 }
 
 fn analyze_target_with_host_cache(
-    source: &'static str,
+    source_path: &str,
+    source: &str,
     host_cache: HostCache,
     target: &GraphTarget,
     workspace_root: &Path,
@@ -707,7 +733,14 @@ fn analyze_target_with_host_cache(
     );
 
     let (store, result) = with_active_store(store, || {
-        analyze_in_starlark(source, target, dep_providers, &build_dir, capability)
+        analyze_in_starlark(
+            source_path,
+            source,
+            target,
+            dep_providers,
+            &build_dir,
+            capability,
+        )
     });
     let provider = result?;
     Ok(AnalysisResult {
@@ -724,14 +757,10 @@ pub fn rule_has_impl(kind: &str) -> Result<bool> {
     Ok(AnalysisEngine::new()?.rule_has_impl(kind))
 }
 
-fn parse_rule_impls(source: &'static str) -> Result<RuleImpls> {
+fn parse_rule_impls(path: &str, source: &str) -> Result<RuleImpls> {
     Module::with_temp_heap(|module| {
-        let ast = AstModule::parse(
-            "once//prelude/apple.star",
-            source.to_string(),
-            &Dialect::Standard,
-        )
-        .map_err(|error| anyhow!("prelude parse failed: {error:?}"))?;
+        let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
+            .map_err(|error| anyhow!("prelude parse failed: {error:?}"))?;
         let globals = globals_for_prelude();
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
@@ -748,16 +777,24 @@ fn parse_rule_impls(source: &'static str) -> Result<RuleImpls> {
                 continue;
             };
             let impl_value = dict.get_str("impl");
-            by_kind.insert(
-                rule_kind.to_string(),
-                impl_value.is_some_and(|value| !value.is_none()),
-            );
+            if by_kind
+                .insert(
+                    rule_kind.to_string(),
+                    impl_value.is_some_and(|value| !value.is_none()),
+                )
+                .is_some()
+            {
+                return Err(anyhow!(
+                    "rule kind `{rule_kind}` is declared more than once"
+                ));
+            }
         }
         Ok(RuleImpls { by_kind })
     })
 }
 
 fn analyze_in_starlark(
+    path: &str,
     source: &str,
     target: &GraphTarget,
     dep_providers: &[JsonValue],
@@ -765,12 +802,8 @@ fn analyze_in_starlark(
     capability: &str,
 ) -> Result<JsonValue> {
     Module::with_temp_heap(|module| {
-        let ast = AstModule::parse(
-            "once//prelude/apple.star",
-            source.to_string(),
-            &Dialect::Standard,
-        )
-        .map_err(|error| anyhow!("prelude parse failed: {error:?}"))?;
+        let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
+            .map_err(|error| anyhow!("prelude parse failed: {error:?}"))?;
         let globals = globals_for_prelude();
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
@@ -1428,6 +1461,57 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
     #[test]
     fn rule_has_impl_returns_true_for_apple_library() {
         assert!(rule_has_impl("apple_library").unwrap());
+    }
+
+    #[test]
+    fn workspace_analysis_engine_runs_custom_rule_impl() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("rules")).unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            "[rules]\npaths = [\"rules/*.star\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/demo.star"),
+            r#"
+def _demo_impl(ctx):
+    out = declare_output("hello.txt")
+    run_action(
+        argv = ["/bin/sh", "-c", "printf custom > \"$1\"", "sh", out],
+        outputs = [out],
+        identifier = "demo_build",
+    )
+    return {"out": out}
+
+RULES = [
+    rule(
+        kind = "demo_rule",
+        docs = "Demo",
+        attrs = [],
+        deps = [],
+        providers = ["demo_provider"],
+        capabilities = [
+            capability("build", ["default"]),
+        ],
+        impl = _demo_impl,
+    ),
+]
+"#,
+        )
+        .unwrap();
+        let engine = AnalysisEngine::for_workspace(tmp.path()).unwrap();
+
+        let result = engine
+            .analyze_target(&target("demo_rule"), tmp.path(), &[])
+            .unwrap();
+
+        assert_eq!(result.actions.len(), 1);
+        assert_eq!(result.actions[0].identifier.as_deref(), Some("demo_build"));
+        assert_eq!(
+            result.provider["out"],
+            ".once/out/apps/ios/Sample/hello.txt"
+        );
     }
 
     #[test]

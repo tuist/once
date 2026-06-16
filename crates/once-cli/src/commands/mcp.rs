@@ -17,7 +17,7 @@
 //! tools start persisted runtime sessions and return session ids agents can use
 //! to query status, read logs, or stop the process later.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -154,11 +154,9 @@ impl Server {
                 "runtime tools require starting `once mcp --allow-run`"
             )),
             "once_apply_edit" => self.tool_apply_edit(&call.arguments),
-            // Rule registry queries don't need a workspace because they
-            // read from the compiled-in rule prelude.
-            "once_query_schema" => tool_query_schema(&call.arguments),
-            "once_list_rules" => tool_list_rules(),
-            "once_validate_target" => tool_validate_target(&call.arguments),
+            "once_query_schema" => tool_query_schema(&self.workspace, &call.arguments),
+            "once_list_rules" => tool_list_rules(&self.workspace),
+            "once_validate_target" => tool_validate_target(&self.workspace, &call.arguments),
             other => Err(anyhow::anyhow!("unknown tool `{other}`")),
         };
         match result {
@@ -428,32 +426,32 @@ struct RuntimeLogsArgs {
     limit: Option<usize>,
 }
 
-fn tool_query_schema(args: &Value) -> Result<Value> {
+fn tool_query_schema(workspace: &Path, args: &Value) -> Result<Value> {
     let kind = args
         .get("kind")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing `kind` argument"))?;
-    let schema = once_frontend::built_in_rule_schemas_result()?
+    let schema = once_frontend::rule_schemas_for_workspace(workspace)?
         .into_iter()
         .find(|schema| schema.kind == kind)
-        .with_context(|| format!("no built-in rule schema matches `{kind}`"))?;
+        .with_context(|| format!("no rule schema matches `{kind}`"))?;
     Ok(serde_json::to_value(schema)?)
 }
 
-fn tool_list_rules() -> Result<Value> {
-    let schemas = once_frontend::built_in_rule_schemas_result()?;
+fn tool_list_rules(workspace: &Path) -> Result<Value> {
+    let schemas = once_frontend::rule_schemas_for_workspace(workspace)?;
     let summaries: Vec<RuleSummary> = schemas.into_iter().map(RuleSummary::from).collect();
     Ok(serde_json::to_value(summaries)?)
 }
 
-fn tool_validate_target(args: &Value) -> Result<Value> {
+fn tool_validate_target(workspace: &Path, args: &Value) -> Result<Value> {
     let raw_target = args
         .get("target")
         .ok_or_else(|| anyhow::anyhow!("missing `target` argument"))?
         .clone();
     let spec: once_frontend::TargetSpec = serde_json::from_value(raw_target)
         .map_err(|err| anyhow::anyhow!("invalid `target`: {err}"))?;
-    let schemas = once_frontend::built_in_rule_schemas_result()?;
+    let schemas = once_frontend::rule_schemas_for_workspace(workspace)?;
     let diagnostics = once_frontend::validate_target(&spec, &schemas);
     if diagnostics.is_empty() {
         Ok(json!({ "valid": true }))
@@ -479,7 +477,9 @@ fn apply_edit_to_package(
             ));
         }
     };
-    match once_frontend::apply_operations(&existing, operations) {
+    let schemas =
+        once_frontend::rule_schemas_for_workspace(workspace).context("loading rule schemas")?;
+    match once_frontend::apply_operations_with_schemas(&existing, operations, &schemas) {
         Ok(new_src) => {
             std::fs::create_dir_all(&package_dir).with_context(|| {
                 format!("creating package directory `{}`", package_dir.display())
@@ -641,7 +641,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_list_rules",
-            description: "List every rule kind the registry knows about, with its one-line docs and example slugs.",
+            description: "List every rule kind available in the workspace, with its one-line docs and example slugs.",
             long_description: "Lightweight discovery entry point. Returns one entry per rule kind containing the rule's documentation and the slugs of its bundled starter examples. Use this to discover what kinds of targets are buildable in the workspace before calling `once_query_schema` for the full contract of a chosen rule.",
             input_schema: json!({
                 "type": "object",
@@ -1175,7 +1175,7 @@ srcs = ["other_spec.sh"]
     fn query_schema_returns_the_apple_library_contract() {
         let tmp = TempDir::new().unwrap();
         let _ = server(tmp.path().to_path_buf());
-        let value = tool_query_schema(&json!({ "kind": "apple_library" })).unwrap();
+        let value = tool_query_schema(tmp.path(), &json!({ "kind": "apple_library" })).unwrap();
         assert_eq!(value["kind"], "apple_library");
         let attr_names: Vec<&str> = value["attrs"]
             .as_array()
@@ -1189,7 +1189,8 @@ srcs = ["other_spec.sh"]
 
     #[test]
     fn query_schema_inlines_example_files() {
-        let value = tool_query_schema(&json!({ "kind": "apple_library" })).unwrap();
+        let tmp = TempDir::new().unwrap();
+        let value = tool_query_schema(tmp.path(), &json!({ "kind": "apple_library" })).unwrap();
         let examples = value["examples"].as_array().expect("examples is an array");
         assert!(
             !examples.is_empty(),
@@ -1210,7 +1211,8 @@ srcs = ["other_spec.sh"]
 
     #[test]
     fn list_rules_includes_every_known_rule() {
-        let value = tool_list_rules().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let value = tool_list_rules(tmp.path()).unwrap();
         let kinds: Vec<&str> = value
             .as_array()
             .unwrap()
@@ -1225,25 +1227,33 @@ srcs = ["other_spec.sh"]
 
     #[test]
     fn validate_target_returns_valid_for_minimal_apple_library() {
-        let value = tool_validate_target(&json!({
-            "target": {
-                "name": "Hello",
-                "kind": "apple_library",
-                "attrs": { "platform": "ios" }
-            }
-        }))
+        let tmp = TempDir::new().unwrap();
+        let value = tool_validate_target(
+            tmp.path(),
+            &json!({
+                "target": {
+                    "name": "Hello",
+                    "kind": "apple_library",
+                    "attrs": { "platform": "ios" }
+                }
+            }),
+        )
         .unwrap();
         assert_eq!(value["valid"], true);
     }
 
     #[test]
     fn validate_target_returns_structured_diagnostics_on_failure() {
-        let value = tool_validate_target(&json!({
-            "target": {
-                "name": "Hello",
-                "kind": "apple_library"
-            }
-        }))
+        let tmp = TempDir::new().unwrap();
+        let value = tool_validate_target(
+            tmp.path(),
+            &json!({
+                "target": {
+                    "name": "Hello",
+                    "kind": "apple_library"
+                }
+            }),
+        )
         .unwrap();
         assert_eq!(value["valid"], false);
         let diagnostics = value["diagnostics"].as_array().unwrap();

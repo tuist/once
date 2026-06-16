@@ -73,11 +73,10 @@ pub async fn capabilities(workspace: &Path, output: Output, target_id: &str) -> 
 }
 
 pub async fn schema(workspace: &Path, output: Output, kind: &str) -> Result<()> {
-    let _ = workspace;
-    let schema = once_frontend::built_in_rule_schemas_result()?
+    let schema = once_frontend::rule_schemas_for_workspace(workspace)?
         .into_iter()
         .find(|schema| schema.kind == kind)
-        .with_context(|| format!("no built-in rule schema matches `{kind}`"))?;
+        .with_context(|| format!("no rule schema matches `{kind}`"))?;
     write_body(output, || render_schema_human(&schema), &schema).await
 }
 
@@ -113,8 +112,8 @@ impl From<once_frontend::RuleSchema> for RuleSummary {
     }
 }
 
-pub async fn rules(output: Output) -> Result<()> {
-    let schemas = once_frontend::built_in_rule_schemas_result()?;
+pub async fn rules(workspace: &Path, output: Output) -> Result<()> {
+    let schemas = once_frontend::rule_schemas_for_workspace(workspace)?;
     let summaries: Vec<RuleSummary> = schemas.into_iter().map(RuleSummary::from).collect();
     write_body(output, || render_rules_human(&summaries), &summaries).await
 }
@@ -177,11 +176,15 @@ pub(crate) fn test_results_value(workspace: &Path, target_id: &str) -> Result<se
     serde_json::from_str(&raw).with_context(|| format!("parsing `{}`", path.display()))
 }
 
-pub async fn validate_target(output: Output, file: Option<PathBuf>) -> Result<()> {
+pub async fn validate_target(
+    workspace: &Path,
+    output: Output,
+    file: Option<PathBuf>,
+) -> Result<()> {
     let raw = read_json_input(file)?;
     let input: ValidateTargetInput = serde_json::from_str(&raw)
         .context("validate-target input is not valid JSON matching `{ \"target\": { ... } }`")?;
-    let schemas = once_frontend::built_in_rule_schemas_result()?;
+    let schemas = once_frontend::rule_schemas_for_workspace(workspace)?;
     let diagnostics = once_frontend::validate_target(&input.target, &schemas);
     let result = if diagnostics.is_empty() {
         ValidateResult::Valid { valid: true }
@@ -474,7 +477,7 @@ fn metadata_provider(
     workspace: &Path,
     target: &once_frontend::GraphTarget,
 ) -> Option<serde_json::Value> {
-    let analyzer = once_frontend::analysis::AnalysisEngine::new().ok()?;
+    let analyzer = once_frontend::analysis::AnalysisEngine::for_workspace(workspace).ok()?;
     let analysis = analyzer
         .analyze_target_capability(target, workspace, &[], "metadata")
         .ok()?;

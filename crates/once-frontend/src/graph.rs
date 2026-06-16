@@ -161,7 +161,8 @@ pub struct DepSchema {
 
 pub fn load_graph_workspace(root: &Path) -> Result<Vec<GraphTarget>> {
     let targets = load_workspace(root)?;
-    graph_from_targets_result(&targets)
+    let schemas = rule_schemas_for_workspace(root)?;
+    Ok(graph_from_targets_with_schemas(&targets, &schemas))
 }
 
 #[must_use]
@@ -171,10 +172,14 @@ pub fn graph_from_targets(targets: &[Target]) -> Vec<GraphTarget> {
 
 pub fn graph_from_targets_result(targets: &[Target]) -> Result<Vec<GraphTarget>> {
     let schemas = built_in_rule_schemas_result()?;
-    Ok(targets
+    Ok(graph_from_targets_with_schemas(targets, &schemas))
+}
+
+fn graph_from_targets_with_schemas(targets: &[Target], schemas: &[RuleSchema]) -> Vec<GraphTarget> {
+    targets
         .iter()
-        .map(|target| graph_target_from_schema(target, &schemas))
-        .collect())
+        .map(|target| graph_target_from_schema(target, schemas))
+        .collect()
 }
 
 #[must_use]
@@ -187,7 +192,14 @@ pub fn built_in_rule_schemas() -> Vec<RuleSchema> {
 
 pub fn built_in_rule_schemas_result() -> Result<Vec<RuleSchema>> {
     let mut schemas = starlark_prelude_rule_schemas()?;
-    schemas.push(script_schema());
+    append_script_schema(&mut schemas)?;
+    Ok(schemas)
+}
+
+pub fn rule_schemas_for_workspace(root: &Path) -> Result<Vec<RuleSchema>> {
+    let source = crate::rules::combined_rule_source_for_workspace(root)?;
+    let mut schemas = parse_rule_schemas(crate::rules::COMBINED_RULE_PATH, &source)?;
+    append_script_schema(&mut schemas)?;
     Ok(schemas)
 }
 
@@ -211,7 +223,7 @@ fn graph_target_from_schema(target: &Target, schemas: &[RuleSchema]) -> GraphTar
     } else {
         vec![Diagnostic {
             code: "unknown_rule_kind".to_string(),
-            message: format!("target kind `{}` has no built-in schema", target.kind),
+            message: format!("target kind `{}` has no rule schema", target.kind),
             target: Some(target.id()),
             attribute: None,
             repairs: Vec::new(),
@@ -269,9 +281,10 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
 }
 
 fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
-    const PRELUDE_PATH: &str = "once//prelude/apple.star";
-    let source = include_str!("../prelude/apple.star");
-    parse_rule_schemas(PRELUDE_PATH, source)
+    parse_rule_schemas(
+        crate::rules::BUILT_IN_RULE_PATH,
+        crate::rules::built_in_rule_source(),
+    )
 }
 
 /// Evaluate a Starlark prelude source and read its `RULES` export.
@@ -310,11 +323,37 @@ fn prelude_message(path: &str, message: &str) -> Error {
 }
 
 fn rule_schemas_from_value(value: Value<'_>) -> std::result::Result<Vec<RuleSchema>, String> {
-    list(value, "RULES")?
+    let schemas = list(value, "RULES")?
         .iter()
         .enumerate()
         .map(|(index, rule)| rule_schema_from_value(rule, &format!("RULES[{index}]")))
-        .collect()
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    validate_unique_rule_kinds(&schemas)?;
+    Ok(schemas)
+}
+
+fn validate_unique_rule_kinds(schemas: &[RuleSchema]) -> std::result::Result<(), String> {
+    let mut seen = BTreeMap::new();
+    for (index, schema) in schemas.iter().enumerate() {
+        if let Some(first_index) = seen.insert(schema.kind.as_str(), index) {
+            return Err(format!(
+                "rule kind `{}` is declared more than once (RULES[{first_index}] and RULES[{index}])",
+                schema.kind
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn append_script_schema(schemas: &mut Vec<RuleSchema>) -> Result<()> {
+    if schemas.iter().any(|schema| schema.kind == "script") {
+        return Err(prelude_message(
+            crate::rules::COMBINED_RULE_PATH,
+            "rule kind `script` is reserved for Once script targets",
+        ));
+    }
+    schemas.push(script_schema());
+    Ok(())
 }
 
 fn rule_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<RuleSchema, String> {
@@ -611,6 +650,81 @@ RULES = [
     }
 
     #[test]
+    fn workspace_rule_paths_extend_graph_schemas() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("rules")).unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            r#"
+[rules]
+paths = ["rules/*.star"]
+
+[[target]]
+name = "Hello"
+kind = "demo_rule"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/demo.star"),
+            r#"
+RULES = [
+    rule(
+        kind = "demo_rule",
+        docs = "Demo rule",
+        attrs = [],
+        deps = [],
+        providers = ["demo_provider"],
+        capabilities = [
+            capability("build", ["default"]),
+        ],
+    ),
+]
+"#,
+        )
+        .unwrap();
+
+        let graph = load_graph_workspace(tmp.path()).unwrap();
+
+        assert_eq!(graph.len(), 1);
+        assert_eq!(graph[0].kind, "demo_rule");
+        assert_eq!(graph[0].providers, vec!["demo_provider"]);
+        assert_eq!(graph[0].capabilities[0].name, "build");
+        assert!(graph[0].diagnostics.is_empty());
+    }
+
+    #[test]
+    fn workspace_rule_paths_reject_duplicate_kinds() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("rules")).unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            "[rules]\npaths = [\"rules/*.star\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/demo.star"),
+            r#"
+RULES = [
+    rule(
+        kind = "apple_library",
+        docs = "Duplicate",
+        attrs = [],
+        deps = [],
+        providers = [],
+        capabilities = [],
+    ),
+]
+"#,
+        )
+        .unwrap();
+
+        let err = rule_schemas_for_workspace(tmp.path()).unwrap_err();
+
+        assert!(err.to_string().contains("declared more than once"));
+    }
+
+    #[test]
     fn unknown_kind_gets_diagnostic_and_no_capabilities() {
         let target = Target {
             package: "apps/ios".to_string(),
@@ -630,7 +744,7 @@ RULES = [
         assert_eq!(thing.diagnostics[0].code, "unknown_rule_kind");
         assert!(thing.diagnostics[0]
             .message
-            .contains("`mystery_rule` has no built-in schema"));
+            .contains("`mystery_rule` has no rule schema"));
     }
 
     #[test]

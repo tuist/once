@@ -17,7 +17,7 @@ pub enum QueryCmd {
         target: String,
     },
 
-    /// Inspect a built-in rule schema.
+    /// Inspect a rule schema.
     Schema {
         /// Rule kind, e.g. `apple_application`.
         kind: String,

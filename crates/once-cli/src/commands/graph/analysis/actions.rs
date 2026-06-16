@@ -16,6 +16,7 @@ use super::BuildOutcome;
 pub(super) async fn run_declared_actions(
     workspace: &Path,
     cache: &CacheProvider,
+    rule_source_digest: Digest,
     target: &GraphTarget,
     analysis: AnalysisResult,
     dep_action_digests: &[(String, Digest)],
@@ -34,12 +35,13 @@ pub(super) async fn run_declared_actions(
             .unwrap_or_else(|| "<anonymous>".to_string());
         all_outputs.extend(declared.outputs.iter().cloned());
         let action =
-            declared_to_action(workspace, declared, dep_action_digests).with_context(|| {
-                format!(
-                    "building action {index} for {} ({identifier_for_error})",
-                    target.label.id,
-                )
-            })?;
+            declared_to_action(workspace, declared, rule_source_digest, dep_action_digests)
+                .with_context(|| {
+                    format!(
+                        "building action {index} for {} ({identifier_for_error})",
+                        target.label.id,
+                    )
+                })?;
         let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
             .await
             .with_context(|| {
@@ -86,9 +88,11 @@ fn compose_target_action_digest(target_id: &str, action_digests: &[Digest]) -> D
 fn declared_to_action(
     workspace: &Path,
     declared: DeclaredAction,
+    rule_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
 ) -> Result<Action> {
-    let input_digest = compose_input_digest(workspace, &declared, dep_action_digests)?;
+    let input_digest =
+        compose_input_digest(workspace, &declared, rule_source_digest, dep_action_digests)?;
     let outputs = declared
         .outputs
         .iter()
@@ -152,9 +156,11 @@ fn push_shell_literal(out: &mut String, value: &str) {
 fn compose_input_digest(
     workspace: &Path,
     declared: &DeclaredAction,
+    rule_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
 ) -> Result<Digest> {
     let mut builder = InputDigestBuilder::new(b"once.declared_action.input.v1\0");
+    builder.push_keyed(b"rules", &rule_source_digest);
     if let Some(identity) = &declared.toolchain_identity {
         builder.push_bytes(identity.as_bytes());
     }
@@ -197,6 +203,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+
+    fn rule_digest() -> Digest {
+        Digest::of_bytes(b"rules")
+    }
 
     #[test]
     fn shell_literal_escapes_single_quotes() {
@@ -244,12 +254,42 @@ mod tests {
             toolchain_identity: Some("id-1".to_string()),
             identifier: None,
         };
-        let one = compose_input_digest(workspace.path(), &declared, &[]).unwrap();
+        let one = compose_input_digest(workspace.path(), &declared, rule_digest(), &[]).unwrap();
         let declared2 = DeclaredAction {
             toolchain_identity: Some("id-2".to_string()),
             ..declared.clone()
         };
-        let two = compose_input_digest(workspace.path(), &declared2, &[]).unwrap();
+        let two = compose_input_digest(workspace.path(), &declared2, rule_digest(), &[]).unwrap();
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn input_digest_changes_with_rule_source_digest() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("a.swift"), b"print(1)").unwrap();
+        let declared = DeclaredAction {
+            argv: vec!["swiftc".to_string()],
+            inputs: vec!["a.swift".to_string()],
+            outputs: vec![".once/out/A.a".to_string()],
+            env: BTreeMap::new(),
+            toolchain_identity: None,
+            identifier: None,
+        };
+        let one = compose_input_digest(
+            workspace.path(),
+            &declared,
+            Digest::of_bytes(b"rules-1"),
+            &[],
+        )
+        .unwrap();
+        let two = compose_input_digest(
+            workspace.path(),
+            &declared,
+            Digest::of_bytes(b"rules-2"),
+            &[],
+        )
+        .unwrap();
+
         assert_ne!(one, two);
     }
 
@@ -268,6 +308,7 @@ mod tests {
         let a = compose_input_digest(
             workspace.path(),
             &declared,
+            rule_digest(),
             &[
                 ("dep1".to_string(), Digest::of_bytes(b"d1")),
                 ("dep2".to_string(), Digest::of_bytes(b"d2")),
@@ -277,6 +318,7 @@ mod tests {
         let b = compose_input_digest(
             workspace.path(),
             &declared,
+            rule_digest(),
             &[
                 ("dep2".to_string(), Digest::of_bytes(b"d2")),
                 ("dep1".to_string(), Digest::of_bytes(b"d1")),

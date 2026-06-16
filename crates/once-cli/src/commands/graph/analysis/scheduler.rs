@@ -17,6 +17,7 @@ pub(super) struct BuildScheduler<'a> {
     cache: &'a CacheProvider,
     targets: &'a HashMap<String, Arc<GraphTarget>>,
     analyzer: &'a AnalysisEngine,
+    rule_source_digest: Digest,
     reachable: &'a HashSet<String>,
     retained: &'a HashSet<String>,
 }
@@ -31,12 +32,14 @@ impl<'a> BuildScheduler<'a> {
         reachable: &'a HashSet<String>,
         retained: &'a HashSet<String>,
     ) -> Self {
+        let rule_source_digest = Digest::of_bytes(analyzer.rule_source().as_bytes());
         Self {
             root_id,
             workspace,
             cache,
             targets,
             analyzer,
+            rule_source_digest,
             reachable,
             retained,
         }
@@ -84,6 +87,7 @@ impl<'a> BuildScheduler<'a> {
                 self.workspace.to_path_buf(),
                 self.cache.clone(),
                 self.analyzer.clone(),
+                self.rule_source_digest,
                 target,
                 inputs.providers,
                 inputs.action_digests,
