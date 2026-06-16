@@ -1651,10 +1651,10 @@ printf '%s\\n' {record_json} > {record}
         record_suffix = '"}'
         command = """simulator_id="${{ONCE_APPLE_SIMULATOR_UDID:-}}"
 if [ -z "$simulator_id" ]; then
-  simulator_id=$({xcrun} simctl list devices booted | sed -n 's/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p' | head -n 1)
+  simulator_id=$({xcrun} simctl list devices booted | sed -n '/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p' | head -n 1)
 fi
 if [ -z "$simulator_id" ]; then
-  simulator_id=$({xcrun} simctl list devices available | sed -n '/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p' | head -n 1)
+  simulator_id=$({xcrun} simctl list devices available | sed -n '/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p' | head -n 1)
 fi
 if [ -z "$simulator_id" ]; then
   echo "error: no booted or available iOS simulator found" >&2
@@ -2129,10 +2129,10 @@ def _apple_test_bundle_impl(ctx):
         elif sdk_variant == "simulator":
             runner_command = """simulator_id="${{ONCE_APPLE_SIMULATOR_UDID:-}}"
 if [ -z "$simulator_id" ]; then
-  simulator_id=$({xcrun} simctl list devices booted | sed -n 's/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p' | head -n 1)
+  simulator_id=$({xcrun} simctl list devices booted | sed -n '/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Booted).*/\\1/p' | head -n 1)
 fi
 if [ -z "$simulator_id" ]; then
-  simulator_id=$({xcrun} simctl list devices available | sed -n '/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p' | head -n 1)
+  simulator_id=$({xcrun} simctl list devices available | sed -n '/iPhone/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p; /iPad/ s/.*(\\([0-9A-Fa-f-][0-9A-Fa-f-]*\\)) (Shutdown).*/\\1/p' | head -n 1)
 fi
 if [ -z "$simulator_id" ]; then
   echo "error: no booted or available iOS simulator found" >&2
