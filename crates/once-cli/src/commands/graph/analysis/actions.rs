@@ -3,7 +3,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use once_cas::{CacheProvider, Digest};
+use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     Action, InputDigestBuilder, OutputSymlinkMode, ResourceRequest, RunOpts, WorkspacePath,
 };
@@ -12,6 +12,8 @@ use once_frontend::GraphTarget;
 use tokio::process::Command;
 
 use super::BuildOutcome;
+
+const FAILURE_OUTPUT_LIMIT: usize = 16 * 1024;
 
 /// Materialise each declared action through the action cache, then
 /// fold the analysis provider directly into the build outcome.
@@ -62,8 +64,16 @@ pub(super) async fn run_declared_actions(
             let exit_code = outcome.result.exit_code;
             if exit_code != 0 {
                 anyhow::bail!(
-                    "{identifier_for_error} ({index}) failed for {} with exit code {exit_code}",
-                    target.label.id,
+                    "{}",
+                    declared_action_failure_message(
+                        cache,
+                        &identifier_for_error,
+                        index,
+                        &target.label.id,
+                        exit_code,
+                        &outcome.result,
+                    )
+                    .await
                 );
             }
             action_digests.push(outcome.action);
@@ -95,6 +105,51 @@ pub(super) async fn run_declared_actions(
         outputs: all_outputs,
         cache_tag: last_cache_tag,
     })
+}
+
+async fn declared_action_failure_message(
+    cache: &CacheProvider,
+    identifier: &str,
+    index: usize,
+    target: &str,
+    exit_code: i32,
+    result: &ActionResult,
+) -> String {
+    let mut message =
+        format!("{identifier} ({index}) failed for {target} with exit code {exit_code}");
+    append_captured_output(cache, &mut message, "stdout", result.stdout.as_ref()).await;
+    append_captured_output(cache, &mut message, "stderr", result.stderr.as_ref()).await;
+    message
+}
+
+async fn append_captured_output(
+    cache: &CacheProvider,
+    message: &mut String,
+    name: &str,
+    digest: Option<&Digest>,
+) {
+    let Some(digest) = digest else {
+        return;
+    };
+    let Ok(bytes) = cache.get_blob(digest).await else {
+        return;
+    };
+    if bytes.is_empty() {
+        return;
+    }
+    let (prefix, slice) = if bytes.len() > FAILURE_OUTPUT_LIMIT {
+        (
+            format!("last {FAILURE_OUTPUT_LIMIT} bytes of "),
+            &bytes[bytes.len() - FAILURE_OUTPUT_LIMIT..],
+        )
+    } else {
+        (String::new(), bytes.as_slice())
+    };
+    message.push_str("\n\n");
+    message.push_str(&prefix);
+    message.push_str(name);
+    message.push_str(":\n");
+    message.push_str(&String::from_utf8_lossy(slice));
 }
 
 async fn run_uncached_action(action: &Action, workspace: &Path) -> Result<i32> {
