@@ -542,7 +542,8 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     )
     run_env = _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path)
     metadata_exports, metadata_inputs = _rust_dep_metadata_exports(metadata_deps)
-    run_script = _shell_quote(host_which("mkdir")) + " -p " + _shell_quote(run_env["OUT_DIR"]) + " && cd " + _shell_quote(run_env["CARGO_MANIFEST_DIR"]) + "\n" + metadata_exports + "\n" + _shell_quote(_workspace_absolute(runner)) + " > " + _shell_quote(_workspace_absolute(stdout)) + " 2>&1"
+    stdout_abs = _shell_quote(_workspace_absolute(stdout))
+    run_script = _shell_quote(host_which("mkdir")) + " -p " + _shell_quote(run_env["OUT_DIR"]) + " && cd " + _shell_quote(run_env["CARGO_MANIFEST_DIR"]) + "\n" + metadata_exports + "\n" + _shell_quote(_workspace_absolute(runner)) + " > " + stdout_abs + " 2>&1 || { code=$?; " + _shell_quote(host_which("cat")) + " " + stdout_abs + " >&2; exit $code; }"
     run_action(
         argv = [host_which("sh"), "-c", run_script],
         inputs = _unique([runner] + metadata_inputs + _rust_source_inputs(ctx)),
