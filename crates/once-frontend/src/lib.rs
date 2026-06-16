@@ -11,6 +11,7 @@ mod examples;
 mod graph;
 mod manifest;
 mod manifest_editor;
+mod rules;
 mod script;
 mod target;
 mod target_ref;
@@ -29,11 +30,14 @@ pub use error::{Error, Result};
 pub use examples::{list_example_slugs, load_example};
 pub use graph::{
     built_in_rule_schema, built_in_rule_schemas, built_in_rule_schemas_result, graph_from_targets,
-    graph_from_targets_result, load_graph_workspace, AttrSchema, Capability, DepSchema, Diagnostic,
-    GraphTarget, RuleExample, RuleExampleFile, RuleSchema, TargetLabel,
+    graph_from_targets_result, load_graph_workspace, rule_schemas_for_workspace, AttrSchema,
+    Capability, DepSchema, Diagnostic, GraphTarget, RuleExample, RuleExampleFile, RuleSchema,
+    TargetLabel,
 };
 pub use manifest::{load_cache_provider_toml_str, load_toml_str};
-pub use manifest_editor::{apply_operations, EditOperation, TargetSpec, TargetUpdate};
+pub use manifest_editor::{
+    apply_operations, apply_operations_with_schemas, EditOperation, TargetSpec, TargetUpdate,
+};
 pub use script::{parse_script_annotations, ScriptAnnotations};
 pub use target::{AttrValue, Target};
 pub use target_ref::{

@@ -161,7 +161,7 @@ async fn run_query_command(
         Some(cli::QueryCmd::Schema { kind }) => commands::query::schema(workspace, output, &kind)
             .await
             .map(|()| ExitCode::SUCCESS),
-        Some(cli::QueryCmd::Rules) => commands::query::rules(output)
+        Some(cli::QueryCmd::Rules) => commands::query::rules(workspace, output)
             .await
             .map(|()| ExitCode::SUCCESS),
         Some(cli::QueryCmd::Target { target }) => {
@@ -183,7 +183,7 @@ async fn run_query_command(
                 .map(|()| ExitCode::SUCCESS)
         }
         Some(cli::QueryCmd::ValidateTarget { file }) => {
-            commands::query::validate_target(output, file)
+            commands::query::validate_target(workspace, output, file)
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }

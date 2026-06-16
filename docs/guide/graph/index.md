@@ -61,6 +61,23 @@ Today the built-in prelude covers one platform family:
   libraries, frameworks, applications, and test bundles for Apple
   platforms.
 
+Projects can add checked-in Starlark rule files from the root
+`once.toml`:
+
+```toml
+[rules]
+paths = ["rules/*.star"]
+```
+
+Each rule file assigns `RULES = [...]` using the same `rule`, `attr`,
+`dep`, and `capability` helpers as the built-in prelude. Rule paths are
+resolved relative to the project root, loaded in sorted order, and
+included in `once query rules`, `once query schema`, validation, MCP
+schema tools, and graph analysis.
+
+The `[rules]` table is only loaded from the root manifest. Package
+manifests that declare `[rules]` are rejected.
+
 ## Capabilities
 
 Each rule declares which capabilities its targets expose:

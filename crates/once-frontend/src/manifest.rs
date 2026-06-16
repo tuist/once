@@ -16,6 +16,7 @@ struct Manifest {
     workspace: WorkspaceToml,
     infrastructure: InfrastructureToml,
     cache_provider: Option<CacheProviderToml>,
+    rules: Option<RulesToml>,
     target: Vec<TargetToml>,
 }
 
@@ -24,6 +25,12 @@ struct Manifest {
 pub(crate) struct WorkspaceToml {
     pub include: Vec<String>,
     pub exclude: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RulesToml {
+    pub(crate) paths: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -50,6 +57,12 @@ pub(crate) fn load_toml_with(
         path: display_name.to_string(),
         message: source.to_string(),
     })?;
+    if manifest.rules.is_some() && !package.is_empty() {
+        return Err(Error::Eval {
+            path: display_name.to_string(),
+            message: "[rules] is only loaded from the root once.toml".to_string(),
+        });
+    }
     manifest
         .target
         .into_iter()
@@ -72,6 +85,14 @@ pub fn load_cache_provider_toml_str(
         .cache_provider
         .map(|raw| raw.into_config(path))
         .transpose()
+}
+
+pub(crate) fn load_rule_paths_toml_str(path: &str, src: &str) -> Result<Vec<String>> {
+    let manifest: Manifest = toml::from_str(src).map_err(|source| Error::Parse {
+        path: path.to_string(),
+        message: source.to_string(),
+    })?;
+    Ok(manifest.rules.map_or_else(Vec::new, |rules| rules.paths))
 }
 
 pub(crate) fn load_workspace_toml_str(path: &str, src: &str) -> Result<WorkspaceToml> {
@@ -265,6 +286,36 @@ exclude = ["fixtures/**"]
 "#;
         let targets = load_toml_str("once.toml", src).unwrap();
         assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn loads_root_rule_paths() {
+        let paths = load_rule_paths_toml_str(
+            "once.toml",
+            r#"
+[rules]
+paths = ["rules/*.star"]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(paths, vec!["rules/*.star"]);
+    }
+
+    #[test]
+    fn rejects_package_rule_paths() {
+        let err = load_toml_with(
+            "apps/once.toml",
+            r#"
+[rules]
+paths = ["rules/*.star"]
+"#,
+            Path::new("."),
+            "apps",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("root once.toml"));
     }
 
     #[test]

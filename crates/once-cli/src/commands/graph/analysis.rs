@@ -62,6 +62,7 @@ pub(super) struct BuildSession {
     /// execution.
     targets: HashMap<String, Arc<GraphTarget>>,
     analyzer: AnalysisEngine,
+    rule_source_digest: Digest,
 }
 
 impl BuildSession {
@@ -74,7 +75,7 @@ impl BuildSession {
             workspace,
             cache,
             graph,
-            AnalysisEngine::new()?,
+            AnalysisEngine::for_workspace(workspace)?,
         ))
     }
 
@@ -84,6 +85,7 @@ impl BuildSession {
         graph: &[GraphTarget],
         analyzer: AnalysisEngine,
     ) -> Self {
+        let rule_source_digest = Digest::of_bytes(analyzer.rule_source().as_bytes());
         Self {
             workspace: workspace.to_path_buf(),
             cache: cache.clone(),
@@ -92,6 +94,7 @@ impl BuildSession {
                 .map(|target| (target.label.id.clone(), Arc::new(target.clone())))
                 .collect(),
             analyzer,
+            rule_source_digest,
         }
     }
 
@@ -135,6 +138,7 @@ impl BuildSession {
         let outcome = run_declared_actions(
             &self.workspace,
             &self.cache,
+            self.rule_source_digest,
             target,
             analysis,
             &dep_action_digests,
@@ -255,6 +259,7 @@ async fn build_one(
     workspace: PathBuf,
     cache: CacheProvider,
     analyzer: AnalysisEngine,
+    rule_source_digest: Digest,
     target: Arc<GraphTarget>,
     dep_providers: Vec<JsonValue>,
     dep_action_digests: Vec<(String, Digest)>,
@@ -272,8 +277,15 @@ async fn build_one(
     .await
     .context("joining graph analysis task")??;
 
-    let outcome =
-        run_declared_actions(&workspace, &cache, &target, analysis, &dep_action_digests).await?;
+    let outcome = run_declared_actions(
+        &workspace,
+        &cache,
+        rule_source_digest,
+        &target,
+        analysis,
+        &dep_action_digests,
+    )
+    .await?;
     Ok((target_id, outcome))
 }
 

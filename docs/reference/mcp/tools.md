@@ -121,7 +121,7 @@ Returns the rule schema (the typed contract a target of that kind must match) as
 
 ## `once_list_rules`
 
-List every rule kind the registry knows about, with its one-line docs and example slugs.
+List every rule kind available in the workspace, with its one-line docs and example slugs.
 
 Lightweight discovery entry point. Returns one entry per rule kind containing the rule's documentation and the slugs of its bundled starter examples. Use this to discover what kinds of targets are buildable in the workspace before calling `once_query_schema` for the full contract of a chosen rule.
 
@@ -651,4 +651,3 @@ Reads the manifest at `<workspace>/<package>/once.toml` (creating it if missing)
   "path": "apps/Hello/once.toml"
 }
 ```
-
