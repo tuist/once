@@ -543,6 +543,33 @@ done < {stdout}
 """.format(metadata = _rust_dep_metadata_key_shell(prefix), stdout = _shell_quote(_workspace_absolute(stdout))))
     return ("\n".join(snippets), _unique(inputs))
 
+def _rust_build_script_output_pipeline(runner, status, stdout):
+    runner_exec = _shell_quote(_workspace_absolute(runner))
+    printf = _shell_quote(host_which("printf"))
+    tee = _shell_quote(host_which("tee"))
+    status_abs = _shell_quote(status)
+    stdout_abs = _shell_quote(_workspace_absolute(stdout))
+    status_capture = "{ " + runner_exec + " 2>&1; " + printf + " '%s' \"$?\" > " + status_abs + "; }"
+    return status_capture + " | " + tee + " " + stdout_abs
+
+def _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports):
+    status = run_env["OUT_DIR"] + "/.once-build-script-status"
+    status_abs = _shell_quote(status)
+    rm = _shell_quote(host_which("rm"))
+    lines = [
+        _shell_quote(host_which("mkdir")) + " -p " + _shell_quote(run_env["OUT_DIR"]) + " && cd " + _shell_quote(run_env["CARGO_MANIFEST_DIR"]),
+    ]
+    if metadata_exports:
+        lines.append(metadata_exports)
+    lines.extend([
+        rm + " -f " + status_abs,
+        _rust_build_script_output_pipeline(runner, status, stdout),
+        "code=$(" + _shell_quote(host_which("cat")) + " " + status_abs + ")",
+        rm + " -f " + status_abs,
+        "exit \"$code\"",
+    ])
+    return "\n".join(lines)
+
 def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps, metadata_deps):
     build_script = _rust_attr(ctx, "build_script", "")
     if not build_script:
@@ -575,9 +602,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     )
     run_env = _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path)
     metadata_exports, metadata_inputs = _rust_dep_metadata_exports(metadata_deps)
-    stdout_abs = _shell_quote(_workspace_absolute(stdout))
-    status_abs = _shell_quote(run_env["OUT_DIR"] + "/.once-build-script-status")
-    run_script = _shell_quote(host_which("mkdir")) + " -p " + _shell_quote(run_env["OUT_DIR"]) + " && cd " + _shell_quote(run_env["CARGO_MANIFEST_DIR"]) + "\n" + metadata_exports + "\n" + _shell_quote(host_which("rm")) + " -f " + status_abs + "\n{ " + _shell_quote(_workspace_absolute(runner)) + " 2>&1; " + _shell_quote(host_which("printf")) + " '%s' \"$?\" > " + status_abs + "; } | " + _shell_quote(host_which("tee")) + " " + stdout_abs + "\ncode=$(" + _shell_quote(host_which("cat")) + " " + status_abs + ")\n" + _shell_quote(host_which("rm")) + " -f " + status_abs + "\nexit \"$code\""
+    run_script = _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports)
     run_action(
         argv = [host_which("sh"), "-c", run_script],
         inputs = _unique([runner] + metadata_inputs + _rust_source_inputs(ctx) + _rust_build_script_inputs(ctx)),
