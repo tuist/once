@@ -51,10 +51,7 @@ pub struct DeclaredAction {
     pub outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
-    #[serde(
-        default = "default_cacheable",
-        skip_serializing_if = "std::clone::Clone::clone"
-    )]
+    #[serde(default = "default_cacheable", skip_serializing_if = "is_true")]
     pub cacheable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain_identity: Option<String>,
@@ -64,6 +61,11 @@ pub struct DeclaredAction {
 
 fn default_cacheable() -> bool {
     true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// Per-target collection of declared outputs, actions, and the host

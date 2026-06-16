@@ -355,6 +355,7 @@ async fn dispatch_run(
             anyhow::bail!("--remote is only supported for executable script targets");
         }
         let cache = crate::cache_provider::resolve(workspace, xdg)?;
+        // Keep dispatch_run's future below clippy's large_futures limit.
         return Box::pin(commands::graph::run(
             workspace,
             &cache,
