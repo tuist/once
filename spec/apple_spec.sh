@@ -50,6 +50,85 @@ Describe 'apple graph'
     cp -R "$REPO_ROOT/fixtures/apple_swift_testing/." "$WORKSPACE/"
   }
 
+  create_mock_apple_run_fixture() {
+    mkdir -p "$WORKSPACE/bin" "$WORKSPACE/apps/ios/Sources/App"
+    cat > "$WORKSPACE/apps/ios/Sources/App/App.swift" <<'SWIFT'
+@main
+struct App {
+    static func main() {}
+}
+SWIFT
+    cat > "$WORKSPACE/apps/ios/once.toml" <<'TOML'
+[[target]]
+name = "App"
+kind = "apple_application"
+srcs = ["Sources/App/**/*.swift"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+bundle_id = "dev.once.App"
+minimum_os = "17.0"
+TOML
+    cat > "$WORKSPACE/bin/codesign" <<'SH'
+#!/bin/sh
+app=""
+for arg do
+  app="$arg"
+done
+mkdir -p "$app/_CodeSignature"
+: > "$app/_CodeSignature/CodeResources"
+SH
+    chmod +x "$WORKSPACE/bin/codesign"
+    cat > "$WORKSPACE/bin/xcrun" <<SH
+#!/bin/sh
+log='$WORKSPACE/xcrun.log'
+if [ "\${1:-}" = "--sdk" ]; then
+  shift 2
+fi
+case "\${1:-}" in
+  --find)
+    case "\${2:-}" in
+      swiftc) printf '%s\\n' "\$0" ;;
+      codesign) printf '%s\\n' '$WORKSPACE/bin/codesign' ;;
+      *) printf '%s\\n' "\$0" ;;
+    esac
+    ;;
+  swiftc)
+    if [ "\${2:-}" = "--version" ]; then
+      printf '%s\\n' 'Apple Swift version mock'
+      exit 0
+    fi
+    out=''
+    while [ "\$#" -gt 0 ]; do
+      if [ "\$1" = "-o" ]; then
+        shift
+        out="\${1:-}"
+        break
+      fi
+      shift
+    done
+    [ -n "\$out" ] || exit 2
+    mkdir -p "\$(dirname "\$out")"
+    printf '%s\\n' '#!/bin/sh' 'exit 0' > "\$out"
+    chmod 755 "\$out"
+    ;;
+  simctl)
+    printf '%s\\n' "\$*" >> "\$log"
+    if [ "\${2:-}" = "list" ] && [ "\${3:-}" = "devices" ] && [ "\${4:-}" = "booted" ]; then
+      printf '%s\\n' '    Apple TV (TV-DEVICE) (Booted)'
+      printf '%s\\n' '    iPhone 15 (11111111-1111-1111-1111-111111111111) (Booted)'
+    fi
+    ;;
+  *)
+    printf '%s\\n' "unexpected xcrun invocation: \$*" >&2
+    exit 1
+    ;;
+esac
+SH
+    chmod +x "$WORKSPACE/bin/xcrun"
+  }
+
   It 'lists buildable Apple artifacts'
     copy_apple_graph_fixture
 
@@ -87,6 +166,20 @@ Describe 'apple graph'
     The path "$WORKSPACE/.once/out/apps/ios/App/App.app/App" should be file
     The path "$WORKSPACE/.once/out/apps/ios/App/App.app/Info.plist" should be file
     The path "$WORKSPACE/.once/out/apps/ios/App/App.app/Frameworks/DesignSystem.framework/DesignSystem" should be file
+  End
+
+  It 'runs Apple application artifacts through the simulator launch path'
+    create_mock_apple_run_fixture
+
+    When call env PATH="$WORKSPACE/bin:$PATH" "$ONCE_BIN" -C "$WORKSPACE" --format json run apps/ios/App
+    The status should be success
+    The stdout should include '"target":"apps/ios/App"'
+    The stdout should include '"capability":"run"'
+    The stdout should include '"cache":"bypass"'
+    The path "$WORKSPACE/.once/out/apps/ios/App/run/run.json" should be file
+    The contents of file "$WORKSPACE/.once/out/apps/ios/App/run/run.json" should include '"status":"launched"'
+    The contents of file "$WORKSPACE/.once/out/apps/ios/App/run/run.json" should include '"simulator_id":"11111111-1111-1111-1111-111111111111"'
+    The contents of file "$WORKSPACE/xcrun.log" should include 'simctl launch 11111111-1111-1111-1111-111111111111 dev.once.App'
   End
 
   It 'exposes testable Apple test bundle artifacts'

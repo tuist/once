@@ -194,6 +194,14 @@ def _xcrun_codesign(xcode_developer_dir):
     identity = "once.apple.codesign.v1\x00" + codesign_path + "\x00" + (xcode_developer_dir or "")
     return (xcrun, codesign_path, identity, env)
 
+def _swift_testing_macros_plugin(xcrun, xcrun_env):
+    swiftc_path = host_command([xcrun, "--find", "swiftc"], env = xcrun_env).strip()
+    suffix = "/usr/bin/swiftc"
+    if not _ends_with(swiftc_path, suffix):
+        fail("unable to derive Swift toolchain path from swiftc at " + swiftc_path)
+    toolchain_dir = swiftc_path[:len(swiftc_path) - len(suffix)]
+    return toolchain_dir + "/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib"
+
 def _xcrun_actool(xcode_developer_dir):
     xcrun = host_which("xcrun")
     env = _xcrun_env(xcode_developer_dir)
@@ -1974,8 +1982,7 @@ def _apple_test_bundle_impl(ctx):
     platform_path = host_command([xcrun, "--sdk", sdk, "--show-sdk-platform-path"], env = xcrun_env).strip()
     xctest_framework_dir = platform_path + "/Developer/Library/Frameworks"
     xctest_usr_lib_dir = platform_path + "/Developer/usr/lib"
-    developer_dir = platform_path.split("/Platforms/")[0]
-    testing_macros_plugin = developer_dir + "/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib"
+    testing_macros_plugin = _swift_testing_macros_plugin(xcrun, xcrun_env)
 
     bundle_dir = product_name + ".xctest"
     if platform == "macos" or platform == "macosx":
@@ -2144,12 +2151,15 @@ def _apple_test_bundle_impl(ctx):
 tmpdir=$(mktemp -d "${{TMPDIR:-/tmp}}/once-xctest.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT
 cp -R {bundle} "$tmpdir/"
-chmod -R 777 "$tmpdir/{bundle_name}"
+find "$tmpdir/{bundle_name}" -type d -exec chmod 755 {{}} +
+find "$tmpdir/{bundle_name}" -type f -exec chmod 644 {{}} +
+chmod 755 "$tmpdir/{bundle_name}/{binary_name}"
 SIMCTL_CHILD_DYLD_LIBRARY_PATH={usr_lib} SIMCTL_CHILD_DYLD_FALLBACK_FRAMEWORK_PATH={frameworks} {xcrun} simctl spawn "$simulator_id" {xctest_agent} -XCTest All "$tmpdir/{bundle_name}"
 """.format(
                 xcrun = _shell_literal(xcrun),
                 bundle = _shell_literal(test_bundle_path),
                 bundle_name = bundle_dir,
+                binary_name = product_name,
                 usr_lib = _shell_literal(xctest_usr_lib_dir),
                 frameworks = _shell_literal(xctest_framework_dir),
                 xctest_agent = _shell_literal(platform_path + "/Developer/Library/Xcode/Agents/xctest"),
@@ -2197,6 +2207,7 @@ exit "$status"
             inputs = test_inputs,
             outputs = [test_dir, results, log, native_results],
             env = action_env,
+            cacheable = False,
             toolchain_identity = "once.apple." + runner_type + ".runner.v1\x00" + swiftc_identity,
             identifier = "apple_" + runner_type + ":" + ctx["label"]["id"],
         )
