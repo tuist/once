@@ -232,6 +232,30 @@ def _rust_user_flags(ctx):
 def _rust_encoded_rustflags(ctx):
     return "\x1f".join(_rust_user_flags(ctx))
 
+def _rust_host_env_value(name):
+    if host_os() == "windows":
+        return ""
+    return host_command([host_which("sh"), "-c", "printf '%s' \"${" + name + "-}\""])
+
+def _rust_host_tool_env():
+    env = {}
+    for key in [
+        "PATH",
+        "COMPILER_PATH",
+        "LIBRARY_PATH",
+        "GCC_EXEC_PREFIX",
+        "CPATH",
+        "C_INCLUDE_PATH",
+        "CPLUS_INCLUDE_PATH",
+        "PKG_CONFIG_PATH",
+        "PKG_CONFIG_LIBDIR",
+        "PKG_CONFIG_SYSROOT_DIR",
+    ]:
+        value = _rust_host_env_value(key)
+        if value:
+            env[key] = value
+    return env
+
 def _rust_cap_lints(ctx):
     value = _rust_attr(ctx, "cap_lints", "")
     if value:
@@ -439,6 +463,9 @@ def _rust_builtin_extern_args(crate_type):
 
 def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path):
     env = _rust_compile_env(ctx)
+    for key, value in _rust_host_tool_env().items():
+        if key not in env:
+            env[key] = value
     for key, value in _rust_cfg_env(rustc, target).items():
         if key not in env:
             env[key] = value
