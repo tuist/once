@@ -70,7 +70,7 @@ pub(super) async fn run_declared_actions(
             last_cache_tag = crate::commands::util::cache_tag(outcome.cache);
         } else {
             let action_digest = action.digest();
-            run_uncached_action(&action, workspace)
+            let exit_code = run_uncached_action(&action, workspace)
                 .await
                 .with_context(|| {
                     format!(
@@ -78,6 +78,12 @@ pub(super) async fn run_declared_actions(
                         target.label.id,
                     )
                 })?;
+            if exit_code != 0 {
+                anyhow::bail!(
+                    "{identifier_for_error} ({index}) failed for {} with exit code {exit_code}",
+                    target.label.id,
+                );
+            }
             action_digests.push(action_digest);
             last_cache_tag = "bypass";
         }
@@ -91,13 +97,14 @@ pub(super) async fn run_declared_actions(
     })
 }
 
-async fn run_uncached_action(action: &Action, workspace: &Path) -> Result<()> {
+async fn run_uncached_action(action: &Action, workspace: &Path) -> Result<i32> {
     match action {
         Action::RunCommand {
             argv,
             env,
             cwd,
             timeout_ms,
+            outputs,
             ..
         } => {
             let (program, rest) = argv
@@ -110,7 +117,7 @@ async fn run_uncached_action(action: &Action, workspace: &Path) -> Result<()> {
                 command.env(key, value);
             }
             command.stdin(Stdio::null());
-            command.stdout(Stdio::piped());
+            command.stdout(Stdio::null());
             command.stderr(Stdio::piped());
             command.current_dir(
                 cwd.as_ref()
@@ -129,9 +136,22 @@ async fn run_uncached_action(action: &Action, workspace: &Path) -> Result<()> {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 anyhow::bail!("declared action exited with code {code}: {stderr}");
             }
-            Ok(())
+            verify_declared_outputs(outputs, workspace)?;
+            Ok(output.status.code().unwrap_or(0))
         }
     }
+}
+
+fn verify_declared_outputs(outputs: &[WorkspacePath], workspace: &Path) -> Result<()> {
+    for output in outputs {
+        if !output.resolve(workspace).exists() {
+            anyhow::bail!(
+                "declared action completed without producing output `{}`",
+                output.as_str()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn compose_target_action_digest(target_id: &str, action_digests: &[Digest]) -> Digest {
