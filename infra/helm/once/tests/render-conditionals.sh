@@ -2,6 +2,7 @@
 set -euo pipefail
 
 chart_path="${CHART_PATH:-infra/helm/once}"
+rendered_manifest="${RENDERED_MANIFEST:-}"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -24,7 +25,15 @@ expect_external_secret_count() {
   fi
 }
 
-render >"$tmpdir/default.yaml"
+if [[ -n "$rendered_manifest" ]]; then
+  if [[ ! -f "$rendered_manifest" ]]; then
+    echo "rendered manifest not found: $rendered_manifest" >&2
+    exit 1
+  fi
+  cp "$rendered_manifest" "$tmpdir/default.yaml"
+else
+  render >"$tmpdir/default.yaml"
+fi
 grep -q '^[[:space:]]*imagePullSecrets:' "$tmpdir/default.yaml"
 
 render --set-string image.pullSecretName= >"$tmpdir/no-image-pull-secret.yaml"
