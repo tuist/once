@@ -412,11 +412,7 @@ fn target(kind: &str) -> GraphTarget {
 }
 
 #[test]
-fn analyze_target_returns_null_provider_for_target_kinds_without_impl() {
-    // `script` is the canonical example of a target kind that the
-    // bundled prelude knows about but provides no Starlark impl
-    // for; the analysis driver should hand back a null provider
-    // and no actions so the CLI falls back to its own runner.
+fn analyze_target_errors_for_script_kind_without_starlark_impl() {
     let tmp = TempDir::new().unwrap();
     let result = analyze_target(&target("script"), tmp.path(), &[]);
     // `script` is supplied by the CLI's script-runner path; the
