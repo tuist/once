@@ -62,6 +62,7 @@ probes:
     failureThreshold: 30
 
 externalSecrets:
+  enabled: true
   refreshInterval: 1h
   storeRef:
     name: onepassword

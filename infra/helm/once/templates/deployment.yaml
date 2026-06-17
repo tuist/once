@@ -24,8 +24,10 @@ spec:
         {{- include "once.webSelectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "once.fullname" . }}
+      {{- if .Values.image.pullSecretName }}
       imagePullSecrets:
         - name: {{ .Values.image.pullSecretName }}
+      {{- end }}
       terminationGracePeriodSeconds: 30
       containers:
         - name: once
