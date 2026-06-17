@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment:
       name: production
-      url: https://buildonce.dev
+      url: https://docs.buildonce.dev
     defaults:
       run:
         working-directory: docs
@@ -79,7 +79,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: "4.90.1"
+          wranglerVersion: "4.100.0"
           workingDirectory: docs
           command: deploy
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}

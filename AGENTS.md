@@ -2,6 +2,12 @@
 
 Conventions for humans and AI agents contributing to this repo.
 
+## GitHub
+
+- Use Conventional Commit style for pull request titles, such as
+  `fix(docs): update deployment route`.
+- Do not prefix pull request titles with `[codex]`.
+
 ## Module Layout
 
 **Avoid monolith Rust files.** When a `lib.rs` or `main.rs` grows past
