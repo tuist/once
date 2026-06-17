@@ -43,6 +43,7 @@ export const site = {
         collapsed: false,
         items: [
           { text: "Overview", link: "/reference/prelude/" },
+          { text: "Starlark rules", link: "/reference/prelude/starlark-rules" },
           { text: "apple_library", link: "/reference/prelude/apple_library" },
           { text: "swift_macro", link: "/reference/prelude/swift_macro" },
           { text: "apple_framework", link: "/reference/prelude/apple_framework" },

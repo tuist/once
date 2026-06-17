@@ -65,6 +65,15 @@ Build system behavior belongs in rules. The Rust side should provide
 generic primitives, typed graph plumbing, validation surfaces, and
 execution policy that rules can compose to express their needs.
 
+Starlark rule contract changes must update the public Starlark rules
+reference in the same change. This includes new globals, changed `ctx`
+fields, action declaration semantics, provider expectations, schema
+helpers, loading behavior, or project rule authoring rules. Shared
+Starlark helpers should live in the common prelude instead of being
+copied into each toolchain file. The Starlark prelude index owns the
+built-in rule source order, so adding or removing a rule family should
+not require Rust executor changes.
+
 Every new toolchain rule should preserve these invariants:
 
 - The rule is discoverable through `once_list_rules` and its full

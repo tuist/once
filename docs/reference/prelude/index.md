@@ -6,6 +6,10 @@ the impl that turns a target into a set of cached actions. The
 [`once query schema`](/reference/cli/query) command exposes the same
 metadata at the keyboard.
 
+Rules are ordinary Starlark values. See
+[`Starlark rules`](/reference/prelude/starlark-rules) for the rule
+schema, implementation context, host globals, and action contract.
+
 ## Apple rules
 
 - [`apple_library`](/reference/prelude/apple_library): Swift,
