@@ -14,8 +14,51 @@ env:
   RUSTUP_MAX_RETRIES: "10"
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust_ci: ${{ steps.filter.outputs.rust_ci }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: filter
+        name: classify changed files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+            if [[ "$base" =~ ^0+$ ]]; then
+              base="${head}^"
+            fi
+          fi
+
+          git diff --name-only "$base" "$head" > changed-files.txt
+
+          rust_ci=false
+          while IFS= read -r path; do
+            case "$path" in
+              Cargo.toml|Cargo.lock|mise.toml|once.toml|crates/*|spec/*|mise/tasks/*|.cargo/*)
+                rust_ci=true
+                ;;
+            esac
+          done < changed-files.txt
+
+          echo "rust_ci=$rust_ci" >> "$GITHUB_OUTPUT"
+          echo "Rust CI required: $rust_ci"
+          sed 's/^/- /' changed-files.txt
+
   fmt:
     name: fmt
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -28,6 +71,8 @@ jobs:
 
   clippy:
     name: clippy
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -46,6 +91,8 @@ jobs:
 
   tests:
     name: tests (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -68,6 +115,8 @@ jobs:
 
   release-build:
     name: release build (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -109,7 +158,8 @@ jobs:
 
   dogfood:
     name: dogfood (${{ matrix.os }})
-    needs: release-build
+    needs: [changes, release-build]
+    if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -132,7 +182,8 @@ jobs:
 
   shellspec:
     name: shellspec (${{ matrix.os }})
-    needs: release-build
+    needs: [changes, release-build]
+    if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -153,6 +204,8 @@ jobs:
 
   windows-build:
     name: windows build
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -175,6 +228,8 @@ jobs:
 
   windows-cas-test:
     name: windows cas test
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
