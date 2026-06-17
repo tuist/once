@@ -1,4 +1,6 @@
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -32,56 +34,58 @@ struct DeclaredActionOutcome {
 
 /// Materialise each declared action through the action cache, then
 /// fold the analysis provider directly into the build outcome.
-pub(super) async fn run_declared_actions(
-    workspace: &Path,
-    cache: &CacheProvider,
+pub(super) fn run_declared_actions<'a>(
+    workspace: &'a Path,
+    cache: &'a CacheProvider,
     rule_source_digest: Digest,
-    target: &GraphTarget,
+    target: &'a GraphTarget,
     analysis: AnalysisResult,
-    dep_action_digests: &[(String, Digest)],
-) -> Result<BuildOutcome> {
-    let AnalysisResult {
-        actions, provider, ..
-    } = analysis;
-    tracing::debug!(
-        target = %target.label.id,
-        declared_actions = actions.len(),
-        dep_action_digests = dep_action_digests.len(),
-        "running declared graph actions"
-    );
-    let mut action_digests = Vec::new();
-    let mut last_cache_tag = "miss";
-    let mut all_outputs = Vec::new();
-
-    for (index, declared) in actions.into_iter().enumerate() {
-        all_outputs.extend(declared.outputs.iter().cloned());
-        let mut input_action_digests = dep_action_digests.to_vec();
-        input_action_digests.extend(
-            action_digests
-                .iter()
-                .enumerate()
-                .map(|(prior_index, digest)| (format!("same-target:{prior_index}"), *digest)),
+    dep_action_digests: &'a [(String, Digest)],
+) -> Pin<Box<dyn Future<Output = Result<BuildOutcome>> + Send + 'a>> {
+    Box::pin(async move {
+        let AnalysisResult {
+            actions, provider, ..
+        } = analysis;
+        tracing::debug!(
+            target = %target.label.id,
+            declared_actions = actions.len(),
+            dep_action_digests = dep_action_digests.len(),
+            "running declared graph actions"
         );
+        let mut action_digests = Vec::new();
+        let mut last_cache_tag = "miss";
+        let mut all_outputs = Vec::new();
 
-        let outcome = run_declared_action(DeclaredActionRun {
-            workspace,
-            cache,
-            rule_source_digest,
-            target_id: &target.label.id,
-            index,
-            declared,
-            input_action_digests: &input_action_digests,
+        for (index, declared) in actions.into_iter().enumerate() {
+            all_outputs.extend(declared.outputs.iter().cloned());
+            let mut input_action_digests = dep_action_digests.to_vec();
+            input_action_digests.extend(
+                action_digests
+                    .iter()
+                    .enumerate()
+                    .map(|(prior_index, digest)| (format!("same-target:{prior_index}"), *digest)),
+            );
+
+            let outcome = run_declared_action(DeclaredActionRun {
+                workspace,
+                cache,
+                rule_source_digest,
+                target_id: &target.label.id,
+                index,
+                declared,
+                input_action_digests: &input_action_digests,
+            })
+            .await?;
+            action_digests.push(outcome.digest);
+            last_cache_tag = outcome.cache_tag;
+        }
+
+        Ok(BuildOutcome {
+            provider,
+            action_digest: compose_target_action_digest(&target.label.id, &action_digests),
+            outputs: all_outputs,
+            cache_tag: last_cache_tag,
         })
-        .await?;
-        action_digests.push(outcome.digest);
-        last_cache_tag = outcome.cache_tag;
-    }
-
-    Ok(BuildOutcome {
-        provider,
-        action_digest: compose_target_action_digest(&target.label.id, &action_digests),
-        outputs: all_outputs,
-        cache_tag: last_cache_tag,
     })
 }
 

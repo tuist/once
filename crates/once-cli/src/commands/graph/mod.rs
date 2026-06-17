@@ -67,8 +67,7 @@ pub async fn test(
     {
         let _ = build_target(workspace, cache, &target, &session).await?;
     }
-    let record = if let Some(outcome) = Box::pin(session.run_with_analysis(&target, "test")).await?
-    {
+    let record = if let Some(outcome) = session.run_with_analysis(&target, "test").await? {
         CapabilityRunRecord {
             target: target.label.id.clone(),
             kind: target.kind.clone(),
@@ -105,7 +104,7 @@ pub async fn run(
     {
         let _ = build_target(workspace, cache, &target, &session).await?;
     }
-    let record = if let Some(outcome) = Box::pin(session.run_with_analysis(&target, "run")).await? {
+    let record = if let Some(outcome) = session.run_with_analysis(&target, "run").await? {
         CapabilityRunRecord {
             target: target.label.id.clone(),
             kind: target.kind.clone(),

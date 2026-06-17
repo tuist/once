@@ -19,7 +19,9 @@ mod actions;
 mod scheduler;
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -123,50 +125,52 @@ impl BuildSession {
         Ok(Some(outcome))
     }
 
-    pub(super) async fn run_with_analysis(
-        &self,
-        target: &GraphTarget,
-        capability: &str,
-    ) -> Result<Option<BuildOutcome>> {
-        if !self.analyzer.rule_has_impl(&target.kind) {
+    pub(super) fn run_with_analysis<'a>(
+        &'a self,
+        target: &'a GraphTarget,
+        capability: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<BuildOutcome>>> + Send + 'a>> {
+        Box::pin(async move {
+            if !self.analyzer.rule_has_impl(&target.kind) {
+                tracing::debug!(
+                    target = %target.label.id,
+                    kind = %target.kind,
+                    capability,
+                    "graph target capability has no Starlark analysis implementation"
+                );
+                return Ok(None);
+            }
+
+            let dep_outcomes = self.build_direct_analysis_deps(target).await?;
             tracing::debug!(
                 target = %target.label.id,
-                kind = %target.kind,
                 capability,
-                "graph target capability has no Starlark analysis implementation"
+                direct_analysis_deps = dep_outcomes.len(),
+                "running graph target capability through Starlark analysis"
             );
-            return Ok(None);
-        }
+            let mut dep_providers = Vec::with_capacity(dep_outcomes.len());
+            let mut dep_action_digests = Vec::with_capacity(dep_outcomes.len());
+            for (dep_id, outcome) in dep_outcomes {
+                dep_action_digests.push((dep_id, outcome.action_digest));
+                dep_providers.push(outcome.provider);
+            }
 
-        let dep_outcomes = self.build_direct_analysis_deps(target).await?;
-        tracing::debug!(
-            target = %target.label.id,
-            capability,
-            direct_analysis_deps = dep_outcomes.len(),
-            "running graph target capability through Starlark analysis"
-        );
-        let mut dep_providers = Vec::with_capacity(dep_outcomes.len());
-        let mut dep_action_digests = Vec::with_capacity(dep_outcomes.len());
-        for (dep_id, outcome) in dep_outcomes {
-            dep_action_digests.push((dep_id, outcome.action_digest));
-            dep_providers.push(outcome.provider);
-        }
-
-        let analysis = self
-            .analyzer
-            .analyze_target_capability(target, &self.workspace, &dep_providers, capability)
-            .with_context(|| format!("analysing {}", target.label.id))?;
-        let outcome = Box::pin(run_declared_actions(
-            &self.workspace,
-            &self.cache,
-            self.rule_source_digest,
-            target,
-            analysis,
-            &dep_action_digests,
-        ))
-        .await
-        .with_context(|| format!("executing {capability} for {}", target.label.id))?;
-        Ok(Some(outcome))
+            let analysis = self
+                .analyzer
+                .analyze_target_capability(target, &self.workspace, &dep_providers, capability)
+                .with_context(|| format!("analysing {}", target.label.id))?;
+            let outcome = run_declared_actions(
+                &self.workspace,
+                &self.cache,
+                self.rule_source_digest,
+                target,
+                analysis,
+                &dep_action_digests,
+            )
+            .await
+            .with_context(|| format!("executing {capability} for {}", target.label.id))?;
+            Ok(Some(outcome))
+        })
     }
 
     fn reachable_analysis_targets(&self, target: &GraphTarget) -> HashSet<String> {
@@ -310,14 +314,14 @@ async fn build_one(
         "finished graph target analysis"
     );
 
-    let outcome = Box::pin(run_declared_actions(
+    let outcome = run_declared_actions(
         &workspace,
         &cache,
         rule_source_digest,
         &target,
         analysis,
         &dep_action_digests,
-    ))
+    )
     .await?;
     Ok((target_id, outcome))
 }

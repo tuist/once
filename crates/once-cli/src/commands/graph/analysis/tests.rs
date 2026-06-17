@@ -149,9 +149,7 @@ async fn run_with_analysis_returns_none_for_rules_without_implementation() {
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
     let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
 
-    let outcome = Box::pin(session.run_with_analysis(&graph[0], "test"))
-        .await
-        .unwrap();
+    let outcome = session.run_with_analysis(&graph[0], "test").await.unwrap();
 
     assert!(outcome.is_none());
     assert!(!workspace.path().join(".once/out/Dep").exists());
@@ -289,7 +287,8 @@ async fn capability_runs_are_salted_by_dependency_action_digests() {
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
 
     let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
-    let first = Box::pin(session.run_with_analysis(&graph[1], "test"))
+    let first = session
+        .run_with_analysis(&graph[1], "test")
         .await
         .unwrap()
         .unwrap();
@@ -297,7 +296,8 @@ async fn capability_runs_are_salted_by_dependency_action_digests() {
     std::fs::write(workspace.path().join("dep.txt"), b"two").unwrap();
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
     let session = BuildSession::new_with_analyzer(workspace.path(), &cache, &graph, analyzer);
-    let second = Box::pin(session.run_with_analysis(&graph[1], "test"))
+    let second = session
+        .run_with_analysis(&graph[1], "test")
         .await
         .unwrap()
         .unwrap();

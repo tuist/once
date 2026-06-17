@@ -97,7 +97,7 @@ impl<'a> BuildScheduler<'a> {
                 "spawning graph target build task"
             );
 
-            running.spawn(Box::pin(build_one(
+            running.spawn(build_one(
                 self.workspace.to_path_buf(),
                 self.cache.clone(),
                 self.analyzer.clone(),
@@ -105,7 +105,7 @@ impl<'a> BuildScheduler<'a> {
                 target,
                 inputs.providers,
                 inputs.action_digests,
-            )));
+            ));
         }
         Ok(())
     }
