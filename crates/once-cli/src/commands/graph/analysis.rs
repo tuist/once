@@ -9,12 +9,11 @@
 //! the prelude, the driver returns `None` so the caller can fall back to
 //! its generic marker action.
 //!
-//! This module has no Apple-specific logic: it consults the prelude
-//! via `rule_has_impl` to know which kinds run through analysis, and
-//! the analysis layer is fed everything it needs through generic
-//! starlark globals. Dep providers and dep action digests are carried
-//! Buck2/Bazel-style so a parent's input digest composes its deps'
-//! action digests.
+//! This module stays toolchain-neutral: it consults the prelude via
+//! `rule_has_impl` to know which kinds run through analysis, and the
+//! analysis layer is fed everything it needs through generic Starlark
+//! globals. Dep providers and dep action digests are carried so a
+//! parent's input digest composes its deps' action digests.
 
 mod actions;
 mod scheduler;
@@ -106,10 +105,20 @@ impl BuildSession {
         target: &GraphTarget,
     ) -> Result<Option<BuildOutcome>> {
         if !self.analyzer.rule_has_impl(&target.kind) {
+            tracing::debug!(
+                target = %target.label.id,
+                kind = %target.kind,
+                "graph target has no Starlark analysis implementation"
+            );
             return Ok(None);
         }
 
         let reachable = self.reachable_analysis_targets(target);
+        tracing::debug!(
+            target = %target.label.id,
+            reachable = reachable.len(),
+            "building graph target through Starlark analysis"
+        );
         let outcome = self.build_reachable(&target.label.id, &reachable).await?;
         Ok(Some(outcome))
     }
@@ -120,10 +129,22 @@ impl BuildSession {
         capability: &str,
     ) -> Result<Option<BuildOutcome>> {
         if !self.analyzer.rule_has_impl(&target.kind) {
+            tracing::debug!(
+                target = %target.label.id,
+                kind = %target.kind,
+                capability,
+                "graph target capability has no Starlark analysis implementation"
+            );
             return Ok(None);
         }
 
         let dep_outcomes = self.build_direct_analysis_deps(target).await?;
+        tracing::debug!(
+            target = %target.label.id,
+            capability,
+            direct_analysis_deps = dep_outcomes.len(),
+            "running graph target capability through Starlark analysis"
+        );
         let mut dep_providers = Vec::with_capacity(dep_outcomes.len());
         let mut dep_action_digests = Vec::with_capacity(dep_outcomes.len());
         for (dep_id, outcome) in dep_outcomes {
@@ -135,14 +156,14 @@ impl BuildSession {
             .analyzer
             .analyze_target_capability(target, &self.workspace, &dep_providers, capability)
             .with_context(|| format!("analysing {}", target.label.id))?;
-        let outcome = run_declared_actions(
+        let outcome = Box::pin(run_declared_actions(
             &self.workspace,
             &self.cache,
             self.rule_source_digest,
             target,
             analysis,
             &dep_action_digests,
-        )
+        ))
         .await
         .with_context(|| format!("executing {capability} for {}", target.label.id))?;
         Ok(Some(outcome))
@@ -265,6 +286,12 @@ async fn build_one(
     dep_action_digests: Vec<(String, Digest)>,
 ) -> Result<(String, BuildOutcome)> {
     let target_id = target.label.id.clone();
+    tracing::debug!(
+        target = %target_id,
+        dep_providers = dep_providers.len(),
+        dep_action_digests = dep_action_digests.len(),
+        "starting graph target analysis"
+    );
     // Cheap refcount bumps so the analyzer task and the action runner
     // both reach the same `GraphTarget` without deep-cloning it.
     let analysis_target = Arc::clone(&target);
@@ -276,15 +303,21 @@ async fn build_one(
     })
     .await
     .context("joining graph analysis task")??;
+    tracing::debug!(
+        target = %target_id,
+        declared_actions = analysis.actions.len(),
+        declared_outputs = analysis.declared_outputs.len(),
+        "finished graph target analysis"
+    );
 
-    let outcome = run_declared_actions(
+    let outcome = Box::pin(run_declared_actions(
         &workspace,
         &cache,
         rule_source_digest,
         &target,
         analysis,
         &dep_action_digests,
-    )
+    ))
     .await?;
     Ok((target_id, outcome))
 }

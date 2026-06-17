@@ -63,6 +63,14 @@ impl<'a> BuildScheduler<'a> {
                 .await
                 .context("build task set ended unexpectedly")?;
             let (target_id, outcome) = joined.context("joining graph build task")??;
+            tracing::debug!(
+                target = %target_id,
+                cache = outcome.cache_tag,
+                outputs = outcome.outputs.len(),
+                completed = state.completed + 1,
+                total = self.reachable.len(),
+                "completed graph target build task"
+            );
             state.record_completion(&target_id, outcome)?;
             self.spawn_ready(&mut state, &mut running)?;
         }
@@ -82,6 +90,12 @@ impl<'a> BuildScheduler<'a> {
                     .with_context(|| format!("target `{target_id}` vanished from graph"))?,
             );
             let inputs = state.dependency_inputs(&target, self.reachable)?;
+            tracing::debug!(
+                target = %target_id,
+                deps = inputs.providers.len(),
+                running_after_spawn = running.len() + 1,
+                "spawning graph target build task"
+            );
 
             running.spawn(Box::pin(build_one(
                 self.workspace.to_path_buf(),
