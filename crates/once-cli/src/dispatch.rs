@@ -166,7 +166,7 @@ async fn run_query_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
-        Some(cli::QueryCmd::Rules) => commands::query::rules(workspace, output)
+        Some(cli::QueryCmd::TargetKinds) => commands::query::target_kinds(workspace, output)
             .await
             .map(|()| ExitCode::SUCCESS),
         Some(cli::QueryCmd::Target { target }) => {

@@ -4,15 +4,15 @@
 
 Once is expanding around a graph and action model for repository automation.
 Scripts remain the adapter for existing work: teams can make automation
-cacheable first, then move the same work into typed graph rules when they need
+cacheable first, then move the same work into typed graph target kinds when they need
 richer target relationships, queries, diagnostics, and agent-driven edits.
 
 The first product slice should focus on Apple platforms. The goal is to model
 Apple libraries, frameworks, applications, application runs, and tests well
 enough that Once can build and run real iOS, macOS, watchOS, tvOS, and
 visionOS workflows over time. Buck2 is the strongest architectural inspiration,
-especially its Rust core, Starlark rule layer, phase model, query model, and
-incremental computation engine. Bazel and Buck Apple rules are the strongest
+especially its Rust core, Starlark target kind layer, phase model, query model, and
+incremental computation engine. Bazel and Buck Apple target kinds are the strongest
 domain references for target shapes, providers, toolchain concerns, and common
 Apple build products.
 
@@ -41,7 +41,7 @@ for coding agents from the beginning.
 - A full external dependency implementation in the first code slice.
 - Arbitrary graph macros in target declarations.
 - Direct agent editing of TOML text as the primary workflow.
-- Shipping every Apple rule shape before the graph, capability, and query model
+- Shipping every Apple target kind shape before the graph, capability, and query model
   exist.
 
 ## Product Model
@@ -53,9 +53,9 @@ Once has a small set of durable concepts:
    `test`.
 3. Actions: concrete executable work with inputs, outputs, environment,
    platform requirements, and cache identity.
-4. Rules: typed logic that validates targets and lowers capabilities into
+4. Target kinds: typed logic that validates targets and lowers capabilities into
    actions.
-5. Scripts: the least typed rule-backed adapter for existing executable files.
+5. Scripts: the least typed adapter backed by target kinds for existing executable files.
 
 The Apple platform is the first full build graph proving ground because it
 requires the system to model real build-system complexity: compile actions,
@@ -108,7 +108,7 @@ value model rather than treating attrs as arbitrary string maps.
 
 ## Target Capabilities
 
-Rules expose capabilities. Capabilities are the contract between CLI commands,
+Target kinds expose capabilities. Capabilities are the contract between CLI commands,
 agents, analysis, and execution.
 
 - `build`: produce artifacts such as static libraries, dynamic libraries,
@@ -131,7 +131,7 @@ supports multiple workflows.
 
 `run` must declare the build outputs it needs. An app run should depend on the
 `.app` bundle or equivalent artifact through the action graph, not through a
-private rule side effect. That makes questions like "why did running this app
+private target kind side effect. That makes questions like "why did running this app
 rebuild the framework?" answerable.
 
 Every capability exposes named output groups. Apple examples include:
@@ -146,9 +146,9 @@ Every capability exposes named output groups. Apple examples include:
 - `coverage`
 - `test_results`
 
-## Apple Rule Families
+## Apple Target Kind Families
 
-The initial Apple rule families should be small but real:
+The initial Apple target kind families should be small but real:
 
 - `apple_library`: compiles Swift, Objective-C, C, and C++ sources into a
   linkable module or library.
@@ -162,8 +162,8 @@ The initial Apple rule families should be small but real:
 - `script`: keeps existing executable automation available as graph targets
   during migration.
 
-The RFC does not require copying Bazel or Buck rule names or attributes. It
-requires studying their Apple rules for the provider boundaries and build
+The RFC does not require copying Bazel or Buck target kind names or attributes. It
+requires studying their Apple target kinds for the provider boundaries and build
 products that matter:
 
 - source compilation, module interfaces, headers, and generated sources
@@ -175,13 +175,13 @@ products that matter:
 - XCTest bundles, test hosts, and test plans
 - simulator or device selection for run and test
 
-## Rule Contract
+## Target Kind Contract
 
-Starlark is the likely rule language, following Buck2's split between a Rust
-core and Starlark rules. The rule contract matters more than the interpreter
+Starlark is the likely target kind language, following Buck2's split between a Rust
+core and Starlark target kinds. The target kind contract matters more than the interpreter
 choice.
 
-Every rule must expose a machine-readable schema:
+Every target kind must expose a machine-readable schema:
 
 - attributes, types, defaults, required fields, and docs
 - configurable values where attributes can vary by platform or constraint
@@ -192,7 +192,7 @@ Every rule must expose a machine-readable schema:
 - validation diagnostics and candidate repair operations
 - examples that agents can retrieve before authoring targets
 
-Rule schemas are mandatory for first-party and third-party rules. Agents should
+Target kind schemas are mandatory for first-party and third-party target kinds. Agents should
 introspect schemas before creating or editing targets.
 
 ## Configuration And Toolchains
@@ -219,13 +219,13 @@ should work locally and remotely, even when some actions must run on macOS.
 ## Presets, Subtargets, And Visibility
 
 Once should not support arbitrary target-declaration macros. Reusable
-conventions should be modeled with typed presets and rule-generated subtargets.
+conventions should be modeled with typed presets and target kind-generated subtargets.
 
-Presets provide schema-checked defaults for matching rule types. For example, an
+Presets provide schema-checked defaults for matching target kind types. For example, an
 organization can define common Apple bundle settings, default Swift compiler
 flags, visibility, signing policy, test environment, or dependency groups.
 
-Subtargets are named outputs or views generated by a rule. For Apple platforms,
+Subtargets are named outputs or views generated by a target kind. For Apple platforms,
 subtargets can expose products such as `App#bundle`, `App#dsyms`,
 `Framework#swiftmodule`, or `Tests#coverage`. Subtargets can expose their own
 capabilities when useful.
@@ -241,7 +241,7 @@ operation model should be available through JSON-RPC and CLI wrappers.
 
 Representative operations:
 
-- `schema.rule(kind: "apple_application")`
+- `schema.target_kind(kind: "apple_application")`
 - `graph.add_target`
 - `graph.add_dep`
 - `graph.set_attr`
@@ -256,7 +256,7 @@ Representative operations:
 - `query.cost`
 
 Graph edits are transactional. A transaction validates schema, labels,
-visibility, configuration constraints where possible, and rule constraints
+visibility, configuration constraints where possible, and target kind constraints
 before writing files. A successful transaction returns:
 
 - semantic graph diff
@@ -275,7 +275,7 @@ should identify as much of the following as possible:
 - target id
 - capability
 - action
-- rule kind
+- target kind
 - source file or manifest location
 - tool message
 - provider or toolchain context
@@ -310,9 +310,9 @@ Required query families:
 - `once query why-changed <target>`: explain rebuilds, cache reuse, and cache
   misses.
 - `once query why-dep <from> <to>`: explain dependency provenance through
-  direct deps, presets, rule-generated deps, toolchains, or observed repairs.
+  direct deps, presets, target kind-generated deps, toolchains, or observed repairs.
 - `once query affected-tests`: combine graph reachability, observed inputs,
-  historical results, and rule metadata.
+  historical results, and target kind metadata.
 - `once query cost`: estimate rebuild and test cost from historical action
   timings, cache hit rates, and local or remote outcomes.
 
@@ -340,11 +340,11 @@ and language ecosystems used by mixed Apple projects.
 
 This RFC does not specify the full resolver. It requires the build graph design
 to leave room for a module graph with lockable versions, provenance,
-checksums, visibility, and rule-provided providers.
+checksums, visibility, and target kind-provided providers.
 
 ## First Implementation Slice
 
-The first implementation after this RFC should not start with Starlark rule
+The first implementation after this RFC should not start with Starlark target kind
 execution. It should start with the graph model and queries needed to make the
 Apple target model inspectable.
 
@@ -355,11 +355,11 @@ Suggested order:
 2. Load canonical `once.toml` target declarations without changing existing
    script execution.
 3. Represent script adapter targets so scripts appear in graph queries.
-4. Add schema introspection for a small built-in Apple rule set.
+4. Add schema introspection for a small built-in Apple target kind set.
 5. Add `once query targets` and `once query capabilities`.
 6. Add configured graph and action graph placeholders for Apple build, run, and
    test capabilities.
-7. Add structured diagnostics before adding broad rule execution.
+7. Add structured diagnostics before adding broad target kind execution.
 
 The first proof should show:
 
@@ -371,7 +371,7 @@ The first proof should show:
 
 ## Open Questions
 
-- Which Apple rule names should be final once implementation begins?
+- Which Apple target kind names should be final once implementation begins?
 - How much of Xcode project generation should Once avoid, replace, or
   interoperate with?
 - Should SwiftPM packages be imported as external modules, generated graph

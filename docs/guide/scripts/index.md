@@ -15,11 +15,11 @@ there is no shared contract that says what changed.
 
 Once gives those scripts that contract without asking teams to move the
 implementation into a new build-system shape. A script is the least typed
-way to enter the same graph and action model that typed rules use.
+way to enter the same graph and action model that typed target kinds use.
 
 ::: tip Scripts are adapters
 Use scripts when the workflow is still one opaque executable action. Move
-the work into a typed graph rule when it needs dependencies, multiple
+the work into a typed graph target kind when it needs dependencies, multiple
 capabilities, structured diagnostics, or agent-editable shape.
 :::
 

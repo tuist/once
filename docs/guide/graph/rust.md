@@ -10,13 +10,13 @@ is the lowered target shape for resolved third-party Cargo packages.
 procedural macro for downstream Rust targets. [`cargo_dependencies`](/reference/prelude/cargo_dependencies)
 groups resolved Cargo packages behind one cacheable graph target.
 
-For the per-rule attribute, dep, provider, and capability tables see
+For the per-target-kind attribute, dep, provider, and capability tables see
 the [Prelude reference](/reference/prelude/).
 
 ## Targets
 
 Declare first-party Rust libraries and binaries with the same target
-shape as other graph rules:
+shape as other graph target kinds:
 
 ```toml
 [[target]]
@@ -138,22 +138,22 @@ Build Rust graph targets with [`once build`](/reference/cli/build):
 once build crates/hello/hello
 ```
 
-Outputs land under `.once/out/<target>/`. The rule reference pages list
-the exact outputs each rule emits.
+Outputs land under `.once/out/<target>/`. The target kind reference pages list
+the exact outputs each target kind emits.
 
 ## Prior Art
 
-The Rust rule set follows the same provider model used by established
-Rust build rules:
+The Rust target kind set follows the same provider model used by established
+Rust build target kinds:
 
-- Bazel Rust rules model Rust libraries as crate providers, pass direct
+- Bazel Rust target kinds model Rust libraries as crate providers, pass direct
   dependencies through `--extern`, and make transitive artifacts
   available for downstream compilation.
-- Buck2 Rust rules separate libraries, binaries, crate metadata,
+- Buck2 Rust target kinds separate libraries, binaries, crate metadata,
   dependency contexts, and Cargo package lowering so third-party crates
   become normal graph nodes.
 
 Once is not Buck-compatible, Bazel-compatible, or a drop-in
 replacement for Cargo. The goal is an inspectable graph where agents
-can discover rule contracts, materialize examples, and edit targets
+can discover target kind contracts, materialize examples, and edit targets
 through the same Once surfaces.

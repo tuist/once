@@ -31,9 +31,9 @@ def example(slug, name, use_when, path = None):
         "path": path or ("examples/" + slug),
     }
 
-def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None):
+def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None):
     return {
-        "_once_rule": True,
+        "_once_target_kind": True,
         "kind": kind,
         "docs": docs,
         "attrs": attrs,

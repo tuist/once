@@ -1,11 +1,11 @@
-//! Loading and composing Starlark rule sources.
+//! Loading and composing Starlark graph modules.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 
 use crate::error::{Error, Result};
-use crate::manifest::load_rule_paths_toml_str;
+use crate::manifest::load_module_paths_toml_str;
 use crate::TOML_BUILD_FILE_NAME;
 use include_dir::{include_dir, Dir};
 use starlark::environment::{GlobalsBuilder, Module};
@@ -14,73 +14,77 @@ use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 use starlark::values::Value;
 
-pub(crate) const BUILT_IN_RULE_PATH: &str = "once//prelude/all.star";
-pub(crate) const COMBINED_RULE_PATH: &str = "once//rules/all.star";
+pub(crate) const BUILT_IN_MODULE_PATH: &str = "once//prelude/all.star";
+pub(crate) const COMBINED_MODULE_PATH: &str = "once//modules/all.star";
 
 const PRELUDE_INDEX_PATH: &str = "index.star";
 const COMMON_PRELUDE_PATH: &str = "common.star";
 static PRELUDE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/prelude");
-static BUILT_IN_RULE_SOURCE: LazyLock<String> = LazyLock::new(load_built_in_rule_source);
+static BUILT_IN_MODULE_SOURCE: LazyLock<String> = LazyLock::new(load_built_in_module_source);
 
-pub(crate) fn built_in_rule_source() -> &'static str {
-    BUILT_IN_RULE_SOURCE.as_str()
+pub(crate) fn built_in_module_source() -> &'static str {
+    BUILT_IN_MODULE_SOURCE.as_str()
 }
 
-pub(crate) fn common_rule_source() -> &'static str {
+pub(crate) fn common_module_source() -> &'static str {
     prelude_source(COMMON_PRELUDE_PATH)
 }
 
-pub(crate) fn combined_rule_source_for_workspace(root: &Path) -> Result<String> {
-    let rule_files = load_rule_files(root)?;
-    Ok(combine_rule_sources(built_in_rule_source(), &rule_files))
+pub(crate) fn combined_module_source_for_workspace(root: &Path) -> Result<String> {
+    let module_files = load_module_files(root)?;
+    Ok(combine_module_sources(
+        built_in_module_source(),
+        &module_files,
+    ))
 }
 
-pub(crate) fn combine_rule_sources(built_in: &str, rule_files: &[RuleFile]) -> String {
+pub(crate) fn combine_module_sources(built_in: &str, module_files: &[ModuleFile]) -> String {
     let mut source = String::new();
     source.push_str(built_in);
-    for rule_file in rule_files {
-        source.push_str("\n# once rule file: ");
-        source.push_str(&rule_file.display_path);
+    for module_file in module_files {
+        source.push_str("\n# once module file: ");
+        source.push_str(&module_file.display_path);
         source.push('\n');
-        source.push_str(&rule_file.source);
+        source.push_str(&module_file.source);
         source.push('\n');
     }
     source
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RuleExport<'v> {
+pub(crate) struct TargetKindExport<'v> {
     pub name: &'v str,
     pub value: Value<'v>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuleFile {
+pub(crate) struct ModuleFile {
     pub(crate) display_path: String,
     pub(crate) source: String,
 }
 
-pub(crate) fn load_rule_files(root: &Path) -> Result<Vec<RuleFile>> {
-    let patterns = load_rule_path_patterns(root)?;
+pub(crate) fn load_module_files(root: &Path) -> Result<Vec<ModuleFile>> {
+    let patterns = load_module_path_patterns(root)?;
     let canonical_root = std::fs::canonicalize(root).map_err(|source| Error::Read {
         path: root.display().to_string(),
         source,
     })?;
     let mut files = BTreeMap::new();
     for pattern in patterns {
-        validate_rule_path_pattern(&pattern)?;
+        validate_module_path_pattern(&pattern)?;
         let glob_pattern = root.join(&pattern);
         let glob_pattern = glob_pattern.to_string_lossy().into_owned();
         let mut matched = false;
         for entry in glob::glob(&glob_pattern).map_err(|source| Error::Eval {
             path: TOML_BUILD_FILE_NAME.to_string(),
-            message: format!("invalid rule path pattern `{pattern}`: {source}"),
+            message: format!("invalid module path pattern `{pattern}`: {source}"),
         })? {
             let path = entry.map_err(|source| Error::Eval {
                 path: TOML_BUILD_FILE_NAME.to_string(),
-                message: format!("failed to resolve rule path pattern `{pattern}`: {source}"),
+                message: format!("failed to resolve module path pattern `{pattern}`: {source}"),
             })?;
-            let Some((display, canonical_path)) = resolve_rule_file(root, &canonical_root, &path)?
+            let Some((display, canonical_path)) =
+                resolve_module_file(root, &canonical_root, &path)?
             else {
                 continue;
             };
@@ -90,31 +94,31 @@ pub(crate) fn load_rule_files(root: &Path) -> Result<Vec<RuleFile>> {
         if !matched {
             return Err(Error::Eval {
                 path: TOML_BUILD_FILE_NAME.to_string(),
-                message: format!("rule path pattern `{pattern}` did not match any files"),
+                message: format!("module path pattern `{pattern}` did not match any files"),
             });
         }
     }
 
-    let rule_files = files
+    let module_files = files
         .into_iter()
         .map(|(display_path, path)| {
             let source = std::fs::read_to_string(&path).map_err(|source| Error::Read {
                 path: display_path.clone(),
                 source,
             })?;
-            Ok(RuleFile {
+            Ok(ModuleFile {
                 display_path,
                 source,
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    for rule_file in &rule_files {
-        validate_rule_file_source(rule_file)?;
+    for module_file in &module_files {
+        validate_module_file_source(module_file)?;
     }
-    Ok(rule_files)
+    Ok(module_files)
 }
 
-fn resolve_rule_file(
+fn resolve_module_file(
     root: &Path,
     canonical_root: &Path,
     path: &Path,
@@ -122,7 +126,7 @@ fn resolve_rule_file(
     if !path.is_file() {
         return Ok(None);
     }
-    let display_path = display_rule_path(root, path);
+    let display_path = display_module_path(root, path);
     let canonical_path = std::fs::canonicalize(path).map_err(|source| Error::Read {
         path: display_path.clone(),
         source,
@@ -133,26 +137,26 @@ fn resolve_rule_file(
     if !canonical_path.starts_with(canonical_root) {
         return Err(Error::Eval {
             path: TOML_BUILD_FILE_NAME.to_string(),
-            message: format!("rule file `{display_path}` resolves outside the project root"),
+            message: format!("module file `{display_path}` resolves outside the project root"),
         });
     }
     Ok(Some((display_path, canonical_path)))
 }
 
-fn validate_rule_file_source(rule_file: &RuleFile) -> Result<()> {
+fn validate_module_file_source(module_file: &ModuleFile) -> Result<()> {
     AstModule::parse(
-        &rule_file.display_path,
-        rule_file.source.clone(),
+        &module_file.display_path,
+        module_file.source.clone(),
         &Dialect::Standard,
     )
     .map(|_| ())
     .map_err(|source| Error::Parse {
-        path: rule_file.display_path.clone(),
+        path: module_file.display_path.clone(),
         message: format!("{source:?}"),
     })
 }
 
-fn load_rule_path_patterns(root: &Path) -> Result<Vec<String>> {
+fn load_module_path_patterns(root: &Path) -> Result<Vec<String>> {
     let path = root.join(TOML_BUILD_FILE_NAME);
     let src = match std::fs::read_to_string(&path) {
         Ok(src) => src,
@@ -166,21 +170,21 @@ fn load_rule_path_patterns(root: &Path) -> Result<Vec<String>> {
             });
         }
     };
-    load_rule_paths_toml_str(TOML_BUILD_FILE_NAME, &src)
+    load_module_paths_toml_str(TOML_BUILD_FILE_NAME, &src)
 }
 
-fn validate_rule_path_pattern(pattern: &str) -> Result<()> {
+fn validate_module_path_pattern(pattern: &str) -> Result<()> {
     if pattern.trim().is_empty() {
         return Err(Error::Eval {
             path: TOML_BUILD_FILE_NAME.to_string(),
-            message: "`rules.paths` entries must be non-empty".to_string(),
+            message: "`modules.paths` entries must be non-empty".to_string(),
         });
     }
     let path = Path::new(pattern);
     if path.is_absolute() {
         return Err(Error::Eval {
             path: TOML_BUILD_FILE_NAME.to_string(),
-            message: format!("rule path `{pattern}` must be relative to the project root"),
+            message: format!("module path `{pattern}` must be relative to the project root"),
         });
     }
     for component in path.components() {
@@ -188,19 +192,19 @@ fn validate_rule_path_pattern(pattern: &str) -> Result<()> {
             Component::CurDir => {
                 return Err(Error::Eval {
                     path: TOML_BUILD_FILE_NAME.to_string(),
-                    message: format!("rule path `{pattern}` must not contain `.` components"),
+                    message: format!("module path `{pattern}` must not contain `.` components"),
                 });
             }
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
                 return Err(Error::Eval {
                     path: TOML_BUILD_FILE_NAME.to_string(),
-                    message: format!("rule path `{pattern}` must stay inside the project root"),
+                    message: format!("module path `{pattern}` must stay inside the project root"),
                 });
             }
             Component::Normal(name) if name == ".once" => {
                 return Err(Error::Eval {
                     path: TOML_BUILD_FILE_NAME.to_string(),
-                    message: "rule paths under `.once` are reserved for Once state".to_string(),
+                    message: "module paths under `.once` are reserved for Once state".to_string(),
                 });
             }
             Component::Normal(_) => {}
@@ -209,15 +213,15 @@ fn validate_rule_path_pattern(pattern: &str) -> Result<()> {
     Ok(())
 }
 
-fn display_rule_path(root: &Path, path: &Path) -> String {
+fn display_module_path(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
         .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
-pub(crate) fn exported_rule_values<'v>(module: &Module<'v>) -> Vec<RuleExport<'v>> {
-    let mut rules = module
+pub(crate) fn exported_target_kind_values<'v>(module: &Module<'v>) -> Vec<TargetKindExport<'v>> {
+    let mut target_kinds = module
         .names()
         .filter_map(|name| {
             let name = name.as_str();
@@ -225,40 +229,40 @@ pub(crate) fn exported_rule_values<'v>(module: &Module<'v>) -> Vec<RuleExport<'v
                 return None;
             }
             let value = module.get(name)?;
-            is_rule_value(value).then_some(RuleExport { name, value })
+            is_target_kind_value(value).then_some(TargetKindExport { name, value })
         })
         .collect::<Vec<_>>();
-    rules.sort_unstable_by(|a, b| a.name.cmp(b.name));
-    rules
+    target_kinds.sort_unstable_by(|a, b| a.name.cmp(b.name));
+    target_kinds
 }
 
-pub(crate) fn rule_kind(
+pub(crate) fn target_kind(
     value: Value<'_>,
     export_name: &str,
 ) -> std::result::Result<String, String> {
     let dict = DictRef::from_value(value)
-        .ok_or_else(|| format!("rule export `{export_name}` should be a dict"))?;
+        .ok_or_else(|| format!("target kind export `{export_name}` should be a dict"))?;
     let Some(kind) = dict.get_str("kind") else {
         return Ok(export_name.to_string());
     };
     if kind.is_none() {
         return Ok(export_name.to_string());
     }
-    kind.unpack_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| format!("rule export `{export_name}` kind should be a string or None"))
+    kind.unpack_str().map(ToOwned::to_owned).ok_or_else(|| {
+        format!("target kind export `{export_name}` kind should be a string or None")
+    })
 }
 
-fn is_rule_value(value: Value<'_>) -> bool {
+fn is_target_kind_value(value: Value<'_>) -> bool {
     let Some(dict) = DictRef::from_value(value) else {
         return false;
     };
-    dict.get_str("_once_rule")
+    dict.get_str("_once_target_kind")
         .and_then(Value::unpack_bool)
         .unwrap_or(false)
 }
 
-fn load_built_in_rule_source() -> String {
+fn load_built_in_module_source() -> String {
     let sources = prelude_sources_from_index();
     let mut source = String::new();
     for path in sources {
@@ -326,96 +330,103 @@ mod tests {
     use super::*;
 
     #[test]
-    fn custom_rule_files_are_appended_to_built_in_rules() {
-        let custom = RuleFile {
-            display_path: "rules/demo.star".to_string(),
+    fn custom_module_files_are_appended_to_built_in_modules() {
+        let custom = ModuleFile {
+            display_path: "modules/demo.star".to_string(),
             source: r#"
-demo_rule = rule(docs = "Demo")
+demo_kind = target_kind(docs = "Demo")
 "#
             .to_string(),
         };
 
-        let source = combine_rule_sources("built_in_rule = rule(docs = \"Built in\")\n", &[custom]);
+        let source = combine_module_sources(
+            "built_in_kind = target_kind(docs = \"Built in\")\n",
+            &[custom],
+        );
 
-        assert!(source.contains("built_in_rule = rule"));
-        assert!(source.contains("# once rule file: rules/demo.star"));
-        assert!(source.contains("demo_rule = rule"));
-        assert!(!source.contains("_ONCE_BUILT_IN_RULES"));
+        assert!(source.contains("built_in_kind = target_kind"));
+        assert!(source.contains("# once module file: modules/demo.star"));
+        assert!(source.contains("demo_kind = target_kind"));
+        assert!(!source.contains("_ONCE_BUILT_IN_TARGET_KINDS"));
     }
 
     #[test]
-    fn rejects_dot_once_rule_paths() {
-        let err = validate_rule_path_pattern(".once/rules/*.star").unwrap_err();
+    fn rejects_dot_once_module_paths() {
+        let err = validate_module_path_pattern(".once/modules/*.star").unwrap_err();
         assert!(err.to_string().contains("reserved"));
     }
 
     #[test]
-    fn rejects_nested_dot_once_rule_paths() {
-        let err = validate_rule_path_pattern("build/.once/*.star").unwrap_err();
+    fn rejects_nested_dot_once_module_paths() {
+        let err = validate_module_path_pattern("build/.once/*.star").unwrap_err();
         assert!(err.to_string().contains("reserved"));
     }
 
     #[test]
-    fn rejects_current_dir_rule_paths() {
-        let err = validate_rule_path_pattern("./rules/*.star").unwrap_err();
+    fn rejects_current_dir_module_paths() {
+        let err = validate_module_path_pattern("./modules/*.star").unwrap_err();
         assert!(err.to_string().contains("must not contain `.`"));
     }
 
     #[cfg(unix)]
     #[test]
-    fn rejects_rule_file_symlinks_outside_workspace() {
+    fn rejects_module_file_symlinks_outside_workspace() {
         use std::os::unix::fs::symlink;
 
         let workspace = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        std::fs::write(outside.path().join("escape.star"), "demo_rule = None\n").unwrap();
+        std::fs::write(outside.path().join("escape.star"), "demo_kind = None\n").unwrap();
         std::fs::write(
             workspace.path().join(TOML_BUILD_FILE_NAME),
-            "[rules]\npaths = [\"rules/*.star\"]\n",
+            "[modules]\npaths = [\"modules/*.star\"]\n",
         )
         .unwrap();
-        std::fs::create_dir(workspace.path().join("rules")).unwrap();
+        std::fs::create_dir(workspace.path().join("modules")).unwrap();
         symlink(
             outside.path().join("escape.star"),
-            workspace.path().join("rules/escape.star"),
+            workspace.path().join("modules/escape.star"),
         )
         .unwrap();
 
-        let err = load_rule_files(workspace.path()).unwrap_err();
+        let err = load_module_files(workspace.path()).unwrap_err();
 
         assert!(err.to_string().contains("outside the project root"));
     }
 
     #[test]
-    fn rule_file_parse_errors_use_rule_file_path() {
+    fn module_file_parse_errors_use_module_file_path() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join(TOML_BUILD_FILE_NAME),
-            "[rules]\npaths = [\"rules/*.star\"]\n",
+            "[modules]\npaths = [\"modules/*.star\"]\n",
         )
         .unwrap();
-        std::fs::create_dir(tmp.path().join("rules")).unwrap();
-        std::fs::write(tmp.path().join("rules/bad.star"), "demo_rule = rule(\n").unwrap();
+        std::fs::create_dir(tmp.path().join("modules")).unwrap();
+        std::fs::write(
+            tmp.path().join("modules/bad.star"),
+            "demo_kind = target_kind(\n",
+        )
+        .unwrap();
 
-        let err = combined_rule_source_for_workspace(tmp.path()).unwrap_err();
+        let err = combined_module_source_for_workspace(tmp.path()).unwrap_err();
 
-        assert!(err.to_string().contains("rules/bad.star"));
+        assert!(err.to_string().contains("modules/bad.star"));
     }
 
     #[test]
-    fn loads_rule_files_from_root_rules_table() {
+    fn loads_module_files_from_root_modules_table() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join(TOML_BUILD_FILE_NAME),
-            "[rules]\npaths = [\"rules/*.star\"]\n",
+            "[modules]\npaths = [\"modules/*.star\"]\n",
         )
         .unwrap();
-        std::fs::create_dir(tmp.path().join("rules")).unwrap();
-        std::fs::write(tmp.path().join("rules/demo.star"), "demo_rule = None\n").unwrap();
+        std::fs::create_dir(tmp.path().join("modules")).unwrap();
+        std::fs::write(tmp.path().join("modules/demo.star"), "demo_kind = None\n").unwrap();
 
-        let files = load_rule_files(tmp.path()).unwrap();
+        let files = load_module_files(tmp.path()).unwrap();
 
         assert_eq!(files.len(), 1);
-        assert_eq!(files[0].display_path, "rules/demo.star");
+        assert_eq!(files[0].display_path, "modules/demo.star");
     }
 }

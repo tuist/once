@@ -164,7 +164,7 @@ pub enum Cmd {
     ///
     /// Builds the target as needed, then executes its `test`
     /// capability through the action cache. Output paths and result
-    /// groups are owned by the rule that exposes the capability.
+    /// groups are owned by the target kind that exposes the capability.
     #[command(arg_required_else_help = true)]
     Test {
         /// Target id, e.g. `apps/ios/AppTests` or `./AppTests`.
@@ -257,7 +257,7 @@ pub enum Cmd {
     ///
     /// Reports the toolchains a project pins (Rust, Swift, mise) and
     /// the resolved versions Once will use when running actions from
-    /// script adapters or graph rules. Pair with `once query schema`
+    /// script adapters or graph target kinds. Pair with `once query schema`
     /// when debugging "why did the cache miss?" questions where the
     /// toolchain identity is suspect.
     #[command(arg_required_else_help = true)]
@@ -269,10 +269,10 @@ pub enum Cmd {
     /// Query the typed build graph.
     ///
     /// Inspectable-first surface for humans and agents. `query
-    /// targets` lists every declared target id with its rule kind
+    /// targets` lists every declared target id with its target kind
     /// and capabilities; `query capabilities` shows what a specific
     /// target exposes (`build`, `run`, `test`); `query schema`
-    /// returns the typed attribute and provider shape for a rule; and
+    /// returns the typed attribute and provider shape for a target kind; and
     /// `query example` materializes a chosen starter. All query
     /// surfaces respect `--format json` so consumers can plan against
     /// the graph without scraping prose.

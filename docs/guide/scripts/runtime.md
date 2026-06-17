@@ -20,7 +20,7 @@ for it.
 Declare the inputs that determine a result, ask the cache whether you
 have already produced that result, and either skip the work or restore
 the artifact. The script stays a script. The speedup comes from the same
-store used by script adapters and typed graph rules.
+store used by script adapters and typed graph target kinds.
 
 The surface is small: a content-addressed store of bytes, plus a map
 from an action's input digest to the result that input produced.

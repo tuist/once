@@ -1418,8 +1418,8 @@ _RUST_COMMON_ATTRS = [
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
 ]
 
-cargo_dependencies = rule(
-    docs = "Cacheable Cargo dependency set consumed by Rust targets. The rule reads Cargo.toml and Cargo.lock through `cargo metadata`, compiles resolved external crates as Once actions, and exposes them as one graph dependency.",
+cargo_dependencies = target_kind(
+    docs = "Cacheable Cargo dependency set consumed by Rust targets. The target kind reads Cargo.toml and Cargo.lock through `cargo metadata`, compiles resolved external crates as Once actions, and exposes them as one graph dependency.",
     attrs = [
         attr("manifest", "string", default = "Cargo.toml", docs = "Workspace-relative Cargo manifest path passed to `cargo metadata --manifest-path`.", configurable = False),
         attr("lockfile", "string", default = "Cargo.lock", docs = "Workspace-relative Cargo lockfile path included in the dependency action key.", configurable = False),
@@ -1442,7 +1442,7 @@ cargo_dependencies = rule(
     impl = _cargo_dependencies_impl,
 )
 
-rust_library = rule(
+rust_library = target_kind(
     docs = "Rust rlib compiled with rustc. Direct deps are passed through `--extern`; transitive rlibs are exposed as dependency search paths.",
     attrs = _RUST_COMMON_ATTRS + [
         attr("crate_type", "string", default = "rlib", docs = "Rust crate type for the library output. Defaults to `rlib`; final artifacts may use `staticlib`, `cdylib`, or `dylib`.", configurable = False),
@@ -1460,7 +1460,7 @@ rust_library = rule(
     impl = _rust_library_impl,
 )
 
-rust_binary = rule(
+rust_binary = target_kind(
     docs = "Rust executable compiled with rustc from a main crate and Rust crate deps.",
     attrs = _RUST_COMMON_ATTRS,
     deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
@@ -1476,7 +1476,7 @@ rust_binary = rule(
     impl = _rust_binary_impl,
 )
 
-rust_crate = rule(
+rust_crate = target_kind(
     docs = "Resolved third-party Rust crate lowered from Cargo package metadata into a normal Once Rust library target.",
     attrs = _RUST_COMMON_ATTRS + [
         attr("package_name", "string", required = True, docs = "Original Cargo package name."),
@@ -1497,7 +1497,7 @@ rust_crate = rule(
     impl = _rust_crate_impl,
 )
 
-rust_proc_macro = rule(
+rust_proc_macro = target_kind(
     docs = "Rust procedural macro compiled for the execution host and consumed through --extern by Rust targets.",
     attrs = _RUST_COMMON_ATTRS + [
         attr("package_name", "string", docs = "Original Cargo package name when the target was lowered from Cargo metadata."),

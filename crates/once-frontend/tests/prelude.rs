@@ -3,9 +3,9 @@ use std::path::Path;
 use std::process::Command;
 
 use once_frontend::analysis::{
-    globals_for_prelude, rule_has_impl, with_active_store, AnalysisStore,
+    globals_for_prelude, target_kind_has_impl, with_active_store, AnalysisStore,
 };
-use once_frontend::{built_in_rule_schema, graph_from_targets, Target};
+use once_frontend::{built_in_target_kind_schema, graph_from_targets, Target};
 use starlark::environment::Module;
 use starlark::eval::Evaluator;
 use starlark::syntax::{AstModule, Dialect};
@@ -38,8 +38,8 @@ fn all_prelude_source() -> String {
 }
 
 #[test]
-fn rule_has_impl_returns_true_for_apple_library() {
-    assert!(rule_has_impl("apple_library").unwrap());
+fn target_kind_has_impl_returns_true_for_apple_library() {
+    assert!(target_kind_has_impl("apple_library").unwrap());
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn apple_application_exposes_build_and_run() {
 
 #[test]
 fn apple_library_schema_exposes_multi_arch_attributes() {
-    let schema = built_in_rule_schema("apple_library").expect("apple_library schema");
+    let schema = built_in_target_kind_schema("apple_library").expect("apple_library schema");
     let attr_names = schema
         .attrs
         .iter()
@@ -96,19 +96,19 @@ fn apple_library_swift_compile_is_split_into_module_and_archive_actions() {
 }
 
 #[test]
-fn rule_has_impl_returns_true_for_swift_macro() {
-    assert!(rule_has_impl("swift_macro").unwrap());
+fn target_kind_has_impl_returns_true_for_swift_macro() {
+    assert!(target_kind_has_impl("swift_macro").unwrap());
 }
 
 #[test]
-fn rule_has_impl_returns_true_for_all_apple_bundle_rules() {
-    // Every bundled Apple rule kind now has a Starlark impl that
+fn target_kind_has_impl_returns_true_for_all_apple_bundle_kinds() {
+    // Every bundled Apple target kind now has a Starlark impl that
     // declares actions; the CLI's generic fallback action is
     // bypassed for these kinds in favour of the Starlark-driven
     // analysis.
-    assert!(rule_has_impl("apple_framework").unwrap());
-    assert!(rule_has_impl("apple_application").unwrap());
-    assert!(rule_has_impl("apple_test_bundle").unwrap());
+    assert!(target_kind_has_impl("apple_framework").unwrap());
+    assert!(target_kind_has_impl("apple_application").unwrap());
+    assert!(target_kind_has_impl("apple_test_bundle").unwrap());
 }
 
 fn eval_prelude_function(
@@ -801,7 +801,7 @@ fn prelude_apple_config_tokens_rejects_select_on_platform() {
     );
 }
 
-/// `_resolve_attrs` must reject `select()` on attributes the rule
+/// `_resolve_attrs` must reject `select()` on attributes the target kind
 /// schema marks non-configurable (e.g. `module_name`). Without
 /// this guard, a select on `module_name` would silently resolve
 /// against the configuration and the build would proceed with a

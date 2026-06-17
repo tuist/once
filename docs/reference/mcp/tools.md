@@ -4,9 +4,9 @@ Every tool the `once mcp` server advertises in `tools/list`, with the input sche
 
 ## `once_query_targets`
 
-List every declared target in the workspace, optionally filtered by rule kind.
+List every declared target in the workspace, optionally filtered by target kind.
 
-Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, rule kind, dep edges, and the capabilities it exposes. The optional `kind` argument narrows results to a single rule.
+Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, target kind, dep edges, and the capabilities it exposes. The optional `kind` argument narrows results to one target kind.
 
 **Input schema**
 
@@ -14,7 +14,7 @@ Returns the same record shape as `once query targets --format json`: one entry p
 {
   "properties": {
     "kind": {
-      "description": "Restrict results to targets of this rule kind (e.g. `apple_library`).",
+      "description": "Restrict results to targets of this target kind (e.g. `apple_library`).",
       "type": "string"
     }
   },
@@ -74,9 +74,9 @@ Returns the same record `once query capabilities <target> --format json` emits: 
 
 ## `once_query_schema`
 
-Return the typed contract for a rule kind: attributes, dep edges, providers, capabilities, and runnable starter examples.
+Return the typed contract for a target kind: attributes, dep edges, providers, capabilities, and runnable starter examples.
 
-Returns the rule schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the rule's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.
+Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.
 
 **Input schema**
 
@@ -84,7 +84,7 @@ Returns the rule schema (the typed contract a target of that kind must match) as
 {
   "properties": {
     "kind": {
-      "description": "Rule kind to introspect, e.g. `apple_library`.",
+      "description": "Target kind to introspect, e.g. `apple_library`.",
       "type": "string"
     }
   },
@@ -118,9 +118,9 @@ Returns the rule schema (the typed contract a target of that kind must match) as
 
 ## `once_query_example`
 
-Return the materialized file bundle for one rule starter example.
+Return the materialized file bundle for one target kind starter example.
 
-Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every UTF-8 file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_rules` or `once_query_schema`; this tool fetches the heavier file payload only after a caller chooses one.
+Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every UTF-8 file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`; this tool fetches the heavier file payload only after a caller chooses one.
 
 **Input schema**
 
@@ -128,11 +128,11 @@ Returns the same record as `once query example <kind> <slug> --format json`: the
 {
   "properties": {
     "kind": {
-      "description": "Rule kind that owns the example, e.g. `apple_library`.",
+      "description": "Target kind that owns the example, e.g. `apple_library`.",
       "type": "string"
     },
     "slug": {
-      "description": "Example slug from the rule schema, e.g. `apple-library-minimal`.",
+      "description": "Example slug from the target kind schema, e.g. `apple-library-minimal`.",
       "type": "string"
     }
   },
@@ -157,11 +157,11 @@ Returns the same record as `once query example <kind> <slug> --format json`: the
 }
 ```
 
-## `once_list_rules`
+## `once_list_target_kinds`
 
-List every rule kind available in the workspace, with its one-line docs and example slugs.
+List every target kind available in the workspace, with its one-line docs and example slugs.
 
-Lightweight discovery entry point. Returns one entry per rule kind containing the rule's documentation and the slugs of its bundled starter examples. Use this to discover what kinds of targets are buildable in the workspace before calling `once_query_schema` for the full contract of a chosen rule.
+Lightweight discovery entry point. Returns one entry per target kind containing the target kind's documentation and the slugs of its bundled starter examples. Use this to discover what kinds of targets are buildable in the workspace before calling `once_query_schema` for the full contract of a chosen target kind.
 
 **Input schema**
 
@@ -188,9 +188,9 @@ Lightweight discovery entry point. Returns one entry per rule kind containing th
 
 ## `once_get_target`
 
-Return the resolved view of a single target: rule kind, srcs, deps, typed attrs, capabilities, providers.
+Return the resolved view of a single target: target kind, srcs, deps, typed attrs, capabilities, providers.
 
-Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one target id. Includes the target's typed attribute values (with the types declared by its rule schema), the capabilities it exposes, the providers it emits, and any diagnostics emitted while loading the manifest. Use this before editing a target to learn its current shape.
+Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one target id. Includes the target's typed attribute values (with the types declared by its target kind schema), the capabilities it exposes, the providers it emits, and any diagnostics emitted while loading the manifest. Use this before editing a target to learn its current shape.
 
 **Input schema**
 
@@ -227,7 +227,7 @@ Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one 
 
 List targets that expose Once's generic test capability.
 
-Returns every target with a `test` capability, including its rule kind, dependencies, runner type when the rule exposes `once_test_info`, labels, and normalized result path. Use this as the agent-native test discovery entry point before running or filtering tests.
+Returns every target with a `test` capability, including its target kind, dependencies, runner type when the target kind exposes `once_test_info`, labels, and normalized result path. Use this as the agent-native test discovery entry point before running or filtering tests.
 
 **Input schema**
 
@@ -378,7 +378,7 @@ Reads the normalized result file produced by the target's `test` capability. Thi
 
 Build a target by running its generic `build` capability.
 
-Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once build <target> --format json`, so dependency traversal, rule-declared actions, cache policy, and output groups stay owned by the CLI and rule graph. The tool returns stdout parsed as JSON when possible, along with exit status and stderr. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.
+Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once build <target> --format json`, so dependency traversal, actions declared by target kinds, cache policy, and output groups stay owned by the CLI graph. The tool returns stdout parsed as JSON when possible, along with exit status and stderr. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.
 
 **Input schema**
 
@@ -420,7 +420,7 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 
 Run a target by executing its generic `run` capability.
 
-Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once run <target> --format json`, including any prerequisite build outputs declared by the target's `run` capability. Rule-declared execution policy is preserved, so uncacheable actions are executed instead of replayed from the action cache. The tool returns stdout parsed as JSON when possible, plus exit status and stderr.
+Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once run <target> --format json`, including any prerequisite build outputs declared by the target's `run` capability. Execution policy declared by the target kind is preserved, so uncacheable actions are executed instead of replayed from the action cache. The tool returns stdout parsed as JSON when possible, plus exit status and stderr.
 
 **Input schema**
 
@@ -613,9 +613,9 @@ Writes a stop request into the runtime session directory. The supervisor observe
 
 ## `once_validate_target`
 
-Validate a proposed `[[target]]` table against its rule schema. Returns structured diagnostics instead of prose.
+Validate a proposed `[[target]]` table against its target kind schema. Returns structured diagnostics instead of prose.
 
-Schema-only validation: checks that the target declares a known rule kind, every required attribute is present, every declared attribute is known to the rule and matches the rule's declared type, and the target name is well-formed. The check is local; it does not resolve dep references or read other manifests. Returns `{ valid: true }` on success or `{ valid: false, diagnostics: [...] }` where each diagnostic carries a stable `code`, the offending `target` id, the offending `attribute` when applicable, and `repairs` an agent can apply.
+Schema-only validation: checks that the target declares a known target kind, every required attribute is present, every declared attribute is known to the target kind and matches the target kind's declared type, and the target name is well-formed. The check is local; it does not resolve dep references or read other manifests. Returns `{ valid: true }` on success or `{ valid: false, diagnostics: [...] }` where each diagnostic carries a stable `code`, the offending `target` id, the offending `attribute` when applicable, and `repairs` an agent can apply.
 
 **Input schema**
 
@@ -642,7 +642,7 @@ Schema-only validation: checks that the target declares a known rule kind, every
   "diagnostics": [
     {
       "code": "missing_required_attr",
-      "message": "rule `apple_library` requires attribute `platform`",
+      "message": "target kind `apple_library` requires attribute `platform`",
       "target": "Hello",
       "attribute": "platform"
     }

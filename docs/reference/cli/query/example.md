@@ -1,6 +1,6 @@
 # `once query example`
 
-Materialize a rule starter example
+Materialize a target kind starter example
 
 ## Synopsis
 
@@ -12,7 +12,7 @@ once query example [OPTIONS] <KIND> <SLUG>
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<KIND>` | yes | Rule kind, e.g. `apple_library` |
+| `<KIND>` | yes | Target kind, e.g. `apple_library` |
 | `<SLUG>` | yes | Example slug from `once query schema` |
 
 ## Options

@@ -1,6 +1,6 @@
-//! Rule example bundles. Rule schemas carry lightweight example
-//! descriptors during discovery; the file tree is loaded only when a
-//! caller asks to materialize a specific starter.
+//! Target kind example bundles. Target kind schemas carry lightweight
+//! example descriptors during discovery; the file tree is loaded only
+//! when a caller asks to materialize a specific starter.
 
 use std::path::{Component, Path};
 
@@ -9,41 +9,47 @@ use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
 use crate::graph::{
-    RuleExample, RuleExampleBundle, RuleExampleFile, RuleExampleRoot, RuleExampleSource, RuleSchema,
+    TargetKindExample, TargetKindExampleBundle, TargetKindExampleFile, TargetKindExampleRoot,
+    TargetKindExampleSource, TargetKindSchema,
 };
 
 static PRELUDE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/prelude");
 
 pub(crate) fn example_source(
-    root: RuleExampleRoot,
+    root: TargetKindExampleRoot,
     base: &str,
     path: &str,
-) -> std::result::Result<RuleExampleSource, String> {
+) -> std::result::Result<TargetKindExampleSource, String> {
     validate_relative_path(path)?;
     let path = join_relative(base, path);
-    let source = RuleExampleSource { root, path };
+    let source = TargetKindExampleSource { root, path };
     validate_example_source(&source)?;
     Ok(source)
 }
 
-pub fn load_rule_example(schema: &RuleSchema, slug: &str) -> Result<RuleExampleBundle> {
+pub fn load_target_kind_example(
+    schema: &TargetKindSchema,
+    slug: &str,
+) -> Result<TargetKindExampleBundle> {
     let example = schema
         .examples
         .iter()
         .find(|example| example.slug == slug)
         .ok_or_else(|| Error::Eval {
             path: schema.kind.clone(),
-            message: format!("rule `{}` has no example `{slug}`", schema.kind),
+            message: format!("target kind `{}` has no example `{slug}`", schema.kind),
         })?;
     load_example_bundle(example)
 }
 
-pub fn load_example_bundle(example: &RuleExample) -> Result<RuleExampleBundle> {
+pub fn load_example_bundle(example: &TargetKindExample) -> Result<TargetKindExampleBundle> {
     let files = match &example.source.root {
-        RuleExampleRoot::BuiltInPrelude => load_included_files(&example.source.path)?,
-        RuleExampleRoot::Workspace { root } => load_workspace_files(root, &example.source.path)?,
+        TargetKindExampleRoot::BuiltInPrelude => load_included_files(&example.source.path)?,
+        TargetKindExampleRoot::Workspace { root } => {
+            load_workspace_files(root, &example.source.path)?
+        }
     };
-    Ok(RuleExampleBundle {
+    Ok(TargetKindExampleBundle {
         name: example.name.clone(),
         slug: example.slug.clone(),
         use_when: example.use_when.clone(),
@@ -52,10 +58,10 @@ pub fn load_example_bundle(example: &RuleExample) -> Result<RuleExampleBundle> {
 }
 
 pub(crate) fn validate_example_source(
-    source: &RuleExampleSource,
+    source: &TargetKindExampleSource,
 ) -> std::result::Result<(), String> {
     match &source.root {
-        RuleExampleRoot::BuiltInPrelude => {
+        TargetKindExampleRoot::BuiltInPrelude => {
             if PRELUDE_DIR.get_dir(&source.path).is_none() {
                 return Err(format!(
                     "references missing built-in example directory `{}`",
@@ -64,11 +70,11 @@ pub(crate) fn validate_example_source(
             }
             Ok(())
         }
-        RuleExampleRoot::Workspace { root } => validate_workspace_source(root, &source.path),
+        TargetKindExampleRoot::Workspace { root } => validate_workspace_source(root, &source.path),
     }
 }
 
-fn load_included_files(path: &str) -> Result<Vec<RuleExampleFile>> {
+fn load_included_files(path: &str) -> Result<Vec<TargetKindExampleFile>> {
     let dir = PRELUDE_DIR.get_dir(path).ok_or_else(|| Error::Eval {
         path: path.to_string(),
         message: format!("example directory `{path}` is not bundled"),
@@ -79,11 +85,11 @@ fn load_included_files(path: &str) -> Result<Vec<RuleExampleFile>> {
     Ok(files)
 }
 
-fn collect_included_files(dir: &Dir<'_>, root: &Path, out: &mut Vec<RuleExampleFile>) {
+fn collect_included_files(dir: &Dir<'_>, root: &Path, out: &mut Vec<TargetKindExampleFile>) {
     for file in dir.files() {
         let path = file.path();
         let relative = path.strip_prefix(root).unwrap_or(path);
-        out.push(RuleExampleFile {
+        out.push(TargetKindExampleFile {
             path: display_path(relative),
             contents: file.contents_utf8().unwrap_or_default().to_string(),
         });
@@ -93,7 +99,7 @@ fn collect_included_files(dir: &Dir<'_>, root: &Path, out: &mut Vec<RuleExampleF
     }
 }
 
-fn load_workspace_files(root: &Path, path: &str) -> Result<Vec<RuleExampleFile>> {
+fn load_workspace_files(root: &Path, path: &str) -> Result<Vec<TargetKindExampleFile>> {
     let source_root = root.join(path);
     let mut files = Vec::new();
     for entry in WalkDir::new(&source_root) {
@@ -112,7 +118,7 @@ fn load_workspace_files(root: &Path, path: &str) -> Result<Vec<RuleExampleFile>>
             path: entry.path().display().to_string(),
             source,
         })?;
-        files.push(RuleExampleFile {
+        files.push(TargetKindExampleFile {
             path: display_path(relative),
             contents,
         });
@@ -168,7 +174,7 @@ fn validate_relative_path(path: &str) -> std::result::Result<(), String> {
             | Component::ParentDir
             | Component::RootDir
             | Component::Prefix(_) => {
-                return Err("path must stay inside the rule package".to_string());
+                return Err("path must stay inside the module package".to_string());
             }
         }
     }

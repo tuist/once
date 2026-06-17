@@ -20,7 +20,7 @@ const FAILURE_OUTPUT_LIMIT: usize = 16 * 1024;
 struct DeclaredActionRun<'a> {
     workspace: &'a Path,
     cache: &'a CacheProvider,
-    rule_source_digest: Digest,
+    module_source_digest: Digest,
     target_id: &'a str,
     index: usize,
     declared: DeclaredAction,
@@ -42,7 +42,7 @@ struct DeclaredActionOutcome {
 pub(super) fn run_declared_actions<'a>(
     workspace: &'a Path,
     cache: &'a CacheProvider,
-    rule_source_digest: Digest,
+    module_source_digest: Digest,
     target: &'a GraphTarget,
     analysis: AnalysisResult,
     dep_action_digests: &'a [(String, Digest)],
@@ -74,7 +74,7 @@ pub(super) fn run_declared_actions<'a>(
             let outcome = run_declared_action(DeclaredActionRun {
                 workspace,
                 cache,
-                rule_source_digest,
+                module_source_digest,
                 target_id: &target.label.id,
                 index,
                 declared,
@@ -98,7 +98,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     let DeclaredActionRun {
         workspace,
         cache,
-        rule_source_digest,
+        module_source_digest,
         target_id,
         index,
         declared,
@@ -121,7 +121,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     let action = declared_to_action(
         workspace,
         declared,
-        rule_source_digest,
+        module_source_digest,
         input_action_digests,
     )
     .with_context(|| format!("building action {index} for {target_id} ({identifier_for_error})"))?;
@@ -316,7 +316,7 @@ fn compose_target_action_digest(target_id: &str, action_digests: &[Digest]) -> D
 fn declared_to_action(
     workspace: &Path,
     declared: DeclaredAction,
-    rule_source_digest: Digest,
+    module_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
 ) -> Result<Action> {
     let env_keys = declared.env.keys().cloned().collect::<Vec<_>>();
@@ -328,8 +328,12 @@ fn declared_to_action(
         outputs = declared.outputs.len(),
         "declared graph action"
     );
-    let input_digest =
-        compose_input_digest(workspace, &declared, rule_source_digest, dep_action_digests)?;
+    let input_digest = compose_input_digest(
+        workspace,
+        &declared,
+        module_source_digest,
+        dep_action_digests,
+    )?;
     let outputs = declared
         .outputs
         .iter()
@@ -368,11 +372,11 @@ fn ensure_output_parent_dirs(workspace: &Path, outputs: &[WorkspacePath]) -> Res
 fn compose_input_digest(
     workspace: &Path,
     declared: &DeclaredAction,
-    rule_source_digest: Digest,
+    module_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
 ) -> Result<Digest> {
     let mut builder = InputDigestBuilder::new(b"once.declared_action.input.v1\0");
-    builder.push_keyed(b"rules", &rule_source_digest);
+    builder.push_keyed(b"modules", &module_source_digest);
     if let Some(identity) = &declared.toolchain_identity {
         builder.push_bytes(identity.as_bytes());
     }
@@ -416,8 +420,8 @@ mod tests {
 
     use super::*;
 
-    fn rule_digest() -> Digest {
-        Digest::of_bytes(b"rules")
+    fn module_digest() -> Digest {
+        Digest::of_bytes(b"modules")
     }
 
     #[test]
@@ -436,7 +440,7 @@ mod tests {
             identifier: None,
         };
 
-        let action = declared_to_action(workspace.path(), declared, rule_digest(), &[]).unwrap();
+        let action = declared_to_action(workspace.path(), declared, module_digest(), &[]).unwrap();
 
         assert!(workspace.path().join(".once/out/x").is_dir());
         assert!(workspace.path().join(".once/out/x/sub").is_dir());
@@ -606,17 +610,17 @@ mod tests {
             toolchain_identity: Some("id-1".to_string()),
             identifier: None,
         };
-        let one = compose_input_digest(workspace.path(), &declared, rule_digest(), &[]).unwrap();
+        let one = compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
         let declared2 = DeclaredAction {
             toolchain_identity: Some("id-2".to_string()),
             ..declared.clone()
         };
-        let two = compose_input_digest(workspace.path(), &declared2, rule_digest(), &[]).unwrap();
+        let two = compose_input_digest(workspace.path(), &declared2, module_digest(), &[]).unwrap();
         assert_ne!(one, two);
     }
 
     #[test]
-    fn input_digest_changes_with_rule_source_digest() {
+    fn input_digest_changes_with_module_source_digest() {
         let workspace = tempfile::tempdir().unwrap();
         std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
@@ -631,14 +635,14 @@ mod tests {
         let one = compose_input_digest(
             workspace.path(),
             &declared,
-            Digest::of_bytes(b"rules-1"),
+            Digest::of_bytes(b"modules-1"),
             &[],
         )
         .unwrap();
         let two = compose_input_digest(
             workspace.path(),
             &declared,
-            Digest::of_bytes(b"rules-2"),
+            Digest::of_bytes(b"modules-2"),
             &[],
         )
         .unwrap();
@@ -662,7 +666,7 @@ mod tests {
         let a = compose_input_digest(
             workspace.path(),
             &declared,
-            rule_digest(),
+            module_digest(),
             &[
                 ("dep1".to_string(), Digest::of_bytes(b"d1")),
                 ("dep2".to_string(), Digest::of_bytes(b"d2")),
@@ -672,7 +676,7 @@ mod tests {
         let b = compose_input_digest(
             workspace.path(),
             &declared,
-            rule_digest(),
+            module_digest(),
             &[
                 ("dep2".to_string(), Digest::of_bytes(b"d2")),
                 ("dep1".to_string(), Digest::of_bytes(b"d1")),

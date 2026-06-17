@@ -13,10 +13,10 @@
 //! tool because coding harnesses need a short discover, filter, run,
 //! inspect loop after editing files.
 //!
-//! Target execution is opt-in because it writes outputs and may trigger rule
-//! side effects. When enabled, tools can build, run, or start persisted runtime
-//! sessions and return session ids agents can use to query status, read logs,
-//! or stop the process later.
+//! Target execution is opt-in because it writes outputs and may trigger target
+//! kind side effects. When enabled, tools can build, run, or start persisted
+//! runtime sessions and return session ids agents can use to query status, read
+//! logs, or stop the process later.
 
 use std::path::{Path, PathBuf};
 
@@ -161,7 +161,7 @@ impl Server {
             "once_apply_edit" => self.tool_apply_edit(&call.arguments),
             "once_query_schema" => tool_query_schema(&self.workspace, &call.arguments),
             "once_query_example" => tool_query_example(&self.workspace, &call.arguments),
-            "once_list_rules" => tool_list_rules(&self.workspace),
+            "once_list_target_kinds" => tool_list_target_kinds(&self.workspace),
             "once_validate_target" => tool_validate_target(&self.workspace, &call.arguments),
             other => Err(anyhow::anyhow!("unknown tool `{other}`")),
         };
@@ -487,21 +487,21 @@ fn tool_query_schema(workspace: &Path, args: &Value) -> Result<Value> {
         .get("kind")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing `kind` argument"))?;
-    let schema = once_frontend::rule_schemas_for_workspace(workspace)?
+    let schema = once_frontend::target_kind_schemas_for_workspace(workspace)?
         .into_iter()
         .find(|schema| schema.kind == kind)
-        .with_context(|| format!("no rule schema matches `{kind}`"))?;
+        .with_context(|| format!("no target kind schema matches `{kind}`"))?;
     Ok(serde_json::to_value(schema)?)
 }
 
 fn tool_query_example(workspace: &Path, args: &Value) -> Result<Value> {
     let kind = required_string_arg(args, "kind")?;
     let slug = required_string_arg(args, "slug")?;
-    let schema = once_frontend::rule_schemas_for_workspace(workspace)?
+    let schema = once_frontend::target_kind_schemas_for_workspace(workspace)?
         .into_iter()
         .find(|schema| schema.kind == kind)
-        .with_context(|| format!("no rule schema matches `{kind}`"))?;
-    let example = once_frontend::load_rule_example(&schema, slug)?;
+        .with_context(|| format!("no target kind schema matches `{kind}`"))?;
+    let example = once_frontend::load_target_kind_example(&schema, slug)?;
     Ok(serde_json::to_value(example)?)
 }
 
@@ -514,9 +514,10 @@ fn required_string_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("`{name}` must be a string"))
 }
 
-fn tool_list_rules(workspace: &Path) -> Result<Value> {
-    let schemas = once_frontend::rule_schemas_for_workspace(workspace)?;
-    let summaries: Vec<RuleSummary> = schemas.into_iter().map(RuleSummary::from).collect();
+fn tool_list_target_kinds(workspace: &Path) -> Result<Value> {
+    let schemas = once_frontend::target_kind_schemas_for_workspace(workspace)?;
+    let summaries: Vec<TargetKindSummary> =
+        schemas.into_iter().map(TargetKindSummary::from).collect();
     Ok(serde_json::to_value(summaries)?)
 }
 
@@ -527,7 +528,7 @@ fn tool_validate_target(workspace: &Path, args: &Value) -> Result<Value> {
         .clone();
     let spec: once_frontend::TargetSpec = serde_json::from_value(raw_target)
         .map_err(|err| anyhow::anyhow!("invalid `target`: {err}"))?;
-    let schemas = once_frontend::rule_schemas_for_workspace(workspace)?;
+    let schemas = once_frontend::target_kind_schemas_for_workspace(workspace)?;
     let diagnostics = once_frontend::validate_target(&spec, &schemas);
     if diagnostics.is_empty() {
         Ok(json!({ "valid": true }))
@@ -553,8 +554,8 @@ fn apply_edit_to_package(
             ));
         }
     };
-    let schemas =
-        once_frontend::rule_schemas_for_workspace(workspace).context("loading rule schemas")?;
+    let schemas = once_frontend::target_kind_schemas_for_workspace(workspace)
+        .context("loading target kind schemas")?;
     match once_frontend::apply_operations_with_schemas(&existing, operations, &schemas) {
         Ok(new_src) => {
             std::fs::create_dir_all(&package_dir).with_context(|| {
@@ -572,28 +573,28 @@ fn apply_edit_to_package(
 }
 
 #[derive(Debug, Serialize)]
-struct RuleSummary {
+struct TargetKindSummary {
     kind: String,
     docs: String,
-    examples: Vec<RuleExampleSummary>,
+    examples: Vec<TargetKindExampleSummary>,
 }
 
 #[derive(Debug, Serialize)]
-struct RuleExampleSummary {
+struct TargetKindExampleSummary {
     slug: String,
     name: String,
     use_when: String,
 }
 
-impl From<once_frontend::RuleSchema> for RuleSummary {
-    fn from(schema: once_frontend::RuleSchema) -> Self {
+impl From<once_frontend::TargetKindSchema> for TargetKindSummary {
+    fn from(schema: once_frontend::TargetKindSchema) -> Self {
         Self {
             kind: schema.kind,
             docs: schema.docs,
             examples: schema
                 .examples
                 .into_iter()
-                .map(|example| RuleExampleSummary {
+                .map(|example| TargetKindExampleSummary {
                     slug: example.slug,
                     name: example.name,
                     use_when: example.use_when,
@@ -675,14 +676,14 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "once_query_targets",
-            description: "List every declared target in the workspace, optionally filtered by rule kind.",
-            long_description: "Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, rule kind, dep edges, and the capabilities it exposes. The optional `kind` argument narrows results to a single rule.",
+            description: "List every declared target in the workspace, optionally filtered by target kind.",
+            long_description: "Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, target kind, dep edges, and the capabilities it exposes. The optional `kind` argument narrows results to one target kind.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "description": "Restrict results to targets of this rule kind (e.g. `apple_library`)."
+                        "description": "Restrict results to targets of this target kind (e.g. `apple_library`)."
                     }
                 }
             }),
@@ -706,14 +707,14 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_query_schema",
-            description: "Return the typed contract for a rule kind: attributes, dep edges, providers, capabilities, and runnable starter examples.",
-            long_description: "Returns the rule schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the rule's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.",
+            description: "Return the typed contract for a target kind: attributes, dep edges, providers, capabilities, and runnable starter examples.",
+            long_description: "Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "description": "Rule kind to introspect, e.g. `apple_library`."
+                        "description": "Target kind to introspect, e.g. `apple_library`."
                     }
                 },
                 "required": ["kind"]
@@ -722,18 +723,18 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_query_example",
-            description: "Return the materialized file bundle for one rule starter example.",
-            long_description: "Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every UTF-8 file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_rules` or `once_query_schema`; this tool fetches the heavier file payload only after a caller chooses one.",
+            description: "Return the materialized file bundle for one target kind starter example.",
+            long_description: "Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every UTF-8 file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`; this tool fetches the heavier file payload only after a caller chooses one.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "description": "Rule kind that owns the example, e.g. `apple_library`."
+                        "description": "Target kind that owns the example, e.g. `apple_library`."
                     },
                     "slug": {
                         "type": "string",
-                        "description": "Example slug from the rule schema, e.g. `apple-library-minimal`."
+                        "description": "Example slug from the target kind schema, e.g. `apple-library-minimal`."
                     }
                 },
                 "required": ["kind", "slug"]
@@ -741,9 +742,9 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
             example_return: "{\n  \"slug\": \"apple-library-minimal\",\n  \"name\": \"Minimal Apple library\",\n  \"use_when\": \"...\",\n  \"files\": [\n    { \"path\": \"apps/Hello/once.toml\", \"contents\": \"[[target]]\\nname = \\\"Hello\\\"\\nkind = \\\"apple_library\\\"\\n...\" }\n  ]\n}",
         },
         ToolDefinition {
-            name: "once_list_rules",
-            description: "List every rule kind available in the workspace, with its one-line docs and example slugs.",
-            long_description: "Lightweight discovery entry point. Returns one entry per rule kind containing the rule's documentation and the slugs of its bundled starter examples. Use this to discover what kinds of targets are buildable in the workspace before calling `once_query_schema` for the full contract of a chosen rule.",
+            name: "once_list_target_kinds",
+            description: "List every target kind available in the workspace, with its one-line docs and example slugs.",
+            long_description: "Lightweight discovery entry point. Returns one entry per target kind containing the target kind's documentation and the slugs of its bundled starter examples. Use this to discover what kinds of targets are buildable in the workspace before calling `once_query_schema` for the full contract of a chosen target kind.",
             input_schema: json!({
                 "type": "object",
                 "properties": {}
@@ -752,8 +753,8 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_get_target",
-            description: "Return the resolved view of a single target: rule kind, srcs, deps, typed attrs, capabilities, providers.",
-            long_description: "Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one target id. Includes the target's typed attribute values (with the types declared by its rule schema), the capabilities it exposes, the providers it emits, and any diagnostics emitted while loading the manifest. Use this before editing a target to learn its current shape.",
+            description: "Return the resolved view of a single target: target kind, srcs, deps, typed attrs, capabilities, providers.",
+            long_description: "Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one target id. Includes the target's typed attribute values (with the types declared by its target kind schema), the capabilities it exposes, the providers it emits, and any diagnostics emitted while loading the manifest. Use this before editing a target to learn its current shape.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -769,7 +770,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_tests",
             description: "List targets that expose Once's generic test capability.",
-            long_description: "Returns every target with a `test` capability, including its rule kind, dependencies, runner type when the rule exposes `once_test_info`, labels, and normalized result path. Use this as the agent-native test discovery entry point before running or filtering tests.",
+            long_description: "Returns every target with a `test` capability, including its target kind, dependencies, runner type when the target kind exposes `once_test_info`, labels, and normalized result path. Use this as the agent-native test discovery entry point before running or filtering tests.",
             input_schema: json!({
                 "type": "object",
                 "properties": {}
@@ -836,7 +837,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_build_target",
             description: "Build a target by running its generic `build` capability.",
-            long_description: "Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once build <target> --format json`, so dependency traversal, rule-declared actions, cache policy, and output groups stay owned by the CLI and rule graph. The tool returns stdout parsed as JSON when possible, along with exit status and stderr. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.",
+            long_description: "Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once build <target> --format json`, so dependency traversal, actions declared by target kinds, cache policy, and output groups stay owned by the CLI graph. The tool returns stdout parsed as JSON when possible, along with exit status and stderr. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -852,7 +853,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_run_target",
             description: "Run a target by executing its generic `run` capability.",
-            long_description: "Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once run <target> --format json`, including any prerequisite build outputs declared by the target's `run` capability. Rule-declared execution policy is preserved, so uncacheable actions are executed instead of replayed from the action cache. The tool returns stdout parsed as JSON when possible, plus exit status and stderr.",
+            long_description: "Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once run <target> --format json`, including any prerequisite build outputs declared by the target's `run` capability. Execution policy declared by the target kind is preserved, so uncacheable actions are executed instead of replayed from the action cache. The tool returns stdout parsed as JSON when possible, plus exit status and stderr.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -944,8 +945,8 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_validate_target",
-            description: "Validate a proposed `[[target]]` table against its rule schema. Returns structured diagnostics instead of prose.",
-            long_description: "Schema-only validation: checks that the target declares a known rule kind, every required attribute is present, every declared attribute is known to the rule and matches the rule's declared type, and the target name is well-formed. The check is local; it does not resolve dep references or read other manifests. Returns `{ valid: true }` on success or `{ valid: false, diagnostics: [...] }` where each diagnostic carries a stable `code`, the offending `target` id, the offending `attribute` when applicable, and `repairs` an agent can apply.",
+            description: "Validate a proposed `[[target]]` table against its target kind schema. Returns structured diagnostics instead of prose.",
+            long_description: "Schema-only validation: checks that the target declares a known target kind, every required attribute is present, every declared attribute is known to the target kind and matches the target kind's declared type, and the target name is well-formed. The check is local; it does not resolve dep references or read other manifests. Returns `{ valid: true }` on success or `{ valid: false, diagnostics: [...] }` where each diagnostic carries a stable `code`, the offending `target` id, the offending `attribute` when applicable, and `repairs` an agent can apply.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -956,7 +957,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 },
                 "required": ["target"]
             }),
-            example_return: "{\n  \"valid\": false,\n  \"diagnostics\": [\n    {\n      \"code\": \"missing_required_attr\",\n      \"message\": \"rule `apple_library` requires attribute `platform`\",\n      \"target\": \"Hello\",\n      \"attribute\": \"platform\"\n    }\n  ]\n}",
+            example_return: "{\n  \"valid\": false,\n  \"diagnostics\": [\n    {\n      \"code\": \"missing_required_attr\",\n      \"message\": \"target kind `apple_library` requires attribute `platform`\",\n      \"target\": \"Hello\",\n      \"attribute\": \"platform\"\n    }\n  ]\n}",
         },
         ToolDefinition {
             name: "once_apply_edit",
@@ -1126,18 +1127,18 @@ mod tests {
         Server::new(workspace, true)
     }
 
-    fn seed_custom_rule_workspace(root: &std::path::Path) {
-        std::fs::create_dir_all(root.join("rules")).unwrap();
+    fn seed_custom_module_workspace(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("modules")).unwrap();
         std::fs::write(
             root.join("once.toml"),
-            "[rules]\npaths = [\"rules/*.star\"]\n",
+            "[modules]\npaths = [\"modules/*.star\"]\n",
         )
         .unwrap();
         std::fs::write(
-            root.join("rules/demo.star"),
+            root.join("modules/demo.star"),
             r#"
-demo_rule = rule(
-    docs = "Demo rule",
+demo_kind = target_kind(
+    docs = "Demo kind",
     attrs = [
         attr("message", "string", required = True, docs = "Message to emit"),
     ],
@@ -1190,7 +1191,7 @@ demo_rule = rule(
                 "once_query_capabilities".to_string(),
                 "once_query_schema".to_string(),
                 "once_query_example".to_string(),
-                "once_list_rules".to_string(),
+                "once_list_target_kinds".to_string(),
                 "once_get_target".to_string(),
                 "once_query_tests".to_string(),
                 "once_query_affected_tests".to_string(),
@@ -1444,9 +1445,9 @@ srcs = ["other_spec.sh"]
     }
 
     #[test]
-    fn list_rules_includes_every_known_rule() {
+    fn list_target_kinds_includes_every_known_target_kind() {
         let tmp = TempDir::new().unwrap();
-        let value = tool_list_rules(tmp.path()).unwrap();
+        let value = tool_list_target_kinds(tmp.path()).unwrap();
         let kinds: Vec<&str> = value
             .as_array()
             .unwrap()
@@ -1460,27 +1461,27 @@ srcs = ["other_spec.sh"]
     }
 
     #[test]
-    fn mcp_tools_use_workspace_custom_rules() {
+    fn mcp_tools_use_workspace_custom_modules() {
         let tmp = TempDir::new().unwrap();
-        seed_custom_rule_workspace(tmp.path());
+        seed_custom_module_workspace(tmp.path());
 
-        let schema = tool_query_schema(tmp.path(), &json!({ "kind": "demo_rule" })).unwrap();
-        assert_eq!(schema["kind"], "demo_rule");
+        let schema = tool_query_schema(tmp.path(), &json!({ "kind": "demo_kind" })).unwrap();
+        assert_eq!(schema["kind"], "demo_kind");
         assert_eq!(schema["providers"], json!(["demo_provider"]));
 
-        let rules = tool_list_rules(tmp.path()).unwrap();
-        assert!(rules
+        let target_kinds = tool_list_target_kinds(tmp.path()).unwrap();
+        assert!(target_kinds
             .as_array()
             .unwrap()
             .iter()
-            .any(|rule| rule["kind"] == "demo_rule"));
+            .any(|kind| kind["kind"] == "demo_kind"));
 
         let validation = tool_validate_target(
             tmp.path(),
             &json!({
                 "target": {
                     "name": "Hello",
-                    "kind": "demo_rule",
+                    "kind": "demo_kind",
                     "attrs": { "message": "hello" }
                 }
             }),
@@ -1494,7 +1495,7 @@ srcs = ["other_spec.sh"]
             &[once_frontend::EditOperation::Create {
                 target: once_frontend::TargetSpec {
                     name: "Hello".to_string(),
-                    kind: "demo_rule".to_string(),
+                    kind: "demo_kind".to_string(),
                     attrs: serde_json::Map::from_iter([("message".to_string(), json!("hello"))]),
                     ..Default::default()
                 },

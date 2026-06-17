@@ -1,4 +1,4 @@
-//! Typed build graph model and built-in rule metadata.
+//! Typed build graph model and built-in target kind metadata.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -27,13 +27,13 @@ pub struct TargetLabel {
     pub id: String,
 }
 
-/// Target record after manifest loading and rule metadata attachment.
+/// Target record after manifest loading and target kind metadata attachment.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct GraphTarget {
     /// Canonical target label.
     pub label: TargetLabel,
-    /// Rule kind declared by the target manifest. Matched against the
-    /// exported Starlark rule symbols to attach schema, capabilities, and
+    /// Target kind declared by the target manifest. Matched against exported
+    /// Starlark target kind symbols to attach schema, capabilities, and
     /// providers.
     pub kind: String,
     /// Canonical dependency target ids.
@@ -45,7 +45,7 @@ pub struct GraphTarget {
     /// Typed target attributes parsed from the manifest.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub attrs: BTreeMap<String, AttrValue>,
-    /// Operations exposed by the target's rule schema.
+    /// Operations exposed by the target kind schema.
     pub capabilities: Vec<Capability>,
     /// Providers emitted by this target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -55,7 +55,7 @@ pub struct GraphTarget {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Operation exposed by a rule, such as build, run, or test.
+/// Operation exposed by a target kind, such as build, run, or test.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Capability {
     /// Capability name.
@@ -85,79 +85,79 @@ pub struct Diagnostic {
     pub repairs: Vec<String>,
 }
 
-/// Rule metadata used for schema queries and graph target enrichment.
+/// Target kind metadata used for schema queries and graph target enrichment.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct RuleSchema {
-    /// Rule kind matched by `target.kind`.
+pub struct TargetKindSchema {
+    /// Target kind matched by `target.kind`.
     pub kind: String,
-    /// Human-readable rule description.
+    /// Human-readable target kind description.
     pub docs: String,
-    /// Attribute schema for this rule.
+    /// Attribute schema for this target kind.
     pub attrs: Vec<AttrSchema>,
-    /// Dependency expectations for this rule.
+    /// Dependency expectations for this target kind.
     pub deps: Vec<DepSchema>,
-    /// Providers emitted by targets of this rule.
+    /// Providers emitted by targets of this kind.
     pub providers: Vec<String>,
-    /// Capabilities exposed by targets of this rule.
+    /// Capabilities exposed by targets of this kind.
     pub capabilities: Vec<Capability>,
     /// Runnable starter workspaces. Each example is a lightweight
     /// descriptor; callers load the file bundle only when they choose
     /// a starter to materialize.
-    pub examples: Vec<RuleExample>,
+    pub examples: Vec<TargetKindExample>,
 }
 
-/// A runnable starter descriptor for a rule.
+/// A runnable starter descriptor for a target kind.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct RuleExample {
+pub struct TargetKindExample {
     /// Human-readable example title.
     pub name: String,
     /// Stable identifier used to reference this example.
     pub slug: String,
     /// One-line "use this when..." hint that helps callers choose
-    /// between examples for the same rule kind.
+    /// between examples for the same target kind.
     pub use_when: String,
     /// Where the starter file tree lives. The wire schema omits this so
     /// discovery remains independent from local package layout.
     #[serde(skip_serializing)]
-    pub source: RuleExampleSource,
+    pub source: TargetKindExampleSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuleExampleSource {
-    pub root: RuleExampleRoot,
+pub struct TargetKindExampleSource {
+    pub root: TargetKindExampleRoot,
     pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuleExampleRoot {
+pub enum TargetKindExampleRoot {
     BuiltInPrelude,
     Workspace { root: PathBuf },
 }
 
-/// A materialized starter workspace for a rule.
+/// A materialized starter workspace for a target kind.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct RuleExampleBundle {
+pub struct TargetKindExampleBundle {
     /// Human-readable example title.
     pub name: String,
     /// Stable identifier used to reference this example.
     pub slug: String,
     /// One-line "use this when..." hint that helps callers choose
-    /// between examples for the same rule kind.
+    /// between examples for the same target kind.
     pub use_when: String,
     /// Every file in the example bundle, sorted by path.
-    pub files: Vec<RuleExampleFile>,
+    pub files: Vec<TargetKindExampleFile>,
 }
 
-/// A single file inside a [`RuleExample`].
+/// A single file inside a [`TargetKindExample`].
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct RuleExampleFile {
+pub struct TargetKindExampleFile {
     /// Path relative to the example workspace root.
     pub path: String,
     /// File contents as a UTF-8 string.
     pub contents: String,
 }
 
-/// Attribute metadata exposed by a rule schema.
+/// Attribute metadata exposed by a target kind schema.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AttrSchema {
     /// Attribute name under `[target.attrs]`.
@@ -166,7 +166,7 @@ pub struct AttrSchema {
     pub ty: String,
     /// Whether the attribute must be present.
     pub required: bool,
-    /// Default value rendered as rule metadata.
+    /// Default value rendered as target kind metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
     /// Human-readable attribute description.
@@ -175,7 +175,7 @@ pub struct AttrSchema {
     pub configurable: bool,
 }
 
-/// Dependency metadata exposed by a rule schema.
+/// Dependency metadata exposed by a target kind schema.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DepSchema {
     /// Dependency attribute name.
@@ -188,7 +188,7 @@ pub struct DepSchema {
 
 pub fn load_graph_workspace(root: &Path) -> Result<Vec<GraphTarget>> {
     let targets = load_workspace(root)?;
-    let schemas = rule_schemas_for_workspace(root)?;
+    let schemas = target_kind_schemas_for_workspace(root)?;
     Ok(graph_from_targets_with_schemas(&targets, &schemas))
 }
 
@@ -198,11 +198,14 @@ pub fn graph_from_targets(targets: &[Target]) -> Vec<GraphTarget> {
 }
 
 pub fn graph_from_targets_result(targets: &[Target]) -> Result<Vec<GraphTarget>> {
-    let schemas = built_in_rule_schemas_result()?;
+    let schemas = built_in_target_kind_schemas_result()?;
     Ok(graph_from_targets_with_schemas(targets, &schemas))
 }
 
-fn graph_from_targets_with_schemas(targets: &[Target], schemas: &[RuleSchema]) -> Vec<GraphTarget> {
+fn graph_from_targets_with_schemas(
+    targets: &[Target],
+    schemas: &[TargetKindSchema],
+) -> Vec<GraphTarget> {
     targets
         .iter()
         .map(|target| graph_target_from_schema(target, schemas))
@@ -210,57 +213,57 @@ fn graph_from_targets_with_schemas(targets: &[Target], schemas: &[RuleSchema]) -
 }
 
 #[must_use]
-pub fn built_in_rule_schemas() -> Vec<RuleSchema> {
-    let Ok(schemas) = built_in_rule_schemas_result() else {
+pub fn built_in_target_kind_schemas() -> Vec<TargetKindSchema> {
+    let Ok(schemas) = built_in_target_kind_schemas_result() else {
         return vec![script_schema()];
     };
     schemas
 }
 
-pub fn built_in_rule_schemas_result() -> Result<Vec<RuleSchema>> {
-    let mut schemas = starlark_prelude_rule_schemas()?;
+pub fn built_in_target_kind_schemas_result() -> Result<Vec<TargetKindSchema>> {
+    let mut schemas = starlark_prelude_target_kind_schemas()?;
     append_script_schema(&mut schemas)?;
     Ok(schemas)
 }
 
-pub fn rule_schemas_for_workspace(root: &Path) -> Result<Vec<RuleSchema>> {
-    let mut schemas = starlark_prelude_rule_schemas()?;
-    let common = crate::rules::common_rule_source();
-    for rule_file in crate::rules::load_rule_files(root)? {
-        let source_context = RuleSchemaSource::workspace(root, &rule_file.display_path);
-        schemas.extend(parse_rule_schemas_with_context(
-            &rule_file.display_path,
-            &format!("{common}\n{}", rule_file.source),
+pub fn target_kind_schemas_for_workspace(root: &Path) -> Result<Vec<TargetKindSchema>> {
+    let mut schemas = starlark_prelude_target_kind_schemas()?;
+    let common = crate::modules::common_module_source();
+    for module_file in crate::modules::load_module_files(root)? {
+        let source_context = TargetKindSchemaSource::workspace(root, &module_file.display_path);
+        schemas.extend(parse_target_kind_schemas_with_context(
+            &module_file.display_path,
+            &format!("{common}\n{}", module_file.source),
             &source_context,
         )?);
     }
-    validate_unique_rule_kinds(&schemas)
-        .map_err(|message| prelude_message(crate::rules::COMBINED_RULE_PATH, &message))?;
+    validate_unique_target_kinds(&schemas)
+        .map_err(|message| prelude_message(crate::modules::COMBINED_MODULE_PATH, &message))?;
     append_script_schema(&mut schemas)?;
     Ok(schemas)
 }
 
 #[must_use]
-pub fn built_in_rule_schema(kind: &str) -> Option<RuleSchema> {
-    built_in_rule_schemas()
+pub fn built_in_target_kind_schema(kind: &str) -> Option<TargetKindSchema> {
+    built_in_target_kind_schemas()
         .into_iter()
         .find(|schema| schema.kind == kind)
 }
 
 impl From<&Target> for GraphTarget {
     fn from(target: &Target) -> Self {
-        graph_target_from_schema(target, &built_in_rule_schemas())
+        graph_target_from_schema(target, &built_in_target_kind_schemas())
     }
 }
 
-fn graph_target_from_schema(target: &Target, schemas: &[RuleSchema]) -> GraphTarget {
+fn graph_target_from_schema(target: &Target, schemas: &[TargetKindSchema]) -> GraphTarget {
     let schema = schemas.iter().find(|schema| schema.kind == target.kind);
     let mut diagnostics = if schema.is_some() {
         Vec::new()
     } else {
         vec![Diagnostic {
-            code: "unknown_rule_kind".to_string(),
-            message: format!("target kind `{}` has no rule schema", target.kind),
+            code: "unknown_target_kind".to_string(),
+            message: format!("target kind `{}` has no target kind schema", target.kind),
             target: Some(target.id()),
             attribute: None,
             repairs: Vec::new(),
@@ -318,29 +321,29 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
 }
 
 #[derive(Debug, Clone)]
-struct RuleSchemaSource {
-    example_root: RuleExampleRoot,
+struct TargetKindSchemaSource {
+    example_root: TargetKindExampleRoot,
     example_base: String,
 }
 
-impl RuleSchemaSource {
+impl TargetKindSchemaSource {
     fn built_in_prelude() -> Self {
         Self {
-            example_root: RuleExampleRoot::BuiltInPrelude,
+            example_root: TargetKindExampleRoot::BuiltInPrelude,
             example_base: String::new(),
         }
     }
 
-    fn workspace(root: &Path, rule_file: &str) -> Self {
+    fn workspace(root: &Path, module_file: &str) -> Self {
         Self {
-            example_root: RuleExampleRoot::Workspace {
+            example_root: TargetKindExampleRoot::Workspace {
                 root: root.to_path_buf(),
             },
-            example_base: parent_dir(rule_file),
+            example_base: parent_dir(module_file),
         }
     }
 
-    fn example_source(&self, path: &str) -> std::result::Result<RuleExampleSource, String> {
+    fn example_source(&self, path: &str) -> std::result::Result<TargetKindExampleSource, String> {
         crate::examples::example_source(self.example_root.clone(), &self.example_base, path)
     }
 }
@@ -351,28 +354,32 @@ fn parent_dir(path: &str) -> String {
         .unwrap_or_default()
 }
 
-fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
-    parse_rule_schemas(
-        crate::rules::BUILT_IN_RULE_PATH,
-        crate::rules::built_in_rule_source(),
+fn starlark_prelude_target_kind_schemas() -> Result<Vec<TargetKindSchema>> {
+    parse_target_kind_schemas(
+        crate::modules::BUILT_IN_MODULE_PATH,
+        crate::modules::built_in_module_source(),
     )
 }
 
-/// Evaluate a Starlark rule source and read its exported rule symbols.
+/// Evaluate a Starlark module source and read its exported target kind symbols.
 ///
-/// Split out from [`starlark_prelude_rule_schemas`] so the error paths
+/// Split out from [`starlark_prelude_target_kind_schemas`] so the error paths
 /// (parse failure, missing exports, wrong types) are reachable from tests
 /// without depending on the compiled-in prelude staying valid, and so they
 /// keep working if the prelude ever becomes user-configurable.
-fn parse_rule_schemas(path: &str, source: &str) -> Result<Vec<RuleSchema>> {
-    parse_rule_schemas_with_context(path, source, &RuleSchemaSource::built_in_prelude())
+fn parse_target_kind_schemas(path: &str, source: &str) -> Result<Vec<TargetKindSchema>> {
+    parse_target_kind_schemas_with_context(
+        path,
+        source,
+        &TargetKindSchemaSource::built_in_prelude(),
+    )
 }
 
-fn parse_rule_schemas_with_context(
+fn parse_target_kind_schemas_with_context(
     path: &str,
     source: &str,
-    source_context: &RuleSchemaSource,
-) -> Result<Vec<RuleSchema>> {
+    source_context: &TargetKindSchemaSource,
+) -> Result<Vec<TargetKindSchema>> {
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
             .map_err(|error| prelude_error(path, error))?;
@@ -380,11 +387,11 @@ fn parse_rule_schemas_with_context(
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
             .map_err(|error| prelude_error(path, error))?;
-        let rules = crate::rules::exported_rule_values(&module);
-        if rules.is_empty() {
-            return Err(prelude_message(path, "no rule symbols exported"));
+        let target_kinds = crate::modules::exported_target_kind_values(&module);
+        if target_kinds.is_empty() {
+            return Err(prelude_message(path, "no target kind symbols exported"));
         }
-        rule_schemas_from_exports(&rules, source_context)
+        target_kind_schemas_from_exports(&target_kinds, source_context)
             .map_err(|message| prelude_message(path, &message))
     })
 }
@@ -403,24 +410,24 @@ fn prelude_message(path: &str, message: &str) -> Error {
     }
 }
 
-fn rule_schemas_from_exports(
-    rules: &[crate::rules::RuleExport<'_>],
-    source_context: &RuleSchemaSource,
-) -> std::result::Result<Vec<RuleSchema>, String> {
-    let schemas = rules
+fn target_kind_schemas_from_exports(
+    target_kinds: &[crate::modules::TargetKindExport<'_>],
+    source_context: &TargetKindSchemaSource,
+) -> std::result::Result<Vec<TargetKindSchema>, String> {
+    let schemas = target_kinds
         .iter()
-        .map(|rule| rule_schema_from_value(rule.value, rule.name, source_context))
+        .map(|kind| target_kind_schema_from_value(kind.value, kind.name, source_context))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    validate_unique_rule_kinds(&schemas)?;
+    validate_unique_target_kinds(&schemas)?;
     Ok(schemas)
 }
 
-fn validate_unique_rule_kinds(schemas: &[RuleSchema]) -> std::result::Result<(), String> {
+fn validate_unique_target_kinds(schemas: &[TargetKindSchema]) -> std::result::Result<(), String> {
     let mut seen = BTreeMap::new();
     for (index, schema) in schemas.iter().enumerate() {
         if let Some(first_index) = seen.insert(schema.kind.as_str(), index) {
             return Err(format!(
-                "rule kind `{}` is declared more than once (rule export {first_index} and {index})",
+                "target kind `{}` is declared more than once (target kind export {first_index} and {index})",
                 schema.kind
             ));
         }
@@ -428,23 +435,23 @@ fn validate_unique_rule_kinds(schemas: &[RuleSchema]) -> std::result::Result<(),
     Ok(())
 }
 
-fn append_script_schema(schemas: &mut Vec<RuleSchema>) -> Result<()> {
+fn append_script_schema(schemas: &mut Vec<TargetKindSchema>) -> Result<()> {
     if schemas.iter().any(|schema| schema.kind == "script") {
         return Err(prelude_message(
-            crate::rules::COMBINED_RULE_PATH,
-            "rule kind `script` is reserved for Once script targets",
+            crate::modules::COMBINED_MODULE_PATH,
+            "target kind `script` is reserved for Once script targets",
         ));
     }
     schemas.push(script_schema());
     Ok(())
 }
 
-fn rule_schema_from_value(
+fn target_kind_schema_from_value(
     value: Value<'_>,
     path: &str,
-    source_context: &RuleSchemaSource,
-) -> std::result::Result<RuleSchema, String> {
-    let kind = crate::rules::rule_kind(value, path)?;
+    source_context: &TargetKindSchemaSource,
+) -> std::result::Result<TargetKindSchema, String> {
+    let kind = crate::modules::target_kind(value, path)?;
     let examples = field_list(value, path, "examples")?
         .iter()
         .enumerate()
@@ -456,7 +463,7 @@ fn rule_schema_from_value(
             )
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(RuleSchema {
+    Ok(TargetKindSchema {
         kind,
         docs: field_string(value, path, "docs")?,
         attrs: field_list(value, path, "attrs")?
@@ -511,8 +518,8 @@ fn capability_from_value(value: Value<'_>, path: &str) -> std::result::Result<Ca
 fn example_from_value(
     value: Value<'_>,
     path: &str,
-    source_context: &RuleSchemaSource,
-) -> std::result::Result<RuleExample, String> {
+    source_context: &TargetKindSchemaSource,
+) -> std::result::Result<TargetKindExample, String> {
     let dict = DictRef::from_value(value).ok_or_else(|| {
         format!(
             "{path} should be an example(...) value, got `{}`",
@@ -533,7 +540,7 @@ fn example_from_value(
     let source = source_context
         .example_source(&example_path)
         .map_err(|message| format!("{path}.path {message}"))?;
-    Ok(RuleExample {
+    Ok(TargetKindExample {
         name,
         slug,
         use_when,
@@ -638,8 +645,8 @@ fn list<'v>(value: Value<'v>, path: &str) -> std::result::Result<&'v ListRef<'v>
         .ok_or_else(|| format!("{path} should be a list, got `{}`", value.get_type()))
 }
 
-fn script_schema() -> RuleSchema {
-    RuleSchema {
+fn script_schema() -> TargetKindSchema {
+    TargetKindSchema {
         kind: "script".to_string(),
         docs: "Adapter target that wraps existing executable automation.".to_string(),
         attrs: vec![
@@ -705,28 +712,30 @@ mod tests {
     use crate::target::Target;
 
     fn source_with_common(source: &str) -> String {
-        format!("{}\n{source}", crate::rules::common_rule_source())
+        format!("{}\n{source}", crate::modules::common_module_source())
     }
 
     #[test]
-    fn parse_rule_schemas_rejects_invalid_syntax() {
-        let err = parse_rule_schemas("test.star", "demo_rule = rule(").unwrap_err();
+    fn parse_target_kind_schemas_rejects_invalid_syntax() {
+        let err = parse_target_kind_schemas("test.star", "demo_kind = target_kind(").unwrap_err();
         assert!(matches!(err, Error::Eval { .. }));
     }
 
     #[test]
-    fn parse_rule_schemas_requires_rule_exports() {
-        let err = parse_rule_schemas("test.star", "OTHER = []").unwrap_err();
+    fn parse_target_kind_schemas_requires_target_kind_exports() {
+        let err = parse_target_kind_schemas("test.star", "OTHER = []").unwrap_err();
         match err {
-            Error::Eval { message, .. } => assert!(message.contains("no rule symbols exported")),
+            Error::Eval { message, .. } => {
+                assert!(message.contains("no target kind symbols exported"));
+            }
             other => panic!("expected Error::Eval, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_rule_schemas_rejects_invalid_kind_type() {
-        let source = source_with_common(r#"demo_rule = rule(kind = 7, docs = "Demo rule")"#);
-        let err = parse_rule_schemas("test.star", &source).unwrap_err();
+    fn parse_target_kind_schemas_rejects_invalid_kind_type() {
+        let source = source_with_common(r#"demo_kind = target_kind(kind = 7, docs = "Demo kind")"#);
+        let err = parse_target_kind_schemas("test.star", &source).unwrap_err();
         match err {
             Error::Eval { message, .. } => {
                 assert!(message.contains("kind should be a string or None"));
@@ -736,9 +745,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_rule_schemas_reports_missing_rule_field() {
+    fn parse_target_kind_schemas_reports_missing_target_kind_field() {
         let err =
-            parse_rule_schemas("test.star", r#"demo_rule = {"_once_rule": True}"#).unwrap_err();
+            parse_target_kind_schemas("test.star", r#"demo_kind = {"_once_target_kind": True}"#)
+                .unwrap_err();
         match err {
             Error::Eval { message, .. } => assert!(message.contains("is missing")),
             other => panic!("expected Error::Eval, got {other:?}"),
@@ -746,34 +756,34 @@ mod tests {
     }
 
     #[test]
-    fn parse_rule_schemas_accepts_minimal_valid_rule() {
-        let source = source_with_common(r#"demo = rule(docs = "Demo rule")"#);
-        let schemas = parse_rule_schemas("test.star", &source).unwrap();
+    fn parse_target_kind_schemas_accepts_minimal_valid_target_kind() {
+        let source = source_with_common(r#"demo = target_kind(docs = "Demo kind")"#);
+        let schemas = parse_target_kind_schemas("test.star", &source).unwrap();
         assert_eq!(schemas.len(), 1);
         assert_eq!(schemas[0].kind, "demo");
     }
 
     #[test]
-    fn workspace_rule_paths_extend_graph_schemas() {
+    fn workspace_module_paths_extend_graph_schemas() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(tmp.path().join("rules")).unwrap();
+        std::fs::create_dir(tmp.path().join("modules")).unwrap();
         std::fs::write(
             tmp.path().join("once.toml"),
             r#"
-[rules]
-paths = ["rules/*.star"]
+[modules]
+paths = ["modules/*.star"]
 
 [[target]]
 name = "Hello"
-kind = "demo_rule"
+kind = "demo_kind"
 "#,
         )
         .unwrap();
         std::fs::write(
-            tmp.path().join("rules/demo.star"),
+            tmp.path().join("modules/demo.star"),
             r#"
-demo_rule = rule(
-    docs = "Demo rule",
+demo_kind = target_kind(
+    docs = "Demo kind",
     attrs = [],
     deps = [],
     providers = ["demo_provider"],
@@ -788,26 +798,26 @@ demo_rule = rule(
         let graph = load_graph_workspace(tmp.path()).unwrap();
 
         assert_eq!(graph.len(), 1);
-        assert_eq!(graph[0].kind, "demo_rule");
+        assert_eq!(graph[0].kind, "demo_kind");
         assert_eq!(graph[0].providers, vec!["demo_provider"]);
         assert_eq!(graph[0].capabilities[0].name, "build");
         assert!(graph[0].diagnostics.is_empty());
     }
 
     #[test]
-    fn workspace_rule_examples_resolve_relative_to_rule_file() {
+    fn workspace_target_kind_examples_resolve_relative_to_module_file() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("rules/examples/demo/src")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("modules/examples/demo/src")).unwrap();
         std::fs::write(
             tmp.path().join("once.toml"),
-            "[rules]\npaths = [\"rules/*.star\"]\n",
+            "[modules]\npaths = [\"modules/*.star\"]\n",
         )
         .unwrap();
         std::fs::write(
-            tmp.path().join("rules/demo.star"),
+            tmp.path().join("modules/demo.star"),
             r#"
-demo_rule = rule(
-    docs = "Demo rule",
+demo_kind = target_kind(
+    docs = "Demo kind",
     examples = [
         example(
             "minimal",
@@ -821,24 +831,24 @@ demo_rule = rule(
         )
         .unwrap();
         std::fs::write(
-            tmp.path().join("rules/examples/demo/once.toml"),
-            "[[target]]\nname = \"Demo\"\nkind = \"demo_rule\"\n",
+            tmp.path().join("modules/examples/demo/once.toml"),
+            "[[target]]\nname = \"Demo\"\nkind = \"demo_kind\"\n",
         )
         .unwrap();
         std::fs::write(
-            tmp.path().join("rules/examples/demo/src/main.txt"),
+            tmp.path().join("modules/examples/demo/src/main.txt"),
             "hello\n",
         )
         .unwrap();
 
-        let schema = rule_schemas_for_workspace(tmp.path())
+        let schema = target_kind_schemas_for_workspace(tmp.path())
             .unwrap()
             .into_iter()
-            .find(|schema| schema.kind == "demo_rule")
+            .find(|schema| schema.kind == "demo_kind")
             .unwrap();
         assert_eq!(schema.examples[0].slug, "minimal");
 
-        let bundle = crate::examples::load_rule_example(&schema, "minimal").unwrap();
+        let bundle = crate::examples::load_target_kind_example(&schema, "minimal").unwrap();
 
         assert_eq!(bundle.name, "Minimal demo");
         assert!(bundle.files.iter().any(|file| file.path == "once.toml"));
@@ -846,19 +856,19 @@ demo_rule = rule(
     }
 
     #[test]
-    fn workspace_rule_examples_reject_paths_outside_rule_package() {
+    fn workspace_target_kind_examples_reject_paths_outside_module_package() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("modules")).unwrap();
         std::fs::write(
             tmp.path().join("once.toml"),
-            "[rules]\npaths = [\"rules/*.star\"]\n",
+            "[modules]\npaths = [\"modules/*.star\"]\n",
         )
         .unwrap();
         std::fs::write(
-            tmp.path().join("rules/demo.star"),
+            tmp.path().join("modules/demo.star"),
             r#"
-demo_rule = rule(
-    docs = "Demo rule",
+demo_kind = target_kind(
+    docs = "Demo kind",
     examples = [
         example(
             "bad",
@@ -872,26 +882,26 @@ demo_rule = rule(
         )
         .unwrap();
 
-        let err = rule_schemas_for_workspace(tmp.path()).unwrap_err();
+        let err = target_kind_schemas_for_workspace(tmp.path()).unwrap_err();
 
         assert!(err
             .to_string()
-            .contains("must stay inside the rule package"));
+            .contains("must stay inside the module package"));
     }
 
     #[test]
-    fn workspace_rule_paths_reject_duplicate_kinds() {
+    fn workspace_module_paths_reject_duplicate_kinds() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(tmp.path().join("rules")).unwrap();
+        std::fs::create_dir(tmp.path().join("modules")).unwrap();
         std::fs::write(
             tmp.path().join("once.toml"),
-            "[rules]\npaths = [\"rules/*.star\"]\n",
+            "[modules]\npaths = [\"modules/*.star\"]\n",
         )
         .unwrap();
         std::fs::write(
-            tmp.path().join("rules/demo.star"),
+            tmp.path().join("modules/demo.star"),
             r#"
-demo_rule = rule(
+demo_kind = target_kind(
     docs = "Duplicate",
     attrs = [],
     deps = [],
@@ -902,9 +912,9 @@ demo_rule = rule(
         )
         .unwrap();
         std::fs::write(
-            tmp.path().join("rules/other.star"),
+            tmp.path().join("modules/other.star"),
             r#"
-demo_rule = rule(
+demo_kind = target_kind(
     docs = "Duplicate",
     attrs = [],
     deps = [],
@@ -915,7 +925,7 @@ demo_rule = rule(
         )
         .unwrap();
 
-        let err = rule_schemas_for_workspace(tmp.path()).unwrap_err();
+        let err = target_kind_schemas_for_workspace(tmp.path()).unwrap_err();
 
         assert!(err.to_string().contains("declared more than once"));
     }
@@ -924,7 +934,7 @@ demo_rule = rule(
     fn unknown_kind_gets_diagnostic_and_no_capabilities() {
         let target = Target {
             package: "pkg".to_string(),
-            kind: "mystery_rule".to_string(),
+            kind: "mystery_kind".to_string(),
             name: "Thing".to_string(),
             deps: Vec::new(),
             srcs: Vec::new(),
@@ -937,10 +947,10 @@ demo_rule = rule(
         assert!(thing.capabilities.is_empty());
         assert!(thing.providers.is_empty());
         assert_eq!(thing.diagnostics.len(), 1);
-        assert_eq!(thing.diagnostics[0].code, "unknown_rule_kind");
+        assert_eq!(thing.diagnostics[0].code, "unknown_target_kind");
         assert!(thing.diagnostics[0]
             .message
-            .contains("`mystery_rule` has no rule schema"));
+            .contains("`mystery_kind` has no target kind schema"));
     }
 
     #[test]
@@ -997,16 +1007,16 @@ demo_rule = rule(
         typed_attrs.insert("fixed_name".to_string(), AttrValue::Map(select_outer));
         let target = Target {
             package: "pkg".to_string(),
-            kind: "demo_rule".to_string(),
+            kind: "demo_kind".to_string(),
             name: "Thing".to_string(),
             deps: Vec::new(),
             srcs: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
         };
-        let schemas = vec![RuleSchema {
-            kind: "demo_rule".to_string(),
-            docs: "Demo rule".to_string(),
+        let schemas = vec![TargetKindSchema {
+            kind: "demo_kind".to_string(),
+            docs: "Demo kind".to_string(),
             attrs: vec![attr(
                 "fixed_name",
                 "string",
@@ -1031,8 +1041,8 @@ demo_rule = rule(
     }
 
     #[test]
-    fn built_in_schema_contains_expected_core_rules() {
-        let kinds = built_in_rule_schemas()
+    fn built_in_schema_contains_expected_core_target_kinds() {
+        let kinds = built_in_target_kind_schemas()
             .into_iter()
             .map(|schema| schema.kind)
             .collect::<Vec<_>>();
@@ -1043,9 +1053,9 @@ demo_rule = rule(
     }
 
     #[test]
-    fn parse_rule_schemas_derives_kind_from_exported_symbol() {
-        let source = source_with_common(r#"custom_library = rule(docs = "Custom library")"#);
-        let schemas = parse_rule_schemas("test.star", &source).unwrap();
+    fn parse_target_kind_schemas_derives_kind_from_exported_symbol() {
+        let source = source_with_common(r#"custom_library = target_kind(docs = "Custom library")"#);
+        let schemas = parse_target_kind_schemas("test.star", &source).unwrap();
 
         assert_eq!(schemas[0].kind, "custom_library");
     }

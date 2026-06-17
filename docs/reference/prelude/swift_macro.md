@@ -66,7 +66,7 @@ deps = [
 
 ## Limitations
 
-The rule does not vendor swift-syntax. The user supplies it as a
-regular dep edge, which matches how `rules_apple` and Buck2 handle
+The target kind does not vendor swift-syntax. The user supplies it as a
+regular dep edge, which matches how established Apple build systems handle
 the same dependency. Until a swift-syntax checkout is available as
 an `apple_library`, `swift_macro` targets cannot build end to end.

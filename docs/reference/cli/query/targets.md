@@ -12,7 +12,7 @@ once query targets [OPTIONS]
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
-| `--kind` | `<KIND>` |  | Only include targets with this rule kind |
+| `--kind` | `<KIND>` |  | Only include targets with this target kind |
 | `-C, --directory` | `<DIR>` |  | Project root. Defaults to the current directory; the cache lives under `<project>/.once/`. Mirrors `make -C` |
 | `--format` | `<FORMAT>` | `human` | Output format for Once's structured data (`cache stats`, `run`/`exec` trailers). Defaults to a human-readable rendering; pass `json` or `toon` to get machine-parseable output for scripting and for agent consumers |
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |

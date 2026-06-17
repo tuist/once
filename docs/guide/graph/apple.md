@@ -11,11 +11,11 @@ automatically. The bundle, app, and test-host kinds
 ([`apple_framework`](/reference/prelude/apple_framework),
 [`apple_application`](/reference/prelude/apple_application),
 [`apple_test_bundle`](/reference/prelude/apple_test_bundle)) are
-implemented as Starlark graph rules that declare cacheable build
+implemented as Starlark graph target kinds that declare cacheable build
 actions. Runtime effects, such as launching an app, are also declared
-by rules and can opt out of action-cache replay.
+by target kinds and can opt out of action-cache replay.
 
-For the per-rule attribute, dep, provider, and capability tables see
+For the per-target-kind attribute, dep, provider, and capability tables see
 the [Prelude reference](/reference/prelude/).
 
 ## Targets
@@ -50,7 +50,7 @@ once query schema apple_library
 `once query schema <kind>` returns the same typed contract the
 [Prelude reference](/reference/prelude/) documents: which attributes
 a target of that kind accepts, which providers each dep edge expects,
-which providers the rule emits, and which capabilities it exposes.
+which providers the target kind emits, and which capabilities it exposes.
 
 Materialize a target with the [`once build`](/reference/cli/build)
 capability:
@@ -59,18 +59,18 @@ capability:
 once build apps/ios/AppCore
 ```
 
-Outputs land under `.once/out/<target>/`. The per-rule reference
-pages list the exact paths each rule emits.
+Outputs land under `.once/out/<target>/`. The per-target-kind reference
+pages list the exact paths each target kind emits.
 
 ## Running Apps
 
 `apple_application` produces an `.app` bundle and exposes `run`.
 `once run` first materializes the required bundle output, then executes
-the launch action declared by the Apple rule. That launch action is not
+the launch action declared by the Apple target kind. That launch action is not
 cacheable, so each `once run` attempts a fresh launch instead of
 replaying an action-cache hit.
 
-The Apple rule owns the platform behavior. macOS apps are launched with
+The Apple target kind owns the platform behavior. macOS apps are launched with
 the host app launcher. iOS simulator apps use `simctl` to pick or boot a
 simulator, install the bundle, and launch the bundle identifier. Device
 launch support is not implemented yet.
@@ -110,7 +110,7 @@ Two kinds of attributes cannot use `select`:
 - The attributes that decide which branch is picked: `platform`,
   `sdk_variant`, `archs`, and `mac_catalyst`. They have to be literal
   values.
-- Attributes the rule marks as non-configurable. Trying to use
+- Attributes the target kind marks as non-configurable. Trying to use
   `select` on those surfaces a graph loading error.
 
 The surface is intentionally small for now. Richer configuration
@@ -119,25 +119,22 @@ transitions) can layer on later without changing the TOML shape.
 
 ## Prior art
 
-The Apple rule set adapts ideas from established Apple build tooling
+The Apple target kind set adapts ideas from established Apple build tooling
 rather than copying its surface:
 
-- [Bazel rules_apple](https://github.com/bazelbuild/rules_apple), where
-  application rules handle linking and bundling while Swift and
-  Objective-C compilation live in dedicated language rules.
+- Bazel's Apple build support, where application target kinds handle
+  linking and bundling while Swift and Objective-C compilation live in
+  dedicated language target kinds.
 - [Bazel apple_binary](https://docs.bazel.build/versions/3.0.0/be/objective-c.html#apple_binary),
   which exposes Apple binary concepts such as platform type, minimum
   OS version, SDK frameworks, SDK dylibs, weak SDK frameworks, link
   options, and multi-architecture outputs.
-- [Buck2 apple_library](https://buck2.build/docs/prelude/rules/apple/apple_library/),
-  [apple_binary](https://buck2.build/docs/prelude/rules/apple/apple_binary/),
-  and [apple_bundle](https://buck2.build/docs/prelude/rules/apple/apple_bundle/),
-  which separate compile inputs, Apple toolchain selection, bundle
-  assembly, resources, asset catalogs, Info.plist values,
-  entitlements, provisioning profiles, and tests.
+- Buck2's Apple build primitives, which separate compile inputs, Apple
+  toolchain selection, bundle assembly, resources, asset catalogs,
+  Info.plist values, entitlements, provisioning profiles, and tests.
 
 Once is not Buck-compatible, Bazel-compatible, or a drop-in
 replacement for either tool; users and agents declare targets in
-`once.toml`, built-in rule metadata lives in the Starlark prelude,
+`once.toml`, built-in target kind metadata lives in the Starlark prelude,
 and the graph is intentionally inspectable first so agents and CLI
 users can ask what a target can do before broad execution exists.

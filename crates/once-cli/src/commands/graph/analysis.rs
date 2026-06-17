@@ -1,16 +1,16 @@
 //! Walks the graph in dependency order and executes declared actions
-//! for analysis-backed rules.
+//! for analysis-backed target kinds.
 //!
 //! For every target the driver calls [`once_frontend::analysis::analyze_target`].
-//! When the rule has an `impl` callable the analysis returns a list of
+//! When the target kind has an `impl` callable the analysis returns a list of
 //! `DeclaredAction`s plus a provider record; we materialise each
 //! declared command according to its cache policy and pass the resulting
-//! provider down to consumers. When the rule has no `impl` declared in
+//! provider down to consumers. When the target kind has no `impl` declared in
 //! the prelude, the driver returns `None` so the caller can fall back to
 //! its generic marker action.
 //!
 //! This module stays toolchain-neutral: it consults the prelude via
-//! `rule_has_impl` to know which kinds run through analysis, and the
+//! `target_kind_has_impl` to know which kinds run through analysis, and the
 //! analysis layer is fed everything it needs through generic Starlark
 //! globals. Dep providers and dep action digests are carried so a
 //! parent's input digest composes its deps' action digests.
@@ -51,7 +51,7 @@ pub(super) struct BuildOutcome {
 /// Command-scoped graph build session.
 ///
 /// The session owns the target id map and analysis engine so one graph
-/// command does not repeatedly parse rule metadata or linearly scan the
+/// command does not repeatedly parse target kind metadata or linearly scan the
 /// graph for every dependency edge.
 pub(super) struct BuildSession {
     workspace: PathBuf,
@@ -63,7 +63,7 @@ pub(super) struct BuildSession {
     /// execution.
     targets: HashMap<String, Arc<GraphTarget>>,
     analyzer: AnalysisEngine,
-    rule_source_digest: Digest,
+    module_source_digest: Digest,
 }
 
 impl BuildSession {
@@ -86,7 +86,7 @@ impl BuildSession {
         graph: &[GraphTarget],
         analyzer: AnalysisEngine,
     ) -> Self {
-        let rule_source_digest = Digest::of_bytes(analyzer.rule_source().as_bytes());
+        let module_source_digest = Digest::of_bytes(analyzer.module_source().as_bytes());
         Self {
             workspace: workspace.to_path_buf(),
             cache: cache.clone(),
@@ -95,18 +95,18 @@ impl BuildSession {
                 .map(|target| (target.label.id.clone(), Arc::new(target.clone())))
                 .collect(),
             analyzer,
-            rule_source_digest,
+            module_source_digest,
         }
     }
 
     /// Build a target and the impl-backed portion of its dependency
-    /// closure. Returns `Ok(None)` when the target's own rule has no
+    /// closure. Returns `Ok(None)` when the target's own kind has no
     /// impl, allowing callers to fall back to generic marker actions.
     pub(super) async fn build_with_analysis(
         &self,
         target: &GraphTarget,
     ) -> Result<Option<BuildOutcome>> {
-        if !self.analyzer.rule_has_impl(&target.kind) {
+        if !self.analyzer.target_kind_has_impl(&target.kind) {
             tracing::debug!(
                 target = %target.label.id,
                 kind = %target.kind,
@@ -135,7 +135,7 @@ impl BuildSession {
         capability: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<BuildOutcome>>> + Send + 'a>> {
         Box::pin(async move {
-            if !self.analyzer.rule_has_impl(&target.kind) {
+            if !self.analyzer.target_kind_has_impl(&target.kind) {
                 tracing::debug!(
                     target = %target.label.id,
                     kind = %target.kind,
@@ -166,7 +166,7 @@ impl BuildSession {
             let outcome = run_declared_actions(
                 &self.workspace,
                 &self.cache,
-                self.rule_source_digest,
+                self.module_source_digest,
                 target,
                 analysis,
                 &dep_action_digests,
@@ -185,7 +185,7 @@ impl BuildSession {
         let roots = target.deps.iter().filter_map(|dep_id| {
             let dep = self.targets.get(dep_id)?;
             self.analyzer
-                .rule_has_impl(&dep.kind)
+                .target_kind_has_impl(&dep.kind)
                 .then(|| dep_id.clone())
         });
         self.reachable_analysis_targets_from(roots)
@@ -212,7 +212,7 @@ impl BuildSession {
                 let Some(dep) = self.targets.get(dep_id) else {
                     continue;
                 };
-                if self.analyzer.rule_has_impl(&dep.kind) {
+                if self.analyzer.target_kind_has_impl(&dep.kind) {
                     stack.push(dep_id.clone());
                 }
             }
@@ -288,7 +288,7 @@ async fn build_one(
     workspace: PathBuf,
     cache: CacheProvider,
     analyzer: AnalysisEngine,
-    rule_source_digest: Digest,
+    module_source_digest: Digest,
     target: Arc<GraphTarget>,
     dep_providers: Vec<JsonValue>,
     dep_action_digests: Vec<(String, Digest)>,
@@ -321,7 +321,7 @@ async fn build_one(
     let outcome = run_declared_actions(
         &workspace,
         &cache,
-        rule_source_digest,
+        module_source_digest,
         &target,
         analysis,
         &dep_action_digests,

@@ -38,7 +38,7 @@ Scripts can also run directly with a Once shebang:
 #!/usr/bin/env -S once exec -- bash
 ```
 
-When the workflow needs dependencies, multiple capabilities, typed validation, or agent-editable structure, move it into the build graph and let the rule lower the target into the same action substrate.
+When the workflow needs dependencies, multiple capabilities, typed validation, or agent-editable structure, move it into the build graph and let the target kind lower the target into the same action substrate.
 
 ## Documentation
 

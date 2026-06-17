@@ -16,7 +16,7 @@
 #   ctx["build_dir"]  -> workspace-relative output directory for this target
 #   ctx["capability"] -> active capability requested by the executor ("build", "test", "metadata")
 #
-# The impl returns a provider dict. Conventional keys downstream rules read:
+# The impl returns a provider dict. Conventional keys downstream target kinds read:
 #   "swiftmodule_dir" -> directory holding the .swiftmodule (added to -I by consumers)
 #   "archive"         -> workspace-relative path to the .a archive
 
@@ -325,7 +325,7 @@ def _resolve_dep_ref(ref, package):
 
 # Accumulate a transitive list of strings from a field that every dep
 # provider exposes. Preserves order while removing duplicates: the
-# first occurrence wins. Mirrors the rules_swift / Buck2 convention of
+# first occurrence wins. Mirrors the Swift and Buck2 convention of
 # propagating SwiftInfo / CcInfo fields up the graph.
 def _collect_transitive(deps, key, own_values):
     seen = {}
@@ -455,7 +455,7 @@ def _attr_has_value(value):
 def _reject_unsupported_attrs(attrs, label_id, keys):
     for key in keys:
         if key in attrs and _attr_has_value(attrs.get(key)):
-            fail(label_id + ": attribute `" + key + "` is declared but not implemented by this rule yet")
+            fail(label_id + ": attribute `" + key + "` is declared but not implemented by this target kind yet")
 
 def _select_mentions_any(branches, tokens):
     for key in branches.keys():
@@ -534,7 +534,7 @@ def _shellspec_test_impl(ctx):
         action_env[key] = env[key]
     provider = {
         "label_id": ctx["label"]["id"],
-        "rule_kind": "shellspec_test",
+        "target_kind": "shellspec_test",
         "affected_inputs": inputs,
         "test_info": {
             "schema": "once.test_info.v1",
@@ -821,7 +821,7 @@ def _apple_library_impl(ctx):
     # Modulemap generation: if the target exports headers AND opts into
     # clang modules, write a modulemap so consumers can `import` the
     # module without listing each header on the command line. This is
-    # the minimum Buck2 / rules_apple do; framework modules and umbrella
+    # the minimum Buck2 and Bazel Apple implementations do; framework modules and umbrella
     # headers can layer on later.
     modulemap_path = ""
     if enable_modules and len(own_exported_headers) > 0:
@@ -2143,7 +2143,7 @@ exit "$status"
 
     return provider
 
-swift_macro = rule(
+swift_macro = target_kind(
     docs = "Compiles a Swift compiler-plugin dylib that consumers load via `-load-plugin-library` at compile time.",
     impl = _swift_macro_impl,
     attrs = [
@@ -2168,7 +2168,7 @@ swift_macro = rule(
     ],
 )
 
-apple_library = rule(
+apple_library = target_kind(
     docs = "Compiles Swift, Objective-C, C, and C++ sources into a linkable Apple module.",
     impl = _apple_library_impl,
     attrs = [
@@ -2187,12 +2187,12 @@ apple_library = rule(
         attr("defines", "list<string>", default = "[]", docs = "`-D` preprocessor / Swift conditional compilation flags, propagated transitively"),
         attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled for dependent tests"),
         attr("library_evolution", "bool", default = "false", docs = "Emit stable Swift module interfaces for binary compatibility"),
-        attr("emit_dsym", "bool", default = "false", docs = "Emit DWARF debug info so downstream rules can extract a `.dSYM` bundle"),
+        attr("emit_dsym", "bool", default = "false", docs = "Emit DWARF debug info so downstream target kinds can extract a `.dSYM` bundle"),
         attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS (always uses macosx)", configurable = False),
         attr("archs", "list<string>", default = "[]", docs = "Target architectures (`arm64`, `x86_64`, `arm64e`, `arm64_32`). Empty defaults to the host arch; multi-arch fans out per-arch compiles and combines them with `lipo`", configurable = False),
         attr("mac_catalyst", "bool", default = "false", docs = "Build the iOSMac (Mac Catalyst) variant. Requires `platform = macos`; rewrites the triple to `<arch>-apple-ios<minOS>-macabi`", configurable = False),
         attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
-        attr("alwayslink", "bool", default = "false", docs = "Hint to downstream linker rules to force-load this archive (`-Wl,-force_load`)"),
+        attr("alwayslink", "bool", default = "false", docs = "Hint to downstream linker target kinds to force-load this archive (`-Wl,-force_load`)"),
         attr("exported_deps", "list<string>", default = "[]", docs = "Target IDs from `deps` whose module interface flows through to consumers' compile path"),
         attr("bridging_header", "string", docs = "ObjC bridging header that lets Swift sources see ObjC symbols (`-import-objc-header`)"),
         attr("enable_modules", "bool", default = "false", docs = "Emit a `module.modulemap` for `exported_headers` and pass `-fmodules` to Clang so consumers can `import` the module instead of #importing each header"),
@@ -2218,7 +2218,7 @@ apple_library = rule(
     ],
 )
 
-apple_framework = rule(
+apple_framework = target_kind(
     docs = "Builds a dynamic Apple framework bundle (`Foo.framework/Foo` dylib) with module metadata and resources.",
     impl = _apple_framework_impl,
     attrs = [
@@ -2257,7 +2257,7 @@ apple_framework = rule(
     ],
 )
 
-apple_application = rule(
+apple_application = target_kind(
     docs = "Builds an Apple application bundle (`Foo.app`) with the Mach-O executable, embedded frameworks, Info.plist, and ad-hoc codesign.",
     impl = _apple_application_impl,
     attrs = [
@@ -2300,7 +2300,7 @@ apple_application = rule(
     ],
 )
 
-apple_test_bundle = rule(
+apple_test_bundle = target_kind(
     docs = "Builds Apple test targets and can run Swift Testing tests through the generic Once test capability.",
     impl = _apple_test_bundle_impl,
     attrs = [
@@ -2339,7 +2339,7 @@ apple_test_bundle = rule(
     ],
 )
 
-shellspec_test = rule(
+shellspec_test = target_kind(
     docs = "Runs ShellSpec files through the generic Once test capability and emits normalized once.test_results.v1 results.",
     attrs = [
         attr("shellspec", "string", default = "shellspec", docs = "ShellSpec executable to invoke"),

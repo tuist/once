@@ -11,7 +11,7 @@
 //! workspace-local. They're per-project artifacts users consume from
 //! their checkout; moving them under `$HOME` would force ad-hoc
 //! discovery and break the `./.once/out/...` muscle memory inherited
-//! from the rust and apple rules. The split is:
+//! from the built-in Rust and Apple target kinds. The split is:
 //!
 //! - `<workspace>/.once/out/...` - build outputs, runtime sessions
 //! - `<XDG_CACHE_HOME>/once/cas` - CAS blobs and action results

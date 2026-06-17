@@ -1,20 +1,20 @@
 #shellcheck shell=bash
 # End-to-end specs for the agent-facing graph discovery and editing
-# CLI surface: `once query rules`, `once query example`,
+# CLI surface: `once query target-kinds`, `once query example`,
 # `once query target`, `once query validate-target`, and
 # `once edit apply`. These commands mirror the MCP tool surface; the
 # MCP tests cover the protocol layer, these specs pin the CLI contract
 # (exit codes, --format handling, stdin and --file input).
 
-seed_custom_rule_workspace() {
-  mkdir -p "$WORKSPACE/rules"
+seed_custom_module_workspace() {
+  mkdir -p "$WORKSPACE/modules"
   cat > "$WORKSPACE/once.toml" <<'EOF'
-[rules]
-paths = ["rules/*.star"]
+[modules]
+paths = ["modules/*.star"]
 EOF
-  cat > "$WORKSPACE/rules/demo.star" <<'EOF'
-demo_rule = rule(
-    docs = "Demo rule",
+  cat > "$WORKSPACE/modules/demo.star" <<'EOF'
+demo_kind = target_kind(
+    docs = "Demo kind",
     attrs = [
         attr("message", "string", required = True, docs = "Message to emit"),
     ],
@@ -27,9 +27,9 @@ demo_rule = rule(
 EOF
 }
 
-Describe 'once query rules'
-  It 'lists every rule kind with its example slugs in human mode'
-    When call "$ONCE_BIN" query rules
+Describe 'once query target-kinds'
+  It 'lists every target kind with its example slugs in human mode'
+    When call "$ONCE_BIN" query target-kinds
     The status should be success
     The stdout should include 'apple_library'
     The stdout should include 'apple_application'
@@ -41,7 +41,7 @@ Describe 'once query rules'
   End
 
   It 'emits structured JSON under --format json'
-    When call "$ONCE_BIN" --format json query rules
+    When call "$ONCE_BIN" --format json query target-kinds
     The status should be success
     The stdout should include '"kind":"apple_library"'
     The stdout should include '"slug":"apple-library-minimal"'
@@ -69,47 +69,47 @@ Describe 'once query example'
   End
 End
 
-Describe 'workspace custom rule CLI surface'
+Describe 'workspace custom module CLI surface'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
-  It 'includes custom rules in query rules'
-    seed_custom_rule_workspace
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query rules
+  It 'includes custom target kinds in query target-kinds'
+    seed_custom_module_workspace
+    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query target-kinds
     The status should be success
-    The stdout should include '"kind":"demo_rule"'
-    The stdout should include '"docs":"Demo rule"'
+    The stdout should include '"kind":"demo_kind"'
+    The stdout should include '"docs":"Demo kind"'
   End
 
-  It 'returns custom schemas from query schema'
-    seed_custom_rule_workspace
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query schema demo_rule
+  It 'returns custom target kind schemas from query schema'
+    seed_custom_module_workspace
+    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query schema demo_kind
     The status should be success
-    The stdout should include '"kind":"demo_rule"'
+    The stdout should include '"kind":"demo_kind"'
     The stdout should include '"name":"message"'
     The stdout should include '"required":true'
   End
 
-  It 'validates drafts against custom schemas'
-    seed_custom_rule_workspace
+  It 'validates drafts against custom target kind schemas'
+    seed_custom_module_workspace
     cat > "$WORKSPACE/draft.json" <<'EOF'
-{"target":{"name":"Hello","kind":"demo_rule","attrs":{"message":"hello"}}}
+{"target":{"name":"Hello","kind":"demo_kind","attrs":{"message":"hello"}}}
 EOF
     When call "$ONCE_BIN" -C "$WORKSPACE" --format json query validate-target --file "$WORKSPACE/draft.json"
     The status should be success
     The stdout should include '"valid":true'
   End
 
-  It 'applies edits against custom schemas'
-    seed_custom_rule_workspace
+  It 'applies edits against custom target kind schemas'
+    seed_custom_module_workspace
     cat > "$WORKSPACE/edit.json" <<'EOF'
-{"package":"apps/Hello","operations":[{"op":"create","target":{"name":"Hello","kind":"demo_rule","attrs":{"message":"hello"}}}]}
+{"package":"apps/Hello","operations":[{"op":"create","target":{"name":"Hello","kind":"demo_kind","attrs":{"message":"hello"}}}]}
 EOF
     When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit apply --file "$WORKSPACE/edit.json"
     The status should be success
     The stdout should include '"applied":true'
     The path "$WORKSPACE/apps/Hello/once.toml" should be file
-    The contents of file "$WORKSPACE/apps/Hello/once.toml" should include 'kind = "demo_rule"'
+    The contents of file "$WORKSPACE/apps/Hello/once.toml" should include 'kind = "demo_kind"'
   End
 End
 
