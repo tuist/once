@@ -18,13 +18,17 @@ Prerequisites:
 - The token has `Zone:Read` and `DNS:Edit` permissions for `buildonce.dev`.
 
 ```bash
-CLOUDFLARE_API_TOKEN="$(op read 'op://once-k8s-production/cloudflare-buildonce-dns/credential')"
+tmpdir="$(mktemp -d)"
+chmod 700 "$tmpdir"
+trap 'rm -rf "$tmpdir"' EXIT
+token_file="$tmpdir/cloudflare-api-token"
+op read 'op://once-k8s-production/cloudflare-buildonce-dns/credential' | tr -d '\n' >"$token_file"
+chmod 600 "$token_file"
 
 kubectl create namespace external-dns --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n external-dns create secret generic cloudflare-api-token \
-  --from-literal=token="$CLOUDFLARE_API_TOKEN" \
+  --from-file=token="$token_file" \
   --dry-run=client -o yaml | kubectl apply -f -
-unset CLOUDFLARE_API_TOKEN
 
 helm repo add external-dns https://kubernetes-sigs.github.io/external-dns 2>/dev/null \
   || helm repo update external-dns
