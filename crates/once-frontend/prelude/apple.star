@@ -1,39 +1,3 @@
-def attr(name, ty, required = False, default = None, docs = "", configurable = True):
-    return {
-        "name": name,
-        "ty": ty,
-        "required": required,
-        "default": default,
-        "docs": docs,
-        "configurable": configurable,
-    }
-
-def dep(name, expected_providers, docs = ""):
-    return {
-        "name": name,
-        "expected_providers": expected_providers,
-        "docs": docs,
-    }
-
-def capability(name, output_groups, requires_outputs = []):
-    return {
-        "name": name,
-        "output_groups": output_groups,
-        "requires_outputs": requires_outputs,
-    }
-
-def rule(kind, docs, attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None):
-    return {
-        "kind": kind,
-        "docs": docs,
-        "attrs": attrs,
-        "deps": deps,
-        "providers": providers,
-        "capabilities": capabilities,
-        "examples": examples,
-        "impl": impl,
-    }
-
 # Generic host primitives provided by Rust:
 #   host_arch()                -> "arm64" | "x86_64" | ...
 #   host_os()                  -> "macos" | "linux" | ...
@@ -135,20 +99,6 @@ def _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir):
     identity = "once.apple.swiftc.v1\x00" + swiftc_path + "\x00" + version + "\x00" + (xcode_developer_dir or "")
     return (xcrun, sdk, identity, env)
 
-def _ends_with(value, suffix):
-    if len(value) < len(suffix):
-        return False
-    return value[len(value) - len(suffix):] == suffix
-
-def _filter_by_extensions(paths, extensions):
-    out = []
-    for path in paths:
-        for ext in extensions:
-            if _ends_with(path, ext):
-                out.append(path)
-                break
-    return out
-
 def _filter_swift_sources(paths):
     return _filter_by_extensions(paths, [".swift"])
 
@@ -208,27 +158,6 @@ def _xcrun_actool(xcode_developer_dir):
     actool_path = host_command([xcrun, "--find", "actool"], env = env).strip()
     identity = "once.apple.actool.v1\x00" + actool_path + "\x00" + (xcode_developer_dir or "")
     return (xcrun, actool_path, identity, env)
-
-def _package_relative(ctx, path):
-    if not path:
-        return path
-    # Absolute / already-workspace-rooted paths (rare in once.toml)
-    # are returned untouched.
-    if path.startswith("/") or path.startswith("."):
-        return path
-    package = ctx["label"]["package"]
-    if package:
-        return package + "/" + path
-    return path
-
-def _parent_dir(path):
-    idx = -1
-    for i in range(len(path)):
-        if path[i] == "/":
-            idx = i
-    if idx < 0:
-        return ""
-    return path[:idx]
 
 def _unique_dirs(paths):
     seen = {}

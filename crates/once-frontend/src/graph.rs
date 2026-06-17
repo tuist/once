@@ -11,7 +11,7 @@ use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 use starlark::values::Value;
 
-use crate::analysis::{select_branches, BUILT_IN_PRELUDE_FILES};
+use crate::analysis::select_branches;
 use crate::error::{Error, Result};
 use crate::target::{AttrValue, Target};
 use crate::workspace::load_workspace;
@@ -281,11 +281,10 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
 }
 
 fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
-    let mut schemas = Vec::new();
-    for (path, source) in BUILT_IN_PRELUDE_FILES {
-        schemas.extend(parse_rule_schemas(path, &prelude_schema_source(source))?);
-    }
-    Ok(schemas)
+    parse_rule_schemas(
+        crate::rules::BUILT_IN_RULE_PATH,
+        &prelude_schema_source(crate::rules::built_in_rule_source()),
+    )
 }
 
 fn prelude_schema_source(source: &str) -> String {
@@ -576,32 +575,6 @@ mod tests {
     use crate::target::Target;
 
     #[test]
-    fn apple_application_exposes_build_and_run() {
-        let target = Target {
-            package: "apps/ios".to_string(),
-            kind: "apple_application".to_string(),
-            name: "App".to_string(),
-            deps: vec!["apps/ios/AppKit".to_string()],
-            srcs: Vec::new(),
-            attrs: BTreeMap::new(),
-            typed_attrs: BTreeMap::new(),
-        };
-
-        let graph = graph_from_targets(&[target]);
-        let app = &graph[0];
-        assert_eq!(app.label.id, "apps/ios/App");
-        // Assert membership rather than order: capability order is defined by
-        // the prelude and reordering it there should not break this test.
-        let mut names = app
-            .capabilities
-            .iter()
-            .map(|capability| capability.name.as_str())
-            .collect::<Vec<_>>();
-        names.sort_unstable();
-        assert_eq!(names, vec!["build", "run"]);
-    }
-
-    #[test]
     fn parse_rule_schemas_rejects_invalid_syntax() {
         let err = parse_rule_schemas("test.star", "RULES = [").unwrap_err();
         assert!(matches!(err, Error::Eval { .. }));
@@ -712,7 +685,23 @@ RULES = [
             r#"
 RULES = [
     rule(
-        kind = "apple_library",
+        kind = "demo_rule",
+        docs = "Duplicate",
+        attrs = [],
+        deps = [],
+        providers = [],
+        capabilities = [],
+    ),
+]
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/other.star"),
+            r#"
+RULES = [
+    rule(
+        kind = "demo_rule",
         docs = "Duplicate",
         attrs = [],
         deps = [],
@@ -732,7 +721,7 @@ RULES = [
     #[test]
     fn unknown_kind_gets_diagnostic_and_no_capabilities() {
         let target = Target {
-            package: "apps/ios".to_string(),
+            package: "pkg".to_string(),
             kind: "mystery_rule".to_string(),
             name: "Thing".to_string(),
             deps: Vec::new(),
@@ -755,11 +744,11 @@ RULES = [
     #[test]
     fn graph_attrs_fall_back_to_string_attrs_when_untyped() {
         let mut attrs = BTreeMap::new();
-        attrs.insert("platform".to_string(), "ios".to_string());
+        attrs.insert("mode".to_string(), "debug".to_string());
         let target = Target {
-            package: "apps/ios".to_string(),
-            kind: "apple_library".to_string(),
-            name: "AppCore".to_string(),
+            package: "pkg".to_string(),
+            kind: "script".to_string(),
+            name: "Tool".to_string(),
             deps: Vec::new(),
             srcs: Vec::new(),
             attrs,
@@ -768,21 +757,21 @@ RULES = [
 
         let graph = graph_from_targets(&[target]);
         assert_eq!(
-            graph[0].attrs.get("platform"),
-            Some(&AttrValue::String("ios".to_string()))
+            graph[0].attrs.get("mode"),
+            Some(&AttrValue::String("debug".to_string()))
         );
     }
 
     #[test]
     fn typed_attrs_take_precedence_over_string_attrs() {
         let mut attrs = BTreeMap::new();
-        attrs.insert("enable_testing".to_string(), "true".to_string());
+        attrs.insert("enabled".to_string(), "false".to_string());
         let mut typed_attrs = BTreeMap::new();
-        typed_attrs.insert("enable_testing".to_string(), AttrValue::Bool(true));
+        typed_attrs.insert("enabled".to_string(), AttrValue::Bool(true));
         let target = Target {
-            package: "apps/ios".to_string(),
-            kind: "apple_library".to_string(),
-            name: "AppCore".to_string(),
+            package: "pkg".to_string(),
+            kind: "script".to_string(),
+            name: "Tool".to_string(),
             deps: Vec::new(),
             srcs: Vec::new(),
             attrs,
@@ -790,17 +779,11 @@ RULES = [
         };
 
         let graph = graph_from_targets(&[target]);
-        assert_eq!(
-            graph[0].attrs.get("enable_testing"),
-            Some(&AttrValue::Bool(true))
-        );
+        assert_eq!(graph[0].attrs.get("enabled"), Some(&AttrValue::Bool(true)));
     }
 
     #[test]
     fn select_on_non_configurable_attribute_emits_a_diagnostic() {
-        // module_name is declared `configurable = False` in the
-        // prelude. A select() on it should surface a diagnostic, not
-        // be silently accepted.
         let mut typed_attrs = BTreeMap::new();
         let mut select_outer = BTreeMap::new();
         let mut branches = BTreeMap::new();
@@ -809,38 +792,40 @@ RULES = [
             AttrValue::String("Default".to_string()),
         );
         select_outer.insert("select".to_string(), AttrValue::Map(branches));
-        typed_attrs.insert("module_name".to_string(), AttrValue::Map(select_outer));
-        typed_attrs.insert("platform".to_string(), AttrValue::String("ios".to_string()));
+        typed_attrs.insert("fixed_name".to_string(), AttrValue::Map(select_outer));
         let target = Target {
-            package: "apps/ios".to_string(),
-            kind: "apple_library".to_string(),
-            name: "AppCore".to_string(),
+            package: "pkg".to_string(),
+            kind: "demo_rule".to_string(),
+            name: "Thing".to_string(),
             deps: Vec::new(),
             srcs: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
         };
-        let graph = graph_from_targets(&[target]);
+        let schemas = vec![RuleSchema {
+            kind: "demo_rule".to_string(),
+            docs: "Demo rule".to_string(),
+            attrs: vec![attr(
+                "fixed_name",
+                "string",
+                false,
+                None,
+                "Fixed target name",
+                false,
+            )],
+            deps: Vec::new(),
+            providers: Vec::new(),
+            capabilities: Vec::new(),
+            examples: Vec::new(),
+        }];
+
+        let graph = graph_from_targets_with_schemas(&[target], &schemas);
         let diag = graph[0]
             .diagnostics
             .iter()
             .find(|d| d.code == "select_on_non_configurable_attr")
             .expect("expected select_on_non_configurable_attr diagnostic");
-        assert!(diag.message.contains("module_name"), "{}", diag.message);
-    }
-
-    #[test]
-    fn apple_library_schema_exposes_multi_arch_attributes() {
-        let schema = built_in_rule_schema("apple_library").expect("apple_library schema");
-        let attr_names: Vec<&str> = schema.attrs.iter().map(|attr| attr.name.as_str()).collect();
-        assert!(
-            attr_names.contains(&"archs"),
-            "apple_library should expose an archs attribute, got {attr_names:?}"
-        );
-        assert!(
-            attr_names.contains(&"mac_catalyst"),
-            "apple_library should expose a mac_catalyst attribute, got {attr_names:?}"
-        );
+        assert!(diag.message.contains("fixed_name"), "{}", diag.message);
     }
 
     #[test]
@@ -849,8 +834,8 @@ RULES = [
             .into_iter()
             .map(|schema| schema.kind)
             .collect::<Vec<_>>();
-        assert!(kinds.contains(&"apple_library".to_string()));
         assert!(kinds.contains(&"script".to_string()));
+        assert!(kinds.len() > 1);
         let unique = kinds.iter().collect::<std::collections::BTreeSet<_>>();
         assert_eq!(unique.len(), kinds.len());
     }

@@ -3,17 +3,26 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
+use std::sync::LazyLock;
 
 use crate::error::{Error, Result};
 use crate::manifest::load_rule_paths_toml_str;
 use crate::TOML_BUILD_FILE_NAME;
+use include_dir::{include_dir, Dir};
+use starlark::environment::{GlobalsBuilder, Module};
 use starlark::syntax::{AstModule, Dialect};
+use starlark::values::list::ListRef;
+use starlark::values::Value;
 
 pub(crate) const BUILT_IN_RULE_PATH: &str = "once//prelude/all.star";
 pub(crate) const COMBINED_RULE_PATH: &str = "once//rules/all.star";
 
+const PRELUDE_INDEX_PATH: &str = "index.star";
+static PRELUDE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/prelude");
+static BUILT_IN_RULE_SOURCE: LazyLock<String> = LazyLock::new(load_built_in_rule_source);
+
 pub(crate) fn built_in_rule_source() -> &'static str {
-    crate::analysis::BUILT_IN_PRELUDE
+    BUILT_IN_RULE_SOURCE.as_str()
 }
 
 pub(crate) fn combined_rule_source_for_workspace(root: &Path) -> Result<String> {
@@ -220,6 +229,67 @@ fn display_rule_path(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace(std::path::MAIN_SEPARATOR, "/")
+}
+
+fn load_built_in_rule_source() -> String {
+    let sources = prelude_sources_from_index();
+    let mut source = String::new();
+    for path in sources {
+        let file = PRELUDE_DIR
+            .get_file(&path)
+            .unwrap_or_else(|| panic!("built-in prelude source `{path}` is missing"));
+        let contents = file
+            .contents_utf8()
+            .unwrap_or_else(|| panic!("built-in prelude source `{path}` is not UTF-8"));
+        source.push_str(contents);
+        source.push('\n');
+    }
+    source
+}
+
+fn prelude_sources_from_index() -> Vec<String> {
+    let index = PRELUDE_DIR
+        .get_file(PRELUDE_INDEX_PATH)
+        .unwrap_or_else(|| panic!("built-in prelude index `{PRELUDE_INDEX_PATH}` is missing"));
+    let source = index
+        .contents_utf8()
+        .unwrap_or_else(|| panic!("built-in prelude index `{PRELUDE_INDEX_PATH}` is not UTF-8"));
+    Module::with_temp_heap(|module| {
+        let ast = AstModule::parse(PRELUDE_INDEX_PATH, source.to_string(), &Dialect::Standard)
+            .unwrap_or_else(|error| panic!("built-in prelude index parse failed: {error:?}"));
+        let globals = GlobalsBuilder::standard().build();
+        let mut eval = starlark::eval::Evaluator::new(&module);
+        eval.eval_module(ast, &globals)
+            .unwrap_or_else(|error| panic!("built-in prelude index eval failed: {error:?}"));
+        let value = module
+            .get("PRELUDE_SOURCES")
+            .unwrap_or_else(|| panic!("built-in prelude index is missing PRELUDE_SOURCES"));
+        let list = ListRef::from_value(value)
+            .unwrap_or_else(|| panic!("built-in prelude PRELUDE_SOURCES is not a list"));
+        list.iter()
+            .map(|value| {
+                let path = Value::unpack_str(value).unwrap_or_else(|| {
+                    panic!("built-in prelude PRELUDE_SOURCES entries must be strings")
+                });
+                validate_built_in_prelude_source_path(path);
+                path.to_string()
+            })
+            .collect()
+    })
+}
+
+fn validate_built_in_prelude_source_path(path: &str) {
+    let path_value = Path::new(path);
+    assert!(
+        !path.trim().is_empty() && !path_value.is_absolute(),
+        "built-in prelude source path `{path}` must be relative"
+    );
+    for component in path_value.components() {
+        match component {
+            Component::Normal(_) => {}
+            _ => panic!("built-in prelude source path `{path}` must stay inside the prelude"),
+        }
+    }
 }
 
 fn starlark_string_literal(value: &str) -> String {
