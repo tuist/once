@@ -1,7 +1,7 @@
 //! Typed build graph model and built-in rule metadata.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use starlark::environment::Module;
@@ -100,16 +100,43 @@ pub struct RuleSchema {
     pub providers: Vec<String>,
     /// Capabilities exposed by targets of this rule.
     pub capabilities: Vec<Capability>,
-    /// Runnable starter workspaces. Each example bundles the files an
-    /// agent or human needs to copy to get a working target of this
-    /// rule kind, along with a one-line "use this when..." hint.
+    /// Runnable starter workspaces. Each example is a lightweight
+    /// descriptor; callers load the file bundle only when they choose
+    /// a starter to materialize.
     pub examples: Vec<RuleExample>,
 }
 
-/// A runnable starter workspace for a rule. Resolved from the
-/// `prelude/examples/<slug>/` directory bundled into the binary.
+/// A runnable starter descriptor for a rule.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RuleExample {
+    /// Human-readable example title.
+    pub name: String,
+    /// Stable identifier used to reference this example.
+    pub slug: String,
+    /// One-line "use this when..." hint that helps callers choose
+    /// between examples for the same rule kind.
+    pub use_when: String,
+    /// Where the starter file tree lives. The wire schema omits this so
+    /// discovery remains independent from local package layout.
+    #[serde(skip_serializing)]
+    pub source: RuleExampleSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleExampleSource {
+    pub root: RuleExampleRoot,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleExampleRoot {
+    BuiltInPrelude,
+    Workspace { root: PathBuf },
+}
+
+/// A materialized starter workspace for a rule.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuleExampleBundle {
     /// Human-readable example title.
     pub name: String,
     /// Stable identifier used to reference this example.
@@ -200,9 +227,11 @@ pub fn rule_schemas_for_workspace(root: &Path) -> Result<Vec<RuleSchema>> {
     let mut schemas = starlark_prelude_rule_schemas()?;
     let common = crate::rules::common_rule_source();
     for rule_file in crate::rules::load_rule_files(root)? {
-        schemas.extend(parse_rule_schemas(
+        let source_context = RuleSchemaSource::workspace(root, &rule_file.display_path);
+        schemas.extend(parse_rule_schemas_with_context(
             &rule_file.display_path,
             &format!("{common}\n{}", rule_file.source),
+            &source_context,
         )?);
     }
     validate_unique_rule_kinds(&schemas)
@@ -288,6 +317,40 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
         .collect()
 }
 
+#[derive(Debug, Clone)]
+struct RuleSchemaSource {
+    example_root: RuleExampleRoot,
+    example_base: String,
+}
+
+impl RuleSchemaSource {
+    fn built_in_prelude() -> Self {
+        Self {
+            example_root: RuleExampleRoot::BuiltInPrelude,
+            example_base: String::new(),
+        }
+    }
+
+    fn workspace(root: &Path, rule_file: &str) -> Self {
+        Self {
+            example_root: RuleExampleRoot::Workspace {
+                root: root.to_path_buf(),
+            },
+            example_base: parent_dir(rule_file),
+        }
+    }
+
+    fn example_source(&self, path: &str) -> std::result::Result<RuleExampleSource, String> {
+        crate::examples::example_source(self.example_root.clone(), &self.example_base, path)
+    }
+}
+
+fn parent_dir(path: &str) -> String {
+    path.rsplit_once('/')
+        .map(|(parent, _)| parent.to_string())
+        .unwrap_or_default()
+}
+
 fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
     parse_rule_schemas(
         crate::rules::BUILT_IN_RULE_PATH,
@@ -302,6 +365,14 @@ fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
 /// without depending on the compiled-in prelude staying valid, and so they
 /// keep working if the prelude ever becomes user-configurable.
 fn parse_rule_schemas(path: &str, source: &str) -> Result<Vec<RuleSchema>> {
+    parse_rule_schemas_with_context(path, source, &RuleSchemaSource::built_in_prelude())
+}
+
+fn parse_rule_schemas_with_context(
+    path: &str,
+    source: &str,
+    source_context: &RuleSchemaSource,
+) -> Result<Vec<RuleSchema>> {
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
             .map_err(|error| prelude_error(path, error))?;
@@ -313,7 +384,8 @@ fn parse_rule_schemas(path: &str, source: &str) -> Result<Vec<RuleSchema>> {
         if rules.is_empty() {
             return Err(prelude_message(path, "no rule symbols exported"));
         }
-        rule_schemas_from_exports(&rules).map_err(|message| prelude_message(path, &message))
+        rule_schemas_from_exports(&rules, source_context)
+            .map_err(|message| prelude_message(path, &message))
     })
 }
 
@@ -333,10 +405,11 @@ fn prelude_message(path: &str, message: &str) -> Error {
 
 fn rule_schemas_from_exports(
     rules: &[crate::rules::RuleExport<'_>],
+    source_context: &RuleSchemaSource,
 ) -> std::result::Result<Vec<RuleSchema>, String> {
     let schemas = rules
         .iter()
-        .map(|rule| rule_schema_from_value(rule.value, rule.name))
+        .map(|rule| rule_schema_from_value(rule.value, rule.name, source_context))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     validate_unique_rule_kinds(&schemas)?;
     Ok(schemas)
@@ -366,16 +439,21 @@ fn append_script_schema(schemas: &mut Vec<RuleSchema>) -> Result<()> {
     Ok(())
 }
 
-fn rule_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<RuleSchema, String> {
+fn rule_schema_from_value(
+    value: Value<'_>,
+    path: &str,
+    source_context: &RuleSchemaSource,
+) -> std::result::Result<RuleSchema, String> {
     let kind = crate::rules::rule_kind(value, path)?;
-    let example_slugs = field_string_list(value, path, "examples")?;
-    let examples = example_slugs
-        .into_iter()
+    let examples = field_list(value, path, "examples")?
+        .iter()
         .enumerate()
-        .map(|(index, slug)| {
-            crate::examples::load_example(&slug).ok_or_else(|| {
-                format!("{path}.examples[{index}] references unknown example slug `{slug}`")
-            })
+        .map(|(index, example)| {
+            example_from_value(
+                example,
+                &format!("{path}.examples[{index}]"),
+                source_context,
+            )
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(RuleSchema {
@@ -430,6 +508,39 @@ fn capability_from_value(value: Value<'_>, path: &str) -> std::result::Result<Ca
     })
 }
 
+fn example_from_value(
+    value: Value<'_>,
+    path: &str,
+    source_context: &RuleSchemaSource,
+) -> std::result::Result<RuleExample, String> {
+    let dict = DictRef::from_value(value).ok_or_else(|| {
+        format!(
+            "{path} should be an example(...) value, got `{}`",
+            value.get_type()
+        )
+    })?;
+    let marker = dict
+        .get_str("_once_example")
+        .and_then(Value::unpack_bool)
+        .unwrap_or(false);
+    if !marker {
+        return Err(format!("{path} should be an example(...) value"));
+    }
+    let slug = non_empty_field_string(value, path, "slug")?;
+    let name = non_empty_field_string(value, path, "name")?;
+    let use_when = non_empty_field_string(value, path, "use_when")?;
+    let example_path = non_empty_field_string(value, path, "path")?;
+    let source = source_context
+        .example_source(&example_path)
+        .map_err(|message| format!("{path}.path {message}"))?;
+    Ok(RuleExample {
+        name,
+        slug,
+        use_when,
+        source,
+    })
+}
+
 fn field_value<'v>(
     value: Value<'v>,
     path: &str,
@@ -449,6 +560,18 @@ fn field_string(value: Value<'_>, path: &str, field: &str) -> std::result::Resul
             value.get_type()
         )
     })
+}
+
+fn non_empty_field_string(
+    value: Value<'_>,
+    path: &str,
+    field: &str,
+) -> std::result::Result<String, String> {
+    let value = field_string(value, path, field)?;
+    if value.trim().is_empty() {
+        return Err(format!("{path}.{field} should be non-empty"));
+    }
+    Ok(value)
 }
 
 fn optional_field_string(
@@ -669,6 +792,91 @@ demo_rule = rule(
         assert_eq!(graph[0].providers, vec!["demo_provider"]);
         assert_eq!(graph[0].capabilities[0].name, "build");
         assert!(graph[0].diagnostics.is_empty());
+    }
+
+    #[test]
+    fn workspace_rule_examples_resolve_relative_to_rule_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("rules/examples/demo/src")).unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            "[rules]\npaths = [\"rules/*.star\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/demo.star"),
+            r#"
+demo_rule = rule(
+    docs = "Demo rule",
+    examples = [
+        example(
+            "minimal",
+            name = "Minimal demo",
+            use_when = "Start a minimal demo target.",
+            path = "examples/demo",
+        ),
+    ],
+)
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/examples/demo/once.toml"),
+            "[[target]]\nname = \"Demo\"\nkind = \"demo_rule\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/examples/demo/src/main.txt"),
+            "hello\n",
+        )
+        .unwrap();
+
+        let schema = rule_schemas_for_workspace(tmp.path())
+            .unwrap()
+            .into_iter()
+            .find(|schema| schema.kind == "demo_rule")
+            .unwrap();
+        assert_eq!(schema.examples[0].slug, "minimal");
+
+        let bundle = crate::examples::load_rule_example(&schema, "minimal").unwrap();
+
+        assert_eq!(bundle.name, "Minimal demo");
+        assert!(bundle.files.iter().any(|file| file.path == "once.toml"));
+        assert!(bundle.files.iter().any(|file| file.path == "src/main.txt"));
+    }
+
+    #[test]
+    fn workspace_rule_examples_reject_paths_outside_rule_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            "[rules]\npaths = [\"rules/*.star\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/demo.star"),
+            r#"
+demo_rule = rule(
+    docs = "Demo rule",
+    examples = [
+        example(
+            "bad",
+            name = "Bad demo",
+            use_when = "This should fail.",
+            path = "../examples/bad",
+        ),
+    ],
+)
+"#,
+        )
+        .unwrap();
+
+        let err = rule_schemas_for_workspace(tmp.path()).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("must stay inside the rule package"));
     }
 
     #[test]

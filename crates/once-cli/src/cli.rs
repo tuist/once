@@ -272,9 +272,10 @@ pub enum Cmd {
     /// targets` lists every declared target id with its rule kind
     /// and capabilities; `query capabilities` shows what a specific
     /// target exposes (`build`, `run`, `test`); `query schema`
-    /// returns the typed attribute and provider shape for a rule.
-    /// All three respect `--format json` so consumers can plan
-    /// against the graph without scraping prose.
+    /// returns the typed attribute and provider shape for a rule; and
+    /// `query example` materializes a chosen starter. All query
+    /// surfaces respect `--format json` so consumers can plan against
+    /// the graph without scraping prose.
     #[command(arg_required_else_help = true)]
     Query {
         #[command(subcommand)]
@@ -312,11 +313,11 @@ pub enum Cmd {
     ///
     /// Speaks the Model Context Protocol over stdio so an agent host
     /// (Claude Desktop, an IDE plug-in, the Anthropic SDK) can call
-    /// `once_query_targets`, `once_query_capabilities`, and
-    /// `once_query_schema` as tools and get JSON back without
-    /// scraping prose. Mounts inspection tools by default; pass
-    /// `--allow-run` to expose side-effectful build, run, and
-    /// runtime session tools.
+    /// `once_query_targets`, `once_query_capabilities`,
+    /// `once_query_schema`, and `once_query_example` as tools and get
+    /// JSON back without scraping prose. Mounts inspection tools by
+    /// default; pass `--allow-run` to expose side-effectful build,
+    /// run, and runtime session tools.
     Mcp {
         /// Workspace root the MCP tools resolve targets against.
         /// Defaults to the value of the global `-C/--directory` flag

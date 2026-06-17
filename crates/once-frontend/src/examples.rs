@@ -1,123 +1,188 @@
-//! Rule example bundles. Each example is a real on-disk workspace
-//! under `prelude/examples/<slug>/`; we bake the tree into the binary
-//! with `include_dir!` so MCP and CLI consumers get the same files a
-//! human browsing the repo would see.
-//!
-//! Each example directory contains a `_meta.toml` (`name`, `use_when`)
-//! plus the files that make up the runnable workspace. The meta file
-//! is metadata only and never appears in the file bundle returned to
-//! callers.
+//! Rule example bundles. Rule schemas carry lightweight example
+//! descriptors during discovery; the file tree is loaded only when a
+//! caller asks to materialize a specific starter.
+
+use std::path::{Component, Path};
 
 use include_dir::{include_dir, Dir};
-use serde::Deserialize;
+use walkdir::WalkDir;
 
-use crate::graph::{RuleExample, RuleExampleFile};
+use crate::error::{Error, Result};
+use crate::graph::{
+    RuleExample, RuleExampleBundle, RuleExampleFile, RuleExampleRoot, RuleExampleSource, RuleSchema,
+};
 
-static EXAMPLES_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/prelude/examples");
+static PRELUDE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/prelude");
 
-const META_FILE_NAME: &str = "_meta.toml";
-
-#[derive(Debug, Deserialize)]
-struct ExampleMeta {
-    name: String,
-    use_when: String,
+pub(crate) fn example_source(
+    root: RuleExampleRoot,
+    base: &str,
+    path: &str,
+) -> std::result::Result<RuleExampleSource, String> {
+    validate_relative_path(path)?;
+    let path = join_relative(base, path);
+    let source = RuleExampleSource { root, path };
+    validate_example_source(&source)?;
+    Ok(source)
 }
 
-/// Load a single example by slug. Returns `None` if no example with
-/// that slug is bundled, or if the example's `_meta.toml` is missing
-/// or malformed.
-#[must_use]
-pub fn load_example(slug: &str) -> Option<RuleExample> {
-    let dir = EXAMPLES_DIR.get_dir(slug)?;
-    let meta_path = format!("{slug}/{META_FILE_NAME}");
-    let meta_file = EXAMPLES_DIR.get_file(&meta_path)?;
-    let raw_meta = meta_file.contents_utf8()?;
-    let meta: ExampleMeta = toml::from_str(raw_meta).ok()?;
+pub fn load_rule_example(schema: &RuleSchema, slug: &str) -> Result<RuleExampleBundle> {
+    let example = schema
+        .examples
+        .iter()
+        .find(|example| example.slug == slug)
+        .ok_or_else(|| Error::Eval {
+            path: schema.kind.clone(),
+            message: format!("rule `{}` has no example `{slug}`", schema.kind),
+        })?;
+    load_example_bundle(example)
+}
 
-    let mut files = Vec::new();
-    collect_files(dir, slug, &mut files);
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-
-    Some(RuleExample {
-        name: meta.name,
-        slug: slug.to_string(),
-        use_when: meta.use_when,
+pub fn load_example_bundle(example: &RuleExample) -> Result<RuleExampleBundle> {
+    let files = match &example.source.root {
+        RuleExampleRoot::BuiltInPrelude => load_included_files(&example.source.path)?,
+        RuleExampleRoot::Workspace { root } => load_workspace_files(root, &example.source.path)?,
+    };
+    Ok(RuleExampleBundle {
+        name: example.name.clone(),
+        slug: example.slug.clone(),
+        use_when: example.use_when.clone(),
         files,
     })
 }
 
-/// List every example slug bundled in the binary, sorted.
-#[must_use]
-pub fn list_example_slugs() -> Vec<String> {
-    let mut slugs: Vec<String> = EXAMPLES_DIR
-        .dirs()
-        .filter_map(|dir| dir.path().file_name()?.to_str().map(str::to_string))
-        .collect();
-    slugs.sort();
-    slugs
+pub(crate) fn validate_example_source(
+    source: &RuleExampleSource,
+) -> std::result::Result<(), String> {
+    match &source.root {
+        RuleExampleRoot::BuiltInPrelude => {
+            if PRELUDE_DIR.get_dir(&source.path).is_none() {
+                return Err(format!(
+                    "references missing built-in example directory `{}`",
+                    source.path
+                ));
+            }
+            Ok(())
+        }
+        RuleExampleRoot::Workspace { root } => validate_workspace_source(root, &source.path),
+    }
 }
 
-fn collect_files(dir: &Dir<'_>, slug: &str, out: &mut Vec<RuleExampleFile>) {
+fn load_included_files(path: &str) -> Result<Vec<RuleExampleFile>> {
+    let dir = PRELUDE_DIR.get_dir(path).ok_or_else(|| Error::Eval {
+        path: path.to_string(),
+        message: format!("example directory `{path}` is not bundled"),
+    })?;
+    let mut files = Vec::new();
+    collect_included_files(dir, Path::new(path), &mut files);
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+fn collect_included_files(dir: &Dir<'_>, root: &Path, out: &mut Vec<RuleExampleFile>) {
     for file in dir.files() {
         let path = file.path();
-        if path.file_name().and_then(|name| name.to_str()) == Some(META_FILE_NAME) {
-            continue;
-        }
-        let relative = path.strip_prefix(slug).unwrap_or(path);
-        let contents = file.contents_utf8().unwrap_or_default().to_string();
+        let relative = path.strip_prefix(root).unwrap_or(path);
         out.push(RuleExampleFile {
-            path: relative.to_string_lossy().to_string(),
-            contents,
+            path: display_path(relative),
+            contents: file.contents_utf8().unwrap_or_default().to_string(),
         });
     }
     for sub in dir.dirs() {
-        collect_files(sub, slug, out);
+        collect_included_files(sub, root, out);
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn load_example_returns_apple_library_minimal() {
-        let example = load_example("apple-library-minimal").expect("example loads");
-        assert_eq!(example.slug, "apple-library-minimal");
-        assert!(!example.name.is_empty());
-        assert!(!example.use_when.is_empty());
-        // The example must include at least the manifest and one source file.
-        assert!(example
-            .files
-            .iter()
-            .any(|f| f.path == "apps/Hello/once.toml"));
-        assert!(example
-            .files
-            .iter()
-            .any(|f| f.path == "apps/Hello/Sources/Hello.swift"));
-        // _meta.toml must never leak into the file bundle.
-        assert!(!example.files.iter().any(|f| f.path.ends_with("_meta.toml")));
+fn load_workspace_files(root: &Path, path: &str) -> Result<Vec<RuleExampleFile>> {
+    let source_root = root.join(path);
+    let mut files = Vec::new();
+    for entry in WalkDir::new(&source_root) {
+        let entry = entry.map_err(|source| Error::Walk {
+            root: source_root.display().to_string(),
+            source,
+        })?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(&source_root)
+            .unwrap_or(entry.path());
+        let contents = std::fs::read_to_string(entry.path()).map_err(|source| Error::Read {
+            path: entry.path().display().to_string(),
+            source,
+        })?;
+        files.push(RuleExampleFile {
+            path: display_path(relative),
+            contents,
+        });
     }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
 
-    #[test]
-    fn load_example_returns_none_for_unknown_slug() {
-        assert!(load_example("does-not-exist").is_none());
+fn validate_workspace_source(root: &Path, path: &str) -> std::result::Result<(), String> {
+    let canonical_root = std::fs::canonicalize(root).map_err(|err| {
+        format!(
+            "could not resolve workspace root `{}`: {err}",
+            root.display()
+        )
+    })?;
+    let example_root = root.join(path);
+    let canonical_example = std::fs::canonicalize(&example_root).map_err(|err| {
+        format!(
+            "references missing example directory `{}`: {err}",
+            example_root.display()
+        )
+    })?;
+    if !canonical_example.starts_with(&canonical_root) {
+        return Err(format!(
+            "example directory `{}` resolves outside the workspace",
+            example_root.display()
+        ));
     }
+    if !canonical_example.is_dir() {
+        return Err(format!(
+            "example path `{}` must be a directory",
+            example_root.display()
+        ));
+    }
+    Ok(())
+}
 
-    #[test]
-    fn list_example_slugs_returns_every_bundled_example() {
-        let slugs = list_example_slugs();
-        assert!(slugs.contains(&"apple-library-minimal".to_string()));
-        assert!(slugs.contains(&"apple-library-with-objc".to_string()));
-        assert!(slugs.contains(&"apple-application-minimal".to_string()));
-        assert!(slugs.windows(2).all(|pair| pair[0] <= pair[1]));
+fn validate_relative_path(path: &str) -> std::result::Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("path must be non-empty".to_string());
     }
+    let path = Path::new(path);
+    if path.is_absolute() {
+        return Err("path must be relative".to_string());
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(name) if name == ".once" => {
+                return Err("path must not reference `.once`".to_string());
+            }
+            Component::Normal(_) => {}
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
+                return Err("path must stay inside the rule package".to_string());
+            }
+        }
+    }
+    Ok(())
+}
 
-    #[test]
-    fn collect_files_sorts_paths_deterministically() {
-        let example = load_example("apple-library-with-objc").expect("example loads");
-        let paths: Vec<&str> = example.files.iter().map(|f| f.path.as_str()).collect();
-        let mut sorted = paths.clone();
-        sorted.sort_unstable();
-        assert_eq!(paths, sorted);
+fn join_relative(base: &str, path: &str) -> String {
+    if base.is_empty() {
+        return path.to_string();
     }
+    format!("{base}/{path}")
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
 }

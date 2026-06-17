@@ -79,11 +79,13 @@ Every new toolchain rule should preserve these invariants:
 - The rule is discoverable through `once_list_rules` and its full
   contract is fetchable through `once_query_schema`.
 - The rule ships at least one runnable starter example as a real
-  directory under `crates/once-frontend/prelude/examples/<slug>/`
-  (manifest plus sources plus a `_meta.toml` with `name` and
-  `use_when`). The exported Starlark rule symbol references these by
-  slug through `rule(examples = [...])`; inline TOML strings are not
-  allowed.
+  directory owned by the rule package (manifest plus sources). The
+  exported Starlark rule symbol declares it through
+  `example(slug, name = ..., use_when = ..., path = ...)`; `path`
+  defaults to `examples/<slug>`, and inline TOML strings are not
+  allowed. Example paths are relative to the rule package and must stay
+  inside it so rules can be published through a registry as a portable
+  unit.
 - Every example loads under the examples integration test
   (`crates/once-frontend/tests/examples.rs`) without emitting any
   diagnostics. If the rule has an `impl`, the example must build.
@@ -95,10 +97,10 @@ Every new toolchain rule should preserve these invariants:
   subcommand so a human can reproduce what an agent does from the
   terminal.
 
-The Apple rules under `crates/once-frontend/prelude/apple.star` and
-the examples under `crates/once-frontend/prelude/examples/` are the
-reference implementation. Treat them as the template when wiring a
-new toolchain.
+The built-in Apple rules and their portable starter examples are the
+reference implementation. Treat their rule-owned examples, schema
+metadata, validation, and MCP/CLI discovery shape as the template when
+wiring a new toolchain.
 
 ## SDK API And Docs
 

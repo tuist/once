@@ -61,7 +61,8 @@ and by MCP rule discovery.
 - `providers`: provider names this rule can return.
 - `capabilities`: command surfaces this rule supports, such as
   `build`, `run`, `test`, or `metadata`.
-- `examples`: starter example slugs exposed to agents.
+- `examples`: `example(...)` declarations for starter workspaces exposed
+  to agents.
 - `impl`: optional function that declares actions and returns a provider
   record.
 
@@ -71,12 +72,17 @@ during validation before the implementation runs.
 
 ## Starter Examples
 
-`examples` points at runnable starter bundles for a rule. The bundles
-are checked-in workspaces with metadata, manifests, and sources. They
-are not defined in Starlark; Starlark only references their slugs. Use
-them when a caller should be able to discover the rule, choose a
+`examples` points at runnable starter bundles for a rule. Starlark owns
+the example slug, title, selection hint, and package-relative path. The
+bundle itself is a real workspace directory with manifests and sources.
+Use examples when a caller should be able to discover the rule, choose a
 starter by intent, and materialize a working target without reading
 prose docs.
+
+`example(slug, name, use_when, path = None)` defaults `path` to
+`examples/<slug>`. Paths are resolved relative to the rule package,
+validated during schema loading, and loaded only when a caller requests
+that specific example.
 
 ```python
 apple_library = rule(
@@ -87,8 +93,16 @@ apple_library = rule(
     providers = ["apple_linkable", "apple_module"],
     capabilities = [capability("build", ["default"])],
     examples = [
-        "apple-library-minimal",
-        "apple-library-with-objc",
+        example(
+            "apple-library-minimal",
+            name = "Minimal Apple library",
+            use_when = "You want a small Swift static library.",
+        ),
+        example(
+            "apple-library-with-objc",
+            name = "Apple library with mixed Swift and Objective-C",
+            use_when = "Your Swift API calls into Objective-C sources.",
+        ),
     ],
     impl = _apple_library_impl,
 )
@@ -96,7 +110,7 @@ apple_library = rule(
 
 `once query rules` lists the available rule kinds with their starter
 example slugs. Use `once query schema <kind> --format json` for the full
-example bundle:
+rule contract and lightweight example descriptors:
 
 ```sh
 once query schema apple_library --format json
@@ -109,21 +123,36 @@ once query schema apple_library --format json
     {
       "slug": "apple-library-minimal",
       "name": "Minimal Apple library",
-      "use_when": "Start a small Apple library target.",
-      "files": [
-        {
-          "path": "apps/Hello/once.toml",
-          "contents": "[[target]]\nname = \"Hello\"\nkind = \"apple_library\"\n..."
-        }
-      ]
+      "use_when": "Start a small Apple library target."
     }
   ]
 }
 ```
 
-Agents should use `use_when` to pick the closest starter, then create
-each returned file using its relative `path` and `contents`. MCP callers
-get the same data from `once_list_rules` and `once_query_schema`.
+Agents should use `use_when` to pick the closest starter, then fetch its
+file bundle:
+
+```sh
+once query example apple_library apple-library-minimal --format json
+```
+
+```json
+{
+  "slug": "apple-library-minimal",
+  "name": "Minimal Apple library",
+  "use_when": "Start a small Apple library target.",
+  "files": [
+    {
+      "path": "apps/Hello/once.toml",
+      "contents": "[[target]]\nname = \"Hello\"\nkind = \"apple_library\"\n..."
+    }
+  ]
+}
+```
+
+MCP callers use `once_list_rules` and `once_query_schema` for discovery,
+then `once_query_example` to fetch the file bundle for the chosen
+starter.
 
 ## Implementation Context
 

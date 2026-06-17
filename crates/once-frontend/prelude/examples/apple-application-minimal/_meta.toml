@@ -1,2 +1,0 @@
-name = "Minimal iOS application"
-use_when = "You want the smallest viable iOS app target wired into a Once workspace."

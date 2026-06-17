@@ -2160,7 +2160,11 @@ swift_macro = rule(
         capability("build", ["default", "plugin_dylib", "swiftmodule"]),
     ],
     examples = [
-        "swift-macro-minimal",
+        example(
+            "swift-macro-minimal",
+            name = "Minimal Swift macro plugin",
+            use_when = "You want a host-loaded Swift compiler plugin target that a library can depend on.",
+        ),
     ],
 )
 
@@ -2201,8 +2205,16 @@ apple_library = rule(
         capability("build", ["default", "binary", "swiftmodule", "generated_sources"]),
     ],
     examples = [
-        "apple-library-minimal",
-        "apple-library-with-objc",
+        example(
+            "apple-library-minimal",
+            name = "Minimal Apple library",
+            use_when = "You want a Swift static library targeting iOS or macOS with no extra resources or mixed-language sources.",
+        ),
+        example(
+            "apple-library-with-objc",
+            name = "Apple library with mixed Swift and Objective-C",
+            use_when = "Your library exposes Swift APIs that call into an existing Objective-C codebase through a bridging header.",
+        ),
     ],
 )
 
@@ -2237,7 +2249,11 @@ apple_framework = rule(
         capability("build", ["default", "framework", "dsyms", "swiftmodule"]),
     ],
     examples = [
-        "apple-framework-minimal",
+        example(
+            "apple-framework-minimal",
+            name = "Minimal Apple framework",
+            use_when = "You want a Swift dynamic framework bundle that can be embedded by an application.",
+        ),
     ],
 )
 
@@ -2276,7 +2292,11 @@ apple_application = rule(
         capability("run", ["default"], ["bundle"]),
     ],
     examples = [
-        "apple-application-minimal",
+        example(
+            "apple-application-minimal",
+            name = "Minimal iOS application",
+            use_when = "You want the smallest viable iOS app target wired into a Once workspace.",
+        ),
     ],
 )
 
@@ -2311,7 +2331,11 @@ apple_test_bundle = rule(
         capability("test", ["default", "test_results", "coverage"]),
     ],
     examples = [
-        "apple-test-bundle-minimal",
+        example(
+            "apple-test-bundle-minimal",
+            name = "Minimal Swift Testing bundle",
+            use_when = "You want a modern Swift Testing target without a host application.",
+        ),
     ],
 )
 
@@ -2333,7 +2357,11 @@ shellspec_test = rule(
         capability("test", ["default", "test_results", "logs"]),
     ],
     examples = [
-        "shellspec-test-minimal",
+        example(
+            "shellspec-test-minimal",
+            name = "Minimal ShellSpec test",
+            use_when = "Use when modeling shell-based e2e tests that should run through Once's generic test capability.",
+        ),
     ],
     impl = _shellspec_test_impl,
 )

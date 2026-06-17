@@ -160,6 +160,7 @@ impl Server {
             )),
             "once_apply_edit" => self.tool_apply_edit(&call.arguments),
             "once_query_schema" => tool_query_schema(&self.workspace, &call.arguments),
+            "once_query_example" => tool_query_example(&self.workspace, &call.arguments),
             "once_list_rules" => tool_list_rules(&self.workspace),
             "once_validate_target" => tool_validate_target(&self.workspace, &call.arguments),
             other => Err(anyhow::anyhow!("unknown tool `{other}`")),
@@ -493,6 +494,23 @@ fn tool_query_schema(workspace: &Path, args: &Value) -> Result<Value> {
     Ok(serde_json::to_value(schema)?)
 }
 
+fn tool_query_example(workspace: &Path, args: &Value) -> Result<Value> {
+    let kind = args
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `kind` argument"))?;
+    let slug = args
+        .get("slug")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `slug` argument"))?;
+    let schema = once_frontend::rule_schemas_for_workspace(workspace)?
+        .into_iter()
+        .find(|schema| schema.kind == kind)
+        .with_context(|| format!("no rule schema matches `{kind}`"))?;
+    let example = once_frontend::load_rule_example(&schema, slug)?;
+    Ok(serde_json::to_value(example)?)
+}
+
 fn tool_list_rules(workspace: &Path) -> Result<Value> {
     let schemas = once_frontend::rule_schemas_for_workspace(workspace)?;
     let summaries: Vec<RuleSummary> = schemas.into_iter().map(RuleSummary::from).collect();
@@ -686,7 +704,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_schema",
             description: "Return the typed contract for a rule kind: attributes, dep edges, providers, capabilities, and runnable starter examples.",
-            long_description: "Returns the rule schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the rule's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a list of runnable starter examples. Each example bundles a slug, a one-line `use_when` hint, and the full file tree (`once.toml` plus source files) a caller would copy to get a working target.",
+            long_description: "Returns the rule schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the rule's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -697,7 +715,27 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 },
                 "required": ["kind"]
             }),
-            example_return: "{\n  \"kind\": \"apple_library\",\n  \"docs\": \"Mixed Swift, Objective-C, C, and C++ static library...\",\n  \"attrs\": [\n    { \"name\": \"platform\", \"ty\": \"string\", \"required\": true, \"configurable\": true }\n  ],\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"archive\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"apple_linkable\", \"apple_module\"],\n  \"examples\": [\n    {\n      \"slug\": \"apple-library-minimal\",\n      \"name\": \"Minimal Apple library\",\n      \"use_when\": \"...\",\n      \"files\": [\n        { \"path\": \"apps/Hello/once.toml\", \"contents\": \"[[target]]\\nname = \\\"Hello\\\"\\nkind = \\\"apple_library\\\"\\n...\" }\n      ]\n    }\n  ]\n}",
+            example_return: "{\n  \"kind\": \"apple_library\",\n  \"docs\": \"Mixed Swift, Objective-C, C, and C++ static library...\",\n  \"attrs\": [\n    { \"name\": \"platform\", \"ty\": \"string\", \"required\": true, \"configurable\": true }\n  ],\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"archive\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"apple_linkable\", \"apple_module\"],\n  \"examples\": [\n    {\n      \"slug\": \"apple-library-minimal\",\n      \"name\": \"Minimal Apple library\",\n      \"use_when\": \"...\"\n    }\n  ]\n}",
+        },
+        ToolDefinition {
+            name: "once_query_example",
+            description: "Return the materialized file bundle for one rule starter example.",
+            long_description: "Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every UTF-8 file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_rules` or `once_query_schema`; this tool fetches the heavier file payload only after a caller chooses one.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "description": "Rule kind that owns the example, e.g. `apple_library`."
+                    },
+                    "slug": {
+                        "type": "string",
+                        "description": "Example slug from the rule schema, e.g. `apple-library-minimal`."
+                    }
+                },
+                "required": ["kind", "slug"]
+            }),
+            example_return: "{\n  \"slug\": \"apple-library-minimal\",\n  \"name\": \"Minimal Apple library\",\n  \"use_when\": \"...\",\n  \"files\": [\n    { \"path\": \"apps/Hello/once.toml\", \"contents\": \"[[target]]\\nname = \\\"Hello\\\"\\nkind = \\\"apple_library\\\"\\n...\" }\n  ]\n}",
         },
         ToolDefinition {
             name: "once_list_rules",
@@ -1148,6 +1186,7 @@ demo_rule = rule(
                 "once_query_targets".to_string(),
                 "once_query_capabilities".to_string(),
                 "once_query_schema".to_string(),
+                "once_query_example".to_string(),
                 "once_list_rules".to_string(),
                 "once_get_target".to_string(),
                 "once_query_tests".to_string(),
@@ -1348,7 +1387,7 @@ srcs = ["other_spec.sh"]
     }
 
     #[test]
-    fn query_schema_inlines_example_files() {
+    fn query_schema_returns_example_descriptors() {
         let tmp = TempDir::new().unwrap();
         let value = tool_query_schema(tmp.path(), &json!({ "kind": "apple_library" })).unwrap();
         let examples = value["examples"].as_array().expect("examples is an array");
@@ -1362,7 +1401,21 @@ srcs = ["other_spec.sh"]
             .expect("apple-library-minimal example present");
         assert!(!minimal["name"].as_str().unwrap().is_empty());
         assert!(!minimal["use_when"].as_str().unwrap().is_empty());
-        let files = minimal["files"].as_array().expect("files is an array");
+        assert!(minimal.get("files").is_none());
+    }
+
+    #[test]
+    fn query_example_returns_materialized_files() {
+        let tmp = TempDir::new().unwrap();
+        let value = tool_query_example(
+            tmp.path(),
+            &json!({ "kind": "apple_library", "slug": "apple-library-minimal" }),
+        )
+        .unwrap();
+        assert_eq!(value["slug"], "apple-library-minimal");
+        assert!(!value["name"].as_str().unwrap().is_empty());
+        assert!(!value["use_when"].as_str().unwrap().is_empty());
+        let files = value["files"].as_array().expect("files is an array");
         assert!(files
             .iter()
             .any(|f| f["path"] == "apps/Hello/once.toml"

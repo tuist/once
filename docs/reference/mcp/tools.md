@@ -76,7 +76,7 @@ Returns the same record `once query capabilities <target> --format json` emits: 
 
 Return the typed contract for a rule kind: attributes, dep edges, providers, capabilities, and runnable starter examples.
 
-Returns the rule schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the rule's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a list of runnable starter examples. Each example bundles a slug, a one-line `use_when` hint, and the full file tree (`once.toml` plus source files) a caller would copy to get a working target.
+Returns the rule schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the rule's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.
 
 **Input schema**
 
@@ -110,11 +110,49 @@ Returns the rule schema (the typed contract a target of that kind must match) as
     {
       "slug": "apple-library-minimal",
       "name": "Minimal Apple library",
-      "use_when": "...",
-      "files": [
-        { "path": "apps/Hello/once.toml", "contents": "[[target]]\nname = \"Hello\"\nkind = \"apple_library\"\n..." }
-      ]
+      "use_when": "..."
     }
+  ]
+}
+```
+
+## `once_query_example`
+
+Return the materialized file bundle for one rule starter example.
+
+Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every UTF-8 file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_rules` or `once_query_schema`; this tool fetches the heavier file payload only after a caller chooses one.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "kind": {
+      "description": "Rule kind that owns the example, e.g. `apple_library`.",
+      "type": "string"
+    },
+    "slug": {
+      "description": "Example slug from the rule schema, e.g. `apple-library-minimal`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "slug"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "slug": "apple-library-minimal",
+  "name": "Minimal Apple library",
+  "use_when": "...",
+  "files": [
+    { "path": "apps/Hello/once.toml", "contents": "[[target]]\nname = \"Hello\"\nkind = \"apple_library\"\n..." }
   ]
 }
 ```

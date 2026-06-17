@@ -1,23 +1,24 @@
-# `once mcp`
+# `once query example`
 
-Expose Once's graph queries to a coding agent over MCP
+Materialize a rule starter example
 
 ## Synopsis
 
 ```text
-once mcp [OPTIONS]
+once query example [OPTIONS] <KIND> <SLUG>
 ```
 
-## Description
+## Arguments
 
-Speaks the Model Context Protocol over stdio so an agent host (Claude Desktop, an IDE plug-in, the Anthropic SDK) can call `once_query_targets`, `once_query_capabilities`, `once_query_schema`, and `once_query_example` as tools and get JSON back without scraping prose. Mounts inspection tools by default; pass `--allow-run` to expose side-effectful build, run, and runtime session tools.
+| Argument | Required | Description |
+| --- | --- | --- |
+| `<KIND>` | yes | Rule kind, e.g. `apple_library` |
+| `<SLUG>` | yes | Example slug from `once query schema` |
 
 ## Options
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
-| `--workspace` | `<DIR>` |  | Workspace root the MCP tools resolve targets against. Defaults to the value of the global `-C/--directory` flag (or the current directory) |
-| `--allow-run` | (flag) | `false` | Advertise and allow side-effectful execution tools |
 | `-C, --directory` | `<DIR>` |  | Project root. Defaults to the current directory; the cache lives under `<project>/.once/`. Mirrors `make -C` |
 | `--format` | `<FORMAT>` | `human` | Output format for Once's structured data (`cache stats`, `run`/`exec` trailers). Defaults to a human-readable rendering; pass `json` or `toon` to get machine-parseable output for scripting and for agent consumers |
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |

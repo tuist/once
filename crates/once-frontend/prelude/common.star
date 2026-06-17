@@ -22,6 +22,15 @@ def capability(name, output_groups, requires_outputs = []):
         "requires_outputs": requires_outputs,
     }
 
+def example(slug, name, use_when, path = None):
+    return {
+        "_once_example": True,
+        "slug": slug,
+        "name": name,
+        "use_when": use_when,
+        "path": path or ("examples/" + slug),
+    }
+
 def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None):
     return {
         "_once_rule": True,

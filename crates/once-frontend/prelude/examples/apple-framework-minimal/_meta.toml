@@ -1,2 +1,0 @@
-name = "Minimal Apple framework"
-use_when = "You want a Swift dynamic framework bundle that can be embedded by an application."

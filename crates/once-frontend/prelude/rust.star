@@ -1432,7 +1432,13 @@ cargo_dependencies = rule(
     ],
     providers = ["rust_dependency_set"],
     capabilities = [capability("build", [])],
-    examples = ["rust-binary-with-crate"],
+    examples = [
+        example(
+            "rust-binary-with-crate",
+            name = "Rust binary with Cargo dependencies",
+            use_when = "Use this when a binary consumes external crates resolved from Cargo.toml and Cargo.lock.",
+        ),
+    ],
     impl = _cargo_dependencies_impl,
 )
 
@@ -1444,7 +1450,13 @@ rust_library = rule(
     deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
     providers = ["rust_crate"],
     capabilities = [capability("build", ["library"])],
-    examples = ["rust-library-minimal"],
+    examples = [
+        example(
+            "rust-library-minimal",
+            name = "Minimal Rust library",
+            use_when = "Start here for a first-party Rust rlib target with no external dependencies.",
+        ),
+    ],
     impl = _rust_library_impl,
 )
 
@@ -1454,7 +1466,13 @@ rust_binary = rule(
     deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
     providers = ["rust_binary"],
     capabilities = [capability("build", ["binary"])],
-    examples = ["rust-binary-with-crate"],
+    examples = [
+        example(
+            "rust-binary-with-crate",
+            name = "Rust binary with Cargo dependencies",
+            use_when = "Use this when a binary consumes external crates resolved from Cargo.toml and Cargo.lock.",
+        ),
+    ],
     impl = _rust_binary_impl,
 )
 
@@ -1469,7 +1487,13 @@ rust_crate = rule(
     deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Resolved Cargo package dependencies.")],
     providers = ["rust_crate"],
     capabilities = [capability("build", ["rlib"])],
-    examples = ["rust-crate-minimal"],
+    examples = [
+        example(
+            "rust-crate-minimal",
+            name = "Rust crate minimal",
+            use_when = "Use this when inspecting the lowered target shape for one resolved Cargo package.",
+        ),
+    ],
     impl = _rust_crate_impl,
 )
 
@@ -1484,6 +1508,12 @@ rust_proc_macro = rule(
     deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed by the procedural macro.")],
     providers = ["rust_proc_macro"],
     capabilities = [capability("build", ["proc_macro"])],
-    examples = ["rust-proc-macro-minimal"],
+    examples = [
+        example(
+            "rust-proc-macro-minimal",
+            name = "Minimal Rust procedural macro",
+            use_when = "Use when a Rust crate exports a procedural macro consumed by other Rust targets.",
+        ),
+    ],
     impl = _rust_proc_macro_impl,
 )
