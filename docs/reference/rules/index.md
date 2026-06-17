@@ -28,6 +28,20 @@ CLI and MCP surfaces need deterministic rule discovery, schema
 extraction, duplicate-kind validation, and starter example lookup
 without teaching the Rust side about individual rule families.
 
+The value is operational. A coding agent can list available rules,
+fetch one schema, inspect starter examples, validate a draft target,
+and apply an edit without reading prose or guessing which Starlark
+symbol to load. Humans get the same contract through `once query` and
+`once edit`, so the agent path and terminal path stay aligned. The
+registry also keeps future toolchains additive: a rule family can ship
+its own attrs, capabilities, providers, examples, and implementation
+while Rust continues to validate and execute the generic shape.
+
+The tradeoff is that `RULES` is not trying to mirror Bazel or Buck2
+module style exactly. Once still follows their analysis model: rules
+declare attrs, register actions during analysis, and return providers.
+The registry is the discovery and editing layer Once needs on top.
+
 ```python
 def _copy_impl(ctx):
     out = declare_output("copied.txt")
