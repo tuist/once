@@ -12,19 +12,25 @@
 use std::fs;
 use std::path::Path;
 
-use once_frontend::{built_in_rule_schemas_result, list_example_slugs, load_example};
+use once_frontend::{built_in_rule_schemas_result, load_rule_example};
 use tempfile::TempDir;
 
 #[test]
-fn every_bundled_example_resolves() {
-    let slugs = list_example_slugs();
-    assert!(!slugs.is_empty(), "no bundled examples found");
-    for slug in &slugs {
-        assert!(
-            load_example(slug).is_some(),
-            "example slug `{slug}` advertised by list_example_slugs but does not resolve",
-        );
+fn every_schema_example_materializes() {
+    let schemas = built_in_rule_schemas_result().expect("built-in rule schemas load");
+    let mut examples = 0;
+    for schema in &schemas {
+        for example in &schema.examples {
+            examples += 1;
+            load_rule_example(schema, &example.slug).unwrap_or_else(|err| {
+                panic!(
+                    "example `{}` (rule `{}`) failed to materialize: {err}",
+                    example.slug, schema.kind
+                )
+            });
+        }
     }
+    assert!(examples > 0, "no bundled examples found");
 }
 
 #[test]
@@ -32,8 +38,14 @@ fn every_schema_example_loads_without_diagnostics() {
     let schemas = built_in_rule_schemas_result().expect("built-in rule schemas load");
     for schema in &schemas {
         for example in &schema.examples {
+            let bundle = load_rule_example(schema, &example.slug).unwrap_or_else(|err| {
+                panic!(
+                    "example `{}` (rule `{}`) failed to materialize: {err}",
+                    example.slug, schema.kind
+                )
+            });
             let tmp = TempDir::new().expect("tempdir");
-            materialize(tmp.path(), example);
+            materialize(tmp.path(), &bundle);
             let graph = once_frontend::load_graph_workspace(tmp.path()).unwrap_or_else(|err| {
                 panic!(
                     "example `{}` (rule `{}`) failed to load: {err}",
@@ -74,6 +86,7 @@ fn every_schema_example_carries_meta() {
     let schemas = built_in_rule_schemas_result().expect("built-in rule schemas load");
     for schema in &schemas {
         for example in &schema.examples {
+            let bundle = load_rule_example(schema, &example.slug).expect("example materializes");
             assert!(
                 !example.name.is_empty(),
                 "example `{}` (rule `{}`) has an empty `name`",
@@ -87,13 +100,13 @@ fn every_schema_example_carries_meta() {
                 schema.kind
             );
             assert!(
-                !example.files.is_empty(),
+                !bundle.files.is_empty(),
                 "example `{}` (rule `{}`) has no files",
                 example.slug,
                 schema.kind
             );
             assert!(
-                example.files.iter().any(|f| f.path.ends_with("once.toml")),
+                bundle.files.iter().any(|f| f.path.ends_with("once.toml")),
                 "example `{}` (rule `{}`) ships no once.toml manifest",
                 example.slug,
                 schema.kind
@@ -116,7 +129,7 @@ fn every_impl_backed_rule_has_a_schema_example() {
     }
 }
 
-fn materialize(root: &Path, example: &once_frontend::RuleExample) {
+fn materialize(root: &Path, example: &once_frontend::RuleExampleBundle) {
     for file in &example.files {
         let path = root.join(&file.path);
         if let Some(parent) = path.parent() {

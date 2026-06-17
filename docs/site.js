@@ -39,6 +39,13 @@ export const site = {
         ],
       },
       {
+        text: "Rules",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/reference/rules/" },
+        ],
+      },
+      {
         text: "Prelude",
         collapsed: false,
         items: [

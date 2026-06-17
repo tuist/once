@@ -161,6 +161,11 @@ async fn run_query_command(
         Some(cli::QueryCmd::Schema { kind }) => commands::query::schema(workspace, output, &kind)
             .await
             .map(|()| ExitCode::SUCCESS),
+        Some(cli::QueryCmd::Example { kind, slug }) => {
+            commands::query::example(workspace, output, &kind, &slug)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
         Some(cli::QueryCmd::Rules) => commands::query::rules(workspace, output)
             .await
             .map(|()| ExitCode::SUCCESS),

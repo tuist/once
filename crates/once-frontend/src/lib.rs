@@ -27,12 +27,12 @@ pub use cache_provider::{
     CacheProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig, DEFAULT_TUIST_URL,
 };
 pub use error::{Error, Result};
-pub use examples::{list_example_slugs, load_example};
+pub use examples::{load_example_bundle, load_rule_example};
 pub use graph::{
     built_in_rule_schema, built_in_rule_schemas, built_in_rule_schemas_result, graph_from_targets,
     graph_from_targets_result, load_graph_workspace, rule_schemas_for_workspace, AttrSchema,
-    Capability, DepSchema, Diagnostic, GraphTarget, RuleExample, RuleExampleFile, RuleSchema,
-    TargetLabel,
+    Capability, DepSchema, Diagnostic, GraphTarget, RuleExample, RuleExampleBundle,
+    RuleExampleFile, RuleExampleRoot, RuleExampleSource, RuleSchema, TargetLabel,
 };
 pub use manifest::{load_cache_provider_toml_str, load_toml_str};
 pub use manifest_editor::{

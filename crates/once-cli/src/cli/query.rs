@@ -23,6 +23,14 @@ pub enum QueryCmd {
         kind: String,
     },
 
+    /// Materialize a rule starter example.
+    Example {
+        /// Rule kind, e.g. `apple_library`.
+        kind: String,
+        /// Example slug from `once query schema`.
+        slug: String,
+    },
+
     /// List every rule kind with its one-line docs and example slugs.
     Rules,
 
@@ -65,6 +73,7 @@ impl QueryCmd {
             Self::Targets { .. } => vec!["targets"],
             Self::Capabilities { .. } => vec!["capabilities"],
             Self::Schema { .. } => vec!["schema"],
+            Self::Example { .. } => vec!["example"],
             Self::Rules => vec!["rules"],
             Self::Target { .. } => vec!["target"],
             Self::Tests => vec!["tests"],

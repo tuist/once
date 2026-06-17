@@ -1,2 +1,0 @@
-name = "Rust binary with Cargo dependencies"
-use_when = "Use this when a binary consumes external crates resolved from Cargo.toml and Cargo.lock."

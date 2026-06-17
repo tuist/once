@@ -1,4 +1,6 @@
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -15,101 +17,172 @@ use super::BuildOutcome;
 
 const FAILURE_OUTPUT_LIMIT: usize = 16 * 1024;
 
+struct DeclaredActionRun<'a> {
+    workspace: &'a Path,
+    cache: &'a CacheProvider,
+    rule_source_digest: Digest,
+    target_id: &'a str,
+    index: usize,
+    declared: DeclaredAction,
+    input_action_digests: &'a [(String, Digest)],
+}
+
+struct DeclaredActionOutcome {
+    digest: Digest,
+    cache_tag: &'static str,
+}
+
 /// Materialise each declared action through the action cache, then
 /// fold the analysis provider directly into the build outcome.
-pub(super) async fn run_declared_actions(
-    workspace: &Path,
-    cache: &CacheProvider,
+///
+/// Returns a boxed future intentionally because the concrete future
+/// captures declared action state and cache execution state. Boxing at
+/// this boundary keeps parent graph futures small enough for
+/// `clippy::large_futures` and centralizes the allocation.
+pub(super) fn run_declared_actions<'a>(
+    workspace: &'a Path,
+    cache: &'a CacheProvider,
     rule_source_digest: Digest,
-    target: &GraphTarget,
+    target: &'a GraphTarget,
     analysis: AnalysisResult,
-    dep_action_digests: &[(String, Digest)],
-) -> Result<BuildOutcome> {
-    let AnalysisResult {
-        actions, provider, ..
-    } = analysis;
-    let mut action_digests = Vec::new();
-    let mut last_cache_tag = "miss";
-    let mut all_outputs = Vec::new();
-
-    for (index, declared) in actions.into_iter().enumerate() {
-        let identifier_for_error = declared
-            .identifier
-            .clone()
-            .unwrap_or_else(|| "<anonymous>".to_string());
-        all_outputs.extend(declared.outputs.iter().cloned());
-        let cacheable = declared.cacheable;
-        let mut input_action_digests = dep_action_digests.to_vec();
-        input_action_digests.extend(
-            action_digests
-                .iter()
-                .enumerate()
-                .map(|(prior_index, digest)| (format!("same-target:{prior_index}"), *digest)),
+    dep_action_digests: &'a [(String, Digest)],
+) -> Pin<Box<dyn Future<Output = Result<BuildOutcome>> + Send + 'a>> {
+    Box::pin(async move {
+        let AnalysisResult {
+            actions, provider, ..
+        } = analysis;
+        tracing::debug!(
+            target = %target.label.id,
+            declared_actions = actions.len(),
+            dep_action_digests = dep_action_digests.len(),
+            "running declared graph actions"
         );
-        let action = declared_to_action(
-            workspace,
-            declared,
-            rule_source_digest,
-            &input_action_digests,
-        )
-        .with_context(|| {
-            format!(
-                "building action {index} for {} ({identifier_for_error})",
-                target.label.id,
-            )
-        })?;
-        if cacheable {
-            let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
-                .await
-                .with_context(|| {
-                    format!(
-                        "executing action {index} for {} ({identifier_for_error})",
-                        target.label.id,
-                    )
-                })?;
-            let exit_code = outcome.result.exit_code;
-            if exit_code != 0 {
-                anyhow::bail!(
-                    "{}",
-                    declared_action_failure_message(
-                        cache,
-                        &identifier_for_error,
-                        index,
-                        &target.label.id,
-                        exit_code,
-                        &outcome.result,
-                    )
-                    .await
-                );
-            }
-            action_digests.push(outcome.action);
-            last_cache_tag = crate::commands::util::cache_tag(outcome.cache);
-        } else {
-            let action_digest = action.digest();
-            let exit_code = run_uncached_action(&action, workspace)
-                .await
-                .with_context(|| {
-                    format!(
-                        "executing action {index} for {} ({identifier_for_error})",
-                        target.label.id,
-                    )
-                })?;
-            if exit_code != 0 {
-                anyhow::bail!(
-                    "{identifier_for_error} ({index}) failed for {} with exit code {exit_code}",
-                    target.label.id,
-                );
-            }
-            action_digests.push(action_digest);
-            last_cache_tag = "bypass";
+        let mut action_digests = Vec::new();
+        let mut last_cache_tag = "miss";
+        let mut all_outputs = Vec::new();
+
+        for (index, declared) in actions.into_iter().enumerate() {
+            all_outputs.extend(declared.outputs.iter().cloned());
+            let mut input_action_digests = dep_action_digests.to_vec();
+            input_action_digests.extend(
+                action_digests
+                    .iter()
+                    .enumerate()
+                    .map(|(prior_index, digest)| (format!("same-target:{prior_index}"), *digest)),
+            );
+
+            let outcome = run_declared_action(DeclaredActionRun {
+                workspace,
+                cache,
+                rule_source_digest,
+                target_id: &target.label.id,
+                index,
+                declared,
+                input_action_digests: &input_action_digests,
+            })
+            .await?;
+            action_digests.push(outcome.digest);
+            last_cache_tag = outcome.cache_tag;
         }
+
+        Ok(BuildOutcome {
+            provider,
+            action_digest: compose_target_action_digest(&target.label.id, &action_digests),
+            outputs: all_outputs,
+            cache_tag: last_cache_tag,
+        })
+    })
+}
+
+async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActionOutcome> {
+    let DeclaredActionRun {
+        workspace,
+        cache,
+        rule_source_digest,
+        target_id,
+        index,
+        declared,
+        input_action_digests,
+    } = run;
+    let identifier_for_error = declared
+        .identifier
+        .clone()
+        .unwrap_or_else(|| "<anonymous>".to_string());
+    let cacheable = declared.cacheable;
+    tracing::debug!(
+        target = %target_id,
+        action_index = index,
+        identifier = %identifier_for_error,
+        cacheable,
+        inputs = declared.inputs.len(),
+        outputs = declared.outputs.len(),
+        "preparing declared graph action"
+    );
+    let action = declared_to_action(
+        workspace,
+        declared,
+        rule_source_digest,
+        input_action_digests,
+    )
+    .with_context(|| format!("building action {index} for {target_id} ({identifier_for_error})"))?;
+
+    if cacheable {
+        let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
+            .await
+            .with_context(|| {
+                format!("executing action {index} for {target_id} ({identifier_for_error})")
+            })?;
+        let exit_code = outcome.result.exit_code;
+        if exit_code != 0 {
+            anyhow::bail!(
+                "{}",
+                declared_action_failure_message(
+                    cache,
+                    &identifier_for_error,
+                    index,
+                    target_id,
+                    exit_code,
+                    &outcome.result,
+                )
+                .await
+            );
+        }
+        let cache_tag = crate::commands::util::cache_tag(outcome.cache);
+        tracing::debug!(
+            target = %target_id,
+            action_index = index,
+            identifier = %identifier_for_error,
+            cache = cache_tag,
+            action_digest = %outcome.action,
+            "completed cacheable declared graph action"
+        );
+        return Ok(DeclaredActionOutcome {
+            digest: outcome.action,
+            cache_tag,
+        });
     }
 
-    Ok(BuildOutcome {
-        provider,
-        action_digest: compose_target_action_digest(&target.label.id, &action_digests),
-        outputs: all_outputs,
-        cache_tag: last_cache_tag,
+    let action_digest = action.digest();
+    let exit_code = run_uncached_action(&action, workspace)
+        .await
+        .with_context(|| {
+            format!("executing action {index} for {target_id} ({identifier_for_error})")
+        })?;
+    if exit_code != 0 {
+        anyhow::bail!(
+            "{identifier_for_error} ({index}) failed for {target_id} with exit code {exit_code}",
+        );
+    }
+    tracing::debug!(
+        target = %target_id,
+        action_index = index,
+        identifier = %identifier_for_error,
+        action_digest = %action_digest,
+        "completed uncached declared graph action"
+    );
+    Ok(DeclaredActionOutcome {
+        digest: action_digest,
+        cache_tag: "bypass",
     })
 }
 
@@ -246,11 +319,13 @@ fn declared_to_action(
     rule_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
 ) -> Result<Action> {
+    let env_keys = declared.env.keys().cloned().collect::<Vec<_>>();
     tracing::trace!(
         identifier = ?declared.identifier,
-        argv = ?declared.argv,
-        env = ?declared.env,
-        outputs = ?declared.outputs,
+        argv_len = declared.argv.len(),
+        env_keys = ?env_keys,
+        inputs = declared.inputs.len(),
+        outputs = declared.outputs.len(),
         "declared graph action"
     );
     let input_digest =
@@ -521,10 +596,10 @@ mod tests {
     #[test]
     fn input_digest_changes_with_toolchain_identity() {
         let workspace = tempfile::tempdir().unwrap();
-        std::fs::write(workspace.path().join("a.swift"), b"print(1)").unwrap();
+        std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
-            argv: vec!["swiftc".to_string()],
-            inputs: vec!["a.swift".to_string()],
+            argv: vec!["tool".to_string()],
+            inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),
             cacheable: true,
@@ -543,10 +618,10 @@ mod tests {
     #[test]
     fn input_digest_changes_with_rule_source_digest() {
         let workspace = tempfile::tempdir().unwrap();
-        std::fs::write(workspace.path().join("a.swift"), b"print(1)").unwrap();
+        std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
-            argv: vec!["swiftc".to_string()],
-            inputs: vec!["a.swift".to_string()],
+            argv: vec!["tool".to_string()],
+            inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),
             cacheable: true,
@@ -574,10 +649,10 @@ mod tests {
     #[test]
     fn input_digest_stable_under_dep_reordering() {
         let workspace = tempfile::tempdir().unwrap();
-        std::fs::write(workspace.path().join("a.swift"), b"print(1)").unwrap();
+        std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
-            argv: vec!["swiftc".to_string()],
-            inputs: vec!["a.swift".to_string()],
+            argv: vec!["tool".to_string()],
+            inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),
             cacheable: true,

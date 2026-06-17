@@ -1,2 +1,0 @@
-name = "Minimal Swift macro plugin"
-use_when = "You want a host-loaded Swift compiler plugin target that a library can depend on."

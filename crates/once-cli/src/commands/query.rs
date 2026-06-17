@@ -80,6 +80,15 @@ pub async fn schema(workspace: &Path, output: Output, kind: &str) -> Result<()> 
     write_body(output, || render_schema_human(&schema), &schema).await
 }
 
+pub async fn example(workspace: &Path, output: Output, kind: &str, slug: &str) -> Result<()> {
+    let schema = once_frontend::rule_schemas_for_workspace(workspace)?
+        .into_iter()
+        .find(|schema| schema.kind == kind)
+        .with_context(|| format!("no rule schema matches `{kind}`"))?;
+    let example = once_frontend::load_rule_example(&schema, slug)?;
+    write_body(output, || render_example_human(&example), &example).await
+}
+
 #[derive(Debug, Serialize)]
 struct RuleSummary {
     kind: String,
@@ -304,6 +313,17 @@ fn render_rules_human(rules: &[RuleSummary]) -> String {
             writeln!(out, "    {} - {}", example.slug, example.use_when)
                 .expect("writing to string cannot fail");
         }
+    }
+    out
+}
+
+fn render_example_human(example: &once_frontend::RuleExampleBundle) -> String {
+    let mut out = format!(
+        "example {}: {}\nuse when: {}\nfiles:\n",
+        example.slug, example.name, example.use_when
+    );
+    for file in &example.files {
+        writeln!(out, "  {}", file.path).expect("writing to string cannot fail");
     }
     out
 }

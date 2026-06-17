@@ -10,7 +10,7 @@ once query [OPTIONS] <SUBCOMMAND>
 
 ## Description
 
-Inspectable-first surface for humans and agents. `query targets` lists every declared target id with its rule kind and capabilities; `query capabilities` shows what a specific target exposes (`build`, `run`, `test`); `query schema` returns the typed attribute and provider shape for a rule. All three respect `--format json` so consumers can plan against the graph without scraping prose.
+Inspectable-first surface for humans and agents. `query targets` lists every declared target id with its rule kind and capabilities; `query capabilities` shows what a specific target exposes (`build`, `run`, `test`); `query schema` returns the typed attribute and provider shape for a rule; and `query example` materializes a chosen starter. All query surfaces respect `--format json` so consumers can plan against the graph without scraping prose.
 
 ## Options
 
@@ -27,6 +27,7 @@ Inspectable-first surface for humans and agents. `query targets` lists every dec
 - [`once query targets`](/reference/cli/query/targets)
 - [`once query capabilities`](/reference/cli/query/capabilities)
 - [`once query schema`](/reference/cli/query/schema)
+- [`once query example`](/reference/cli/query/example)
 - [`once query rules`](/reference/cli/query/rules)
 - [`once query target`](/reference/cli/query/target)
 - [`once query tests`](/reference/cli/query/tests)

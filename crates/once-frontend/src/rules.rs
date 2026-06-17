@@ -1,19 +1,33 @@
 //! Loading and composing Starlark rule sources.
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
+use std::sync::LazyLock;
 
 use crate::error::{Error, Result};
 use crate::manifest::load_rule_paths_toml_str;
 use crate::TOML_BUILD_FILE_NAME;
+use include_dir::{include_dir, Dir};
+use starlark::environment::{GlobalsBuilder, Module};
 use starlark::syntax::{AstModule, Dialect};
+use starlark::values::dict::DictRef;
+use starlark::values::list::ListRef;
+use starlark::values::Value;
 
 pub(crate) const BUILT_IN_RULE_PATH: &str = "once//prelude/all.star";
 pub(crate) const COMBINED_RULE_PATH: &str = "once//rules/all.star";
 
+const PRELUDE_INDEX_PATH: &str = "index.star";
+const COMMON_PRELUDE_PATH: &str = "common.star";
+static PRELUDE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/prelude");
+static BUILT_IN_RULE_SOURCE: LazyLock<String> = LazyLock::new(load_built_in_rule_source);
+
 pub(crate) fn built_in_rule_source() -> &'static str {
-    crate::analysis::BUILT_IN_PRELUDE
+    BUILT_IN_RULE_SOURCE.as_str()
+}
+
+pub(crate) fn common_rule_source() -> &'static str {
+    prelude_source(COMMON_PRELUDE_PATH)
 }
 
 pub(crate) fn combined_rule_source_for_workspace(root: &Path) -> Result<String> {
@@ -22,51 +36,31 @@ pub(crate) fn combined_rule_source_for_workspace(root: &Path) -> Result<String> 
 }
 
 pub(crate) fn combine_rule_sources(built_in: &str, rule_files: &[RuleFile]) -> String {
-    if rule_files.is_empty() {
-        return built_in.to_string();
-    }
-
     let mut source = String::new();
     source.push_str(built_in);
-    source.push_str("\n_ONCE_BUILT_IN_RULES = RULES\n");
-    source.push_str(
-        r#"
-def _once_capture_rules(path, rules):
-    if rules == None:
-        fail("rule file `" + path + "` must assign RULES")
-    return rules
-"#,
-    );
-    let mut custom_names = Vec::with_capacity(rule_files.len());
-    for (index, rule_file) in rule_files.iter().enumerate() {
-        let name = format!("_ONCE_CUSTOM_RULES_{index}");
-        custom_names.push(name.clone());
+    for rule_file in rule_files {
         source.push_str("\n# once rule file: ");
         source.push_str(&rule_file.display_path);
-        source.push_str("\nRULES = None\n");
+        source.push('\n');
         source.push_str(&rule_file.source);
         source.push('\n');
-        source.push_str(&name);
-        source.push_str(" = _once_capture_rules(");
-        source.push_str(&starlark_string_literal(&rule_file.display_path));
-        source.push_str(", RULES)\n");
     }
-    source.push_str("RULES = _ONCE_BUILT_IN_RULES");
-    for name in custom_names {
-        source.push_str(" + ");
-        source.push_str(&name);
-    }
-    source.push('\n');
     source
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RuleExport<'v> {
+    pub name: &'v str,
+    pub value: Value<'v>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuleFile {
-    display_path: String,
-    source: String,
+    pub(crate) display_path: String,
+    pub(crate) source: String,
 }
 
-fn load_rule_files(root: &Path) -> Result<Vec<RuleFile>> {
+pub(crate) fn load_rule_files(root: &Path) -> Result<Vec<RuleFile>> {
     let patterns = load_rule_path_patterns(root)?;
     let canonical_root = std::fs::canonicalize(root).map_err(|source| Error::Read {
         path: root.display().to_string(),
@@ -222,31 +216,109 @@ fn display_rule_path(root: &Path, path: &Path) -> String {
         .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
-fn starlark_string_literal(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len() + 2);
-    escaped.push('"');
-    for ch in value.chars() {
-        match ch {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            ch if ch.is_control() => {
-                let code = u32::from(ch);
-                if code <= 0xff {
-                    let _ = write!(&mut escaped, "\\x{code:02x}");
-                } else if code <= 0xffff {
-                    let _ = write!(&mut escaped, "\\u{code:04x}");
-                } else {
-                    let _ = write!(&mut escaped, "\\U{code:08x}");
-                }
+pub(crate) fn exported_rule_values<'v>(module: &Module<'v>) -> Vec<RuleExport<'v>> {
+    let mut rules = module
+        .names()
+        .filter_map(|name| {
+            let name = name.as_str();
+            if name.starts_with('_') {
+                return None;
             }
-            ch => escaped.push(ch),
+            let value = module.get(name)?;
+            is_rule_value(value).then_some(RuleExport { name, value })
+        })
+        .collect::<Vec<_>>();
+    rules.sort_unstable_by(|a, b| a.name.cmp(b.name));
+    rules
+}
+
+pub(crate) fn rule_kind(
+    value: Value<'_>,
+    export_name: &str,
+) -> std::result::Result<String, String> {
+    let dict = DictRef::from_value(value)
+        .ok_or_else(|| format!("rule export `{export_name}` should be a dict"))?;
+    let Some(kind) = dict.get_str("kind") else {
+        return Ok(export_name.to_string());
+    };
+    if kind.is_none() {
+        return Ok(export_name.to_string());
+    }
+    kind.unpack_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| format!("rule export `{export_name}` kind should be a string or None"))
+}
+
+fn is_rule_value(value: Value<'_>) -> bool {
+    let Some(dict) = DictRef::from_value(value) else {
+        return false;
+    };
+    dict.get_str("_once_rule")
+        .and_then(Value::unpack_bool)
+        .unwrap_or(false)
+}
+
+fn load_built_in_rule_source() -> String {
+    let sources = prelude_sources_from_index();
+    let mut source = String::new();
+    for path in sources {
+        source.push_str(prelude_source(&path));
+        source.push('\n');
+    }
+    source
+}
+
+fn prelude_source(path: &str) -> &'static str {
+    let file = PRELUDE_DIR
+        .get_file(path)
+        .unwrap_or_else(|| panic!("built-in prelude source `{path}` is missing"));
+    file.contents_utf8()
+        .unwrap_or_else(|| panic!("built-in prelude source `{path}` is not UTF-8"))
+}
+
+fn prelude_sources_from_index() -> Vec<String> {
+    let index = PRELUDE_DIR
+        .get_file(PRELUDE_INDEX_PATH)
+        .unwrap_or_else(|| panic!("built-in prelude index `{PRELUDE_INDEX_PATH}` is missing"));
+    let source = index
+        .contents_utf8()
+        .unwrap_or_else(|| panic!("built-in prelude index `{PRELUDE_INDEX_PATH}` is not UTF-8"));
+    Module::with_temp_heap(|module| {
+        let ast = AstModule::parse(PRELUDE_INDEX_PATH, source.to_string(), &Dialect::Standard)
+            .unwrap_or_else(|error| panic!("built-in prelude index parse failed: {error:?}"));
+        let globals = GlobalsBuilder::standard().build();
+        let mut eval = starlark::eval::Evaluator::new(&module);
+        eval.eval_module(ast, &globals)
+            .unwrap_or_else(|error| panic!("built-in prelude index eval failed: {error:?}"));
+        let value = module
+            .get("PRELUDE_SOURCES")
+            .unwrap_or_else(|| panic!("built-in prelude index is missing PRELUDE_SOURCES"));
+        let list = ListRef::from_value(value)
+            .unwrap_or_else(|| panic!("built-in prelude PRELUDE_SOURCES is not a list"));
+        list.iter()
+            .map(|value| {
+                let path = Value::unpack_str(value).unwrap_or_else(|| {
+                    panic!("built-in prelude PRELUDE_SOURCES entries must be strings")
+                });
+                validate_built_in_prelude_source_path(path);
+                path.to_string()
+            })
+            .collect()
+    })
+}
+
+fn validate_built_in_prelude_source_path(path: &str) {
+    let path_value = Path::new(path);
+    assert!(
+        !path.trim().is_empty() && !path_value.is_absolute(),
+        "built-in prelude source path `{path}` must be relative"
+    );
+    for component in path_value.components() {
+        match component {
+            Component::Normal(_) => {}
+            _ => panic!("built-in prelude source path `{path}` must stay inside the prelude"),
         }
     }
-    escaped.push('"');
-    escaped
 }
 
 #[cfg(test)]
@@ -254,29 +326,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn custom_rule_files_extend_built_in_rules() {
+    fn custom_rule_files_are_appended_to_built_in_rules() {
         let custom = RuleFile {
             display_path: "rules/demo.star".to_string(),
             source: r#"
-RULES = [
-    rule(
-        kind = "demo_rule",
-        docs = "Demo",
-        attrs = [],
-        deps = [],
-        providers = [],
-        capabilities = [],
-    ),
-]
+demo_rule = rule(docs = "Demo")
 "#
             .to_string(),
         };
 
-        let source = combine_rule_sources("RULES = [\"built_in\"]\n", &[custom]);
+        let source = combine_rule_sources("built_in_rule = rule(docs = \"Built in\")\n", &[custom]);
 
-        assert!(source.contains("_ONCE_BUILT_IN_RULES"));
-        assert!(source.contains("_ONCE_CUSTOM_RULES_0"));
-        assert!(source.contains("RULES = _ONCE_BUILT_IN_RULES + _ONCE_CUSTOM_RULES_0"));
+        assert!(source.contains("built_in_rule = rule"));
+        assert!(source.contains("# once rule file: rules/demo.star"));
+        assert!(source.contains("demo_rule = rule"));
+        assert!(!source.contains("_ONCE_BUILT_IN_RULES"));
     }
 
     #[test]
@@ -304,7 +368,7 @@ RULES = [
 
         let workspace = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        std::fs::write(outside.path().join("escape.star"), "RULES = []\n").unwrap();
+        std::fs::write(outside.path().join("escape.star"), "demo_rule = None\n").unwrap();
         std::fs::write(
             workspace.path().join(TOML_BUILD_FILE_NAME),
             "[rules]\npaths = [\"rules/*.star\"]\n",
@@ -331,19 +395,11 @@ RULES = [
         )
         .unwrap();
         std::fs::create_dir(tmp.path().join("rules")).unwrap();
-        std::fs::write(tmp.path().join("rules/bad.star"), "RULES = [\n").unwrap();
+        std::fs::write(tmp.path().join("rules/bad.star"), "demo_rule = rule(\n").unwrap();
 
         let err = combined_rule_source_for_workspace(tmp.path()).unwrap_err();
 
         assert!(err.to_string().contains("rules/bad.star"));
-    }
-
-    #[test]
-    fn starlark_string_literal_escapes_control_characters() {
-        assert_eq!(
-            starlark_string_literal("rules/a\nb\t\"c\".star"),
-            "\"rules/a\\nb\\t\\\"c\\\".star\""
-        );
     }
 
     #[test]
@@ -355,7 +411,7 @@ RULES = [
         )
         .unwrap();
         std::fs::create_dir(tmp.path().join("rules")).unwrap();
-        std::fs::write(tmp.path().join("rules/demo.star"), "RULES = []\n").unwrap();
+        std::fs::write(tmp.path().join("rules/demo.star"), "demo_rule = None\n").unwrap();
 
         let files = load_rule_files(tmp.path()).unwrap();
 

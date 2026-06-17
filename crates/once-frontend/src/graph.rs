@@ -1,7 +1,7 @@
 //! Typed build graph model and built-in rule metadata.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use starlark::environment::Module;
@@ -11,7 +11,7 @@ use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 use starlark::values::Value;
 
-use crate::analysis::{select_branches, BUILT_IN_PRELUDE_FILES};
+use crate::analysis::select_branches;
 use crate::error::{Error, Result};
 use crate::target::{AttrValue, Target};
 use crate::workspace::load_workspace;
@@ -33,7 +33,7 @@ pub struct GraphTarget {
     /// Canonical target label.
     pub label: TargetLabel,
     /// Rule kind declared by the target manifest. Matched against the
-    /// prelude's `RULES` list to attach schema, capabilities, and
+    /// exported Starlark rule symbols to attach schema, capabilities, and
     /// providers.
     pub kind: String,
     /// Canonical dependency target ids.
@@ -100,16 +100,43 @@ pub struct RuleSchema {
     pub providers: Vec<String>,
     /// Capabilities exposed by targets of this rule.
     pub capabilities: Vec<Capability>,
-    /// Runnable starter workspaces. Each example bundles the files an
-    /// agent or human needs to copy to get a working target of this
-    /// rule kind, along with a one-line "use this when..." hint.
+    /// Runnable starter workspaces. Each example is a lightweight
+    /// descriptor; callers load the file bundle only when they choose
+    /// a starter to materialize.
     pub examples: Vec<RuleExample>,
 }
 
-/// A runnable starter workspace for a rule. Resolved from the
-/// `prelude/examples/<slug>/` directory bundled into the binary.
+/// A runnable starter descriptor for a rule.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RuleExample {
+    /// Human-readable example title.
+    pub name: String,
+    /// Stable identifier used to reference this example.
+    pub slug: String,
+    /// One-line "use this when..." hint that helps callers choose
+    /// between examples for the same rule kind.
+    pub use_when: String,
+    /// Where the starter file tree lives. The wire schema omits this so
+    /// discovery remains independent from local package layout.
+    #[serde(skip_serializing)]
+    pub source: RuleExampleSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleExampleSource {
+    pub root: RuleExampleRoot,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleExampleRoot {
+    BuiltInPrelude,
+    Workspace { root: PathBuf },
+}
+
+/// A materialized starter workspace for a rule.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuleExampleBundle {
     /// Human-readable example title.
     pub name: String,
     /// Stable identifier used to reference this example.
@@ -197,8 +224,18 @@ pub fn built_in_rule_schemas_result() -> Result<Vec<RuleSchema>> {
 }
 
 pub fn rule_schemas_for_workspace(root: &Path) -> Result<Vec<RuleSchema>> {
-    let source = crate::rules::combined_rule_source_for_workspace(root)?;
-    let mut schemas = parse_rule_schemas(crate::rules::COMBINED_RULE_PATH, &source)?;
+    let mut schemas = starlark_prelude_rule_schemas()?;
+    let common = crate::rules::common_rule_source();
+    for rule_file in crate::rules::load_rule_files(root)? {
+        let source_context = RuleSchemaSource::workspace(root, &rule_file.display_path);
+        schemas.extend(parse_rule_schemas_with_context(
+            &rule_file.display_path,
+            &format!("{common}\n{}", rule_file.source),
+            &source_context,
+        )?);
+    }
+    validate_unique_rule_kinds(&schemas)
+        .map_err(|message| prelude_message(crate::rules::COMBINED_RULE_PATH, &message))?;
     append_script_schema(&mut schemas)?;
     Ok(schemas)
 }
@@ -280,25 +317,62 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
         .collect()
 }
 
-fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
-    let mut schemas = Vec::new();
-    for (path, source) in BUILT_IN_PRELUDE_FILES {
-        schemas.extend(parse_rule_schemas(path, &prelude_schema_source(source))?);
+#[derive(Debug, Clone)]
+struct RuleSchemaSource {
+    example_root: RuleExampleRoot,
+    example_base: String,
+}
+
+impl RuleSchemaSource {
+    fn built_in_prelude() -> Self {
+        Self {
+            example_root: RuleExampleRoot::BuiltInPrelude,
+            example_base: String::new(),
+        }
     }
-    Ok(schemas)
+
+    fn workspace(root: &Path, rule_file: &str) -> Self {
+        Self {
+            example_root: RuleExampleRoot::Workspace {
+                root: root.to_path_buf(),
+            },
+            example_base: parent_dir(rule_file),
+        }
+    }
+
+    fn example_source(&self, path: &str) -> std::result::Result<RuleExampleSource, String> {
+        crate::examples::example_source(self.example_root.clone(), &self.example_base, path)
+    }
 }
 
-fn prelude_schema_source(source: &str) -> String {
-    format!("RULES = []\n{source}")
+fn parent_dir(path: &str) -> String {
+    path.rsplit_once('/')
+        .map(|(parent, _)| parent.to_string())
+        .unwrap_or_default()
 }
 
-/// Evaluate a Starlark prelude source and read its `RULES` export.
+fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
+    parse_rule_schemas(
+        crate::rules::BUILT_IN_RULE_PATH,
+        crate::rules::built_in_rule_source(),
+    )
+}
+
+/// Evaluate a Starlark rule source and read its exported rule symbols.
 ///
 /// Split out from [`starlark_prelude_rule_schemas`] so the error paths
-/// (parse failure, missing export, wrong types) are reachable from tests
+/// (parse failure, missing exports, wrong types) are reachable from tests
 /// without depending on the compiled-in prelude staying valid, and so they
 /// keep working if the prelude ever becomes user-configurable.
 fn parse_rule_schemas(path: &str, source: &str) -> Result<Vec<RuleSchema>> {
+    parse_rule_schemas_with_context(path, source, &RuleSchemaSource::built_in_prelude())
+}
+
+fn parse_rule_schemas_with_context(
+    path: &str,
+    source: &str,
+    source_context: &RuleSchemaSource,
+) -> Result<Vec<RuleSchema>> {
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
             .map_err(|error| prelude_error(path, error))?;
@@ -306,10 +380,12 @@ fn parse_rule_schemas(path: &str, source: &str) -> Result<Vec<RuleSchema>> {
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
             .map_err(|error| prelude_error(path, error))?;
-        let rules = module
-            .get("RULES")
-            .ok_or_else(|| prelude_message(path, "missing RULES export"))?;
-        rule_schemas_from_value(rules).map_err(|message| prelude_message(path, &message))
+        let rules = crate::rules::exported_rule_values(&module);
+        if rules.is_empty() {
+            return Err(prelude_message(path, "no rule symbols exported"));
+        }
+        rule_schemas_from_exports(&rules, source_context)
+            .map_err(|message| prelude_message(path, &message))
     })
 }
 
@@ -327,11 +403,13 @@ fn prelude_message(path: &str, message: &str) -> Error {
     }
 }
 
-fn rule_schemas_from_value(value: Value<'_>) -> std::result::Result<Vec<RuleSchema>, String> {
-    let schemas = list(value, "RULES")?
+fn rule_schemas_from_exports(
+    rules: &[crate::rules::RuleExport<'_>],
+    source_context: &RuleSchemaSource,
+) -> std::result::Result<Vec<RuleSchema>, String> {
+    let schemas = rules
         .iter()
-        .enumerate()
-        .map(|(index, rule)| rule_schema_from_value(rule, &format!("RULES[{index}]")))
+        .map(|rule| rule_schema_from_value(rule.value, rule.name, source_context))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     validate_unique_rule_kinds(&schemas)?;
     Ok(schemas)
@@ -342,7 +420,7 @@ fn validate_unique_rule_kinds(schemas: &[RuleSchema]) -> std::result::Result<(),
     for (index, schema) in schemas.iter().enumerate() {
         if let Some(first_index) = seen.insert(schema.kind.as_str(), index) {
             return Err(format!(
-                "rule kind `{}` is declared more than once (RULES[{first_index}] and RULES[{index}])",
+                "rule kind `{}` is declared more than once (rule export {first_index} and {index})",
                 schema.kind
             ));
         }
@@ -361,19 +439,25 @@ fn append_script_schema(schemas: &mut Vec<RuleSchema>) -> Result<()> {
     Ok(())
 }
 
-fn rule_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<RuleSchema, String> {
-    let example_slugs = field_string_list(value, path, "examples")?;
-    let examples = example_slugs
-        .into_iter()
+fn rule_schema_from_value(
+    value: Value<'_>,
+    path: &str,
+    source_context: &RuleSchemaSource,
+) -> std::result::Result<RuleSchema, String> {
+    let kind = crate::rules::rule_kind(value, path)?;
+    let examples = field_list(value, path, "examples")?
+        .iter()
         .enumerate()
-        .map(|(index, slug)| {
-            crate::examples::load_example(&slug).ok_or_else(|| {
-                format!("{path}.examples[{index}] references unknown example slug `{slug}`")
-            })
+        .map(|(index, example)| {
+            example_from_value(
+                example,
+                &format!("{path}.examples[{index}]"),
+                source_context,
+            )
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(RuleSchema {
-        kind: field_string(value, path, "kind")?,
+        kind,
         docs: field_string(value, path, "docs")?,
         attrs: field_list(value, path, "attrs")?
             .iter()
@@ -424,6 +508,39 @@ fn capability_from_value(value: Value<'_>, path: &str) -> std::result::Result<Ca
     })
 }
 
+fn example_from_value(
+    value: Value<'_>,
+    path: &str,
+    source_context: &RuleSchemaSource,
+) -> std::result::Result<RuleExample, String> {
+    let dict = DictRef::from_value(value).ok_or_else(|| {
+        format!(
+            "{path} should be an example(...) value, got `{}`",
+            value.get_type()
+        )
+    })?;
+    let marker = dict
+        .get_str("_once_example")
+        .and_then(Value::unpack_bool)
+        .unwrap_or(false);
+    if !marker {
+        return Err(format!("{path} should be an example(...) value"));
+    }
+    let slug = non_empty_field_string(value, path, "slug")?;
+    let name = non_empty_field_string(value, path, "name")?;
+    let use_when = non_empty_field_string(value, path, "use_when")?;
+    let example_path = non_empty_field_string(value, path, "path")?;
+    let source = source_context
+        .example_source(&example_path)
+        .map_err(|message| format!("{path}.path {message}"))?;
+    Ok(RuleExample {
+        name,
+        slug,
+        use_when,
+        source,
+    })
+}
+
 fn field_value<'v>(
     value: Value<'v>,
     path: &str,
@@ -443,6 +560,18 @@ fn field_string(value: Value<'_>, path: &str, field: &str) -> std::result::Resul
             value.get_type()
         )
     })
+}
+
+fn non_empty_field_string(
+    value: Value<'_>,
+    path: &str,
+    field: &str,
+) -> std::result::Result<String, String> {
+    let value = field_string(value, path, field)?;
+    if value.trim().is_empty() {
+        return Err(format!("{path}.{field} should be non-empty"));
+    }
+    Ok(value)
 }
 
 fn optional_field_string(
@@ -575,59 +704,41 @@ mod tests {
     use super::*;
     use crate::target::Target;
 
-    #[test]
-    fn apple_application_exposes_build_and_run() {
-        let target = Target {
-            package: "apps/ios".to_string(),
-            kind: "apple_application".to_string(),
-            name: "App".to_string(),
-            deps: vec!["apps/ios/AppKit".to_string()],
-            srcs: Vec::new(),
-            attrs: BTreeMap::new(),
-            typed_attrs: BTreeMap::new(),
-        };
-
-        let graph = graph_from_targets(&[target]);
-        let app = &graph[0];
-        assert_eq!(app.label.id, "apps/ios/App");
-        // Assert membership rather than order: capability order is defined by
-        // the prelude and reordering it there should not break this test.
-        let mut names = app
-            .capabilities
-            .iter()
-            .map(|capability| capability.name.as_str())
-            .collect::<Vec<_>>();
-        names.sort_unstable();
-        assert_eq!(names, vec!["build", "run"]);
+    fn source_with_common(source: &str) -> String {
+        format!("{}\n{source}", crate::rules::common_rule_source())
     }
 
     #[test]
     fn parse_rule_schemas_rejects_invalid_syntax() {
-        let err = parse_rule_schemas("test.star", "RULES = [").unwrap_err();
+        let err = parse_rule_schemas("test.star", "demo_rule = rule(").unwrap_err();
         assert!(matches!(err, Error::Eval { .. }));
     }
 
     #[test]
-    fn parse_rule_schemas_requires_rules_export() {
+    fn parse_rule_schemas_requires_rule_exports() {
         let err = parse_rule_schemas("test.star", "OTHER = []").unwrap_err();
         match err {
-            Error::Eval { message, .. } => assert!(message.contains("missing RULES export")),
+            Error::Eval { message, .. } => assert!(message.contains("no rule symbols exported")),
             other => panic!("expected Error::Eval, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_rule_schemas_requires_list_export() {
-        let err = parse_rule_schemas("test.star", "RULES = 7").unwrap_err();
+    fn parse_rule_schemas_rejects_invalid_kind_type() {
+        let source = source_with_common(r#"demo_rule = rule(kind = 7, docs = "Demo rule")"#);
+        let err = parse_rule_schemas("test.star", &source).unwrap_err();
         match err {
-            Error::Eval { message, .. } => assert!(message.contains("should be a list")),
+            Error::Eval { message, .. } => {
+                assert!(message.contains("kind should be a string or None"));
+            }
             other => panic!("expected Error::Eval, got {other:?}"),
         }
     }
 
     #[test]
     fn parse_rule_schemas_reports_missing_rule_field() {
-        let err = parse_rule_schemas("test.star", r#"RULES = [{"kind": "x"}]"#).unwrap_err();
+        let err =
+            parse_rule_schemas("test.star", r#"demo_rule = {"_once_rule": True}"#).unwrap_err();
         match err {
             Error::Eval { message, .. } => assert!(message.contains("is missing")),
             other => panic!("expected Error::Eval, got {other:?}"),
@@ -636,20 +747,8 @@ mod tests {
 
     #[test]
     fn parse_rule_schemas_accepts_minimal_valid_rule() {
-        let source = r#"
-RULES = [
-    {
-        "kind": "demo",
-        "docs": "Demo rule",
-        "attrs": [],
-        "deps": [],
-        "providers": [],
-        "capabilities": [],
-        "examples": [],
-    },
-]
-"#;
-        let schemas = parse_rule_schemas("test.star", source).unwrap();
+        let source = source_with_common(r#"demo = rule(docs = "Demo rule")"#);
+        let schemas = parse_rule_schemas("test.star", &source).unwrap();
         assert_eq!(schemas.len(), 1);
         assert_eq!(schemas[0].kind, "demo");
     }
@@ -673,18 +772,15 @@ kind = "demo_rule"
         std::fs::write(
             tmp.path().join("rules/demo.star"),
             r#"
-RULES = [
-    rule(
-        kind = "demo_rule",
-        docs = "Demo rule",
-        attrs = [],
-        deps = [],
-        providers = ["demo_provider"],
-        capabilities = [
-            capability("build", ["default"]),
-        ],
-    ),
-]
+demo_rule = rule(
+    docs = "Demo rule",
+    attrs = [],
+    deps = [],
+    providers = ["demo_provider"],
+    capabilities = [
+        capability("build", ["default"]),
+    ],
+)
 "#,
         )
         .unwrap();
@@ -699,6 +795,91 @@ RULES = [
     }
 
     #[test]
+    fn workspace_rule_examples_resolve_relative_to_rule_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("rules/examples/demo/src")).unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            "[rules]\npaths = [\"rules/*.star\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/demo.star"),
+            r#"
+demo_rule = rule(
+    docs = "Demo rule",
+    examples = [
+        example(
+            "minimal",
+            name = "Minimal demo",
+            use_when = "Start a minimal demo target.",
+            path = "examples/demo",
+        ),
+    ],
+)
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/examples/demo/once.toml"),
+            "[[target]]\nname = \"Demo\"\nkind = \"demo_rule\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/examples/demo/src/main.txt"),
+            "hello\n",
+        )
+        .unwrap();
+
+        let schema = rule_schemas_for_workspace(tmp.path())
+            .unwrap()
+            .into_iter()
+            .find(|schema| schema.kind == "demo_rule")
+            .unwrap();
+        assert_eq!(schema.examples[0].slug, "minimal");
+
+        let bundle = crate::examples::load_rule_example(&schema, "minimal").unwrap();
+
+        assert_eq!(bundle.name, "Minimal demo");
+        assert!(bundle.files.iter().any(|file| file.path == "once.toml"));
+        assert!(bundle.files.iter().any(|file| file.path == "src/main.txt"));
+    }
+
+    #[test]
+    fn workspace_rule_examples_reject_paths_outside_rule_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            "[rules]\npaths = [\"rules/*.star\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/demo.star"),
+            r#"
+demo_rule = rule(
+    docs = "Demo rule",
+    examples = [
+        example(
+            "bad",
+            name = "Bad demo",
+            use_when = "This should fail.",
+            path = "../examples/bad",
+        ),
+    ],
+)
+"#,
+        )
+        .unwrap();
+
+        let err = rule_schemas_for_workspace(tmp.path()).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("must stay inside the rule package"));
+    }
+
+    #[test]
     fn workspace_rule_paths_reject_duplicate_kinds() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("rules")).unwrap();
@@ -710,16 +891,26 @@ RULES = [
         std::fs::write(
             tmp.path().join("rules/demo.star"),
             r#"
-RULES = [
-    rule(
-        kind = "apple_library",
-        docs = "Duplicate",
-        attrs = [],
-        deps = [],
-        providers = [],
-        capabilities = [],
-    ),
-]
+demo_rule = rule(
+    docs = "Duplicate",
+    attrs = [],
+    deps = [],
+    providers = [],
+    capabilities = [],
+)
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("rules/other.star"),
+            r#"
+demo_rule = rule(
+    docs = "Duplicate",
+    attrs = [],
+    deps = [],
+    providers = [],
+    capabilities = [],
+)
 "#,
         )
         .unwrap();
@@ -732,7 +923,7 @@ RULES = [
     #[test]
     fn unknown_kind_gets_diagnostic_and_no_capabilities() {
         let target = Target {
-            package: "apps/ios".to_string(),
+            package: "pkg".to_string(),
             kind: "mystery_rule".to_string(),
             name: "Thing".to_string(),
             deps: Vec::new(),
@@ -755,11 +946,11 @@ RULES = [
     #[test]
     fn graph_attrs_fall_back_to_string_attrs_when_untyped() {
         let mut attrs = BTreeMap::new();
-        attrs.insert("platform".to_string(), "ios".to_string());
+        attrs.insert("mode".to_string(), "debug".to_string());
         let target = Target {
-            package: "apps/ios".to_string(),
-            kind: "apple_library".to_string(),
-            name: "AppCore".to_string(),
+            package: "pkg".to_string(),
+            kind: "script".to_string(),
+            name: "Tool".to_string(),
             deps: Vec::new(),
             srcs: Vec::new(),
             attrs,
@@ -768,21 +959,21 @@ RULES = [
 
         let graph = graph_from_targets(&[target]);
         assert_eq!(
-            graph[0].attrs.get("platform"),
-            Some(&AttrValue::String("ios".to_string()))
+            graph[0].attrs.get("mode"),
+            Some(&AttrValue::String("debug".to_string()))
         );
     }
 
     #[test]
     fn typed_attrs_take_precedence_over_string_attrs() {
         let mut attrs = BTreeMap::new();
-        attrs.insert("enable_testing".to_string(), "true".to_string());
+        attrs.insert("enabled".to_string(), "false".to_string());
         let mut typed_attrs = BTreeMap::new();
-        typed_attrs.insert("enable_testing".to_string(), AttrValue::Bool(true));
+        typed_attrs.insert("enabled".to_string(), AttrValue::Bool(true));
         let target = Target {
-            package: "apps/ios".to_string(),
-            kind: "apple_library".to_string(),
-            name: "AppCore".to_string(),
+            package: "pkg".to_string(),
+            kind: "script".to_string(),
+            name: "Tool".to_string(),
             deps: Vec::new(),
             srcs: Vec::new(),
             attrs,
@@ -790,17 +981,11 @@ RULES = [
         };
 
         let graph = graph_from_targets(&[target]);
-        assert_eq!(
-            graph[0].attrs.get("enable_testing"),
-            Some(&AttrValue::Bool(true))
-        );
+        assert_eq!(graph[0].attrs.get("enabled"), Some(&AttrValue::Bool(true)));
     }
 
     #[test]
     fn select_on_non_configurable_attribute_emits_a_diagnostic() {
-        // module_name is declared `configurable = False` in the
-        // prelude. A select() on it should surface a diagnostic, not
-        // be silently accepted.
         let mut typed_attrs = BTreeMap::new();
         let mut select_outer = BTreeMap::new();
         let mut branches = BTreeMap::new();
@@ -809,38 +994,40 @@ RULES = [
             AttrValue::String("Default".to_string()),
         );
         select_outer.insert("select".to_string(), AttrValue::Map(branches));
-        typed_attrs.insert("module_name".to_string(), AttrValue::Map(select_outer));
-        typed_attrs.insert("platform".to_string(), AttrValue::String("ios".to_string()));
+        typed_attrs.insert("fixed_name".to_string(), AttrValue::Map(select_outer));
         let target = Target {
-            package: "apps/ios".to_string(),
-            kind: "apple_library".to_string(),
-            name: "AppCore".to_string(),
+            package: "pkg".to_string(),
+            kind: "demo_rule".to_string(),
+            name: "Thing".to_string(),
             deps: Vec::new(),
             srcs: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
         };
-        let graph = graph_from_targets(&[target]);
+        let schemas = vec![RuleSchema {
+            kind: "demo_rule".to_string(),
+            docs: "Demo rule".to_string(),
+            attrs: vec![attr(
+                "fixed_name",
+                "string",
+                false,
+                None,
+                "Fixed target name",
+                false,
+            )],
+            deps: Vec::new(),
+            providers: Vec::new(),
+            capabilities: Vec::new(),
+            examples: Vec::new(),
+        }];
+
+        let graph = graph_from_targets_with_schemas(&[target], &schemas);
         let diag = graph[0]
             .diagnostics
             .iter()
             .find(|d| d.code == "select_on_non_configurable_attr")
             .expect("expected select_on_non_configurable_attr diagnostic");
-        assert!(diag.message.contains("module_name"), "{}", diag.message);
-    }
-
-    #[test]
-    fn apple_library_schema_exposes_multi_arch_attributes() {
-        let schema = built_in_rule_schema("apple_library").expect("apple_library schema");
-        let attr_names: Vec<&str> = schema.attrs.iter().map(|attr| attr.name.as_str()).collect();
-        assert!(
-            attr_names.contains(&"archs"),
-            "apple_library should expose an archs attribute, got {attr_names:?}"
-        );
-        assert!(
-            attr_names.contains(&"mac_catalyst"),
-            "apple_library should expose a mac_catalyst attribute, got {attr_names:?}"
-        );
+        assert!(diag.message.contains("fixed_name"), "{}", diag.message);
     }
 
     #[test]
@@ -849,33 +1036,16 @@ RULES = [
             .into_iter()
             .map(|schema| schema.kind)
             .collect::<Vec<_>>();
-        assert!(kinds.contains(&"apple_library".to_string()));
         assert!(kinds.contains(&"script".to_string()));
+        assert!(kinds.len() > 1);
         let unique = kinds.iter().collect::<std::collections::BTreeSet<_>>();
         assert_eq!(unique.len(), kinds.len());
     }
 
     #[test]
-    fn prelude_schema_source_supports_additive_rule_exports() {
-        let schemas = parse_rule_schemas(
-            "test.star",
-            &prelude_schema_source(
-                r#"
-RULES = RULES + [
-    {
-        "kind": "custom_library",
-        "docs": "Custom library",
-        "attrs": [],
-        "deps": [],
-        "providers": [],
-        "capabilities": [],
-        "examples": [],
-    },
-]
-"#,
-            ),
-        )
-        .unwrap();
+    fn parse_rule_schemas_derives_kind_from_exported_symbol() {
+        let source = source_with_common(r#"custom_library = rule(docs = "Custom library")"#);
+        let schemas = parse_rule_schemas("test.star", &source).unwrap();
 
         assert_eq!(schemas[0].kind, "custom_library");
     }
