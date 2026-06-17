@@ -185,7 +185,7 @@ def _rust_extra_inputs(ctx):
     return _rust_attr(ctx, "_extra_inputs", [])
 
 def _rust_build_script_inputs(ctx):
-    return _rust_attr(ctx, "_build_script_inputs", [])
+    return glob(_rust_attr(ctx, "_build_script_inputs", []))
 
 def _rust_target(ctx):
     return _rust_target_raw(ctx)

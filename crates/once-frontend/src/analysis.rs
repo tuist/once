@@ -1959,7 +1959,8 @@ env = _rust_build_script_env(
 result = repr(env.get("CARGO_ENCODED_RUSTFLAGS"))
 "#
         );
-        let store = store_for(TempDir::new().unwrap().path(), "crates/app/app");
+        let workspace = TempDir::new().unwrap();
+        let store = store_for(workspace.path(), "crates/app/app");
 
         let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
@@ -1998,7 +1999,8 @@ _rust_compile(ctx, "proc-macro", "src/lib.rs", "libstringify.so")
 result = repr("ok")
 "#
         );
-        let store = store_for(TempDir::new().unwrap().path(), "macros/stringify");
+        let workspace = TempDir::new().unwrap();
+        let store = store_for(workspace.path(), "macros/stringify");
 
         let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
@@ -2054,7 +2056,8 @@ result = repr([
 ])
 "#
         );
-        let store = store_for(TempDir::new().unwrap().path(), "");
+        let workspace = TempDir::new().unwrap();
+        let store = store_for(workspace.path(), "");
 
         let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
         let values: Vec<String> = serde_json::from_str(&out.unwrap()).unwrap();
@@ -2100,7 +2103,8 @@ result = repr([
 ])
 "#
         );
-        let store = store_for(TempDir::new().unwrap().path(), "");
+        let workspace = TempDir::new().unwrap();
+        let store = store_for(workspace.path(), "");
 
         let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
