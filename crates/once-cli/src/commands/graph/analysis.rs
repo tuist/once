@@ -125,6 +125,10 @@ impl BuildSession {
         Ok(Some(outcome))
     }
 
+    /// Returns a boxed future intentionally because the concrete future
+    /// captures dependency outcomes, provider records, and declared action
+    /// state. Boxing here keeps graph command callers small enough for
+    /// `clippy::large_futures` without spreading `Box::pin` across callers.
     pub(super) fn run_with_analysis<'a>(
         &'a self,
         target: &'a GraphTarget,

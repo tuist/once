@@ -34,6 +34,11 @@ struct DeclaredActionOutcome {
 
 /// Materialise each declared action through the action cache, then
 /// fold the analysis provider directly into the build outcome.
+///
+/// Returns a boxed future intentionally because the concrete future
+/// captures declared action state and cache execution state. Boxing at
+/// this boundary keeps parent graph futures small enough for
+/// `clippy::large_futures` and centralizes the allocation.
 pub(super) fn run_declared_actions<'a>(
     workspace: &'a Path,
     cache: &'a CacheProvider,
