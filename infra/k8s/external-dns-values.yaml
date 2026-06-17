@@ -1,0 +1,25 @@
+# external-dns watches the Once Ingress and keeps Cloudflare records in sync.
+# The Cloudflare API token is created out-of-band as a Kubernetes Secret by the
+# deploy workflow so it never lands in Helm values or release history.
+
+provider:
+  name: cloudflare
+
+sources:
+  - ingress
+
+domainFilters:
+  - buildonce.dev
+
+policy: upsert-only
+registry: txt
+txtOwnerId: once-production
+interval: 1m
+triggerLoopOnEvent: false
+
+env:
+  - name: CF_API_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: cloudflare-api-token
+        key: token
