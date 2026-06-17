@@ -71,9 +71,12 @@ during validation before the implementation runs.
 
 ## Starter Examples
 
-`examples` points at runnable starter bundles for a rule. Use it when a
-caller should be able to discover the rule, choose a starter by intent,
-and materialize a working target without reading prose docs.
+`examples` points at runnable starter bundles for a rule. The bundles
+are checked-in workspaces with metadata, manifests, and sources. They
+are not defined in Starlark; Starlark only references their slugs. Use
+them when a caller should be able to discover the rule, choose a
+starter by intent, and materialize a working target without reading
+prose docs.
 
 ```python
 apple_library = rule(
