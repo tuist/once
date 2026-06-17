@@ -178,8 +178,14 @@ def _rust_sources(ctx, crate_root):
         srcs.append(crate_root)
     return _unique(srcs)
 
+def _rust_source_inputs(ctx):
+    return glob(ctx["srcs"])
+
 def _rust_extra_inputs(ctx):
     return _rust_attr(ctx, "_extra_inputs", [])
+
+def _rust_build_script_inputs(ctx):
+    return glob(_rust_attr(ctx, "_build_script_inputs", []))
 
 def _rust_target(ctx):
     return _rust_target_raw(ctx)
@@ -225,6 +231,36 @@ def _rust_features(ctx):
 
 def _rust_user_flags(ctx):
     return _rust_attr(ctx, "rustc_flags", [])
+
+def _rust_encoded_rustflags(ctx):
+    return "\x1f".join(_rust_user_flags(ctx))
+
+def _host_which_optional(name):
+    path = host_command([host_which("sh"), "-c", "command -v " + _shell_quote(name) + " 2>/dev/null || true"]).strip()
+    return path
+
+def _rust_tool_path(tools):
+    dirs = []
+    for tool in tools:
+        directory = _parent_dir(tool)
+        if directory:
+            dirs.append(directory)
+    return ":".join(_unique(dirs))
+
+def _rust_c_tool_env(target, host_triple):
+    env = {}
+    if host_os() == "windows" or target != host_triple:
+        return env
+    cc = host_which("cc")
+    if cc:
+        env["CC"] = cc
+    ar = host_which("ar")
+    if ar:
+        env["AR"] = ar
+    path = _rust_tool_path([cc, ar, _host_which_optional("as"), _host_which_optional("ld")])
+    if path:
+        env["PATH"] = path
+    return env
 
 def _rust_cap_lints(ctx):
     value = _rust_attr(ctx, "cap_lints", "")
@@ -433,6 +469,9 @@ def _rust_builtin_extern_args(crate_type):
 
 def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path):
     env = _rust_compile_env(ctx)
+    for key, value in _rust_c_tool_env(target or host_triple, host_triple).items():
+        if key not in env:
+            env[key] = value
     for key, value in _rust_cfg_env(rustc, target).items():
         if key not in env:
             env[key] = value
@@ -452,6 +491,8 @@ def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path
         env["PROFILE"] = "debug"
     env["RUSTC"] = rustc
     env["TARGET"] = target or host_triple
+    if "CARGO_ENCODED_RUSTFLAGS" not in env:
+        env["CARGO_ENCODED_RUSTFLAGS"] = _rust_encoded_rustflags(ctx)
     return env
 
 def _rust_manifest_links(ctx):
@@ -502,7 +543,34 @@ done < {stdout}
 """.format(metadata = _rust_dep_metadata_key_shell(prefix), stdout = _shell_quote(_workspace_absolute(stdout))))
     return ("\n".join(snippets), _unique(inputs))
 
-def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps):
+def _rust_build_script_output_pipeline(runner, status, stdout):
+    runner_exec = _shell_quote(_workspace_absolute(runner))
+    printf = _shell_quote(host_which("printf"))
+    tee = _shell_quote(host_which("tee"))
+    status_abs = _shell_quote(status)
+    stdout_abs = _shell_quote(_workspace_absolute(stdout))
+    status_capture = "{ " + runner_exec + " 2>&1; " + printf + " '%s' \"$?\" > " + status_abs + "; }"
+    return status_capture + " | " + tee + " " + stdout_abs
+
+def _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports):
+    status = run_env["OUT_DIR"] + "/.once-build-script-status"
+    status_abs = _shell_quote(status)
+    rm = _shell_quote(host_which("rm"))
+    lines = [
+        _shell_quote(host_which("mkdir")) + " -p " + _shell_quote(run_env["OUT_DIR"]) + " && cd " + _shell_quote(run_env["CARGO_MANIFEST_DIR"]),
+    ]
+    if metadata_exports:
+        lines.append(metadata_exports)
+    lines.extend([
+        rm + " -f " + status_abs,
+        _rust_build_script_output_pipeline(runner, status, stdout),
+        "code=$(" + _shell_quote(host_which("cat")) + " " + status_abs + ")",
+        rm + " -f " + status_abs,
+        "exit \"$code\"",
+    ])
+    return "\n".join(lines)
+
+def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps, metadata_deps):
     build_script = _rust_attr(ctx, "build_script", "")
     if not build_script:
         return (None, [], {}, None)
@@ -533,11 +601,11 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
         identifier = ctx["label"]["id"] + ":build-script-rustc",
     )
     run_env = _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path)
-    metadata_exports, metadata_inputs = _rust_dep_metadata_exports(deps)
-    run_script = _shell_quote(host_which("mkdir")) + " -p " + _shell_quote(run_env["OUT_DIR"]) + " && cd " + _shell_quote(run_env["CARGO_MANIFEST_DIR"]) + "\n" + metadata_exports + "\n" + _shell_quote(_workspace_absolute(runner)) + " > " + _shell_quote(_workspace_absolute(stdout))
+    metadata_exports, metadata_inputs = _rust_dep_metadata_exports(metadata_deps)
+    run_script = _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports)
     run_action(
         argv = [host_which("sh"), "-c", run_script],
-        inputs = _unique([runner] + metadata_inputs),
+        inputs = _unique([runner] + metadata_inputs + _rust_source_inputs(ctx) + _rust_build_script_inputs(ctx)),
         outputs = [out_dir, stdout],
         env = run_env,
         toolchain_identity = identity + "\x00build-script-run",
@@ -628,9 +696,14 @@ def _rust_output_extension(crate_type, target):
         return ".exe" if "windows" in os_key else ""
     return ""
 
+def _rust_effective_target(ctx, crate_type):
+    if crate_type == "proc-macro":
+        return ""
+    return _rust_target(ctx)
+
 def _rust_output_name(ctx, crate_type):
     crate_name = _rust_crate_name(ctx)
-    target = _rust_target(ctx)
+    target = _rust_effective_target(ctx, crate_type)
     if crate_type == "bin":
         return crate_name + _rust_output_extension(crate_type, target)
     if crate_type == "rlib" or crate_type == "staticlib" or crate_type == "cdylib" or crate_type == "dylib" or crate_type == "proc-macro":
@@ -643,7 +716,7 @@ def _rust_declared_output(ctx, name):
     return prefix + name
 
 def _rust_compile(ctx, crate_type, default_root, output_name):
-    target = _rust_target(ctx)
+    target = _rust_effective_target(ctx, crate_type)
     rustc, identity, host_triple = _rustc_toolchain(target)
     crate_name = _rust_crate_name(ctx)
     edition = _rust_attr(ctx, "edition", "2021")
@@ -654,7 +727,12 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     deps = _rust_resolved_deps(ctx)
     dep_args = _rust_dep_args(deps, aliases)
     dep_inputs = _rust_dep_inputs(deps)
-    build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps)
+    build_deps = ctx.get("build_deps")
+    if build_deps == None:
+        build_deps = []
+    build_dep_args = _rust_dep_args(build_deps, aliases)
+    build_dep_inputs = _rust_dep_inputs(build_deps)
+    build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps)
     compile_env = build_env if build_env else _rust_compile_env(ctx)
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
     argv = [
@@ -730,7 +808,7 @@ def _rust_proc_macro_impl(ctx):
 def _cargo_dependencies_impl(ctx):
     resolved = _cargo_resolved_metadata(ctx)
     deps, providers_by_name = _cargo_compile_resolved_specs(ctx, resolved["specs"])
-    workspace_deps = _cargo_workspace_deps(resolved["metadata"], providers_by_name)
+    workspace_deps = _cargo_workspace_deps(ctx, resolved["metadata"], providers_by_name)
     packages = _rust_attr(ctx, "packages", [])
     if packages:
         deps = _rust_select_dependency_set([{"deps": deps}], packages, ctx["label"]["id"])
@@ -780,8 +858,11 @@ def _cargo_resolved_metadata(ctx):
     argv.extend(_cargo_feature_args(ctx))
     metadata_content = host_command(argv)
     metadata = json_decode(metadata_content)
+    resolver_attrs = {"vendor_dir": vendor_dir}
+    if target:
+        resolver_attrs["target"] = target
     resolver_ctx = {
-        "attrs": {"vendor_dir": vendor_dir},
+        "attrs": resolver_attrs,
     }
     return {
         "metadata": metadata,
@@ -816,6 +897,7 @@ def _cargo_compile_resolved_specs(ctx, specs):
         progressed = False
         for spec in remaining:
             dep_providers = []
+            build_dep_providers = []
             ready = True
             for dep_ref in spec.get("deps") or []:
                 dep_name = _cargo_ref_name(dep_ref)
@@ -827,7 +909,17 @@ def _cargo_compile_resolved_specs(ctx, specs):
             if not ready:
                 next_remaining.append(spec)
                 continue
-            provider = _cargo_compile_resolved_spec(ctx, spec, dep_providers, metadata_inputs)
+            for dep_ref in spec.get("build_deps") or []:
+                dep_name = _cargo_ref_name(dep_ref)
+                provider = providers_by_name.get(dep_name)
+                if provider == None:
+                    ready = False
+                    break
+                build_dep_providers.append(provider)
+            if not ready:
+                next_remaining.append(spec)
+                continue
+            provider = _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs)
             providers_by_name[spec["name"]] = provider
             providers.append(provider)
             progressed = True
@@ -840,7 +932,7 @@ def _cargo_compile_resolved_specs(ctx, specs):
         fail(ctx["label"]["id"] + ": Cargo dependency graph has a cycle or missing dependency among " + ", ".join(names))
     return (providers, providers_by_name)
 
-def _cargo_compile_resolved_spec(ctx, spec, dep_providers, metadata_inputs):
+def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs):
     attrs = _cargo_copy_attrs(spec.get("attrs") or {})
     attrs["_output_prefix"] = spec["name"] + "/"
     attrs["_extra_inputs"] = metadata_inputs
@@ -852,17 +944,19 @@ def _cargo_compile_resolved_spec(ctx, spec, dep_providers, metadata_inputs):
         },
         "attr": attrs,
         "deps": dep_providers,
+        "build_deps": build_dep_providers,
         "srcs": spec.get("srcs") or [],
     }
     if spec.get("kind") == "rust_proc_macro":
         return _rust_proc_macro_impl(spec_ctx)
     return _rust_crate_impl(spec_ctx)
 
-def _cargo_workspace_deps(metadata, providers_by_name):
+def _cargo_workspace_deps(ctx, metadata, providers_by_name):
     packages = metadata.get("packages") or []
     duplicate_counts = _cargo_duplicate_counts(packages)
-    _, id_to_target_name = _cargo_package_indexes(packages, duplicate_counts)
     nodes = _cargo_resolve_nodes(metadata)
+    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes)
+    id_to_target_name, _ = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids)
     out = {}
     for package in packages:
         if package.get("source") != None:
@@ -1057,7 +1151,7 @@ def _cargo_resolver_impl(ctx):
             "name": name,
             "kind": "rust_crate",
             "deps": deps,
-            "srcs": [source_root + "/src/**/*.rs"],
+            "srcs": _cargo_package_source_globs(source_root),
             "attrs": attrs,
         })
     return targets
@@ -1084,6 +1178,13 @@ def _cargo_source_glob(source_root, crate_root):
             return source_root + "/" + rel_parent + "/**/*.rs"
     return source_root + "/src/**/*.rs"
 
+def _cargo_package_source_globs(source_root):
+    return [
+        source_root + "/Cargo.toml",
+        source_root + "/build.rs",
+        source_root + "/src/**/*.rs",
+    ]
+
 def _cargo_library_target(package):
     for target in package.get("targets") or []:
         if "proc-macro" in (target.get("kind") or []) or "proc-macro" in (target.get("crate_types") or []):
@@ -1105,6 +1206,69 @@ def _cargo_kind_for_target(target):
     if "proc-macro" in (target.get("kind") or []) or "proc-macro" in (target.get("crate_types") or []):
         return "rust_proc_macro"
     return "rust_crate"
+
+def _cargo_package_is_proc_macro(package):
+    target = _cargo_library_target(package)
+    if target == None:
+        return False
+    return _cargo_kind_for_target(target) == "rust_proc_macro"
+
+def _cargo_host_variant_name(package, duplicate_counts):
+    return _cargo_target_name(package, duplicate_counts) + "-host"
+
+def _cargo_host_dependency_ids(packages, nodes):
+    package_by_id, _ = _cargo_package_indexes(packages, _cargo_duplicate_counts(packages))
+    needed = {}
+    stack = []
+    for package in packages:
+        package_id = package.get("id")
+        if package.get("source") == None or not package_id:
+            continue
+        if _cargo_package_is_proc_macro(package):
+            stack.append(package_id)
+        if _cargo_build_script_target(package) != None:
+            node = nodes.get(package_id) or {}
+            for dep in node.get("deps") or []:
+                if _cargo_dep_is_build(dep):
+                    dep_id = dep.get("pkg")
+                    dep_package = package_by_id.get(dep_id)
+                    if dep_package != None and dep_package.get("source") != None:
+                        stack.append(dep_id)
+    for _ in range(len(packages) + 1):
+        if len(stack) == 0:
+            break
+        current = stack
+        stack = []
+        for package_id in current:
+            package = package_by_id.get(package_id)
+            if package == None or package.get("source") == None or package_id in needed:
+                continue
+            needed[package_id] = True
+            node = nodes.get(package_id) or {}
+            include_build = _cargo_build_script_target(package) != None
+            for dep in node.get("deps") or []:
+                if not _cargo_dep_is_runtime(dep) and not (include_build and _cargo_dep_is_build(dep)):
+                    continue
+                dep_id = dep.get("pkg")
+                dep_package = package_by_id.get(dep_id)
+                if dep_package != None and dep_package.get("source") != None and dep_id not in needed:
+                    stack.append(dep_id)
+    return needed
+
+def _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids):
+    target_names = {}
+    host_names = {}
+    for package in packages:
+        package_id = package.get("id")
+        if package.get("source") == None or not package_id:
+            continue
+        target_name = _cargo_target_name(package, duplicate_counts)
+        target_names[package_id] = target_name
+        if _cargo_package_is_proc_macro(package):
+            host_names[package_id] = target_name
+        elif host_dependency_ids.get(package_id):
+            host_names[package_id] = _cargo_host_variant_name(package, duplicate_counts)
+    return (target_names, host_names)
 
 def _cargo_package_indexes(packages, duplicate_counts):
     by_id = {}
@@ -1139,11 +1303,13 @@ def _cargo_dep_is_build(dep):
             return True
     return False
 
-def _cargo_metadata_deps(node, id_to_target_name, include_build):
+def _cargo_metadata_dep_refs(node, id_to_target_name, include_runtime, include_build):
     deps = []
     aliases = {}
     for dep in node.get("deps") or []:
-        if not _cargo_dep_is_runtime(dep) and not (include_build and _cargo_dep_is_build(dep)):
+        runtime = include_runtime and _cargo_dep_is_runtime(dep)
+        build = include_build and _cargo_dep_is_build(dep)
+        if not runtime and not build:
             continue
         dep_id = dep.get("pkg")
         target_name = id_to_target_name.get(dep_id)
@@ -1154,6 +1320,12 @@ def _cargo_metadata_deps(node, id_to_target_name, include_build):
         if local_name:
             aliases[target_name] = local_name
     return (_unique(deps), aliases)
+
+def _cargo_metadata_deps(node, id_to_target_name, include_build):
+    return _cargo_metadata_dep_refs(node, id_to_target_name, True, include_build)
+
+def _cargo_metadata_build_deps(node, id_to_target_name):
+    return _cargo_metadata_dep_refs(node, id_to_target_name, False, True)
 
 def _cargo_version_components(version):
     build_parts = version.split("+")
@@ -1228,12 +1400,42 @@ def _cargo_metadata_resolver_impl(ctx, metadata_content):
     metadata = json_decode(metadata_content)
     return _cargo_metadata_targets(ctx, metadata)
 
+def _cargo_merge_aliases(left, right):
+    out = {}
+    for key, value in left.items():
+        out[key] = value
+    for key, value in right.items():
+        out[key] = value
+    return out
+
+def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target):
+    attrs = _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases)
+    if rust_target:
+        attrs["target"] = rust_target
+    checksum = package.get("checksum")
+    if checksum != None:
+        attrs["checksum"] = checksum
+    if attrs.get("build_script"):
+        attrs["_build_script_inputs"] = [source_root + "/**"]
+    spec = {
+        "name": name,
+        "kind": kind,
+        "deps": deps,
+        "srcs": _cargo_package_source_globs(source_root),
+        "attrs": attrs,
+    }
+    if build_deps:
+        spec["build_deps"] = build_deps
+    return spec
+
 def _cargo_metadata_targets(ctx, metadata):
     packages = metadata.get("packages") or []
     duplicate_counts = _cargo_duplicate_counts(packages)
-    package_by_id, id_to_target_name = _cargo_package_indexes(packages, duplicate_counts)
     nodes = _cargo_resolve_nodes(metadata)
+    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes)
+    id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids)
     vendor_dir = _trim_trailing_slash(ctx["attrs"].get("vendor_dir") or "vendor")
+    rust_target = ctx["attrs"].get("target") or ""
     targets = []
     for package in packages:
         if package.get("source") == None:
@@ -1241,23 +1443,29 @@ def _cargo_metadata_targets(ctx, metadata):
         target = _cargo_library_target(package)
         if target == None:
             continue
-        name = id_to_target_name.get(package.get("id")) or _cargo_target_name(package, duplicate_counts)
-        source_root = _cargo_vendor_source_root(vendor_dir, package, name)
+        package_id = package.get("id")
+        name = id_to_target_name.get(package_id) or _cargo_target_name(package, duplicate_counts)
+        kind = _cargo_kind_for_target(target)
+        source_root = _cargo_vendor_source_root(vendor_dir, package, _cargo_target_name(package, duplicate_counts))
         rel_root = _cargo_source_rel(package, target)
         crate_root = source_root + "/" + rel_root
-        node = nodes.get(package.get("id")) or {}
-        deps, aliases = _cargo_metadata_deps(node, id_to_target_name, _cargo_build_script_target(package) != None)
-        attrs = _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases)
-        checksum = package.get("checksum")
-        if checksum != None:
-            attrs["checksum"] = checksum
-        targets.append({
-            "name": name,
-            "kind": _cargo_kind_for_target(target),
-            "deps": deps,
-            "srcs": [_cargo_source_glob(source_root, crate_root)],
-            "attrs": attrs,
-        })
+        node = nodes.get(package_id) or {}
+
+        if kind == "rust_proc_macro":
+            deps, aliases = _cargo_metadata_deps(node, id_to_host_name, False)
+            build_deps, build_aliases = _cargo_metadata_build_deps(node, id_to_host_name)
+            targets.append(_cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), ""))
+            continue
+
+        deps, aliases = _cargo_metadata_deps(node, id_to_target_name, False)
+        build_deps, build_aliases = _cargo_metadata_build_deps(node, id_to_host_name)
+        targets.append(_cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), rust_target))
+
+        host_name = id_to_host_name.get(package_id)
+        if host_name:
+            host_deps, host_aliases = _cargo_metadata_deps(node, id_to_host_name, False)
+            host_build_deps, host_build_aliases = _cargo_metadata_build_deps(node, id_to_host_name)
+            targets.append(_cargo_metadata_target_spec(package, target, node, source_root, crate_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), ""))
     return targets
 
 def _cargo_vendor_source_root(vendor_dir, package, target_name):

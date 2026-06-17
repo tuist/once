@@ -18,16 +18,55 @@ Describe 'release SDK packaging scripts'
     chmod +x "$path"
   }
 
+  setup_release_graph_workspace() {
+    mkdir -p \
+      "$WORKSPACE/crates/once-cas" \
+      "$WORKSPACE/crates/once-core" \
+      "$WORKSPACE/crates/once-frontend" \
+      "$WORKSPACE/crates/once" \
+      "$WORKSPACE/crates/once-cli"
+    touch \
+      "$WORKSPACE/Cargo.toml" \
+      "$WORKSPACE/Cargo.lock" \
+      "$WORKSPACE/once.toml" \
+      "$WORKSPACE/crates/once-cas/once.toml" \
+      "$WORKSPACE/crates/once-core/once.toml" \
+      "$WORKSPACE/crates/once-frontend/once.toml" \
+      "$WORKSPACE/crates/once/once.toml" \
+      "$WORKSPACE/crates/once-cli/once.toml"
+  }
+
   It 'copies a built shared library into each SDK prebuild directory'
     setup_release_path
+    setup_release_graph_workspace
     write_stub cargo \
       '#!/usr/bin/env bash' \
-      'mkdir -p target/x86_64-unknown-linux-gnu/release' \
-      'printf library > target/x86_64-unknown-linux-gnu/release/libonce.so'
+      'case "$1" in' \
+      '  vendor)' \
+      '    mkdir -p third_party/rust/vendor' \
+      '    ;;' \
+      '  metadata)' \
+      '    printf "%s\n" "{\"packages\":[]}"' \
+      '    ;;' \
+      'esac'
+    write_stub mise \
+      '#!/usr/bin/env bash' \
+      'if [ "$1" = exec ] && [ "$2" = -- ]; then' \
+      '  shift 2' \
+      '  exec "$@"' \
+      'fi' \
+      'exit 2'
+    write_stub jq \
+      '#!/usr/bin/env bash'
+    write_stub once \
+      '#!/usr/bin/env bash' \
+      'target_id="$2"' \
+      'mkdir -p ".once/out/${target_id}"' \
+      'printf library > ".once/out/${target_id}/libonce.so"'
     mkdir -p "$WORKSPACE/packages/js" "$WORKSPACE/packages/ruby"
     cd "$WORKSPACE"
 
-    When call "$REPO_ROOT/mise/tasks/release/package-sdk-libs.sh" --target x86_64-unknown-linux-gnu
+    When call env ONCE_BIN="$WORKSPACE/bin/once" "$REPO_ROOT/mise/tasks/release/package-sdk-libs.sh" --target x86_64-unknown-linux-gnu
     The status should be success
     The contents of file "$WORKSPACE/packages/js/prebuilds/linux-x64/libonce.so" should equal 'library'
     The contents of file "$WORKSPACE/packages/ruby/prebuilds/linux-x64/libonce.so" should equal 'library'

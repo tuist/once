@@ -3,7 +3,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use once_cas::{CacheProvider, Digest};
+use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     Action, InputDigestBuilder, OutputSymlinkMode, ResourceRequest, RunOpts, WorkspacePath,
 };
@@ -12,6 +12,8 @@ use once_frontend::GraphTarget;
 use tokio::process::Command;
 
 use super::BuildOutcome;
+
+const FAILURE_OUTPUT_LIMIT: usize = 16 * 1024;
 
 /// Materialise each declared action through the action cache, then
 /// fold the analysis provider directly into the build outcome.
@@ -68,8 +70,16 @@ pub(super) async fn run_declared_actions(
             let exit_code = outcome.result.exit_code;
             if exit_code != 0 {
                 anyhow::bail!(
-                    "{identifier_for_error} ({index}) failed for {} with exit code {exit_code}",
-                    target.label.id,
+                    "{}",
+                    declared_action_failure_message(
+                        cache,
+                        &identifier_for_error,
+                        index,
+                        &target.label.id,
+                        exit_code,
+                        &outcome.result,
+                    )
+                    .await
                 );
             }
             action_digests.push(outcome.action);
@@ -101,6 +111,60 @@ pub(super) async fn run_declared_actions(
         outputs: all_outputs,
         cache_tag: last_cache_tag,
     })
+}
+
+async fn declared_action_failure_message(
+    cache: &CacheProvider,
+    identifier: &str,
+    index: usize,
+    target: &str,
+    exit_code: i32,
+    result: &ActionResult,
+) -> String {
+    let mut message =
+        format!("{identifier} ({index}) failed for {target} with exit code {exit_code}");
+    append_captured_output(cache, &mut message, "stdout", result.stdout.as_ref()).await;
+    append_captured_output(cache, &mut message, "stderr", result.stderr.as_ref()).await;
+    message
+}
+
+async fn append_captured_output(
+    cache: &CacheProvider,
+    message: &mut String,
+    name: &str,
+    digest: Option<&Digest>,
+) {
+    let Some(digest) = digest else {
+        return;
+    };
+    let bytes = match cache.get_blob(digest).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            tracing::warn!(
+                output = name,
+                digest = %digest,
+                error = %err,
+                "failed to read captured declared action output"
+            );
+            return;
+        }
+    };
+    if bytes.is_empty() {
+        return;
+    }
+    let (prefix, slice) = if bytes.len() > FAILURE_OUTPUT_LIMIT {
+        (
+            format!("last {FAILURE_OUTPUT_LIMIT} bytes of "),
+            &bytes[bytes.len() - FAILURE_OUTPUT_LIMIT..],
+        )
+    } else {
+        (String::new(), bytes.as_slice())
+    };
+    message.push_str("\n\n");
+    message.push_str(&prefix);
+    message.push_str(name);
+    message.push_str(":\n");
+    message.push_str(&String::from_utf8_lossy(slice));
 }
 
 async fn run_uncached_action(action: &Action, workspace: &Path) -> Result<i32> {
@@ -303,6 +367,61 @@ mod tests {
         assert!(workspace.path().join(".once/out/x/sub").is_dir());
         let Action::RunCommand { argv, .. } = action;
         assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn declared_action_failure_message_appends_captured_output() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let stdout = cache.put_blob(b"visible stdout").await.unwrap();
+        let stderr = cache.put_blob(b"visible stderr").await.unwrap();
+        let result = ActionResult {
+            exit_code: 7,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            outputs: BTreeMap::new(),
+        };
+
+        let message =
+            declared_action_failure_message(&cache, "target:action", 2, "target", 7, &result).await;
+
+        assert!(message.contains("target:action (2) failed for target with exit code 7"));
+        assert!(message.contains("stdout:\nvisible stdout"));
+        assert!(message.contains("stderr:\nvisible stderr"));
+    }
+
+    #[tokio::test]
+    async fn declared_action_failure_message_truncates_large_output() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let mut bytes = b"drop-me".to_vec();
+        bytes.extend(std::iter::repeat_n(b'x', FAILURE_OUTPUT_LIMIT));
+        let stdout = cache.put_blob(&bytes).await.unwrap();
+        let result = ActionResult {
+            exit_code: 1,
+            stdout: Some(stdout),
+            stderr: None,
+            outputs: BTreeMap::new(),
+        };
+
+        let message = declared_action_failure_message(&cache, "id", 0, "target", 1, &result).await;
+
+        assert!(message.contains("last 16384 bytes of stdout:\n"));
+        assert!(!message.contains("drop-me"));
+        assert!(message.ends_with(&"x".repeat(FAILURE_OUTPUT_LIMIT)));
+    }
+
+    #[tokio::test]
+    async fn append_captured_output_ignores_missing_digest_and_missing_blob() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let missing = Digest::of_bytes(b"missing");
+        let mut message = "base".to_string();
+
+        append_captured_output(&cache, &mut message, "stdout", None).await;
+        append_captured_output(&cache, &mut message, "stdout", Some(&missing)).await;
+
+        assert_eq!(message, "base");
     }
 
     #[cfg(unix)]

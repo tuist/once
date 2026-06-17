@@ -3,6 +3,8 @@
 #USAGE flag "--version <version>" help="Version number to validate the release input"
 set -Eeuo pipefail
 
+release_tasks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 version=""
 while (($# > 0)); do
   case "$1" in
@@ -66,10 +68,25 @@ require_lipo_archs() {
   done
 }
 
+target_suffix() {
+  printf '%s' "$1" | tr '.-' '__'
+}
+
+staticlib_path() {
+  local target="$1"
+  local suffix
+  suffix="$(target_suffix "${target}")"
+  printf '.once/out/crates/once/once_staticlib_%s/libonce.a\n' "${suffix}"
+}
+
 build_target() {
   local target="$1"
-  if ! cargo build --locked --release --package once --target "${target}"; then
-    echo "cargo build failed for ${target}" >&2
+  local suffix target_id
+  suffix="$(target_suffix "${target}")"
+  target_id="crates/once/once_staticlib_${suffix}"
+  "${release_tasks_dir}/write-rust-release-manifests.sh" --target "${target}" --version "${version}"
+  if ! "${once_bin}" build "${target_id}" --format json --quiet; then
+    echo "once build failed for ${target}" >&2
     exit 1
   fi
 }
@@ -86,20 +103,11 @@ targets=(
   x86_64-apple-ios
 )
 
-rustup target add "${targets[@]}"
-
-for target in "${targets[@]}"; do
-  build_target "${target}"
-done
-
-for target in "${targets[@]}"; do
-  require_file "target/${target}/release/libonce.a"
-done
-
 stage_dir=""
 keychain_path=""
 certificate_path=""
 cleanup() {
+  "${release_tasks_dir}/write-rust-release-manifests.sh" --clear >/dev/null 2>&1 || true
   if [[ -n "${certificate_path}" ]]; then
     rm -f "${certificate_path}"
   fi
@@ -110,8 +118,21 @@ cleanup() {
     rm -rf "${stage_dir}"
   fi
 }
-stage_dir="$(mktemp -d)"
 trap cleanup EXIT
+
+rustup target add "${targets[@]}"
+once_bin="$("${release_tasks_dir}/bootstrap-once.sh")"
+"${release_tasks_dir}/prepare-rust-graph-deps.sh"
+
+for target in "${targets[@]}"; do
+  build_target "${target}"
+done
+
+for target in "${targets[@]}"; do
+  require_file "$(staticlib_path "${target}")"
+done
+
+stage_dir="$(mktemp -d)"
 
 mkdir -p "${stage_dir}/macos" "${stage_dir}/ios-simulator" dist
 
@@ -170,16 +191,16 @@ if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then
 fi
 
 lipo -create \
-  "target/aarch64-apple-darwin/release/libonce.a" \
-  "target/x86_64-apple-darwin/release/libonce.a" \
+  "$(staticlib_path aarch64-apple-darwin)" \
+  "$(staticlib_path x86_64-apple-darwin)" \
   -output "${stage_dir}/macos/libonce.a"
 require_lipo_archs "${stage_dir}/macos/libonce.a" arm64 x86_64
 
 lipo -create \
-  "target/aarch64-apple-ios-sim/release/libonce.a" \
-  "target/x86_64-apple-ios/release/libonce.a" \
+  "$(staticlib_path aarch64-apple-ios-sim)" \
+  "$(staticlib_path x86_64-apple-ios)" \
   -output "${stage_dir}/ios-simulator/libonce.a"
-require_lipo_archs "target/aarch64-apple-ios/release/libonce.a" arm64
+require_lipo_archs "$(staticlib_path aarch64-apple-ios)" arm64
 require_lipo_archs "${stage_dir}/ios-simulator/libonce.a" arm64 x86_64
 
 release_dir="${stage_dir}/release"
@@ -188,7 +209,7 @@ mkdir -p "${release_dir}"
 rm -rf "${release_dir}/Once.xcframework"
 xcodebuild -create-xcframework \
   -library "${stage_dir}/macos/libonce.a" -headers "crates/once/include/Once" \
-  -library "target/aarch64-apple-ios/release/libonce.a" -headers "crates/once/include/Once" \
+  -library "$(staticlib_path aarch64-apple-ios)" -headers "crates/once/include/Once" \
   -library "${stage_dir}/ios-simulator/libonce.a" -headers "crates/once/include/Once" \
   -output "${release_dir}/Once.xcframework"
 

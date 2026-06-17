@@ -1739,12 +1739,24 @@ RULES = [
         function_name: &str,
         call_source: &str,
     ) -> std::result::Result<String, String> {
+        let prelude = include_str!("../prelude/apple.star");
+        eval_prelude_function_in(prelude, function_name, call_source)
+    }
+
+    fn eval_prelude_function_in(
+        prelude: &str,
+        function_name: &str,
+        call_source: &str,
+    ) -> std::result::Result<String, String> {
+        let source = format!("{prelude}\nresult = repr({function_name}{call_source})\n");
+        eval_prelude_source_to_repr(source)
+    }
+
+    fn eval_prelude_source_to_repr(source: String) -> std::result::Result<String, String> {
         // Build a Starlark module that splices the prelude's source
         // inline and invokes the requested helper. Returning the
         // result as a string via `repr()` keeps the test independent
         // of starlark Value plumbing details.
-        let prelude = include_str!("../prelude/apple.star");
-        let source = format!("{prelude}\nresult = repr({function_name}{call_source})\n");
         Module::with_temp_heap(|module| {
             let ast = AstModule::parse("test.star", source, &Dialect::Standard)
                 .map_err(|error| format!("parse: {error:?}"))?;
@@ -1841,6 +1853,369 @@ RULES = [
         )
         .unwrap_err();
         assert!(err.contains("no branch matching"), "{err}");
+    }
+
+    #[test]
+    fn prelude_cargo_metadata_targets_preserve_rust_target() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let out = eval_prelude_function_in(
+            &prelude,
+            "_cargo_metadata_targets",
+            r#"({
+                "attrs": {
+                    "target": "x86_64-apple-darwin",
+                    "vendor_dir": "third_party/rust/vendor",
+                },
+            }, {
+                "packages": [{
+                    "id": "registry+https://github.com/rust-lang/crates.io-index#cpufeatures@0.2.17",
+                    "name": "cpufeatures",
+                    "version": "0.2.17",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index",
+                    "manifest_path": "/workspace/vendor/cpufeatures-0.2.17/Cargo.toml",
+                    "targets": [{
+                        "name": "cpufeatures",
+                        "kind": ["lib"],
+                        "crate_types": ["lib"],
+                        "src_path": "/workspace/vendor/cpufeatures-0.2.17/src/lib.rs",
+                        "edition": "2018",
+                    }],
+                }],
+                "resolve": {
+                    "nodes": [{
+                        "id": "registry+https://github.com/rust-lang/crates.io-index#cpufeatures@0.2.17",
+                        "features": [],
+                        "deps": [],
+                    }],
+                },
+            })"#,
+        )
+        .unwrap();
+
+        assert!(out.contains("\"target\": \"x86_64-apple-darwin\""), "{out}");
+        assert!(
+            out.contains("\"srcs\": [\"third_party/rust/vendor/cpufeatures-0.2.17/Cargo.toml\", \"third_party/rust/vendor/cpufeatures-0.2.17/build.rs\", \"third_party/rust/vendor/cpufeatures-0.2.17/src/**/*.rs\"]"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn prelude_cargo_metadata_targets_split_proc_macro_host_deps() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r#"{prelude}
+targets = _cargo_metadata_targets({{
+    "attrs": {{
+        "target": "x86_64-apple-darwin",
+        "vendor_dir": "third_party/rust/vendor",
+    }},
+}}, {{
+    "packages": [
+        {{
+            "id": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.45",
+            "name": "quote",
+            "version": "1.0.45",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "manifest_path": "/workspace/vendor/quote-1.0.45/Cargo.toml",
+            "targets": [{{
+                "name": "quote",
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "src_path": "/workspace/vendor/quote-1.0.45/src/lib.rs",
+                "edition": "2018",
+            }}],
+        }},
+        {{
+            "id": "registry+https://github.com/rust-lang/crates.io-index#linktime-proc-macro@0.2.0",
+            "name": "linktime-proc-macro",
+            "version": "0.2.0",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "manifest_path": "/workspace/vendor/linktime-proc-macro-0.2.0/Cargo.toml",
+            "targets": [{{
+                "name": "linktime_proc_macro",
+                "kind": ["proc-macro"],
+                "crate_types": ["proc-macro"],
+                "src_path": "/workspace/vendor/linktime-proc-macro-0.2.0/src/lib.rs",
+                "edition": "2021",
+            }}],
+        }},
+    ],
+    "resolve": {{
+        "nodes": [
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.45",
+                "features": [],
+                "deps": [],
+            }},
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#linktime-proc-macro@0.2.0",
+                "features": [],
+                "deps": [{{
+                    "name": "quote",
+                    "pkg": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.45",
+                    "dep_kinds": [{{"kind": None}}],
+                }}],
+            }},
+        ],
+    }},
+}})
+by_name = {{target["name"]: target for target in targets}}
+result = repr([
+    by_name["quote-1.0.45"]["attrs"].get("target"),
+    by_name["quote-1.0.45-host"]["attrs"].get("target"),
+    by_name["linktime-proc-macro-0.2.0"]["attrs"].get("target"),
+    by_name["linktime-proc-macro-0.2.0"]["deps"],
+])
+"#
+        );
+        let out = eval_prelude_source_to_repr(source).unwrap();
+
+        assert_eq!(
+            out,
+            "[\"x86_64-apple-darwin\", None, None, [\"./quote-1.0.45-host\"]]"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_rust_build_script_metadata_deps_are_not_duplicated() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "build_script": "build.rs",
+        "crate_root": "src/lib.rs",
+    }},
+    "deps": [{{
+        "label_id": "third_party/rust/native",
+        "crate_name": "native",
+        "rlib": ".once/out/native/libnative.rlib",
+        "links": "native",
+        "build_script_stdout": ".once/out/native/build-script.stdout",
+    }}],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libapp.rlib")
+result = repr("ok")
+"#
+        );
+        let workspace = TempDir::new().unwrap();
+        let store = store_for(workspace.path(), "crates/app/app");
+
+        let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+        assert_eq!(out.unwrap(), "\"ok\"");
+        let script = store
+            .actions
+            .iter()
+            .find(|action| action.identifier.as_deref() == Some("crates/app/app:build-script"))
+            .and_then(|action| action.argv.get(2))
+            .unwrap();
+        assert_eq!(script.matches("done <").count(), 1, "{script}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_rust_build_script_env_encodes_rustflags() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r#"{prelude}
+rustc, _identity, host_triple = _rustc_toolchain("")
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "rustc_flags": ["-C", "opt-level=3"],
+    }},
+    "deps": [],
+    "srcs": [],
+}}
+env = _rust_build_script_env(
+    ctx,
+    rustc,
+    host_triple,
+    host_triple,
+    ".once/out/app/build",
+    "crates/app/build.rs",
+)
+result = repr(env.get("CARGO_ENCODED_RUSTFLAGS"))
+"#
+        );
+        let workspace = TempDir::new().unwrap();
+        let store = store_for(workspace.path(), "crates/app/app");
+
+        let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+        assert_eq!(out.unwrap(), "\"-C\\x1fopt-level=3\"");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_rust_proc_macro_compile_uses_host_target() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r#"{prelude}
+_rustc, _identity, host_triple = _rustc_toolchain("")
+def other_target(host_triple):
+    if host_triple == "aarch64-unknown-linux-gnu":
+        return "x86_64-unknown-linux-gnu"
+    return "aarch64-unknown-linux-gnu"
+ctx = {{
+    "label": {{
+        "package": "macros/stringify",
+        "name": "stringify",
+        "id": "macros/stringify",
+    }},
+    "attr": {{
+        "target": other_target(host_triple),
+        "crate_root": "src/lib.rs",
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "proc-macro", "src/lib.rs", "libstringify.so")
+result = repr("ok")
+"#
+        );
+        let workspace = TempDir::new().unwrap();
+        let store = store_for(workspace.path(), "macros/stringify");
+
+        let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+        assert_eq!(out.unwrap(), "\"ok\"");
+        let action = &store.actions[0];
+        assert!(
+            !action.argv.iter().any(|arg| arg == "--target"),
+            "{:?}",
+            action.argv
+        );
+        assert_eq!(
+            action.outputs,
+            vec![".once/out/macros/stringify/libstringify.so".to_string()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_rust_build_script_env_uses_absolute_c_tool_paths() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r#"{prelude}
+rustc, _identity, host_triple = _rustc_toolchain("")
+ctx = {{
+    "label": {{
+        "package": "third_party/rust/vendor/pkg-1.0.0",
+        "name": "pkg",
+        "id": "third_party/rust/vendor/pkg-1.0.0",
+    }},
+    "attr": {{}},
+    "srcs": [],
+}}
+tool_env = _rust_c_tool_env(host_triple, host_triple)
+build_env = _rust_build_script_env(
+    ctx,
+    rustc,
+    host_triple,
+    host_triple,
+    ".once/out/pkg/build",
+    "third_party/rust/vendor/pkg-1.0.0/build.rs",
+)
+result = repr([
+    tool_env.get("CC"),
+    tool_env.get("AR"),
+    tool_env.get("PATH"),
+    build_env.get("CC"),
+    build_env.get("AR"),
+    build_env.get("PATH"),
+])
+"#
+        );
+        let workspace = TempDir::new().unwrap();
+        let store = store_for(workspace.path(), "");
+
+        let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+        let values: Vec<String> = serde_json::from_str(&out.unwrap()).unwrap();
+
+        assert!(std::path::Path::new(&values[0]).is_absolute());
+        assert!(std::path::Path::new(&values[1]).is_absolute());
+        assert_eq!(values[0], values[3]);
+        assert_eq!(values[1], values[4]);
+        assert_eq!(values[2], values[5]);
+        for entry in values[2].split(':') {
+            assert!(std::path::Path::new(entry).is_absolute());
+        }
+        let cc_dir = std::path::Path::new(&values[0])
+            .parent()
+            .unwrap()
+            .to_string_lossy();
+        assert!(values[2].split(':').any(|entry| entry == cc_dir));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelude_rust_build_script_env_does_not_use_host_c_tool_for_cross_target() {
+        let prelude = format!(
+            "{}\n{}",
+            include_str!("../prelude/apple.star"),
+            include_str!("../prelude/rust.star")
+        );
+        let source = format!(
+            r#"{prelude}
+_rustc, _identity, host_triple = _rustc_toolchain("")
+def other_target(host_triple):
+    if host_triple == "aarch64-unknown-linux-gnu":
+        return "x86_64-unknown-linux-gnu"
+    return "aarch64-unknown-linux-gnu"
+target = other_target(host_triple)
+env = _rust_c_tool_env(target, host_triple)
+result = repr([
+    env.get("CC"),
+    env.get("AR"),
+    env.get("PATH"),
+    env.get("CC_" + target.replace("-", "_")),
+    env.get("CC_" + target),
+])
+"#
+        );
+        let workspace = TempDir::new().unwrap();
+        let store = store_for(workspace.path(), "");
+
+        let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+        assert_eq!(out.unwrap(), "[None, None, None, None, None]");
     }
 
     #[test]

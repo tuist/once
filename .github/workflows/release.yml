@@ -56,6 +56,8 @@ jobs:
         include:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
           - runner: macos-15-intel
             target: x86_64-apple-darwin
           - runner: macos-15
@@ -72,9 +74,8 @@ jobs:
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
-          # Restrict to rust so shellspec (no Windows binary) doesn't
-          # block the Windows job.
-          install_args: "rust"
+          # Restrict to the build tools needed on every matrix host.
+          install_args: "rust jq"
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
       - name: Cache Rust
@@ -86,6 +87,8 @@ jobs:
         run: rustup target add ${{ matrix.target }}
       - name: Package release archive
         run: mise run release:package --target "${{ matrix.target }}" --version "${{ needs.detect.outputs.next-version }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Upload release assets
         uses: actions/upload-artifact@v7
         with:
@@ -102,7 +105,7 @@ jobs:
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
-          install_args: "rust"
+          install_args: "rust jq"
       - name: Cache Rust
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
@@ -111,6 +114,7 @@ jobs:
       - name: Package XCFramework
         run: mise run release:package-xcframework --version "${{ needs.detect.outputs.next-version }}"
         env:
+          GH_TOKEN: ${{ github.token }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD }}
           APPLE_DEVELOPER_ID_CERTIFICATE_NAME: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_NAME }}
@@ -150,7 +154,7 @@ jobs:
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
-          install_args: "rust"
+          install_args: "rust jq"
       - if: startsWith(matrix.runner, 'ubuntu-')
         run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
       - name: Cache Rust
@@ -162,7 +166,9 @@ jobs:
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
       - name: Package SDK libraries
-        run: mise run release:package-sdk-libs --target "${{ matrix.target }}"
+        run: mise run release:package-sdk-libs --target "${{ matrix.target }}" --version "${{ needs.detect.outputs.next-version }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Upload SDK libraries
         uses: actions/upload-artifact@v7
         with:
