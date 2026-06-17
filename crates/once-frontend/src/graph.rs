@@ -262,7 +262,7 @@ fn graph_target_from_schema(target: &Target, schemas: &[TargetKindSchema]) -> Gr
         Vec::new()
     } else {
         vec![Diagnostic {
-            code: "unknown_rule_kind".to_string(),
+            code: "unknown_target_kind".to_string(),
             message: format!("target kind `{}` has no target kind schema", target.kind),
             target: Some(target.id()),
             attribute: None,
@@ -955,7 +955,7 @@ demo_kind = target_kind(
         assert!(thing.capabilities.is_empty());
         assert!(thing.providers.is_empty());
         assert_eq!(thing.diagnostics.len(), 1);
-        assert_eq!(thing.diagnostics[0].code, "unknown_rule_kind");
+        assert_eq!(thing.diagnostics[0].code, "unknown_target_kind");
         assert!(thing.diagnostics[0]
             .message
             .contains("`mystery_kind` has no target kind schema"));

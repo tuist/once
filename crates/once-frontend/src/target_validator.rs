@@ -49,7 +49,7 @@ pub fn validate_target(target: &TargetSpec, schemas: &[TargetKindSchema]) -> Vec
 
     let Some(schema) = schemas.iter().find(|s| s.kind == target.kind) else {
         diagnostics.push(Diagnostic {
-            code: "unknown_rule_kind".to_string(),
+            code: "unknown_target_kind".to_string(),
             message: format!("target kind `{}` is not registered", target.kind),
             target: Some(target.name.clone()),
             attribute: Some("kind".to_string()),
@@ -298,8 +298,8 @@ mod tests {
         let diagnostics = validate_target(&target, &schemas);
         let unknown = diagnostics
             .iter()
-            .find(|d| d.code == "unknown_rule_kind")
-            .expect("unknown_rule_kind diagnostic");
+            .find(|d| d.code == "unknown_target_kind")
+            .expect("unknown_target_kind diagnostic");
         assert!(!unknown.repairs.is_empty());
         assert!(unknown.repairs[0].contains("apple_library"));
     }
