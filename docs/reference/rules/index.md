@@ -69,6 +69,59 @@ Attributes can be configurable unless their schema sets
 `configurable = False`. Non-configurable attributes reject `select`
 during validation before the implementation runs.
 
+## Starter Examples
+
+`examples` points at runnable starter bundles for a rule. Use it when a
+caller should be able to discover the rule, choose a starter by intent,
+and materialize a working target without reading prose docs.
+
+```python
+apple_library = rule(
+    docs = "Compiles Swift, Objective-C, C, and C++ sources into a linkable Apple module.",
+    attrs = [
+        attr("platform", "string", required = True, docs = "Apple platform"),
+    ],
+    providers = ["apple_linkable", "apple_module"],
+    capabilities = [capability("build", ["default"])],
+    examples = [
+        "apple-library-minimal",
+        "apple-library-with-objc",
+    ],
+    impl = _apple_library_impl,
+)
+```
+
+`once query rules` lists the available rule kinds with their starter
+example slugs. Use `once query schema <kind> --format json` for the full
+example bundle:
+
+```sh
+once query schema apple_library --format json
+```
+
+```json
+{
+  "kind": "apple_library",
+  "examples": [
+    {
+      "slug": "apple-library-minimal",
+      "name": "Minimal Apple library",
+      "use_when": "Start a small Apple library target.",
+      "files": [
+        {
+          "path": "apps/Hello/once.toml",
+          "contents": "[[target]]\nname = \"Hello\"\nkind = \"apple_library\"\n..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+Agents should use `use_when` to pick the closest starter, then create
+each returned file using its relative `path` and `contents`. MCP callers
+get the same data from `once_list_rules` and `once_query_schema`.
+
 ## Implementation Context
 
 An implementation receives `ctx` with generic graph data:
