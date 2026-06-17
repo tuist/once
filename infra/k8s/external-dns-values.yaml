@@ -1,6 +1,6 @@
 # external-dns watches the Once Ingress and keeps Cloudflare records in sync.
 # The Cloudflare API token is created out-of-band as a Kubernetes Secret by the
-# deploy workflow so it never lands in Helm values or release history.
+# cluster bootstrap procedure so it never lands in Helm values or release history.
 
 provider:
   name: cloudflare

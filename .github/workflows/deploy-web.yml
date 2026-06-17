@@ -92,24 +92,6 @@ jobs:
           API="$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.server}')"
           echo "Reaching apiserver at $API"
           kubectl --request-timeout=10s get --raw /version >/dev/null
-      - name: Ensure DNS controller
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-        run: |
-          set -euo pipefail
-          CLOUDFLARE_API_TOKEN="$(op read 'op://once-k8s-production/cloudflare-buildonce-dns/credential')"
-          : "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN is required to manage buildonce.dev DNS}"
-          kubectl create namespace external-dns --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n external-dns create secret generic cloudflare-api-token \
-            --from-literal=token="$CLOUDFLARE_API_TOKEN" \
-            --dry-run=client -o yaml | kubectl apply -f -
-          helm repo add external-dns https://kubernetes-sigs.github.io/external-dns 2>/dev/null \
-            || helm repo update external-dns
-          helm upgrade --install external-dns external-dns/external-dns \
-            --version 1.21.1 \
-            -n external-dns --create-namespace \
-            -f infra/k8s/external-dns-values.yaml \
-            --timeout 5m --wait
       - name: Recover stuck release
         run: |
           status=$(helm status "$HELM_RELEASE_NAME" -n "$NAMESPACE" -o json 2>/dev/null \
