@@ -14,7 +14,7 @@
   },
   "routes": [
     {
-      "pattern": "once.tuist.dev",
+      "pattern": "docs.buildonce.dev",
       "custom_domain": true
     }
   ]
