@@ -33,7 +33,7 @@ pub struct GraphTarget {
     /// Canonical target label.
     pub label: TargetLabel,
     /// Rule kind declared by the target manifest. Matched against the
-    /// prelude's `RULES` list to attach schema, capabilities, and
+    /// exported Starlark rule symbols to attach schema, capabilities, and
     /// providers.
     pub kind: String,
     /// Canonical dependency target ids.
@@ -197,8 +197,16 @@ pub fn built_in_rule_schemas_result() -> Result<Vec<RuleSchema>> {
 }
 
 pub fn rule_schemas_for_workspace(root: &Path) -> Result<Vec<RuleSchema>> {
-    let source = crate::rules::combined_rule_source_for_workspace(root)?;
-    let mut schemas = parse_rule_schemas(crate::rules::COMBINED_RULE_PATH, &source)?;
+    let mut schemas = starlark_prelude_rule_schemas()?;
+    let common = crate::rules::common_rule_source();
+    for rule_file in crate::rules::load_rule_files(root)? {
+        schemas.extend(parse_rule_schemas(
+            &rule_file.display_path,
+            &format!("{common}\n{}", rule_file.source),
+        )?);
+    }
+    validate_unique_rule_kinds(&schemas)
+        .map_err(|message| prelude_message(crate::rules::COMBINED_RULE_PATH, &message))?;
     append_script_schema(&mut schemas)?;
     Ok(schemas)
 }
@@ -283,18 +291,14 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
 fn starlark_prelude_rule_schemas() -> Result<Vec<RuleSchema>> {
     parse_rule_schemas(
         crate::rules::BUILT_IN_RULE_PATH,
-        &prelude_schema_source(crate::rules::built_in_rule_source()),
+        crate::rules::built_in_rule_source(),
     )
 }
 
-fn prelude_schema_source(source: &str) -> String {
-    format!("RULES = []\n{source}")
-}
-
-/// Evaluate a Starlark prelude source and read its `RULES` export.
+/// Evaluate a Starlark rule source and read its exported rule symbols.
 ///
 /// Split out from [`starlark_prelude_rule_schemas`] so the error paths
-/// (parse failure, missing export, wrong types) are reachable from tests
+/// (parse failure, missing exports, wrong types) are reachable from tests
 /// without depending on the compiled-in prelude staying valid, and so they
 /// keep working if the prelude ever becomes user-configurable.
 fn parse_rule_schemas(path: &str, source: &str) -> Result<Vec<RuleSchema>> {
@@ -305,10 +309,11 @@ fn parse_rule_schemas(path: &str, source: &str) -> Result<Vec<RuleSchema>> {
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
             .map_err(|error| prelude_error(path, error))?;
-        let rules = module
-            .get("RULES")
-            .ok_or_else(|| prelude_message(path, "missing RULES export"))?;
-        rule_schemas_from_value(rules).map_err(|message| prelude_message(path, &message))
+        let rules = crate::rules::exported_rule_values(&module);
+        if rules.is_empty() {
+            return Err(prelude_message(path, "no rule symbols exported"));
+        }
+        rule_schemas_from_exports(&rules).map_err(|message| prelude_message(path, &message))
     })
 }
 
@@ -326,11 +331,12 @@ fn prelude_message(path: &str, message: &str) -> Error {
     }
 }
 
-fn rule_schemas_from_value(value: Value<'_>) -> std::result::Result<Vec<RuleSchema>, String> {
-    let schemas = list(value, "RULES")?
+fn rule_schemas_from_exports(
+    rules: &[crate::rules::RuleExport<'_>],
+) -> std::result::Result<Vec<RuleSchema>, String> {
+    let schemas = rules
         .iter()
-        .enumerate()
-        .map(|(index, rule)| rule_schema_from_value(rule, &format!("RULES[{index}]")))
+        .map(|rule| rule_schema_from_value(rule.value, rule.name))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     validate_unique_rule_kinds(&schemas)?;
     Ok(schemas)
@@ -341,7 +347,7 @@ fn validate_unique_rule_kinds(schemas: &[RuleSchema]) -> std::result::Result<(),
     for (index, schema) in schemas.iter().enumerate() {
         if let Some(first_index) = seen.insert(schema.kind.as_str(), index) {
             return Err(format!(
-                "rule kind `{}` is declared more than once (RULES[{first_index}] and RULES[{index}])",
+                "rule kind `{}` is declared more than once (rule export {first_index} and {index})",
                 schema.kind
             ));
         }
@@ -361,6 +367,7 @@ fn append_script_schema(schemas: &mut Vec<RuleSchema>) -> Result<()> {
 }
 
 fn rule_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<RuleSchema, String> {
+    let kind = crate::rules::rule_kind(value, path)?;
     let example_slugs = field_string_list(value, path, "examples")?;
     let examples = example_slugs
         .into_iter()
@@ -372,7 +379,7 @@ fn rule_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<R
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(RuleSchema {
-        kind: field_string(value, path, "kind")?,
+        kind,
         docs: field_string(value, path, "docs")?,
         attrs: field_list(value, path, "attrs")?
             .iter()
@@ -574,33 +581,41 @@ mod tests {
     use super::*;
     use crate::target::Target;
 
+    fn source_with_common(source: &str) -> String {
+        format!("{}\n{source}", crate::rules::common_rule_source())
+    }
+
     #[test]
     fn parse_rule_schemas_rejects_invalid_syntax() {
-        let err = parse_rule_schemas("test.star", "RULES = [").unwrap_err();
+        let err = parse_rule_schemas("test.star", "demo_rule = rule(").unwrap_err();
         assert!(matches!(err, Error::Eval { .. }));
     }
 
     #[test]
-    fn parse_rule_schemas_requires_rules_export() {
+    fn parse_rule_schemas_requires_rule_exports() {
         let err = parse_rule_schemas("test.star", "OTHER = []").unwrap_err();
         match err {
-            Error::Eval { message, .. } => assert!(message.contains("missing RULES export")),
+            Error::Eval { message, .. } => assert!(message.contains("no rule symbols exported")),
             other => panic!("expected Error::Eval, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_rule_schemas_requires_list_export() {
-        let err = parse_rule_schemas("test.star", "RULES = 7").unwrap_err();
+    fn parse_rule_schemas_rejects_invalid_kind_type() {
+        let source = source_with_common(r#"demo_rule = rule(kind = 7, docs = "Demo rule")"#);
+        let err = parse_rule_schemas("test.star", &source).unwrap_err();
         match err {
-            Error::Eval { message, .. } => assert!(message.contains("should be a list")),
+            Error::Eval { message, .. } => {
+                assert!(message.contains("kind should be a string or None"));
+            }
             other => panic!("expected Error::Eval, got {other:?}"),
         }
     }
 
     #[test]
     fn parse_rule_schemas_reports_missing_rule_field() {
-        let err = parse_rule_schemas("test.star", r#"RULES = [{"kind": "x"}]"#).unwrap_err();
+        let err =
+            parse_rule_schemas("test.star", r#"demo_rule = {"_once_rule": True}"#).unwrap_err();
         match err {
             Error::Eval { message, .. } => assert!(message.contains("is missing")),
             other => panic!("expected Error::Eval, got {other:?}"),
@@ -609,20 +624,8 @@ mod tests {
 
     #[test]
     fn parse_rule_schemas_accepts_minimal_valid_rule() {
-        let source = r#"
-RULES = [
-    {
-        "kind": "demo",
-        "docs": "Demo rule",
-        "attrs": [],
-        "deps": [],
-        "providers": [],
-        "capabilities": [],
-        "examples": [],
-    },
-]
-"#;
-        let schemas = parse_rule_schemas("test.star", source).unwrap();
+        let source = source_with_common(r#"demo = rule(docs = "Demo rule")"#);
+        let schemas = parse_rule_schemas("test.star", &source).unwrap();
         assert_eq!(schemas.len(), 1);
         assert_eq!(schemas[0].kind, "demo");
     }
@@ -646,18 +649,15 @@ kind = "demo_rule"
         std::fs::write(
             tmp.path().join("rules/demo.star"),
             r#"
-RULES = [
-    rule(
-        kind = "demo_rule",
-        docs = "Demo rule",
-        attrs = [],
-        deps = [],
-        providers = ["demo_provider"],
-        capabilities = [
-            capability("build", ["default"]),
-        ],
-    ),
-]
+demo_rule = rule(
+    docs = "Demo rule",
+    attrs = [],
+    deps = [],
+    providers = ["demo_provider"],
+    capabilities = [
+        capability("build", ["default"]),
+    ],
+)
 "#,
         )
         .unwrap();
@@ -683,32 +683,26 @@ RULES = [
         std::fs::write(
             tmp.path().join("rules/demo.star"),
             r#"
-RULES = [
-    rule(
-        kind = "demo_rule",
-        docs = "Duplicate",
-        attrs = [],
-        deps = [],
-        providers = [],
-        capabilities = [],
-    ),
-]
+demo_rule = rule(
+    docs = "Duplicate",
+    attrs = [],
+    deps = [],
+    providers = [],
+    capabilities = [],
+)
 "#,
         )
         .unwrap();
         std::fs::write(
             tmp.path().join("rules/other.star"),
             r#"
-RULES = [
-    rule(
-        kind = "demo_rule",
-        docs = "Duplicate",
-        attrs = [],
-        deps = [],
-        providers = [],
-        capabilities = [],
-    ),
-]
+demo_rule = rule(
+    docs = "Duplicate",
+    attrs = [],
+    deps = [],
+    providers = [],
+    capabilities = [],
+)
 "#,
         )
         .unwrap();
@@ -841,26 +835,9 @@ RULES = [
     }
 
     #[test]
-    fn prelude_schema_source_supports_additive_rule_exports() {
-        let schemas = parse_rule_schemas(
-            "test.star",
-            &prelude_schema_source(
-                r#"
-RULES = RULES + [
-    {
-        "kind": "custom_library",
-        "docs": "Custom library",
-        "attrs": [],
-        "deps": [],
-        "providers": [],
-        "capabilities": [],
-        "examples": [],
-    },
-]
-"#,
-            ),
-        )
-        .unwrap();
+    fn parse_rule_schemas_derives_kind_from_exported_symbol() {
+        let source = source_with_common(r#"custom_library = rule(docs = "Custom library")"#);
+        let schemas = parse_rule_schemas("test.star", &source).unwrap();
 
         assert_eq!(schemas[0].kind, "custom_library");
     }

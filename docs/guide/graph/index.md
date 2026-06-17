@@ -69,9 +69,11 @@ Projects can add checked-in Starlark rule files from the root
 paths = ["rules/*.star"]
 ```
 
-Each rule file assigns `RULES = [...]` using the same `rule`, `attr`,
-`dep`, and `capability` helpers as the built-in prelude. Rule paths are
-resolved relative to the project root, loaded in sorted order, and
+Each rule file exports public rule symbols using the same `rule`,
+`attr`, `dep`, and `capability` helpers as the built-in prelude. Public
+symbols are module globals that do not start with `_`, and the symbol
+name becomes the rule kind unless `kind` is set explicitly. Rule paths
+are resolved relative to the project root, loaded in sorted order, and
 included in `once query rules`, `once query schema`, validation, MCP
 schema tools, and graph analysis.
 

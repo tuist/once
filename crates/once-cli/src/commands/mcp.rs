@@ -1095,20 +1095,17 @@ mod tests {
         std::fs::write(
             root.join("rules/demo.star"),
             r#"
-RULES = [
-    rule(
-        kind = "demo_rule",
-        docs = "Demo rule",
-        attrs = [
-            attr("message", "string", required = True, docs = "Message to emit"),
-        ],
-        deps = [],
-        providers = ["demo_provider"],
-        capabilities = [
-            capability("build", ["default"]),
-        ],
-    ),
-]
+demo_rule = rule(
+    docs = "Demo rule",
+    attrs = [
+        attr("message", "string", required = True, docs = "Message to emit"),
+    ],
+    deps = [],
+    providers = ["demo_provider"],
+    capabilities = [
+        capability("build", ["default"]),
+    ],
+)
 "#,
         )
         .unwrap();

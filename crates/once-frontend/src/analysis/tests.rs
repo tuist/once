@@ -419,8 +419,7 @@ fn analyze_target_returns_null_provider_for_rules_without_impl() {
     // and no actions so the CLI falls back to its own runner.
     let tmp = TempDir::new().unwrap();
     let result = analyze_target(&target("script"), tmp.path(), &[]);
-    // `script` does not appear in the Starlark prelude's RULES
-    // list and is supplied by the CLI's script-runner path; the
+    // `script` is supplied by the CLI's script-runner path; the
     // frontend should error with the same "no rule found" surface
     // it uses for unknown kinds. Confirm that here so the
     // "no impl available" path is exercised end-to-end.
@@ -444,9 +443,7 @@ fn analyze_target_errors_on_unknown_rule_kind() {
 fn rule_has_impl_reads_custom_rule_impls() {
     let engine = AnalysisEngine::from_source(
         r#"
-RULES = [
-    {"kind": "custom_library", "impl": lambda ctx: None},
-]
+custom_library = {"_once_rule": True, "impl": lambda ctx: None}
 "#,
     )
     .unwrap();
@@ -456,7 +453,7 @@ RULES = [
 
 #[test]
 fn analysis_engine_debug_omits_rule_source() {
-    let engine = AnalysisEngine::from_source("RULES = []\n# SECRET_RULE_SOURCE").unwrap();
+    let engine = AnalysisEngine::from_source("# SECRET_RULE_SOURCE").unwrap();
 
     let rendered = format!("{engine:?}");
 
@@ -485,19 +482,16 @@ def _demo_impl(ctx):
     )
     return {"out": out}
 
-RULES = [
-    rule(
-        kind = "demo_rule",
-        docs = "Demo",
-        attrs = [],
-        deps = [],
-        providers = ["demo_provider"],
-        capabilities = [
-            capability("build", ["default"]),
-        ],
-        impl = _demo_impl,
-    ),
-]
+demo_rule = rule(
+    docs = "Demo",
+    attrs = [],
+    deps = [],
+    providers = ["demo_provider"],
+    capabilities = [
+        capability("build", ["default"]),
+    ],
+    impl = _demo_impl,
+)
 "#,
     )
     .unwrap();

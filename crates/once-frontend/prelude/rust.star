@@ -1418,75 +1418,72 @@ _RUST_COMMON_ATTRS = [
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
 ]
 
-RULES = RULES + [
-    rule(
-        kind = "cargo_dependencies",
-        docs = "Cacheable Cargo dependency set consumed by Rust targets. The rule reads Cargo.toml and Cargo.lock through `cargo metadata`, compiles resolved external crates as Once actions, and exposes them as one graph dependency.",
-        attrs = [
-            attr("manifest", "string", default = "Cargo.toml", docs = "Workspace-relative Cargo manifest path passed to `cargo metadata --manifest-path`.", configurable = False),
-            attr("lockfile", "string", default = "Cargo.lock", docs = "Workspace-relative Cargo lockfile path included in the dependency action key.", configurable = False),
-            attr("vendor_dir", "string", default = "third_party/rust/vendor", docs = "Workspace-relative directory containing vendored crate sources.", configurable = False),
-            attr("packages", "list<string>", default = "[]", docs = "Optional package names to expose from this dependency set. Defaults to all resolved external packages.", configurable = True),
-            attr("features", "list<string>", default = "[]", docs = "Cargo features passed to `cargo metadata --features`.", configurable = True),
-            attr("all_features", "bool", default = "false", docs = "Pass `--all-features` to Cargo metadata.", configurable = True),
-            attr("no_default_features", "bool", default = "false", docs = "Pass `--no-default-features` to Cargo metadata.", configurable = True),
-            attr("target", "string", docs = "Rust target triple passed to Cargo as `--filter-platform`. Defaults to the host target.", configurable = False),
-        ],
-        providers = ["rust_dependency_set"],
-        capabilities = [capability("build", [])],
-        examples = ["rust-binary-with-crate"],
-        impl = _cargo_dependencies_impl,
-    ),
-    rule(
-        kind = "rust_library",
-        docs = "Rust rlib compiled with rustc. Direct deps are passed through `--extern`; transitive rlibs are exposed as dependency search paths.",
-        attrs = _RUST_COMMON_ATTRS + [
-            attr("crate_type", "string", default = "rlib", docs = "Rust crate type for the library output. Defaults to `rlib`; final artifacts may use `staticlib`, `cdylib`, or `dylib`.", configurable = False),
-        ],
-        deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
-        providers = ["rust_crate"],
-        capabilities = [capability("build", ["library"])],
-        examples = ["rust-library-minimal"],
-        impl = _rust_library_impl,
-    ),
-    rule(
-        kind = "rust_binary",
-        docs = "Rust executable compiled with rustc from a main crate and Rust crate deps.",
-        attrs = _RUST_COMMON_ATTRS,
-        deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
-        providers = ["rust_binary"],
-        capabilities = [capability("build", ["binary"])],
-        examples = ["rust-binary-with-crate"],
-        impl = _rust_binary_impl,
-    ),
-    rule(
-        kind = "rust_crate",
-        docs = "Resolved third-party Rust crate lowered from Cargo package metadata into a normal Once Rust library target.",
-        attrs = _RUST_COMMON_ATTRS + [
-            attr("package_name", "string", required = True, docs = "Original Cargo package name."),
-            attr("version", "string", required = True, docs = "Resolved Cargo package version."),
-            attr("source", "string", docs = "Cargo source identifier, such as registry+https://github.com/rust-lang/crates.io-index.", configurable = False),
-            attr("checksum", "string", docs = "Cargo.lock checksum for registry packages.", configurable = False),
-        ],
-        deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Resolved Cargo package dependencies.")],
-        providers = ["rust_crate"],
-        capabilities = [capability("build", ["rlib"])],
-        examples = ["rust-crate-minimal"],
-        impl = _rust_crate_impl,
-    ),
-    rule(
-        kind = "rust_proc_macro",
-        docs = "Rust procedural macro compiled for the execution host and consumed through --extern by Rust targets.",
-        attrs = _RUST_COMMON_ATTRS + [
-            attr("package_name", "string", docs = "Original Cargo package name when the target was lowered from Cargo metadata."),
-            attr("version", "string", docs = "Resolved Cargo package version when the target was lowered from Cargo metadata."),
-            attr("source", "string", docs = "Cargo source identifier, such as registry+https://github.com/rust-lang/crates.io-index.", configurable = False),
-            attr("checksum", "string", docs = "Cargo.lock checksum for registry packages.", configurable = False),
-        ],
-        deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed by the procedural macro.")],
-        providers = ["rust_proc_macro"],
-        capabilities = [capability("build", ["proc_macro"])],
-        examples = ["rust-proc-macro-minimal"],
-        impl = _rust_proc_macro_impl,
-    ),
-]
+cargo_dependencies = rule(
+    docs = "Cacheable Cargo dependency set consumed by Rust targets. The rule reads Cargo.toml and Cargo.lock through `cargo metadata`, compiles resolved external crates as Once actions, and exposes them as one graph dependency.",
+    attrs = [
+        attr("manifest", "string", default = "Cargo.toml", docs = "Workspace-relative Cargo manifest path passed to `cargo metadata --manifest-path`.", configurable = False),
+        attr("lockfile", "string", default = "Cargo.lock", docs = "Workspace-relative Cargo lockfile path included in the dependency action key.", configurable = False),
+        attr("vendor_dir", "string", default = "third_party/rust/vendor", docs = "Workspace-relative directory containing vendored crate sources.", configurable = False),
+        attr("packages", "list<string>", default = "[]", docs = "Optional package names to expose from this dependency set. Defaults to all resolved external packages.", configurable = True),
+        attr("features", "list<string>", default = "[]", docs = "Cargo features passed to `cargo metadata --features`.", configurable = True),
+        attr("all_features", "bool", default = "false", docs = "Pass `--all-features` to Cargo metadata.", configurable = True),
+        attr("no_default_features", "bool", default = "false", docs = "Pass `--no-default-features` to Cargo metadata.", configurable = True),
+        attr("target", "string", docs = "Rust target triple passed to Cargo as `--filter-platform`. Defaults to the host target.", configurable = False),
+    ],
+    providers = ["rust_dependency_set"],
+    capabilities = [capability("build", [])],
+    examples = ["rust-binary-with-crate"],
+    impl = _cargo_dependencies_impl,
+)
+
+rust_library = rule(
+    docs = "Rust rlib compiled with rustc. Direct deps are passed through `--extern`; transitive rlibs are exposed as dependency search paths.",
+    attrs = _RUST_COMMON_ATTRS + [
+        attr("crate_type", "string", default = "rlib", docs = "Rust crate type for the library output. Defaults to `rlib`; final artifacts may use `staticlib`, `cdylib`, or `dylib`.", configurable = False),
+    ],
+    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
+    providers = ["rust_crate"],
+    capabilities = [capability("build", ["library"])],
+    examples = ["rust-library-minimal"],
+    impl = _rust_library_impl,
+)
+
+rust_binary = rule(
+    docs = "Rust executable compiled with rustc from a main crate and Rust crate deps.",
+    attrs = _RUST_COMMON_ATTRS,
+    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
+    providers = ["rust_binary"],
+    capabilities = [capability("build", ["binary"])],
+    examples = ["rust-binary-with-crate"],
+    impl = _rust_binary_impl,
+)
+
+rust_crate = rule(
+    docs = "Resolved third-party Rust crate lowered from Cargo package metadata into a normal Once Rust library target.",
+    attrs = _RUST_COMMON_ATTRS + [
+        attr("package_name", "string", required = True, docs = "Original Cargo package name."),
+        attr("version", "string", required = True, docs = "Resolved Cargo package version."),
+        attr("source", "string", docs = "Cargo source identifier, such as registry+https://github.com/rust-lang/crates.io-index.", configurable = False),
+        attr("checksum", "string", docs = "Cargo.lock checksum for registry packages.", configurable = False),
+    ],
+    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Resolved Cargo package dependencies.")],
+    providers = ["rust_crate"],
+    capabilities = [capability("build", ["rlib"])],
+    examples = ["rust-crate-minimal"],
+    impl = _rust_crate_impl,
+)
+
+rust_proc_macro = rule(
+    docs = "Rust procedural macro compiled for the execution host and consumed through --extern by Rust targets.",
+    attrs = _RUST_COMMON_ATTRS + [
+        attr("package_name", "string", docs = "Original Cargo package name when the target was lowered from Cargo metadata."),
+        attr("version", "string", docs = "Resolved Cargo package version when the target was lowered from Cargo metadata."),
+        attr("source", "string", docs = "Cargo source identifier, such as registry+https://github.com/rust-lang/crates.io-index.", configurable = False),
+        attr("checksum", "string", docs = "Cargo.lock checksum for registry packages.", configurable = False),
+    ],
+    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed by the procedural macro.")],
+    providers = ["rust_proc_macro"],
+    capabilities = [capability("build", ["proc_macro"])],
+    examples = ["rust-proc-macro-minimal"],
+    impl = _rust_proc_macro_impl,
+)

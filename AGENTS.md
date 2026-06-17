@@ -81,8 +81,9 @@ Every new toolchain rule should preserve these invariants:
 - The rule ships at least one runnable starter example as a real
   directory under `crates/once-frontend/prelude/examples/<slug>/`
   (manifest plus sources plus a `_meta.toml` with `name` and
-  `use_when`). The Starlark `rule(examples = [...])` declaration
-  references these by slug; inline TOML strings are not allowed.
+  `use_when`). The exported Starlark rule symbol references these by
+  slug through `rule(examples = [...])`; inline TOML strings are not
+  allowed.
 - Every example loads under the examples integration test
   (`crates/once-frontend/tests/examples.rs`) without emitting any
   diagnostics. If the rule has an `impl`, the example must build.

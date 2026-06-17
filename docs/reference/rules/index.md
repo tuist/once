@@ -17,16 +17,10 @@ Project rules are listed from the root manifest:
 paths = ["rules/*.star"]
 ```
 
-Each matched file must assign `RULES` to a list of `rule(...)` values.
-Once combines project rules with the built-in prelude before graph
-loading and analysis.
-
-`RULES` is a Once-specific registry. Bazel and Buck2 commonly expose
-named rule symbols from Starlark modules, then load or inject those
-symbols into build files. Once uses an explicit registry because the
-CLI and MCP surfaces need deterministic rule discovery, schema
-extraction, duplicate-kind validation, and starter example lookup
-without teaching the Rust side about individual rule families.
+Each matched file exports one or more public rule symbols. Public
+symbols are module globals that do not start with `_`. The exported
+symbol name becomes the target kind unless the rule explicitly sets
+`kind`.
 
 ```python
 def _copy_impl(ctx):
@@ -43,16 +37,13 @@ def _copy_impl(ctx):
         "copied_file": out,
     }
 
-RULES = [
-    rule(
-        kind = "copy_file",
-        docs = "Copy one declared source file into the target output directory.",
-        attrs = [],
-        providers = ["copied_file"],
-        capabilities = [capability("build", ["default"])],
-        impl = _copy_impl,
-    ),
-]
+copy_file = rule(
+    docs = "Copy one declared source file into the target output directory.",
+    attrs = [],
+    providers = ["copied_file"],
+    capabilities = [capability("build", ["default"])],
+    impl = _copy_impl,
+)
 ```
 
 ## Rule Schema
@@ -60,7 +51,8 @@ RULES = [
 `rule(...)` declares the public contract exposed by `once query schema`
 and by MCP rule discovery.
 
-- `kind`: target kind used in `once.toml`.
+- `kind`: optional override for the target kind used in `once.toml`.
+  When omitted, Once uses the exported symbol name.
 - `docs`: short human-readable rule description.
 - `attrs`: `attr(...)` declarations. Supported types include `string`,
   `bool`, `int`, `float`, `list<string>`, `map<string, string>`,

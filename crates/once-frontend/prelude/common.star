@@ -22,8 +22,9 @@ def capability(name, output_groups, requires_outputs = []):
         "requires_outputs": requires_outputs,
     }
 
-def rule(kind, docs, attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None):
+def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None):
     return {
+        "_once_rule": True,
         "kind": kind,
         "docs": docs,
         "attrs": attrs,

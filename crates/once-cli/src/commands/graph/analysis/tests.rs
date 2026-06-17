@@ -3,8 +3,8 @@ use super::*;
 use once_frontend::{AttrValue, Capability, TargetLabel};
 
 static GRAPH_TEST_PRELUDE: &str = r#"
-def rule(kind, impl = None):
-    return {"kind": kind, "impl": impl}
+def rule(kind = None, impl = None):
+    return {"_once_rule": True, "kind": kind, "impl": impl}
 
 def _impl(ctx):
     out = declare_output(ctx["label"]["name"] + "-" + ctx["capability"] + ".txt")
@@ -40,10 +40,8 @@ def _impl(ctx):
         )
     return {"target": ctx["label"]["name"], "out": out}
 
-RULES = [
-    rule("test_rule", impl = _impl),
-    rule("metadata_rule"),
-]
+test_rule = rule(impl = _impl)
+metadata_rule = rule()
 "#;
 
 fn test_target(name: &str, deps: &[&str], script: impl Into<String>) -> GraphTarget {

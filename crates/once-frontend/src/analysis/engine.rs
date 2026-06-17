@@ -3,14 +3,13 @@ use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use starlark::environment::Module;
 use starlark::eval::Evaluator;
 use starlark::syntax::{AstModule, Dialect};
 use starlark::values::dict::{AllocDict, DictRef};
-use starlark::values::list::ListRef;
 use starlark::values::Value;
 
 use super::globals::globals_for_prelude;
@@ -208,21 +207,16 @@ fn parse_rule_impls(path: &str, source: &str) -> Result<RuleImpls> {
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
             .map_err(|error| anyhow!("prelude eval failed: {error:?}"))?;
-        let rules_value = module
-            .get("RULES")
-            .context("prelude is missing RULES export")?;
-        let rules = ListRef::from_value(rules_value).context("RULES is not a list")?;
         let mut by_kind = BTreeMap::new();
-        for rule in rules.iter() {
-            let dict =
-                DictRef::from_value(rule).ok_or_else(|| anyhow!("RULES entry is not a dict"))?;
-            let Some(rule_kind) = dict.get_str("kind").and_then(Value::unpack_str) else {
-                continue;
-            };
+        for rule in crate::rules::exported_rule_values(&module) {
+            let dict = DictRef::from_value(rule.value)
+                .ok_or_else(|| anyhow!("rule export `{}` is not a dict", rule.name))?;
+            let rule_kind = crate::rules::rule_kind(rule.value, rule.name)
+                .map_err(|message| anyhow!(message))?;
             let impl_value = dict.get_str("impl");
             if by_kind
                 .insert(
-                    rule_kind.to_string(),
+                    rule_kind.clone(),
                     impl_value.is_some_and(|value| !value.is_none()),
                 )
                 .is_some()
@@ -251,11 +245,8 @@ fn analyze_in_starlark(
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
             .map_err(|error| anyhow!("prelude eval failed: {error:?}"))?;
-        let rules_value = module
-            .get("RULES")
-            .context("prelude is missing RULES export")?;
-        let rules = ListRef::from_value(rules_value).context("RULES is not a list")?;
-        let impl_value = find_impl_for_kind(rules, &target.kind)?;
+        let rules = crate::rules::exported_rule_values(&module);
+        let impl_value = find_impl_for_kind(&rules, &target.kind)?;
         let Some(impl_value) = impl_value else {
             return Ok(JsonValue::Null);
         };
@@ -267,11 +258,16 @@ fn analyze_in_starlark(
     })
 }
 
-fn find_impl_for_kind<'v>(rules: &ListRef<'v>, kind: &str) -> Result<Option<Value<'v>>> {
-    for rule in rules.iter() {
-        let dict = DictRef::from_value(rule).ok_or_else(|| anyhow!("RULES entry is not a dict"))?;
-        let rule_kind = dict.get_str("kind").and_then(Value::unpack_str);
-        if rule_kind == Some(kind) {
+fn find_impl_for_kind<'v>(
+    rules: &[crate::rules::RuleExport<'v>],
+    kind: &str,
+) -> Result<Option<Value<'v>>> {
+    for rule in rules {
+        let dict = DictRef::from_value(rule.value)
+            .ok_or_else(|| anyhow!("rule export `{}` is not a dict", rule.name))?;
+        let rule_kind =
+            crate::rules::rule_kind(rule.value, rule.name).map_err(|message| anyhow!(message))?;
+        if rule_kind == kind {
             let impl_value = dict
                 .get_str("impl")
                 .ok_or_else(|| anyhow!("rule `{kind}` is missing `impl` field"))?;
