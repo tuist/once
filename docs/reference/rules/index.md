@@ -1,4 +1,4 @@
-# Starlark Rules
+# Rules
 
 Once rules are Starlark records that describe a target schema and,
 optionally, an implementation function that lowers one target into
@@ -20,6 +20,13 @@ paths = ["rules/*.star"]
 Each matched file must assign `RULES` to a list of `rule(...)` values.
 Once combines project rules with the built-in prelude before graph
 loading and analysis.
+
+`RULES` is a Once-specific registry. Bazel and Buck2 commonly expose
+named rule symbols from Starlark modules, then load or inject those
+symbols into build files. Once uses an explicit registry because the
+CLI and MCP surfaces need deterministic rule discovery, schema
+extraction, duplicate-kind validation, and starter example lookup
+without teaching the Rust side about individual rule families.
 
 ```python
 def _copy_impl(ctx):
