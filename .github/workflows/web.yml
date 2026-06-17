@@ -169,3 +169,4 @@ jobs:
 
       - run: mise exec -- helm lint infra/helm/once
       - run: mise exec -- helm template once infra/helm/once --namespace once-production >/tmp/once-helm-rendered.yaml
+      - run: mise exec -- bash infra/helm/once/tests/render-conditionals.sh
