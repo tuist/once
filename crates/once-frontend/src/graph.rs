@@ -262,7 +262,7 @@ fn graph_target_from_schema(target: &Target, schemas: &[TargetKindSchema]) -> Gr
         Vec::new()
     } else {
         vec![Diagnostic {
-            code: "unknown_target_kind".to_string(),
+            code: "unknown_rule_kind".to_string(),
             message: format!("target kind `{}` has no target kind schema", target.kind),
             target: Some(target.id()),
             attribute: None,
@@ -764,6 +764,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_target_kind_schemas_accepts_legacy_rule_alias() {
+        let source = source_with_common(r#"demo = rule(docs = "Demo kind")"#);
+        let schemas = parse_target_kind_schemas("test.star", &source).unwrap();
+        assert_eq!(schemas.len(), 1);
+        assert_eq!(schemas[0].kind, "demo");
+    }
+
+    #[test]
     fn workspace_module_paths_extend_graph_schemas() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("modules")).unwrap();
@@ -947,7 +955,7 @@ demo_kind = target_kind(
         assert!(thing.capabilities.is_empty());
         assert!(thing.providers.is_empty());
         assert_eq!(thing.diagnostics.len(), 1);
-        assert_eq!(thing.diagnostics[0].code, "unknown_target_kind");
+        assert_eq!(thing.diagnostics[0].code, "unknown_rule_kind");
         assert!(thing.diagnostics[0]
             .message
             .contains("`mystery_kind` has no target kind schema"));

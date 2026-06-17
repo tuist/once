@@ -161,7 +161,7 @@ impl Server {
             "once_apply_edit" => self.tool_apply_edit(&call.arguments),
             "once_query_schema" => tool_query_schema(&self.workspace, &call.arguments),
             "once_query_example" => tool_query_example(&self.workspace, &call.arguments),
-            "once_list_target_kinds" => tool_list_target_kinds(&self.workspace),
+            "once_list_target_kinds" | "once_list_rules" => tool_list_target_kinds(&self.workspace),
             "once_validate_target" => tool_validate_target(&self.workspace, &call.arguments),
             other => Err(anyhow::anyhow!("unknown tool `{other}`")),
         };
@@ -1220,6 +1220,23 @@ demo_kind = target_kind(
         assert!(names.contains(&"once_runtime_status".to_string()));
         assert!(names.contains(&"once_runtime_logs".to_string()));
         assert!(names.contains(&"once_stop_runtime".to_string()));
+    }
+
+    #[test]
+    fn tools_call_accepts_legacy_list_rules_alias() {
+        let tmp = TempDir::new().unwrap();
+        let response = server(tmp.path().to_path_buf()).dispatch(request(
+            "tools/call",
+            json!({
+                "name": "once_list_rules",
+                "arguments": {}
+            }),
+        ));
+
+        assert!(response.error.is_none());
+        let result = response.result.expect("result");
+        let text = result["content"][0]["text"].as_str().expect("text content");
+        assert!(text.contains("apple_library"));
     }
 
     #[test]

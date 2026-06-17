@@ -17,6 +17,7 @@ struct Manifest {
     infrastructure: InfrastructureToml,
     cache_provider: Option<CacheProviderToml>,
     modules: Option<ModulesToml>,
+    rules: Option<ModulesToml>,
     target: Vec<TargetToml>,
 }
 
@@ -57,10 +58,10 @@ pub(crate) fn load_toml_with(
         path: display_name.to_string(),
         message: source.to_string(),
     })?;
-    if manifest.modules.is_some() && !package.is_empty() {
+    if (manifest.modules.is_some() || manifest.rules.is_some()) && !package.is_empty() {
         return Err(Error::Eval {
             path: display_name.to_string(),
-            message: "[modules] is only loaded from the root once.toml".to_string(),
+            message: "module paths are only loaded from the root once.toml".to_string(),
         });
     }
     manifest
@@ -92,9 +93,14 @@ pub(crate) fn load_module_paths_toml_str(path: &str, src: &str) -> Result<Vec<St
         path: path.to_string(),
         message: source.to_string(),
     })?;
-    Ok(manifest
-        .modules
-        .map_or_else(Vec::new, |modules| modules.paths))
+    match (manifest.modules, manifest.rules) {
+        (Some(_), Some(_)) => Err(Error::Eval {
+            path: path.to_string(),
+            message: "use either [modules] or [rules], not both".to_string(),
+        }),
+        (Some(modules), None) | (None, Some(modules)) => Ok(modules.paths),
+        (None, None) => Ok(Vec::new()),
+    }
 }
 
 pub(crate) fn load_workspace_toml_str(path: &str, src: &str) -> Result<WorkspaceToml> {
@@ -305,12 +311,59 @@ paths = ["modules/*.star"]
     }
 
     #[test]
+    fn loads_legacy_root_rule_paths() {
+        let paths = load_module_paths_toml_str(
+            "once.toml",
+            r#"
+[rules]
+paths = ["rules/*.star"]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(paths, vec!["rules/*.star"]);
+    }
+
+    #[test]
+    fn rejects_root_module_and_rule_paths_together() {
+        let err = load_module_paths_toml_str(
+            "once.toml",
+            r#"
+[modules]
+paths = ["modules/*.star"]
+
+[rules]
+paths = ["rules/*.star"]
+"#,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("not both"));
+    }
+
+    #[test]
     fn rejects_package_module_paths() {
         let err = load_toml_with(
             "apps/once.toml",
             r#"
 [modules]
 paths = ["modules/*.star"]
+"#,
+            Path::new("."),
+            "apps",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("root once.toml"));
+    }
+
+    #[test]
+    fn rejects_package_legacy_rule_paths() {
+        let err = load_toml_with(
+            "apps/once.toml",
+            r#"
+[rules]
+paths = ["rules/*.star"]
 "#,
             Path::new("."),
             "apps",

@@ -376,7 +376,9 @@ fn compose_input_digest(
     dep_action_digests: &[(String, Digest)],
 ) -> Result<Digest> {
     let mut builder = InputDigestBuilder::new(b"once.declared_action.input.v1\0");
-    builder.push_keyed(b"modules", &module_source_digest);
+    // Keep the legacy namespace so terminology-only renames do not
+    // invalidate existing declared-action cache entries.
+    builder.push_keyed(b"rules", &module_source_digest);
     if let Some(identity) = &declared.toolchain_identity {
         builder.push_bytes(identity.as_bytes());
     }

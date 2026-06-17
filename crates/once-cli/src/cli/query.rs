@@ -32,6 +32,7 @@ pub enum QueryCmd {
     },
 
     /// List every target kind with its one-line docs and example slugs.
+    #[command(alias = "rules")]
     TargetKinds,
 
     /// Resolve a single target's full record (kind, srcs, deps, attrs, capabilities).

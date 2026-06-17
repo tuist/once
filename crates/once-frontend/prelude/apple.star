@@ -535,6 +535,7 @@ def _shellspec_test_impl(ctx):
     provider = {
         "label_id": ctx["label"]["id"],
         "target_kind": "shellspec_test",
+        "rule_kind": "shellspec_test",
         "affected_inputs": inputs,
         "test_info": {
             "schema": "once.test_info.v1",

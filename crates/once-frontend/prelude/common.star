@@ -44,6 +44,9 @@ def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], c
         "impl": impl,
     }
 
+def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None):
+    return target_kind(kind, docs, attrs, deps, providers, capabilities, examples, impl)
+
 def _ends_with(value, suffix):
     if len(value) < len(suffix):
         return False
