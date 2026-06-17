@@ -495,20 +495,23 @@ fn tool_query_schema(workspace: &Path, args: &Value) -> Result<Value> {
 }
 
 fn tool_query_example(workspace: &Path, args: &Value) -> Result<Value> {
-    let kind = args
-        .get("kind")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `kind` argument"))?;
-    let slug = args
-        .get("slug")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `slug` argument"))?;
+    let kind = required_string_arg(args, "kind")?;
+    let slug = required_string_arg(args, "slug")?;
     let schema = once_frontend::rule_schemas_for_workspace(workspace)?
         .into_iter()
         .find(|schema| schema.kind == kind)
         .with_context(|| format!("no rule schema matches `{kind}`"))?;
     let example = once_frontend::load_rule_example(&schema, slug)?;
     Ok(serde_json::to_value(example)?)
+}
+
+fn required_string_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str> {
+    let Some(value) = args.get(name) else {
+        return Err(anyhow::anyhow!("missing `{name}` argument"));
+    };
+    value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("`{name}` must be a string"))
 }
 
 fn tool_list_rules(workspace: &Path) -> Result<Value> {
@@ -1420,6 +1423,24 @@ srcs = ["other_spec.sh"]
             .iter()
             .any(|f| f["path"] == "apps/Hello/once.toml"
                 && !f["contents"].as_str().unwrap().is_empty()));
+    }
+
+    #[test]
+    fn query_example_reports_non_string_arguments() {
+        let tmp = TempDir::new().unwrap();
+        let kind_err = tool_query_example(
+            tmp.path(),
+            &json!({ "kind": 7, "slug": "apple-library-minimal" }),
+        )
+        .unwrap_err();
+        assert!(kind_err.to_string().contains("`kind` must be a string"));
+
+        let slug_err = tool_query_example(
+            tmp.path(),
+            &json!({ "kind": "apple_library", "slug": false }),
+        )
+        .unwrap_err();
+        assert!(slug_err.to_string().contains("`slug` must be a string"));
     }
 
     #[test]

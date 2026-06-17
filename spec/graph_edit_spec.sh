@@ -1,10 +1,10 @@
 #shellcheck shell=bash
 # End-to-end specs for the agent-facing graph discovery and editing
-# CLI surface: `once query rules`, `once query target`,
-# `once query validate-target`, and `once edit apply`. These commands
-# mirror the MCP tool surface; the MCP tests cover the protocol layer,
-# these specs pin the CLI contract (exit codes, --format handling,
-# stdin and --file input).
+# CLI surface: `once query rules`, `once query example`,
+# `once query target`, `once query validate-target`, and
+# `once edit apply`. These commands mirror the MCP tool surface; the
+# MCP tests cover the protocol layer, these specs pin the CLI contract
+# (exit codes, --format handling, stdin and --file input).
 
 seed_custom_rule_workspace() {
   mkdir -p "$WORKSPACE/rules"
@@ -46,6 +46,26 @@ Describe 'once query rules'
     The stdout should include '"kind":"apple_library"'
     The stdout should include '"slug":"apple-library-minimal"'
     The stdout should include '"use_when"'
+  End
+End
+
+Describe 'once query example'
+  It 'materializes a starter example as JSON'
+    When call "$ONCE_BIN" --format json query example apple_library apple-library-minimal
+    The status should be success
+    The stdout should include '"slug":"apple-library-minimal"'
+    The stdout should include '"path":"apps/Hello/once.toml"'
+    The stdout should include '"contents":"[[target]]'
+  End
+
+  It 'materializes a starter example through MCP'
+    mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_query_example","arguments":{"kind":"apple_library","slug":"apple-library-minimal"}}}'
+
+    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp' sh "$mcp_request" "$ONCE_BIN" "$REPO_ROOT"
+    The status should be success
+    The stdout should include 'apple-library-minimal'
+    The stdout should include 'apps/Hello/once.toml'
+    The stdout should include 'Hello.swift'
   End
 End
 
