@@ -10,7 +10,7 @@ once query [OPTIONS] [QUERY] [SUBCOMMAND]
 
 ## Description
 
-Inspectable-first surface for humans and agents. `query targets` lists every declared target id with its target kind and capabilities; `query capabilities` shows what a specific target exposes (`build`, `run`, `test`); `query schema` returns the typed attribute and provider shape for a target kind; and `query example` materializes a chosen starter. A quoted `MATCH ... RETURN ...` expression can explore the graph through a read-only Cypher-like pattern. All query surfaces respect `--format json` so consumers can plan against the graph without scraping prose.
+Inspectable-first surface for humans and agents. `query targets` lists every declared target id with its target kind and capabilities; `query capabilities` shows what a specific target exposes (`build`, `run`, `test`); `query schema` returns the typed attribute and provider shape for a target kind; and `query example` materializes a chosen starter. A quoted `MATCH ... RETURN ...` expression can explore the graph through a read-only Cypher-like pattern. All query surfaces respect `--format json` and `--format toon` so consumers can plan against the graph without scraping prose.
 
 ## Arguments
 
