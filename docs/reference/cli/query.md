@@ -5,12 +5,29 @@ Query the typed build graph
 ## Synopsis
 
 ```text
-once query [OPTIONS] <SUBCOMMAND>
+once query [OPTIONS] [QUERY] [SUBCOMMAND]
 ```
 
 ## Description
 
-Inspectable-first surface for humans and agents. `query targets` lists every declared target id with its target kind and capabilities; `query capabilities` shows what a specific target exposes (`build`, `run`, `test`); `query schema` returns the typed attribute and provider shape for a target kind; and `query example` materializes a chosen starter. All query surfaces respect `--format json` so consumers can plan against the graph without scraping prose.
+Inspectable-first surface for humans and agents. `query targets` lists every declared target id with its target kind and capabilities; `query capabilities` shows what a specific target exposes (`build`, `run`, `test`); `query schema` returns the typed attribute and provider shape for a target kind; and `query example` materializes a chosen starter. A quoted `MATCH ... RETURN ...` expression can explore the graph through a read-only Cypher-like pattern. All query surfaces respect `--format json` so consumers can plan against the graph without scraping prose.
+
+## Arguments
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `QUERY` | no | Read-only Cypher-like graph query expression |
+
+## Query Expressions
+
+`once query '<QUERY>'` accepts a read-only subset of Cypher backed by the Cypher tree-sitter grammar. The first supported shape is a single `MATCH` pattern with optional `WHERE` equality predicates and explicit `RETURN` projections.
+
+```sh
+once query 'MATCH (app:Target {id: "apps/ios/App"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
+once query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id'
+```
+
+Supported labels are `Target`, `Capability`, and `Provider`. Supported relationships are `DEPENDS_ON`, `EXPOSES`, and `EMITS`. The `*` suffix on a relationship performs transitive traversal, for example `[:DEPENDS_ON*]`.
 
 ## Options
 

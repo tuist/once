@@ -113,6 +113,66 @@ EOF
   End
 End
 
+Describe 'once query expression'
+  BeforeEach 'setup_workspace'
+  AfterEach 'cleanup_workspace'
+
+  seed_query_expression_workspace() {
+    mkdir -p "$WORKSPACE/apps/Hello"
+    cat > "$WORKSPACE/apps/Hello/once.toml" <<'EOF'
+[[target]]
+name = "Core"
+kind = "apple_library"
+
+[target.attrs]
+platform = "ios"
+
+[[target]]
+name = "DesignSystem"
+kind = "apple_framework"
+deps = ["./Core"]
+
+[target.attrs]
+platform = "ios"
+bundle_id = "dev.once.DesignSystem"
+
+[[target]]
+name = "App"
+kind = "apple_application"
+deps = ["./DesignSystem"]
+
+[target.attrs]
+platform = "ios"
+bundle_id = "dev.once.App"
+
+[[target]]
+name = "AppTests"
+kind = "apple_test_bundle"
+deps = ["./Core"]
+
+[target.attrs]
+platform = "ios"
+EOF
+  }
+
+  It 'evaluates a transitive dependency query'
+    seed_query_expression_workspace
+    When call once query 'MATCH (app:Target {id: "apps/Hello/App"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
+    The status should be success
+    The stdout should include 'dep.id | dep.kind'
+    The stdout should include 'apps/Hello/DesignSystem | apple_framework'
+    The stdout should include 'apps/Hello/Core | apple_library'
+  End
+
+  It 'emits JSON rows for capability queries'
+    seed_query_expression_workspace
+    When call once --format json query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id AS target'
+    The status should be success
+    The stdout should include '"columns":["target"]'
+    The stdout should include '"apps/Hello/AppTests"'
+  End
+End
+
 Describe 'once query target'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'

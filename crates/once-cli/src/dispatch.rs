@@ -111,7 +111,9 @@ async fn run_command(
             Box::pin(commands::graph::test(workspace, &cache, output, &target)).await
         }
         Cmd::Toolchain { cmd } => run_toolchain_command(workspace, output, cmd).await,
-        Cmd::Query { cmd } => run_query_command(workspace, output, cmd).await,
+        Cmd::Query { expression, cmd } => {
+            run_query_command(workspace, output, expression.as_deref(), cmd).await
+        }
         Cmd::Edit { cmd } => run_edit_command(workspace, output, cmd).await,
         Cmd::Runtime { cmd } => run_runtime_command(workspace, output, cmd).await,
         Cmd::Mcp {
@@ -145,6 +147,7 @@ async fn run_toolchain_command(
 async fn run_query_command(
     workspace: &Path,
     output: Output,
+    expression: Option<&str>,
     command: Option<cli::QueryCmd>,
 ) -> Result<ExitCode> {
     match command {
@@ -189,6 +192,11 @@ async fn run_query_command(
         }
         Some(cli::QueryCmd::ValidateTarget { file }) => {
             commands::query::validate_target(workspace, output, file)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        None if let Some(expression) = expression => {
+            commands::query::expression(workspace, output, expression)
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
