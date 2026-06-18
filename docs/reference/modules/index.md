@@ -1,25 +1,26 @@
-# Rules
+# Modules
 
-Once rules are Starlark records that describe a target schema and,
-optionally, an implementation function that lowers one target into
-cacheable actions. Built-in rules and project rules use the same shape,
-so a project can add a rule without changing the Rust executor.
+Once graph modules are Starlark files that export graph primitives. Today the
+primary exported primitive is a target kind: a schema and optional
+implementation function that lowers one target into cacheable actions. Built-in
+target kinds and project target kinds use the same shape, so a project can add a
+target kind without changing the Rust executor.
 The built-in prelude also declares its source order in Starlark, so
-adding a rule family updates the prelude rather than hardcoding a new
+adding a target kind family updates the prelude rather than hardcoding a new
 toolchain in Rust.
 
-## Loading Project Rules
+## Loading Project Modules
 
-Project rules are listed from the root manifest:
+Project modules are listed from the root manifest:
 
 ```toml
-[rules]
-paths = ["rules/*.star"]
+[modules]
+paths = ["modules/*.star"]
 ```
 
-Each matched file exports one or more public rule symbols. Public
+Each matched file exports one or more public target kind symbols. Public
 symbols are module globals that do not start with `_`. The exported
-symbol name becomes the target kind unless the rule explicitly sets
+symbol name becomes the target kind unless the target kind explicitly sets
 `kind`.
 
 ```python
@@ -37,7 +38,7 @@ def _copy_impl(ctx):
         "copied_file": out,
     }
 
-copy_file = rule(
+copy_file = target_kind(
     docs = "Copy one declared source file into the target output directory.",
     attrs = [],
     providers = ["copied_file"],
@@ -46,20 +47,20 @@ copy_file = rule(
 )
 ```
 
-## Rule Schema
+## Target Kind Schema
 
-`rule(...)` declares the public contract exposed by `once query schema`
-and by MCP rule discovery.
+`target_kind(...)` declares the public contract exposed by `once query schema`
+and by MCP target kind discovery.
 
 - `kind`: optional override for the target kind used in `once.toml`.
   When omitted, Once uses the exported symbol name.
-- `docs`: short human-readable rule description.
+- `docs`: short human-readable target kind description.
 - `attrs`: `attr(...)` declarations. Supported types include `string`,
   `bool`, `int`, `float`, `list<string>`, `map<string, string>`,
   `target`, and nested values used by `select`.
 - `deps`: `dep(...)` declarations that name expected providers.
-- `providers`: provider names this rule can return.
-- `capabilities`: command surfaces this rule supports, such as
+- `providers`: provider names this target kind can return.
+- `capabilities`: command surfaces this target kind supports, such as
   `build`, `run`, `test`, or `metadata`.
 - `examples`: `example(...)` declarations for starter workspaces exposed
   to agents.
@@ -72,20 +73,20 @@ during validation before the implementation runs.
 
 ## Starter Examples
 
-`examples` points at runnable starter bundles for a rule. Starlark owns
+`examples` points at runnable starter bundles for a target kind. Starlark owns
 the example slug, title, selection hint, and package-relative path. The
 bundle itself is a real workspace directory with manifests and sources.
-Use examples when a caller should be able to discover the rule, choose a
+Use examples when a caller should be able to discover the target kind, choose a
 starter by intent, and materialize a working target without reading
 prose docs.
 
 `example(slug, name, use_when, path = None)` defaults `path` to
-`examples/<slug>`. Paths are resolved relative to the rule package,
+`examples/<slug>`. Paths are resolved relative to the module package,
 validated during schema loading, and loaded only when a caller requests
 that specific example.
 
 ```python
-apple_library = rule(
+apple_library = target_kind(
     docs = "Compiles Swift, Objective-C, C, and C++ sources into a linkable Apple module.",
     attrs = [
         attr("platform", "string", required = True, docs = "Apple platform"),
@@ -108,9 +109,9 @@ apple_library = rule(
 )
 ```
 
-`once query rules` lists the available rule kinds with their starter
+`once query target-kinds` lists the available target kinds with their starter
 example slugs. Use `once query schema <kind> --format json` for the full
-rule contract and lightweight example descriptors:
+target kind contract and lightweight example descriptors:
 
 ```sh
 once query schema apple_library --format json
@@ -150,7 +151,7 @@ once query example apple_library apple-library-minimal --format json
 }
 ```
 
-MCP callers use `once_list_rules` and `once_query_schema` for discovery,
+MCP callers use `once_list_target_kinds` and `once_query_schema` for discovery,
 then `once_query_example` to fetch the file bundle for the chosen
 starter.
 
@@ -167,8 +168,8 @@ An implementation receives `ctx` with generic graph data:
 - `ctx["capability"]`: active capability being analyzed.
 
 The implementation returns a JSON-shaped provider record. Downstream
-rules should read provider fields from `ctx["deps"]` instead of
-inspecting target kinds.
+target kinds should read provider fields from `ctx["deps"]` instead of
+inspecting target identities.
 
 ## Host Globals
 
@@ -212,14 +213,14 @@ Actions inside one target run in declaration order because later actions
 may consume earlier outputs. Independent graph targets run concurrently
 once their analysis-backed dependencies are complete.
 
-## Design Rules
+## Design Modules
 
-Keep rule implementations ecosystem-specific and the executor generic.
-If a rule needs to understand a compiler, package manager, SDK, binary
+Keep target kind implementations ecosystem-specific and the executor generic.
+If a target kind needs to understand a compiler, package manager, SDK, binary
 format, or platform naming convention, encode that in Starlark and pass
 only declared actions and provider records back to Rust.
 
-Provider records are the cross-rule contract. Prefer small, typed,
+Provider records are the cross-target kind contract. Prefer small, typed,
 documented fields such as output paths, transitive inputs, flags, and
 metadata. Avoid making consumers branch on a dependency target kind.
 
@@ -228,6 +229,6 @@ selection, generated file contents, and other non-source inputs that
 should invalidate cached actions. Do not log secrets or place secrets in
 arguments, provider records, or action metadata.
 
-When adding a public rule, make it discoverable through `once query
-rules` and `once query schema`, provide at least one starter example,
+When adding a public target kind, make it discoverable through `once query
+target-kinds` and `once query schema`, provide at least one starter example,
 and keep the schema, docs, and examples in sync.

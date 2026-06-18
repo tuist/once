@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// A single command declared by a rule impl through `run_action`.
+/// A single command declared by a target kind impl through `run_action`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DeclaredAction {
     pub argv: Vec<String>,
@@ -34,7 +34,7 @@ fn is_true(value: &bool) -> bool {
 }
 
 /// Per-target collection of declared outputs, actions, and the host
-/// context the rule impl needs (workspace root + package for globbing,
+/// context the target kind impl needs (workspace root + package for globbing,
 /// build dir for output declaration).
 #[derive(Debug, Default)]
 pub struct AnalysisStore {

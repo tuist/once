@@ -7,7 +7,7 @@ Apple application bundle.
 Builds an Apple application bundle with a generated Info.plist,
 linked dependencies, embedded frameworks, and ad-hoc signing. The
 `run` capability builds the required bundle and then executes a
-rule-declared launch action that bypasses the action cache.
+launch action declared by the target kind that bypasses the action cache.
 
 ## Attributes
 
@@ -52,7 +52,7 @@ The target emits `apple_application` and `apple_bundle`.
 `once run` launches macOS apps with the host app launcher and iOS
 simulator apps with `simctl` boot, install, and launch. The launch
 action writes a run record under the target's output directory and is
-marked uncacheable by the rule, so repeated runs execute the launch
+marked uncacheable by the target kind, so repeated runs execute the launch
 again instead of replaying an action-cache hit. Device launch support
 is not implemented yet.
 

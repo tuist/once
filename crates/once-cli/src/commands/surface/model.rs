@@ -205,6 +205,7 @@ mod tests {
                 "0000000000000000000000000000000000000000000000000000000000000000",
             ],
             &["once", "query", "targets"],
+            &["once", "query", "rules"],
             &["once", "query", "capabilities", "apps/ios/App"],
             &["once", "query", "schema", "apple_application"],
             &["once", "toolchain", "inspect"],

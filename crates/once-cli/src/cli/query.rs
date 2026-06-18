@@ -6,7 +6,7 @@ use clap::Subcommand;
 pub enum QueryCmd {
     /// List declared graph targets.
     Targets {
-        /// Only include targets with this rule kind.
+        /// Only include targets with this target kind.
         #[arg(long)]
         kind: Option<String>,
     },
@@ -17,22 +17,23 @@ pub enum QueryCmd {
         target: String,
     },
 
-    /// Inspect a rule schema.
+    /// Inspect a target kind schema.
     Schema {
-        /// Rule kind, e.g. `apple_application`.
+        /// Target kind, e.g. `apple_application`.
         kind: String,
     },
 
-    /// Materialize a rule starter example.
+    /// Materialize a target kind starter example.
     Example {
-        /// Rule kind, e.g. `apple_library`.
+        /// Target kind, e.g. `apple_library`.
         kind: String,
         /// Example slug from `once query schema`.
         slug: String,
     },
 
-    /// List every rule kind with its one-line docs and example slugs.
-    Rules,
+    /// List every target kind with its one-line docs and example slugs.
+    #[command(alias = "rules")]
+    TargetKinds,
 
     /// Resolve a single target's full record (kind, srcs, deps, attrs, capabilities).
     Target {
@@ -56,7 +57,7 @@ pub enum QueryCmd {
         target: String,
     },
 
-    /// Validate a proposed `[[target]]` table against its rule schema.
+    /// Validate a proposed `[[target]]` table against its target kind schema.
     ///
     /// Reads `{ "target": { ... } }` from `--file` or, if omitted,
     /// from stdin.
@@ -74,7 +75,7 @@ impl QueryCmd {
             Self::Capabilities { .. } => vec!["capabilities"],
             Self::Schema { .. } => vec!["schema"],
             Self::Example { .. } => vec!["example"],
-            Self::Rules => vec!["rules"],
+            Self::TargetKinds => vec!["target-kinds"],
             Self::Target { .. } => vec!["target"],
             Self::Tests => vec!["tests"],
             Self::AffectedTests { .. } => vec!["affected-tests"],

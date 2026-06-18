@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
-use crate::graph::{built_in_rule_schemas_result, Diagnostic, RuleSchema};
+use crate::graph::{built_in_target_kind_schemas_result, Diagnostic, TargetKindSchema};
 use crate::target_validator::validate_target;
 
 /// One mutation against the `[[target]]` array in a `once.toml`.
@@ -67,15 +67,16 @@ pub fn apply_operations(
     toml_src: &str,
     operations: &[EditOperation],
 ) -> Result<String, Vec<Diagnostic>> {
-    let schemas = built_in_rule_schemas_result().map_err(|err| schema_load_diagnostic(&err))?;
+    let schemas =
+        built_in_target_kind_schemas_result().map_err(|err| schema_load_diagnostic(&err))?;
     apply_operations_with_schemas(toml_src, operations, &schemas)
 }
 
-/// Apply operations using the caller-provided rule schema set.
+/// Apply operations using the caller-provided target kind schema set.
 pub fn apply_operations_with_schemas(
     toml_src: &str,
     operations: &[EditOperation],
-    schemas: &[RuleSchema],
+    schemas: &[TargetKindSchema],
 ) -> Result<String, Vec<Diagnostic>> {
     let mut doc: DocumentMut = toml_src.parse().map_err(|err: toml_edit::TomlError| {
         vec![Diagnostic {
@@ -116,7 +117,7 @@ fn ensure_target_array(doc: &mut DocumentMut) -> Result<(), Vec<Diagnostic>> {
 fn apply_one(
     doc: &mut DocumentMut,
     op: &EditOperation,
-    schemas: &[RuleSchema],
+    schemas: &[TargetKindSchema],
 ) -> Result<(), Vec<Diagnostic>> {
     match op {
         EditOperation::Create { target } => create(doc, target, schemas),
@@ -128,7 +129,7 @@ fn apply_one(
 fn create(
     doc: &mut DocumentMut,
     spec: &TargetSpec,
-    schemas: &[RuleSchema],
+    schemas: &[TargetKindSchema],
 ) -> Result<(), Vec<Diagnostic>> {
     if spec.name.trim().is_empty() {
         return Err(vec![Diagnostic {
@@ -172,7 +173,7 @@ fn update(
     doc: &mut DocumentMut,
     target_name: &str,
     set: &TargetUpdate,
-    schemas: &[RuleSchema],
+    schemas: &[TargetKindSchema],
 ) -> Result<(), Vec<Diagnostic>> {
     let Some(index) = find_target_index(doc, target_name) else {
         return Err(vec![Diagnostic {
@@ -215,7 +216,7 @@ fn update(
     Ok(())
 }
 
-fn validate_spec(spec: &TargetSpec, schemas: &[RuleSchema]) -> Result<(), Vec<Diagnostic>> {
+fn validate_spec(spec: &TargetSpec, schemas: &[TargetKindSchema]) -> Result<(), Vec<Diagnostic>> {
     let diagnostics = validate_target(spec, schemas);
     if diagnostics.is_empty() {
         Ok(())
@@ -226,7 +227,7 @@ fn validate_spec(spec: &TargetSpec, schemas: &[RuleSchema]) -> Result<(), Vec<Di
 
 fn schema_load_diagnostic(err: &crate::Error) -> Vec<Diagnostic> {
     vec![Diagnostic {
-        code: "rule_schema_load_failed".to_string(),
+        code: "target_kind_schema_load_failed".to_string(),
         message: err.to_string(),
         target: None,
         attribute: Some("kind".to_string()),
@@ -564,7 +565,7 @@ kind = "apple_library"
     }
 
     #[test]
-    fn create_validates_against_rule_schema() {
+    fn create_validates_against_target_kind_schema() {
         let mut spec = target("Hello", "apple_library");
         spec.attrs.clear();
         let diagnostics = apply_operations("", &[EditOperation::Create { target: spec }])
@@ -656,7 +657,7 @@ minimum_os = "17.0"
     }
 
     #[test]
-    fn update_validates_merged_target_against_rule_schema() {
+    fn update_validates_merged_target_against_target_kind_schema() {
         let src = r#"
 [[target]]
 name = "Hello"

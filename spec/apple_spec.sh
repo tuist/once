@@ -296,7 +296,7 @@ printf "spawn_count=%s\n" "$(grep -c "simctl spawn" "$2/xcrun.log")"' sh "$ONCE_
     copy_apple_graph_fixture
 
     # XCTest execution still emits placeholder normalized results while
-    # simulator/device runners are wired through the Apple rule.
+    # simulator/device runners are wired through the Apple target kind.
     once --format json build apps/ios/AppTests >/dev/null 2>&1 || true
 
     When call once --format json test apps/ios/AppTests

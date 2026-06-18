@@ -1,11 +1,11 @@
-# `once query rules`
+# `once query target-kinds`
 
-List every rule kind with its one-line docs and example slugs
+List every target kind with its one-line docs and example slugs
 
 ## Synopsis
 
 ```text
-once query rules [OPTIONS]
+once query target-kinds [OPTIONS]
 ```
 
 ## Options

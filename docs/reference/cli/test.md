@@ -10,7 +10,7 @@ once test [OPTIONS] [TARGET]
 
 ## Description
 
-Builds the target as needed, then executes its `test` capability through the action cache. Output paths and result groups are owned by the rule that exposes the capability.
+Builds the target as needed, then executes its `test` capability through the action cache. Output paths and result groups are owned by the target kind that exposes the capability.
 
 ## Arguments
 

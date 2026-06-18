@@ -1,30 +1,30 @@
-//! Integration tests that materialize every bundled `RuleExample` and
+//! Integration tests that materialize every bundled `TargetKindExample` and
 //! load it as a real workspace. This is the rot-prevention invariant
-//! the doc-less foundation depends on: if a rule schema changes in a
+//! the doc-less foundation depends on: if a target kind schema changes in a
 //! way that breaks one of the starter examples, this test fails and
-//! the example has to be updated alongside the rule.
+//! the example has to be updated alongside the target kind.
 //!
 //! Scope: parse + diagnostic check (cheap, runs anywhere). End-to-end
-//! build verification for examples whose rule has an `impl` is
+//! build verification for examples whose target kind has an `impl` is
 //! intentional follow-up work; it needs an Apple toolchain in the test
 //! environment and a configured cache provider.
 
 use std::fs;
 use std::path::Path;
 
-use once_frontend::{built_in_rule_schemas_result, load_rule_example};
+use once_frontend::{built_in_target_kind_schemas_result, load_target_kind_example};
 use tempfile::TempDir;
 
 #[test]
 fn every_schema_example_materializes() {
-    let schemas = built_in_rule_schemas_result().expect("built-in rule schemas load");
+    let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
     let mut examples = 0;
     for schema in &schemas {
         for example in &schema.examples {
             examples += 1;
-            load_rule_example(schema, &example.slug).unwrap_or_else(|err| {
+            load_target_kind_example(schema, &example.slug).unwrap_or_else(|err| {
                 panic!(
-                    "example `{}` (rule `{}`) failed to materialize: {err}",
+                    "example `{}` (target kind `{}`) failed to materialize: {err}",
                     example.slug, schema.kind
                 )
             });
@@ -35,12 +35,12 @@ fn every_schema_example_materializes() {
 
 #[test]
 fn every_schema_example_loads_without_diagnostics() {
-    let schemas = built_in_rule_schemas_result().expect("built-in rule schemas load");
+    let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
     for schema in &schemas {
         for example in &schema.examples {
-            let bundle = load_rule_example(schema, &example.slug).unwrap_or_else(|err| {
+            let bundle = load_target_kind_example(schema, &example.slug).unwrap_or_else(|err| {
                 panic!(
-                    "example `{}` (rule `{}`) failed to materialize: {err}",
+                    "example `{}` (target kind `{}`) failed to materialize: {err}",
                     example.slug, schema.kind
                 )
             });
@@ -48,13 +48,13 @@ fn every_schema_example_loads_without_diagnostics() {
             materialize(tmp.path(), &bundle);
             let graph = once_frontend::load_graph_workspace(tmp.path()).unwrap_or_else(|err| {
                 panic!(
-                    "example `{}` (rule `{}`) failed to load: {err}",
+                    "example `{}` (target kind `{}`) failed to load: {err}",
                     example.slug, schema.kind
                 )
             });
             assert!(
                 !graph.is_empty(),
-                "example `{}` (rule `{}`) declared no targets",
+                "example `{}` (target kind `{}`) declared no targets",
                 example.slug,
                 schema.kind
             );
@@ -73,7 +73,7 @@ fn every_schema_example_loads_without_diagnostics() {
                 .count();
             assert!(
                 example_targets > 0,
-                "example `{}` declares no target of rule `{}`",
+                "example `{}` declares no target of target kind `{}`",
                 example.slug,
                 schema.kind
             );
@@ -83,31 +83,32 @@ fn every_schema_example_loads_without_diagnostics() {
 
 #[test]
 fn every_schema_example_carries_meta() {
-    let schemas = built_in_rule_schemas_result().expect("built-in rule schemas load");
+    let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
     for schema in &schemas {
         for example in &schema.examples {
-            let bundle = load_rule_example(schema, &example.slug).expect("example materializes");
+            let bundle =
+                load_target_kind_example(schema, &example.slug).expect("example materializes");
             assert!(
                 !example.name.is_empty(),
-                "example `{}` (rule `{}`) has an empty `name`",
+                "example `{}` (target kind `{}`) has an empty `name`",
                 example.slug,
                 schema.kind
             );
             assert!(
                 !example.use_when.is_empty(),
-                "example `{}` (rule `{}`) has an empty `use_when`",
+                "example `{}` (target kind `{}`) has an empty `use_when`",
                 example.slug,
                 schema.kind
             );
             assert!(
                 !bundle.files.is_empty(),
-                "example `{}` (rule `{}`) has no files",
+                "example `{}` (target kind `{}`) has no files",
                 example.slug,
                 schema.kind
             );
             assert!(
                 bundle.files.iter().any(|f| f.path.ends_with("once.toml")),
-                "example `{}` (rule `{}`) ships no once.toml manifest",
+                "example `{}` (target kind `{}`) ships no once.toml manifest",
                 example.slug,
                 schema.kind
             );
@@ -116,20 +117,22 @@ fn every_schema_example_carries_meta() {
 }
 
 #[test]
-fn every_impl_backed_rule_has_a_schema_example() {
-    let schemas = built_in_rule_schemas_result().expect("built-in rule schemas load");
+fn every_impl_backed_target_kind_has_a_schema_example() {
+    let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
     for schema in &schemas {
-        if once_frontend::analysis::rule_has_impl(&schema.kind).expect("rule impl lookup") {
+        if once_frontend::analysis::target_kind_has_impl(&schema.kind)
+            .expect("target kind impl lookup")
+        {
             assert!(
                 !schema.examples.is_empty(),
-                "impl-backed rule `{}` has no bundled starter example",
+                "impl-backed target kind `{}` has no bundled starter example",
                 schema.kind
             );
         }
     }
 }
 
-fn materialize(root: &Path, example: &once_frontend::RuleExampleBundle) {
+fn materialize(root: &Path, example: &once_frontend::TargetKindExampleBundle) {
     for file in &example.files {
         let path = root.join(&file.path);
         if let Some(parent) = path.parent() {

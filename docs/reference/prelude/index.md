@@ -1,12 +1,12 @@
 # Prelude
 
-The Starlark prelude bundled with `once` declares every built-in rule
+The Starlark prelude bundled with `once` declares every built-in target
 kind: its attribute schema, dep edges, providers, capabilities, and
 the impl that turns a target into a set of cached actions. The
 [`once query schema`](/reference/cli/query) command exposes the same
 metadata at the keyboard.
 
-## Apple rules
+## Apple target kinds
 
 - [`apple_library`](/reference/prelude/apple_library): Swift,
   Objective-C, C, and C++ static library
@@ -19,7 +19,7 @@ metadata at the keyboard.
 - [`apple_test_bundle`](/reference/prelude/apple_test_bundle): XCTest
   bundle assembled for an external runner
 
-## Rust rules
+## Rust target kinds
 
 - [`cargo_dependencies`](/reference/prelude/cargo_dependencies): cacheable
   Cargo dependency set consumed by Rust targets

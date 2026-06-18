@@ -47,8 +47,8 @@ pub async fn apply(workspace: &Path, output: Output, file: Option<PathBuf>) -> R
             ));
         }
     };
-    let schemas =
-        once_frontend::rule_schemas_for_workspace(workspace).context("loading rule schemas")?;
+    let schemas = once_frontend::target_kind_schemas_for_workspace(workspace)
+        .context("loading target kind schemas")?;
     let result = match once_frontend::apply_operations_with_schemas(
         &existing,
         &input.operations,

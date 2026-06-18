@@ -39,10 +39,10 @@ export const site = {
         ],
       },
       {
-        text: "Rules",
+        text: "Modules",
         collapsed: false,
         items: [
-          { text: "Overview", link: "/reference/rules/" },
+          { text: "Overview", link: "/reference/modules/" },
         ],
       },
       {

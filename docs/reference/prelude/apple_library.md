@@ -31,12 +31,12 @@ merge them with `lipo`.
 | `enable_testing` | bool | no | `false` | Compile Swift with testability enabled for dependent tests |
 | `library_evolution` | bool | no | `false` | Emit stable Swift module interfaces for binary compatibility |
 | `enable_modules` | bool | no | `false` | Emit a `module.modulemap` and `.hmap` from `exported_headers` and pass `-fmodules` to Clang |
-| `emit_dsym` | bool | no | `false` | Emit DWARF debug info so downstream rules can extract a `.dSYM` bundle |
+| `emit_dsym` | bool | no | `false` | Emit DWARF debug info so downstream target kinds can extract a `.dSYM` bundle |
 | `sdk_frameworks` | list&lt;string&gt; | no | `[]` | Apple SDK frameworks linked by name, propagated transitively |
 | `weak_sdk_frameworks` | list&lt;string&gt; | no | `[]` | Apple SDK frameworks linked weakly, propagated transitively |
 | `sdk_dylibs` | list&lt;string&gt; | no | `[]` | Apple SDK dynamic libraries linked by name, propagated transitively |
 | `linkopts` | list&lt;string&gt; | no | `[]` | Extra linker flags, propagated transitively |
-| `alwayslink` | bool | no | `false` | Hint to downstream linker rules to force-load this archive (`-Wl,-force_load`) |
+| `alwayslink` | bool | no | `false` | Hint to downstream linker target kinds to force-load this archive (`-Wl,-force_load`) |
 | `exported_deps` | list&lt;string&gt; | no | `[]` | Target ids from `deps` whose module interface flows through to consumers' compile path |
 
 ## Dep edges
@@ -114,7 +114,7 @@ affected cache slots.
 | `transitive_linkopts` | list&lt;string&gt; | Extra linker flags |
 | `transitive_defines` | list&lt;string&gt; | Preprocessor / conditional compilation flags |
 
-The shape mirrors `SwiftInfo` and `CcInfo` from the Bazel rules so
+The shape mirrors `SwiftInfo` and `CcInfo` from Bazel's Apple build model so
 existing build engineers have a familiar mental model.
 
 ## Configurable attributes

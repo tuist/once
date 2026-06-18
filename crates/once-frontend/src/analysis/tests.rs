@@ -412,66 +412,65 @@ fn target(kind: &str) -> GraphTarget {
 }
 
 #[test]
-fn analyze_target_returns_null_provider_for_rules_without_impl() {
-    // `script` is the canonical example of a rule kind that the
-    // bundled prelude knows about but provides no Starlark impl
-    // for; the analysis driver should hand back a null provider
-    // and no actions so the CLI falls back to its own runner.
+fn analyze_target_errors_for_script_kind_without_starlark_impl() {
     let tmp = TempDir::new().unwrap();
     let result = analyze_target(&target("script"), tmp.path(), &[]);
     // `script` is supplied by the CLI's script-runner path; the
-    // frontend should error with the same "no rule found" surface
+    // frontend should error with the same "no target kind found" surface
     // it uses for unknown kinds. Confirm that here so the
     // "no impl available" path is exercised end-to-end.
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("no rule found for kind `script`"), "{err}");
-}
-
-#[test]
-fn analyze_target_errors_on_unknown_rule_kind() {
-    let tmp = TempDir::new().unwrap();
-    let err = analyze_target(&target("mystery_rule"), tmp.path(), &[])
-        .unwrap_err()
-        .to_string();
     assert!(
-        err.contains("no rule found for kind `mystery_rule`"),
+        err.contains("no target kind found for kind `script`"),
         "{err}"
     );
 }
 
 #[test]
-fn rule_has_impl_reads_custom_rule_impls() {
+fn analyze_target_errors_on_unknown_target_kind() {
+    let tmp = TempDir::new().unwrap();
+    let err = analyze_target(&target("mystery_kind"), tmp.path(), &[])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("no target kind found for kind `mystery_kind`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn target_kind_has_impl_reads_custom_target_kind_impls() {
     let engine = AnalysisEngine::from_source(
         r#"
-custom_library = {"_once_rule": True, "impl": lambda ctx: None}
+custom_library = {"_once_target_kind": True, "impl": lambda ctx: None}
 "#,
     )
     .unwrap();
 
-    assert!(engine.rule_has_impl("custom_library"));
+    assert!(engine.target_kind_has_impl("custom_library"));
 }
 
 #[test]
-fn analysis_engine_debug_omits_rule_source() {
-    let engine = AnalysisEngine::from_source("# SECRET_RULE_SOURCE").unwrap();
+fn analysis_engine_debug_omits_module_source() {
+    let engine = AnalysisEngine::from_source("# SECRET_MODULE_SOURCE").unwrap();
 
     let rendered = format!("{engine:?}");
 
     assert!(rendered.contains("source_len"));
-    assert!(!rendered.contains("SECRET_RULE_SOURCE"));
+    assert!(!rendered.contains("SECRET_MODULE_SOURCE"));
 }
 
 #[test]
-fn workspace_analysis_engine_runs_custom_rule_impl() {
+fn workspace_analysis_engine_runs_custom_target_kind_impl() {
     let tmp = TempDir::new().unwrap();
-    std::fs::create_dir(tmp.path().join("rules")).unwrap();
+    std::fs::create_dir(tmp.path().join("modules")).unwrap();
     std::fs::write(
         tmp.path().join("once.toml"),
-        "[rules]\npaths = [\"rules/*.star\"]\n",
+        "[modules]\npaths = [\"modules/*.star\"]\n",
     )
     .unwrap();
     std::fs::write(
-        tmp.path().join("rules/demo.star"),
+        tmp.path().join("modules/demo.star"),
         r#"
 def _demo_impl(ctx):
     out = declare_output("hello.txt")
@@ -482,7 +481,7 @@ def _demo_impl(ctx):
     )
     return {"out": out}
 
-demo_rule = rule(
+demo_kind = target_kind(
     docs = "Demo",
     attrs = [],
     deps = [],
@@ -498,7 +497,7 @@ demo_rule = rule(
     let engine = AnalysisEngine::for_workspace(tmp.path()).unwrap();
 
     let result = engine
-        .analyze_target(&target("demo_rule"), tmp.path(), &[])
+        .analyze_target(&target("demo_kind"), tmp.path(), &[])
         .unwrap();
 
     assert_eq!(result.actions.len(), 1);
@@ -510,8 +509,8 @@ demo_rule = rule(
 }
 
 #[test]
-fn rule_has_impl_returns_false_for_unknown_kind() {
-    assert!(!rule_has_impl("mystery_rule").unwrap());
+fn target_kind_has_impl_returns_false_for_unknown_kind() {
+    assert!(!target_kind_has_impl("mystery_kind").unwrap());
 }
 
 fn select_attr_value(branches: &[(&str, AttrValue)]) -> AttrValue {

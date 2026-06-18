@@ -22,7 +22,7 @@ features:
   - title: Graph-aware automation
     details: Model work as targets with build, run, and test capabilities that agents and humans can query before executing anything.
   - title: Flexible action adapters
-    details: Keep existing scripts and tools in place while they lower into the same content-addressed action model as typed rules.
+    details: Keep existing scripts and tools in place while they lower into the same content-addressed action model as typed target kinds.
   - title: Deterministic cache keys
     details: Inputs, outputs, environment variables, working directories, and timeouts become part of the action contract.
   - title: Providers

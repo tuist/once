@@ -73,45 +73,45 @@ pub async fn capabilities(workspace: &Path, output: Output, target_id: &str) -> 
 }
 
 pub async fn schema(workspace: &Path, output: Output, kind: &str) -> Result<()> {
-    let schema = once_frontend::rule_schemas_for_workspace(workspace)?
+    let schema = once_frontend::target_kind_schemas_for_workspace(workspace)?
         .into_iter()
         .find(|schema| schema.kind == kind)
-        .with_context(|| format!("no rule schema matches `{kind}`"))?;
+        .with_context(|| format!("no target kind schema matches `{kind}`"))?;
     write_body(output, || render_schema_human(&schema), &schema).await
 }
 
 pub async fn example(workspace: &Path, output: Output, kind: &str, slug: &str) -> Result<()> {
-    let schema = once_frontend::rule_schemas_for_workspace(workspace)?
+    let schema = once_frontend::target_kind_schemas_for_workspace(workspace)?
         .into_iter()
         .find(|schema| schema.kind == kind)
-        .with_context(|| format!("no rule schema matches `{kind}`"))?;
-    let example = once_frontend::load_rule_example(&schema, slug)?;
+        .with_context(|| format!("no target kind schema matches `{kind}`"))?;
+    let example = once_frontend::load_target_kind_example(&schema, slug)?;
     write_body(output, || render_example_human(&example), &example).await
 }
 
 #[derive(Debug, Serialize)]
-struct RuleSummary {
+struct TargetKindSummary {
     kind: String,
     docs: String,
-    examples: Vec<RuleExampleSummary>,
+    examples: Vec<TargetKindExampleSummary>,
 }
 
 #[derive(Debug, Serialize)]
-struct RuleExampleSummary {
+struct TargetKindExampleSummary {
     slug: String,
     name: String,
     use_when: String,
 }
 
-impl From<once_frontend::RuleSchema> for RuleSummary {
-    fn from(schema: once_frontend::RuleSchema) -> Self {
+impl From<once_frontend::TargetKindSchema> for TargetKindSummary {
+    fn from(schema: once_frontend::TargetKindSchema) -> Self {
         Self {
             kind: schema.kind,
             docs: schema.docs,
             examples: schema
                 .examples
                 .into_iter()
-                .map(|example| RuleExampleSummary {
+                .map(|example| TargetKindExampleSummary {
                     slug: example.slug,
                     name: example.name,
                     use_when: example.use_when,
@@ -121,10 +121,11 @@ impl From<once_frontend::RuleSchema> for RuleSummary {
     }
 }
 
-pub async fn rules(workspace: &Path, output: Output) -> Result<()> {
-    let schemas = once_frontend::rule_schemas_for_workspace(workspace)?;
-    let summaries: Vec<RuleSummary> = schemas.into_iter().map(RuleSummary::from).collect();
-    write_body(output, || render_rules_human(&summaries), &summaries).await
+pub async fn target_kinds(workspace: &Path, output: Output) -> Result<()> {
+    let schemas = once_frontend::target_kind_schemas_for_workspace(workspace)?;
+    let summaries: Vec<TargetKindSummary> =
+        schemas.into_iter().map(TargetKindSummary::from).collect();
+    write_body(output, || render_target_kinds_human(&summaries), &summaries).await
 }
 
 pub async fn target(workspace: &Path, output: Output, target_id: &str) -> Result<()> {
@@ -193,7 +194,7 @@ pub async fn validate_target(
     let raw = read_json_input(file)?;
     let input: ValidateTargetInput = serde_json::from_str(&raw)
         .context("validate-target input is not valid JSON matching `{ \"target\": { ... } }`")?;
-    let schemas = once_frontend::rule_schemas_for_workspace(workspace)?;
+    let schemas = once_frontend::target_kind_schemas_for_workspace(workspace)?;
     let diagnostics = once_frontend::validate_target(&input.target, &schemas);
     let result = if diagnostics.is_empty() {
         ValidateResult::Valid { valid: true }
@@ -258,7 +259,7 @@ fn render_capabilities_human(target: &once_frontend::GraphTarget) -> String {
     out
 }
 
-fn render_schema_human(schema: &once_frontend::RuleSchema) -> String {
+fn render_schema_human(schema: &once_frontend::TargetKindSchema) -> String {
     let mut out = format!("{}: {}\n", schema.kind, schema.docs);
     if !schema.attrs.is_empty() {
         out.push_str("attrs:\n");
@@ -302,14 +303,14 @@ fn render_schema_human(schema: &once_frontend::RuleSchema) -> String {
     out
 }
 
-fn render_rules_human(rules: &[RuleSummary]) -> String {
-    if rules.is_empty() {
-        return "rules: none\n".to_string();
+fn render_target_kinds_human(target_kinds: &[TargetKindSummary]) -> String {
+    if target_kinds.is_empty() {
+        return "target kinds: none\n".to_string();
     }
-    let mut out = String::from("rules:\n");
-    for rule in rules {
-        writeln!(out, "  {}: {}", rule.kind, rule.docs).expect("writing to string cannot fail");
-        for example in &rule.examples {
+    let mut out = String::from("target kinds:\n");
+    for kind in target_kinds {
+        writeln!(out, "  {}: {}", kind.kind, kind.docs).expect("writing to string cannot fail");
+        for example in &kind.examples {
             writeln!(out, "    {} - {}", example.slug, example.use_when)
                 .expect("writing to string cannot fail");
         }
@@ -317,7 +318,7 @@ fn render_rules_human(rules: &[RuleSummary]) -> String {
     out
 }
 
-fn render_example_human(example: &once_frontend::RuleExampleBundle) -> String {
+fn render_example_human(example: &once_frontend::TargetKindExampleBundle) -> String {
     let mut out = format!(
         "example {}: {}\nuse when: {}\nfiles:\n",
         example.slug, example.name, example.use_when
@@ -787,7 +788,7 @@ mod tests {
 
     #[test]
     fn render_schema_human_includes_attrs_and_capabilities() {
-        let schema = once_frontend::built_in_rule_schema("apple_application").unwrap();
+        let schema = once_frontend::built_in_target_kind_schema("apple_application").unwrap();
         let rendered = render_schema_human(&schema);
         assert!(rendered.starts_with("apple_application: "));
         assert!(rendered.contains("bundle_id: string (required"));

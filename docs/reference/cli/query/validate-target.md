@@ -1,6 +1,6 @@
 # `once query validate-target`
 
-Validate a proposed `[[target]]` table against its rule schema
+Validate a proposed `[[target]]` table against its target kind schema
 
 ## Synopsis
 

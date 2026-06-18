@@ -6,12 +6,12 @@ Describe 'graph declared actions'
   AfterEach 'cleanup_workspace'
 
   create_declared_action_workspace() {
-    mkdir -p "$WORKSPACE/rules" "$WORKSPACE/tools/demo"
+    mkdir -p "$WORKSPACE/modules" "$WORKSPACE/tools/demo"
     cat > "$WORKSPACE/once.toml" <<'EOF'
-[rules]
-paths = ["rules/*.star"]
+[modules]
+paths = ["modules/*.star"]
 EOF
-    cat > "$WORKSPACE/rules/demo.star" <<'EOF'
+    cat > "$WORKSPACE/modules/demo.star" <<'EOF'
 def _demo_impl(ctx):
     out = declare_output(ctx["capability"] + ".txt")
     content = ctx["attr"]["message"] + ":" + ctx["capability"]
@@ -22,8 +22,8 @@ def _demo_impl(ctx):
     )
     return {"out": out}
 
-demo_action = rule(
-    docs = "Demo action rule",
+demo_action = target_kind(
+    docs = "Demo action kind",
     attrs = [
         attr("message", "string", required = True, docs = "Message to emit"),
     ],
@@ -46,7 +46,7 @@ message = "hello"
 EOF
   }
 
-  It 'builds custom rule declared actions through the graph command'
+  It 'builds custom target kind declared actions through the graph command'
     create_declared_action_workspace
 
     When call once --format json build tools/demo/Task
@@ -59,7 +59,7 @@ EOF
     The contents of file "$WORKSPACE/.once/out/tools/demo/Task/build.txt" should equal 'hello:build'
   End
 
-  It 'runs custom rule declared actions through the graph command'
+  It 'runs custom target kind declared actions through the graph command'
     create_declared_action_workspace
 
     When call once --format json run tools/demo/Task
@@ -72,7 +72,7 @@ EOF
     The contents of file "$WORKSPACE/.once/out/tools/demo/Task/run.txt" should equal 'hello:run'
   End
 
-  It 'tests custom rule declared actions through the graph command'
+  It 'tests custom target kind declared actions through the graph command'
     create_declared_action_workspace
 
     When call once --format json test tools/demo/Task

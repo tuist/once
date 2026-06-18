@@ -1,21 +1,21 @@
 //! Schema-only validation for a single `[[target]]` table.
 //!
 //! Given a [`TargetSpec`] (the shape the editor produces) and the
-//! workspace's rule registry, [`validate_target`] returns a list of
+//! workspace's target kind registry, [`validate_target`] returns a list of
 //! [`Diagnostic`]s. An empty list means the target shape matches the
-//! rule's declared contract. The check is local: it does not resolve
+//! target kind's declared contract. The check is local: it does not resolve
 //! dep references or read other manifests.
 
 use serde_json::Value as JsonValue;
 
-use crate::graph::{AttrSchema, Diagnostic, RuleSchema};
+use crate::graph::{AttrSchema, Diagnostic, TargetKindSchema};
 use crate::manifest_editor::TargetSpec;
 use crate::target_ref::validate_target_name;
 
 /// Validate `target` against `schemas`. Returns an empty `Vec` if the
-/// target's shape is acceptable to its rule kind.
+/// target's shape is acceptable to its target kind.
 #[must_use]
-pub fn validate_target(target: &TargetSpec, schemas: &[RuleSchema]) -> Vec<Diagnostic> {
+pub fn validate_target(target: &TargetSpec, schemas: &[TargetKindSchema]) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     if target.name.trim().is_empty() {
@@ -49,8 +49,8 @@ pub fn validate_target(target: &TargetSpec, schemas: &[RuleSchema]) -> Vec<Diagn
 
     let Some(schema) = schemas.iter().find(|s| s.kind == target.kind) else {
         diagnostics.push(Diagnostic {
-            code: "unknown_rule_kind".to_string(),
-            message: format!("rule kind `{}` is not registered", target.kind),
+            code: "unknown_target_kind".to_string(),
+            message: format!("target kind `{}` is not registered", target.kind),
             target: Some(target.name.clone()),
             attribute: Some("kind".to_string()),
             repairs: vec![suggest_known_kinds(schemas)],
@@ -63,7 +63,7 @@ pub fn validate_target(target: &TargetSpec, schemas: &[RuleSchema]) -> Vec<Diagn
             diagnostics.push(Diagnostic {
                 code: "missing_required_attr".to_string(),
                 message: format!(
-                    "rule `{}` requires attribute `{}`",
+                    "target kind `{}` requires attribute `{}`",
                     schema.kind, attr_schema.name
                 ),
                 target: Some(target.name.clone()),
@@ -78,7 +78,7 @@ pub fn validate_target(target: &TargetSpec, schemas: &[RuleSchema]) -> Vec<Diagn
             diagnostics.push(Diagnostic {
                 code: "unknown_attr".to_string(),
                 message: format!(
-                    "rule `{}` does not declare attribute `{}`",
+                    "target kind `{}` does not declare attribute `{}`",
                     schema.kind, attr_name
                 ),
                 target: Some(target.name.clone()),
@@ -199,7 +199,7 @@ fn check_type(value: &JsonValue, ty: &str) -> Result<(), String> {
             _ => Err(format!("expected an integer, got {}", json_type(value))),
         },
         other => Err(format!(
-            "unknown attribute type `{other}` declared by rule schema"
+            "unknown attribute type `{other}` declared by target kind schema"
         )),
     }
 }
@@ -233,14 +233,14 @@ fn json_type(value: &JsonValue) -> &'static str {
     }
 }
 
-fn suggest_known_kinds(schemas: &[RuleSchema]) -> String {
+fn suggest_known_kinds(schemas: &[TargetKindSchema]) -> String {
     let kinds: Vec<&str> = schemas.iter().map(|s| s.kind.as_str()).collect();
-    format!("known rule kinds: {}", kinds.join(", "))
+    format!("known target kinds: {}", kinds.join(", "))
 }
 
-fn suggest_known_attrs(schema: &RuleSchema) -> String {
+fn suggest_known_attrs(schema: &TargetKindSchema) -> String {
     if schema.attrs.is_empty() {
-        return format!("rule `{}` declares no attributes", schema.kind);
+        return format!("target kind `{}` declares no attributes", schema.kind);
     }
     let names: Vec<&str> = schema
         .attrs
@@ -248,7 +248,7 @@ fn suggest_known_attrs(schema: &RuleSchema) -> String {
         .map(|a: &AttrSchema| a.name.as_str())
         .collect();
     format!(
-        "attributes declared by rule `{}`: {}",
+        "attributes declared by target kind `{}`: {}",
         schema.kind,
         names.join(", ")
     )
@@ -257,15 +257,15 @@ fn suggest_known_attrs(schema: &RuleSchema) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::built_in_rule_schemas;
+    use crate::graph::built_in_target_kind_schemas;
     use serde_json::json;
     use serde_json::Map as JsonMap;
 
-    fn schema_named(kind: &str) -> RuleSchema {
-        built_in_rule_schemas()
+    fn schema_named(kind: &str) -> TargetKindSchema {
+        built_in_target_kind_schemas()
             .into_iter()
             .find(|s| s.kind == kind)
-            .expect("rule kind exists")
+            .expect("target kind exists")
     }
 
     fn target(name: &str, kind: &str) -> TargetSpec {
@@ -293,20 +293,20 @@ mod tests {
 
     #[test]
     fn unknown_kind_produces_diagnostic_with_repair() {
-        let schemas = built_in_rule_schemas();
-        let target = target("Hello", "mystery_rule");
+        let schemas = built_in_target_kind_schemas();
+        let target = target("Hello", "mystery_kind");
         let diagnostics = validate_target(&target, &schemas);
         let unknown = diagnostics
             .iter()
-            .find(|d| d.code == "unknown_rule_kind")
-            .expect("unknown_rule_kind diagnostic");
+            .find(|d| d.code == "unknown_target_kind")
+            .expect("unknown_target_kind diagnostic");
         assert!(!unknown.repairs.is_empty());
         assert!(unknown.repairs[0].contains("apple_library"));
     }
 
     #[test]
     fn unknown_attr_lists_known_attrs_as_repair() {
-        let schemas = built_in_rule_schemas();
+        let schemas = built_in_target_kind_schemas();
         let mut t = target("Hello", "apple_library");
         t.attrs.insert("platform".to_string(), json!("ios"));
         t.attrs.insert("wat".to_string(), json!("nope"));
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn type_mismatch_diagnoses_with_scope() {
-        let schemas = built_in_rule_schemas();
+        let schemas = built_in_target_kind_schemas();
         let mut t = target("Hello", "apple_library");
         // platform should be a string; pass a number.
         t.attrs.insert("platform".to_string(), json!(42));
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn list_of_strings_validates_each_element() {
-        let schemas = built_in_rule_schemas();
+        let schemas = built_in_target_kind_schemas();
         let mut t = target("Hello", "apple_library");
         t.attrs.insert("platform".to_string(), json!("ios"));
         // sdk_frameworks is list<string>. Pass a list with one bad entry.
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn map_validates_value_type() {
-        let schemas = built_in_rule_schemas();
+        let schemas = built_in_target_kind_schemas();
         let mut t = target("Hello", "apple_application");
         t.attrs.insert("platform".to_string(), json!("ios"));
         t.attrs.insert("bundle_id".to_string(), json!("dev.once.X"));
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn configurable_select_validates_each_branch_value() {
-        let schemas = built_in_rule_schemas();
+        let schemas = built_in_target_kind_schemas();
         let mut t = target("Hello", "apple_library");
         t.attrs.insert("platform".to_string(), json!("ios"));
         t.attrs.insert(
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn configurable_select_reports_branch_type_mismatch() {
-        let schemas = built_in_rule_schemas();
+        let schemas = built_in_target_kind_schemas();
         let mut t = target("Hello", "apple_library");
         t.attrs.insert("platform".to_string(), json!("ios"));
         t.attrs.insert(
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn select_on_non_configurable_attr_reports_specific_code() {
-        let schemas = built_in_rule_schemas();
+        let schemas = built_in_target_kind_schemas();
         let mut t = target("Hello", "apple_library");
         t.attrs.insert(
             "platform".to_string(),
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn valid_minimal_apple_library_returns_no_diagnostics() {
-        let schemas = built_in_rule_schemas();
+        let schemas = built_in_target_kind_schemas();
         let mut t = target("Hello", "apple_library");
         t.attrs.insert("platform".to_string(), json!("ios"));
         let diagnostics = validate_target(&t, &schemas);
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn empty_name_diagnoses_with_attribute_scope_only() {
-        let schemas = built_in_rule_schemas();
+        let schemas = built_in_target_kind_schemas();
         let mut t = target("", "apple_library");
         t.attrs.insert("platform".to_string(), json!("ios"));
         let diagnostics = validate_target(&t, &schemas);

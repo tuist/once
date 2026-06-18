@@ -3,8 +3,8 @@ use super::*;
 use once_frontend::{AttrValue, Capability, TargetLabel};
 
 static GRAPH_TEST_PRELUDE: &str = r#"
-def rule(kind = None, impl = None):
-    return {"_once_rule": True, "kind": kind, "impl": impl}
+def target_kind(kind = None, impl = None):
+    return {"_once_target_kind": True, "kind": kind, "impl": impl}
 
 def _impl(ctx):
     out = declare_output(ctx["label"]["name"] + "-" + ctx["capability"] + ".txt")
@@ -40,8 +40,8 @@ def _impl(ctx):
         )
     return {"target": ctx["label"]["name"], "out": out}
 
-test_rule = rule(impl = _impl)
-metadata_rule = rule()
+test_kind = target_kind(impl = _impl)
+metadata_kind = target_kind()
 "#;
 
 fn test_target(name: &str, deps: &[&str], script: impl Into<String>) -> GraphTarget {
@@ -80,7 +80,7 @@ fn target_with_capabilities(
             name: name.to_string(),
             id: name.to_string(),
         },
-        kind: "test_rule".to_string(),
+        kind: "test_kind".to_string(),
         deps: deps.iter().map(|dep| (*dep).to_string()).collect(),
         srcs: srcs.iter().map(|src| (*src).to_string()).collect(),
         attrs: attrs.into_iter().collect(),
@@ -118,7 +118,7 @@ fn reachable_analysis_deps_walks_only_analysis_backed_direct_deps() {
         ),
         target_with_capabilities("TransitiveAnalysis", &[], &[], &["build"], []),
         target_of_kind(
-            "metadata_rule",
+            "metadata_kind",
             "DirectMetadata",
             &["HiddenAnalysis"],
             &[],
@@ -139,11 +139,11 @@ fn reachable_analysis_deps_walks_only_analysis_backed_direct_deps() {
 }
 
 #[tokio::test]
-async fn run_with_analysis_returns_none_for_rules_without_implementation() {
+async fn run_with_analysis_returns_none_for_target_kinds_without_implementation() {
     let workspace = tempfile::tempdir().unwrap();
     let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
     let graph = vec![
-        target_of_kind("metadata_rule", "Root", &["Dep"], &[], &["test"], []),
+        target_of_kind("metadata_kind", "Root", &["Dep"], &[], &["test"], []),
         target_with_capabilities("Dep", &[], &[], &["build"], []),
     ];
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
@@ -244,7 +244,7 @@ async fn build_direct_analysis_deps_returns_only_direct_deps_in_declared_order()
     let graph = vec![
         target_with_capabilities("Root", &["Second", "Metadata", "First"], &[], &["test"], []),
         target_with_capabilities("Second", &["Shared"], &[], &["build"], []),
-        target_of_kind("metadata_rule", "Metadata", &[], &[], &["build"], []),
+        target_of_kind("metadata_kind", "Metadata", &[], &[], &["build"], []),
         target_with_capabilities("First", &["Shared"], &[], &["build"], []),
         target_with_capabilities("Shared", &[], &[], &["build"], []),
     ];

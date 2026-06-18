@@ -45,56 +45,56 @@ Keep the current CLI surface centered on:
 - `once runtime` for JSON-RPC runtime sessions
 - `once auth` and `once toolchain` for supporting infrastructure
 
-New build graph CLI, rule, and query surfaces should be introduced
+New build graph CLI, target kind, and query surfaces should be introduced
 deliberately and documented in the relevant RFC or implementation plan.
 
 Generic surfaces must stay ecosystem-neutral. CLI commands, Rust APIs,
 MCP tools, and shared graph/query records should not hardcode examples,
 field names, or behavior around one toolchain such as Apple, Cargo,
 npm, SwiftPM, or crates.io. Put ecosystem-specific behavior behind a
-resolver/rule parameter, Starlark rule implementation, or dedicated
+resolver or Starlark target kind implementation, or behind a dedicated
 toolchain guide/reference page so future ecosystems can plug into the
 same shape instead of requiring parallel CLI or MCP surfaces.
 
-## Toolchain Rules
+## Graph Modules
 
 Once exposes a doc-less surface for coding agents: an agent should be
-able to discover what rules exist, pull a runnable starter, validate a
+able to discover what target kinds exist, pull a runnable starter, validate a
 draft, and commit an edit using MCP tool calls alone, without reading
 prose docs. When adding support for a new toolchain (Android, JVM,
-Rust, etc.), mirror the shape already established for the Apple rules
+Rust, etc.), mirror the shape already established for the Apple target kinds
 rather than inventing a parallel surface.
 
 Rust code must stay toolchain-agnostic. Do not add Rust branches that
 recognize Apple, Android, JVM, Rust, or any other build system by name.
-Build system behavior belongs in rules. The Rust side should provide
+Build system behavior belongs in target kinds. The Rust side should provide
 generic primitives, typed graph plumbing, validation surfaces, and
-execution policy that rules can compose to express their needs.
+execution policy that target kinds can compose to express their needs.
 
-Starlark rule contract changes must update the public Starlark rules
+Starlark target kind contract changes must update the public Starlark modules
 reference in the same change. This includes new globals, changed `ctx`
 fields, action declaration semantics, provider expectations, schema
-helpers, loading behavior, or project rule authoring rules. Shared
+helpers, loading behavior, or project module authoring guidance. Shared
 Starlark helpers should live in the common prelude instead of being
 copied into each toolchain file. The Starlark prelude index owns the
-built-in rule source order, so adding or removing a rule family should
+built-in module source order, so adding or removing a target kind family should
 not require Rust executor changes.
 
-Every new toolchain rule should preserve these invariants:
+Every new toolchain target kind should preserve these invariants:
 
-- The rule is discoverable through `once_list_rules` and its full
+- The target kind is discoverable through `once_list_target_kinds` and its full
   contract is fetchable through `once_query_schema`.
-- The rule ships at least one runnable starter example as a real
-  directory owned by the rule package (manifest plus sources). The
-  exported Starlark rule symbol declares it through
+- The target kind ships at least one runnable starter example as a real
+  directory owned by the module package (manifest plus sources). The
+  exported Starlark target kind symbol declares it through
   `example(slug, name = ..., use_when = ..., path = ...)`; `path`
   defaults to `examples/<slug>`, and inline TOML strings are not
-  allowed. Example paths are relative to the rule package and must stay
-  inside it so rules can be published through a registry as a portable
+  allowed. Example paths are relative to the module package and must stay
+  inside it so target kinds can be published through a registry as a portable
   unit.
 - Every example loads under the examples integration test
   (`crates/once-frontend/tests/examples.rs`) without emitting any
-  diagnostics. If the rule has an `impl`, the example must build.
+  diagnostics. If the target kind has an `impl`, the example must build.
 - User-visible failures surface through the structured `Diagnostic`
   shape (`code`, `target`, `attribute`, `repairs`). Validation lives
   in `target_validator`; the editor in `manifest_editor` reuses the
@@ -103,8 +103,8 @@ Every new toolchain rule should preserve these invariants:
   subcommand so a human can reproduce what an agent does from the
   terminal.
 
-The built-in Apple rules and their portable starter examples are the
-reference implementation. Treat their rule-owned examples, schema
+The built-in Apple target kinds and their portable starter examples are the
+reference implementation. Treat their module-owned examples, schema
 metadata, validation, and MCP/CLI discovery shape as the template when
 wiring a new toolchain.
 

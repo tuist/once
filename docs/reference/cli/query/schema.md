@@ -1,6 +1,6 @@
 # `once query schema`
 
-Inspect a rule schema
+Inspect a target kind schema
 
 ## Synopsis
 
@@ -12,7 +12,7 @@ once query schema [OPTIONS] <KIND>
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<KIND>` | yes | Rule kind, e.g. `apple_application` |
+| `<KIND>` | yes | Target kind, e.g. `apple_application` |
 
 ## Options
 

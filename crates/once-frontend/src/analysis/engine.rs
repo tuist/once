@@ -31,14 +31,14 @@ pub struct AnalysisResult {
 /// Command-scoped analysis helper.
 ///
 /// Construct this once for a graph command and reuse it for every
-/// target. It caches cheap rule metadata and generic host lookups
+/// target. It caches cheap target kind metadata and generic host lookups
 /// (`host_which`, `host_command`) while still evaluating each target's
 /// Starlark impl in an isolated module heap.
 #[derive(Clone)]
 pub struct AnalysisEngine {
     source_path: Arc<str>,
     source: Arc<str>,
-    rule_impls: RuleImpls,
+    target_kind_impls: TargetKindImpls,
     host_cache: HostCache,
 }
 
@@ -47,7 +47,7 @@ impl fmt::Debug for AnalysisEngine {
         f.debug_struct("AnalysisEngine")
             .field("source_path", &self.source_path)
             .field("source_len", &self.source.len())
-            .field("rule_impls", &self.rule_impls)
+            .field("target_kind_impls", &self.target_kind_impls)
             .field("host_cache", &self.host_cache)
             .finish()
     }
@@ -56,18 +56,18 @@ impl fmt::Debug for AnalysisEngine {
 impl AnalysisEngine {
     pub fn new() -> Result<Self> {
         Self::from_source_with_path(
-            crate::rules::BUILT_IN_RULE_PATH,
-            crate::rules::built_in_rule_source(),
+            crate::modules::BUILT_IN_MODULE_PATH,
+            crate::modules::built_in_module_source(),
         )
     }
 
     pub fn for_workspace(root: &Path) -> Result<Self> {
-        let source = crate::rules::combined_rule_source_for_workspace(root)?;
-        Self::from_source_with_path(crate::rules::COMBINED_RULE_PATH, source)
+        let source = crate::modules::combined_module_source_for_workspace(root)?;
+        Self::from_source_with_path(crate::modules::COMBINED_MODULE_PATH, source)
     }
 
     pub fn from_source(source: impl Into<Arc<str>>) -> Result<Self> {
-        Self::from_source_with_path(crate::rules::BUILT_IN_RULE_PATH, source)
+        Self::from_source_with_path(crate::modules::BUILT_IN_MODULE_PATH, source)
     }
 
     fn from_source_with_path(
@@ -76,31 +76,31 @@ impl AnalysisEngine {
     ) -> Result<Self> {
         let source_path = source_path.into();
         let source = source.into();
-        let rule_impls = parse_rule_impls(&source_path, &source)?;
+        let target_kind_impls = parse_target_kind_impls(&source_path, &source)?;
         Ok(Self {
             source_path,
             source,
-            rule_impls,
+            target_kind_impls,
             host_cache: HostCache::default(),
         })
     }
 
     #[must_use]
-    pub fn rule_source(&self) -> &str {
+    pub fn module_source(&self) -> &str {
         &self.source
     }
 
     #[must_use]
-    pub fn rule_has_impl(&self, kind: &str) -> bool {
-        self.rule_impls.has_impl(kind)
+    pub fn target_kind_has_impl(&self, kind: &str) -> bool {
+        self.target_kind_impls.has_impl(kind)
     }
 
-    /// Run a single target's rule impl and collect its declared
+    /// Run a single target's target kind impl and collect its declared
     /// actions and provider record.
     ///
     /// `dep_providers` supplies the provider record each in-graph
     /// dependency already returned; impls iterate it to gather
-    /// whatever transitive state their rule family carries (search
+    /// whatever transitive state their target kind family carries (search
     /// paths, archives, linker flags, and so on).
     pub fn analyze_target(
         &self,
@@ -130,20 +130,20 @@ impl AnalysisEngine {
     }
 }
 
-/// Cached view of which rules declare executable impls.
+/// Cached view of which target kinds declare executable impls.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct RuleImpls {
+struct TargetKindImpls {
     by_kind: BTreeMap<String, bool>,
 }
 
-impl RuleImpls {
+impl TargetKindImpls {
     #[must_use]
     pub fn has_impl(&self, kind: &str) -> bool {
         self.by_kind.get(kind).copied().unwrap_or(false)
     }
 }
 
-/// Run a single target's rule impl and collect its declared actions
+/// Run a single target's target kind impl and collect its declared actions
 /// and provider record.
 ///
 /// `dep_providers` supplies the provider record each in-graph
@@ -192,14 +192,14 @@ fn analyze_target_with_host_cache(
     })
 }
 
-/// Returns true if the rule for `kind` declares an `impl` callable in
-/// the prelude. The driver consults this before walking deps so
-/// capability-only rules don't trigger analysis of their deps.
-pub fn rule_has_impl(kind: &str) -> Result<bool> {
-    Ok(AnalysisEngine::new()?.rule_has_impl(kind))
+/// Returns true if the target kind declares an `impl` callable in the
+/// prelude. The driver consults this before walking deps so
+/// capability-only target kinds don't trigger analysis of their deps.
+pub fn target_kind_has_impl(kind: &str) -> Result<bool> {
+    Ok(AnalysisEngine::new()?.target_kind_has_impl(kind))
 }
 
-fn parse_rule_impls(path: &str, source: &str) -> Result<RuleImpls> {
+fn parse_target_kind_impls(path: &str, source: &str) -> Result<TargetKindImpls> {
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
             .map_err(|error| anyhow!("prelude parse failed: {error:?}"))?;
@@ -208,25 +208,25 @@ fn parse_rule_impls(path: &str, source: &str) -> Result<RuleImpls> {
         eval.eval_module(ast, &globals)
             .map_err(|error| anyhow!("prelude eval failed: {error:?}"))?;
         let mut by_kind = BTreeMap::new();
-        for rule in crate::rules::exported_rule_values(&module) {
-            let dict = DictRef::from_value(rule.value)
-                .ok_or_else(|| anyhow!("rule export `{}` is not a dict", rule.name))?;
-            let rule_kind = crate::rules::rule_kind(rule.value, rule.name)
+        for export in crate::modules::exported_target_kind_values(&module) {
+            let dict = DictRef::from_value(export.value)
+                .ok_or_else(|| anyhow!("target kind export `{}` is not a dict", export.name))?;
+            let target_kind = crate::modules::target_kind(export.value, export.name)
                 .map_err(|message| anyhow!(message))?;
             let impl_value = dict.get_str("impl");
             if by_kind
                 .insert(
-                    rule_kind.clone(),
+                    target_kind.clone(),
                     impl_value.is_some_and(|value| !value.is_none()),
                 )
                 .is_some()
             {
                 return Err(anyhow!(
-                    "rule kind `{rule_kind}` is declared more than once"
+                    "target kind `{target_kind}` is declared more than once"
                 ));
             }
         }
-        Ok(RuleImpls { by_kind })
+        Ok(TargetKindImpls { by_kind })
     })
 }
 
@@ -245,8 +245,8 @@ fn analyze_in_starlark(
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
             .map_err(|error| anyhow!("prelude eval failed: {error:?}"))?;
-        let rules = crate::rules::exported_rule_values(&module);
-        let impl_value = find_impl_for_kind(&rules, &target.kind)?;
+        let target_kinds = crate::modules::exported_target_kind_values(&module);
+        let impl_value = find_impl_for_kind(&target_kinds, &target.kind)?;
         let Some(impl_value) = impl_value else {
             return Ok(JsonValue::Null);
         };
@@ -259,25 +259,25 @@ fn analyze_in_starlark(
 }
 
 fn find_impl_for_kind<'v>(
-    rules: &[crate::rules::RuleExport<'v>],
+    target_kinds: &[crate::modules::TargetKindExport<'v>],
     kind: &str,
 ) -> Result<Option<Value<'v>>> {
-    for rule in rules {
-        let dict = DictRef::from_value(rule.value)
-            .ok_or_else(|| anyhow!("rule export `{}` is not a dict", rule.name))?;
-        let rule_kind =
-            crate::rules::rule_kind(rule.value, rule.name).map_err(|message| anyhow!(message))?;
-        if rule_kind == kind {
+    for export in target_kinds {
+        let dict = DictRef::from_value(export.value)
+            .ok_or_else(|| anyhow!("target kind export `{}` is not a dict", export.name))?;
+        let target_kind = crate::modules::target_kind(export.value, export.name)
+            .map_err(|message| anyhow!(message))?;
+        if target_kind == kind {
             let impl_value = dict
                 .get_str("impl")
-                .ok_or_else(|| anyhow!("rule `{kind}` is missing `impl` field"))?;
+                .ok_or_else(|| anyhow!("target kind `{kind}` is missing `impl` field"))?;
             if impl_value.is_none() {
                 return Ok(None);
             }
             return Ok(Some(impl_value));
         }
     }
-    Err(anyhow!("no rule found for kind `{kind}`"))
+    Err(anyhow!("no target kind found for kind `{kind}`"))
 }
 
 fn build_ctx<'v>(

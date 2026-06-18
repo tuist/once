@@ -1,8 +1,9 @@
 //! Turns a graph target and capability into a generic cacheable [`Action`].
 //!
-//! Rules with Starlark `impl` functions declare their own actions and outputs.
-//! This module only covers legacy capability-only rules by producing a small
-//! generic marker directory through the same action-cache substrate.
+//! Target kinds with Starlark `impl` functions declare their own actions and
+//! outputs. This module only covers legacy capability-only target kinds by
+//! producing a small generic marker directory through the same action-cache
+//! substrate.
 
 use std::collections::BTreeMap;
 
