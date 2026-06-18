@@ -4,6 +4,11 @@ def _android_shell_words(values):
 def _android_shell_env(root):
     return "ANDROID_HOME=" + _shell_quote(root) + " ANDROID_SDK_ROOT=" + _shell_quote(root)
 
+def _android_host_shell(label_id):
+    if host_os() == "windows":
+        fail(label_id + ": Android build actions currently require a POSIX-compatible host shell")
+    return host_which("sh")
+
 def _android_is_select_shape(value):
     if type(value) != type({}):
         return False
@@ -159,14 +164,13 @@ def _android_sdk_root(attrs, label_id):
     configured = _android_attr(attrs, "android_sdk", "")
     if configured:
         return configured
-    sh = host_which("sh")
-    root = host_command([sh, "-c", "if [ -n \"${ANDROID_HOME:-}\" ]; then printf '%s' \"$ANDROID_HOME\"; elif [ -n \"${ANDROID_SDK_ROOT:-}\" ]; then printf '%s' \"$ANDROID_SDK_ROOT\"; fi"]).strip()
+    root = host_env("ANDROID_HOME") or host_env("ANDROID_SDK_ROOT")
     if not root:
         fail(label_id + ": set `android_sdk` or ANDROID_HOME/ANDROID_SDK_ROOT so Once can find Android SDK tools")
     return root
 
 def _android_highest_platform(sdk_root, label_id):
-    sh = host_which("sh")
+    sh = _android_host_shell(label_id)
     script = "set -eu\nfor p in " + _shell_quote(sdk_root + "/platforms") + "/android-*; do\n  [ -d \"$p\" ] || continue\n  v=${p##*/android-}\n  case \"$v\" in *[!0-9]*|'') continue ;; esac\n  printf '%s\\n' \"$v\"\ndone | sort -n | tail -n 1\n"
     value = host_command([sh, "-c", script]).strip()
     if not value:
@@ -174,24 +178,26 @@ def _android_highest_platform(sdk_root, label_id):
     return value
 
 def _android_highest_build_tools(sdk_root, label_id):
-    sh = host_which("sh")
+    sh = _android_host_shell(label_id)
     script = "set -eu\nfor p in " + _shell_quote(sdk_root + "/build-tools") + "/*; do\n  [ -d \"$p\" ] || continue\n  printf '%s\\n' \"${p##*/}\"\ndone | sort | tail -n 1\n"
     value = host_command([sh, "-c", script]).strip()
     if not value:
         fail(label_id + ": no Android SDK build-tools version was found under `" + sdk_root + "`; install build-tools or set `build_tools_version`")
     return value
 
-def _android_tool_version(tool):
-    sh = host_which("sh")
+def _android_tool_version(tool, label_id):
+    sh = _android_host_shell(label_id)
     return host_command([sh, "-c", _shell_quote(tool) + " --version 2>&1 | head -n 1 || true"]).strip()
 
-def _android_javac_version(javac):
-    sh = host_which("sh")
+def _android_adb_version(adb):
+    return host_command([adb, "version"]).strip()
+
+def _android_javac_version(javac, label_id):
+    sh = _android_host_shell(label_id)
     return host_command([sh, "-c", _shell_quote(javac) + " -version 2>&1 | head -n 1 || true"]).strip()
 
 def _android_host_env(name):
-    sh = host_which("sh")
-    return host_command([sh, "-c", "printf '%s' \"${" + name + ":-}\""]).strip()
+    return host_env(name)
 
 def _android_tools(ctx, attrs, include_java, include_apk):
     label_id = ctx["label"]["id"]
@@ -216,7 +222,7 @@ def _android_tools(ctx, attrs, include_java, include_apk):
         build_tools_version,
         "aapt2",
         tools["aapt2"],
-        _android_tool_version(tools["aapt2"]),
+        _android_tool_version(tools["aapt2"], label_id),
     ]
     if include_java:
         javac = _android_attr(attrs, "javac", "") or host_which("javac")
@@ -228,15 +234,25 @@ def _android_tools(ctx, attrs, include_java, include_apk):
         tools["java"] = java
         if java_home:
             tools["java_home"] = java_home
-        identity.extend(["javac", javac, _android_javac_version(javac), "jar", jar, "java", java, "java_home", java_home])
+        identity.extend(["javac", javac, _android_javac_version(javac, label_id), "jar", jar, "java", java, "java_home", java_home])
     if include_apk:
         tools["d8"] = _android_attr(attrs, "d8", "") or build_tools + "/d8"
         tools["apksigner"] = _android_attr(attrs, "apksigner", "") or build_tools + "/apksigner"
         tools["zipalign"] = _android_attr(attrs, "zipalign", "") or build_tools + "/zipalign"
         tools["keytool"] = _android_attr(attrs, "keytool", "") or host_which("keytool")
-        identity.extend(["d8", tools["d8"], _android_tool_version(tools["d8"]), "apksigner", tools["apksigner"], "zipalign", tools["zipalign"]])
+        identity.extend(["d8", tools["d8"], _android_tool_version(tools["d8"], label_id), "apksigner", tools["apksigner"], "zipalign", tools["zipalign"]])
     tools["identity"] = "\x00".join(identity)
     return tools
+
+def _android_adb_tools(ctx, attrs):
+    label_id = ctx["label"]["id"]
+    sdk_root = _android_sdk_root(attrs, label_id)
+    adb = _android_attr(attrs, "adb", "") or sdk_root + "/platform-tools/adb"
+    return {
+        "sdk_root": sdk_root,
+        "adb": adb,
+        "identity": "\x00".join(["once.android.adb.v1", "sdk", sdk_root, "adb", adb, _android_adb_version(adb)]),
+    }
 
 def _android_env(tools):
     env = {"ANDROID_HOME": tools["sdk_root"], "ANDROID_SDK_ROOT": tools["sdk_root"]}
@@ -252,6 +268,38 @@ def _android_classpath_sep():
     if host_os() == "windows":
         return ";"
     return ":"
+
+def _android_contains(value, needle):
+    for i in range(len(value)):
+        if value[i:i + len(needle)] == needle:
+            return True
+    return False
+
+def _android_adb_argv(tools, attrs):
+    argv = [tools["adb"]]
+    serial = _android_attr(attrs, "adb_serial", "")
+    if serial:
+        argv.extend(["-s", serial])
+    return argv
+
+def _android_launch_component(application_id, launch_activity):
+    if not launch_activity:
+        return ""
+    if _android_contains(launch_activity, "/"):
+        return launch_activity
+    return application_id + "/" + launch_activity
+
+def _android_launcher_script(application_id):
+    return """set -eu
+component=$(cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER {application_id} | tail -n 1)
+case "$component" in
+  */*) exec am start -n "$component" ;;
+  *) echo {error_message} >&2; exit 1 ;;
+esac
+""".format(
+        application_id = _shell_quote(application_id),
+        error_message = _shell_quote("unable to resolve launcher activity for " + application_id),
+    )
 
 def _android_compile_jars(deps):
     jars = []
@@ -294,6 +342,7 @@ def _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
         return []
     compiled_zips = []
     compile_lines = []
+    sh = _android_host_shell(ctx["label"]["id"])
     i = 0
     for resource_dir in resource_dirs:
         i = i + 1
@@ -306,7 +355,7 @@ def _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
         compile_lines = "\n".join(compile_lines),
     )
     run_action(
-        argv = ["/bin/sh", "-c", script],
+        argv = [sh, "-c", script],
         inputs = resource_files,
         outputs = compiled_zips,
         env = _android_env(tools),
@@ -317,6 +366,7 @@ def _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
 
 def _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, static_lib, asset_roots, asset_files):
     label_id = ctx["label"]["id"]
+    sh = _android_host_shell(label_id)
     resource_apk = declare_output("resources.apk")
     r_src_dir = declare_output("generated/r")
     r_src_hash = declare_output("generated/r_sources.sha256")
@@ -366,7 +416,7 @@ done
         hash_r_sources = _android_hash_tree_script(r_src_dir, r_src_hash, "-name '*.java'"),
     )
     run_action(
-        argv = ["/bin/sh", "-c", script],
+        argv = [sh, "-c", script],
         inputs = _unique([manifest] + compiled_zips + dep_compiled_zips + asset_files),
         outputs = [resource_apk, r_src_dir, r_src_hash, r_txt],
         env = _android_env(tools),
@@ -376,6 +426,7 @@ done
     return (resource_apk, r_src_dir, r_src_hash, r_txt)
 
 def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars):
+    sh = _android_host_shell(ctx["label"]["id"])
     classes_dir = declare_output("classes")
     classes_hash = declare_output("classes.sha256")
     source_list = ctx["build_dir"] + "/java_sources.list"
@@ -416,7 +467,7 @@ fi
         hash_classes = _android_hash_tree_script(classes_dir, classes_hash, ""),
     )
     run_action(
-        argv = ["/bin/sh", "-c", script],
+        argv = [sh, "-c", script],
         inputs = _unique(java_sources + [r_src_hash] + dep_jars),
         outputs = [classes_dir, classes_hash],
         env = _android_env(tools),
@@ -426,6 +477,7 @@ fi
     return (classes_dir, classes_hash)
 
 def _android_jar_classes(ctx, tools, classes_dir, classes_hash):
+    sh = _android_host_shell(ctx["label"]["id"])
     classes_jar = declare_output(ctx["label"]["name"] + ".jar")
     script = """set -eu
 rm -f {classes_jar}
@@ -436,7 +488,7 @@ rm -f {classes_jar}
         classes_dir = _shell_quote(classes_dir),
     )
     run_action(
-        argv = ["/bin/sh", "-c", script],
+        argv = [sh, "-c", script],
         inputs = [classes_hash],
         outputs = [classes_jar],
         env = _android_env(tools),
@@ -446,6 +498,7 @@ rm -f {classes_jar}
     return classes_jar
 
 def _android_package_aar(ctx, attrs, tools, manifest, classes_jar, r_txt, resource_dirs, asset_roots, resource_files, asset_files):
+    sh = _android_host_shell(ctx["label"]["id"])
     aar = declare_output(ctx["label"]["name"] + ".aar")
     staging = ctx["build_dir"] + "/aar_staging"
     script = """set -eu
@@ -483,7 +536,7 @@ rm -f {aar}
         jar = _shell_quote(tools["jar"]),
     )
     run_action(
-        argv = ["/bin/sh", "-c", script],
+        argv = [sh, "-c", script],
         inputs = _unique([manifest, classes_jar, r_txt] + resource_files + asset_files),
         outputs = [aar],
         env = _android_env(tools),
@@ -493,6 +546,7 @@ rm -f {aar}
     return aar
 
 def _android_dex(ctx, attrs, tools, runtime_jars):
+    sh = _android_host_shell(ctx["label"]["id"])
     dex_dir = declare_output("dex")
     dex_hash = declare_output("dex.sha256")
     min_sdk = str(_android_attr(attrs, "min_sdk_version", 23))
@@ -515,7 +569,7 @@ set -- {base_args}
         hash_dex = _android_hash_tree_script(dex_dir, dex_hash, "-name '*.dex'"),
     )
     run_action(
-        argv = ["/bin/sh", "-c", script],
+        argv = [sh, "-c", script],
         inputs = runtime_jars,
         outputs = [dex_dir, dex_hash],
         env = _android_env(tools),
@@ -525,6 +579,7 @@ set -- {base_args}
     return (dex_dir, dex_hash)
 
 def _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash):
+    sh = _android_host_shell(ctx["label"]["id"])
     unsigned_apk = declare_output("unsigned.apk")
     script = """set -eu
 rm -f {unsigned_apk}
@@ -539,7 +594,7 @@ fi
         jar = _shell_quote(tools["jar"]),
     )
     run_action(
-        argv = ["/bin/sh", "-c", script],
+        argv = [sh, "-c", script],
         inputs = [resource_apk, dex_hash],
         outputs = [unsigned_apk],
         env = _android_env(tools),
@@ -561,11 +616,12 @@ def _android_zipalign(ctx, tools, unsigned_apk):
     return aligned_apk
 
 def _android_sign_or_copy(ctx, attrs, tools, aligned_apk):
+    sh = _android_host_shell(ctx["label"]["id"])
     apk = declare_output(ctx["label"]["name"] + ".apk")
     signing = _android_attr(attrs, "signing", "debug")
     if signing == "none":
         run_action(
-            argv = ["/bin/sh", "-c", "set -eu\ncp " + _shell_quote(aligned_apk) + " " + _shell_quote(apk) + "\n"],
+            argv = [sh, "-c", "set -eu\ncp " + _shell_quote(aligned_apk) + " " + _shell_quote(apk) + "\n"],
             outputs = [apk],
             env = _android_env(tools),
             toolchain_identity = tools["identity"] + "\x00unsigned_final",
@@ -603,7 +659,7 @@ fi
         aligned_apk = _shell_quote(aligned_apk),
     )
     run_action(
-        argv = ["/bin/sh", "-c", script],
+        argv = [sh, "-c", script],
         inputs = _unique(inputs + [aligned_apk]),
         outputs = [apk, keystore],
         env = _android_env(tools),
@@ -611,6 +667,42 @@ fi
         identifier = "android_sign:" + ctx["label"]["id"],
     )
     return apk
+
+def _android_run_app(ctx, attrs, tools):
+    label_id = ctx["label"]["id"]
+    application_id = _android_attr(attrs, "application_id", "")
+    launch_activity = _android_attr(attrs, "launch_activity", "")
+    component = _android_launch_component(application_id, launch_activity)
+    apk = ctx["build_dir"] + "/" + ctx["label"]["name"] + ".apk"
+    adb = _android_adb_argv(tools, attrs)
+    run_actions = [
+        (adb + ["wait-for-device"], []),
+        (adb + ["install", "-r", "-d", apk], [apk]),
+    ]
+    if component:
+        run_actions.append((adb + ["shell", "am", "start", "-n", component], []))
+    else:
+        run_actions.append((adb + ["shell", _android_launcher_script(application_id)], []))
+    index = 0
+    for action in run_actions:
+        index = index + 1
+        run_action(
+            argv = action[0],
+            inputs = action[1],
+            outputs = [],
+            env = _android_env(tools),
+            cacheable = False,
+            toolchain_identity = tools["identity"] + "\x00run\x00" + str(index),
+            identifier = "android_run:" + label_id + ":" + str(index),
+        )
+    return {
+        "label_id": label_id,
+        "target_kind": "android_binary",
+        "application_id": application_id,
+        "apk": apk,
+        "adb": tools["adb"],
+        "launch_activity": launch_activity,
+    }
 
 def _android_resource_impl(ctx):
     attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "custom_package", "namespace", "package", "aapt2"])
@@ -692,8 +784,11 @@ def _android_library_impl(ctx):
     }
 
 def _android_binary_impl(ctx):
-    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "application_id", "custom_package", "namespace", "javac", "jar", "java", "java_home", "aapt2", "d8", "apksigner", "zipalign", "keytool", "debug_keystore"])
+    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "application_id", "custom_package", "namespace", "javac", "jar", "java", "java_home", "aapt2", "d8", "apksigner", "zipalign", "keytool", "debug_keystore", "adb", "adb_serial", "launch_activity"])
     _android_reject_unsupported_attrs(attrs, ctx["label"]["id"], ["enable_data_binding", "instruments", "manifest_values", "proguard_specs", "resource_configuration_filters", "densities", "nocompress_extensions", "startup_profiles", "native_target"])
+    if ctx["capability"] == "run":
+        tools = _android_adb_tools(ctx, attrs)
+        return _android_run_app(ctx, attrs, tools)
     tools = _android_tools(ctx, attrs, True, True)
     manifest = _android_manifest(ctx, attrs)
     dep_compiled_zips = _android_compiled_resource_zips(ctx["deps"])
@@ -827,6 +922,9 @@ android_binary = target_kind(
         attr("debug_keystore", "string", docs = "Optional package-relative debug keystore. When omitted, Once generates a debug keystore.", configurable = False),
         attr("debug_keystore_password", "string", default = "\"android\"", docs = "Password for debug signing only.", configurable = False),
         attr("debug_key_alias", "string", default = "\"androiddebugkey\"", docs = "Key alias for debug signing only.", configurable = False),
+        attr("adb", "string", docs = "Override adb path for the run capability.", configurable = False),
+        attr("adb_serial", "string", docs = "Optional adb device serial for the run capability.", configurable = False),
+        attr("launch_activity", "string", docs = "Optional Android activity component launched by once run. Defaults to the launcher intent for application_id.", configurable = False),
         attr("enable_data_binding", "bool", default = "false", docs = "Reserved for Android data binding support.", configurable = False),
         attr("instruments", "target", docs = "Reserved for instrumentation test support.", configurable = False),
         attr("manifest_values", "map<string,string>", default = "{}", docs = "Reserved for manifest placeholder expansion.", configurable = False),
@@ -841,7 +939,10 @@ android_binary = target_kind(
         dep("deps", ["android_library", "android_resource"], "Android libraries and resources packaged into the APK."),
     ],
     providers = ["android_application", "android_apk"],
-    capabilities = [capability("build", ["default", "apk", "dex", "resources"])],
+    capabilities = [
+        capability("build", ["default", "apk", "dex", "resources"]),
+        capability("run", ["default"], ["apk"]),
+    ],
     examples = [
         example(
             "android-binary-minimal",

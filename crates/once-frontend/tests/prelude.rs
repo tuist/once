@@ -67,6 +67,27 @@ fn apple_application_exposes_build_and_run() {
 }
 
 #[test]
+fn android_binary_exposes_build_and_run() {
+    let schema = built_in_target_kind_schema("android_binary").expect("android_binary schema");
+    let run = schema
+        .capabilities
+        .iter()
+        .find(|capability| capability.name == "run")
+        .expect("android_binary run capability");
+    assert_eq!(run.output_groups, vec!["default"]);
+    assert_eq!(run.requires_outputs, vec!["apk"]);
+
+    let attr_names = schema
+        .attrs
+        .iter()
+        .map(|attr| attr.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(attr_names.contains(&"adb"));
+    assert!(attr_names.contains(&"adb_serial"));
+    assert!(attr_names.contains(&"launch_activity"));
+}
+
+#[test]
 fn apple_library_schema_exposes_multi_arch_attributes() {
     let schema = built_in_target_kind_schema("apple_library").expect("apple_library schema");
     let attr_names = schema

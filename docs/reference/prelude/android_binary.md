@@ -32,6 +32,9 @@ with a debug key by default.
 | `debug_keystore` | string | no | generated | Optional package-relative debug keystore |
 | `debug_keystore_password` | string | no | `android` | Password for debug signing only |
 | `debug_key_alias` | string | no | `androiddebugkey` | Key alias for debug signing only |
+| `adb` | string | no | SDK platform-tools | Override adb path for `run` |
+| `adb_serial` | string | no |  | Device serial passed to `adb -s` |
+| `launch_activity` | string | no | launcher intent | Activity component launched by `once run` |
 | `build_tools_version` | string | no | highest installed | Android SDK build-tools version |
 | `android_sdk` | string | no | env | Android SDK root, otherwise `ANDROID_HOME` or `ANDROID_SDK_ROOT` |
 | `java_language_level` | string | no | `17` | Java source and target level passed to `javac` |
@@ -39,7 +42,8 @@ with a debug key by default.
 | `dexopts` | list&lt;string&gt; | no | `[]` | Additional `d8` flags |
 
 Tool override attrs are also available for `javac`, `jar`, `java`,
-`java_home`, `aapt2`, `d8`, `apksigner`, `zipalign`, and `keytool`.
+`java_home`, `aapt2`, `d8`, `apksigner`, `zipalign`, `keytool`, and
+`adb`.
 
 ## Dep Edges
 
@@ -53,9 +57,10 @@ The target emits `android_application` and `android_apk`.
 
 ## Capabilities
 
-| Capability | Output groups |
-| --- | --- |
-| `build` | `default`, `apk`, `dex`, `resources` |
+| Capability | Output groups | Requires |
+| --- | --- | --- |
+| `build` | `default`, `apk`, `dex`, `resources` |  |
+| `run` | `default` | `apk` |
 
 ## Outputs
 
@@ -72,15 +77,31 @@ The target emits `android_application` and `android_apk`.
 omitted and signs with `apksigner`. `signing = "none"` leaves the APK
 unsigned after zipalign. Production signing is not implemented yet.
 
+## Running
+
+`once run` first builds the APK because the `run` capability requires the
+`apk` output group. The run action then executes direct `adb` commands:
+wait for a device, install the APK with `adb install -r -d`, and launch the
+app.
+
+When `launch_activity` is empty, Once resolves the launcher activity on the
+device with `cmd package resolve-activity --brief`, then starts the resolved
+component with `am start -n`. When `launch_activity` is set, Once launches it
+directly with `adb shell am start -n <component>`. Components may be written
+as `package/.Activity`, `package/FullyQualifiedActivity`, or just an activity
+name, which Once pairs with `application_id`.
+
+Set `adb_serial` when more than one Android device or emulator is connected.
+
 ## Limitations
 
 The first Android implementation supports Java sources, resources,
-debug signing, Android resource deps, and Android library deps. Kotlin,
-data binding, instrumentation tests, manifest placeholder expansion,
-native splits, shrinking, resource filtering, density filtering,
-no-compress packaging, and startup profile packaging are not implemented
-yet. Non-empty values for unsupported attrs fail analysis instead of
-being ignored.
+debug signing, Android resource deps, Android library deps, APK install,
+and app launch. Kotlin, data binding, instrumentation tests, manifest
+placeholder expansion, native splits, shrinking, resource filtering,
+density filtering, no-compress packaging, and startup profile packaging are
+not implemented yet. Non-empty values for unsupported attrs fail analysis
+instead of being ignored.
 
 ## Example
 

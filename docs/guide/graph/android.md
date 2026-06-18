@@ -80,13 +80,6 @@ ownership clear and queryable.
 
 ## Commands
 
-Install the SDK packages used by the bundled examples:
-
-```sh
-mise install
-mise run android:install-sdk
-```
-
 Inspect the graph with [`once query`](/reference/cli/query):
 
 ```sh
@@ -105,17 +98,46 @@ once build apps/hello/Hello
 Outputs land under `.once/out/<target>/`. The target kind reference pages list
 the exact outputs each target kind emits.
 
+## Running Apps
+
+`android_binary` produces an APK and exposes `run`. `once run` first
+materializes the required APK output, then executes the Android run action
+declared by the target kind. That run action is not cacheable, so each
+`once run` attempts a fresh install and launch instead of replaying an
+action-cache hit.
+
+The Android target kind owns the platform behavior. It waits for an Android
+device or emulator through `adb`, installs the APK with `adb install -r -d`,
+resolves the launcher activity on the device, and starts that component with
+`am start`. Set `launch_activity` when the app needs an explicit activity
+component. Set `adb_serial` when more than one device is connected.
+
+```sh
+once build apps/hello/Hello
+once run apps/hello/Hello
+```
+
 ## Toolchain
 
-Android targets find the Android SDK from `android_sdk`, `ANDROID_HOME`,
-or `ANDROID_SDK_ROOT`. When `compile_sdk` or `build_tools_version` is
-omitted, the target kind picks the highest installed platform or build-tools
-version under the SDK root.
+Android targets require a JDK with `java`, `javac`, `jar`, and `keytool`.
+They also require the Android SDK command-line tools plus an installed
+Android platform and build-tools package. Build-tools provide `aapt2`, `d8`,
+`zipalign`, and `apksigner`. Running apps also requires platform-tools so
+`adb` is available.
+
+Android targets find the SDK from `android_sdk`, `ANDROID_HOME`, or
+`ANDROID_SDK_ROOT`. When `compile_sdk` or `build_tools_version` is omitted,
+the target kind picks the highest installed platform or build-tools version
+under the SDK root.
 
 Java-backed Android targets use `javac`, `jar`, and `java` from the host
 toolchain unless those paths are overridden. The Android SDK tools also
 receive `JAVA_HOME` when it is available, which keeps `d8` and `apksigner`
 working with mise-managed Java installs.
+
+Android build actions currently require a POSIX-compatible host shell for
+file staging and directory hashing. App launch actions use direct `adb`
+commands.
 
 The current implementation supports Java sources, Android resources,
 assets, static resource packages, AAR packaging, dexing, APK packaging,
@@ -150,7 +172,10 @@ marked non-configurable in the target kind schema also reject `select`.
 
 ## Prior Art
 
-The Android target kind set uses both Bazel and Buck2 as reference points:
+The Android target kind set uses both
+[Bazel's Android rules](https://github.com/bazelbuild/rules_android) and
+[Buck2's Android rules](https://github.com/facebook/buck2) as reference
+points:
 
 - Bazel's Android rules provide a broad compatibility vocabulary for
   Java sources, resources, assets, SDK selection, dexing, APK packaging,
