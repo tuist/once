@@ -27,7 +27,9 @@ once query 'MATCH (app:Target {id: "apps/ios/App"})-[:DEPENDS_ON*]->(dep:Target)
 once query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id'
 ```
 
-Supported labels are `Target`, `Capability`, and `Provider`; labels use the `:Label` form, for example `(t:Target)`. Supported relationships are `DEPENDS_ON`, `EXPOSES`, and `EMITS`. The `*` suffix on a relationship performs transitive traversal, for example `[:DEPENDS_ON*]`.
+Supported labels are `Target`, `Capability`, and `Provider`. Labels use the `:Label` form, for example `(t:Target)`. Bare node names without a colon are aliases, so `(Target)` binds a variable named `Target` instead of filtering by the `Target` label. Supported relationships are `DEPENDS_ON`, `EXPOSES`, and `EMITS`. The `*` suffix on a relationship performs transitive traversal, for example `[:DEPENDS_ON*]`.
+
+String literals can be quoted with single or double quotes and support `\n`, `\r`, `\t`, `\\`, `\"`, and `\'` escapes. Other escape forms, including Unicode escapes, are rejected.
 
 ## Options
 

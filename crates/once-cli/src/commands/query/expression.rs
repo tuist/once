@@ -8,8 +8,8 @@ use serde_json::{json, Map, Value};
 const SUPPORTED_LABELS: &[&str] = &["Target", "Capability", "Provider"];
 const SUPPORTED_RELATIONSHIPS: &[&str] = &["DEPENDS_ON", "EXPOSES", "EMITS"];
 const UNSUPPORTED_CLAUSES: &[&str] = &[
-    "CALL", "CREATE", "DELETE", "DETACH", "FOREACH", "LOAD", "MERGE", "REMOVE", "SET", "UNWIND",
-    "WITH",
+    "CALL", "CREATE", "DELETE", "DETACH", "DROP", "FOREACH", "LOAD", "MERGE", "OPTIONAL", "REMOVE",
+    "SET", "UNWIND", "WITH",
 ];
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -230,11 +230,6 @@ fn parse_node(raw: &str) -> Result<NodePattern> {
         let alias = optional_identifier(head[..colon].trim())?;
         let label = canonical_label(head[colon + 1..].trim())?;
         (alias, Some(label))
-    } else if SUPPORTED_LABELS
-        .iter()
-        .any(|label| label.eq_ignore_ascii_case(head))
-    {
-        bail!("node label `{head}` must use `:{head}`");
     } else {
         (optional_identifier(head)?, None)
     };
@@ -397,7 +392,7 @@ fn parse_string_literal(raw: &str) -> Result<String> {
     let mut escaped = false;
     for ch in inner.chars() {
         if escaped {
-            output.push(match ch {
+            let value = match ch {
                 'n' => '\n',
                 'r' => '\r',
                 't' => '\t',
@@ -405,7 +400,8 @@ fn parse_string_literal(raw: &str) -> Result<String> {
                 '"' => '"',
                 '\'' => '\'',
                 other => bail!("unsupported string escape `\\{other}`"),
-            });
+            };
+            output.push(value);
             escaped = false;
         } else if ch == '\\' {
             escaped = true;
@@ -976,6 +972,29 @@ mod tests {
     }
 
     #[test]
+    fn rejects_mutating_clauses_case_insensitively() {
+        let error = evaluate("MATCH (t:Target) delete t RETURN t.id", &[]).unwrap_err();
+        assert!(error.to_string().contains("read-only"));
+        assert!(error.to_string().contains("DELETE"));
+    }
+
+    #[test]
+    fn rejects_additional_unsupported_clauses() {
+        let optional_error =
+            reject_unsupported_clauses("OPTIONAL MATCH (t:Target) RETURN t.id").unwrap_err();
+        assert!(optional_error.to_string().contains("OPTIONAL"));
+
+        let drop_error = reject_unsupported_clauses("DROP INDEX target_name").unwrap_err();
+        assert!(drop_error.to_string().contains("DROP"));
+    }
+
+    #[test]
+    fn allows_clause_keywords_inside_string_literals() {
+        let result = evaluate(r#"MATCH (t:Target {kind: "CREATE"}) RETURN t.id"#, &[]).unwrap();
+        assert!(result.rows.is_empty());
+    }
+
+    #[test]
     fn rejects_duplicate_relationship_aliases() {
         let error = evaluate(
             "MATCH (target:Target)-[:DEPENDS_ON]->(target:Target) RETURN target.id",
@@ -986,14 +1005,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_supported_labels_without_colons() {
-        let error = evaluate("MATCH (Target) RETURN Target.id", &[]).unwrap_err();
-        assert!(error.to_string().contains("must use `:Target`"));
+    fn treats_supported_label_words_without_colons_as_aliases() {
+        let graph = vec![target("apps/App", "apple_application", &[], &[])];
+
+        let result = evaluate("MATCH (Target) RETURN Target.id", &graph).unwrap();
+
+        assert_eq!(result.columns, vec!["Target.id"]);
+        assert_eq!(result.rows, vec![vec![json!("apps/App")]]);
     }
 
     #[test]
     fn rejects_unsupported_string_escapes() {
         let error = evaluate(r#"MATCH (t:Target {id: "apps\x"}) RETURN t.id"#, &[]).unwrap_err();
+        assert!(error.to_string().contains("unsupported string escape"));
+
+        let error =
+            evaluate(r#"MATCH (t:Target {id: "apps\u0041"}) RETURN t.id"#, &[]).unwrap_err();
         assert!(error.to_string().contains("unsupported string escape"));
     }
 
