@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde::Serialize;
 use starlark::environment::Module;
@@ -194,7 +195,8 @@ pub fn load_graph_workspace(root: &Path) -> Result<Vec<GraphTarget>> {
 
 #[must_use]
 pub fn graph_from_targets(targets: &[Target]) -> Vec<GraphTarget> {
-    targets.iter().map(GraphTarget::from).collect()
+    let schemas = built_in_target_kind_schemas();
+    graph_from_targets_with_schemas(targets, &schemas)
 }
 
 pub fn graph_from_targets_result(targets: &[Target]) -> Result<Vec<GraphTarget>> {
@@ -355,10 +357,18 @@ fn parent_dir(path: &str) -> String {
 }
 
 fn starlark_prelude_target_kind_schemas() -> Result<Vec<TargetKindSchema>> {
-    parse_target_kind_schemas(
+    static BUILT_IN_TARGET_KIND_SCHEMAS: OnceLock<Vec<TargetKindSchema>> = OnceLock::new();
+
+    if let Some(schemas) = BUILT_IN_TARGET_KIND_SCHEMAS.get() {
+        return Ok(schemas.clone());
+    }
+
+    let schemas = parse_target_kind_schemas(
         crate::modules::BUILT_IN_MODULE_PATH,
         crate::modules::built_in_module_source(),
-    )
+    )?;
+    let _ = BUILT_IN_TARGET_KIND_SCHEMAS.set(schemas.clone());
+    Ok(schemas)
 }
 
 /// Evaluate a Starlark module source and read its exported target kind symbols.
@@ -980,6 +990,31 @@ demo_kind = target_kind(
             graph[0].attrs.get("mode"),
             Some(&AttrValue::String("debug".to_string()))
         );
+    }
+
+    #[test]
+    fn graph_from_targets_attaches_built_in_schema_to_each_target() {
+        let targets = ["ToolA", "ToolB"].map(|name| Target {
+            package: "tools".to_string(),
+            kind: "script".to_string(),
+            name: name.to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            typed_attrs: BTreeMap::new(),
+        });
+
+        let graph = graph_from_targets(&targets);
+
+        assert_eq!(graph.len(), 2);
+        for target in graph {
+            assert!(target.diagnostics.is_empty());
+            assert_eq!(target.providers, vec!["script_action"]);
+            assert!(target
+                .capabilities
+                .iter()
+                .any(|capability| capability.name == "run"));
+        }
     }
 
     #[test]

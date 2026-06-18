@@ -37,6 +37,7 @@ fn cmd(script: &str) -> Action {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn many_independent_actions_execute_concurrently() {
     let (_tmp, runner) = ws();
+    let runner = runner.with_max_concurrency(8);
     let actions: Vec<Action> = (0..8u32)
         .map(|i| cmd(&format!("sleep 0.2; printf {i}")))
         .collect();
