@@ -387,24 +387,45 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn independent_leaves_run_in_parallel() {
-        let (_tmp, runner) = ws();
-        let runner = runner.with_max_concurrency(6);
+        let (tmp, runner) = ws();
+        let runner = runner.with_max_concurrency(2);
+        let a_started = tmp.path().join("parallel/a.started");
+        let b_started = tmp.path().join("parallel/b.started");
+        let wait_for_peer = |name: &str, peer: &str| {
+            Action::RunCommand {
+                argv: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!(
+                        "mkdir -p parallel; : > parallel/{name}.started; while [ ! -f parallel/{peer}.started ]; do sleep 0.01; done; printf {name}",
+                    ),
+                ],
+                env: BTreeMap::new(),
+                cwd: None,
+                input_digest: None,
+                outputs: vec![],
+                output_symlink_mode: OutputSymlinkMode::default(),
+                resources: ResourceRequest::default(),
+                timeout_ms: Some(5_000),
+                remote: None,
+            }
+        };
         let mut plan = Plan::new();
-        for i in 0..6u32 {
-            plan.push(PlanNode {
-                label: format!("leaf-{i}"),
-                action: cmd(&format!("sleep 0.2; printf {i}")),
-                deps: vec![],
-            });
-        }
-        let started = std::time::Instant::now();
+        plan.push(PlanNode {
+            label: "leaf-a".into(),
+            action: wait_for_peer("a", "b"),
+            deps: vec![],
+        });
+        plan.push(PlanNode {
+            label: "leaf-b".into(),
+            action: wait_for_peer("b", "a"),
+            deps: vec![],
+        });
+
         let outcomes = runner.run_plan(&plan).await.unwrap();
-        assert_eq!(outcomes.len(), 6);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(1),
-            "expected parallel scheduling; took {:?}",
-            started.elapsed()
-        );
+        assert_eq!(outcomes.len(), 2);
+        assert!(a_started.exists());
+        assert!(b_started.exists());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
