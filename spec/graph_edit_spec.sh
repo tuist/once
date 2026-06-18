@@ -179,6 +179,35 @@ EOF
     The stdout should include 'columns[1]:target'
     The stdout should include 'apps/Hello/AppTests'
   End
+
+  It 'rejects invalid Cypher syntax'
+    seed_query_expression_workspace
+    When call once query 'MATCH (t:Target RETURN t.id'
+    The status should not equal 0
+    The stderr should include 'not valid Cypher syntax'
+  End
+
+  It 'rejects unsupported graph labels'
+    seed_query_expression_workspace
+    When call once query 'MATCH (t:Unknown) RETURN t.id'
+    The status should not equal 0
+    The stderr should include 'unsupported graph label'
+  End
+
+  It 'rejects unsupported graph relationships'
+    seed_query_expression_workspace
+    When call once query 'MATCH (t:Target)-[:OWNS]->(d:Target) RETURN d.id'
+    The status should not equal 0
+    The stderr should include 'unsupported relationship'
+  End
+
+  It 'rejects mutating Cypher clauses'
+    seed_query_expression_workspace
+    When call once query 'MATCH (t:Target) DELETE t RETURN t.id'
+    The status should not equal 0
+    The stderr should include 'read-only'
+    The stderr should include 'DELETE'
+  End
 End
 
 Describe 'once query target'

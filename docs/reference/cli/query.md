@@ -27,7 +27,7 @@ once query 'MATCH (app:Target {id: "apps/ios/App"})-[:DEPENDS_ON*]->(dep:Target)
 once query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id'
 ```
 
-Supported labels are `Target`, `Capability`, and `Provider`. Supported relationships are `DEPENDS_ON`, `EXPOSES`, and `EMITS`. The `*` suffix on a relationship performs transitive traversal, for example `[:DEPENDS_ON*]`.
+Supported labels are `Target`, `Capability`, and `Provider`; labels use the `:Label` form, for example `(t:Target)`. Supported relationships are `DEPENDS_ON`, `EXPOSES`, and `EMITS`. The `*` suffix on a relationship performs transitive traversal, for example `[:DEPENDS_ON*]`.
 
 ## Options
 

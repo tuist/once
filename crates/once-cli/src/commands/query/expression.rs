@@ -7,6 +7,10 @@ use serde_json::{json, Map, Value};
 
 const SUPPORTED_LABELS: &[&str] = &["Target", "Capability", "Provider"];
 const SUPPORTED_RELATIONSHIPS: &[&str] = &["DEPENDS_ON", "EXPOSES", "EMITS"];
+const UNSUPPORTED_CLAUSES: &[&str] = &[
+    "CALL", "CREATE", "DELETE", "DETACH", "FOREACH", "LOAD", "MERGE", "REMOVE", "SET", "UNWIND",
+    "WITH",
+];
 
 #[derive(Debug, PartialEq, Serialize)]
 pub(crate) struct QueryResult {
@@ -150,6 +154,7 @@ fn validate_cypher_syntax(query: &str) -> Result<()> {
 
 fn parse_query(raw: &str) -> Result<ParsedQuery> {
     let query = strip_trailing_semicolon(raw.trim());
+    reject_unsupported_clauses(query)?;
     let match_pos = keyword_pos(query, "MATCH", 0).ok_or_else(|| {
         anyhow!("query expression must start with a read-only `MATCH ... RETURN ...` query")
     })?;
@@ -189,6 +194,7 @@ fn parse_match_pattern(raw: &str) -> Result<MatchPattern> {
     }
     let (relationship, rest) = parse_relationship_at(rest)?;
     let (right, rest) = parse_node_at(rest)?;
+    reject_duplicate_relationship_aliases(&left, &right)?;
     if !rest.trim().is_empty() {
         bail!("only one relationship pattern is supported");
     }
@@ -224,6 +230,11 @@ fn parse_node(raw: &str) -> Result<NodePattern> {
         let alias = optional_identifier(head[..colon].trim())?;
         let label = canonical_label(head[colon + 1..].trim())?;
         (alias, Some(label))
+    } else if SUPPORTED_LABELS
+        .iter()
+        .any(|label| label.eq_ignore_ascii_case(head))
+    {
+        bail!("node label `{head}` must use `:{head}`");
     } else {
         (optional_identifier(head)?, None)
     };
@@ -393,7 +404,7 @@ fn parse_string_literal(raw: &str) -> Result<String> {
                 '\\' => '\\',
                 '"' => '"',
                 '\'' => '\'',
-                other => other,
+                other => bail!("unsupported string escape `\\{other}`"),
             });
             escaped = false;
         } else if ch == '\\' {
@@ -406,6 +417,24 @@ fn parse_string_literal(raw: &str) -> Result<String> {
         bail!("unterminated string escape");
     }
     Ok(output)
+}
+
+fn reject_unsupported_clauses(query: &str) -> Result<()> {
+    for clause in UNSUPPORTED_CLAUSES {
+        if keyword_pos(query, clause, 0).is_some() {
+            bail!("query expressions are read-only; `{clause}` is not supported");
+        }
+    }
+    Ok(())
+}
+
+fn reject_duplicate_relationship_aliases(left: &NodePattern, right: &NodePattern) -> Result<()> {
+    if let (Some(left), Some(right)) = (&left.alias, &right.alias) {
+        if left == right {
+            bail!("duplicate relationship alias `{left}` is not supported");
+        }
+    }
+    Ok(())
 }
 
 impl GraphModel {
@@ -937,6 +966,35 @@ mod tests {
     fn rejects_unsupported_relationships() {
         let error = evaluate("MATCH (a:Target)-[:OWNS]->(b:Target) RETURN b.id", &[]).unwrap_err();
         assert!(error.to_string().contains("unsupported relationship"));
+    }
+
+    #[test]
+    fn rejects_mutating_clauses() {
+        let error = evaluate("MATCH (t:Target) DELETE t RETURN t.id", &[]).unwrap_err();
+        assert!(error.to_string().contains("read-only"));
+        assert!(error.to_string().contains("DELETE"));
+    }
+
+    #[test]
+    fn rejects_duplicate_relationship_aliases() {
+        let error = evaluate(
+            "MATCH (target:Target)-[:DEPENDS_ON]->(target:Target) RETURN target.id",
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("duplicate relationship alias"));
+    }
+
+    #[test]
+    fn rejects_supported_labels_without_colons() {
+        let error = evaluate("MATCH (Target) RETURN Target.id", &[]).unwrap_err();
+        assert!(error.to_string().contains("must use `:Target`"));
+    }
+
+    #[test]
+    fn rejects_unsupported_string_escapes() {
+        let error = evaluate(r#"MATCH (t:Target {id: "apps\x"}) RETURN t.id"#, &[]).unwrap_err();
+        assert!(error.to_string().contains("unsupported string escape"));
     }
 
     #[test]
