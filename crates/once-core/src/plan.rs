@@ -388,20 +388,23 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn independent_leaves_run_in_parallel() {
         let (tmp, runner) = ws();
-        let runner = runner.with_max_concurrency(2);
-        let a_started = tmp.path().join("parallel/a.started");
-        let b_started = tmp.path().join("parallel/b.started");
-        let wait_for_peer = |name: &str, peer: &str| {
+        let leaf_count = 6usize;
+        let runner = runner.with_max_concurrency(leaf_count);
+        let started = (0..leaf_count)
+            .map(|index| tmp.path().join(format!("parallel/leaf-{index}.started")))
+            .collect::<Vec<_>>();
+        let wait_for_peers = |name: String| {
             Action::RunCommand {
                 argv: vec![
                     "/bin/sh".into(),
                     "-c".into(),
-                    format!(
-                        "mkdir -p parallel; : > parallel/{name}.started; while [ ! -f parallel/{peer}.started ]; do sleep 0.01; done; printf {name}",
-                    ),
+                    "mkdir -p parallel; : > \"parallel/$1.started\"; while [ \"$(find parallel -name '*.started' -print | wc -l | tr -d '[:space:]')\" -lt \"$2\" ]; do sleep 0.01; done; printf '%s' \"$1\"".into(),
+                    "wait-for-peers".into(),
+                    name,
+                    leaf_count.to_string(),
                 ],
                 env: BTreeMap::new(),
-                cwd: None,
+                cwd: Some(WorkspacePath::root()),
                 input_digest: None,
                 outputs: vec![],
                 output_symlink_mode: OutputSymlinkMode::default(),
@@ -411,21 +414,23 @@ mod tests {
             }
         };
         let mut plan = Plan::new();
-        plan.push(PlanNode {
-            label: "leaf-a".into(),
-            action: wait_for_peer("a", "b"),
-            deps: vec![],
-        });
-        plan.push(PlanNode {
-            label: "leaf-b".into(),
-            action: wait_for_peer("b", "a"),
-            deps: vec![],
-        });
+        for index in 0..leaf_count {
+            let name = format!("leaf-{index}");
+            plan.push(PlanNode {
+                label: name.clone(),
+                action: wait_for_peers(name),
+                deps: vec![],
+            });
+        }
 
         let outcomes = runner.run_plan(&plan).await.unwrap();
-        assert_eq!(outcomes.len(), 2);
-        assert!(a_started.exists());
-        assert!(b_started.exists());
+        assert_eq!(outcomes.len(), leaf_count);
+        for outcome in &outcomes {
+            assert_eq!(outcome.outcome.result.exit_code, 0);
+        }
+        for marker in started {
+            assert!(marker.exists(), "missing marker {}", marker.display());
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
