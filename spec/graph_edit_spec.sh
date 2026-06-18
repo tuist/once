@@ -113,6 +113,133 @@ EOF
   End
 End
 
+Describe 'once query expression'
+  BeforeEach 'setup_workspace'
+  AfterEach 'cleanup_workspace'
+
+  seed_query_expression_workspace() {
+    mkdir -p "$WORKSPACE/apps/Hello"
+    cat > "$WORKSPACE/apps/Hello/once.toml" <<'EOF'
+[[target]]
+name = "Core"
+kind = "apple_library"
+
+[target.attrs]
+platform = "ios"
+
+[[target]]
+name = "DesignSystem"
+kind = "apple_framework"
+deps = ["./Core"]
+
+[target.attrs]
+platform = "ios"
+bundle_id = "dev.once.DesignSystem"
+
+[[target]]
+name = "App"
+kind = "apple_application"
+deps = ["./DesignSystem"]
+
+[target.attrs]
+platform = "ios"
+bundle_id = "dev.once.App"
+
+[[target]]
+name = "AppTests"
+kind = "apple_test_bundle"
+deps = ["./Core"]
+
+[target.attrs]
+platform = "ios"
+EOF
+  }
+
+  It 'evaluates a transitive dependency query'
+    seed_query_expression_workspace
+    When call once query 'MATCH (app:Target {id: "apps/Hello/App"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
+    The status should be success
+    The stdout should include 'dep.id | dep.kind'
+    The stdout should include 'apps/Hello/DesignSystem | apple_framework'
+    The stdout should include 'apps/Hello/Core | apple_library'
+  End
+
+  It 'emits JSON rows for capability queries'
+    seed_query_expression_workspace
+    When call once --format json query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id AS target'
+    The status should be success
+    The stdout should include '"columns":["target"]'
+    The stdout should include '"apps/Hello/AppTests"'
+  End
+
+  It 'emits Toon rows for capability queries'
+    seed_query_expression_workspace
+    When call once --format toon query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id AS target'
+    The status should be success
+    The stdout should include 'columns[1]:target'
+    The stdout should include 'apps/Hello/AppTests'
+  End
+
+  It 'treats bare supported label words as aliases'
+    seed_query_expression_workspace
+    When call once query 'MATCH (Target) RETURN Target.id'
+    The status should be success
+    The stdout should include 'Target.id'
+    The stdout should include 'apps/Hello/App'
+  End
+
+  It 'rejects invalid Cypher syntax'
+    seed_query_expression_workspace
+    When call once query 'MATCH (t:Target RETURN t.id'
+    The status should equal 2
+    The stdout should equal ''
+    The stderr should include 'not valid Cypher syntax'
+  End
+
+  It 'rejects unsupported graph labels'
+    seed_query_expression_workspace
+    When call once query 'MATCH (t:Unknown) RETURN t.id'
+    The status should equal 2
+    The stdout should equal ''
+    The stderr should include 'unsupported graph label'
+  End
+
+  It 'rejects unsupported graph relationships'
+    seed_query_expression_workspace
+    When call once query 'MATCH (t:Target)-[:OWNS]->(d:Target) RETURN d.id'
+    The status should equal 2
+    The stdout should equal ''
+    The stderr should include 'unsupported relationship'
+  End
+
+  It 'rejects mutating Cypher clauses'
+    seed_query_expression_workspace
+    When call once query 'MATCH (t:Target) DELETE t RETURN t.id'
+    The status should equal 2
+    The stdout should equal ''
+    The stderr should include 'read-only'
+    The stderr should include 'DELETE'
+  End
+
+  It 'rejects optional match clauses'
+    seed_query_expression_workspace
+    When call once query 'OPTIONAL MATCH (t:Target) RETURN t.id'
+    The status should equal 2
+    The stdout should equal ''
+    The stderr should include 'read-only'
+    The stderr should include 'OPTIONAL'
+  End
+
+  It 'rejects drop statements'
+    seed_query_expression_workspace
+    When call once query 'DROP INDEX target_name'
+    The status should equal 2
+    The stdout should equal ''
+    The stderr should include 'read-only'
+    The stderr should include 'DROP'
+  End
+End
+
 Describe 'once query target'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'

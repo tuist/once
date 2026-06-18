@@ -273,11 +273,16 @@ pub enum Cmd {
     /// and capabilities; `query capabilities` shows what a specific
     /// target exposes (`build`, `run`, `test`); `query schema`
     /// returns the typed attribute and provider shape for a target kind; and
-    /// `query example` materializes a chosen starter. All query
-    /// surfaces respect `--format json` so consumers can plan against
-    /// the graph without scraping prose.
+    /// `query example` materializes a chosen starter. A quoted
+    /// `MATCH ... RETURN ...` expression can explore the graph through
+    /// a read-only Cypher-like pattern. All query surfaces respect
+    /// `--format json` and `--format toon` so consumers can plan
+    /// against the graph without scraping prose.
     #[command(arg_required_else_help = true)]
     Query {
+        /// Read-only Cypher-like graph query expression.
+        #[arg(value_name = "QUERY")]
+        expression: Option<String>,
         #[command(subcommand)]
         cmd: Option<QueryCmd>,
     },
@@ -379,7 +384,7 @@ impl Cmd {
                 }
                 path
             }
-            Self::Query { cmd } => {
+            Self::Query { cmd, .. } => {
                 let mut path = vec!["query"];
                 if let Some(cmd) = cmd {
                     path.extend(cmd.surface_path());

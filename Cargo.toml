@@ -38,6 +38,8 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
+tree-sitter = "0.26.9"
+tree-sitter-cypher = "0.2.6"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 schlussel = { git = "https://github.com/tuist/schlussel.git", rev = "80a7bc1fc0b68bdc2cd2379b16240ddbfbe0267b" }
 tracing = "0.1"

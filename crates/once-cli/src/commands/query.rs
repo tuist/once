@@ -1,5 +1,7 @@
 //! `once query` - inspect the typed build graph.
 
+mod expression;
+
 use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -42,6 +44,12 @@ pub async fn targets(workspace: &Path, output: Output, kind: Option<&str>) -> Re
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let records = target_records(graph, kind);
     write_body(output, || render_targets_human(&records), &records).await
+}
+
+pub async fn expression(workspace: &Path, output: Output, query: &str) -> Result<()> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let result = expression::evaluate(query, &graph)?;
+    write_body(output, || expression::render_human(&result), &result).await
 }
 
 fn target_records(graph: Vec<once_frontend::GraphTarget>, kind: Option<&str>) -> Vec<TargetRecord> {
