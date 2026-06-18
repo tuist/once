@@ -1,0 +1,110 @@
+# `android_binary`
+
+Android APK target.
+
+## Description
+
+Builds an Android APK from Java sources, Android resources,
+`android_resource` deps, and `android_library` deps. The target kind
+links resources with `aapt2`, compiles Java sources with `javac`, dexes
+runtime jars with `d8`, packages the APK, zipaligns it, and signs it
+with a debug key by default.
+
+## Attributes
+
+| Attribute | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `application_id` | string | yes |  | Android application id |
+| `manifest` | string | no | `AndroidManifest.xml` | Package-relative Android manifest |
+| `resource_files` | list&lt;string&gt; | no | files under `res` | Android resource file glob patterns |
+| `resource_dirs` | list&lt;string&gt; | no | `["res"]` | Resource roots passed to `aapt2 compile` |
+| `assets` | list&lt;string&gt; | no | `[]` | Android asset file glob patterns |
+| `asset_dirs` | list&lt;string&gt; | no | `["assets"]` | Asset roots packaged into the APK |
+| `assets_dir` | string | no |  | Bazel-compatible single asset root alias |
+| `namespace` | string | no | `application_id` | Java package for generated R classes |
+| `custom_package` | string | no |  | Bazel-compatible alias for generated R package |
+| `compile_sdk` | int | no | highest installed | Android SDK API level used for android.jar |
+| `min_sdk_version` | int | no | `23` | Minimum Android API level |
+| `target_sdk_version` | int | no | `compile_sdk` | Target Android API level |
+| `version_code` | int | no | `1` | APK versionCode passed to `aapt2` |
+| `version_name` | string | no | `1.0` | APK versionName passed to `aapt2` |
+| `signing` | string | no | `debug` | `debug` for debug signing or `none` for unsigned output |
+| `debug_keystore` | string | no | generated | Optional package-relative debug keystore |
+| `debug_keystore_password` | string | no | `android` | Password for debug signing only |
+| `debug_key_alias` | string | no | `androiddebugkey` | Key alias for debug signing only |
+| `build_tools_version` | string | no | highest installed | Android SDK build-tools version |
+| `android_sdk` | string | no | env | Android SDK root, otherwise `ANDROID_HOME` or `ANDROID_SDK_ROOT` |
+| `java_language_level` | string | no | `17` | Java source and target level passed to `javac` |
+| `javac_opts` | list&lt;string&gt; | no | `[]` | Additional `javac` flags |
+| `dexopts` | list&lt;string&gt; | no | `[]` | Additional `d8` flags |
+
+Tool override attrs are also available for `javac`, `jar`, `java`,
+`java_home`, `aapt2`, `d8`, `apksigner`, `zipalign`, and `keytool`.
+
+## Dep Edges
+
+| Edge | Accepts | Description |
+| --- | --- | --- |
+| `deps` | `android_library`, `android_resource` | Android libraries and resources packaged into the APK |
+
+## Providers
+
+The target emits `android_application` and `android_apk`.
+
+## Capabilities
+
+| Capability | Output groups |
+| --- | --- |
+| `build` | `default`, `apk`, `dex`, `resources` |
+
+## Outputs
+
+| Output | Location |
+| --- | --- |
+| APK | `.once/out/<target>/<name>.apk` |
+| Unsigned APK | `.once/out/<target>/unsigned.apk` |
+| Dex directory | `.once/out/<target>/dex` |
+| Linked resource package | `.once/out/<target>/resources.apk` |
+
+## Signing
+
+`signing = "debug"` generates a debug keystore when `debug_keystore` is
+omitted and signs with `apksigner`. `signing = "none"` leaves the APK
+unsigned after zipalign. Production signing is not implemented yet.
+
+## Limitations
+
+The first Android implementation supports Java sources, resources,
+debug signing, Android resource deps, and Android library deps. Kotlin,
+data binding, instrumentation tests, manifest placeholder expansion,
+native splits, shrinking, resource filtering, density filtering,
+no-compress packaging, and startup profile packaging are not implemented
+yet. Non-empty values for unsupported attrs fail analysis instead of
+being ignored.
+
+## Example
+
+```toml
+[[target]]
+name = "HelloResources"
+kind = "android_resource"
+
+[target.attrs]
+package = "dev.once.hello"
+manifest = "ResourcesManifest.xml"
+resource_files = ["res/**"]
+min_sdk_version = 23
+
+[[target]]
+name = "Hello"
+kind = "android_binary"
+srcs = ["src/**/*.java"]
+deps = ["./HelloResources"]
+
+[target.attrs]
+application_id = "dev.once.hello"
+manifest = "AndroidManifest.xml"
+min_sdk_version = 23
+version_code = 1
+version_name = "1.0"
+```

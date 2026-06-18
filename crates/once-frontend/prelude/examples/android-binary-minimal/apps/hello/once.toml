@@ -1,0 +1,22 @@
+[[target]]
+name = "HelloResources"
+kind = "android_resource"
+
+[target.attrs]
+package = "dev.once.hello"
+manifest = "ResourcesManifest.xml"
+resource_files = ["res/**"]
+min_sdk_version = 23
+
+[[target]]
+name = "Hello"
+kind = "android_binary"
+srcs = ["src/**/*.java"]
+deps = ["./HelloResources"]
+
+[target.attrs]
+application_id = "dev.once.hello"
+manifest = "AndroidManifest.xml"
+min_sdk_version = 23
+version_code = 1
+version_name = "1.0"
