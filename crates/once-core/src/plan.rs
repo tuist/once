@@ -388,6 +388,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn independent_leaves_run_in_parallel() {
         let (_tmp, runner) = ws();
+        let runner = runner.with_max_concurrency(6);
         let mut plan = Plan::new();
         for i in 0..6u32 {
             plan.push(PlanNode {
