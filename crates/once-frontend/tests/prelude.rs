@@ -85,6 +85,36 @@ fn android_binary_exposes_build_and_run() {
     assert!(attr_names.contains(&"adb"));
     assert!(attr_names.contains(&"adb_serial"));
     assert!(attr_names.contains(&"launch_activity"));
+    assert!(attr_names.contains(&"kotlinc"));
+    assert!(attr_names.contains(&"kotlin_home"));
+    assert!(attr_names.contains(&"kotlin_stdlib"));
+    assert!(!attr_names.contains(&"keytool"));
+}
+
+#[test]
+fn android_target_kind_schemas_expose_all_target_kinds() {
+    for kind in ["android_resource", "android_library", "android_binary"] {
+        let schema = built_in_target_kind_schema(kind).expect("android target kind schema");
+        assert_eq!(schema.kind, kind);
+        assert!(
+            !schema.examples.is_empty(),
+            "{kind} should expose a starter example"
+        );
+        assert!(
+            target_kind_has_impl(kind).unwrap(),
+            "{kind} should have an impl"
+        );
+    }
+
+    let library = built_in_target_kind_schema("android_library").unwrap();
+    let attr_names = library
+        .attrs
+        .iter()
+        .map(|attr| attr.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(attr_names.contains(&"kotlinc_opts"));
+    assert!(attr_names.contains(&"kotlinc"));
+    assert!(attr_names.contains(&"kotlin_stdlib"));
 }
 
 #[test]

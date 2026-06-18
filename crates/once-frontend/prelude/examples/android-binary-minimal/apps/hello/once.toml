@@ -9,14 +9,27 @@ resource_files = ["res/**"]
 min_sdk_version = 23
 
 [[target]]
-name = "Hello"
-kind = "android_binary"
+name = "Greeting"
+kind = "android_library"
 srcs = ["src/**/*.java"]
 deps = ["./HelloResources"]
 
 [target.attrs]
+namespace = "dev.once.greeting"
+manifest = "LibraryManifest.xml"
+resource_files = []
+min_sdk_version = 23
+
+[[target]]
+name = "Hello"
+kind = "android_binary"
+srcs = ["src/**/*.kt"]
+deps = ["./Greeting"]
+
+[target.attrs]
 application_id = "dev.once.hello"
 manifest = "AndroidManifest.xml"
+resource_files = []
 min_sdk_version = 23
 version_code = 1
 version_name = "1.0"

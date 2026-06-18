@@ -4,6 +4,32 @@ def _android_shell_words(values):
 def _android_shell_env(root):
     return "ANDROID_HOME=" + _shell_quote(root) + " ANDROID_SDK_ROOT=" + _shell_quote(root)
 
+_ANDROID_DEBUG_KEYSTORE_BASE64 = """/u3+7QAAAAIAAAABAAAAAQAPYW5kcm9pZGRlYnVna2V5AAABntvqPWsAAAT/MIIE+zAOBgorBgEEASoCEQEBBQAEggTnkc637qzRW5SyB2D5c2Nl81QHw8Y5
+4Zb7YxJpdolMyYgesX4y5IS0mOHKTWSN0iHi3ox3Q+eiv7oE8wzxjRW+ohhtSpjiorZtuIVlG1AuekOYQaqilpxGjUIMLoAnxvIJglxZqZhkGkrcM/lNnG9L
+5FgEiEPXe8SFjCnNoMUvx3YIg9gQI2EB2/4EcyB4VhbTQnUn5AG72RVNq7vflGHvPEg1ihEz9tscpEwj3hvBbwljj2kvNQlj4v/GD9pfy2hN95a6PHKZKUcf
+ffuWneZWAmL82HOrg5uj0J0nbBnT9ELoaOeDLSue4QpcgzBhnJYLo5ZkcniF+VXgWXFDEhuYsLsSrlBNAyRQgJUVHH8ac4Drw1qj/HsOsALdgWURbqkaY/nT
+ijWFo8YF2EIJZeMPdMQgeaEwvwr0TnwVUCWltcPdKN1m/yLX+fZT6mNgh5Jub93gvmRGutmHfpfZ9dk1ZTgB4fJI5y/70qCM+wWOHTmijXjKzhlBAZr2VMJX
+vvbP367+BXOxNo8i+ijOOwmcXsRZawjzf+ivisehCZePAxm+DRrq75r60LjMOtnO1kEazAGsxs0mxkG6GnEvuOZEA10cTlkhip5uz4c0tOMJ2NDKfYzDAjS5
+c/dPX16wnjtQ7AzZNbf47vLtO1Np4e1emmyT71Ov+rd0lQRaxFQqL8qzmlAJXN6R9PNVOlS6g208+rQ7//2f4+mKDtufv6IrqzgEFSf4DRaQtv6IaDlf4yCd
+QIR/Po6OccSFPr5D7HDLvOnATCqNToc7l+VZoQyirAPGPrISz6agY4hfEc8FzS+yZgyegoKdOsPJuhr6BV5BTGbz08aC+OJLiHYb1GHpDElrkf864F7jpIqj
+eZfWKAY7Y1H+jzh5DOnwBnTN/+ObmKb+ZMHD7yEoRCjUU0nXxM1PCQZzMdJGzrIF1Xys22mgDcCa4xLnhBJ96G9YmY5crjVntDvZdmW4HnyMqKS8OU9X1Qqu
+Gn/SHRn0f71DI6kR3vRy7dMH+FVRluWAcN+M3f2bJnKaZ44jWutqLMrU91AT8MdDTNStiWSrIccNDzNVEY9rtcPVisxY8vptsJvzp2CFbZ90iOk643/aEm9/
+72dyYNY8Av58nbvvPvBg/wTaSlkQ+AulP7VSRAptemMJqyqZCzJ6k9q6pN0xebCVahZ6GAn3BU6DGVrLy5bcvGQvwYm4X1p8eXV4V3chyyIhSWrH9LLXemdi
+beJldWM0aRvQh3FcakV3L/VJlcdIB0cloogl1kNnTPZcmXK8Ndkl86Jyk/wUIJgs5zuqW1rDwIVXf8Pq71sEGjkGZ82ATANkf0vpqL6lM/92B4VsXJrPlrT/
+wlnRUS0Rg2yJoJOpoAf8AKim7OjNcjzOAj44Tnw3vydSgS5t50fp9F51SS+j9e1xmPYII54L6seZGH1zl3nTBRNi/yp/J07lHy3kaMzd8ng+lunNLAesKK7D
+WjFM9gjU90U9OfpAUaKl9ndL6Vqia7KUaG5Gpxgc6O7Q0TiAurFRyeBwZSogvD2W5mc1QdcNnXFlXQ/nNMKnloUnWQGcKv7VhFqYmVASsIEEWIL9gv7xUx5x
+PpwkRnzG+SAqvIDeSe8r9eJk8fdtjF4itTDe5sAWYLDdDmqv2mKDcNTns1eatkq+YF18hXviPsA384j3+nEfEAAAAAEABVguNTA5AAADFzCCAxMwggH7oAMC
+AQICCD7weSYHeAhbMA0GCSqGSIb3DQEBCwUAMDcxCzAJBgNVBAYTAlVTMRAwDgYDVQQKEwdBbmRyb2lkMRYwFAYDVQQDEw1BbmRyb2lkIERlYnVnMCAXDTI2
+MDYxODE4MDcwMVoYDzIwNTMxMTAzMTgwNzAxWjA3MQswCQYDVQQGEwJVUzEQMA4GA1UEChMHQW5kcm9pZDEWMBQGA1UEAxMNQW5kcm9pZCBEZWJ1ZzCCASIw
+DQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAKDI7I/S9U0JlrgwahJ2gNs9RkhCUyE5mhgtMZrA4CgGcbj3GDCkVz7egoF4aMoAGzzkqsEPeOcVxNJCB2yO
+gjnz9Zhs4t2XWcik/qiZ4b6ReZfTJxDPtEiyLBvq8IspiCw/J0kndF7JGeL71aRNAl1tahkWoUpjWcMDdE7UOKEWaVcTYXcoeY0c+ohQXSQrxFW3Q6ccSvq0
+EoXf1FyKccCZ4GnNJuzG7Vn9b8Xql+aNoO/o9DsEi7WMtUosvrXLTxuzUZ7rqhl9Jug1z3LC11AsSS5XDvLEzzOUZuULnc2IQ6euFz8k+S7kbfywsDiZSjgS
+I9iTlpmreOa7b7Iba/ECAwEAAaMhMB8wHQYDVR0OBBYEFOU1DO6OvD+6bIkQdH1sQ+ww+TcxMA0GCSqGSIb3DQEBCwUAA4IBAQBOrFkt+oA2CqRTWrtTZwmM
+nH69WYjx1g5IYMqJMCHblGj08+8S0NwUpDRPy4ESWS4pYYexjaoaj03aervmgblCGQduzV38SzX6iDV5D7cVAMuAmuBqd3WDohBV4lIg7AczruOXCfr2p8RO
+9smgrUVI0ScRd+0xI1miH4xPrmp2RIDhdWrzmxwPywLPs4jUIVj2rwXCdFnRnTXiGCXgfJZrtJD9qUmTbv3cEDyyVtbVGIApnQ1eGymwcVtG/5mQgKwJ5m8W
+bhukm2johnErj1eK27racDDKp92aMJe5OeZaEV8MzpBF3wMgIEOvLUkFZywtB9xk41K1cXo/4XiNOiH0PIMdNTjXSph9ZuyBmVbEY34lt1o=
+"""
+
 def _android_host_shell(label_id):
     if host_os() == "windows":
         fail(label_id + ": Android build actions currently require a POSIX-compatible host shell")
@@ -89,6 +115,9 @@ def _android_source_inputs(ctx, attrs, include_implicit_resources):
 def _android_java_sources(ctx):
     return _filter_by_extensions(glob(ctx["srcs"]), [".java"])
 
+def _android_kotlin_sources(ctx):
+    return _filter_by_extensions(glob(ctx["srcs"]), [".kt"])
+
 def _android_resource_files(attrs, include_implicit_resources):
     patterns = attrs.get("resource_files")
     if patterns != None:
@@ -99,6 +128,18 @@ def _android_resource_files(attrs, include_implicit_resources):
 
 def _android_asset_files(attrs):
     return _android_file_globs(_android_attr(attrs, "assets", []))
+
+def _android_workspace_inputs(paths):
+    return [path for path in paths if not path.startswith("/")]
+
+def _android_apk_filename(ctx):
+    return ctx["label"]["name"] + ".apk"
+
+def _android_apk_output(ctx):
+    return declare_output(_android_apk_filename(ctx))
+
+def _android_built_apk(ctx):
+    return ctx["build_dir"] + "/" + _android_apk_filename(ctx)
 
 def _android_file_globs(patterns):
     expanded = []
@@ -185,21 +226,39 @@ def _android_highest_build_tools(sdk_root, label_id):
         fail(label_id + ": no Android SDK build-tools version was found under `" + sdk_root + "`; install build-tools or set `build_tools_version`")
     return value
 
-def _android_tool_version(tool, label_id):
+def _android_tool_first_line(label_id, argv):
     sh = _android_host_shell(label_id)
-    return host_command([sh, "-c", _shell_quote(tool) + " --version 2>&1 | head -n 1 || true"]).strip()
+    script = "set -eu\nout=$(" + _android_shell_words(argv) + " 2>&1)\nif [ -z \"$out\" ]; then echo 'tool version command produced no output' >&2; exit 1; fi\nprintf '%s\\n' \"$out\" | sed -n '1p'\n"
+    return host_command([sh, "-c", script]).strip()
+
+def _android_tool_version(tool, label_id):
+    return _android_tool_first_line(label_id, [tool, "--version"])
 
 def _android_adb_version(adb):
     return host_command([adb, "version"]).strip()
 
 def _android_javac_version(javac, label_id):
-    sh = _android_host_shell(label_id)
-    return host_command([sh, "-c", _shell_quote(javac) + " -version 2>&1 | head -n 1 || true"]).strip()
+    return _android_tool_first_line(label_id, [javac, "-version"])
 
 def _android_host_env(name):
     return host_env(name)
 
-def _android_tools(ctx, attrs, include_java, include_apk):
+def _android_kotlin_home(kotlinc):
+    bin_dir = _parent_dir(kotlinc)
+    if _ends_with(bin_dir, "/bin"):
+        return _parent_dir(bin_dir)
+    return ""
+
+def _android_kotlin_stdlib(attrs, kotlinc):
+    configured = _android_attr(attrs, "kotlin_stdlib", "")
+    if configured:
+        return configured
+    kotlin_home = _android_attr(attrs, "kotlin_home", "") or _android_kotlin_home(kotlinc)
+    if not kotlin_home:
+        return ""
+    return kotlin_home + "/lib/kotlin-stdlib.jar"
+
+def _android_tools(ctx, attrs, include_java, include_apk, include_kotlin = False):
     label_id = ctx["label"]["id"]
     sdk_root = _android_sdk_root(attrs, label_id)
     compile_sdk = str(_android_attr(attrs, "compile_sdk", "") or _android_highest_platform(sdk_root, label_id))
@@ -222,7 +281,7 @@ def _android_tools(ctx, attrs, include_java, include_apk):
         build_tools_version,
         "aapt2",
         tools["aapt2"],
-        _android_tool_version(tools["aapt2"], label_id),
+        _android_tool_first_line(label_id, [tools["aapt2"], "version"]),
     ]
     if include_java:
         javac = _android_attr(attrs, "javac", "") or host_which("javac")
@@ -235,11 +294,18 @@ def _android_tools(ctx, attrs, include_java, include_apk):
         if java_home:
             tools["java_home"] = java_home
         identity.extend(["javac", javac, _android_javac_version(javac, label_id), "jar", jar, "java", java, "java_home", java_home])
+    if include_kotlin:
+        kotlinc = _android_attr(attrs, "kotlinc", "") or host_which("kotlinc")
+        kotlin_stdlib = _android_kotlin_stdlib(attrs, kotlinc)
+        if not kotlin_stdlib:
+            fail(label_id + ": set `kotlin_stdlib` or `kotlin_home` so Once can find kotlin-stdlib.jar")
+        tools["kotlinc"] = kotlinc
+        tools["kotlin_stdlib"] = kotlin_stdlib
+        identity.extend(["kotlinc", kotlinc, _android_tool_first_line(label_id, [kotlinc, "-version"]), "kotlin_stdlib", kotlin_stdlib])
     if include_apk:
         tools["d8"] = _android_attr(attrs, "d8", "") or build_tools + "/d8"
         tools["apksigner"] = _android_attr(attrs, "apksigner", "") or build_tools + "/apksigner"
         tools["zipalign"] = _android_attr(attrs, "zipalign", "") or build_tools + "/zipalign"
-        tools["keytool"] = _android_attr(attrs, "keytool", "") or host_which("keytool")
         identity.extend(["d8", tools["d8"], _android_tool_version(tools["d8"], label_id), "apksigner", tools["apksigner"], "zipalign", tools["zipalign"]])
     tools["identity"] = "\x00".join(identity)
     return tools
@@ -427,7 +493,7 @@ done
 
 def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars):
     sh = _android_host_shell(ctx["label"]["id"])
-    classes_dir = declare_output("classes")
+    classes_dir = declare_output("java_classes")
     classes_hash = declare_output("classes.sha256")
     source_list = ctx["build_dir"] + "/java_sources.list"
     classpath_entries = _unique([tools["android_jar"]] + dep_jars)
@@ -468,13 +534,62 @@ fi
     )
     run_action(
         argv = [sh, "-c", script],
-        inputs = _unique(java_sources + [r_src_hash] + dep_jars),
+        inputs = _unique(java_sources + [r_src_hash] + _android_workspace_inputs(dep_jars)),
         outputs = [classes_dir, classes_hash],
         env = _android_env(tools),
         toolchain_identity = tools["identity"] + "\x00javac\x00level\x00" + source_level,
         identifier = "android_java_compile:" + ctx["label"]["id"],
     )
     return (classes_dir, classes_hash)
+
+def _android_compile_kotlin(ctx, attrs, tools, kotlin_sources, classes_dir, classes_hash, dep_jars):
+    if len(kotlin_sources) == 0:
+        return (classes_dir, classes_hash)
+    sh = _android_host_shell(ctx["label"]["id"])
+    merged_classes_dir = declare_output("classes")
+    kotlin_hash = declare_output("classes.kotlin.sha256")
+    source_list = ctx["build_dir"] + "/kotlin_sources.list"
+    classpath_entries = _unique([tools["android_jar"], tools["kotlin_stdlib"], classes_dir] + dep_jars)
+    classpath = _android_classpath_sep().join(classpath_entries)
+    kotlinc_opts = _android_attr(attrs, "kotlinc_opts", [])
+    base_args = [
+        tools["kotlinc"],
+        "-classpath", classpath,
+        "-d", merged_classes_dir,
+    ] + kotlinc_opts
+    script = """set -eu
+rm -rf {merged_classes_dir}
+mkdir -p {merged_classes_dir}
+if [ -d {classes_dir} ]; then
+  cp -R {classes_dir}/. {merged_classes_dir}/
+fi
+: > {source_list}
+for src in {kotlin_sources}; do
+  [ -f "$src" ] || continue
+  printf '%s\\n' "$src" >> {source_list}
+done
+if [ -s {source_list} ]; then
+  set -- {base_args} @{source_list}
+  "$@"
+fi
+{hash_classes}
+""".format(
+        classes_dir = _shell_quote(classes_dir),
+        merged_classes_dir = _shell_quote(merged_classes_dir),
+        source_list = _shell_quote(source_list),
+        kotlin_sources = _android_shell_words(kotlin_sources),
+        base_args = _android_shell_words(base_args),
+        hash_classes = _android_hash_tree_script(merged_classes_dir, kotlin_hash, ""),
+    )
+    run_action(
+        argv = [sh, "-c", script],
+        inputs = _unique(kotlin_sources + [classes_hash] + _android_workspace_inputs(dep_jars)),
+        outputs = [merged_classes_dir, kotlin_hash],
+        env = _android_env(tools),
+        toolchain_identity = tools["identity"] + "\x00kotlinc",
+        identifier = "android_kotlin_compile:" + ctx["label"]["id"],
+    )
+    return (merged_classes_dir, kotlin_hash)
 
 def _android_jar_classes(ctx, tools, classes_dir, classes_hash):
     sh = _android_host_shell(ctx["label"]["id"])
@@ -570,7 +685,7 @@ set -- {base_args}
     )
     run_action(
         argv = [sh, "-c", script],
-        inputs = runtime_jars,
+        inputs = _android_workspace_inputs(runtime_jars),
         outputs = [dex_dir, dex_hash],
         env = _android_env(tools),
         toolchain_identity = tools["identity"] + "\x00d8\x00min\x00" + min_sdk,
@@ -617,7 +732,7 @@ def _android_zipalign(ctx, tools, unsigned_apk):
 
 def _android_sign_or_copy(ctx, attrs, tools, aligned_apk):
     sh = _android_host_shell(ctx["label"]["id"])
-    apk = declare_output(ctx["label"]["name"] + ".apk")
+    apk = _android_apk_output(ctx)
     signing = _android_attr(attrs, "signing", "debug")
     if signing == "none":
         run_action(
@@ -627,13 +742,15 @@ def _android_sign_or_copy(ctx, attrs, tools, aligned_apk):
             toolchain_identity = tools["identity"] + "\x00unsigned_final",
             identifier = "android_final_apk:" + ctx["label"]["id"],
         )
-        return apk
+        return (apk, "")
     if signing != "debug":
         fail(ctx["label"]["id"] + ": android_binary signing supports `debug` and `none`; production signing is not implemented")
     debug_keystore = _android_attr(attrs, "debug_keystore", "")
     keystore = declare_output("debug.keystore")
     password = _android_attr(attrs, "debug_keystore_password", "android")
     alias = _android_attr(attrs, "debug_key_alias", "androiddebugkey")
+    if password != "android":
+        fail(ctx["label"]["id"] + ": `debug_keystore_password` must stay `android`; custom signing passwords are not supported")
     inputs = []
     if debug_keystore:
         inputs.append(_package_relative(ctx, debug_keystore))
@@ -643,16 +760,18 @@ rm -f {keystore}
 if [ -n {debug_keystore} ]; then
   cp {debug_keystore} {keystore}
 else
-  {keytool} -genkeypair -keystore {keystore} -storepass {password} -keypass {password} -alias {alias} -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 10000 -storetype JKS >/dev/null 2>&1
+  if printf '%s' {embedded_keystore} | base64 -d > {keystore} 2>/dev/null; then
+    :
+  else
+    printf '%s' {embedded_keystore} | base64 -D > {keystore}
+  fi
 fi
 {apksigner} sign --ks {keystore} --ks-pass {password_arg} --key-pass {password_arg} --ks-key-alias {alias_arg} --out {apk} {aligned_apk}
 """.format(
         apk = _shell_quote(apk),
         keystore = _shell_quote(keystore),
         debug_keystore = _shell_quote(inputs[0] if inputs else ""),
-        keytool = _shell_quote(tools["keytool"]),
-        password = _shell_quote(password),
-        alias = _shell_quote(alias),
+        embedded_keystore = _shell_quote(_ANDROID_DEBUG_KEYSTORE_BASE64),
         apksigner = _shell_quote(tools["apksigner"]),
         password_arg = _shell_quote("pass:" + password),
         alias_arg = _shell_quote(alias),
@@ -666,14 +785,14 @@ fi
         toolchain_identity = tools["identity"] + "\x00debug_sign",
         identifier = "android_sign:" + ctx["label"]["id"],
     )
-    return apk
+    return (apk, keystore)
 
 def _android_run_app(ctx, attrs, tools):
     label_id = ctx["label"]["id"]
     application_id = _android_attr(attrs, "application_id", "")
     launch_activity = _android_attr(attrs, "launch_activity", "")
     component = _android_launch_component(application_id, launch_activity)
-    apk = ctx["build_dir"] + "/" + ctx["label"]["name"] + ".apk"
+    apk = _android_built_apk(ctx)
     adb = _android_adb_argv(tools, attrs)
     run_actions = [
         (adb + ["wait-for-device"], []),
@@ -742,12 +861,14 @@ def _android_resource_impl(ctx):
     }
 
 def _android_library_impl(ctx):
-    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "custom_package", "namespace", "package", "javac", "jar", "java", "java_home", "aapt2"])
+    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "custom_package", "namespace", "package", "javac", "jar", "java", "java_home", "kotlinc", "kotlin_home", "kotlin_stdlib", "aapt2"])
     _android_reject_unsupported_attrs(attrs, ctx["label"]["id"], ["enable_data_binding", "idl_srcs", "idl_import_root", "idl_parcelables", "idl_preprocessed", "plugins", "proguard_specs", "neverlink"])
-    tools = _android_tools(ctx, attrs, True, False)
+    java_sources = _android_java_sources(ctx)
+    kotlin_sources = _android_kotlin_sources(ctx)
+    tools = _android_tools(ctx, attrs, True, False, len(kotlin_sources) > 0)
     manifest = _android_manifest(ctx, attrs)
     dep_compiled_zips = _android_compiled_resource_zips(ctx["deps"])
-    resource_files = _android_resource_files(attrs, len(dep_compiled_zips) == 0)
+    resource_files = _android_resource_files(attrs, True)
     asset_files = _android_asset_files(attrs)
     resource_dirs = _android_resource_dirs(ctx, attrs, resource_files)
     asset_roots = _android_asset_roots(ctx, attrs, asset_files)
@@ -755,7 +876,6 @@ def _android_library_impl(ctx):
         fail(ctx["label"]["id"] + ": resource_files matched files but none are under resource_dirs")
     if len(asset_files) > 0 and len(asset_roots) == 0:
         fail(ctx["label"]["id"] + ": assets matched files but none are under asset_dirs or assets_dir")
-    java_sources = _android_java_sources(ctx)
     dep_jars = _android_compile_jars(ctx["deps"])
     dep_resource_apks = _android_resource_apks(ctx["deps"])
     dep_asset_roots = _android_asset_roots_from_deps(ctx["deps"])
@@ -763,8 +883,12 @@ def _android_library_impl(ctx):
     compiled_zips = _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
     resource_apk, r_src_dir, r_src_hash, r_txt = _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, True, [], [])
     classes_dir, classes_hash = _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars)
+    classes_dir, classes_hash = _android_compile_kotlin(ctx, attrs, tools, kotlin_sources, classes_dir, classes_hash, dep_jars)
     classes_jar = _android_jar_classes(ctx, tools, classes_dir, classes_hash)
     aar = _android_package_aar(ctx, attrs, tools, manifest, classes_jar, r_txt, resource_dirs, asset_roots, resource_files, asset_files)
+    local_compile_jars = [classes_jar]
+    if len(kotlin_sources) > 0:
+        local_compile_jars.append(tools["kotlin_stdlib"])
     return {
         "label_id": ctx["label"]["id"],
         "target_kind": "android_library",
@@ -773,26 +897,28 @@ def _android_library_impl(ctx):
         "resource_apk": resource_apk,
         "classes_jar": classes_jar,
         "aar": aar,
-        "transitive_compile_jars": _unique([classes_jar] + dep_jars),
-        "transitive_runtime_jars": _unique([classes_jar] + _android_runtime_jars(ctx["deps"])),
+        "transitive_compile_jars": _unique(local_compile_jars + dep_jars),
+        "transitive_runtime_jars": _unique(local_compile_jars + _android_runtime_jars(ctx["deps"])),
         "transitive_resource_apks": _unique([resource_apk] + dep_resource_apks),
         "compiled_resource_zips": compiled_zips,
         "transitive_compiled_resource_zips": _unique(compiled_zips + dep_compiled_zips),
         "transitive_asset_roots": _unique(asset_roots + dep_asset_roots),
         "transitive_asset_files": _unique(asset_files + dep_asset_files),
-        "affected_inputs": _android_source_inputs(ctx, attrs, len(dep_compiled_zips) == 0) + [manifest],
+        "affected_inputs": _android_source_inputs(ctx, attrs, True) + [manifest],
     }
 
 def _android_binary_impl(ctx):
-    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "application_id", "custom_package", "namespace", "javac", "jar", "java", "java_home", "aapt2", "d8", "apksigner", "zipalign", "keytool", "debug_keystore", "adb", "adb_serial", "launch_activity"])
+    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "application_id", "custom_package", "namespace", "javac", "jar", "java", "java_home", "kotlinc", "kotlin_home", "kotlin_stdlib", "aapt2", "d8", "apksigner", "zipalign", "debug_keystore", "adb", "adb_serial", "launch_activity"])
     _android_reject_unsupported_attrs(attrs, ctx["label"]["id"], ["enable_data_binding", "instruments", "manifest_values", "proguard_specs", "resource_configuration_filters", "densities", "nocompress_extensions", "startup_profiles", "native_target"])
     if ctx["capability"] == "run":
         tools = _android_adb_tools(ctx, attrs)
         return _android_run_app(ctx, attrs, tools)
-    tools = _android_tools(ctx, attrs, True, True)
+    java_sources = _android_java_sources(ctx)
+    kotlin_sources = _android_kotlin_sources(ctx)
+    tools = _android_tools(ctx, attrs, True, True, len(kotlin_sources) > 0)
     manifest = _android_manifest(ctx, attrs)
     dep_compiled_zips = _android_compiled_resource_zips(ctx["deps"])
-    resource_files = _android_resource_files(attrs, len(dep_compiled_zips) == 0)
+    resource_files = _android_resource_files(attrs, True)
     asset_files = _android_asset_files(attrs)
     resource_dirs = _android_resource_dirs(ctx, attrs, resource_files)
     asset_roots = _android_asset_roots(ctx, attrs, asset_files)
@@ -800,7 +926,6 @@ def _android_binary_impl(ctx):
         fail(ctx["label"]["id"] + ": resource_files matched files but none are under resource_dirs")
     if len(asset_files) > 0 and len(asset_roots) == 0:
         fail(ctx["label"]["id"] + ": assets matched files but none are under asset_dirs or assets_dir")
-    java_sources = _android_java_sources(ctx)
     dep_jars = _android_compile_jars(ctx["deps"])
     runtime_jars = _android_runtime_jars(ctx["deps"])
     dep_asset_roots = _android_asset_roots_from_deps(ctx["deps"])
@@ -808,11 +933,14 @@ def _android_binary_impl(ctx):
     compiled_zips = _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
     resource_apk, r_src_dir, r_src_hash, _ = _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, False, _unique(asset_roots + dep_asset_roots), _unique(asset_files + dep_asset_files))
     classes_dir, classes_hash = _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars)
+    classes_dir, classes_hash = _android_compile_kotlin(ctx, attrs, tools, kotlin_sources, classes_dir, classes_hash, dep_jars)
     classes_jar = _android_jar_classes(ctx, tools, classes_dir, classes_hash)
+    if len(kotlin_sources) > 0:
+        runtime_jars = _unique([tools["kotlin_stdlib"]] + runtime_jars)
     dex_dir, dex_hash = _android_dex(ctx, attrs, tools, _unique([classes_jar] + runtime_jars))
     unsigned_apk = _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash)
     aligned_apk = _android_zipalign(ctx, tools, unsigned_apk)
-    apk = _android_sign_or_copy(ctx, attrs, tools, aligned_apk)
+    apk, debug_keystore = _android_sign_or_copy(ctx, attrs, tools, aligned_apk)
     return {
         "label_id": ctx["label"]["id"],
         "target_kind": "android_binary",
@@ -823,7 +951,8 @@ def _android_binary_impl(ctx):
         "dex_dir": dex_dir,
         "unsigned_apk": unsigned_apk,
         "apk": apk,
-        "affected_inputs": _android_source_inputs(ctx, attrs, len(dep_compiled_zips) == 0) + [manifest],
+        "debug_keystore": debug_keystore,
+        "affected_inputs": _android_source_inputs(ctx, attrs, True) + [manifest],
     }
 
 _ANDROID_RESOURCE_ATTRS = [
@@ -832,7 +961,7 @@ _ANDROID_RESOURCE_ATTRS = [
     attr("resource_dirs", "list<string>", default = "[\"res\"]", docs = "Package-relative resource roots passed to aapt2.", configurable = False),
     attr("assets", "list<string>", default = "[]", docs = "Android asset file glob patterns."),
     attr("asset_dirs", "list<string>", default = "[\"assets\"]", docs = "Package-relative asset roots propagated to Android package targets.", configurable = False),
-    attr("assets_dir", "string", docs = "Bazel-compatible single asset root alias.", configurable = False),
+    attr("assets_dir", "string", docs = "Single package-relative asset root alias.", configurable = False),
     attr("compile_sdk", "int", docs = "Android SDK API level used for android.jar. Defaults to the highest installed platform.", configurable = False),
     attr("min_sdk_version", "int", default = "23", docs = "Minimum Android API level.", configurable = False),
     attr("target_sdk_version", "int", docs = "Target Android API level. Defaults to compile_sdk.", configurable = False),
@@ -844,10 +973,14 @@ _ANDROID_RESOURCE_ATTRS = [
 _ANDROID_JAVA_ATTRS = [
     attr("java_language_level", "string", default = "\"17\"", docs = "Java source and target level passed to javac.", configurable = False),
     attr("javac_opts", "list<string>", default = "[]", docs = "Additional javac flags appended after Once-managed flags.", configurable = False),
+    attr("kotlinc_opts", "list<string>", default = "[]", docs = "Additional kotlinc flags appended after Once-managed flags.", configurable = False),
     attr("javac", "string", docs = "Override javac path.", configurable = False),
     attr("jar", "string", docs = "Override jar path.", configurable = False),
     attr("java", "string", docs = "Override java runtime path used by Android SDK tools.", configurable = False),
     attr("java_home", "string", docs = "Override JAVA_HOME passed to Android SDK tools.", configurable = False),
+    attr("kotlinc", "string", docs = "Override kotlinc path.", configurable = False),
+    attr("kotlin_home", "string", docs = "Override Kotlin home used to find kotlin-stdlib.jar.", configurable = False),
+    attr("kotlin_stdlib", "string", docs = "Override kotlin-stdlib.jar path.", configurable = False),
 ]
 
 _ANDROID_APK_ATTRS = [
@@ -855,15 +988,14 @@ _ANDROID_APK_ATTRS = [
     attr("d8", "string", docs = "Override d8 path.", configurable = False),
     attr("apksigner", "string", docs = "Override apksigner path.", configurable = False),
     attr("zipalign", "string", docs = "Override zipalign path.", configurable = False),
-    attr("keytool", "string", docs = "Override keytool path.", configurable = False),
 ]
 
 android_resource = target_kind(
     docs = "Compiles Android resources into a static resource package and propagates assets to Android app targets.",
     attrs = _ANDROID_RESOURCE_ATTRS + [
         attr("namespace", "string", docs = "Java package for generated R classes.", configurable = False),
-        attr("custom_package", "string", docs = "Bazel-compatible alias for the generated R package.", configurable = False),
-        attr("package", "string", docs = "Buck-compatible generated R package fallback.", configurable = False),
+        attr("custom_package", "string", docs = "Alias for the generated R package.", configurable = False),
+        attr("package", "string", docs = "Generated R package fallback.", configurable = False),
     ],
     deps = [
         dep("deps", ["android_resource"], "Android resources merged into this resource package."),
@@ -881,12 +1013,12 @@ android_resource = target_kind(
 )
 
 android_library = target_kind(
-    docs = "Compiles Android Java sources with optional resources into a classes jar, static resource package, and AAR consumed by Android app targets.",
+    docs = "Compiles Android Java and Kotlin sources with optional resources into a classes jar, static resource package, and AAR consumed by Android app targets.",
     attrs = _ANDROID_RESOURCE_ATTRS + _ANDROID_JAVA_ATTRS + [
         attr("namespace", "string", docs = "Java package for generated R classes.", configurable = False),
-        attr("custom_package", "string", docs = "Bazel-compatible alias for the generated R package.", configurable = False),
+        attr("custom_package", "string", docs = "Alias for the generated R package.", configurable = False),
         attr("package", "string", docs = "Generated R package fallback when namespace and custom_package are omitted.", configurable = False),
-        attr("neverlink", "bool", default = "false", docs = "Reserved for Bazel compatibility. Runtime exclusion is not implemented yet.", configurable = False),
+        attr("neverlink", "bool", default = "false", docs = "Reserved for runtime exclusion support.", configurable = False),
         attr("enable_data_binding", "bool", default = "false", docs = "Reserved for Android data binding support.", configurable = False),
         attr("idl_srcs", "list<string>", default = "[]", docs = "Reserved for AIDL support.", configurable = False),
         attr("idl_import_root", "string", docs = "Reserved for AIDL support.", configurable = False),
@@ -904,23 +1036,23 @@ android_library = target_kind(
         example(
             "android-library-minimal",
             name = "Minimal Android library",
-            use_when = "Use this for a first-party Android Java library with optional resources.",
+            use_when = "Use this for a first-party Android Kotlin or Java library with optional resources.",
         ),
     ],
     impl = _android_library_impl,
 )
 
 android_binary = target_kind(
-    docs = "Builds an Android APK from Java sources, Android resources, android_resource deps, and android_library deps.",
+    docs = "Builds an Android APK from Java and Kotlin sources, Android resources, android_resource deps, and android_library deps.",
     attrs = _ANDROID_RESOURCE_ATTRS + _ANDROID_JAVA_ATTRS + _ANDROID_APK_ATTRS + [
         attr("application_id", "string", required = True, docs = "Android application id used for generated R classes and version metadata.", configurable = False),
         attr("namespace", "string", docs = "Java package for generated R classes. Defaults to application_id.", configurable = False),
-        attr("custom_package", "string", docs = "Bazel-compatible alias for the generated R package.", configurable = False),
+        attr("custom_package", "string", docs = "Alias for the generated R package.", configurable = False),
         attr("version_code", "int", default = "1", docs = "APK versionCode passed to aapt2.", configurable = False),
         attr("version_name", "string", default = "\"1.0\"", docs = "APK versionName passed to aapt2.", configurable = False),
         attr("signing", "string", default = "\"debug\"", docs = "`debug` to sign with a debug key or `none` to produce an unsigned APK.", configurable = False),
-        attr("debug_keystore", "string", docs = "Optional package-relative debug keystore. When omitted, Once generates a debug keystore.", configurable = False),
-        attr("debug_keystore_password", "string", default = "\"android\"", docs = "Password for debug signing only.", configurable = False),
+        attr("debug_keystore", "string", docs = "Optional package-relative debug keystore. When omitted, Once uses a bundled debug keystore.", configurable = False),
+        attr("debug_keystore_password", "string", default = "\"android\"", docs = "Fixed public debug signing password.", configurable = False),
         attr("debug_key_alias", "string", default = "\"androiddebugkey\"", docs = "Key alias for debug signing only.", configurable = False),
         attr("adb", "string", docs = "Override adb path for the run capability.", configurable = False),
         attr("adb_serial", "string", docs = "Optional adb device serial for the run capability.", configurable = False),

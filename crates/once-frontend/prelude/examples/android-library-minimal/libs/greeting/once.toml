@@ -1,7 +1,7 @@
 [[target]]
 name = "Greeting"
 kind = "android_library"
-srcs = ["src/**/*.java"]
+srcs = ["src/**/*.kt"]
 
 [target.attrs]
 namespace = "dev.once.greeting"

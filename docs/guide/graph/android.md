@@ -1,11 +1,11 @@
 # Android Graph
 
-Once builds Android resources, Java libraries, and APKs from declarative
+Once builds Android resources, Java and Kotlin libraries, and APKs from declarative
 `once.toml` manifests. [`android_resource`](/reference/prelude/android_resource)
 compiles `res/` trees with `aapt2` and propagates assets to package targets.
-[`android_library`](/reference/prelude/android_library) compiles Java sources,
+[`android_library`](/reference/prelude/android_library) compiles Java and Kotlin sources,
 generates R classes, emits a classes jar, and packages an AAR. [`android_binary`](/reference/prelude/android_binary)
-links resources, compiles Java sources, dexes runtime jars with `d8`, packages
+links resources, compiles Java and Kotlin sources, dexes runtime jars with `d8`, packages
 an APK, zipaligns it, and signs it with a debug key by default.
 
 For the per-target-kind attribute, dep, provider, and capability tables see
@@ -29,14 +29,27 @@ resource_files = ["res/**"]
 min_sdk_version = 23
 
 [[target]]
-name = "Hello"
-kind = "android_binary"
+name = "Greeting"
+kind = "android_library"
 srcs = ["src/**/*.java"]
 deps = ["./HelloResources"]
 
 [target.attrs]
+namespace = "dev.once.greeting"
+manifest = "LibraryManifest.xml"
+resource_files = []
+min_sdk_version = 23
+
+[[target]]
+name = "Hello"
+kind = "android_binary"
+srcs = ["src/**/*.kt"]
+deps = ["./Greeting"]
+
+[target.attrs]
 application_id = "dev.once.hello"
 manifest = "AndroidManifest.xml"
+resource_files = []
 min_sdk_version = 23
 version_code = 1
 version_name = "1.0"
@@ -45,13 +58,13 @@ version_name = "1.0"
 Dependency references are root-relative by default. `./` and `../`
 references resolve from the package that owns the manifest.
 
-`android_library` can own Java sources and optional resources:
+`android_library` can own Kotlin or Java sources and optional resources:
 
 ```toml
 [[target]]
 name = "Greeting"
 kind = "android_library"
-srcs = ["src/**/*.java"]
+srcs = ["src/**/*.kt"]
 
 [target.attrs]
 namespace = "dev.once.greeting"
@@ -119,7 +132,7 @@ once run apps/hello/Hello
 
 ## Toolchain
 
-Android targets require a JDK with `java`, `javac`, `jar`, and `keytool`.
+Android targets require a JDK with `java`, `javac`, and `jar`.
 They also require the Android SDK command-line tools plus an installed
 Android platform and build-tools package. Build-tools provide `aapt2`, `d8`,
 `zipalign`, and `apksigner`. Running apps also requires platform-tools so
@@ -135,13 +148,21 @@ toolchain unless those paths are overridden. The Android SDK tools also
 receive `JAVA_HOME` when it is available, which keeps `d8` and `apksigner`
 working with mise-managed Java installs.
 
+Kotlin-backed Android targets require `kotlinc` and `kotlin-stdlib.jar`.
+The target kind finds `kotlinc` on `PATH` unless `kotlinc` is set, then
+looks for the standard library under `kotlin_home` or next to the compiler
+installation. Set `kotlin_stdlib` when your Kotlin distribution stores the
+standard library somewhere else. In mixed targets Java sources compile
+first, then Kotlin compiles into the final class output with the Java
+classes on its classpath.
+
 Android build actions currently require a POSIX-compatible host shell for
 file staging and directory hashing. App launch actions use direct `adb`
 commands.
 
-The current implementation supports Java sources, Android resources,
-assets, static resource packages, AAR packaging, dexing, APK packaging,
-zipalign, and debug signing. Kotlin, AIDL, data binding, annotation
+The current implementation supports Java sources, Kotlin sources, Android
+resources, assets, static resource packages, AAR packaging, dexing, APK
+packaging, zipalign, and debug signing. AIDL, data binding, annotation
 processors, native libraries, instrumentation tests, manifest placeholder
 expansion, shrinking, density filtering, no-compress packaging, startup
 profiles, and production signing are not implemented yet. Non-empty
@@ -172,18 +193,25 @@ marked non-configurable in the target kind schema also reject `select`.
 
 ## Prior Art
 
-The Android target kind set uses both
-[Bazel's Android rules](https://github.com/bazelbuild/rules_android) and
-[Buck2's Android rules](https://github.com/facebook/buck2) as reference
-points:
+The Android target kind set uses
+[Bazel's Android rules](https://github.com/bazelbuild/rules_android),
+[Bazel's Kotlin rules](https://github.com/bazelbuild/rules_kotlin), and
+[Buck2's Android and Kotlin rules](https://github.com/facebook/buck2) as
+reference points:
 
 - Bazel's Android rules provide a broad compatibility vocabulary for
   Java sources, resources, assets, SDK selection, dexing, APK packaging,
   signing, and migration-friendly attribute names.
+- Bazel's Kotlin rules model Kotlin compilation as a toolchain-backed
+  JVM compile step with the Kotlin standard library on compile and runtime
+  classpaths.
 - Buck2's Android rules provide the cleaner shape for Once: Android
   resources are first-class packageable nodes, Java libraries focus on
   compilation and providers, and binaries own final resource linking,
   dexing, APK assembly, and signing.
+- Buck2's Kotlin rules keep Kotlin compiler and standard library details in
+  the Kotlin toolchain, then feed Android libraries and binaries through the
+  same provider graph.
 
 Once is not Buck-compatible, Bazel-compatible, or a drop-in replacement
 for Gradle. Android behavior lives in Starlark target kinds, while the

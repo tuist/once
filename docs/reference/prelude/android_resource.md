@@ -18,10 +18,10 @@ and binaries can depend on it through `deps`.
 | `resource_dirs` | list&lt;string&gt; | no | `["res"]` | Resource roots passed to `aapt2 compile` |
 | `assets` | list&lt;string&gt; | no | `[]` | Android asset file glob patterns |
 | `asset_dirs` | list&lt;string&gt; | no | `["assets"]` | Asset roots propagated to Android package targets |
-| `assets_dir` | string | no |  | Bazel-compatible single asset root alias |
+| `assets_dir` | string | no |  | Single package-relative asset root alias |
 | `package` | string | no |  | Generated R package fallback |
 | `namespace` | string | no |  | Java package for generated R classes |
-| `custom_package` | string | no |  | Bazel-compatible alias for generated R package |
+| `custom_package` | string | no |  | Alias for generated R package |
 | `compile_sdk` | int | no | highest installed | Android SDK API level used for android.jar |
 | `min_sdk_version` | int | no | `23` | Minimum Android API level |
 | `target_sdk_version` | int | no | `compile_sdk` | Target Android API level |

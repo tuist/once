@@ -4,7 +4,7 @@ Android library target.
 
 ## Description
 
-Compiles Android Java sources with optional resources into a classes
+Compiles Android Java and Kotlin sources with optional resources into a classes
 jar, a static resource package, and an AAR. Downstream Android targets
 consume the emitted jars and resource package through the normal `deps`
 edge. Prefer a separate `android_resource` target for reusable resources
@@ -19,9 +19,9 @@ and assets.
 | `resource_dirs` | list&lt;string&gt; | no | `["res"]` | Resource roots passed to `aapt2 compile` |
 | `assets` | list&lt;string&gt; | no | `[]` | Android asset file glob patterns |
 | `asset_dirs` | list&lt;string&gt; | no | `["assets"]` | Asset roots packaged into the AAR |
-| `assets_dir` | string | no |  | Bazel-compatible single asset root alias |
+| `assets_dir` | string | no |  | Single package-relative asset root alias |
 | `namespace` | string | no |  | Java package for generated R classes |
-| `custom_package` | string | no |  | Bazel-compatible alias for generated R package |
+| `custom_package` | string | no |  | Alias for generated R package |
 | `package` | string | no |  | Generated R package fallback |
 | `compile_sdk` | int | no | highest installed | Android SDK API level used for android.jar |
 | `min_sdk_version` | int | no | `23` | Minimum Android API level |
@@ -30,8 +30,10 @@ and assets.
 | `android_sdk` | string | no | env | Android SDK root, otherwise `ANDROID_HOME` or `ANDROID_SDK_ROOT` |
 | `java_language_level` | string | no | `17` | Java source and target level passed to `javac` |
 | `javac_opts` | list&lt;string&gt; | no | `[]` | Additional `javac` flags |
+| `kotlinc_opts` | list&lt;string&gt; | no | `[]` | Additional `kotlinc` flags |
+
 Tool override attrs are also available for `javac`, `jar`, `java`,
-`java_home`, and `aapt2`.
+`java_home`, `kotlinc`, `kotlin_home`, `kotlin_stdlib`, and `aapt2`.
 
 ## Dep Edges
 
@@ -61,7 +63,7 @@ The target emits `android_library`, `android_archive`, and
 
 ## Limitations
 
-The first Android implementation supports Java sources, Android
+The first Android implementation supports Java sources, Kotlin sources, Android
 resources, assets, AAR packaging, Android resource deps, and Android
 library deps. AIDL, data binding, annotation processors, native
 libraries, ProGuard consumer rules, and `neverlink` runtime pruning are
@@ -74,7 +76,7 @@ analysis instead of being ignored.
 [[target]]
 name = "Greeting"
 kind = "android_library"
-srcs = ["src/**/*.java"]
+srcs = ["src/**/*.kt"]
 
 [target.attrs]
 namespace = "dev.once.greeting"

@@ -20,6 +20,19 @@ fn run(source: &str) -> starlark::Result<()> {
     })
 }
 
+fn eval_string(source: &str) -> starlark::Result<String> {
+    Module::with_temp_heap(|module| {
+        let ast = AstModule::parse("test.star", source.to_string(), &Dialect::Standard)?;
+        let globals = globals_for_prelude();
+        let mut evaluator = Evaluator::new(&module);
+        evaluator.eval_module(ast, &globals)?;
+        let value = module
+            .get("value")
+            .expect("test module should bind `value`");
+        Ok(value.unpack_str().unwrap().to_string())
+    })
+}
+
 fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
     AnalysisStore::new(
         workspace.to_path_buf(),
@@ -36,6 +49,25 @@ fn schema_parse_path_resolves_native_globals_without_calling_them() {
 #[test]
 fn declare_output_outside_analysis_returns_bare_name() {
     run(r#"x = declare_output("AppCore.a")"#).unwrap();
+}
+
+#[test]
+fn host_env_reads_active_analysis_environment_only() {
+    let name = format!("ONCE_HOST_ENV_TEST_{}", std::process::id());
+    std::env::set_var(&name, "present");
+    let source = format!(
+        "value = host_env({})",
+        serde_json::to_string(&name).unwrap()
+    );
+
+    assert_eq!(eval_string(&source).unwrap(), "");
+
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "apps/android/App");
+    let (_, value) = with_active_store(store, || eval_string(&source).unwrap());
+    assert_eq!(value, "present");
+
+    std::env::remove_var(name);
 }
 
 #[test]

@@ -4,7 +4,7 @@ public final class Greeting {
     private Greeting() {
     }
 
-    public static String message() {
-        return "Hello from Once";
+    public static String message(String appName) {
+        return appName + " from Java";
     }
 }
