@@ -7,9 +7,16 @@ use serde_json::{json, Map, Value};
 
 const SUPPORTED_LABELS: &[&str] = &["Target", "Capability", "Provider"];
 const SUPPORTED_RELATIONSHIPS: &[&str] = &["DEPENDS_ON", "EXPOSES", "EMITS"];
-const UNSUPPORTED_CLAUSES: &[&str] = &[
-    "CALL", "CREATE", "DELETE", "DETACH", "DROP", "FOREACH", "LOAD", "MERGE", "OPTIONAL", "REMOVE",
-    "SET", "UNWIND", "WITH",
+const UNSUPPORTED_STATEMENT_PREFIXES: &[&str] = &["DROP"];
+const UNSUPPORTED_CLAUSE_NODES: &[(&str, &str)] = &[
+    ("call_clause", "CALL"),
+    ("create_clause", "CREATE"),
+    ("delete_clause", "DELETE"),
+    ("merge_clause", "MERGE"),
+    ("remove_clause", "REMOVE"),
+    ("set_clause", "SET"),
+    ("unwind_clause", "UNWIND"),
+    ("with_clause", "WITH"),
 ];
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -99,7 +106,9 @@ struct Binding {
 }
 
 pub(crate) fn evaluate(query: &str, graph: &[GraphTarget]) -> Result<QueryResult> {
-    validate_cypher_syntax(query)?;
+    reject_unsupported_statement_prefixes(query)?;
+    let tree = parse_cypher(query)?;
+    reject_unsupported_clauses(&tree)?;
     let query = parse_query(query)?;
     let model = GraphModel::from_graph(graph);
     let bindings = model.evaluate(&query)?;
@@ -140,7 +149,7 @@ pub(crate) fn render_human(result: &QueryResult) -> String {
     out
 }
 
-fn validate_cypher_syntax(query: &str) -> Result<()> {
+fn parse_cypher(query: &str) -> Result<tree_sitter::Tree> {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_cypher::LANGUAGE.into())
@@ -149,12 +158,11 @@ fn validate_cypher_syntax(query: &str) -> Result<()> {
     if tree.root_node().has_error() {
         bail!("query is not valid Cypher syntax");
     }
-    Ok(())
+    Ok(tree)
 }
 
 fn parse_query(raw: &str) -> Result<ParsedQuery> {
     let query = strip_trailing_semicolon(raw.trim());
-    reject_unsupported_clauses(query)?;
     let match_pos = keyword_pos(query, "MATCH", 0).ok_or_else(|| {
         anyhow!("query expression must start with a read-only `MATCH ... RETURN ...` query")
     })?;
@@ -415,13 +423,47 @@ fn parse_string_literal(raw: &str) -> Result<String> {
     Ok(output)
 }
 
-fn reject_unsupported_clauses(query: &str) -> Result<()> {
-    for clause in UNSUPPORTED_CLAUSES {
-        if keyword_pos(query, clause, 0).is_some() {
+fn reject_unsupported_statement_prefixes(query: &str) -> Result<()> {
+    let query = strip_trailing_semicolon(query.trim_start());
+    for clause in UNSUPPORTED_STATEMENT_PREFIXES {
+        if starts_with_keyword(query, clause) {
             bail!("query expressions are read-only; `{clause}` is not supported");
         }
     }
     Ok(())
+}
+
+fn reject_unsupported_clauses(tree: &tree_sitter::Tree) -> Result<()> {
+    let mut nodes = vec![tree.root_node()];
+    while let Some(node) = nodes.pop() {
+        if let Some((_, clause)) = UNSUPPORTED_CLAUSE_NODES
+            .iter()
+            .find(|(kind, _)| node.kind() == *kind)
+        {
+            bail!("query expressions are read-only; `{clause}` is not supported");
+        }
+        if node.kind() == "match_clause" && match_clause_is_optional(node) {
+            bail!("query expressions are read-only; `OPTIONAL` is not supported");
+        }
+        for index in (0..node.child_count())
+            .rev()
+            .filter_map(|index| u32::try_from(index).ok())
+        {
+            if let Some(child) = node.child(index) {
+                nodes.push(child);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn match_clause_is_optional(node: tree_sitter::Node<'_>) -> bool {
+    (0..node.child_count())
+        .filter_map(|index| u32::try_from(index).ok())
+        .any(|index| {
+            node.child(index)
+                .is_some_and(|child| child.kind() == "optional")
+        })
 }
 
 fn reject_duplicate_relationship_aliases(left: &NodePattern, right: &NodePattern) -> Result<()> {
@@ -753,6 +795,13 @@ fn keyword_pos(input: &str, keyword: &str, start: usize) -> Option<usize> {
     None
 }
 
+fn starts_with_keyword(input: &str, keyword: &str) -> bool {
+    input
+        .get(..keyword.len())
+        .is_some_and(|part| part.eq_ignore_ascii_case(keyword))
+        && keyword_boundary(input, 0, keyword.len())
+}
+
 fn keyword_boundary(input: &str, start: usize, len: usize) -> bool {
     let before = input[..start].chars().next_back();
     let after = input[start + len..].chars().next();
@@ -980,11 +1029,10 @@ mod tests {
 
     #[test]
     fn rejects_additional_unsupported_clauses() {
-        let optional_error =
-            reject_unsupported_clauses("OPTIONAL MATCH (t:Target) RETURN t.id").unwrap_err();
+        let optional_error = evaluate("OPTIONAL MATCH (t:Target) RETURN t.id", &[]).unwrap_err();
         assert!(optional_error.to_string().contains("OPTIONAL"));
 
-        let drop_error = reject_unsupported_clauses("DROP INDEX target_name").unwrap_err();
+        let drop_error = evaluate("DROP INDEX target_name", &[]).unwrap_err();
         assert!(drop_error.to_string().contains("DROP"));
     }
 
@@ -992,6 +1040,16 @@ mod tests {
     fn allows_clause_keywords_inside_string_literals() {
         let result = evaluate(r#"MATCH (t:Target {kind: "CREATE"}) RETURN t.id"#, &[]).unwrap();
         assert!(result.rows.is_empty());
+    }
+
+    #[test]
+    fn allows_clause_keywords_as_aliases() {
+        let graph = vec![target("apps/App", "apple_application", &[], &[])];
+
+        let result = evaluate("MATCH (delete:Target) RETURN delete.id AS drop", &graph).unwrap();
+
+        assert_eq!(result.columns, vec!["drop"]);
+        assert_eq!(result.rows, vec![vec![json!("apps/App")]]);
     }
 
     #[test]

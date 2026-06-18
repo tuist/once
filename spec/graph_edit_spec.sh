@@ -180,6 +180,14 @@ EOF
     The stdout should include 'apps/Hello/AppTests'
   End
 
+  It 'treats bare supported label words as aliases'
+    seed_query_expression_workspace
+    When call once query 'MATCH (Target) RETURN Target.id'
+    The status should be success
+    The stdout should include 'Target.id'
+    The stdout should include 'apps/Hello/App'
+  End
+
   It 'rejects invalid Cypher syntax'
     seed_query_expression_workspace
     When call once query 'MATCH (t:Target RETURN t.id'
@@ -211,6 +219,24 @@ EOF
     The stdout should equal ''
     The stderr should include 'read-only'
     The stderr should include 'DELETE'
+  End
+
+  It 'rejects optional match clauses'
+    seed_query_expression_workspace
+    When call once query 'OPTIONAL MATCH (t:Target) RETURN t.id'
+    The status should equal 2
+    The stdout should equal ''
+    The stderr should include 'read-only'
+    The stderr should include 'OPTIONAL'
+  End
+
+  It 'rejects drop statements'
+    seed_query_expression_workspace
+    When call once query 'DROP INDEX target_name'
+    The status should equal 2
+    The stdout should equal ''
+    The stderr should include 'read-only'
+    The stderr should include 'DROP'
   End
 End
 
