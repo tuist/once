@@ -15,70 +15,24 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use serde::{Deserialize, Serialize};
 use tokio::fs::{self, File};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 mod blob;
 mod digest;
+mod error;
+mod model;
 mod provider;
 mod tuist;
 
 pub use digest::Digest;
+pub use error::{Error, Result};
+pub use model::{ActionResult, Stats};
 pub use provider::CacheProvider;
 pub use tuist::{
     TuistAuth, TuistAuthPrompt, TuistCacheConfig, TUIST_APP_OAUTH_CLIENT_ID,
     TUIST_OAUTH_CLIENT_ID_ENV,
 };
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("io error at {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("corrupt action result at {0}: {1}")]
-    Corrupt(PathBuf, serde_json::Error),
-    #[error("blob not found: {0}")]
-    BlobNotFound(Digest),
-    #[error("cache provider `{provider}` is misconfigured: {message}")]
-    InvalidConfig {
-        provider: &'static str,
-        message: String,
-    },
-    #[error("cache provider `{provider}` failed during `{operation}`: {message}")]
-    Remote {
-        provider: &'static str,
-        operation: &'static str,
-        message: String,
-    },
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
-
-/// Cached result of a single action execution.
-///
-/// `outputs` records each declared output file the action produced
-/// (workspace-relative path -> blob digest). On a cache hit, the runner
-/// restores these blobs from the CAS to their declared paths so a
-/// dependent action sees the file it expected, even if the producing
-/// action did not actually run on this machine.
-///
-/// `stdout` and `stderr` are optional: a caller that did not capture
-/// output (or had nothing worth recording) simply leaves them unset
-/// rather than materialising an empty blob.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ActionResult {
-    pub exit_code: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stdout: Option<Digest>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stderr: Option<Digest>,
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub outputs: std::collections::BTreeMap<String, Digest>,
-}
 
 /// Local content-addressed store rooted at a workspace `.once/`
 /// directory.
@@ -355,14 +309,6 @@ impl Cas {
             action_bytes: actions.1,
         })
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Stats {
-    pub blob_count: u64,
-    pub blob_bytes: u64,
-    pub action_count: u64,
-    pub action_bytes: u64,
 }
 
 /// Buffer size for [`Cas::put_stream`]. Bounds per-stream memory use.
