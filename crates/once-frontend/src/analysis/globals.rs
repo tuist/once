@@ -48,6 +48,16 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(host_os_str().to_string())
     }
 
+    /// Read one host environment variable. Missing variables return
+    /// `""`. Schema parsing returns `""`.
+    #[allow(clippy::unnecessary_wraps)]
+    fn host_env(name: &str) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        Ok(std::env::var(name).unwrap_or_default())
+    }
+
     /// Active workspace root as an absolute path. Schema parsing
     /// returns `""`.
     fn workspace_root() -> anyhow::Result<String> {

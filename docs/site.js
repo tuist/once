@@ -55,6 +55,9 @@ export const site = {
           { text: "apple_framework", link: "/reference/prelude/apple_framework" },
           { text: "apple_application", link: "/reference/prelude/apple_application" },
           { text: "apple_test_bundle", link: "/reference/prelude/apple_test_bundle" },
+          { text: "android_resource", link: "/reference/prelude/android_resource" },
+          { text: "android_library", link: "/reference/prelude/android_library" },
+          { text: "android_binary", link: "/reference/prelude/android_binary" },
           { text: "cargo_dependencies", link: "/reference/prelude/cargo_dependencies" },
           { text: "rust_library", link: "/reference/prelude/rust_library" },
           { text: "rust_binary", link: "/reference/prelude/rust_binary" },
@@ -79,6 +82,7 @@ export const site = {
         items: [
           { text: "Overview", link: "/guide/graph/" },
           { text: "Apple", link: "/guide/graph/apple" },
+          { text: "Android", link: "/guide/graph/android" },
           { text: "Rust", link: "/guide/graph/rust" },
         ],
       },

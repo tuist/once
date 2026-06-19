@@ -176,6 +176,8 @@ inspecting target identities.
 The Rust executor exposes generic primitives only:
 
 - `host_arch()` and `host_os()` return normalized host identifiers.
+- `host_env(name)` returns one host environment variable, or an empty
+  string when it is unset.
 - `workspace_root()` returns the absolute workspace root.
 - `host_which(name)` resolves an executable on `PATH`.
 - `host_command(argv, env = {})` runs a discovery command and returns

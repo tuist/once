@@ -19,6 +19,16 @@ metadata at the keyboard.
 - [`apple_test_bundle`](/reference/prelude/apple_test_bundle): XCTest
   bundle assembled for an external runner
 
+## Android target kinds
+
+- [`android_resource`](/reference/prelude/android_resource): Android
+  resources and assets compiled into a static resource package
+- [`android_library`](/reference/prelude/android_library): Android
+  Java library packaged as a jar, static resources, and AAR
+- [`android_binary`](/reference/prelude/android_binary): Android APK
+  built from Java sources, resources, Android resource deps, and Android
+  library deps
+
 ## Rust target kinds
 
 - [`cargo_dependencies`](/reference/prelude/cargo_dependencies): cacheable

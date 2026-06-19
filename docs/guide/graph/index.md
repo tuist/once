@@ -55,11 +55,15 @@ Modules are grouped into preludes. A prelude is a domain-specific target kind se
 that teaches Once how to describe one ecosystem without baking that
 ecosystem into the core graph model.
 
-Today the built-in prelude covers one platform family:
+Today the built-in prelude covers these target kind sets:
 
 - [Apple Prelude](/guide/graph/apple): Swift, Objective-C, C, and C++
   libraries, frameworks, applications, and test bundles for Apple
   platforms.
+- [Android Graph](/guide/graph/android): Android resources, Java
+  libraries, and APKs built with Android SDK tools.
+- [Rust Graph](/guide/graph/rust): Rust libraries, binaries,
+  procedural macros, and Cargo dependency lowering.
 
 Projects can add checked-in Starlark module files from the root
 `once.toml`:

@@ -28,6 +28,14 @@ fn apple_prelude_source() -> String {
     )
 }
 
+fn android_prelude_source() -> String {
+    format!(
+        "{}\n{}",
+        include_str!("../prelude/common.star"),
+        include_str!("../prelude/android.star")
+    )
+}
+
 fn all_prelude_source() -> String {
     format!(
         "{}\n{}\n{}",
@@ -64,6 +72,246 @@ fn apple_application_exposes_build_and_run() {
         .collect::<Vec<_>>();
     names.sort_unstable();
     assert_eq!(names, vec!["build", "run"]);
+}
+
+#[test]
+fn android_binary_exposes_build_and_run() {
+    let schema = built_in_target_kind_schema("android_binary").expect("android_binary schema");
+    let run = schema
+        .capabilities
+        .iter()
+        .find(|capability| capability.name == "run")
+        .expect("android_binary run capability");
+    assert_eq!(run.output_groups, vec!["default"]);
+    assert_eq!(run.requires_outputs, vec!["apk"]);
+
+    let attr_names = schema
+        .attrs
+        .iter()
+        .map(|attr| attr.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(attr_names.contains(&"adb"));
+    assert!(attr_names.contains(&"adb_serial"));
+    assert!(attr_names.contains(&"launch_activity"));
+    assert!(attr_names.contains(&"kotlinc"));
+    assert!(attr_names.contains(&"kotlin_home"));
+    assert!(attr_names.contains(&"kotlin_stdlib"));
+    assert!(!attr_names.contains(&"keytool"));
+}
+
+#[test]
+fn android_target_kind_schemas_expose_all_target_kinds() {
+    for kind in ["android_resource", "android_library", "android_binary"] {
+        let schema = built_in_target_kind_schema(kind).expect("android target kind schema");
+        assert_eq!(schema.kind, kind);
+        assert!(
+            !schema.examples.is_empty(),
+            "{kind} should expose a starter example"
+        );
+        assert!(
+            target_kind_has_impl(kind).unwrap(),
+            "{kind} should have an impl"
+        );
+    }
+
+    let library = built_in_target_kind_schema("android_library").unwrap();
+    let attr_names = library
+        .attrs
+        .iter()
+        .map(|attr| attr.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(attr_names.contains(&"kotlinc_opts"));
+    assert!(attr_names.contains(&"kotlinc"));
+    assert!(attr_names.contains(&"kotlin_stdlib"));
+}
+
+#[test]
+fn prelude_android_kotlin_toolchain_helpers_resolve_stdlib() {
+    let prelude = android_prelude_source();
+
+    let home = eval_prelude_string_function_in(
+        &prelude,
+        "_android_kotlin_home",
+        r#"("/opt/kotlinc/bin/kotlinc")"#,
+    )
+    .unwrap();
+    assert_eq!(home, "/opt/kotlinc");
+
+    let default_stdlib = eval_prelude_string_function_in(
+        &prelude,
+        "_android_kotlin_stdlib",
+        r#"({"kotlin_home": "/opt/kotlinc"}, "/ignored/bin/kotlinc")"#,
+    )
+    .unwrap();
+    assert_eq!(default_stdlib, "/opt/kotlinc/lib/kotlin-stdlib.jar");
+
+    let configured_stdlib = eval_prelude_string_function_in(
+        &prelude,
+        "_android_kotlin_stdlib",
+        r#"({"kotlin_stdlib": "/third_party/kotlin-stdlib.jar"}, "/ignored/bin/kotlinc")"#,
+    )
+    .unwrap();
+    assert_eq!(configured_stdlib, "/third_party/kotlin-stdlib.jar");
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_android_kotlin_compile_declares_merged_classes_action() {
+    let prelude = android_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "apps/hello",
+        "name": "Hello",
+        "id": "apps/hello/Hello",
+    }},
+    "attr": {{
+        "kotlinc_opts": ["-Xjsr305=strict"],
+    }},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/apps/hello/Hello",
+}}
+tools = {{
+    "android_jar": "/sdk/platforms/android-35/android.jar",
+    "kotlin_stdlib": "/kotlin/lib/kotlin-stdlib.jar",
+    "kotlinc": "/kotlin/bin/kotlinc",
+    "identity": "android-tools",
+    "sdk_root": "/sdk",
+}}
+classes_dir, classes_hash = _android_compile_kotlin(
+    ctx,
+    ctx["attr"],
+    tools,
+    ["apps/hello/src/MainActivity.kt"],
+    ".once/out/apps/hello/Hello/java_classes",
+    ".once/out/apps/hello/Hello/classes.sha256",
+    ["apps/hello/Greeting.jar", "/kotlin/lib/kotlin-stdlib.jar"],
+)
+result = repr([classes_dir, classes_hash])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "apps/hello/Hello");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        "[\".once/out/apps/hello/Hello/classes\", \".once/out/apps/hello/Hello/classes.kotlin.sha256\"]"
+    );
+    assert_eq!(store.actions.len(), 1);
+    let action = &store.actions[0];
+    assert_eq!(
+        action.identifier.as_deref(),
+        Some("android_kotlin_compile:apps/hello/Hello")
+    );
+    assert_eq!(
+        action.inputs,
+        vec![
+            "apps/hello/src/MainActivity.kt",
+            ".once/out/apps/hello/Hello/classes.sha256",
+            "apps/hello/Greeting.jar",
+        ]
+    );
+    assert_eq!(
+        action.outputs,
+        vec![
+            ".once/out/apps/hello/Hello/classes",
+            ".once/out/apps/hello/Hello/classes.kotlin.sha256",
+        ]
+    );
+    let script = &action.argv[2];
+    assert!(script.contains("cp -R"), "{script}");
+    assert!(
+        script.contains(".once/out/apps/hello/Hello/java_classes"),
+        "{script}"
+    );
+    assert!(script.contains("/kotlin/lib/kotlin-stdlib.jar"), "{script}");
+    assert!(script.contains("-Xjsr305=strict"), "{script}");
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_android_debug_signing_declares_local_keystore_action() {
+    let prelude = android_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("apps/hello");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("debug.keystore"), b"debug-keystore-bytes").unwrap();
+
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "apps/hello",
+        "name": "Hello",
+        "id": "apps/hello/Hello",
+    }},
+    "attr": {{
+        "debug_keystore": "debug.keystore",
+    }},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/apps/hello/Hello",
+}}
+tools = {{
+    "apksigner": "/sdk/build-tools/35.0.0/apksigner",
+    "identity": "android-tools",
+    "sdk_root": "/sdk",
+}}
+apk, keystore = _android_sign_or_copy(
+    ctx,
+    ctx["attr"],
+    tools,
+    ".once/out/apps/hello/Hello/aligned.apk",
+)
+result = repr([apk, keystore])
+"#
+    );
+    let store = store_for(workspace.path(), "apps/hello/Hello");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        "[\".once/out/apps/hello/Hello/Hello.apk\", \".once/out/apps/hello/Hello/debug.keystore\"]"
+    );
+    assert_eq!(store.actions.len(), 1);
+    let action = &store.actions[0];
+    assert_eq!(
+        action.identifier.as_deref(),
+        Some("android_sign:apps/hello/Hello")
+    );
+    assert_eq!(
+        action.inputs,
+        vec![
+            "apps/hello/debug.keystore",
+            ".once/out/apps/hello/Hello/aligned.apk",
+        ]
+    );
+    assert_eq!(
+        action.outputs,
+        vec![
+            ".once/out/apps/hello/Hello/Hello.apk",
+            ".once/out/apps/hello/Hello/debug.keystore",
+        ]
+    );
+    let script = &action.argv[2];
+    assert!(
+        script.contains("cp 'apps/hello/debug.keystore'"),
+        "{script}"
+    );
+    assert!(script.contains("apksigner' sign"), "{script}");
+    let identity = action.toolchain_identity.as_deref().unwrap();
+    assert!(
+        identity.contains(
+            "\x00debug_sign\x00keystore_sha256\x00764ea889b83367ee6a573d3c0f09847e303701bee50a5a9cc068c9c5736fe37f"
+        ),
+        "{identity:?}"
+    );
+    assert!(!identity.contains("pass:android"), "{identity:?}");
 }
 
 #[test]
@@ -160,6 +408,15 @@ fn eval_prelude_string_function(
     call_source: &str,
 ) -> std::result::Result<String, String> {
     let prelude = apple_prelude_source();
+    eval_prelude_string_function_in(prelude, function_name, call_source)
+}
+
+fn eval_prelude_string_function_in(
+    prelude: impl AsRef<str>,
+    function_name: &str,
+    call_source: &str,
+) -> std::result::Result<String, String> {
+    let prelude = prelude.as_ref();
     let source = format!("{prelude}\nresult = {function_name}{call_source}\n");
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse("test.star", source, &Dialect::Standard)

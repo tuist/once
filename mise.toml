@@ -1,6 +1,9 @@
 [tools]
 erlang = "29.0.2"
 elixir = "1.20.1"
+java = "17.0.2"
+android-sdk = "21.0"
+kotlin = "2.4.0"
 rust = "1.96.0"
 ruby = "4.0.5"
 shellspec = "latest"
@@ -21,3 +24,27 @@ CARGO_INCREMENTAL = "0"
 CARGO_PROFILE_DEV_DEBUG = "line-tables-only"
 CARGO_PROFILE_TEST_DEBUG = "line-tables-only"
 RUST_BACKTRACE = "1"
+
+[tasks."android:install-sdk"]
+description = "Install Android SDK packages used by Once Android rule validation."
+run = '''
+set -eu
+responses="${TMPDIR:-/tmp}/once-android-sdk-licenses.$$"
+trap 'rm -f "$responses"' EXIT
+awk 'BEGIN { for (i = 0; i < 200; i++) print "y" }' > "$responses"
+sdkmanager --licenses < "$responses" >/dev/null || true
+sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" < "$responses"
+mkdir -p "$HOME/.android"
+if [ ! -f "$HOME/.android/debug.keystore" ]; then
+  keytool -genkeypair \
+    -keystore "$HOME/.android/debug.keystore" \
+    -storepass android \
+    -keypass android \
+    -alias androiddebugkey \
+    -dname "CN=Android Debug,O=Android,C=US" \
+    -keyalg RSA \
+    -keysize 2048 \
+    -validity 10000 \
+    -storetype JKS >/dev/null 2>&1
+fi
+'''

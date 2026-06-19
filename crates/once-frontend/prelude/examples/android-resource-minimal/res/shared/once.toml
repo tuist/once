@@ -1,0 +1,9 @@
+[[target]]
+name = "SharedResources"
+kind = "android_resource"
+
+[target.attrs]
+package = "dev.once.shared"
+manifest = "AndroidManifest.xml"
+resource_files = ["res/**"]
+min_sdk_version = 23

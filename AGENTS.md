@@ -145,7 +145,7 @@ Prefer fields over string interpolation so logs stay queryable.
 
 ## Toolchain
 
-The repo pins `rust = "1.88"` in `mise.toml` and the workspace
+The repo pins `rust = "1.96.0"` in `mise.toml` and the workspace
 `rust-version`. Bumping the toolchain affects the user-facing MSRV;
 do it deliberately, not as a side effect of adding a dependency. The
 Windows CI job reads the workspace `rust-version` so it stays aligned
@@ -160,6 +160,21 @@ workspace builds locally on Linux:
 ```sh
 sudo apt-get update && sudo apt-get install -y libcap-ng-dev
 ```
+
+## Android Toolchain
+
+Run the Android setup task before building or testing Android target kinds
+locally:
+
+```sh
+mise install
+mise run android:install-sdk
+```
+
+The task accepts Android SDK licenses, installs the SDK packages used by the
+bundled Android examples, and creates `~/.android/debug.keystore` when it is
+missing. Run it after a fresh checkout or after changing Android SDK versions
+in `mise.toml`.
 
 ## Style
 

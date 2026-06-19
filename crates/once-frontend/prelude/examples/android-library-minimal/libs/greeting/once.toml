@@ -1,0 +1,8 @@
+[[target]]
+name = "Greeting"
+kind = "android_library"
+srcs = ["src/**/*.kt"]
+
+[target.attrs]
+namespace = "dev.once.greeting"
+manifest = "AndroidManifest.xml"
