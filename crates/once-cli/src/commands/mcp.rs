@@ -18,12 +18,12 @@
 //! runtime sessions and return session ids agents can use to query status, read
 //! logs, or stop the process later.
 
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 mod tools;
 pub(crate) use tools::tool_catalog;
@@ -34,21 +34,27 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Run the MCP server until stdin closes.
 pub async fn serve(workspace: PathBuf, allow_run: bool) -> Result<()> {
-    let stdin = tokio::io::stdin();
-    let mut reader = BufReader::new(stdin).lines();
-    let mut stdout = tokio::io::stdout();
+    tokio::task::spawn_blocking(move || serve_blocking(workspace, allow_run))
+        .await
+        .context("joining MCP server thread")?
+}
+
+fn serve_blocking(workspace: PathBuf, allow_run: bool) -> Result<()> {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout().lock();
     let server = Server::new(workspace, allow_run);
 
-    while let Some(line) = reader.next_line().await? {
+    for line in stdin.lock().lines() {
+        let line = line.context("reading MCP request")?;
         if line.trim().is_empty() {
             continue;
         }
         match server.dispatch_line(&line) {
             DispatchOutcome::Reply(response) => {
                 let bytes = serde_json::to_vec(&response).context("encoding MCP response")?;
-                stdout.write_all(&bytes).await?;
-                stdout.write_all(b"\n").await?;
-                stdout.flush().await?;
+                stdout.write_all(&bytes)?;
+                stdout.write_all(b"\n")?;
+                stdout.flush()?;
             }
             DispatchOutcome::Notification => {
                 // Notifications get no reply per JSON-RPC 2.0.
@@ -660,12 +666,26 @@ where
         runtime.block_on(future)
     };
     if tokio::runtime::Handle::try_current().is_ok() {
-        std::thread::spawn(run)
-            .join()
-            .map_err(|_| anyhow::anyhow!("MCP async tool panicked"))?
+        match std::thread::spawn(run).join() {
+            Ok(result) => result,
+            Err(payload) => Err(anyhow::anyhow!(
+                "MCP async tool panicked: {}",
+                panic_payload_message(payload.as_ref())
+            )),
+        }
     } else {
         run()
     }
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic payload".to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -906,7 +926,8 @@ demo_kind = target_kind(
                 stderr: None,
                 outputs: BTreeMap::default(),
             },
-        );
+        )
+        .unwrap();
         run_async_result({
             let store = EvidenceStore::open_workspace(tmp.path());
             let record = record.clone();
