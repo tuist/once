@@ -57,6 +57,19 @@ pub enum QueryCmd {
         target: String,
     },
 
+    /// List durable evidence records, optionally filtered by subject.
+    ///
+    /// Evidence records are provenance for action outcomes. They record
+    /// what happened after `once exec`, `once run`, `once build`, or
+    /// `once test`: the subject, status, action digest, input digest
+    /// when available, cache state, exit code, and captured output
+    /// digests when available. Evidence is queryable history; it does
+    /// not change action-cache reuse rules.
+    Evidence {
+        /// Subject id, e.g. `cli` or `cli:test`.
+        subject: Option<String>,
+    },
+
     /// Validate a proposed `[[target]]` table against its target kind schema.
     ///
     /// Reads `{ "target": { ... } }` from `--file` or, if omitted,
@@ -80,6 +93,7 @@ impl QueryCmd {
             Self::Tests => vec!["tests"],
             Self::AffectedTests { .. } => vec!["affected-tests"],
             Self::TestResults { .. } => vec!["test-results"],
+            Self::Evidence { .. } => vec!["evidence"],
             Self::ValidateTarget { .. } => vec!["validate-target"],
         }
     }

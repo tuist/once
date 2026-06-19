@@ -1,4 +1,4 @@
-# Android Graph
+# Android
 
 Once builds Android resources, Java and Kotlin libraries, and APKs from declarative
 `once.toml` manifests. [`android_resource`](/reference/prelude/android_resource)
@@ -9,7 +9,7 @@ links resources, compiles Java and Kotlin sources, dexes runtime jars with `d8`,
 an APK, zipaligns it, and signs it with a debug key by default.
 
 For the per-target-kind attribute, dep, provider, and capability tables see
-the [Prelude reference](/reference/prelude/).
+the [target kind reference](/reference/prelude/).
 
 ## Targets
 

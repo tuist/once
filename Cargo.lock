@@ -3430,6 +3430,8 @@ dependencies = [
  "microsandbox",
  "once-cas",
  "reqwest 0.13.4",
+ "sea-orm",
+ "sea-orm-migration",
  "serde",
  "serde_json",
  "tempfile",

@@ -1,6 +1,6 @@
-//! `once mcp` exposes Once's graph queries over the Model Context
+//! `once mcp` exposes Once's graph and memory queries over the Model Context
 //! Protocol so a coding agent can call `query_targets`,
-//! `query_capabilities`, and `query_schema` as MCP tools.
+//! `query_capabilities`, `query_schema`, and `query_evidence` as MCP tools.
 //!
 //! Transport is newline-delimited JSON over stdio: every request is
 //! one line of JSON-RPC 2.0 in, every response is one line out. The
@@ -18,12 +18,12 @@
 //! runtime sessions and return session ids agents can use to query status, read
 //! logs, or stop the process later.
 
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 mod tools;
 pub(crate) use tools::tool_catalog;
@@ -34,21 +34,27 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Run the MCP server until stdin closes.
 pub async fn serve(workspace: PathBuf, allow_run: bool) -> Result<()> {
-    let stdin = tokio::io::stdin();
-    let mut reader = BufReader::new(stdin).lines();
-    let mut stdout = tokio::io::stdout();
+    tokio::task::spawn_blocking(move || serve_blocking(workspace, allow_run))
+        .await
+        .context("joining MCP server thread")?
+}
+
+fn serve_blocking(workspace: PathBuf, allow_run: bool) -> Result<()> {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout().lock();
     let server = Server::new(workspace, allow_run);
 
-    while let Some(line) = reader.next_line().await? {
+    for line in stdin.lock().lines() {
+        let line = line.context("reading MCP request")?;
         if line.trim().is_empty() {
             continue;
         }
         match server.dispatch_line(&line) {
             DispatchOutcome::Reply(response) => {
                 let bytes = serde_json::to_vec(&response).context("encoding MCP response")?;
-                stdout.write_all(&bytes).await?;
-                stdout.write_all(b"\n").await?;
-                stdout.flush().await?;
+                stdout.write_all(&bytes)?;
+                stdout.write_all(b"\n")?;
+                stdout.flush()?;
             }
             DispatchOutcome::Notification => {
                 // Notifications get no reply per JSON-RPC 2.0.
@@ -148,6 +154,7 @@ impl Server {
             "once_query_affected_tests" => self.tool_query_affected_tests(&call.arguments),
             "once_run_tests" => self.tool_run_tests(&call.arguments),
             "once_query_test_results" => self.tool_query_test_results(&call.arguments),
+            "once_query_evidence" => self.tool_query_evidence(&call.arguments),
             "once_build_target" if self.allow_run => self.tool_build_target(&call.arguments),
             "once_run_target" if self.allow_run => self.tool_run_target(&call.arguments),
             "once_start_target" if self.allow_run => self.tool_start_target(&call.arguments),
@@ -253,6 +260,23 @@ impl Server {
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing `target` argument"))?;
         crate::commands::query::test_results_value(&self.workspace, target_id)
+    }
+
+    fn tool_query_evidence(&self, args: &Value) -> Result<Value> {
+        let subject = match args.get("subject") {
+            Some(Value::Null) | None => None,
+            Some(value) => Some(
+                value
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("`subject` must be a string"))?
+                    .to_string(),
+            ),
+        };
+        let workspace = self.workspace.clone();
+        let records = run_async_result(async move {
+            crate::commands::query::evidence_records(&workspace, subject.as_deref()).await
+        })?;
+        Ok(serde_json::to_value(records)?)
     }
 
     fn tool_run_tests(&self, args: &Value) -> Result<Value> {
@@ -629,6 +653,41 @@ fn text_content_str(text: &str) -> Value {
     json!({ "type": "text", "text": text })
 }
 
+fn run_async_result<T, F>(future: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: std::future::Future<Output = Result<T>> + Send + 'static,
+{
+    let run = move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("creating async runtime for MCP tool")?;
+        runtime.block_on(future)
+    };
+    if tokio::runtime::Handle::try_current().is_ok() {
+        match std::thread::spawn(run).join() {
+            Ok(result) => result,
+            Err(payload) => Err(anyhow::anyhow!(
+                "MCP async tool panicked: {}",
+                panic_payload_message(payload.as_ref())
+            )),
+        }
+    } else {
+        run()
+    }
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic payload".to_string()
+}
+
 #[derive(Debug, Serialize)]
 struct TargetView {
     id: String,
@@ -762,6 +821,9 @@ impl JsonRpcResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use once_cas::{ActionResult, Digest};
+    use once_core::{EvidenceCacheState, EvidenceRecord, EvidenceStore, EvidenceSubject};
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -843,10 +905,53 @@ demo_kind = target_kind(
                 "once_query_affected_tests".to_string(),
                 "once_run_tests".to_string(),
                 "once_query_test_results".to_string(),
+                "once_query_evidence".to_string(),
                 "once_validate_target".to_string(),
                 "once_apply_edit".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn query_evidence_returns_filtered_records() {
+        let tmp = TempDir::new().unwrap();
+        let record = EvidenceRecord::from_action_result(
+            EvidenceSubject::target("cli", "test"),
+            Digest::of_bytes(b"action"),
+            Some(Digest::of_bytes(b"input")),
+            EvidenceCacheState::Miss,
+            &ActionResult {
+                exit_code: 0,
+                stdout: Some(Digest::of_bytes(b"stdout")),
+                stderr: None,
+                outputs: BTreeMap::default(),
+            },
+        )
+        .unwrap();
+        run_async_result({
+            let store = EvidenceStore::open_workspace(tmp.path());
+            let record = record.clone();
+            async move { store.append(&record).await }
+        })
+        .unwrap();
+
+        let response = server(tmp.path().to_path_buf()).dispatch(request(
+            "tools/call",
+            json!({
+                "name": "once_query_evidence",
+                "arguments": { "subject": "cli:test" }
+            }),
+        ));
+
+        assert!(response.error.is_none());
+        let result = response.result.expect("result");
+        let text = result["content"][0]["text"].as_str().expect("text content");
+        let records: Vec<serde_json::Value> = serde_json::from_str(text).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["schema"], "once.evidence.v1");
+        assert_eq!(records[0]["subject"]["id"], "cli");
+        assert_eq!(records[0]["subject"]["capability"], "test");
+        assert_eq!(records[0]["status"], "passed");
     }
 
     #[test]

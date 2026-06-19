@@ -5,6 +5,7 @@
 pub mod auth;
 pub mod cache;
 pub mod edit;
+pub mod evidence;
 pub mod exec;
 pub mod graph;
 pub mod mcp;

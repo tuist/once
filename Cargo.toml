@@ -41,6 +41,8 @@ tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
 tree-sitter = "0.26.9"
 tree-sitter-cypher = "0.2.6"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+sea-orm = { version = "1.1.20", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-sqlite"] }
+sea-orm-migration = { version = "1.1.20", default-features = false, features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
 schlussel = { git = "https://github.com/tuist/schlussel.git", rev = "80a7bc1fc0b68bdc2cd2379b16240ddbfbe0267b" }
 tracing = "0.1"
 tracing-appender = "0.2"

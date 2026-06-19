@@ -303,10 +303,17 @@ fn write_command_files(out: &Path, bin: &str, entries: &[CommandEntry]) -> Resul
             fs::create_dir_all(parent)
                 .with_context(|| format!("creating reference subdir `{}`", parent.display()))?;
         }
-        fs::write(&path, body)
+        fs::write(&path, trim_trailing_blank_lines(body))
             .with_context(|| format!("writing reference page `{}`", path.display()))?;
     }
     Ok(())
+}
+
+fn trim_trailing_blank_lines(mut body: String) -> String {
+    while body.ends_with("\n\n") {
+        body.pop();
+    }
+    body
 }
 
 /// Return the prose portion of a clap `long_about`, dropping the

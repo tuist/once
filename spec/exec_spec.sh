@@ -13,6 +13,18 @@ Describe 'once exec'
     The stderr should include 'exit=0'
   End
 
+  It 'records action evidence after execution'
+    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf evidence' >/dev/null 2>&1
+    When call once --format json query evidence
+    The status should be success
+    The stdout should include '"schema":"once.evidence.v1"'
+    The stdout should include '"kind":"action_result"'
+    The stdout should include '"status":"passed"'
+    The stdout should include '"cache":"miss"'
+    The stdout should include '"exit_code":0'
+    The path "$WORKSPACE/.once/once.sqlite" should be file
+  End
+
   It 'returns the cached result on a second identical invocation'
     once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hi' >/dev/null 2>&1
     When call once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hi'

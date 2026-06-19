@@ -1,4 +1,4 @@
-# Apple Prelude
+# Apple
 
 Once builds Swift, Objective-C, C, and C++ targets for Apple
 platforms from declarative `once.toml` manifests.
@@ -16,7 +16,7 @@ actions. Runtime effects, such as launching an app, are also declared
 by target kinds and can opt out of action-cache replay.
 
 For the per-target-kind attribute, dep, provider, and capability tables see
-the [Prelude reference](/reference/prelude/).
+the [target kind reference](/reference/prelude/).
 
 ## Targets
 
@@ -48,7 +48,7 @@ once query schema apple_library
 ```
 
 `once query schema <kind>` returns the same typed contract the
-[Prelude reference](/reference/prelude/) documents: which attributes
+[target kind reference](/reference/prelude/) documents: which attributes
 a target of that kind accepts, which providers each dep edge expects,
 which providers the target kind emits, and which capabilities it exposes.
 

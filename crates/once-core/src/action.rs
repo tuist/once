@@ -98,6 +98,12 @@ impl Action {
             Action::RunCommand { resources, .. } => resources,
         }
     }
+
+    pub fn input_digest(&self) -> Option<Digest> {
+        match self {
+            Action::RunCommand { input_digest, .. } => *input_digest,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

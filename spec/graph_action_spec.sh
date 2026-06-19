@@ -59,6 +59,21 @@ EOF
     The contents of file "$WORKSPACE/.once/out/tools/demo/Task/build.txt" should equal 'hello:build'
   End
 
+  It 'records evidence for graph build declared actions'
+    create_declared_action_workspace
+    once --format json build tools/demo/Task >/dev/null
+
+    When call once --format json query evidence tools/demo/Task:build
+    The status should be success
+    The stdout should include '"schema":"once.evidence.v1"'
+    The stdout should include '"subject":{"kind":"target","id":"tools/demo/Task","capability":"build"}'
+    The stdout should include '"status":"passed"'
+    The stdout should include '"cache":"miss"'
+    The stdout should include '"exit_code":0'
+    The stdout should include '.once/out/tools/demo/Task/build.txt'
+    The path "$WORKSPACE/.once/once.sqlite" should be file
+  End
+
   It 'runs custom target kind declared actions through the graph command'
     create_declared_action_workspace
 

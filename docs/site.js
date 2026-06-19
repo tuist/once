@@ -46,6 +46,13 @@ export const site = {
         ],
       },
       {
+        text: "Memory",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/reference/memory/" },
+        ],
+      },
+      {
         text: "Prelude",
         collapsed: false,
         items: [
@@ -81,18 +88,35 @@ export const site = {
         collapsed: false,
         items: [
           { text: "Overview", link: "/guide/graph/" },
-          { text: "Apple", link: "/guide/graph/apple" },
-          { text: "Android", link: "/guide/graph/android" },
-          { text: "Rust", link: "/guide/graph/rust" },
+          {
+            text: "Ecosystems",
+            link: "/guide/graph/ecosystems",
+            collapsed: false,
+            items: [
+              { text: "Overview", link: "/guide/graph/ecosystems" },
+              { text: "Apple", link: "/guide/graph/apple" },
+              { text: "Android", link: "/guide/graph/android" },
+              { text: "Rust", link: "/guide/graph/rust" },
+            ],
+          },
+          {
+            text: "Scripts",
+            collapsed: false,
+            items: [
+              { text: "Overview", link: "/guide/scripts/" },
+              { text: "Caching", link: "/guide/scripts/caching" },
+              { text: "Cache CLI", link: "/guide/cache-cli" },
+              { text: "Runtime", link: "/guide/scripts/runtime" },
+            ],
+          },
         ],
       },
       {
-        text: "Scripts",
+        text: "Memory",
         collapsed: false,
         items: [
-          { text: "Overview", link: "/guide/scripts/" },
-          { text: "Caching", link: "/guide/scripts/caching" },
-          { text: "Runtime", link: "/guide/scripts/runtime" },
+          { text: "Overview", link: "/guide/memory/" },
+          { text: "Evidence", link: "/guide/memory/evidence" },
         ],
       },
       {

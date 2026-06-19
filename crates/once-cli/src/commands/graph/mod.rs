@@ -12,8 +12,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
-use once_cas::CacheProvider;
-use once_core::RunOpts;
+use once_cas::{ActionResult, CacheProvider, Digest};
+use once_core::{EvidenceCacheState, EvidenceSubject, RunOpts};
 use once_frontend::GraphTarget;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -33,6 +33,12 @@ struct CapabilityRunRecord {
     output_groups: Vec<String>,
     required_outputs: Vec<String>,
     outputs: Vec<String>,
+    #[serde(skip)]
+    input_digest: Option<Digest>,
+    #[serde(skip)]
+    cache_state: EvidenceCacheState,
+    #[serde(skip)]
+    result: ActionResult,
 }
 
 pub async fn build(
@@ -45,6 +51,7 @@ pub async fn build(
     let target = require_target(&graph, target_id)?;
     let session = analysis::BuildSession::new(workspace, cache, &graph)?;
     let record = build_target(workspace, cache, &target, &session).await?;
+    record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -65,23 +72,37 @@ pub async fn test(
             .iter()
             .any(|capability| capability.name == "build")
     {
-        let _ = build_target(workspace, cache, &target, &session).await?;
+        let build_record = build_target(workspace, cache, &target, &session).await?;
+        record_capability_run(workspace, &build_record).await;
     }
     let record = if let Some(outcome) = session.run_with_analysis(&target, "test").await? {
+        let analysis::BuildOutcome {
+            action_digest,
+            input_digest,
+            outputs,
+            cache_tag,
+            cache_state,
+            result,
+            ..
+        } = outcome;
         CapabilityRunRecord {
             target: target.label.id.clone(),
             kind: target.kind.clone(),
             capability: test_capability.name.clone(),
             status: "completed",
-            action_digest: outcome.action_digest.to_string(),
-            cache: outcome.cache_tag,
+            action_digest: action_digest.to_string(),
+            cache: cache_tag,
             output_groups: test_capability.output_groups.clone(),
             required_outputs: test_capability.requires_outputs.clone(),
-            outputs: outcome.outputs,
+            outputs,
+            input_digest,
+            cache_state,
+            result,
         }
     } else {
         run_target_capability(workspace, cache, &target, "test").await?
     };
+    record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -102,23 +123,37 @@ pub async fn run(
             .iter()
             .any(|capability| capability.name == "build")
     {
-        let _ = build_target(workspace, cache, &target, &session).await?;
+        let build_record = build_target(workspace, cache, &target, &session).await?;
+        record_capability_run(workspace, &build_record).await;
     }
     let record = if let Some(outcome) = session.run_with_analysis(&target, "run").await? {
+        let analysis::BuildOutcome {
+            action_digest,
+            input_digest,
+            outputs,
+            cache_tag,
+            cache_state,
+            result,
+            ..
+        } = outcome;
         CapabilityRunRecord {
             target: target.label.id.clone(),
             kind: target.kind.clone(),
             capability: run_capability.name.clone(),
             status: "completed",
-            action_digest: outcome.action_digest.to_string(),
-            cache: outcome.cache_tag,
+            action_digest: action_digest.to_string(),
+            cache: cache_tag,
             output_groups: run_capability.output_groups.clone(),
             required_outputs: run_capability.requires_outputs.clone(),
-            outputs: outcome.outputs,
+            outputs,
+            input_digest,
+            cache_state,
+            result,
         }
     } else {
         run_target_capability(workspace, cache, &target, "run").await?
     };
+    record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -148,7 +183,10 @@ async fn build_target(
         // this path because the run record doesn't surface it yet.
         let analysis::BuildOutcome {
             action_digest,
+            input_digest,
             outputs,
+            cache_state,
+            result,
             cache_tag,
             ..
         } = outcome;
@@ -162,6 +200,9 @@ async fn build_target(
             output_groups: capability.output_groups.clone(),
             required_outputs: capability.requires_outputs.clone(),
             outputs,
+            input_digest,
+            cache_state,
+            result,
         })
     } else {
         run_target_capability(workspace, cache, target, "build").await
@@ -191,6 +232,13 @@ async fn run_target_capability(
         .await
         .with_context(|| format!("executing {capability_name} for {}", target.label.id))?;
     if outcome.result.exit_code != 0 {
+        crate::commands::evidence::record_outcome(
+            workspace,
+            EvidenceSubject::target(target.label.id.as_str(), capability_name),
+            &action,
+            &outcome,
+        )
+        .await;
         anyhow::bail!(
             "{} failed for {} with exit code {}",
             capability_name,
@@ -199,6 +247,8 @@ async fn run_target_capability(
         );
     }
     let cache = cache_tag(outcome.cache);
+    let cache_state = EvidenceCacheState::from(outcome.cache);
+    let result = outcome.result;
     Ok(CapabilityRunRecord {
         target: target.label.id.clone(),
         kind: target.kind.clone(),
@@ -212,7 +262,31 @@ async fn run_target_capability(
             .into_iter()
             .map(|output| output.as_str().to_string())
             .collect(),
+        input_digest: action.input_digest(),
+        cache_state,
+        result,
     })
+}
+
+async fn record_capability_run(workspace: &Path, record: &CapabilityRunRecord) {
+    let Some(action_digest) = Digest::from_hex(&record.action_digest) else {
+        tracing::warn!(
+            target = %record.target,
+            capability = %record.capability,
+            action_digest = %record.action_digest,
+            "skipping evidence for invalid action digest"
+        );
+        return;
+    };
+    crate::commands::evidence::record_action_result(
+        workspace,
+        EvidenceSubject::target(record.target.as_str(), record.capability.as_str()),
+        action_digest,
+        record.input_digest,
+        record.cache_state,
+        &record.result,
+    )
+    .await;
 }
 
 fn find_graph_target(workspace: &Path, target_id: &str) -> Result<Option<GraphTarget>> {
@@ -299,6 +373,15 @@ mod tests {
     use super::*;
     use once_frontend::{Capability, TargetLabel};
 
+    fn action_result() -> ActionResult {
+        ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::new(),
+        }
+    }
+
     fn graph_target(kind: &str, capabilities: &[&str]) -> GraphTarget {
         GraphTarget {
             label: TargetLabel {
@@ -357,6 +440,9 @@ mod tests {
             output_groups: vec!["default".to_string()],
             required_outputs: vec!["bundle".to_string()],
             outputs: vec![".once/out/apps/ios/App/run".to_string()],
+            input_digest: None,
+            cache_state: EvidenceCacheState::Miss,
+            result: action_result(),
         };
 
         let rendered = render_human(&record);
@@ -379,6 +465,9 @@ mod tests {
             output_groups: Vec::new(),
             required_outputs: Vec::new(),
             outputs: Vec::new(),
+            input_digest: None,
+            cache_state: EvidenceCacheState::Hit,
+            result: action_result(),
         };
 
         let rendered = render_human(&record);

@@ -19,8 +19,9 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use once_cas::{CacheProvider, Digest};
 use once_core::{
-    tool_env, workspace_tool, workspace_tool_env, Action, CacheState, InputDigestBuilder,
-    OutputSymlinkMode, RemoteExecution, ResourceRequest, RunOpts, WorkspacePath,
+    tool_env, workspace_tool, workspace_tool_env, Action, CacheState, EvidenceSubject,
+    InputDigestBuilder, OutputSymlinkMode, RemoteExecution, ResourceRequest, RunOpts,
+    WorkspacePath,
 };
 use once_frontend::{parse_script_annotations, ScriptAnnotations};
 use serde::Serialize;
@@ -122,6 +123,13 @@ pub async fn exec(
             .await
             .context("executing action")?
     };
+    crate::commands::evidence::record_outcome(
+        &workspace,
+        EvidenceSubject::command(outcome.action),
+        &action,
+        &outcome,
+    )
+    .await;
 
     let stdout = match outcome.result.stdout {
         Some(digest) => cache.get_blob(&digest).await?,

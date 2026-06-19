@@ -207,6 +207,21 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
             example_return: "{\n  \"schema\": \"once.test_results.v1\",\n  \"target\": \"tests/unit\",\n  \"status\": \"passed\",\n  \"summary\": { \"total\": 2, \"passed\": 2, \"failed\": 0 },\n  \"cases\": []\n}",
         },
         ToolDefinition {
+            name: "once_query_evidence",
+            description: "List durable evidence records, optionally filtered by subject.",
+            long_description: "Returns the same record shape as `once query evidence --format json`: durable action evidence captured after `once exec`, `once run`, `once build`, or `once test`. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "subject": {
+                        "type": "string",
+                        "description": "Optional subject id or subject-capability pair, such as `cli` or `cli:test`."
+                    }
+                }
+            }),
+            example_return: "[\n  {\n    \"schema\": \"once.evidence.v1\",\n    \"id\": \"8d65122cd9dcddc8d5d9a8458ff42a40fe3dd7acbd4e0563fd7f9e8fb19b0c44\",\n    \"kind\": \"action_result\",\n    \"subject\": { \"kind\": \"target\", \"id\": \"cli\", \"capability\": \"test\" },\n    \"status\": \"passed\",\n    \"action_digest\": \"0476bde2e7d8d1a64d9bd6f589ef5b443d0f60b71e2ad6f1c5bd7a2c4c41223f\",\n    \"input_digest\": \"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccd5f5814ccfb820e6a41\",\n    \"cache\": \"miss\",\n    \"exit_code\": 0,\n    \"stdout\": \"b439bb065d84034c2e7172c1709eb28797c9bd7f2c64c5d1a1d9c1118f6f9d7e\",\n    \"created_at_unix_ms\": 1812345678901\n  }\n]",
+        },
+        ToolDefinition {
             name: "once_build_target",
             description: "Build a target by running its generic `build` capability.",
             long_description: "Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once build <target> --format json`, so dependency traversal, actions declared by target kinds, cache policy, and output groups stay owned by the CLI graph. The tool returns stdout parsed as JSON when possible, along with exit status and stderr. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.",

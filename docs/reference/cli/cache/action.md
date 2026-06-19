@@ -23,4 +23,3 @@ once cache action [OPTIONS] <SUBCOMMAND>
 - [`once cache action get`](/reference/cli/cache/action/get)
 - [`once cache action put`](/reference/cli/cache/action/put)
 - [`once cache action forget`](/reference/cli/cache/action/forget)
-

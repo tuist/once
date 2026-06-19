@@ -14,8 +14,9 @@ Inspectable-first surface for humans and agents. `query
 targets` lists every declared target id with its target kind
 and capabilities; `query capabilities` shows what a specific
 target exposes (`build`, `run`, `test`); `query schema`
-returns the typed attribute and provider shape for a target kind; and
-`query example` materializes a chosen starter. A quoted
+returns the typed attribute and provider shape for a target kind;
+`query example` materializes a chosen starter; and `query evidence`
+lists durable action evidence captured from prior executions. A quoted
 `MATCH ... RETURN ...` expression can explore the graph through
 a read-only Cypher-like pattern. All query surfaces respect
 `--format json` and `--format toon` so consumers can plan
@@ -72,5 +73,5 @@ escape forms, including Unicode escapes, are rejected.
 - [`once query tests`](/reference/cli/query/tests)
 - [`once query affected-tests`](/reference/cli/query/affected-tests)
 - [`once query test-results`](/reference/cli/query/test-results)
+- [`once query evidence`](/reference/cli/query/evidence)
 - [`once query validate-target`](/reference/cli/query/validate-target)
-

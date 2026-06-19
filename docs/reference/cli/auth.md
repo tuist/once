@@ -26,4 +26,3 @@ Stores or revokes the credentials Once uses when talking to remote cache provide
 
 - [`once auth login`](/reference/cli/auth/login)
 - [`once auth logout`](/reference/cli/auth/logout)
-
