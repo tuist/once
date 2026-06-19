@@ -58,6 +58,8 @@ async fn run_command(
         Cmd::Build { target } => {
             let target = resolve_required_target(workspace, target)?;
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
+            // Graph command futures carry analysis state; boxing keeps
+            // dispatch below clippy's large_futures threshold.
             Box::pin(commands::graph::build(workspace, &cache, output, &target)).await
         }
         Cmd::Run {
@@ -108,6 +110,8 @@ async fn run_command(
         Cmd::Test { target } => {
             let target = resolve_required_target(workspace, target)?;
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
+            // Graph command futures carry analysis state; boxing keeps
+            // dispatch below clippy's large_futures threshold.
             Box::pin(commands::graph::test(workspace, &cache, output, &target)).await
         }
         Cmd::Toolchain { cmd } => run_toolchain_command(workspace, output, cmd).await,
