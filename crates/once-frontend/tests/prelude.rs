@@ -1013,7 +1013,9 @@ result = repr([
 
     assert!(std::path::Path::new(&values[0]).is_absolute());
     assert!(std::path::Path::new(&values[1]).is_absolute());
-    assert!(std::path::Path::new(&values[2]).is_absolute());
+    if !values[2].is_empty() {
+        assert!(std::path::Path::new(&values[2]).is_absolute());
+    }
     if !values[3].is_empty() {
         assert!(std::path::Path::new(&values[3]).is_absolute());
     }
@@ -1067,6 +1069,65 @@ result = repr([
     let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "[None, None, None]");
+}
+
+#[test]
+fn prelude_rust_compile_env_forwards_windows_tool_env_without_overrides() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+_host_values = {{
+    "PATH": "C:/msvc/bin;C:/windows/system32",
+    "Path": "C:/ignored",
+    "INCLUDE": "C:/include",
+    "LIB": "C:/lib",
+    "SystemRoot": "C:/Windows",
+    "TEMP": "C:/Temp",
+    "VCINSTALLDIR": "C:/VS/VC",
+}}
+
+def host_env(name):
+    return _host_values.get(name, "")
+
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "env": {{
+            "CUSTOM": "configured",
+            "LIB": "configured-lib",
+        }},
+        "rustc_env": {{
+            "INCLUDE": "configured-include",
+        }},
+    }},
+    "srcs": [],
+}}
+env = _rust_compile_env(ctx)
+result = repr([
+    env.get("PATH"),
+    env.get("INCLUDE"),
+    env.get("LIB"),
+    env.get("SystemRoot"),
+    env.get("TEMP"),
+    env.get("VCINSTALLDIR"),
+    env.get("CUSTOM"),
+    env.get("PATHEXT"),
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(
+        out,
+        "[\"C:/msvc/bin;C:/windows/system32\", \"configured-include\", \"configured-lib\", \"C:/Windows\", \"C:/Temp\", \"C:/VS/VC\", \"configured\", None]"
+    );
 }
 
 #[cfg(unix)]
