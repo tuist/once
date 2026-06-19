@@ -28,6 +28,7 @@ struct DeclaredActionRun<'a> {
     index: usize,
     declared: DeclaredAction,
     input_action_digests: &'a [(String, Digest)],
+    record_success_evidence: bool,
 }
 
 struct DeclaredActionOutcome {
@@ -36,6 +37,16 @@ struct DeclaredActionOutcome {
     cache_tag: &'static str,
     cache_state: EvidenceCacheState,
     result: ActionResult,
+}
+
+struct DeclaredActionContext<'a> {
+    workspace: &'a Path,
+    cache: &'a CacheProvider,
+    target_id: &'a str,
+    capability: &'a str,
+    index: usize,
+    identifier: &'a str,
+    record_success_evidence: bool,
 }
 
 /// Materialise each declared action through the action cache, then
@@ -75,6 +86,7 @@ pub(super) fn run_declared_actions<'a>(
             stderr: None,
             outputs: BTreeMap::new(),
         };
+        let record_success_evidence = actions.len() > 1;
 
         for (index, declared) in actions.into_iter().enumerate() {
             all_outputs.extend(declared.outputs.iter().cloned());
@@ -95,6 +107,7 @@ pub(super) fn run_declared_actions<'a>(
                 index,
                 declared,
                 input_action_digests: &input_action_digests,
+                record_success_evidence,
             })
             .await?;
             action_digests.push(outcome.digest);
@@ -103,8 +116,6 @@ pub(super) fn run_declared_actions<'a>(
             }
             last_cache_tag = outcome.cache_tag;
             last_cache_state = outcome.cache_state;
-            aggregate_result.stdout = outcome.result.stdout;
-            aggregate_result.stderr = outcome.result.stderr;
             aggregate_result.outputs.extend(outcome.result.outputs);
         }
 
@@ -130,6 +141,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         index,
         declared,
         input_action_digests,
+        record_success_evidence,
     } = run;
     let identifier_for_error = declared
         .identifier
@@ -152,52 +164,46 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         input_action_digests,
     )
     .with_context(|| format!("building action {index} for {target_id} ({identifier_for_error})"))?;
+    let context = DeclaredActionContext {
+        workspace,
+        cache,
+        target_id,
+        capability,
+        index,
+        identifier: &identifier_for_error,
+        record_success_evidence,
+    };
 
     if cacheable {
-        run_cacheable_declared_action(
-            workspace,
-            cache,
-            target_id,
-            capability,
-            index,
-            &identifier_for_error,
-            action,
-        )
-        .await
+        run_cacheable_declared_action(context, action).await
     } else {
-        run_uncacheable_declared_action(
-            workspace,
-            cache,
-            target_id,
-            capability,
-            index,
-            &identifier_for_error,
-            action,
-        )
-        .await
+        run_uncacheable_declared_action(context, action).await
     }
 }
 
 async fn run_cacheable_declared_action(
-    workspace: &Path,
-    cache: &CacheProvider,
-    target_id: &str,
-    capability: &str,
-    index: usize,
-    identifier_for_error: &str,
+    context: DeclaredActionContext<'_>,
     action: Action,
 ) -> Result<DeclaredActionOutcome> {
-    let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
-        .await
-        .with_context(|| {
-            format!("executing action {index} for {target_id} ({identifier_for_error})")
-        })?;
+    let outcome = once_core::run_with_cache(
+        &action,
+        context.workspace,
+        context.cache,
+        RunOpts::default(),
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "executing action {} for {} ({})",
+            context.index, context.target_id, context.identifier
+        )
+    })?;
     let exit_code = outcome.result.exit_code;
     if exit_code != 0 {
         record_declared_action_evidence(
-            workspace,
-            target_id,
-            capability,
+            context.workspace,
+            context.target_id,
+            context.capability,
             &action,
             outcome.action,
             EvidenceCacheState::from(outcome.cache),
@@ -207,10 +213,10 @@ async fn run_cacheable_declared_action(
         anyhow::bail!(
             "{}",
             declared_action_failure_message(
-                cache,
-                identifier_for_error,
-                index,
-                target_id,
+                context.cache,
+                context.identifier,
+                context.index,
+                context.target_id,
                 exit_code,
                 &outcome.result,
             )
@@ -220,13 +226,25 @@ async fn run_cacheable_declared_action(
     let cache_tag = crate::commands::util::cache_tag(outcome.cache);
     let cache_state = EvidenceCacheState::from(outcome.cache);
     tracing::debug!(
-        target = %target_id,
-        action_index = index,
-        identifier = %identifier_for_error,
+        target = %context.target_id,
+        action_index = context.index,
+        identifier = %context.identifier,
         cache = cache_tag,
         action_digest = %outcome.action,
         "completed cacheable declared graph action"
     );
+    if context.record_success_evidence {
+        record_declared_action_evidence(
+            context.workspace,
+            context.target_id,
+            context.capability,
+            &action,
+            outcome.action,
+            cache_state,
+            &outcome.result,
+        )
+        .await;
+    }
     Ok(DeclaredActionOutcome {
         digest: outcome.action,
         input_digest: action.input_digest(),
@@ -237,26 +255,24 @@ async fn run_cacheable_declared_action(
 }
 
 async fn run_uncacheable_declared_action(
-    workspace: &Path,
-    cache: &CacheProvider,
-    target_id: &str,
-    capability: &str,
-    index: usize,
-    identifier_for_error: &str,
+    context: DeclaredActionContext<'_>,
     action: Action,
 ) -> Result<DeclaredActionOutcome> {
     let action_digest = action.digest();
-    let result = run_uncached_action(&action, workspace, cache)
+    let result = run_uncached_action(&action, context.workspace, context.cache)
         .await
         .with_context(|| {
-            format!("executing action {index} for {target_id} ({identifier_for_error})")
+            format!(
+                "executing action {} for {} ({})",
+                context.index, context.target_id, context.identifier
+            )
         })?;
     let exit_code = result.exit_code;
     if exit_code != 0 {
         record_declared_action_evidence(
-            workspace,
-            target_id,
-            capability,
+            context.workspace,
+            context.target_id,
+            context.capability,
             &action,
             action_digest,
             EvidenceCacheState::Bypass,
@@ -266,10 +282,10 @@ async fn run_uncacheable_declared_action(
         anyhow::bail!(
             "{}",
             declared_action_failure_message(
-                cache,
-                identifier_for_error,
-                index,
-                target_id,
+                context.cache,
+                context.identifier,
+                context.index,
+                context.target_id,
                 exit_code,
                 &result,
             )
@@ -277,12 +293,24 @@ async fn run_uncacheable_declared_action(
         );
     }
     tracing::debug!(
-        target = %target_id,
-        action_index = index,
-        identifier = %identifier_for_error,
+        target = %context.target_id,
+        action_index = context.index,
+        identifier = %context.identifier,
         action_digest = %action_digest,
         "completed uncached declared graph action"
     );
+    if context.record_success_evidence {
+        record_declared_action_evidence(
+            context.workspace,
+            context.target_id,
+            context.capability,
+            &action,
+            action_digest,
+            EvidenceCacheState::Bypass,
+            &result,
+        )
+        .await;
+    }
     Ok(DeclaredActionOutcome {
         digest: action_digest,
         input_digest: action.input_digest(),
@@ -390,7 +418,7 @@ async fn run_uncached_action(
                 command.env(key, value);
             }
             command.stdin(Stdio::null());
-            command.stdout(Stdio::piped());
+            command.stdout(Stdio::null());
             command.stderr(Stdio::piped());
             command.current_dir(
                 cwd.as_ref()
@@ -406,7 +434,7 @@ async fn run_uncached_action(
             };
             let mut result = ActionResult {
                 exit_code: output.status.code().unwrap_or(-1),
-                stdout: Some(cache.put_blob(&output.stdout).await?),
+                stdout: None,
                 stderr: Some(cache.put_blob(&output.stderr).await?),
                 outputs: BTreeMap::new(),
             };
@@ -441,9 +469,15 @@ async fn capture_uncached_outputs(
             }
         };
         if metadata.is_dir() {
-            tracing::debug!(
-                output = output.as_str(),
-                "skipping uncached directory output evidence"
+            let manifest = tokio::task::spawn_blocking({
+                let absolute = absolute.clone();
+                move || directory_manifest_bytes(&absolute)
+            })
+            .await
+            .context("joining declared directory output capture")??;
+            captured.insert(
+                output.as_str().to_string(),
+                cache.put_blob(&manifest).await?,
             );
             continue;
         }
@@ -453,6 +487,51 @@ async fn capture_uncached_outputs(
         captured.insert(output.as_str().to_string(), cache.put_blob(&bytes).await?);
     }
     Ok(captured)
+}
+
+fn directory_manifest_bytes(root: &Path) -> Result<Vec<u8>> {
+    let mut entries = Vec::new();
+    collect_directory_manifest(root, root, &mut entries)?;
+    let mut manifest = b"once.directory_output.v1\n".to_vec();
+    for entry in entries {
+        manifest.extend_from_slice(entry.as_bytes());
+        manifest.push(b'\n');
+    }
+    Ok(manifest)
+}
+
+fn collect_directory_manifest(root: &Path, dir: &Path, entries: &mut Vec<String>) -> Result<()> {
+    let mut children = std::fs::read_dir(dir)
+        .with_context(|| format!("reading declared directory output `{}`", dir.display()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("reading declared directory output `{}`", dir.display()))?;
+    children.sort_by_key(std::fs::DirEntry::file_name);
+    for child in children {
+        let path = child.path();
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(path.as_path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        let metadata = std::fs::symlink_metadata(&path)
+            .with_context(|| format!("reading declared output metadata `{}`", path.display()))?;
+        if metadata.is_dir() {
+            entries.push(format!("dir\t{relative}"));
+            collect_directory_manifest(root, &path, entries)?;
+        } else if metadata.is_file() {
+            let bytes = std::fs::read(&path)
+                .with_context(|| format!("reading declared output file `{}`", path.display()))?;
+            entries.push(format!("file\t{relative}\t{}", Digest::of_bytes(&bytes)));
+        } else if metadata.file_type().is_symlink() {
+            let target = std::fs::read_link(&path)
+                .with_context(|| format!("reading declared output symlink `{}`", path.display()))?;
+            entries.push(format!(
+                "symlink\t{relative}\t{}",
+                Digest::of_bytes(target.to_string_lossy().as_bytes())
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn compose_target_action_digest(target_id: &str, action_digests: &[Digest]) -> Digest {
@@ -748,6 +827,129 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn uncached_action_discards_stdout_without_buffering_it() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf noisy-stdout".to_string(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            outputs: Vec::new(),
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: None,
+        };
+
+        let result = run_uncached_action(&action, workspace.path(), &cache)
+            .await
+            .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, None);
+    }
+
+    #[tokio::test]
+    async fn capture_uncached_outputs_records_directory_tree_manifest() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        std::fs::create_dir_all(workspace.path().join(".once/out/tree/sub")).unwrap();
+        std::fs::write(workspace.path().join(".once/out/tree/a.txt"), b"a").unwrap();
+        std::fs::write(workspace.path().join(".once/out/tree/sub/b.txt"), b"b").unwrap();
+
+        let outputs = capture_uncached_outputs(
+            &[WorkspacePath::try_from(".once/out/tree").unwrap()],
+            workspace.path(),
+            &cache,
+        )
+        .await
+        .unwrap();
+        let digest = outputs.get(".once/out/tree").unwrap();
+        let manifest = cache.get_blob(digest).await.unwrap();
+        let manifest = String::from_utf8(manifest).unwrap();
+
+        assert!(manifest.starts_with("once.directory_output.v1\n"));
+        assert!(manifest.contains("dir\tsub\n"));
+        assert!(manifest.contains("file\ta.txt\t"));
+        assert!(manifest.contains("file\tsub/b.txt\t"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn declared_actions_record_success_evidence_per_action() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let target = GraphTarget {
+            label: once_frontend::TargetLabel {
+                package: "tools".to_string(),
+                name: "demo".to_string(),
+                id: "tools/demo".to_string(),
+            },
+            kind: "demo_kind".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            capabilities: Vec::new(),
+            providers: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let action = |name: &str| DeclaredAction {
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!("printf {name} > .once/out/{name}.txt"),
+            ],
+            inputs: Vec::new(),
+            outputs: vec![format!(".once/out/{name}.txt")],
+            env: BTreeMap::new(),
+            cacheable: false,
+            toolchain_identity: None,
+            identifier: Some(name.to_string()),
+        };
+        let analysis = AnalysisResult {
+            actions: vec![action("one"), action("two")],
+            provider: serde_json::json!({}),
+            declared_outputs: Vec::new(),
+        };
+
+        let outcome = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.result.stdout, None);
+        assert_eq!(outcome.result.stderr, None);
+        assert_eq!(outcome.result.outputs.len(), 2);
+        let records = once_core::EvidenceStore::open_workspace(workspace.path())
+            .load()
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records
+            .iter()
+            .all(|record| record.subject.matches("tools/demo:build")));
+        assert!(records
+            .iter()
+            .any(|record| record.outputs.contains_key(".once/out/one.txt")));
+        assert!(records
+            .iter()
+            .any(|record| record.outputs.contains_key(".once/out/two.txt")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn uncached_action_errors_when_declared_output_is_missing() {
         let workspace = tempfile::tempdir().unwrap();
         let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
@@ -893,6 +1095,22 @@ mod tests {
         let reordered = compose_target_action_digest("Root", &[second, first]);
 
         assert_ne!(original, changed);
+        assert_ne!(original, reordered);
+    }
+
+    #[test]
+    fn target_input_digest_handles_empty_single_and_multiple_inputs() {
+        let first = Digest::of_bytes(b"first-input");
+        let second = Digest::of_bytes(b"second-input");
+
+        assert_eq!(compose_target_input_digest(&[]), None);
+        assert_eq!(compose_target_input_digest(&[first]), Some(first));
+
+        let original = compose_target_input_digest(&[first, second]).unwrap();
+        let same = compose_target_input_digest(&[first, second]).unwrap();
+        let reordered = compose_target_input_digest(&[second, first]).unwrap();
+
+        assert_eq!(original, same);
         assert_ne!(original, reordered);
     }
 }
