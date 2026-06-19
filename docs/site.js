@@ -87,12 +87,19 @@ export const site = {
         ],
       },
       {
+        text: "Project Memory",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/guide/memory/" },
+          { text: "Evidence", link: "/guide/memory/evidence" },
+        ],
+      },
+      {
         text: "Scripts",
         collapsed: false,
         items: [
           { text: "Overview", link: "/guide/scripts/" },
           { text: "Caching", link: "/guide/scripts/caching" },
-          { text: "Cache CLI", link: "/guide/cache-cli" },
           { text: "Runtime", link: "/guide/scripts/runtime" },
         ],
       },
@@ -100,7 +107,6 @@ export const site = {
         text: "SDK",
         collapsed: false,
         items: [
-          { text: "Overview", link: "/guide/sdk/" },
           {
             text: '<span class="sidebar-target-link sidebar-target-link-rust"><span class="sidebar-target-icon"></span><span>Rust</span></span>',
             link: "/guide/sdk/rust",
