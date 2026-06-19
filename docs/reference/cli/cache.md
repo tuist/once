@@ -27,4 +27,3 @@ Inspect, read, and write the content-addressed cache that every Once action runs
 - [`once cache stats`](/reference/cli/cache/stats)
 - [`once cache blob`](/reference/cli/cache/blob)
 - [`once cache action`](/reference/cli/cache/action)
-

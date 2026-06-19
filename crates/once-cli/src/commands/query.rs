@@ -189,12 +189,20 @@ pub async fn test_results(workspace: &Path, output: Output, target_id: &str) -> 
 }
 
 pub async fn evidence(workspace: &Path, output: Output, subject: Option<&str>) -> Result<()> {
+    let records = evidence_records(workspace, subject).await?;
+    write_body(output, || render_evidence_human(&records), &records).await
+}
+
+pub(crate) async fn evidence_records(
+    workspace: &Path,
+    subject: Option<&str>,
+) -> Result<Vec<EvidenceRecord>> {
     let store = EvidenceStore::open_workspace(workspace);
     let mut records = store.load().await?;
     if let Some(subject) = subject {
         records.retain(|record| record.subject.matches(subject));
     }
-    write_body(output, || render_evidence_human(&records), &records).await
+    Ok(records)
 }
 
 pub(crate) fn test_results_value(workspace: &Path, target_id: &str) -> Result<serde_json::Value> {

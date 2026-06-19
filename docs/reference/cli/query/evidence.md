@@ -1,6 +1,6 @@
 # `once query evidence`
 
-List durable evidence records, optionally filtered by subject.
+List durable evidence records, optionally filtered by subject
 
 ## Synopsis
 
@@ -8,19 +8,15 @@ List durable evidence records, optionally filtered by subject.
 once query evidence [OPTIONS] [SUBJECT]
 ```
 
+## Description
+
+Evidence records are provenance for action outcomes. They record what happened after `once exec`, `once run`, `once build`, or `once test`: the subject, status, action digest, input digest when available, cache state, exit code, and captured output digests when available. Evidence is queryable history; it does not change action-cache reuse rules.
+
 ## Arguments
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `SUBJECT` | no | Subject id, e.g. `cli` or `cli:test` |
-
-## Description
-
-Evidence records are provenance for action outcomes. They record what happened
-after `once exec`, `once run`, `once build`, or `once test`: the subject, status,
-action digest, input digest when available, cache state, exit code, and captured
-output digests when available. Evidence is queryable history; it does not change
-action-cache reuse rules.
+| `<SUBJECT>` | no | Subject id, e.g. `cli` or `cli:test` |
 
 ## Options
 

@@ -374,6 +374,46 @@ Reads the normalized result file produced by the target's `test` capability. Thi
 }
 ```
 
+## `once_query_evidence`
+
+List durable evidence records, optionally filtered by subject.
+
+Returns the same record shape as `once query evidence --format json`: durable action evidence captured after `once exec`, `once run`, `once build`, or `once test`. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "subject": {
+      "description": "Optional subject id or subject-capability pair, such as `cli` or `cli:test`.",
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+[
+  {
+    "schema": "once.evidence.v1",
+    "id": "8d65122cd9dcddc8d5d9a8458ff42a40fe3dd7acbd4e0563fd7f9e8fb19b0c44",
+    "kind": "action_result",
+    "subject": { "kind": "target", "id": "cli", "capability": "test" },
+    "status": "passed",
+    "action_digest": "0476bde2e7d8d1a64d9bd6f589ef5b443d0f60b71e2ad6f1c5bd7a2c4c41223f",
+    "input_digest": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccd5f5814ccfb820e6a41",
+    "cache": "miss",
+    "exit_code": 0,
+    "stdout": "b439bb065d84034c2e7172c1709eb28797c9bd7f2c64c5d1a1d9c1118f6f9d7e",
+    "created_at_unix_ms": 1812345678901
+  }
+]
+```
+
 ## `once_build_target`
 
 Build a target by running its generic `build` capability.

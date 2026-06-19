@@ -25,4 +25,3 @@ once edit [OPTIONS] <SUBCOMMAND>
 ## Subcommands
 
 - [`once edit apply`](/reference/cli/edit/apply)
-

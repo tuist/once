@@ -272,8 +272,9 @@ pub enum Cmd {
     /// targets` lists every declared target id with its target kind
     /// and capabilities; `query capabilities` shows what a specific
     /// target exposes (`build`, `run`, `test`); `query schema`
-    /// returns the typed attribute and provider shape for a target kind; and
-    /// `query example` materializes a chosen starter. A quoted
+    /// returns the typed attribute and provider shape for a target kind;
+    /// `query example` materializes a chosen starter; and `query evidence`
+    /// lists durable action evidence captured from prior executions. A quoted
     /// `MATCH ... RETURN ...` expression can explore the graph through
     /// a read-only Cypher-like pattern. All query surfaces respect
     /// `--format json` and `--format toon` so consumers can plan
@@ -338,15 +339,16 @@ pub enum Cmd {
         cmd: Option<EditCmd>,
     },
 
-    /// Expose Once's graph queries to a coding agent over MCP.
+    /// Expose Once's graph and memory queries to a coding agent over MCP.
     ///
     /// Speaks the Model Context Protocol over stdio so an agent host
     /// (Claude Desktop, an IDE plug-in, the Anthropic SDK) can call
     /// `once_query_targets`, `once_query_capabilities`,
-    /// `once_query_schema`, and `once_query_example` as tools and get
-    /// JSON back without scraping prose. Mounts inspection tools by
-    /// default; pass `--allow-run` to expose side-effectful build,
-    /// run, and runtime session tools.
+    /// `once_query_schema`, `once_query_example`, and
+    /// `once_query_evidence` as tools and get JSON back without
+    /// scraping prose. Mounts inspection tools by default; pass
+    /// `--allow-run` to expose side-effectful build, run, and runtime
+    /// session tools.
     Mcp {
         /// Workspace root the MCP tools resolve targets against.
         /// Defaults to the value of the global `-C/--directory` flag

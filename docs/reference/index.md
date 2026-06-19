@@ -9,6 +9,8 @@ the keyboard.
 - The [Prelude Reference](/reference/prelude/) enumerates every
   built-in target kind: attributes, dep edges, providers, capabilities,
   and provider record shapes.
+- The [Memory Reference](/reference/memory/) documents project-local
+  runtime state, the evidence database, and location rules.
 - The [MCP Reference](/reference/mcp/) documents the Model Context
   Protocol surface `once mcp` serves: transport, handshake, error
   model, an example session, and the generated tool catalog.

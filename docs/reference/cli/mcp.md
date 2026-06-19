@@ -1,6 +1,6 @@
 # `once mcp`
 
-Expose Once's graph queries to a coding agent over MCP
+Expose Once's graph and memory queries to a coding agent over MCP
 
 ## Synopsis
 
@@ -10,7 +10,7 @@ once mcp [OPTIONS]
 
 ## Description
 
-Speaks the Model Context Protocol over stdio so an agent host (Claude Desktop, an IDE plug-in, the Anthropic SDK) can call `once_query_targets`, `once_query_capabilities`, `once_query_schema`, and `once_query_example` as tools and get JSON back without scraping prose. Mounts inspection tools by default; pass `--allow-run` to expose side-effectful build, run, and runtime session tools.
+Speaks the Model Context Protocol over stdio so an agent host (Claude Desktop, an IDE plug-in, the Anthropic SDK) can call `once_query_targets`, `once_query_capabilities`, `once_query_schema`, `once_query_example`, and `once_query_evidence` as tools and get JSON back without scraping prose. Mounts inspection tools by default; pass `--allow-run` to expose side-effectful build, run, and runtime session tools.
 
 ## Options
 
@@ -23,4 +23,3 @@ Speaks the Model Context Protocol over stdio so an agent host (Claude Desktop, a
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |
 | `-q, --quiet` | (flag) | `false` | Suppress human-mode success and progress trailers. Errors and the structured envelope of `--format json`/`toon` still print. Mirrors the `-q` flag of common build tools |
 | `--list` | (flag) | `false` | Print the command surface at the current command depth |
-

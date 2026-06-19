@@ -33,13 +33,12 @@ once --format json query evidence
 once --format toon query evidence cli:test
 ```
 
-The [MCP tools](/reference/mcp/) do not expose a dedicated evidence
-query yet. Today an agent can inspect the graph through MCP, run work
-through the optional MCP execution tools when the server starts with
-[`once mcp --allow-run`](/reference/cli/mcp), then read evidence through
-the CLI when it needs the project memory record. A future MCP evidence
-tool should mirror the CLI query shape rather than introduce a second
-model.
+Agents can also use
+[`once_query_evidence`](/reference/mcp/tools#once_query_evidence) from
+the [MCP tools](/reference/mcp/) catalog. The MCP tool returns the same
+record shape as the CLI JSON output, so an agent can inspect the graph,
+run the smallest useful check, then query memory without scraping
+terminal output.
 
 ## What A Record Contains
 
@@ -56,10 +55,7 @@ Action evidence includes:
   outputs when available.
 - **Creation Time**: When the evidence record was written.
 
-The local records are stored in the memory database at `.once/once.sqlite`.
-Large output bytes are not stored in SQLite. The database stores digests
-for stdout, stderr, and declared outputs; the byte payloads stay in the
-content-addressed store.
+Storage details live in the [Memory reference](/reference/memory/).
 
 ## Why It Helps
 

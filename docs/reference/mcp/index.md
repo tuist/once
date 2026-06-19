@@ -2,8 +2,10 @@
 
 [`once mcp`](/reference/cli/mcp) runs a Model Context Protocol server
 over stdio so a coding agent (Claude Desktop, an IDE plug-in, an
-Anthropic SDK script) can inspect the typed build graph through the
-same JSON shapes [`once query`](/reference/cli/query) emits.
+Anthropic SDK script) can inspect the typed build graph, query project
+memory, and optionally run graph capabilities through the same JSON
+shapes [`once query`](/reference/cli/query) and the CLI execution
+commands emit.
 
 This page covers transport, handshake, error model, an example
 session, and the Claude Desktop wiring. The [Tools](/reference/mcp/tools)
@@ -99,6 +101,6 @@ Add an entry to your `claude_desktop_config.json` under `mcpServers`:
 }
 ```
 
-Restart Claude Desktop. The three tools appear under the `once`
+Restart Claude Desktop. The read-only tools appear under the `once`
 server in the connectors list and Claude can call them directly when
-planning against the graph.
+planning against the graph and project memory.

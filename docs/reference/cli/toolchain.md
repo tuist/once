@@ -25,4 +25,3 @@ Reports the toolchains a project pins (Rust, Swift, mise) and the resolved versi
 ## Subcommands
 
 - [`once toolchain inspect`](/reference/cli/toolchain/inspect)
-
