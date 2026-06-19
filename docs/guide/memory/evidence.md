@@ -34,8 +34,7 @@ Action evidence includes:
 - captured stdout, stderr, and output digests when available
 - creation time
 
-The local records are stored in the project memory database at
-`.once/once.sqlite`.
+The local records are stored in the memory database at `.once/once.sqlite`.
 
 ## Why It Helps
 

@@ -1,9 +1,9 @@
-# Project Memory
+# Memory
 
 Once starts from a project graph: targets, dependencies, capabilities,
 providers, and typed schemas. The graph tells Once what matters.
 
-Project memory records what happened around that graph. It is local
+Memory records what happened around that graph. It is project-local
 state that lets humans, scripts, and agents answer practical questions
 without scraping terminal output or replaying work blindly:
 
@@ -13,9 +13,9 @@ without scraping terminal output or replaying work blindly:
 - Is that evidence still fresh for the current inputs?
 - What should run next?
 
-Project memory lives under `.once/` because it is runtime state, not
+Memory lives under `.once/` because it is runtime state, not
 source-controlled intent. It can be rebuilt by running work again, but
-while it exists it gives Once a durable working memory for the project.
+while it exists it gives Once durable working memory for the project.
 
 ## Shape
 

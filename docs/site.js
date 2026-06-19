@@ -87,7 +87,7 @@ export const site = {
         ],
       },
       {
-        text: "Project Memory",
+        text: "Memory",
         collapsed: false,
         items: [
           { text: "Overview", link: "/guide/memory/" },
