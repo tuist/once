@@ -86,6 +86,9 @@ pub(super) fn run_declared_actions<'a>(
             stderr: None,
             outputs: BTreeMap::new(),
         };
+        // A single-action target is fully represented by the caller's
+        // capability-level record. Multi-action targets need per-action
+        // success evidence so individual streams and outputs stay visible.
         let record_success_evidence = actions.len() > 1;
 
         for (index, declared) in actions.into_iter().enumerate() {
@@ -116,6 +119,10 @@ pub(super) fn run_declared_actions<'a>(
             }
             last_cache_tag = outcome.cache_tag;
             last_cache_state = outcome.cache_state;
+            if !record_success_evidence {
+                aggregate_result.stdout = outcome.result.stdout;
+                aggregate_result.stderr = outcome.result.stderr;
+            }
             aggregate_result.outputs.extend(outcome.result.outputs);
         }
 
@@ -454,7 +461,7 @@ async fn capture_uncached_outputs(
     let mut captured = BTreeMap::new();
     for output in outputs {
         let absolute = output.resolve(workspace);
-        let metadata = match tokio::fs::metadata(&absolute).await {
+        let metadata = match tokio::fs::symlink_metadata(&absolute).await {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 anyhow::bail!(
@@ -468,6 +475,17 @@ async fn capture_uncached_outputs(
                 });
             }
         };
+        if metadata.file_type().is_symlink() {
+            let target = tokio::fs::read_link(&absolute).await.with_context(|| {
+                format!("reading declared output symlink `{}`", output.as_str())
+            })?;
+            let manifest = format!("once.symlink_output.v1\n{}\n", target.to_string_lossy());
+            captured.insert(
+                output.as_str().to_string(),
+                cache.put_blob(manifest.as_bytes()).await?,
+            );
+            continue;
+        }
         if metadata.is_dir() {
             let manifest = tokio::task::spawn_blocking({
                 let absolute = absolute.clone();
@@ -877,6 +895,101 @@ mod tests {
         assert!(manifest.contains("dir\tsub\n"));
         assert!(manifest.contains("file\ta.txt\t"));
         assert!(manifest.contains("file\tsub/b.txt\t"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn capture_uncached_outputs_records_top_level_symlink_without_following_it() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        std::fs::create_dir_all(workspace.path().join(".once/out")).unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        std::os::unix::fs::symlink(outside.path(), workspace.path().join(".once/out/link"))
+            .unwrap();
+
+        let outputs = capture_uncached_outputs(
+            &[WorkspacePath::try_from(".once/out/link").unwrap()],
+            workspace.path(),
+            &cache,
+        )
+        .await
+        .unwrap();
+        let digest = outputs.get(".once/out/link").unwrap();
+        let manifest = cache.get_blob(digest).await.unwrap();
+        let manifest = String::from_utf8(manifest).unwrap();
+
+        assert!(manifest.starts_with("once.symlink_output.v1\n"));
+        assert!(manifest.contains(&outside.path().to_string_lossy().to_string()));
+        assert!(!manifest.contains("secret.txt"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn single_action_outcome_preserves_streams_for_capability_evidence() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let target = GraphTarget {
+            label: once_frontend::TargetLabel {
+                package: "tools".to_string(),
+                name: "single".to_string(),
+                id: "tools/single".to_string(),
+            },
+            kind: "demo_kind".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            capabilities: Vec::new(),
+            providers: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let analysis = AnalysisResult {
+            actions: vec![DeclaredAction {
+                argv: vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "printf visible-stdout; printf visible-stderr >&2; printf ok > .once/out/one.txt"
+                        .to_string(),
+                ],
+                inputs: Vec::new(),
+                outputs: vec![".once/out/one.txt".to_string()],
+                env: BTreeMap::new(),
+                cacheable: true,
+                toolchain_identity: None,
+                identifier: Some("one".to_string()),
+            }],
+            provider: serde_json::json!({}),
+            declared_outputs: Vec::new(),
+        };
+
+        let outcome = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let stdout = cache
+            .get_blob(&outcome.result.stdout.unwrap())
+            .await
+            .unwrap();
+        let stderr = cache
+            .get_blob(&outcome.result.stderr.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(stdout, b"visible-stdout");
+        assert_eq!(stderr, b"visible-stderr");
+        assert!(outcome.result.outputs.contains_key(".once/out/one.txt"));
+        let records = once_core::EvidenceStore::open_workspace(workspace.path())
+            .load()
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 0);
     }
 
     #[cfg(unix)]
