@@ -79,13 +79,10 @@ pub fn apply_operations_with_schemas(
     schemas: &[TargetKindSchema],
 ) -> Result<String, Vec<Diagnostic>> {
     let mut doc: DocumentMut = toml_src.parse().map_err(|err: toml_edit::TomlError| {
-        vec![Diagnostic {
-            code: "toml_parse_error".to_string(),
-            message: format!("could not parse `once.toml`: {err}"),
-            target: None,
-            attribute: None,
-            repairs: Vec::new(),
-        }]
+        vec![Diagnostic::new(
+            "toml_parse_error",
+            format!("could not parse `once.toml`: {err}"),
+        )]
     })?;
 
     ensure_target_array(&mut doc)?;
@@ -102,14 +99,13 @@ fn ensure_target_array(doc: &mut DocumentMut) -> Result<(), Vec<Diagnostic>> {
         return Ok(());
     }
     if doc["target"].as_array_of_tables().is_none() {
-        return Err(vec![Diagnostic {
-            code: "invalid_target_section".to_string(),
-            message: "the top-level `target` key must be an array of tables (`[[target]]`)"
-                .to_string(),
-            target: None,
-            attribute: None,
-            repairs: vec!["delete the conflicting `target` value and let the editor re-create it as `[[target]]`".to_string()],
-        }]);
+        return Err(vec![Diagnostic::new(
+            "invalid_target_section",
+            "the top-level `target` key must be an array of tables (`[[target]]`)",
+        )
+        .with_repair(
+            "delete the conflicting `target` value and let the editor re-create it as `[[target]]`",
+        )]);
     }
     Ok(())
 }
@@ -132,34 +128,30 @@ fn create(
     schemas: &[TargetKindSchema],
 ) -> Result<(), Vec<Diagnostic>> {
     if spec.name.trim().is_empty() {
-        return Err(vec![Diagnostic {
-            code: "target_name_required".to_string(),
-            message: "`create` operations must declare a non-empty `name`".to_string(),
-            target: None,
-            attribute: Some("name".to_string()),
-            repairs: Vec::new(),
-        }]);
+        return Err(vec![Diagnostic::new(
+            "target_name_required",
+            "`create` operations must declare a non-empty `name`",
+        )
+        .with_attribute("name")]);
     }
     if spec.kind.trim().is_empty() {
-        return Err(vec![Diagnostic {
-            code: "target_kind_required".to_string(),
-            message: "`create` operations must declare a non-empty `kind`".to_string(),
-            target: Some(spec.name.clone()),
-            attribute: Some("kind".to_string()),
-            repairs: Vec::new(),
-        }]);
+        return Err(vec![Diagnostic::new(
+            "target_kind_required",
+            "`create` operations must declare a non-empty `kind`",
+        )
+        .with_target(spec.name.as_str())
+        .with_attribute("kind")]);
     }
     if find_target_index(doc, &spec.name).is_some() {
-        return Err(vec![Diagnostic {
-            code: "target_already_exists".to_string(),
-            message: format!("a target named `{}` already exists", spec.name),
-            target: Some(spec.name.clone()),
-            attribute: None,
-            repairs: vec![format!(
-                "rename the new target, or `update` the existing `{}`",
-                spec.name
-            )],
-        }]);
+        return Err(vec![Diagnostic::new(
+            "target_already_exists",
+            format!("a target named `{}` already exists", spec.name),
+        )
+        .with_target(spec.name.as_str())
+        .with_repair(format!(
+            "rename the new target, or `update` the existing `{}`",
+            spec.name
+        ))]);
     }
 
     validate_spec(spec, schemas)?;
@@ -176,33 +168,29 @@ fn update(
     schemas: &[TargetKindSchema],
 ) -> Result<(), Vec<Diagnostic>> {
     let Some(index) = find_target_index(doc, target_name) else {
-        return Err(vec![Diagnostic {
-            code: "target_not_found".to_string(),
-            message: format!("no target named `{target_name}` in this manifest"),
-            target: Some(target_name.to_string()),
-            attribute: None,
-            repairs: Vec::new(),
-        }]);
+        return Err(vec![Diagnostic::new(
+            "target_not_found",
+            format!("no target named `{target_name}` in this manifest"),
+        )
+        .with_target(target_name)]);
     };
 
     if let Some(new_name) = set.name.as_deref() {
         if new_name.trim().is_empty() {
-            return Err(vec![Diagnostic {
-                code: "target_name_required".to_string(),
-                message: "`update.set.name` must be non-empty when present".to_string(),
-                target: Some(target_name.to_string()),
-                attribute: Some("name".to_string()),
-                repairs: Vec::new(),
-            }]);
+            return Err(vec![Diagnostic::new(
+                "target_name_required",
+                "`update.set.name` must be non-empty when present",
+            )
+            .with_target(target_name)
+            .with_attribute("name")]);
         }
         if new_name != target_name && find_target_index(doc, new_name).is_some() {
-            return Err(vec![Diagnostic {
-                code: "target_already_exists".to_string(),
-                message: format!("renaming to `{new_name}` would clash with an existing target"),
-                target: Some(target_name.to_string()),
-                attribute: Some("name".to_string()),
-                repairs: Vec::new(),
-            }]);
+            return Err(vec![Diagnostic::new(
+                "target_already_exists",
+                format!("renaming to `{new_name}` would clash with an existing target"),
+            )
+            .with_target(target_name)
+            .with_attribute("name")]);
         }
     }
 
@@ -226,24 +214,16 @@ fn validate_spec(spec: &TargetSpec, schemas: &[TargetKindSchema]) -> Result<(), 
 }
 
 fn schema_load_diagnostic(err: &crate::Error) -> Vec<Diagnostic> {
-    vec![Diagnostic {
-        code: "target_kind_schema_load_failed".to_string(),
-        message: err.to_string(),
-        target: None,
-        attribute: Some("kind".to_string()),
-        repairs: Vec::new(),
-    }]
+    vec![Diagnostic::new("target_kind_schema_load_failed", err.to_string()).with_attribute("kind")]
 }
 
 fn delete(doc: &mut DocumentMut, target_name: &str) -> Result<(), Vec<Diagnostic>> {
     let Some(index) = find_target_index(doc, target_name) else {
-        return Err(vec![Diagnostic {
-            code: "target_not_found".to_string(),
-            message: format!("no target named `{target_name}` to delete"),
-            target: Some(target_name.to_string()),
-            attribute: None,
-            repairs: Vec::new(),
-        }]);
+        return Err(vec![Diagnostic::new(
+            "target_not_found",
+            format!("no target named `{target_name}` to delete"),
+        )
+        .with_target(target_name)]);
     };
     targets_mut(doc).remove(index);
     Ok(())
@@ -259,13 +239,12 @@ fn apply_update(
     }
     if let Some(new_kind) = &set.kind {
         if new_kind.trim().is_empty() {
-            return Err(vec![Diagnostic {
-                code: "target_kind_required".to_string(),
-                message: "`update.set.kind` must be non-empty when present".to_string(),
-                target: Some(original_name.to_string()),
-                attribute: Some("kind".to_string()),
-                repairs: Vec::new(),
-            }]);
+            return Err(vec![Diagnostic::new(
+                "target_kind_required",
+                "`update.set.kind` must be non-empty when present",
+            )
+            .with_target(original_name)
+            .with_attribute("kind")]);
         }
         table.insert("kind", Item::Value(Value::from(new_kind.as_str())));
     }
@@ -397,13 +376,12 @@ fn build_attrs_table(
     }
     for (key, value) in sorted {
         let item = json_to_item(value).map_err(|err| {
-            vec![Diagnostic {
-                code: "attr_unrepresentable".to_string(),
-                message: format!("attribute `{key}` cannot be written to TOML: {err}"),
-                target: Some(target_name.to_string()),
-                attribute: Some(key.clone()),
-                repairs: Vec::new(),
-            }]
+            vec![Diagnostic::new(
+                "attr_unrepresentable",
+                format!("attribute `{key}` cannot be written to TOML: {err}"),
+            )
+            .with_target(target_name)
+            .with_attribute(key.as_str())]
         })?;
         attrs_table.insert(key, item);
     }
