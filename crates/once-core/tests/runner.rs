@@ -5,6 +5,7 @@
 //! parallel-safe under `cargo test`'s default scheduler.
 
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 use once_cas::Cas;
 use once_core::{
@@ -42,14 +43,22 @@ async fn many_independent_actions_execute_concurrently() {
             cmd(&format!(
                 "mkdir -p parallel; \
                  : > parallel/{i}.started; \
+                 attempts=0; \
                  while [ \"$(find parallel -name '*.started' -print | wc -l | tr -d '[:space:]')\" -lt 8 ]; do \
+                   attempts=$((attempts + 1)); \
+                   if [ \"$attempts\" -gt 500 ]; then \
+                     echo 'timed out waiting for concurrent starts' >&2; \
+                     exit 124; \
+                   fi; \
                    sleep 0.01; \
                  done; \
+                 sleep 0.2; \
                  printf {i}"
             ))
         })
         .collect();
     let mut handles = Vec::new();
+    let start = Instant::now();
     for a in &actions {
         // Move clones of the runner into spawned tasks; cloning shares
         // the permit pool by design.
@@ -60,6 +69,11 @@ async fn many_independent_actions_execute_concurrently() {
     for h in handles {
         h.await.unwrap();
     }
+    assert!(
+        start.elapsed() < Duration::from_secs(6),
+        "expected concurrent execution; took {:?}",
+        start.elapsed()
+    );
 }
 
 #[tokio::test]
