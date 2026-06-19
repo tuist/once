@@ -611,6 +611,7 @@ result = repr([
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn prelude_cargo_metadata_targets_use_host_metadata_for_host_variants() {
     let prelude = all_prelude_source();
     let source = format!(
