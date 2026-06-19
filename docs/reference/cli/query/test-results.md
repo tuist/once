@@ -12,7 +12,7 @@ once query test-results [OPTIONS] <TARGET>
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<TARGET>` | yes | Target id, e.g. `spec/cli_e2e` |
+| `<TARGET>` | yes | Target id, such as `tests/unit` |
 
 ## Options
 

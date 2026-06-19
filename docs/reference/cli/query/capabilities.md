@@ -12,7 +12,7 @@ once query capabilities [OPTIONS] <TARGET>
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<TARGET>` | yes | Target id, e.g. `apps/ios/App` |
+| `<TARGET>` | yes | Target id, such as `apps/service/Service` |
 
 ## Options
 

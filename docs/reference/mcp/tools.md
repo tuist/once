@@ -14,7 +14,7 @@ Returns the same record shape as `once query targets --format json`: one entry p
 {
   "properties": {
     "kind": {
-      "description": "Restrict results to targets of this target kind (e.g. `apple_library`).",
+      "description": "Restrict results to a target kind discovered through `once_list_target_kinds`.",
       "type": "string"
     }
   },
@@ -26,11 +26,11 @@ Returns the same record shape as `once query targets --format json`: one entry p
 
 ```json
 [
-  { "id": "apps/ios/AppCore", "package": "apps/ios", "name": "AppCore",
-    "kind": "apple_library", "deps": [], "capabilities": ["build"] },
-  { "id": "apps/ios/Greeter", "package": "apps/ios", "name": "Greeter",
-    "kind": "apple_library", "deps": ["apps/ios/AppCore"],
-    "capabilities": ["build"] }
+  { "id": "packages/core/Core", "package": "packages/core", "name": "Core",
+    "kind": "library", "deps": [], "capabilities": ["build"] },
+  { "id": "apps/service/Service", "package": "apps/service", "name": "Service",
+    "kind": "application", "deps": ["packages/core/Core"],
+    "capabilities": ["build", "run"] }
 ]
 ```
 
@@ -46,7 +46,7 @@ Returns the same record `once query capabilities <target> --format json` emits: 
 {
   "properties": {
     "target": {
-      "description": "Canonical target id, e.g. `apps/ios/App`.",
+      "description": "Canonical target id, such as `apps/service/Service`.",
       "type": "string"
     }
   },
@@ -61,13 +61,13 @@ Returns the same record `once query capabilities <target> --format json` emits: 
 
 ```json
 {
-  "id": "apps/ios/App",
-  "kind": "apple_application",
+  "id": "apps/service/Service",
+  "kind": "application",
   "capabilities": [
-    { "name": "build", "output_groups": ["default", "bundle", "dsyms"],
+    { "name": "build", "output_groups": ["default", "package"],
       "requires_outputs": [] },
     { "name": "run", "output_groups": ["default"],
-      "requires_outputs": ["bundle"] }
+      "requires_outputs": ["package"] }
   ]
 }
 ```
@@ -84,7 +84,7 @@ Returns the target kind schema (the typed contract a target of that kind must ma
 {
   "properties": {
     "kind": {
-      "description": "Target kind to introspect, e.g. `apple_library`.",
+      "description": "Target kind to introspect. Discover names with `once_list_target_kinds`.",
       "type": "string"
     }
   },
@@ -99,17 +99,17 @@ Returns the target kind schema (the typed contract a target of that kind must ma
 
 ```json
 {
-  "kind": "apple_library",
-  "docs": "Mixed Swift, Objective-C, C, and C++ static library...",
+  "kind": "library",
+  "docs": "Reusable library target...",
   "attrs": [
-    { "name": "platform", "ty": "string", "required": true, "configurable": true }
+    { "name": "visibility", "ty": "string", "required": true, "configurable": false }
   ],
-  "capabilities": [ { "name": "build", "output_groups": ["archive"], "requires_outputs": [] } ],
-  "providers": ["apple_linkable", "apple_module"],
+  "capabilities": [ { "name": "build", "output_groups": ["default"], "requires_outputs": [] } ],
+  "providers": ["linkable", "module"],
   "examples": [
     {
-      "slug": "apple-library-minimal",
-      "name": "Minimal Apple library",
+      "slug": "library-minimal",
+      "name": "Minimal library",
       "use_when": "..."
     }
   ]
@@ -128,11 +128,11 @@ Returns the same record as `once query example <kind> <slug> --format json`: the
 {
   "properties": {
     "kind": {
-      "description": "Target kind that owns the example, e.g. `apple_library`.",
+      "description": "Target kind that owns the example.",
       "type": "string"
     },
     "slug": {
-      "description": "Example slug from the target kind schema, e.g. `apple-library-minimal`.",
+      "description": "Example slug from the target kind schema.",
       "type": "string"
     }
   },
@@ -148,11 +148,11 @@ Returns the same record as `once query example <kind> <slug> --format json`: the
 
 ```json
 {
-  "slug": "apple-library-minimal",
-  "name": "Minimal Apple library",
+  "slug": "library-minimal",
+  "name": "Minimal library",
   "use_when": "...",
   "files": [
-    { "path": "apps/Hello/once.toml", "contents": "[[target]]\nname = \"Hello\"\nkind = \"apple_library\"\n..." }
+    { "path": "packages/core/once.toml", "contents": "[[target]]\nname = \"Core\"\nkind = \"library\"\n..." }
   ]
 }
 ```
@@ -177,10 +177,10 @@ Lightweight discovery entry point. Returns one entry per target kind containing 
 ```json
 [
   {
-    "kind": "apple_library",
-    "docs": "Mixed Swift, Objective-C, C, and C++ static library...",
+    "kind": "library",
+    "docs": "Reusable library target...",
     "examples": [
-      { "slug": "apple-library-minimal", "name": "Minimal Apple library", "use_when": "..." }
+      { "slug": "library-minimal", "name": "Minimal library", "use_when": "..." }
     ]
   }
 ]
@@ -198,7 +198,7 @@ Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one 
 {
   "properties": {
     "target": {
-      "description": "Canonical target id, e.g. `apps/Hello/Hello`.",
+      "description": "Canonical target id, such as `packages/core/Core`.",
       "type": "string"
     }
   },
@@ -213,13 +213,13 @@ Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one 
 
 ```json
 {
-  "label": { "package": "apps/Hello", "name": "Hello", "id": "apps/Hello/Hello" },
-  "kind": "apple_library",
-  "srcs": ["Sources/**/*.swift"],
+  "label": { "package": "packages/core", "name": "Core", "id": "packages/core/Core" },
+  "kind": "library",
+  "srcs": ["src/**/*.src"],
   "deps": [],
-  "attrs": { "platform": "ios", "minimum_os": "17.0" },
-  "capabilities": [ { "name": "build", "output_groups": ["default", "binary"], "requires_outputs": [] } ],
-  "providers": ["apple_linkable", "apple_module"]
+  "attrs": { "visibility": "public" },
+  "capabilities": [ { "name": "build", "output_groups": ["default"], "requires_outputs": [] } ],
+  "providers": ["linkable", "module"]
 }
 ```
 
@@ -243,12 +243,12 @@ Returns every target with a `test` capability, including its target kind, depend
 ```json
 [
   {
-    "id": "spec/cli_e2e",
-    "kind": "shellspec_test",
+    "id": "tests/unit",
+    "kind": "test_suite",
     "deps": [],
-    "runner": "shellspec",
-    "labels": ["e2e"],
-    "results_path": ".once/out/spec/cli_e2e/test/test_results.json"
+    "runner": "unit",
+    "labels": ["fast"],
+    "results_path": ".once/out/tests/unit/test/test_results.json"
   }
 ]
 ```
@@ -257,7 +257,7 @@ Returns every target with a `test` capability, including its target kind, depend
 
 Return test targets likely affected by a set of changed workspace paths.
 
-Maps changed paths to test targets using generic graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. The query does not know about ShellSpec, Python, Android, or any native runner.
+Maps changed paths to test targets using generic graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. The query does not know about any native runner.
 
 **Input schema**
 
@@ -281,9 +281,9 @@ Maps changed paths to test targets using generic graph relationships and declare
 ```json
 [
   {
-    "id": "spec/cli_e2e",
-    "kind": "shellspec_test",
-    "reasons": ["changed test input `spec/cli_spec.sh`"]
+    "id": "tests/unit",
+    "kind": "test_suite",
+    "reasons": ["changed test input `tests/unit/spec.src`"]
   }
 ]
 ```
@@ -307,7 +307,7 @@ Executes Once's generic `test` capability for either explicit `target` / `target
       "type": "array"
     },
     "target": {
-      "description": "Single canonical target id to run, e.g. `spec/cli_e2e`.",
+      "description": "Single canonical target id to run, such as `tests/unit`.",
       "type": "string"
     },
     "targets": {
@@ -328,10 +328,10 @@ Executes Once's generic `test` capability for either explicit `target` / `target
 {
   "runs": [
     {
-      "target": "spec/cli_e2e",
+      "target": "tests/unit",
       "exit_code": 0,
       "success": true,
-      "record": { "target": "spec/cli_e2e", "capability": "test" },
+      "record": { "target": "tests/unit", "capability": "test" },
       "results": { "schema": "once.test_results.v1", "status": "passed" },
       "stderr": ""
     }
@@ -351,7 +351,7 @@ Reads the normalized result file produced by the target's `test` capability. Thi
 {
   "properties": {
     "target": {
-      "description": "Canonical target id, e.g. `spec/cli_e2e`.",
+      "description": "Canonical target id, such as `tests/unit`.",
       "type": "string"
     }
   },
@@ -367,7 +367,7 @@ Reads the normalized result file produced by the target's `test` capability. Thi
 ```json
 {
   "schema": "once.test_results.v1",
-  "target": "spec/cli_e2e",
+  "target": "tests/unit",
   "status": "passed",
   "summary": { "total": 2, "passed": 2, "failed": 0 },
   "cases": []
@@ -386,7 +386,7 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 {
   "properties": {
     "target": {
-      "description": "Target id to build, e.g. `apps/ios/App` or `./App`.",
+      "description": "Target id to build, such as `apps/service/Service` or `./Service`.",
       "type": "string"
     }
   },
@@ -401,16 +401,16 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 
 ```json
 {
-  "target": "apps/ios/App",
+  "target": "apps/service/Service",
   "capability": "build",
   "exit_code": 0,
   "success": true,
   "record": {
-    "target": "apps/ios/App",
-    "kind": "apple_application",
+    "target": "apps/service/Service",
+    "kind": "application",
     "capability": "build",
     "cache": "miss",
-    "outputs": [".once/out/apps/ios/App/App.app"]
+    "outputs": [".once/out/apps/service/Service/package"]
   },
   "stderr": ""
 }
@@ -428,7 +428,7 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 {
   "properties": {
     "target": {
-      "description": "Target id to run, e.g. `apps/ios/App` or `./App`.",
+      "description": "Target id to run, such as `apps/service/Service` or `./Service`.",
       "type": "string"
     }
   },
@@ -443,16 +443,16 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 
 ```json
 {
-  "target": "apps/ios/App",
+  "target": "apps/service/Service",
   "capability": "run",
   "exit_code": 0,
   "success": true,
   "record": {
-    "target": "apps/ios/App",
-    "kind": "apple_application",
+    "target": "apps/service/Service",
+    "kind": "application",
     "capability": "run",
     "cache": "bypass",
-    "outputs": [".once/out/apps/ios/App/run/run.json"]
+    "outputs": [".once/out/apps/service/Service/run.json"]
   },
   "stderr": ""
 }
@@ -470,7 +470,7 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 {
   "properties": {
     "target": {
-      "description": "Target id to start, e.g. `tools/demo/LaunchApp` or `./LaunchApp`.",
+      "description": "Target id to start, such as `tools/demo/LaunchService` or `./LaunchService`.",
       "type": "string"
     }
   },
@@ -485,12 +485,12 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 
 ```json
 {
-  "session_id": "tools-demo-LaunchApp-123-1812345678901",
-  "target": "tools/demo/LaunchApp",
+  "session_id": "tools-demo-LaunchService-123-1812345678901",
+  "target": "tools/demo/LaunchService",
   "status": "starting",
-  "session_dir": ".once/runtime/tools-demo-LaunchApp-123-1812345678901",
-  "stdout": ".once/runtime/tools-demo-LaunchApp-123-1812345678901/stdout.log",
-  "stderr": ".once/runtime/tools-demo-LaunchApp-123-1812345678901/stderr.log"
+  "session_dir": ".once/runtime/tools-demo-LaunchService-123-1812345678901",
+  "stdout": ".once/runtime/tools-demo-LaunchService-123-1812345678901/stdout.log",
+  "stderr": ".once/runtime/tools-demo-LaunchService-123-1812345678901/stderr.log"
 }
 ```
 
@@ -521,8 +521,8 @@ Reads `.once/runtime/<session_id>/session.json` and returns the supervisor's lat
 
 ```json
 {
-  "session_id": "tools-demo-LaunchApp-123-1812345678901",
-  "target": "tools/demo/LaunchApp",
+  "session_id": "tools-demo-LaunchService-123-1812345678901",
+  "target": "tools/demo/LaunchService",
   "status": "running",
   "pid": 4242
 }
@@ -571,7 +571,7 @@ Reads persisted line-oriented stdout and stderr records from a runtime session. 
 
 ```json
 {
-  "session_id": "tools-demo-LaunchApp-123-1812345678901",
+  "session_id": "tools-demo-LaunchService-123-1812345678901",
   "records": [
     { "cursor": "stdout:000000000000", "source": "stdout", "level": "info", "message": "ready" }
   ]
@@ -605,8 +605,8 @@ Writes a stop request into the runtime session directory. The supervisor observe
 
 ```json
 {
-  "session_id": "tools-demo-LaunchApp-123-1812345678901",
-  "target": "tools/demo/LaunchApp",
+  "session_id": "tools-demo-LaunchService-123-1812345678901",
+  "target": "tools/demo/LaunchService",
   "status": "stopping"
 }
 ```
@@ -642,9 +642,9 @@ Schema-only validation: checks that the target declares a known target kind, eve
   "diagnostics": [
     {
       "code": "missing_required_attr",
-      "message": "target kind `apple_library` requires attribute `platform`",
-      "target": "Hello",
-      "attribute": "platform"
+      "message": "target kind `library` requires attribute `visibility`",
+      "target": "Core",
+      "attribute": "visibility"
     }
   ]
 }
@@ -669,7 +669,7 @@ Reads the manifest at `<workspace>/<package>/once.toml` (creating it if missing)
       "type": "array"
     },
     "package": {
-      "description": "Package directory relative to the workspace root, e.g. `apps/Hello`. Use `\"\"` for the root manifest.",
+      "description": "Package directory relative to the workspace root, such as `packages/core`. Use `\"\"` for the root manifest.",
       "type": "string"
     }
   },
@@ -686,6 +686,7 @@ Reads the manifest at `<workspace>/<package>/once.toml` (creating it if missing)
 ```json
 {
   "applied": true,
-  "path": "apps/Hello/once.toml"
+  "path": "packages/core/once.toml"
 }
 ```
+

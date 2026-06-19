@@ -16,7 +16,7 @@ Builds the target as needed, then executes its `test` capability through the act
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<TARGET>` | no | Target id, e.g. `apps/ios/AppTests` or `./AppTests` |
+| `<TARGET>` | no | Target id, such as `tests/unit` or `./unit` |
 
 ## Options
 

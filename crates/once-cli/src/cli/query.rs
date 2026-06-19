@@ -13,19 +13,19 @@ pub enum QueryCmd {
 
     /// List capabilities and output groups for a target.
     Capabilities {
-        /// Target id, e.g. `apps/ios/App`.
+        /// Target id, such as `apps/service/Service`.
         target: String,
     },
 
     /// Inspect a target kind schema.
     Schema {
-        /// Target kind, e.g. `apple_application`.
+        /// Target kind to inspect. Discover names with `once query target-kinds`.
         kind: String,
     },
 
     /// Materialize a target kind starter example.
     Example {
-        /// Target kind, e.g. `apple_library`.
+        /// Target kind that owns the example.
         kind: String,
         /// Example slug from `once query schema`.
         slug: String,
@@ -37,7 +37,7 @@ pub enum QueryCmd {
 
     /// Resolve a single target's full record (kind, srcs, deps, attrs, capabilities).
     Target {
-        /// Target id, e.g. `apps/Hello/Hello`.
+        /// Target id, such as `packages/core/Core`.
         target: String,
     },
 
@@ -53,7 +53,7 @@ pub enum QueryCmd {
 
     /// Read normalized `once.test_results.v1` results for a target.
     TestResults {
-        /// Target id, e.g. `spec/cli_e2e`.
+        /// Target id, such as `tests/unit`.
         target: String,
     },
 

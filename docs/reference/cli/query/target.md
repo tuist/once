@@ -12,7 +12,7 @@ once query target [OPTIONS] <TARGET>
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<TARGET>` | yes | Target id, e.g. `apps/Hello/Hello` |
+| `<TARGET>` | yes | Target id, such as `packages/core/Core` |
 
 ## Options
 

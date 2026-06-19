@@ -12,7 +12,7 @@ once query schema [OPTIONS] <KIND>
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<KIND>` | yes | Target kind, e.g. `apple_application` |
+| `<KIND>` | yes | Target kind to inspect. Discover names with `once query target-kinds` |
 
 ## Options
 
@@ -23,3 +23,4 @@ once query schema [OPTIONS] <KIND>
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |
 | `-q, --quiet` | (flag) | `false` | Suppress human-mode success and progress trailers. Errors and the structured envelope of `--format json`/`toon` still print. Mirrors the `-q` flag of common build tools |
 | `--list` | (flag) | `false` | Print the command surface at the current command depth |
+
