@@ -81,9 +81,24 @@ export const site = {
         collapsed: false,
         items: [
           { text: "Overview", link: "/guide/graph/" },
-          { text: "Apple", link: "/guide/graph/apple" },
-          { text: "Android", link: "/guide/graph/android" },
-          { text: "Rust", link: "/guide/graph/rust" },
+          {
+            text: "Preludes",
+            collapsed: false,
+            items: [
+              { text: "Apple", link: "/guide/graph/apple" },
+              { text: "Android", link: "/guide/graph/android" },
+              { text: "Rust", link: "/guide/graph/rust" },
+            ],
+          },
+          {
+            text: "Scripts",
+            collapsed: false,
+            items: [
+              { text: "Overview", link: "/guide/scripts/" },
+              { text: "Caching", link: "/guide/scripts/caching" },
+              { text: "Runtime", link: "/guide/scripts/runtime" },
+            ],
+          },
         ],
       },
       {
@@ -92,15 +107,6 @@ export const site = {
         items: [
           { text: "Overview", link: "/guide/memory/" },
           { text: "Evidence", link: "/guide/memory/evidence" },
-        ],
-      },
-      {
-        text: "Scripts",
-        collapsed: false,
-        items: [
-          { text: "Overview", link: "/guide/scripts/" },
-          { text: "Caching", link: "/guide/scripts/caching" },
-          { text: "Runtime", link: "/guide/scripts/runtime" },
         ],
       },
       {
