@@ -441,7 +441,7 @@ async fn capture_uncached_outputs(
             }
         };
         if metadata.is_dir() {
-            tracing::warn!(
+            tracing::debug!(
                 output = output.as_str(),
                 "skipping uncached directory output evidence"
             );
