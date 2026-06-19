@@ -44,12 +44,10 @@ content-addressed store.
 
 Evidence gives Once and coding agents a concrete memory:
 
-```text
-cli:test passed for these inputs.
-app:build failed for this action digest.
-this result came from a cache hit.
-this target has no evidence yet.
-```
+- `cli:test` passed for these inputs.
+- `app:build` failed for this action digest.
+- The result came from a cache hit.
+- The target has no evidence yet.
 
 That changes planning. An agent can ask what is already known, what is
 missing, and what became stale after a change. It can run the smallest
@@ -59,15 +57,11 @@ useful check instead of repeating the whole suite.
 
 An action result says:
 
-```text
 Given these declared inputs, this command produced these outputs.
-```
 
 An evidence record says:
 
-```text
 At this time, this subject produced this status with this provenance.
-```
 
 Action results can be reused by the cache. Evidence can be queried,
 compared, and used to decide what should happen next, but it should not
