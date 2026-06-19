@@ -19,72 +19,70 @@ pub fn validate_target(target: &TargetSpec, schemas: &[TargetKindSchema]) -> Vec
     let mut diagnostics = Vec::new();
 
     if target.name.trim().is_empty() {
-        diagnostics.push(Diagnostic {
-            code: "target_name_required".to_string(),
-            message: "target `name` must not be empty".to_string(),
-            target: None,
-            attribute: Some("name".to_string()),
-            repairs: Vec::new(),
-        });
+        diagnostics.push(
+            Diagnostic::new("target_name_required", "target `name` must not be empty")
+                .with_attribute("name"),
+        );
     } else if let Err(err) = validate_target_name(&target.name) {
-        diagnostics.push(Diagnostic {
-            code: "invalid_target_name".to_string(),
-            message: err.to_string(),
-            target: Some(target.name.clone()),
-            attribute: Some("name".to_string()),
-            repairs: Vec::new(),
-        });
+        diagnostics.push(
+            Diagnostic::new("invalid_target_name", err.to_string())
+                .with_target(target.name.as_str())
+                .with_attribute("name"),
+        );
     }
 
     if target.kind.trim().is_empty() {
-        diagnostics.push(Diagnostic {
-            code: "target_kind_required".to_string(),
-            message: "target `kind` must not be empty".to_string(),
-            target: Some(target.name.clone()),
-            attribute: Some("kind".to_string()),
-            repairs: Vec::new(),
-        });
+        diagnostics.push(
+            Diagnostic::new("target_kind_required", "target `kind` must not be empty")
+                .with_target(target.name.as_str())
+                .with_attribute("kind"),
+        );
         return diagnostics;
     }
 
     let Some(schema) = schemas.iter().find(|s| s.kind == target.kind) else {
-        diagnostics.push(Diagnostic {
-            code: "unknown_target_kind".to_string(),
-            message: format!("target kind `{}` is not registered", target.kind),
-            target: Some(target.name.clone()),
-            attribute: Some("kind".to_string()),
-            repairs: vec![suggest_known_kinds(schemas)],
-        });
+        diagnostics.push(
+            Diagnostic::new(
+                "unknown_target_kind",
+                format!("target kind `{}` is not registered", target.kind),
+            )
+            .with_target(target.name.as_str())
+            .with_attribute("kind")
+            .with_repair(suggest_known_kinds(schemas)),
+        );
         return diagnostics;
     };
 
     for attr_schema in &schema.attrs {
         if attr_schema.required && !target.attrs.contains_key(&attr_schema.name) {
-            diagnostics.push(Diagnostic {
-                code: "missing_required_attr".to_string(),
-                message: format!(
-                    "target kind `{}` requires attribute `{}`",
-                    schema.kind, attr_schema.name
-                ),
-                target: Some(target.name.clone()),
-                attribute: Some(attr_schema.name.clone()),
-                repairs: Vec::new(),
-            });
+            diagnostics.push(
+                Diagnostic::new(
+                    "missing_required_attr",
+                    format!(
+                        "target kind `{}` requires attribute `{}`",
+                        schema.kind, attr_schema.name
+                    ),
+                )
+                .with_target(target.name.as_str())
+                .with_attribute(attr_schema.name.as_str()),
+            );
         }
     }
 
     for (attr_name, attr_value) in &target.attrs {
         let Some(attr_schema) = schema.attrs.iter().find(|a| &a.name == attr_name) else {
-            diagnostics.push(Diagnostic {
-                code: "unknown_attr".to_string(),
-                message: format!(
-                    "target kind `{}` does not declare attribute `{}`",
-                    schema.kind, attr_name
-                ),
-                target: Some(target.name.clone()),
-                attribute: Some(attr_name.clone()),
-                repairs: vec![suggest_known_attrs(schema)],
-            });
+            diagnostics.push(
+                Diagnostic::new(
+                    "unknown_attr",
+                    format!(
+                        "target kind `{}` does not declare attribute `{}`",
+                        schema.kind, attr_name
+                    ),
+                )
+                .with_target(target.name.as_str())
+                .with_attribute(attr_name.as_str())
+                .with_repair(suggest_known_attrs(schema)),
+            );
             continue;
         };
         validate_attr(target, attr_name, attr_value, attr_schema, &mut diagnostics);
@@ -115,13 +113,14 @@ fn validate_select_attr(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if !attr_schema.configurable {
-        diagnostics.push(Diagnostic {
-            code: "select_on_non_configurable_attr".to_string(),
-            message: format!("attribute `{attr_name}` is not configurable but uses `select()`"),
-            target: Some(target.name.clone()),
-            attribute: Some(attr_name.to_string()),
-            repairs: Vec::new(),
-        });
+        diagnostics.push(
+            Diagnostic::new(
+                "select_on_non_configurable_attr",
+                format!("attribute `{attr_name}` is not configurable but uses `select()`"),
+            )
+            .with_target(target.name.as_str())
+            .with_attribute(attr_name),
+        );
         return;
     }
     for (branch, branch_value) in branches {
@@ -137,13 +136,12 @@ fn validate_select_attr(
 }
 
 fn type_mismatch(target: &TargetSpec, attr_name: &str, ty: &str, err: &str) -> Diagnostic {
-    Diagnostic {
-        code: "attr_type_mismatch".to_string(),
-        message: format!("attribute `{attr_name}` expects type `{ty}`: {err}"),
-        target: Some(target.name.clone()),
-        attribute: Some(attr_name.to_string()),
-        repairs: Vec::new(),
-    }
+    Diagnostic::new(
+        "attr_type_mismatch",
+        format!("attribute `{attr_name}` expects type `{ty}`: {err}"),
+    )
+    .with_target(target.name.as_str())
+    .with_attribute(attr_name)
 }
 
 fn select_branches(value: &JsonValue) -> Option<&serde_json::Map<String, JsonValue>> {

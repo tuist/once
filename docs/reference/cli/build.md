@@ -16,7 +16,7 @@ Resolves the target id against the workspace graph, ensures every transitive dep
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<TARGET>` | no | Target id, e.g. `apps/ios/App` or `./App` |
+| `<TARGET>` | no | Target id, such as `services/api/Api` or `./Api` |
 
 ## Options
 

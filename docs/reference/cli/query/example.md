@@ -12,7 +12,7 @@ once query example [OPTIONS] <KIND> <SLUG>
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<KIND>` | yes | Target kind, e.g. `apple_library` |
+| `<KIND>` | yes | Target kind that owns the example |
 | `<SLUG>` | yes | Example slug from `once query schema` |
 
 ## Options

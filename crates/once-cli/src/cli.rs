@@ -126,7 +126,7 @@ pub enum Cmd {
     /// list available ids.
     #[command(arg_required_else_help = true)]
     Build {
-        /// Target id, e.g. `apps/ios/App` or `./App`.
+        /// Target id, such as `services/api/Api` or `./Api`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
     },
@@ -167,7 +167,7 @@ pub enum Cmd {
     /// groups are owned by the target kind that exposes the capability.
     #[command(arg_required_else_help = true)]
     Test {
-        /// Target id, e.g. `apps/ios/AppTests` or `./AppTests`.
+        /// Target id, such as `tests/unit` or `./unit`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
     },
@@ -266,7 +266,7 @@ pub enum Cmd {
         cmd: Option<ToolchainCmd>,
     },
 
-    /// Query the typed build graph.
+    /// Query the typed build graph
     ///
     /// Inspectable-first surface for humans and agents. `query
     /// targets` lists every declared target id with its target kind
@@ -278,7 +278,31 @@ pub enum Cmd {
     /// a read-only Cypher-like pattern. All query surfaces respect
     /// `--format json` and `--format toon` so consumers can plan
     /// against the graph without scraping prose.
-    #[command(arg_required_else_help = true)]
+    ///
+    /// ## Query Expressions
+    ///
+    /// `once query '<QUERY>'` accepts a read-only subset of Cypher backed
+    /// by the Cypher tree-sitter grammar. The first supported shape is a
+    /// single `MATCH` pattern with optional `WHERE` equality predicates
+    /// and explicit `RETURN` projections.
+    ///
+    /// ```sh
+    /// once query 'MATCH (app:Target {id: "services/api/Api"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
+    /// once query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id'
+    /// ```
+    ///
+    /// Supported labels are `Target`, `Capability`, and `Provider`. Labels
+    /// use the `:Label` form, for example `(t:Target)`. Bare node names
+    /// without a colon are aliases, so `(Target)` binds a variable named
+    /// `Target` instead of filtering by the `Target` label. Supported
+    /// relationships are `DEPENDS_ON`, `EXPOSES`, and `EMITS`. The `*`
+    /// suffix on a relationship performs transitive traversal, for example
+    /// `[:DEPENDS_ON*]`.
+    ///
+    /// String literals can be quoted with single or double quotes and
+    /// support `\n`, `\r`, `\t`, `\\`, `\"`, and `\'` escapes. Other
+    /// escape forms, including Unicode escapes, are rejected.
+    #[command(arg_required_else_help = true, verbatim_doc_comment)]
     Query {
         /// Read-only Cypher-like graph query expression.
         #[arg(value_name = "QUERY")]

@@ -86,6 +86,40 @@ pub struct Diagnostic {
     pub repairs: Vec<String>,
 }
 
+impl Diagnostic {
+    /// Create a diagnostic with no target, attribute, or repairs.
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            target: None,
+            attribute: None,
+            repairs: Vec::new(),
+        }
+    }
+
+    /// Scope this diagnostic to a target.
+    #[must_use]
+    pub fn with_target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
+    /// Scope this diagnostic to an attribute.
+    #[must_use]
+    pub fn with_attribute(mut self, attribute: impl Into<String>) -> Self {
+        self.attribute = Some(attribute.into());
+        self
+    }
+
+    /// Add one suggested repair.
+    #[must_use]
+    pub fn with_repair(mut self, repair: impl Into<String>) -> Self {
+        self.repairs.push(repair.into());
+        self
+    }
+}
+
 /// Target kind metadata used for schema queries and graph target enrichment.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TargetKindSchema {
@@ -260,16 +294,15 @@ impl From<&Target> for GraphTarget {
 
 fn graph_target_from_schema(target: &Target, schemas: &[TargetKindSchema]) -> GraphTarget {
     let schema = schemas.iter().find(|schema| schema.kind == target.kind);
+    let target_id = target.id();
     let mut diagnostics = if schema.is_some() {
         Vec::new()
     } else {
-        vec![Diagnostic {
-            code: "unknown_target_kind".to_string(),
-            message: format!("target kind `{}` has no target kind schema", target.kind),
-            target: Some(target.id()),
-            attribute: None,
-            repairs: Vec::new(),
-        }]
+        vec![Diagnostic::new(
+            "unknown_target_kind",
+            format!("target kind `{}` has no target kind schema", target.kind),
+        )
+        .with_target(target_id.as_str())]
     };
     let attrs = graph_attrs(target);
     if let Some(schema) = schema {
@@ -279,16 +312,17 @@ fn graph_target_from_schema(target: &Target, schemas: &[TargetKindSchema]) -> Gr
             }
             if let Some(value) = attrs.get(&attr_schema.name) {
                 if select_branches(value).is_some() {
-                    diagnostics.push(Diagnostic {
-                        code: "select_on_non_configurable_attr".to_string(),
-                        message: format!(
-                            "attribute `{}` is not configurable but uses `select()`",
-                            attr_schema.name
-                        ),
-                        target: Some(target.id()),
-                        attribute: Some(attr_schema.name.clone()),
-                        repairs: Vec::new(),
-                    });
+                    diagnostics.push(
+                        Diagnostic::new(
+                            "select_on_non_configurable_attr",
+                            format!(
+                                "attribute `{}` is not configurable but uses `select()`",
+                                attr_schema.name
+                            ),
+                        )
+                        .with_target(target_id.as_str())
+                        .with_attribute(attr_schema.name.as_str()),
+                    );
                 }
             }
         }
@@ -297,7 +331,7 @@ fn graph_target_from_schema(target: &Target, schemas: &[TargetKindSchema]) -> Gr
         label: TargetLabel {
             package: target.package.clone(),
             name: target.name.clone(),
-            id: target.id(),
+            id: target_id,
         },
         kind: target.kind.clone(),
         deps: target.deps.clone(),
