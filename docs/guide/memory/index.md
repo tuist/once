@@ -18,25 +18,11 @@ Memory lives under `.once/` because it is runtime state, not
 source-controlled intent. It can be rebuilt by running work again, but
 while it exists it gives Once durable working memory for the project.
 
-## Why Evidence Exists
+## Memory Guides
 
-Build caches are good at reusing outputs, but engineering work often
-needs a different answer:
+- [Evidence](/guide/memory/evidence): durable provenance for action
+  outcomes, including how records are created, queried, and used for
+  planning.
 
-```text
-Can I trust that this target was tested?
-Was that result produced for the inputs I have now?
-Did it pass locally or come from cache?
-What should an agent run next?
-```
-
-Evidence is the first piece of memory that answers those questions. It
-records action outcomes as durable provenance: the subject, status,
-action digest, input digest when available, cache state, exit code, and
-captured output digests.
-
-That gives Once a fact base for planning. A coding agent can avoid
-running the whole suite when fresh evidence already exists, and it can
-identify the smallest missing or stale check after a change.
-
-See [Evidence](/guide/memory/evidence) for the current command surface.
+More memory guides will land as Once grows from action outcomes into
+run history, derived views, and long-running feedback loops.

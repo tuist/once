@@ -74,6 +74,18 @@ about a domain, not merely run a command in that domain. Use scripts
 when the integration is exploratory, when the native tool is still the
 source of truth, or when a feature has not been modeled yet.
 
+::: tip If something is missing
+Unsupported does not have to mean blocked. You can contribute the
+missing behavior to Once's ecosystem modules, define local module target
+kinds for your project, or keep that part behind a script while the
+typed model catches up.
+
+Once should also grow consumer-side override tools: a way for a project
+to keep using the built-in ecosystem while replacing or extending a
+specific behavior locally. That would let teams adopt the common graph
+model without waiting for every edge case to land upstream first.
+:::
+
 For a production ecosystem, expect to answer these questions:
 
 - Which native concepts become targets?
