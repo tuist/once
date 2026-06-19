@@ -24,17 +24,21 @@ once query evidence cli:test
 
 Action evidence includes:
 
-- the subject, such as a command action or target capability
-- the evidence kind
-- pass or fail status
-- action digest
-- input digest when available
-- cache state
-- exit code
-- captured stdout, stderr, and output digests when available
-- creation time
+- **Subject**: The command action or target capability the evidence is about.
+- **Kind**: The kind of evidence record, such as an action result.
+- **Status**: Whether the action passed or failed.
+- **Action Digest**: The content-addressed identity of the action.
+- **Input Digest**: The declared input identity when the action has one.
+- **Cache State**: Whether the result came from a cache hit, miss, or bypass.
+- **Exit Code**: The process exit code recorded for the action.
+- **Output Digests**: Digests for captured stdout, stderr, and declared
+  outputs when available.
+- **Creation Time**: When the evidence record was written.
 
 The local records are stored in the memory database at `.once/once.sqlite`.
+Large output bytes are not stored in SQLite. The database stores digests
+for stdout, stderr, and declared outputs; the byte payloads stay in the
+content-addressed store.
 
 ## Why It Helps
 
