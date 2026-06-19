@@ -25,7 +25,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use once_cas::{CacheProvider, Digest};
+use once_cas::{ActionResult, CacheProvider, Digest};
+use once_core::EvidenceCacheState;
 use once_frontend::analysis::AnalysisEngine;
 use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
@@ -44,8 +45,11 @@ use self::scheduler::BuildScheduler;
 pub(super) struct BuildOutcome {
     pub provider: JsonValue,
     pub action_digest: Digest,
+    pub input_digest: Option<Digest>,
     pub outputs: Vec<String>,
     pub cache_tag: &'static str,
+    pub cache_state: EvidenceCacheState,
+    pub result: ActionResult,
 }
 
 /// Command-scoped graph build session.
@@ -168,6 +172,7 @@ impl BuildSession {
                 &self.cache,
                 self.module_source_digest,
                 target,
+                capability,
                 analysis,
                 &dep_action_digests,
             )
@@ -323,6 +328,7 @@ async fn build_one(
         &cache,
         module_source_digest,
         &target,
+        "build",
         analysis,
         &dep_action_digests,
     )

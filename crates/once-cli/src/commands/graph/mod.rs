@@ -8,12 +8,11 @@
 mod action;
 mod analysis;
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
-use once_cas::{CacheProvider, Digest};
+use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{EvidenceCacheState, EvidenceSubject, RunOpts};
 use once_frontend::GraphTarget;
 use serde::Serialize;
@@ -34,6 +33,12 @@ struct CapabilityRunRecord {
     output_groups: Vec<String>,
     required_outputs: Vec<String>,
     outputs: Vec<String>,
+    #[serde(skip)]
+    input_digest: Option<Digest>,
+    #[serde(skip)]
+    cache_state: EvidenceCacheState,
+    #[serde(skip)]
+    result: ActionResult,
 }
 
 pub async fn build(
@@ -71,16 +76,28 @@ pub async fn test(
         record_capability_run(workspace, &build_record).await;
     }
     let record = if let Some(outcome) = session.run_with_analysis(&target, "test").await? {
+        let analysis::BuildOutcome {
+            action_digest,
+            input_digest,
+            outputs,
+            cache_tag,
+            cache_state,
+            result,
+            ..
+        } = outcome;
         CapabilityRunRecord {
             target: target.label.id.clone(),
             kind: target.kind.clone(),
             capability: test_capability.name.clone(),
             status: "completed",
-            action_digest: outcome.action_digest.to_string(),
-            cache: outcome.cache_tag,
+            action_digest: action_digest.to_string(),
+            cache: cache_tag,
             output_groups: test_capability.output_groups.clone(),
             required_outputs: test_capability.requires_outputs.clone(),
-            outputs: outcome.outputs,
+            outputs,
+            input_digest,
+            cache_state,
+            result,
         }
     } else {
         run_target_capability(workspace, cache, &target, "test").await?
@@ -110,16 +127,28 @@ pub async fn run(
         record_capability_run(workspace, &build_record).await;
     }
     let record = if let Some(outcome) = session.run_with_analysis(&target, "run").await? {
+        let analysis::BuildOutcome {
+            action_digest,
+            input_digest,
+            outputs,
+            cache_tag,
+            cache_state,
+            result,
+            ..
+        } = outcome;
         CapabilityRunRecord {
             target: target.label.id.clone(),
             kind: target.kind.clone(),
             capability: run_capability.name.clone(),
             status: "completed",
-            action_digest: outcome.action_digest.to_string(),
-            cache: outcome.cache_tag,
+            action_digest: action_digest.to_string(),
+            cache: cache_tag,
             output_groups: run_capability.output_groups.clone(),
             required_outputs: run_capability.requires_outputs.clone(),
-            outputs: outcome.outputs,
+            outputs,
+            input_digest,
+            cache_state,
+            result,
         }
     } else {
         run_target_capability(workspace, cache, &target, "run").await?
@@ -154,7 +183,10 @@ async fn build_target(
         // this path because the run record doesn't surface it yet.
         let analysis::BuildOutcome {
             action_digest,
+            input_digest,
             outputs,
+            cache_state,
+            result,
             cache_tag,
             ..
         } = outcome;
@@ -168,6 +200,9 @@ async fn build_target(
             output_groups: capability.output_groups.clone(),
             required_outputs: capability.requires_outputs.clone(),
             outputs,
+            input_digest,
+            cache_state,
+            result,
         })
     } else {
         run_target_capability(workspace, cache, target, "build").await
@@ -212,6 +247,8 @@ async fn run_target_capability(
         );
     }
     let cache = cache_tag(outcome.cache);
+    let cache_state = EvidenceCacheState::from(outcome.cache);
+    let result = outcome.result;
     Ok(CapabilityRunRecord {
         target: target.label.id.clone(),
         kind: target.kind.clone(),
@@ -225,6 +262,9 @@ async fn run_target_capability(
             .into_iter()
             .map(|output| output.as_str().to_string())
             .collect(),
+        input_digest: action.input_digest(),
+        cache_state,
+        result,
     })
 }
 
@@ -242,24 +282,11 @@ async fn record_capability_run(workspace: &Path, record: &CapabilityRunRecord) {
         workspace,
         EvidenceSubject::target(record.target.as_str(), record.capability.as_str()),
         action_digest,
-        None,
-        evidence_cache_state(record.cache),
-        &once_cas::ActionResult {
-            exit_code: 0,
-            stdout: None,
-            stderr: None,
-            outputs: BTreeMap::default(),
-        },
+        record.input_digest,
+        record.cache_state,
+        &record.result,
     )
     .await;
-}
-
-fn evidence_cache_state(raw: &str) -> EvidenceCacheState {
-    match raw {
-        "hit" => EvidenceCacheState::Hit,
-        "bypass" => EvidenceCacheState::Bypass,
-        _ => EvidenceCacheState::Miss,
-    }
 }
 
 fn find_graph_target(workspace: &Path, target_id: &str) -> Result<Option<GraphTarget>> {
@@ -346,6 +373,15 @@ mod tests {
     use super::*;
     use once_frontend::{Capability, TargetLabel};
 
+    fn action_result() -> ActionResult {
+        ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::new(),
+        }
+    }
+
     fn graph_target(kind: &str, capabilities: &[&str]) -> GraphTarget {
         GraphTarget {
             label: TargetLabel {
@@ -404,6 +440,9 @@ mod tests {
             output_groups: vec!["default".to_string()],
             required_outputs: vec!["bundle".to_string()],
             outputs: vec![".once/out/apps/ios/App/run".to_string()],
+            input_digest: None,
+            cache_state: EvidenceCacheState::Miss,
+            result: action_result(),
         };
 
         let rendered = render_human(&record);
@@ -426,6 +465,9 @@ mod tests {
             output_groups: Vec::new(),
             required_outputs: Vec::new(),
             outputs: Vec::new(),
+            input_digest: None,
+            cache_state: EvidenceCacheState::Hit,
+            result: action_result(),
         };
 
         let rendered = render_human(&record);

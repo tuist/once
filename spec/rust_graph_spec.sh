@@ -44,4 +44,18 @@ RS
     The stderr should include 'build script stderr is visible'
     The stderr should not include 'last 16384 bytes of stderr'
   End
+
+  It 'records evidence when a declared build action fails'
+    create_failing_build_script_fixture
+    once build crates/failing/failing >/dev/null 2>&1 || true
+
+    When call once --format json query evidence crates/failing/failing:build
+    The status should be success
+    The stdout should include '"subject":{"kind":"target","id":"crates/failing/failing","capability":"build"}'
+    The stdout should include '"status":"failed"'
+    The stdout should include '"cache":"miss"'
+    The stdout should include '"exit_code":7'
+    The stdout should include '"stdout"'
+    The stdout should include '"stderr"'
+  End
 End

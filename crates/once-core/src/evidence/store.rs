@@ -69,8 +69,7 @@ fn record_to_active_model(record: &EvidenceRecord) -> Result<entity::ActiveModel
         outputs_json: Set(
             serde_json::to_string(&record.outputs).context("serializing evidence outputs")?
         ),
-        created_at_unix_ms: Set(i64::try_from(record.created_at_unix_ms)
-            .context("evidence timestamp does not fit SQLite integer")?),
+        created_at_unix_ms: Set(record.created_at_unix_ms),
     })
 }
 
@@ -93,8 +92,7 @@ fn record_from_model(model: entity::Model) -> Result<EvidenceRecord> {
         stderr: parse_optional_digest(model.stderr_digest.as_deref(), "stderr_digest")?,
         outputs: serde_json::from_str::<BTreeMap<String, Digest>>(&model.outputs_json)
             .context("parsing evidence outputs")?,
-        created_at_unix_ms: u128::try_from(model.created_at_unix_ms)
-            .context("evidence timestamp cannot be negative")?,
+        created_at_unix_ms: model.created_at_unix_ms,
     })
 }
 
@@ -140,7 +138,8 @@ mod tests {
             Some(Digest::of_bytes(b"input")),
             EvidenceCacheState::Miss,
             &result,
-        );
+        )
+        .unwrap();
 
         store.append(&record).await.unwrap();
 

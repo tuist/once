@@ -361,7 +361,7 @@ fn render_evidence_human(records: &[EvidenceRecord]) -> String {
     }
     let mut out = String::from("evidence:\n");
     for record in records {
-        writeln!(
+        let _ = writeln!(
             out,
             "  {} {} {} cache={} exit={} action={}",
             record.subject.display(),
@@ -370,8 +370,7 @@ fn render_evidence_human(records: &[EvidenceRecord]) -> String {
             evidence_cache(record),
             record.exit_code,
             record.action_digest
-        )
-        .expect("writing to string cannot fail");
+        );
     }
     out
 }

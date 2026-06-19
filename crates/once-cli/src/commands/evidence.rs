@@ -11,8 +11,12 @@ pub async fn record_outcome(
     action: &Action,
     outcome: &Outcome,
 ) {
-    let record = EvidenceRecord::from_outcome(subject, action, outcome);
-    append_record(workspace, &record).await;
+    match EvidenceRecord::from_outcome(subject, action, outcome) {
+        Ok(record) => append_record(workspace, &record).await,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to construct evidence record");
+        }
+    }
 }
 
 pub async fn record_action_result(
@@ -23,9 +27,12 @@ pub async fn record_action_result(
     cache: EvidenceCacheState,
     result: &ActionResult,
 ) {
-    let record =
-        EvidenceRecord::from_action_result(subject, action_digest, input_digest, cache, result);
-    append_record(workspace, &record).await;
+    match EvidenceRecord::from_action_result(subject, action_digest, input_digest, cache, result) {
+        Ok(record) => append_record(workspace, &record).await,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to construct evidence record");
+        }
+    }
 }
 
 async fn append_record(workspace: &Path, record: &EvidenceRecord) {

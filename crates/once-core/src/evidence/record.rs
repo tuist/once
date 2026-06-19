@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use once_cas::{ActionResult, Digest};
 use serde::{Deserialize, Serialize};
 
@@ -137,11 +137,15 @@ pub struct EvidenceRecord {
     pub stderr: Option<Digest>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub outputs: BTreeMap<String, Digest>,
-    pub created_at_unix_ms: u128,
+    pub created_at_unix_ms: i64,
 }
 
 impl EvidenceRecord {
-    pub fn from_outcome(subject: EvidenceSubject, action: &Action, outcome: &Outcome) -> Self {
+    pub fn from_outcome(
+        subject: EvidenceSubject,
+        action: &Action,
+        outcome: &Outcome,
+    ) -> Result<Self> {
         Self::from_action_result(
             subject,
             outcome.action,
@@ -157,16 +161,16 @@ impl EvidenceRecord {
         input_digest: Option<Digest>,
         cache: EvidenceCacheState,
         result: &ActionResult,
-    ) -> Self {
-        let created_at_unix_ms = unix_ms_now();
+    ) -> Result<Self> {
+        let created_at_unix_ms = unix_ms_now()?;
         let id = evidence_id(
             &subject,
             action_digest,
             cache,
             result.exit_code,
             created_at_unix_ms,
-        );
-        Self {
+        )?;
+        Ok(Self {
             schema: EVIDENCE_SCHEMA.to_string(),
             id,
             kind: ACTION_RESULT_KIND.to_string(),
@@ -180,7 +184,7 @@ impl EvidenceRecord {
             stderr: result.stderr,
             outputs: result.outputs.clone(),
             created_at_unix_ms,
-        }
+        })
     }
 }
 
@@ -189,8 +193,8 @@ fn evidence_id(
     action_digest: Digest,
     cache: EvidenceCacheState,
     exit_code: i32,
-    created_at_unix_ms: u128,
-) -> String {
+    created_at_unix_ms: i64,
+) -> Result<String> {
     let material = serde_json::to_vec(&(
         EVIDENCE_SCHEMA,
         ACTION_RESULT_KIND,
@@ -200,14 +204,25 @@ fn evidence_id(
         exit_code,
         created_at_unix_ms,
     ))
-    .expect("evidence id material is serializable");
-    Digest::of_bytes(&material).to_string()
+    .context("serializing evidence id material")?;
+    Ok(Digest::of_bytes(&material).to_string())
 }
 
-fn unix_ms_now() -> u128 {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_millis(),
-        Err(err) => err.duration().as_millis(),
+fn unix_ms_now() -> Result<i64> {
+    unix_ms(SystemTime::now())
+}
+
+fn unix_ms(time: SystemTime) -> Result<i64> {
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(duration) => i64::try_from(duration.as_millis())
+            .context("evidence timestamp does not fit SQLite integer"),
+        Err(err) => {
+            let millis = i64::try_from(err.duration().as_millis())
+                .context("negative evidence timestamp does not fit SQLite integer")?;
+            millis
+                .checked_neg()
+                .context("negative evidence timestamp overflow")
+        }
     }
 }
 
@@ -223,5 +238,55 @@ mod tests {
         assert!(subject.matches("cli:test"));
         assert_eq!(subject.display(), "cli:test");
         assert!(!subject.matches("other"));
+    }
+
+    #[test]
+    fn command_subject_uses_action_digest() {
+        let digest = Digest::of_bytes(b"action");
+        let subject = EvidenceSubject::command(digest);
+
+        assert_eq!(subject.kind, "command");
+        assert_eq!(subject.id, digest.to_string());
+        assert_eq!(subject.capability, None);
+        assert!(subject.matches(&digest.to_string()));
+    }
+
+    #[test]
+    fn storage_conversions_accept_known_values() {
+        assert_eq!(
+            EvidenceStatus::from_storage("passed").unwrap(),
+            EvidenceStatus::Passed
+        );
+        assert_eq!(
+            EvidenceStatus::from_storage("failed").unwrap(),
+            EvidenceStatus::Failed
+        );
+        assert_eq!(
+            EvidenceCacheState::from_storage("hit").unwrap(),
+            EvidenceCacheState::Hit
+        );
+        assert_eq!(
+            EvidenceCacheState::from_storage("miss").unwrap(),
+            EvidenceCacheState::Miss
+        );
+        assert_eq!(
+            EvidenceCacheState::from_storage("bypass").unwrap(),
+            EvidenceCacheState::Bypass
+        );
+    }
+
+    #[test]
+    fn storage_conversions_reject_unknown_values() {
+        assert!(EvidenceStatus::from_storage("unknown").is_err());
+        assert!(EvidenceCacheState::from_storage("skipped").is_err());
+    }
+
+    #[test]
+    fn pre_epoch_times_are_negative_unix_milliseconds() {
+        let before_epoch = UNIX_EPOCH
+            .checked_sub(std::time::Duration::from_millis(42))
+            .unwrap();
+
+        assert_eq!(unix_ms(before_epoch).unwrap(), -42);
     }
 }
