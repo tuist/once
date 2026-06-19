@@ -57,6 +57,12 @@ pub enum QueryCmd {
         target: String,
     },
 
+    /// List durable evidence records, optionally filtered by subject.
+    Evidence {
+        /// Subject id, e.g. `cli` or `cli:test`.
+        subject: Option<String>,
+    },
+
     /// Validate a proposed `[[target]]` table against its target kind schema.
     ///
     /// Reads `{ "target": { ... } }` from `--file` or, if omitted,
@@ -80,6 +86,7 @@ impl QueryCmd {
             Self::Tests => vec!["tests"],
             Self::AffectedTests { .. } => vec!["affected-tests"],
             Self::TestResults { .. } => vec!["test-results"],
+            Self::Evidence { .. } => vec!["evidence"],
             Self::ValidateTarget { .. } => vec!["validate-target"],
         }
     }

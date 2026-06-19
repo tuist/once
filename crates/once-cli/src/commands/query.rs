@@ -7,6 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
+use once_core::{EvidenceRecord, EvidenceStore};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -187,6 +188,15 @@ pub async fn test_results(workspace: &Path, output: Output, target_id: &str) -> 
     write_body(output, || render_test_results_human(&value), &value).await
 }
 
+pub async fn evidence(workspace: &Path, output: Output, subject: Option<&str>) -> Result<()> {
+    let store = EvidenceStore::open_workspace(workspace);
+    let mut records = store.load().await?;
+    if let Some(subject) = subject {
+        records.retain(|record| record.subject.matches(subject));
+    }
+    write_body(output, || render_evidence_human(&records), &records).await
+}
+
 pub(crate) fn test_results_value(workspace: &Path, target_id: &str) -> Result<serde_json::Value> {
     let path = workspace.join(test_results_path(target_id)?);
     let raw =
@@ -335,6 +345,42 @@ fn render_example_human(example: &once_frontend::TargetKindExampleBundle) -> Str
         writeln!(out, "  {}", file.path).expect("writing to string cannot fail");
     }
     out
+}
+
+fn render_evidence_human(records: &[EvidenceRecord]) -> String {
+    if records.is_empty() {
+        return "evidence: none\n".to_string();
+    }
+    let mut out = String::from("evidence:\n");
+    for record in records {
+        writeln!(
+            out,
+            "  {} {} {} cache={} exit={} action={}",
+            record.subject.display(),
+            record.kind,
+            evidence_status(record),
+            evidence_cache(record),
+            record.exit_code,
+            record.action_digest
+        )
+        .expect("writing to string cannot fail");
+    }
+    out
+}
+
+fn evidence_status(record: &EvidenceRecord) -> &'static str {
+    match record.status {
+        once_core::EvidenceStatus::Passed => "passed",
+        once_core::EvidenceStatus::Failed => "failed",
+    }
+}
+
+fn evidence_cache(record: &EvidenceRecord) -> &'static str {
+    match record.cache {
+        once_core::EvidenceCacheState::Hit => "hit",
+        once_core::EvidenceCacheState::Miss => "miss",
+        once_core::EvidenceCacheState::Bypass => "bypass",
+    }
 }
 
 fn test_records(workspace: &Path, graph: &[once_frontend::GraphTarget]) -> Vec<TestTargetRecord> {

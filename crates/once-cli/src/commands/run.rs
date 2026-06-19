@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use once_cas::CacheProvider;
-use once_core::{Action, CacheState, RemoteExecution, RunOpts};
+use once_core::{Action, CacheState, EvidenceSubject, RemoteExecution, RunOpts};
 
 use self::action::action_for;
 use self::runtime_descriptor::runtime_descriptor;
@@ -54,6 +54,13 @@ pub async fn run(
             .await
             .context("executing action")?
     };
+    crate::commands::evidence::record_outcome(
+        workspace,
+        EvidenceSubject::target(target_id, "run"),
+        &plan.action,
+        &outcome,
+    )
+    .await;
 
     finish_run(
         workspace,

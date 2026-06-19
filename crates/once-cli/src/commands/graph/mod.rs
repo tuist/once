@@ -8,12 +8,13 @@
 mod action;
 mod analysis;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
-use once_cas::CacheProvider;
-use once_core::RunOpts;
+use once_cas::{CacheProvider, Digest};
+use once_core::{EvidenceCacheState, EvidenceSubject, RunOpts};
 use once_frontend::GraphTarget;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -45,6 +46,7 @@ pub async fn build(
     let target = require_target(&graph, target_id)?;
     let session = analysis::BuildSession::new(workspace, cache, &graph)?;
     let record = build_target(workspace, cache, &target, &session).await?;
+    record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -65,7 +67,8 @@ pub async fn test(
             .iter()
             .any(|capability| capability.name == "build")
     {
-        let _ = build_target(workspace, cache, &target, &session).await?;
+        let build_record = build_target(workspace, cache, &target, &session).await?;
+        record_capability_run(workspace, &build_record).await;
     }
     let record = if let Some(outcome) = session.run_with_analysis(&target, "test").await? {
         CapabilityRunRecord {
@@ -82,6 +85,7 @@ pub async fn test(
     } else {
         run_target_capability(workspace, cache, &target, "test").await?
     };
+    record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -102,7 +106,8 @@ pub async fn run(
             .iter()
             .any(|capability| capability.name == "build")
     {
-        let _ = build_target(workspace, cache, &target, &session).await?;
+        let build_record = build_target(workspace, cache, &target, &session).await?;
+        record_capability_run(workspace, &build_record).await;
     }
     let record = if let Some(outcome) = session.run_with_analysis(&target, "run").await? {
         CapabilityRunRecord {
@@ -119,6 +124,7 @@ pub async fn run(
     } else {
         run_target_capability(workspace, cache, &target, "run").await?
     };
+    record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -191,6 +197,13 @@ async fn run_target_capability(
         .await
         .with_context(|| format!("executing {capability_name} for {}", target.label.id))?;
     if outcome.result.exit_code != 0 {
+        crate::commands::evidence::record_outcome(
+            workspace,
+            EvidenceSubject::target(target.label.id.as_str(), capability_name),
+            &action,
+            &outcome,
+        )
+        .await;
         anyhow::bail!(
             "{} failed for {} with exit code {}",
             capability_name,
@@ -213,6 +226,40 @@ async fn run_target_capability(
             .map(|output| output.as_str().to_string())
             .collect(),
     })
+}
+
+async fn record_capability_run(workspace: &Path, record: &CapabilityRunRecord) {
+    let Some(action_digest) = Digest::from_hex(&record.action_digest) else {
+        tracing::warn!(
+            target = %record.target,
+            capability = %record.capability,
+            action_digest = %record.action_digest,
+            "skipping evidence for invalid action digest"
+        );
+        return;
+    };
+    crate::commands::evidence::record_action_result(
+        workspace,
+        EvidenceSubject::target(record.target.as_str(), record.capability.as_str()),
+        action_digest,
+        None,
+        evidence_cache_state(record.cache),
+        &once_cas::ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::default(),
+        },
+    )
+    .await;
+}
+
+fn evidence_cache_state(raw: &str) -> EvidenceCacheState {
+    match raw {
+        "hit" => EvidenceCacheState::Hit,
+        "bypass" => EvidenceCacheState::Bypass,
+        _ => EvidenceCacheState::Miss,
+    }
 }
 
 fn find_graph_target(workspace: &Path, target_id: &str) -> Result<Option<GraphTarget>> {

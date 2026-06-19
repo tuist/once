@@ -58,7 +58,7 @@ async fn run_command(
         Cmd::Build { target } => {
             let target = resolve_required_target(workspace, target)?;
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
-            commands::graph::build(workspace, &cache, output, &target).await
+            Box::pin(commands::graph::build(workspace, &cache, output, &target)).await
         }
         Cmd::Run {
             target,
@@ -187,6 +187,11 @@ async fn run_query_command(
         }
         Some(cli::QueryCmd::TestResults { target }) => {
             commands::query::test_results(workspace, output, &target)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::Evidence { subject }) => {
+            commands::query::evidence(workspace, output, subject.as_deref())
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
