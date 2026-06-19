@@ -156,12 +156,67 @@ def _host_which_optional(name):
     path = host_command([host_which("sh"), "-c", "command -v " + _shell_quote(name) + " 2>/dev/null || true"]).strip()
     return path
 
+def _rust_host_env(keys):
+    env = {}
+    for key in keys:
+        value = host_env(key)
+        if value:
+            env[key] = value
+    return env
+
+def _rust_windows_tool_env():
+    if host_os() != "windows":
+        return {}
+    env = _rust_host_env([
+        "COMSPEC",
+        "INCLUDE",
+        "LIB",
+        "LIBPATH",
+        "PATHEXT",
+        "PROCESSOR_ARCHITECTURE",
+        "PROCESSOR_ARCHITEW6432",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "SystemDrive",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "UCRTVersion",
+        "UniversalCRTSdkDir",
+        "VCINSTALLDIR",
+        "VCToolsInstallDir",
+        "VSINSTALLDIR",
+        "VSCMD_ARG_HOST_ARCH",
+        "VSCMD_ARG_TGT_ARCH",
+        "VSCMD_VER",
+        "VisualStudioVersion",
+        "WindowsSdkBinPath",
+        "WindowsSdkDir",
+        "WindowsSDKLibVersion",
+        "WindowsSdkVerBinPath",
+        "WindowsSDKVersion",
+    ])
+    path = host_env("PATH") or host_env("Path")
+    if path:
+        env["PATH"] = path
+    return env
+
+def _rust_unix_tool_dirs():
+    os = host_os()
+    if os == "macos":
+        return ["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/Library/Apple/usr/bin"]
+    if os == "linux":
+        return ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    return []
+
 def _rust_tool_path(tools):
     dirs = []
     for tool in tools:
         directory = _parent_dir(tool)
         if directory:
             dirs.append(directory)
+    dirs.extend(_rust_unix_tool_dirs())
     return ":".join(_unique(dirs))
 
 def _rust_c_tool_env(target, host_triple):
@@ -174,7 +229,13 @@ def _rust_c_tool_env(target, host_triple):
     ar = host_which("ar")
     if ar:
         env["AR"] = ar
-    path = _rust_tool_path([cc, ar, _host_which_optional("as"), _host_which_optional("ld")])
+    ranlib = _host_which_optional("ranlib")
+    if ranlib:
+        env["RANLIB"] = ranlib
+    pkg_config = _host_which_optional("pkg-config")
+    if pkg_config:
+        env["PKG_CONFIG"] = pkg_config
+    path = _rust_tool_path([cc, ar, _host_which_optional("as"), _host_which_optional("ld"), ranlib, pkg_config])
     if path:
         env["PATH"] = path
     return env
@@ -203,6 +264,9 @@ def _workspace_absolute(path):
 
 def _rust_compile_env(ctx):
     env = _rust_env(ctx)
+    for key, value in _rust_windows_tool_env().items():
+        if key not in env:
+            env[key] = value
     manifest_dir = env.get("CARGO_MANIFEST_DIR")
     if manifest_dir:
         env["CARGO_MANIFEST_DIR"] = _workspace_absolute(_rust_manifest_dir(ctx, manifest_dir))
@@ -762,19 +826,11 @@ def _cargo_resolved_metadata(ctx):
     target = _rust_target(ctx)
     _, _, host_triple = _rustc_toolchain(target)
     cargo = host_which("cargo")
-    argv = [
-        cargo,
-        "metadata",
-        "--locked",
-        "--format-version", "1",
-        "--manifest-path", _workspace_absolute(manifest),
-    ]
     filter_platform = target or host_triple
-    if filter_platform:
-        argv.extend(["--filter-platform", filter_platform])
-    argv.extend(_cargo_feature_args(ctx))
-    metadata_content = host_command(argv)
-    metadata = json_decode(metadata_content)
+    metadata = _cargo_metadata_for_platform(ctx, cargo, manifest, filter_platform)
+    host_metadata = None
+    if target and target != host_triple:
+        host_metadata = _cargo_metadata_for_platform(ctx, cargo, manifest, host_triple)
     resolver_attrs = {"vendor_dir": vendor_dir}
     if target:
         resolver_attrs["target"] = target
@@ -783,8 +839,22 @@ def _cargo_resolved_metadata(ctx):
     }
     return {
         "metadata": metadata,
-        "specs": _cargo_metadata_targets(resolver_ctx, metadata),
+        "specs": _cargo_metadata_targets(resolver_ctx, metadata, host_metadata),
     }
+
+def _cargo_metadata_for_platform(ctx, cargo, manifest, platform):
+    argv = [
+        cargo,
+        "metadata",
+        "--locked",
+        "--format-version", "1",
+        "--manifest-path", _workspace_absolute(manifest),
+    ]
+    if platform:
+        argv.extend(["--filter-platform", platform])
+    argv.extend(_cargo_feature_args(ctx))
+    metadata_content = host_command(argv)
+    return json_decode(metadata_content)
 
 def _cargo_ref_name(ref):
     if ref.startswith("./"):
@@ -1133,8 +1203,10 @@ def _cargo_package_is_proc_macro(package):
 def _cargo_host_variant_name(package, duplicate_counts):
     return _cargo_target_name(package, duplicate_counts) + "-host"
 
-def _cargo_host_dependency_ids(packages, nodes):
+def _cargo_host_dependency_ids(packages, nodes, host_nodes = None):
     package_by_id, _ = _cargo_package_indexes(packages, _cargo_duplicate_counts(packages))
+    if host_nodes == None:
+        host_nodes = nodes
     needed = {}
     stack = []
     for package in packages:
@@ -1161,7 +1233,7 @@ def _cargo_host_dependency_ids(packages, nodes):
             if package == None or package.get("source") == None or package_id in needed:
                 continue
             needed[package_id] = True
-            node = nodes.get(package_id) or {}
+            node = host_nodes.get(package_id) or nodes.get(package_id) or {}
             include_build = _cargo_build_script_target(package) != None
             for dep in node.get("deps") or []:
                 if not _cargo_dep_is_runtime(dep) and not (include_build and _cargo_dep_is_build(dep)):
@@ -1205,6 +1277,26 @@ def _cargo_resolve_nodes(metadata):
     for node in resolve.get("nodes") or []:
         nodes[node.get("id")] = node
     return nodes
+
+def _cargo_merge_packages(primary, secondary):
+    out = []
+    seen = {}
+    for package in primary + secondary:
+        package_id = package.get("id")
+        key = package_id or package.get("name") + "@" + package.get("version")
+        if key in seen:
+            continue
+        seen[key] = True
+        out.append(package)
+    return out
+
+def _cargo_package_id_set(packages):
+    ids = {}
+    for package in packages:
+        package_id = package.get("id")
+        if package_id:
+            ids[package_id] = True
+    return ids
 
 def _cargo_dep_is_runtime(dep):
     saw_kind = False
@@ -1345,11 +1437,15 @@ def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, 
         spec["build_deps"] = build_deps
     return spec
 
-def _cargo_metadata_targets(ctx, metadata):
-    packages = metadata.get("packages") or []
+def _cargo_metadata_targets(ctx, metadata, host_metadata = None):
+    target_packages = metadata.get("packages") or []
+    host_packages = host_metadata.get("packages") if host_metadata != None else []
+    packages = _cargo_merge_packages(target_packages, host_packages)
+    target_package_ids = _cargo_package_id_set(target_packages)
     duplicate_counts = _cargo_duplicate_counts(packages)
     nodes = _cargo_resolve_nodes(metadata)
-    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes)
+    host_nodes = _cargo_resolve_nodes(host_metadata) if host_metadata != None else nodes
+    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, host_nodes)
     id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids)
     vendor_dir = _trim_trailing_slash(ctx["attrs"].get("vendor_dir") or "vendor")
     rust_target = ctx["attrs"].get("target") or ""
@@ -1367,22 +1463,24 @@ def _cargo_metadata_targets(ctx, metadata):
         rel_root = _cargo_source_rel(package, target)
         crate_root = source_root + "/" + rel_root
         node = nodes.get(package_id) or {}
+        host_node = host_nodes.get(package_id) or node
 
         if kind == "rust_proc_macro":
-            deps, aliases = _cargo_metadata_deps(node, id_to_host_name, False)
-            build_deps, build_aliases = _cargo_metadata_build_deps(node, id_to_host_name)
-            targets.append(_cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), ""))
+            deps, aliases = _cargo_metadata_deps(host_node, id_to_host_name, False)
+            build_deps, build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name)
+            targets.append(_cargo_metadata_target_spec(package, target, host_node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), ""))
             continue
 
-        deps, aliases = _cargo_metadata_deps(node, id_to_target_name, False)
-        build_deps, build_aliases = _cargo_metadata_build_deps(node, id_to_host_name)
-        targets.append(_cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), rust_target))
+        if target_package_ids.get(package_id):
+            deps, aliases = _cargo_metadata_deps(node, id_to_target_name, False)
+            build_deps, build_aliases = _cargo_metadata_build_deps(node, id_to_host_name)
+            targets.append(_cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), rust_target))
 
         host_name = id_to_host_name.get(package_id)
         if host_name:
-            host_deps, host_aliases = _cargo_metadata_deps(node, id_to_host_name, False)
-            host_build_deps, host_build_aliases = _cargo_metadata_build_deps(node, id_to_host_name)
-            targets.append(_cargo_metadata_target_spec(package, target, node, source_root, crate_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), ""))
+            host_deps, host_aliases = _cargo_metadata_deps(host_node, id_to_host_name, False)
+            host_build_deps, host_build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name)
+            targets.append(_cargo_metadata_target_spec(package, target, host_node, source_root, crate_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), ""))
     return targets
 
 def _cargo_vendor_source_root(vendor_dir, package, target_name):
