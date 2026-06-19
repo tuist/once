@@ -4,32 +4,6 @@ def _android_shell_words(values):
 def _android_shell_env(root):
     return "ANDROID_HOME=" + _shell_quote(root) + " ANDROID_SDK_ROOT=" + _shell_quote(root)
 
-_ANDROID_DEBUG_KEYSTORE_BASE64 = """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
-"""
-
 def _android_host_shell(label_id):
     if host_os() == "windows":
         fail(label_id + ": Android build actions currently require a POSIX-compatible host shell")
@@ -131,6 +105,53 @@ def _android_asset_files(attrs):
 
 def _android_workspace_inputs(paths):
     return [path for path in paths if not path.startswith("/")]
+
+def _android_abs_path(path):
+    if path.startswith("/"):
+        return path
+    root = workspace_root()
+    if root:
+        return root + "/" + path
+    return path
+
+def _android_existing_file(label_id, path):
+    if not path:
+        return ""
+    sh = _android_host_shell(label_id)
+    script = "set -eu\nif [ -f " + _shell_quote(path) + " ]; then printf '%s' " + _shell_quote(path) + "; fi\n"
+    return host_command([sh, "-c", script]).strip()
+
+def _android_file_sha256(label_id, path):
+    sh = _android_host_shell(label_id)
+    script = """set -eu
+file={path}
+if [ ! -f "$file" ]; then
+  echo "missing file: $file" >&2
+  exit 1
+fi
+if command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 "$file" | awk '{{print $1}}'
+else
+  sha256sum "$file" | awk '{{print $1}}'
+fi
+""".format(
+        path = _shell_quote(path),
+    )
+    return host_command([sh, "-c", script]).strip()
+
+def _android_default_debug_keystore(label_id):
+    candidates = []
+    configured = host_env("ANDROID_DEBUG_KEYSTORE")
+    if configured:
+        candidates.append(configured)
+    home = host_env("HOME")
+    if home:
+        candidates.append(home + "/.android/debug.keystore")
+    for candidate in candidates:
+        found = _android_existing_file(label_id, candidate)
+        if found:
+            return found
+    fail(label_id + ": set `debug_keystore`, set ANDROID_DEBUG_KEYSTORE, create ~/.android/debug.keystore, or set `signing = \"none\"`")
 
 def _android_apk_filename(ctx):
     return ctx["label"]["name"] + ".apk"
@@ -753,25 +774,20 @@ def _android_sign_or_copy(ctx, attrs, tools, aligned_apk):
         fail(ctx["label"]["id"] + ": `debug_keystore_password` must stay `android`; custom signing passwords are not supported")
     inputs = []
     if debug_keystore:
-        inputs.append(_package_relative(ctx, debug_keystore))
+        source_keystore = _package_relative(ctx, debug_keystore)
+        inputs.append(source_keystore)
+    else:
+        source_keystore = _android_default_debug_keystore(ctx["label"]["id"])
+    keystore_digest = _android_file_sha256(ctx["label"]["id"], _android_abs_path(source_keystore))
     script = """set -eu
 rm -f {apk}
 rm -f {keystore}
-if [ -n {debug_keystore} ]; then
-  cp {debug_keystore} {keystore}
-else
-  if printf '%s' {embedded_keystore} | base64 -d > {keystore} 2>/dev/null; then
-    :
-  else
-    printf '%s' {embedded_keystore} | base64 -D > {keystore}
-  fi
-fi
+cp {source_keystore} {keystore}
 {apksigner} sign --ks {keystore} --ks-pass {password_arg} --key-pass {password_arg} --ks-key-alias {alias_arg} --out {apk} {aligned_apk}
 """.format(
         apk = _shell_quote(apk),
         keystore = _shell_quote(keystore),
-        debug_keystore = _shell_quote(inputs[0] if inputs else ""),
-        embedded_keystore = _shell_quote(_ANDROID_DEBUG_KEYSTORE_BASE64),
+        source_keystore = _shell_quote(source_keystore),
         apksigner = _shell_quote(tools["apksigner"]),
         password_arg = _shell_quote("pass:" + password),
         alias_arg = _shell_quote(alias),
@@ -782,7 +798,7 @@ fi
         inputs = _unique(inputs + [aligned_apk]),
         outputs = [apk, keystore],
         env = _android_env(tools),
-        toolchain_identity = tools["identity"] + "\x00debug_sign",
+        toolchain_identity = tools["identity"] + "\x00debug_sign\x00keystore_sha256\x00" + keystore_digest,
         identifier = "android_sign:" + ctx["label"]["id"],
     )
     return (apk, keystore)
@@ -1051,7 +1067,7 @@ android_binary = target_kind(
         attr("version_code", "int", default = "1", docs = "APK versionCode passed to aapt2.", configurable = False),
         attr("version_name", "string", default = "\"1.0\"", docs = "APK versionName passed to aapt2.", configurable = False),
         attr("signing", "string", default = "\"debug\"", docs = "`debug` to sign with a debug key or `none` to produce an unsigned APK.", configurable = False),
-        attr("debug_keystore", "string", docs = "Optional package-relative debug keystore. When omitted, Once uses a bundled debug keystore.", configurable = False),
+        attr("debug_keystore", "string", docs = "Optional package-relative debug keystore. When omitted, Once uses ANDROID_DEBUG_KEYSTORE or ~/.android/debug.keystore.", configurable = False),
         attr("debug_keystore_password", "string", default = "\"android\"", docs = "Fixed public debug signing password.", configurable = False),
         attr("debug_key_alias", "string", default = "\"androiddebugkey\"", docs = "Key alias for debug signing only.", configurable = False),
         attr("adb", "string", docs = "Override adb path for the run capability.", configurable = False),

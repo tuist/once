@@ -34,4 +34,17 @@ trap 'rm -f "$responses"' EXIT
 awk 'BEGIN { for (i = 0; i < 200; i++) print "y" }' > "$responses"
 sdkmanager --licenses < "$responses" >/dev/null || true
 sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" < "$responses"
+mkdir -p "$HOME/.android"
+if [ ! -f "$HOME/.android/debug.keystore" ]; then
+  keytool -genkeypair \
+    -keystore "$HOME/.android/debug.keystore" \
+    -storepass android \
+    -keypass android \
+    -alias androiddebugkey \
+    -dname "CN=Android Debug,O=Android,C=US" \
+    -keyalg RSA \
+    -keysize 2048 \
+    -validity 10000 \
+    -storetype JKS >/dev/null 2>&1
+fi
 '''

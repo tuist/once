@@ -160,6 +160,12 @@ Android build actions currently require a POSIX-compatible host shell for
 file staging and directory hashing. App launch actions use direct `adb`
 commands.
 
+Debug signing requires either a package-relative `debug_keystore`,
+`ANDROID_DEBUG_KEYSTORE`, or the standard local
+`~/.android/debug.keystore`. Once does not ship debug private key material.
+The local debug keystore is expected to use the public Android debug password,
+`android`. Use `signing = "none"` when an unsigned APK is enough.
+
 The current implementation supports Java sources, Kotlin sources, Android
 resources, assets, static resource packages, AAR packaging, dexing, APK
 packaging, zipalign, and debug signing. AIDL, data binding, annotation

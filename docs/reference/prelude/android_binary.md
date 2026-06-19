@@ -30,7 +30,7 @@ with a debug key by default.
 | `version_code` | int | no | `1` | APK versionCode passed to `aapt2` |
 | `version_name` | string | no | `1.0` | APK versionName passed to `aapt2` |
 | `signing` | string | no | `debug` | `debug` for debug signing or `none` for unsigned output |
-| `debug_keystore` | string | no | generated | Optional package-relative debug keystore |
+| `debug_keystore` | string | no | local debug keystore | Optional package-relative debug keystore |
 | `debug_keystore_password` | string | no | `android` | Fixed public debug signing password |
 | `debug_key_alias` | string | no | `androiddebugkey` | Key alias for debug signing only |
 | `adb` | string | no | SDK platform-tools | Override adb path for `run` |
@@ -76,10 +76,16 @@ The target emits `android_application` and `android_apk`.
 
 ## Signing
 
-`signing = "debug"` uses a stable bundled debug keystore when
-`debug_keystore` is omitted and signs with `apksigner`. `signing = "none"`
-leaves the APK unsigned after zipalign. Production signing is not
-implemented yet.
+`signing = "debug"` signs with `debug_keystore` when it is set. When it is
+omitted, Once uses `ANDROID_DEBUG_KEYSTORE` or `~/.android/debug.keystore`.
+Once does not ship debug private key material. The keystore SHA-256 is part
+of the signing action identity so changing the local key invalidates cached
+signing output.
+
+`debug_keystore_password` must stay `android`. Custom signing passwords are
+not supported because action metadata and process arguments are not treated
+as secret channels. `signing = "none"` leaves the APK unsigned after
+zipalign. Production signing is not implemented yet.
 
 ## Running
 
