@@ -14,7 +14,7 @@ hero:
       link: /guide/why
     - theme: alt
       text: SDK
-      link: /guide/sdk/rust
+      link: /guide/sdk/
     - theme: alt
       text: Graph
       link: /guide/graph/
