@@ -1092,6 +1092,12 @@ _host_values = {{
 def host_env(name):
     return _host_values.get(name, "")
 
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
 ctx = {{
     "label": {{
         "package": "crates/app",
