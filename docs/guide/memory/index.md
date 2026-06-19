@@ -1,10 +1,11 @@
 # Memory
 
 Once starts from a project graph: targets, dependencies, capabilities,
-providers, and typed schemas. The graph tells Once what matters.
+providers, and typed schemas. The graph tells Once what exists and what
+can be done.
 
 Memory records what happened around that graph. It is project-local
-state that lets humans, scripts, and agents answer practical questions
+state that helps humans, scripts, and agents answer practical questions
 without scraping terminal output or replaying work blindly:
 
 - Which commands or capabilities ran?
@@ -17,17 +18,25 @@ Memory lives under `.once/` because it is runtime state, not
 source-controlled intent. It can be rebuilt by running work again, but
 while it exists it gives Once durable working memory for the project.
 
-## Shape
+## Why Evidence Exists
 
-The useful public model is:
+Build caches are good at reusing outputs, but engineering work often
+needs a different answer:
 
-| Concept | Meaning |
-| --- | --- |
-| Graph | What the repository declares. |
-| Runs | What Once executed. |
-| Evidence | Durable claims produced by runs, tools, policies, agents, or humans. |
-| Views | Answers computed from graph, runs, and evidence. |
-| Loops | Repeatable workflows that use those answers over time. |
+```text
+Can I trust that this target was tested?
+Was that result produced for the inputs I have now?
+Did it pass locally or come from cache?
+What should an agent run next?
+```
 
-The first implemented piece is evidence for action outcomes. See
-[Evidence](/guide/memory/evidence) for how it works today.
+Evidence is the first piece of memory that answers those questions. It
+records action outcomes as durable provenance: the subject, status,
+action digest, input digest when available, cache state, exit code, and
+captured output digests.
+
+That gives Once a fact base for planning. A coding agent can avoid
+running the whole suite when fresh evidence already exists, and it can
+identify the smallest missing or stale check after a change.
+
+See [Evidence](/guide/memory/evidence) for the current command surface.
