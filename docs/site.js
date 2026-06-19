@@ -105,6 +105,7 @@ export const site = {
             items: [
               { text: "Overview", link: "/guide/scripts/" },
               { text: "Caching", link: "/guide/scripts/caching" },
+              { text: "Cache CLI", link: "/guide/cache-cli" },
               { text: "Runtime", link: "/guide/scripts/runtime" },
             ],
           },
