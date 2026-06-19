@@ -13,11 +13,14 @@ describe, query, run, cache, and explain.
 
 ## What Changes
 
-Adopting an ecosystem means choosing Once's graph model for that part of
-the project. Once is no longer just shelling out to the native tool and
-hoping the result can be understood later. It asks you to declare the
-important units, dependencies, attributes, and capabilities so the graph
-can answer questions before work runs.
+Adopting an ecosystem means lending graph ownership for that part of the
+project to Once. Once still shells out to native compilers, SDK tools,
+package managers, and test runners where that is the right execution
+path. What changes is who defines the graph. The ecosystem provides the
+target kinds, attributes, providers, and capabilities; the project uses
+those definitions to declare its targets and dependencies. The graph can
+then answer questions before work runs instead of treating the native
+command as an opaque boundary.
 
 That is the tradeoff. Once should make a smaller version of this bet
 than a full build-system migration, but it is still a bet: the ecosystem
@@ -35,10 +38,14 @@ External dependencies are the hardest part to get right. Dependency
 resolution, repository materialization, version selection, vendoring,
 and integration with language-specific package managers are separate
 concerns. Once has to decide which system owns resolution for each
-ecosystem. Rust may start from Cargo metadata, Android may start from
-Gradle or Maven coordinates, and Apple may start from source targets or
-SwiftPM packages. Those bridges will not support every native feature on
-day one.
+ecosystem. [Rust](/guide/graph/rust) may start from
+[Cargo metadata](https://doc.rust-lang.org/cargo/commands/cargo-metadata.html),
+[Android](/guide/graph/android) may start from
+[Gradle](https://docs.gradle.org/) or
+[Maven coordinates](https://maven.apache.org/guides/mini/guide-naming-conventions.html),
+and [Apple](/guide/graph/apple) may start from source targets or
+[SwiftPM packages](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/).
+Those bridges will not support every native feature on day one.
 
 Toolchains are another commitment. Different projects source compilers,
 SDKs, linkers, and flags in different ways. Once ecosystems should avoid
