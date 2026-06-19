@@ -45,25 +45,30 @@ minimum_os = "17.0"
 Dep references are root-relative by default; `./` and `../` resolve
 against the package that owns the manifest.
 
-## Modules and Preludes
+## Modules and Ecosystems
 
 A target's `kind` points at a target kind. The target kind defines the target's schema:
 which attributes it accepts, which providers it expects from deps, which
 providers it emits, and which capabilities it exposes.
 
-Modules are grouped into preludes. A prelude is a domain-specific target kind set
-that teaches Once how to describe one ecosystem without baking that
-ecosystem into the core graph model.
+Modules are grouped into ecosystems. An ecosystem is a domain-specific
+target kind set that teaches Once how to describe Apple, Android, Rust,
+or another build world without baking that world into the core graph
+model.
 
-Today the built-in prelude covers these target kind sets:
+Today the built-in ecosystems cover these target kind sets:
 
-- [Apple Prelude](/guide/graph/apple): Swift, Objective-C, C, and C++
+- [Apple](/guide/graph/apple): Swift, Objective-C, C, and C++
   libraries, frameworks, applications, and test bundles for Apple
   platforms.
-- [Android Graph](/guide/graph/android): Android resources, Java
-  libraries, and APKs built with Android SDK tools.
-- [Rust Graph](/guide/graph/rust): Rust libraries, binaries,
-  procedural macros, and Cargo dependency lowering.
+- [Android](/guide/graph/android): Android resources, Java libraries,
+  and APKs built with Android SDK tools.
+- [Rust](/guide/graph/rust): Rust libraries, binaries, procedural
+  macros, and Cargo dependency lowering.
+
+See [Ecosystems](/guide/graph/ecosystems) for the adoption model and
+the tradeoffs that come with letting Once own part of an ecosystem's
+build graph.
 
 Projects can add checked-in Starlark module files from the root
 `once.toml`:
@@ -74,7 +79,7 @@ paths = ["modules/*.star"]
 ```
 
 Each module file exports public target kind symbols using the same `target_kind`,
-`attr`, `dep`, and `capability` helpers as the built-in prelude. Public
+`attr`, `dep`, and `capability` helpers as the built-in ecosystems. Public
 symbols are module globals that do not start with `_`, and the symbol
 name becomes the target kind unless `kind` is set explicitly. Module paths
 are resolved relative to the project root, loaded in sorted order, and
@@ -119,7 +124,7 @@ types into the core CLI. They belong in target kinds, where the ecosystem
 knowledge already lives.
 
 Model that as a runner target. A runner target depends on the artifact it
-knows how to run, carries the runtime-specific attributes its prelude
+knows how to run, carries the runtime-specific attributes its ecosystem
 understands, and exposes the generic `run` capability:
 
 ```toml
@@ -140,7 +145,7 @@ once run tools/demo/LaunchApp
 
 That keeps the bridge explicit: the producer target emits providers and
 output groups; the runner target kind declares which providers it accepts and
-what command it runs against them. The prelude owns any runtime-specific
+what command it runs against them. The ecosystem owns any runtime-specific
 probing, validation, installation, launch, and diagnostics.
 
 ## Agent Access

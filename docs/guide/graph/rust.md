@@ -1,4 +1,4 @@
-# Rust Graph
+# Rust
 
 Once builds Rust libraries and binaries from declarative `once.toml`
 manifests. [`rust_library`](/reference/prelude/rust_library) emits an
@@ -11,7 +11,7 @@ procedural macro for downstream Rust targets. [`cargo_dependencies`](/reference/
 groups resolved Cargo packages behind one cacheable graph target.
 
 For the per-target-kind attribute, dep, provider, and capability tables see
-the [Prelude reference](/reference/prelude/).
+the [target kind reference](/reference/prelude/).
 
 ## Targets
 
