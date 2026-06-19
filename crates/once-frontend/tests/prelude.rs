@@ -232,6 +232,88 @@ result = repr([classes_dir, classes_hash])
     assert!(script.contains("-Xjsr305=strict"), "{script}");
 }
 
+#[cfg(unix)]
+#[test]
+fn prelude_android_debug_signing_declares_local_keystore_action() {
+    let prelude = android_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("apps/hello");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("debug.keystore"), b"debug-keystore-bytes").unwrap();
+
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "apps/hello",
+        "name": "Hello",
+        "id": "apps/hello/Hello",
+    }},
+    "attr": {{
+        "debug_keystore": "debug.keystore",
+    }},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/apps/hello/Hello",
+}}
+tools = {{
+    "apksigner": "/sdk/build-tools/35.0.0/apksigner",
+    "identity": "android-tools",
+    "sdk_root": "/sdk",
+}}
+apk, keystore = _android_sign_or_copy(
+    ctx,
+    ctx["attr"],
+    tools,
+    ".once/out/apps/hello/Hello/aligned.apk",
+)
+result = repr([apk, keystore])
+"#
+    );
+    let store = store_for(workspace.path(), "apps/hello/Hello");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        "[\".once/out/apps/hello/Hello/Hello.apk\", \".once/out/apps/hello/Hello/debug.keystore\"]"
+    );
+    assert_eq!(store.actions.len(), 1);
+    let action = &store.actions[0];
+    assert_eq!(
+        action.identifier.as_deref(),
+        Some("android_sign:apps/hello/Hello")
+    );
+    assert_eq!(
+        action.inputs,
+        vec![
+            "apps/hello/debug.keystore",
+            ".once/out/apps/hello/Hello/aligned.apk",
+        ]
+    );
+    assert_eq!(
+        action.outputs,
+        vec![
+            ".once/out/apps/hello/Hello/Hello.apk",
+            ".once/out/apps/hello/Hello/debug.keystore",
+        ]
+    );
+    let script = &action.argv[2];
+    assert!(
+        script.contains("cp 'apps/hello/debug.keystore'"),
+        "{script}"
+    );
+    assert!(script.contains("apksigner' sign"), "{script}");
+    let identity = action.toolchain_identity.as_deref().unwrap();
+    assert!(
+        identity.contains(
+            "\x00debug_sign\x00keystore_sha256\x00764ea889b83367ee6a573d3c0f09847e303701bee50a5a9cc068c9c5736fe37f"
+        ),
+        "{identity:?}"
+    );
+    assert!(!identity.contains("pass:android"), "{identity:?}");
+}
+
 #[test]
 fn apple_library_schema_exposes_multi_arch_attributes() {
     let schema = built_in_target_kind_schema("apple_library").expect("apple_library schema");
