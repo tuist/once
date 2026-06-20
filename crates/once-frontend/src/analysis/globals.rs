@@ -120,7 +120,10 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     }
 
     /// Return whether one host path currently exists as a file.
-    #[allow(clippy::unnecessary_wraps)]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "starlark_module native functions use Result-returning signatures"
+    )]
     fn host_file_exists(path: &str) -> anyhow::Result<bool> {
         if !analysis_active() {
             return Ok(false);
@@ -133,9 +136,13 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(false);
         }
-        let content =
-            std::fs::read_to_string(path).with_context(|| format!("reading host file `{path}`"))?;
-        Ok(content.contains(needle))
+        if needle.is_empty() {
+            return Ok(true);
+        }
+        let content = std::fs::read(path).with_context(|| format!("reading host file `{path}`"))?;
+        Ok(content
+            .windows(needle.len())
+            .any(|window| window == needle.as_bytes()))
     }
 
     /// Expand a list of glob patterns against the active target's

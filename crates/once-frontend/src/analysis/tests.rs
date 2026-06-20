@@ -33,6 +33,19 @@ fn eval_string(source: &str) -> starlark::Result<String> {
     })
 }
 
+fn eval_bool(source: &str) -> starlark::Result<bool> {
+    Module::with_temp_heap(|module| {
+        let ast = AstModule::parse("test.star", source.to_string(), &Dialect::Standard)?;
+        let globals = globals_for_prelude();
+        let mut evaluator = Evaluator::new(&module);
+        evaluator.eval_module(ast, &globals)?;
+        let value = module
+            .get("value")
+            .expect("test module should bind `value`");
+        Ok(value.unpack_bool().unwrap())
+    })
+}
+
 fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
     AnalysisStore::new(
         workspace.to_path_buf(),
@@ -68,6 +81,21 @@ fn host_env_reads_active_analysis_environment_only() {
     assert_eq!(value, "present");
 
     std::env::remove_var(name);
+}
+
+#[test]
+fn host_file_contains_matches_binary_host_files() {
+    let tmp = TempDir::new().unwrap();
+    let blob = tmp.path().join("blob.bin");
+    std::fs::write(&blob, [0xff, b'a', b'b', b'c', 0x00]).unwrap();
+    let source = format!(
+        "value = host_file_contains({}, \"abc\")",
+        serde_json::to_string(blob.to_str().unwrap()).unwrap()
+    );
+
+    let store = store_for(tmp.path(), "pkg");
+    let (_, contains) = with_active_store(store, || eval_bool(&source).unwrap());
+    assert!(contains);
 }
 
 #[test]
