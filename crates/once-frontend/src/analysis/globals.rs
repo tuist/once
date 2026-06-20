@@ -7,16 +7,20 @@ use sha2::Digest as ShaDigest;
 use starlark::environment::{Globals, GlobalsBuilder};
 use starlark::eval::Evaluator;
 use starlark::starlark_module;
+use starlark::values::dict::{AllocDict, DictRef};
+use starlark::values::list::ListRef;
 use starlark::values::none::NoneType;
 use starlark::values::Value;
 
 use super::store::{
     analysis_active, with_store, with_store_mut, DeclaredAction, DeclaredActionOperation,
-    DeclaredCopyPathMode, DeclaredPreparePathMode,
+    DeclaredArgFile, DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
 use super::values::{
     json_to_value, toml_value_to_starlark, unpack_byte_list, unpack_string_dict, unpack_string_list,
 };
+
+const CMD_ARGS_MARKER: &str = "_once_cmd_args";
 
 /// Globals exposed to the prelude.
 ///
@@ -192,6 +196,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                 bytes,
             }),
             argv: Vec::new(),
+            arg_files: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![path.to_string()],
             env: BTreeMap::new(),
@@ -235,6 +240,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                 mode,
             }),
             argv: Vec::new(),
+            arg_files: Vec::new(),
             inputs,
             outputs: vec![destination.to_string()],
             env: BTreeMap::new(),
@@ -271,6 +277,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                 mode,
             }),
             argv: Vec::new(),
+            arg_files: Vec::new(),
             inputs: Vec::new(),
             outputs,
             env: BTreeMap::new(),
@@ -315,6 +322,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                 include_suffixes,
             }),
             argv: Vec::new(),
+            arg_files: Vec::new(),
             inputs,
             outputs: vec![output.to_string()],
             env: BTreeMap::new(),
@@ -330,11 +338,49 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
+    /// Build a structured command-line fragment. `args` is a list of
+    /// string arguments. When `use_arg_file` is set, it must be a dict
+    /// with `path` plus optional `format` and `arg_format`. The only
+    /// supported format today is `"line-delimited"`, which writes one
+    /// argument per line without shell escaping.
+    fn cmd_args<'v>(
+        args: Value<'v>,
+        use_arg_file: Option<Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let args = unpack_string_list(args, "cmd_args.args")?;
+        let arg_file = match use_arg_file {
+            Some(value) => unpack_cmd_args_arg_file(value)?,
+            None => None,
+        };
+        if let Some(arg_file) = &arg_file {
+            validate_declared_arg_file_args(arg_file.format, &args, &arg_file.path)?;
+            apply_arg_format(&arg_file.arg_format, &arg_file.path)?;
+        }
+        let heap = eval.heap();
+        let mut pairs = vec![
+            (CMD_ARGS_MARKER.to_string(), Value::new_bool(true)),
+            ("args".to_string(), heap.alloc(args)),
+        ];
+        if let Some(arg_file) = arg_file {
+            pairs.extend([
+                ("arg_file_path".to_string(), heap.alloc(arg_file.path)),
+                (
+                    "arg_file_format".to_string(),
+                    heap.alloc(arg_file.format.as_str().to_string()),
+                ),
+                ("arg_format".to_string(), heap.alloc(arg_file.arg_format)),
+            ]);
+        }
+        Ok(heap.alloc(AllocDict(pairs)))
+    }
+
     /// Record one command action declaration. Argument shape:
-    /// `argv`: list of strings; `inputs`: list of workspace-relative
-    /// source paths to hash into the input digest; `outputs`: list of
-    /// workspace-relative paths the action produces; `env`: optional
-    /// string->string dict; `cacheable`: optional bool, default true;
+    /// `argv`: list of strings and `cmd_args` values; `inputs`: list
+    /// of workspace-relative source paths to hash into the input
+    /// digest; `outputs`: list of workspace-relative paths the action
+    /// produces; `env`: optional string->string dict; `cacheable`:
+    /// optional bool, default true;
     /// `toolchain_identity`: optional string folded into the input
     /// digest; `identifier`: optional label for diagnostics.
     fn run_action<'v>(
@@ -346,7 +392,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         identifier: Option<String>,
         cacheable: Option<bool>,
     ) -> anyhow::Result<NoneType> {
-        let argv = unpack_string_list(argv, "argv")?;
+        let argv = unpack_action_argv(argv, "argv")?;
         let inputs = inputs
             .map(|value| unpack_string_list(value, "inputs"))
             .transpose()?
@@ -361,7 +407,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .unwrap_or_default();
         let action = DeclaredAction {
             operation: None,
-            argv,
+            argv: argv.args,
+            arg_files: argv.arg_files,
             inputs,
             outputs,
             env,
@@ -391,6 +438,25 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     fn json_decode<'v>(src: &str, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
         let value: JsonValue = serde_json::from_str(src)?;
         Ok(json_to_value(eval, &value))
+    }
+}
+
+struct ActionArgv {
+    args: Vec<String>,
+    arg_files: Vec<DeclaredArgFile>,
+}
+
+struct CmdArgsArgFile {
+    path: String,
+    format: DeclaredArgFileFormat,
+    arg_format: String,
+}
+
+impl DeclaredArgFileFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::LineDelimited => "line-delimited",
+        }
     }
 }
 
@@ -436,6 +502,162 @@ fn parse_prepare_path_mode(kind: &str) -> Result<DeclaredPreparePathMode> {
             "expected `kind` to be `remove` or `directory`, got `{other}`"
         )),
     }
+}
+
+fn unpack_action_argv(value: Value<'_>, field: &str) -> anyhow::Result<ActionArgv> {
+    let list = ListRef::from_value(value).ok_or_else(|| {
+        anyhow!(
+            "expected `{field}` to be a list of strings or cmd_args values, got `{}`",
+            value.get_type()
+        )
+    })?;
+    let mut argv = ActionArgv {
+        args: Vec::new(),
+        arg_files: Vec::new(),
+    };
+    for (index, item) in list.iter().enumerate() {
+        unpack_action_argv_item(item, field, index, &mut argv)?;
+    }
+    Ok(argv)
+}
+
+fn unpack_action_argv_item(
+    value: Value<'_>,
+    field: &str,
+    index: usize,
+    argv: &mut ActionArgv,
+) -> anyhow::Result<()> {
+    if let Some(arg) = value.unpack_str() {
+        argv.args.push(arg.to_string());
+        return Ok(());
+    }
+    if let Some(dict) = DictRef::from_value(value) {
+        if dict
+            .get_str(CMD_ARGS_MARKER)
+            .and_then(Value::unpack_bool)
+            .unwrap_or(false)
+        {
+            return unpack_cmd_args_value(&dict, field, index, argv);
+        }
+    }
+    Err(anyhow!(
+        "expected `{field}` entries to be strings or cmd_args values, got `{}`",
+        value.get_type()
+    ))
+}
+
+fn unpack_cmd_args_value(
+    dict: &DictRef<'_>,
+    field: &str,
+    index: usize,
+    argv: &mut ActionArgv,
+) -> anyhow::Result<()> {
+    let fragment_args = dict
+        .get_str("args")
+        .ok_or_else(|| anyhow!("expected `{field}` entry {index} cmd_args to contain `args`"))
+        .and_then(|value| unpack_string_list(value, "cmd_args.args"))?;
+    let Some(path) = optional_string_field(dict, "arg_file_path")? else {
+        argv.args.extend(fragment_args);
+        return Ok(());
+    };
+    let format = parse_arg_file_format(
+        optional_string_field(dict, "arg_file_format")?
+            .unwrap_or_else(|| "line-delimited".to_string())
+            .as_str(),
+        "cmd_args.use_arg_file.format",
+    )?;
+    validate_declared_arg_file_args(format, &fragment_args, &path)?;
+    let arg_format =
+        optional_string_field(dict, "arg_format")?.unwrap_or_else(|| "@{}".to_string());
+    argv.args.push(apply_arg_format(&arg_format, &path)?);
+    argv.arg_files.push(DeclaredArgFile {
+        path,
+        format,
+        args: fragment_args,
+    });
+    Ok(())
+}
+
+fn unpack_cmd_args_arg_file(value: Value<'_>) -> anyhow::Result<Option<CmdArgsArgFile>> {
+    if value.is_none() {
+        return Ok(None);
+    }
+    let dict = DictRef::from_value(value).ok_or_else(|| {
+        anyhow!(
+            "expected `cmd_args.use_arg_file` to be a dict, got `{}`",
+            value.get_type()
+        )
+    })?;
+    let path = required_string_field(&dict, "cmd_args.use_arg_file", "path")?;
+    let format = parse_arg_file_format(
+        optional_string_field(&dict, "format")?
+            .unwrap_or_else(|| "line-delimited".to_string())
+            .as_str(),
+        "cmd_args.use_arg_file.format",
+    )?;
+    let arg_format =
+        optional_string_field(&dict, "arg_format")?.unwrap_or_else(|| "@{}".to_string());
+    Ok(Some(CmdArgsArgFile {
+        path,
+        format,
+        arg_format,
+    }))
+}
+
+fn parse_arg_file_format(value: &str, field: &str) -> anyhow::Result<DeclaredArgFileFormat> {
+    match value {
+        "line-delimited" => Ok(DeclaredArgFileFormat::LineDelimited),
+        other => Err(anyhow!(
+            "expected `{field}` to be `line-delimited`, got `{other}`"
+        )),
+    }
+}
+
+fn validate_declared_arg_file_args(
+    format: DeclaredArgFileFormat,
+    args: &[String],
+    path: &str,
+) -> anyhow::Result<()> {
+    match format {
+        DeclaredArgFileFormat::LineDelimited => {
+            for arg in args {
+                if arg.contains('\n') || arg.contains('\r') {
+                    return Err(anyhow!(
+                        "line-delimited arg file `{path}` contains an argument with a newline"
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn apply_arg_format(format: &str, path: &str) -> anyhow::Result<String> {
+    if format.matches("{}").count() != 1 {
+        return Err(anyhow!(
+            "expected `cmd_args.use_arg_file.arg_format` to contain exactly one `{{}}` placeholder"
+        ));
+    }
+    Ok(format.replace("{}", path))
+}
+
+fn required_string_field(dict: &DictRef<'_>, field: &str, name: &str) -> anyhow::Result<String> {
+    dict.get_str(name)
+        .ok_or_else(|| anyhow!("expected `{field}` to contain `{name}`"))?
+        .unpack_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow!("expected `{field}.{name}` to be a string"))
+}
+
+fn optional_string_field(dict: &DictRef<'_>, name: &str) -> anyhow::Result<Option<String>> {
+    dict.get_str(name)
+        .map(|value| {
+            value
+                .unpack_str()
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| anyhow!("expected `{name}` to be a string"))
+        })
+        .transpose()
 }
 
 fn file_sha256_hex(path: &Path) -> Result<String> {
