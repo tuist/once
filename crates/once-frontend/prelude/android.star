@@ -263,7 +263,7 @@ def _android_kotlin_stdlib(attrs, kotlinc):
         return ""
     return kotlin_home + "/lib/kotlin-stdlib.jar"
 
-def _android_tools(ctx, attrs, include_java, include_apk, include_kotlin = False):
+def _android_tools(ctx, attrs, include_java, include_apk, include_kotlin = False, include_jar = True):
     label_id = ctx["label"]["id"]
     sdk_root = _android_sdk_root(attrs, label_id)
     compile_sdk = str(_android_attr(attrs, "compile_sdk", "") or _android_highest_platform(sdk_root, label_id))
@@ -290,15 +290,17 @@ def _android_tools(ctx, attrs, include_java, include_apk, include_kotlin = False
     ]
     if include_java:
         javac = _android_attr(attrs, "javac", "") or host_which("javac")
-        jar = _android_attr(attrs, "jar", "") or host_which("jar")
         java = _android_attr(attrs, "java", "") or host_which("java")
         java_home = _android_attr(attrs, "java_home", "") or _android_host_env("JAVA_HOME")
         tools["javac"] = javac
-        tools["jar"] = jar
         tools["java"] = java
         if java_home:
             tools["java_home"] = java_home
-        identity.extend(["javac", javac, _android_javac_version(javac, label_id), "jar", jar, "java", java, "java_home", java_home])
+        identity.extend(["javac", javac, _android_javac_version(javac, label_id), "java", java, "java_home", java_home])
+        if include_jar:
+            jar = _android_attr(attrs, "jar", "") or host_which("jar")
+            tools["jar"] = jar
+            identity.extend(["jar", jar])
     if include_kotlin:
         kotlinc = _android_attr(attrs, "kotlinc", "") or host_which("kotlinc")
         kotlin_stdlib = _android_kotlin_stdlib(attrs, kotlinc)
@@ -503,12 +505,24 @@ def _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_comp
         argv.extend(["-R", zip])
     for dir in asset_roots:
         argv.extend(["-A", dir])
+    link_tool_source = declare_output("aapt2_link_tool/OnceAndroidAapt2Link.java")
+    link_tool_classes = declare_output("aapt2_link_tool/classes")
     prepare_path(r_src_dir, kind = "remove", identifier = "android_resource_link_clean:" + label_id)
     prepare_path(r_src_dir, kind = "directory", identifier = "android_resource_link_prepare:" + label_id)
-    write_path(r_txt, "")
+    prepare_path(link_tool_classes, kind = "remove", identifier = "android_resource_link_tool_clean:" + label_id)
+    prepare_path(link_tool_classes, kind = "directory", identifier = "android_resource_link_tool_prepare:" + label_id)
+    write_path(link_tool_source, _android_aapt2_link_tool_source())
     run_action(
-        argv = argv,
-        inputs = _unique([manifest] + compiled_zips + dep_compiled_zips + asset_files),
+        argv = [tools["javac"], "-encoding", "UTF-8", "-d", link_tool_classes, link_tool_source],
+        inputs = [link_tool_source],
+        outputs = [link_tool_classes],
+        env = _android_env(tools),
+        toolchain_identity = tools["identity"] + "\x00aapt2_link_tool_javac.v1",
+        identifier = "android_resource_link_tool_compile:" + label_id,
+    )
+    run_action(
+        argv = [tools["java"], "-cp", link_tool_classes, "OnceAndroidAapt2Link", r_txt] + argv,
+        inputs = _unique([manifest, link_tool_classes] + compiled_zips + dep_compiled_zips + asset_files),
         outputs = [resource_apk, r_src_dir, r_txt],
         env = _android_env(tools),
         toolchain_identity = tools["identity"] + "\x00aapt2_link\x00static\x00" + str(static_lib),
@@ -521,6 +535,36 @@ def _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_comp
         identifier = "android_resource_r_digest:" + label_id,
     )
     return (resource_apk, r_src_dir, r_src_hash, r_txt)
+
+def _android_aapt2_link_tool_source():
+    return """import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+
+public final class OnceAndroidAapt2Link {
+  public static void main(String[] args) throws Exception {
+    Path rTxt = Paths.get(args[0]);
+    List<String> command = new ArrayList<>();
+    for (int i = 1; i < args.length; i++) {
+      command.add(args[i]);
+    }
+    Process process = new ProcessBuilder(command).inheritIO().start();
+    int exit = process.waitFor();
+    if (exit != 0) {
+      System.exit(exit);
+    }
+    Path parent = rTxt.getParent();
+    if (parent != null) {
+      Files.createDirectories(parent);
+    }
+    if (!Files.exists(rTxt)) {
+      Files.createFile(rTxt);
+    }
+  }
+}
+"""
 
 def _android_java_source_list_tool_source():
     return """import java.nio.charset.StandardCharsets;
@@ -572,6 +616,7 @@ def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash
     source_list = declare_output("java_sources.list")
     base_source_list = declare_output("java_sources.base.list")
     source_list_tool = declare_output("java_source_list_tool/OnceAndroidJavaSourceList.java")
+    source_list_tool_classes = declare_output("java_source_list_tool/classes")
     classpath_entries = _unique([tools["android_jar"]] + dep_jars)
     classpath = _android_classpath_sep().join(classpath_entries)
     source_level = str(_android_attr(attrs, "java_language_level", "17"))
@@ -590,11 +635,21 @@ def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash
         sources_to_compile.append(r_java)
     prepare_path(classes_dir, kind = "remove", identifier = "android_java_clean:" + ctx["label"]["id"])
     prepare_path(classes_dir, kind = "directory", identifier = "android_java_prepare:" + ctx["label"]["id"])
+    prepare_path(source_list_tool_classes, kind = "remove", identifier = "android_java_source_list_tool_clean:" + ctx["label"]["id"])
+    prepare_path(source_list_tool_classes, kind = "directory", identifier = "android_java_source_list_tool_prepare:" + ctx["label"]["id"])
     write_path(base_source_list, "\n".join(java_sources) + "\n")
     write_path(source_list_tool, _android_java_source_list_tool_source())
     run_action(
-        argv = [tools["java"], source_list_tool, base_source_list, r_src_dir, source_list],
-        inputs = [source_list_tool, base_source_list, r_src_hash],
+        argv = [tools["javac"], "-encoding", "UTF-8", "-d", source_list_tool_classes, source_list_tool],
+        inputs = [source_list_tool],
+        outputs = [source_list_tool_classes],
+        env = _android_env(tools),
+        toolchain_identity = tools["identity"] + "\x00java_source_list_tool_javac.v1",
+        identifier = "android_java_source_list_tool_compile:" + ctx["label"]["id"],
+    )
+    run_action(
+        argv = [tools["java"], "-cp", source_list_tool_classes, "OnceAndroidJavaSourceList", base_source_list, r_src_dir, source_list],
+        inputs = [source_list_tool_classes, base_source_list, r_src_hash],
         outputs = [source_list],
         env = _android_env(tools),
         toolchain_identity = tools["identity"] + "\x00java_source_list.v1",
@@ -876,8 +931,8 @@ def _android_run_app(ctx, attrs, tools):
     }
 
 def _android_resource_impl(ctx):
-    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "custom_package", "namespace", "package", "aapt2"])
-    tools = _android_tools(ctx, attrs, False, False)
+    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "custom_package", "namespace", "package", "aapt2", "javac", "java", "java_home"])
+    tools = _android_tools(ctx, attrs, True, False, include_jar = False)
     manifest = _android_manifest(ctx, attrs)
     resource_files = _android_resource_files(attrs, True)
     asset_files = _android_asset_files(attrs)
@@ -1052,6 +1107,9 @@ android_resource = target_kind(
         attr("namespace", "string", docs = "Java package for generated R classes.", configurable = False),
         attr("custom_package", "string", docs = "Alias for the generated R package.", configurable = False),
         attr("package", "string", docs = "Generated R package fallback.", configurable = False),
+        attr("javac", "string", docs = "Override javac path.", configurable = False),
+        attr("java", "string", docs = "Override java runtime path used by Android SDK tools.", configurable = False),
+        attr("java_home", "string", docs = "Override JAVA_HOME passed to Android SDK tools.", configurable = False),
     ],
     deps = [
         dep("deps", ["android_resource"], "Android resources merged into this resource package."),

@@ -28,6 +28,9 @@ and binaries can depend on it through `deps`.
 | `build_tools_version` | string | no | highest installed | Android SDK build-tools version |
 | `android_sdk` | string | no | env | Android SDK root, otherwise `ANDROID_HOME` or `ANDROID_SDK_ROOT` |
 | `aapt2` | string | no | SDK build-tools | Override `aapt2` path |
+| `javac` | string | no | host PATH | Override `javac` path |
+| `java` | string | no | host PATH | Override Java runtime path |
+| `java_home` | string | no | env | Override `JAVA_HOME` passed to Android SDK tools |
 
 ## Dep Edges
 

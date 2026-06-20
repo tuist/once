@@ -283,6 +283,8 @@ tools = {{
     "aapt2": "/sdk/build-tools/35.0.0/aapt2",
     "android_jar": "/sdk/platforms/android-35/android.jar",
     "compile_sdk": "35",
+    "java": "/jdk/bin/java",
+    "javac": "/jdk/bin/javac",
     "identity": "android-tools",
     "sdk_root": "/sdk",
 }}
@@ -306,22 +308,50 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
-    assert_eq!(
-        store.actions[2].operation,
-        Some(DeclaredActionOperation::WriteFile {
-            path: ".once/out/apps/hello/Hello/R.txt".to_string(),
-            bytes: Vec::new(),
+    assert!(!store.actions.iter().any(|action| {
+        action.operation.as_ref().is_some_and(|operation| {
+            matches!(
+                operation,
+                DeclaredActionOperation::WriteFile { path, .. }
+                    if path == ".once/out/apps/hello/Hello/R.txt"
+            )
         })
-    );
-    let link = &store.actions[3];
+    }));
+    let compile_tool = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .identifier
+                .as_deref()
+                .is_some_and(|id| id == "android_resource_link_tool_compile:apps/hello/Hello")
+        })
+        .expect("link tool compile action");
+    assert_eq!(compile_tool.argv[0], "/jdk/bin/javac");
+    let link = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .identifier
+                .as_deref()
+                .is_some_and(|id| id == "android_resource_link:apps/hello/Hello")
+        })
+        .expect("resource link action");
     assert_eq!(
         link.identifier.as_deref(),
         Some("android_resource_link:apps/hello/Hello")
     );
+    assert_eq!(link.argv[0], "/jdk/bin/java");
+    assert!(link.argv.iter().any(|arg| arg == "OnceAndroidAapt2Link"));
     assert!(link
         .outputs
         .iter()
         .any(|output| output == ".once/out/apps/hello/Hello/R.txt"));
+    assert!(link
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/apps/hello/Hello/aapt2_link_tool/classes"));
 }
 
 #[test]
@@ -367,6 +397,17 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
+    let source_list_tool = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .identifier
+                .as_deref()
+                .is_some_and(|id| id == "android_java_source_list_tool_compile:apps/hello/Hello")
+        })
+        .expect("source list tool compile action");
+    assert_eq!(source_list_tool.argv[0], "/jdk/bin/javac");
     let source_list = store
         .actions
         .iter()
@@ -378,6 +419,10 @@ result = repr("ok")
         })
         .expect("source list action");
     assert_eq!(source_list.argv[0], "/jdk/bin/java");
+    assert!(source_list
+        .argv
+        .iter()
+        .any(|arg| arg == "OnceAndroidJavaSourceList"));
     assert!(source_list
         .inputs
         .iter()

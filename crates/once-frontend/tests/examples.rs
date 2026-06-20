@@ -290,6 +290,7 @@ fn configure_fake_android_tools(root: &Path, android_app: &mut GraphTarget) {
         ("android_sdk", sdk.to_string_lossy().into_owned()),
         ("compile_sdk", "35".to_string()),
         ("build_tools_version", "35.0.0".to_string()),
+        ("signing", "none".to_string()),
         ("aapt2", tools.join("aapt2").to_string_lossy().into_owned()),
         (
             "apksigner",
