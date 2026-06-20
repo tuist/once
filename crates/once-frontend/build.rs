@@ -20,7 +20,7 @@ fn emit_rerun_if_changed(path: &Path) -> io::Result<()> {
     }
 
     let mut entries = fs::read_dir(path)?.collect::<io::Result<Vec<_>>>()?;
-    entries.sort_by_key(|entry| entry.path());
+    entries.sort_by_key(std::fs::DirEntry::path);
     for entry in entries {
         emit_rerun_if_changed(&entry.path())?;
     }
