@@ -387,6 +387,7 @@ android_ctx = {{
         "crate_name": "shared_rust",
         "crate_root": "src/lib.rs",
         "target": "aarch64-linux-android",
+        "linker": "/android/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android23-clang",
     }},
     "deps": [],
     "srcs": ["src/**/*.rs"],
@@ -431,6 +432,8 @@ result = repr([
     assert!(out.contains("-lc++"), "{out}");
     assert_eq!(store.actions.len(), 2);
     assert!(store.actions[0].argv.iter().any(|arg| arg == "--target"));
+    assert!(store.actions[0].argv.iter().any(|arg| arg
+        == "linker=/android/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android23-clang"));
     assert!(store.actions[1].argv.iter().any(|arg| arg == "--target"));
 }
 
