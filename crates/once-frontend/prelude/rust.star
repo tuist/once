@@ -192,7 +192,7 @@ def _rust_android_compile_env(ctx, target):
         env["PATH"] = path
     return env
 
-def _rust_features(ctx):
+def _rust_feature_flags(ctx):
     flags = []
     features = []
     features.extend(_rust_attr(ctx, "features", []))
@@ -200,6 +200,20 @@ def _rust_features(ctx):
     for feature in _unique(features):
         flags.extend(["--cfg", "feature=\"" + feature + "\""])
     return flags
+
+def _rust_response_file(ctx, name, content):
+    path = declare_output(_rust_declared_output(ctx, name))
+    write_path(path, content)
+    return path
+
+def _rust_feature_args(ctx):
+    flags = _rust_feature_flags(ctx)
+    if not flags:
+        return ([], [])
+    if host_os() != "windows":
+        return (flags, [])
+    path = _rust_response_file(ctx, "rustc-features.rsp", "\n".join(flags) + "\n")
+    return (["@" + path], [path])
 
 def _rust_user_flags(ctx):
     return _rust_attr(ctx, "rustc_flags", [])
@@ -274,6 +288,26 @@ def _rust_tool_path(tools):
     dirs.extend(_rust_unix_tool_dirs())
     return ":".join(_unique(dirs))
 
+def _rust_path_separator():
+    return ";" if host_os() == "windows" else ":"
+
+def _rust_merge_paths(primary, fallback):
+    if not primary:
+        return fallback
+    if not fallback:
+        return primary
+    separator = _rust_path_separator()
+    return separator.join(_unique(primary.split(separator) + fallback.split(separator)))
+
+def _rust_merge_env_lower_precedence(env, fallback_env):
+    for key, value in fallback_env.items():
+        if key == "PATH":
+            path = _rust_merge_paths(env.get("PATH") or "", value)
+            if path:
+                env["PATH"] = path
+        elif key not in env:
+            env[key] = value
+
 def _rust_c_tool_env(target, host_triple):
     env = {}
     if host_os() == "windows" or target != host_triple:
@@ -341,6 +375,12 @@ def _rust_manifest_dir(ctx, manifest_dir):
     if package and (manifest_dir == package or manifest_dir.startswith(package + "/")):
         return manifest_dir
     return _package_relative(ctx, manifest_dir)
+
+def _rust_compile_action_env(ctx, target, host_triple):
+    env = _rust_compile_env(ctx)
+    _rust_merge_env_lower_precedence(env, _rust_android_compile_env(ctx, target or host_triple))
+    _rust_merge_env_lower_precedence(env, _rust_c_tool_env(target or host_triple, host_triple))
+    return env
 
 def _rust_target_args(target):
     if target:
@@ -505,9 +545,7 @@ def _rust_builtin_extern_args(crate_type):
 
 def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path):
     env = _rust_compile_env(ctx)
-    for key, value in _rust_c_tool_env(target or host_triple, host_triple).items():
-        if key not in env:
-            env[key] = value
+    _rust_merge_env_lower_precedence(env, _rust_c_tool_env(target or host_triple, host_triple))
     for key, value in _rust_cfg_env(rustc, target).items():
         if key not in env:
             env[key] = value
@@ -603,7 +641,7 @@ def _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports):
     ])
     return "\n".join(lines)
 
-def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps, metadata_deps):
+def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps, metadata_deps, feature_args, feature_inputs):
     build_script = _rust_attr(ctx, "build_script", "")
     if not build_script:
         return (None, [], {}, None)
@@ -621,15 +659,16 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
         script_path,
         "-o", runner,
     ]
-    compile_argv.extend(_rust_features(ctx))
+    compile_argv.extend(feature_args)
     compile_argv.extend(_rust_cap_lints(ctx))
     compile_argv.extend(dep_args)
     compile_argv.extend(linker_args)
+    build_script_compile_env = _rust_compile_action_env(ctx, host_triple, host_triple)
     run_action(
         argv = compile_argv,
-        inputs = _unique([script_path] + dep_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique([script_path] + dep_inputs + feature_inputs + _rust_extra_inputs(ctx)),
         outputs = [runner],
-        env = _rust_compile_env(ctx),
+        env = build_script_compile_env,
         toolchain_identity = identity + linker_identity + "\x00build-script",
         identifier = ctx["label"]["id"] + ":build-script-rustc",
     )
@@ -646,7 +685,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
         toolchain_identity = identity + "\x00build-script-run",
         identifier = ctx["label"]["id"] + ":build-script",
     )
-    compile_env = _rust_compile_env(ctx)
+    compile_env = _rust_compile_action_env(ctx, target, host_triple)
     compile_env["OUT_DIR"] = _workspace_absolute(out_dir)
     return (out_dir, [script_path, stdout], compile_env, stdout)
 
@@ -815,11 +854,9 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         build_deps = []
     build_dep_args = _rust_dep_args(build_deps, aliases)
     build_dep_inputs = _rust_dep_inputs(build_deps)
-    build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps)
-    compile_env = build_env if build_env else _rust_compile_env(ctx)
-    for key, value in _rust_android_compile_env(ctx, target).items():
-        if key not in compile_env:
-            compile_env[key] = value
+    feature_args, feature_inputs = _rust_feature_args(ctx)
+    build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_args, feature_inputs)
+    compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
     argv = [
         rustc,
@@ -831,7 +868,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "-o", output,
     ]
     argv.extend(_rust_target_args(target))
-    argv.extend(_rust_features(ctx))
+    argv.extend(feature_args)
     argv.extend(_rust_user_flags(ctx))
     argv.extend(_rust_cap_lints(ctx))
     argv.extend(_rust_builtin_extern_args(crate_type))
@@ -842,7 +879,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         argv = _rustc_with_build_script_args(argv, build_stdout)
     run_action(
         argv = argv,
-        inputs = _unique(srcs + dep_inputs + build_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique(srcs + dep_inputs + build_inputs + feature_inputs + _rust_extra_inputs(ctx)),
         outputs = [output],
         env = compile_env,
         toolchain_identity = identity + linker_identity,

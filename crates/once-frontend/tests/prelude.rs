@@ -1712,6 +1712,220 @@ result = repr(args)
     assert!(!script.contains("O'Reilly"), "{script}");
 }
 
+#[test]
+fn prelude_rust_windows_feature_cfgs_use_response_file() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+features = ["default", "std"] + ["feature_" + str(i) for i in range(400)]
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "target": "x86_64-pc-windows-msvc",
+        "crate_root": "src/lib.rs",
+        "features": features,
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libapp.rlib")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    assert_eq!(store.actions.len(), 2);
+    let response = &store.actions[0];
+    assert_eq!(
+        response.identifier.as_deref(),
+        Some("write_path:.once/out/crates/app/app/rustc-features.rsp")
+    );
+    assert_eq!(
+        response.outputs,
+        vec![".once/out/crates/app/app/rustc-features.rsp"]
+    );
+    assert!(response.argv.is_empty());
+    let DeclaredActionOperation::WriteFile { path, bytes } = response
+        .operation
+        .as_ref()
+        .expect("write response file action")
+    else {
+        panic!("expected write file action");
+    };
+    assert_eq!(path, ".once/out/crates/app/app/rustc-features.rsp");
+    let content = String::from_utf8(bytes.clone()).unwrap();
+    assert!(content.len() > 4096);
+    assert!(content.contains("feature=\"default\""), "{content}");
+    assert!(content.contains("feature=\"std\""), "{content}");
+    assert!(content.contains("feature=\"feature_399\""), "{content}");
+
+    let rustc = &store.actions[1];
+    assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
+    assert!(rustc
+        .argv
+        .iter()
+        .any(|arg| arg == "@.once/out/crates/app/app/rustc-features.rsp"));
+    assert!(rustc
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/crates/app/app/rustc-features.rsp"));
+    assert!(
+        !rustc.argv.iter().any(|arg| arg.contains("feature=\"")),
+        "{:?}",
+        rustc.argv
+    );
+}
+
+#[test]
+fn prelude_rust_non_windows_feature_cfgs_stay_inline() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("rustc", "rustc-test", "x86_64-unknown-linux-gnu")
+
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "target": "wasm32-unknown-unknown",
+        "crate_root": "src/lib.rs",
+        "features": ["default", "std"],
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libapp.rlib")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    assert_eq!(store.actions.len(), 1);
+    let rustc = &store.actions[0];
+    assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
+    assert!(rustc
+        .argv
+        .windows(2)
+        .any(|pair| pair[0] == "--cfg" && pair[1] == "feature=\"default\""));
+    assert!(rustc
+        .argv
+        .windows(2)
+        .any(|pair| pair[0] == "--cfg" && pair[1] == "feature=\"std\""));
+    assert!(
+        !rustc.argv.iter().any(|arg| arg.starts_with('@')),
+        "{:?}",
+        rustc.argv
+    );
+    assert!(rustc
+        .operation
+        .as_ref()
+        .is_none_or(|operation| !matches!(operation, DeclaredActionOperation::WriteFile { .. })));
+}
+
+#[test]
+fn prelude_rust_empty_feature_list_emits_no_response_file() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "target": "x86_64-pc-windows-msvc",
+        "crate_root": "src/lib.rs",
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libapp.rlib")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    assert_eq!(store.actions.len(), 1);
+    let rustc = &store.actions[0];
+    assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
+    assert!(
+        !rustc.argv.iter().any(|arg| arg.starts_with('@')),
+        "{:?}",
+        rustc.argv
+    );
+    assert!(
+        !rustc
+            .argv
+            .windows(2)
+            .any(|pair| pair[0] == "--cfg" && pair[1].starts_with("feature=")),
+        "{:?}",
+        rustc.argv
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn prelude_rust_proc_macro_compile_uses_host_target() {
@@ -1830,6 +2044,204 @@ result = repr([
         assert!(values[4].split(':').any(|entry| entry == tool_dir));
     }
     assert!(values[4].split(':').any(|entry| entry == "/bin"));
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_rust_build_script_compile_action_gets_sanitized_c_tool_path() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "build_script": "build.rs",
+        "crate_root": "src/lib.rs",
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libapp.rlib")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    let action = store
+        .actions
+        .iter()
+        .find(|action| action.identifier.as_deref() == Some("crates/app/app:build-script-rustc"))
+        .expect("build script rustc action");
+    let path = action.env.get("PATH").expect("host linker PATH");
+    assert!(path.split(':').any(|entry| entry == "/bin"), "{path}");
+    for entry in path.split(':') {
+        assert!(std::path::Path::new(entry).is_absolute(), "{path}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_rust_host_compile_actions_get_sanitized_c_tool_path() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+rustc, _identity, host_triple = _rustc_toolchain("")
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "target": host_triple,
+        "crate_root": "src/main.rs",
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "bin", "src/main.rs", "app")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    let path = store.actions[0].env.get("PATH").expect("host linker PATH");
+    assert!(path.split(':').any(|entry| entry == "/bin"), "{path}");
+    for entry in path.split(':') {
+        assert!(std::path::Path::new(entry).is_absolute(), "{path}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_rust_compile_action_env_merges_c_tool_env_with_existing_path() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+rustc, _identity, host_triple = _rustc_toolchain("")
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "target": host_triple,
+        "crate_root": "src/lib.rs",
+        "env": {{
+            "PATH": "/custom/bin",
+            "CC": "/custom/cc",
+        }},
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libapp.rlib")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    let action = &store.actions[0];
+    let path = action.env.get("PATH").expect("merged linker PATH");
+    let entries = path.split(':').collect::<Vec<_>>();
+    assert_eq!(entries[0], "/custom/bin");
+    assert!(entries.contains(&"/bin"), "{path}");
+    assert_eq!(action.env.get("CC").map(String::as_str), Some("/custom/cc"));
+    assert!(action
+        .env
+        .get("AR")
+        .is_some_and(|ar| std::path::Path::new(ar).is_absolute()));
+}
+
+#[test]
+fn prelude_rust_compile_action_env_uses_target_for_c_tool_env() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_env(name):
+    return ""
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def _rustc_toolchain(target):
+    return ("rustc", "rustc-test", "x86_64-unknown-linux-gnu")
+
+def _rust_c_tool_env(target, host_triple):
+    if target != "thumbv7em-none-eabihf":
+        fail("unexpected c tool target: " + target)
+    if host_triple != "x86_64-unknown-linux-gnu":
+        fail("unexpected host triple: " + host_triple)
+    return {{
+        "CC": "/opt/thumb/bin/thumbv7em-none-eabihf-cc",
+        "AR": "/opt/thumb/bin/thumbv7em-none-eabihf-ar",
+        "PATH": "/opt/thumb/bin:/opt/thumb/libexec",
+    }}
+
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "target": "thumbv7em-none-eabihf",
+        "crate_root": "src/lib.rs",
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libapp.rlib")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    let action = &store.actions[0];
+    assert_eq!(
+        action.env.get("CC").map(String::as_str),
+        Some("/opt/thumb/bin/thumbv7em-none-eabihf-cc")
+    );
+    assert_eq!(
+        action.env.get("AR").map(String::as_str),
+        Some("/opt/thumb/bin/thumbv7em-none-eabihf-ar")
+    );
+    let path = action.env.get("PATH").expect("target c tool PATH");
+    assert!(
+        path.split(':').any(|entry| entry == "/opt/thumb/bin"),
+        "{path}"
+    );
+    assert!(
+        path.split(':').any(|entry| entry == "/opt/thumb/libexec"),
+        "{path}"
+    );
 }
 
 #[cfg(unix)]
