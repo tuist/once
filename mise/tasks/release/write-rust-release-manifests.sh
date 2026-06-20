@@ -71,7 +71,14 @@ fi
 
 suffix="$(printf '%s' "${target}" | tr '.-' '__')"
 dependency_target="cargo_dependencies_${suffix}"
-release_flags='["-C", "opt-level=3", "-C", "codegen-units=1", "-C", "panic=abort"]'
+case "${target}" in
+  *-apple-ios*)
+    release_flags='["-C", "opt-level=3", "-C", "codegen-units=1"]'
+    ;;
+  *)
+    release_flags='["-C", "opt-level=3", "-C", "codegen-units=1", "-C", "panic=abort"]'
+    ;;
+esac
 
 remove_generated_blocks
 
