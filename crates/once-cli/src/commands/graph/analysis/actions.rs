@@ -12,8 +12,8 @@ use once_core::{
     OutputSymlinkMode, PreparePathMode, ResourceRequest, RunOpts, WorkspacePath,
 };
 use once_frontend::analysis::{
-    AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredCopyPathMode,
-    DeclaredPreparePathMode,
+    AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArgFile,
+    DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
 use once_frontend::GraphTarget;
 use tokio::process::Command;
@@ -167,6 +167,9 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         outputs = declared.outputs.len(),
         "preparing declared graph action"
     );
+    materialize_declared_arg_files(workspace, &declared.arg_files).with_context(|| {
+        format!("writing arg files for action {index} for {target_id} ({identifier_for_error})")
+    })?;
     let action = declared_to_action(
         workspace,
         declared,
@@ -646,6 +649,41 @@ fn declared_to_action(
     }
 }
 
+fn materialize_declared_arg_files(workspace: &Path, arg_files: &[DeclaredArgFile]) -> Result<()> {
+    for arg_file in arg_files {
+        let path = workspace_path(&arg_file.path, "arg_files path")?;
+        let absolute = path.resolve(workspace);
+        if let Some(parent) = absolute.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("creating parent directory for arg file `{}`", path.as_str())
+            })?;
+        }
+        let content = declared_arg_file_content(arg_file)?;
+        std::fs::write(&absolute, content)
+            .with_context(|| format!("writing arg file `{}`", path.as_str()))?;
+    }
+    Ok(())
+}
+
+fn declared_arg_file_content(arg_file: &DeclaredArgFile) -> Result<Vec<u8>> {
+    match arg_file.format {
+        DeclaredArgFileFormat::LineDelimited => {
+            let mut content = Vec::new();
+            for arg in &arg_file.args {
+                if arg.contains('\n') || arg.contains('\r') {
+                    anyhow::bail!(
+                        "line-delimited arg file `{}` contains an argument with a newline",
+                        arg_file.path
+                    );
+                }
+                content.extend_from_slice(arg.as_bytes());
+                content.push(b'\n');
+            }
+            Ok(content)
+        }
+    }
+}
+
 fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest) -> Result<Action> {
     Ok(match operation {
         DeclaredActionOperation::WriteFile { path, bytes } => Action::WriteFile {
@@ -730,6 +768,9 @@ fn compose_input_digest(
     for arg in &declared.argv {
         builder.push_bytes(arg.as_bytes());
     }
+    let encoded_arg_files =
+        serde_json::to_vec(&declared.arg_files).context("serializing declared action arg files")?;
+    builder.push_bytes(&encoded_arg_files);
     for (key, value) in &declared.env {
         builder.push_bytes(key.as_bytes());
         builder.push_bytes(value.as_bytes());
@@ -774,6 +815,7 @@ mod tests {
         let declared = DeclaredAction {
             operation: None,
             argv: vec!["tool".to_string(), "--version".to_string()],
+            arg_files: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![
                 ".once/out/x/A.out".to_string(),
@@ -793,6 +835,40 @@ mod tests {
             panic!("command declaration should lower to RunCommand");
         };
         assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
+    }
+
+    #[test]
+    fn materialize_declared_arg_files_writes_line_delimited_args() {
+        let workspace = tempfile::tempdir().unwrap();
+        let arg_files = vec![DeclaredArgFile {
+            path: ".once/out/rust/rustc-features.rsp".to_string(),
+            format: DeclaredArgFileFormat::LineDelimited,
+            args: vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()],
+        }];
+
+        materialize_declared_arg_files(workspace.path(), &arg_files).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/rust/rustc-features.rsp"))
+                .unwrap(),
+            "--cfg\nfeature=\"alloc\"\n"
+        );
+    }
+
+    #[test]
+    fn materialize_declared_arg_files_rejects_newline_args() {
+        let workspace = tempfile::tempdir().unwrap();
+        let arg_files = vec![DeclaredArgFile {
+            path: ".once/out/rust/rustc-features.rsp".to_string(),
+            format: DeclaredArgFileFormat::LineDelimited,
+            args: vec!["feature=\"alloc\"\n--cfg".to_string()],
+        }];
+
+        let err = materialize_declared_arg_files(workspace.path(), &arg_files)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("contains an argument with a newline"), "{err}");
     }
 
     #[tokio::test]
@@ -1027,6 +1103,7 @@ mod tests {
                     "printf visible-stdout; printf visible-stderr >&2; printf ok > .once/out/one.txt"
                         .to_string(),
                 ],
+                arg_files: Vec::new(),
                 inputs: Vec::new(),
                 outputs: vec![".once/out/one.txt".to_string()],
                 env: BTreeMap::new(),
@@ -1094,6 +1171,7 @@ mod tests {
                 "-c".to_string(),
                 format!("printf {name} > .once/out/{name}.txt"),
             ],
+            arg_files: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![format!(".once/out/{name}.txt")],
             env: BTreeMap::new(),
@@ -1175,6 +1253,7 @@ mod tests {
         let declared = DeclaredAction {
             operation: None,
             argv: vec!["tool".to_string()],
+            arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),
@@ -1192,12 +1271,46 @@ mod tests {
     }
 
     #[test]
+    fn input_digest_changes_with_declared_arg_files() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
+        let declared = DeclaredAction {
+            operation: None,
+            argv: vec!["tool".to_string(), "@.once/out/args.rsp".to_string()],
+            arg_files: vec![DeclaredArgFile {
+                path: ".once/out/args.rsp".to_string(),
+                format: DeclaredArgFileFormat::LineDelimited,
+                args: vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()],
+            }],
+            inputs: vec!["input.txt".to_string()],
+            outputs: vec![".once/out/A.a".to_string()],
+            env: BTreeMap::new(),
+            cacheable: true,
+            toolchain_identity: None,
+            identifier: None,
+        };
+        let one = compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
+        let declared2 = DeclaredAction {
+            arg_files: vec![DeclaredArgFile {
+                path: ".once/out/args.rsp".to_string(),
+                format: DeclaredArgFileFormat::LineDelimited,
+                args: vec!["--cfg".to_string(), "feature=\"std\"".to_string()],
+            }],
+            ..declared
+        };
+        let two = compose_input_digest(workspace.path(), &declared2, module_digest(), &[]).unwrap();
+
+        assert_ne!(one, two);
+    }
+
+    #[test]
     fn input_digest_changes_with_module_source_digest() {
         let workspace = tempfile::tempdir().unwrap();
         std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
             operation: None,
             argv: vec!["tool".to_string()],
+            arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),
@@ -1230,6 +1343,7 @@ mod tests {
         let declared = DeclaredAction {
             operation: None,
             argv: vec!["tool".to_string()],
+            arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),

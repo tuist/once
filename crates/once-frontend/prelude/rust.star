@@ -14,6 +14,9 @@ def _ascii_env_key(value):
 def _rust_metadata_suffix(ctx):
     return _ascii_env_key(ctx["label"]["id"])
 
+def _rust_build_dir(ctx):
+    return ctx.get("build_dir") or (".once/out/" + ctx["label"]["id"])
+
 def _crate_name_from_label(ctx):
     return ctx["label"]["name"].replace("-", "_").replace(".", "_")
 
@@ -201,19 +204,23 @@ def _rust_feature_flags(ctx):
         flags.extend(["--cfg", "feature=\"" + feature + "\""])
     return flags
 
-def _rust_response_file(ctx, name, content):
-    path = declare_output(_rust_declared_output(ctx, name))
-    write_path(path, content)
-    return path
-
 def _rust_feature_args(ctx):
     flags = _rust_feature_flags(ctx)
     if not flags:
         return ([], [])
     if host_os() != "windows":
         return (flags, [])
-    path = _rust_response_file(ctx, "rustc-features.rsp", "\n".join(flags) + "\n")
-    return (["@" + path], [path])
+    path = _rust_build_dir(ctx) + "/" + _rust_declared_output(ctx, "rustc-features.rsp")
+    return ([
+        cmd_args(
+            args = flags,
+            use_arg_file = {
+                "path": path,
+                "format": "line-delimited",
+                "arg_format": "@{}",
+            },
+        ),
+    ], [])
 
 def _rust_user_flags(ctx):
     return _rust_attr(ctx, "rustc_flags", [])

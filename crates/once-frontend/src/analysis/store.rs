@@ -53,6 +53,8 @@ pub struct DeclaredAction {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arg_files: Vec<DeclaredArgFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -63,6 +65,19 @@ pub struct DeclaredAction {
     pub toolchain_identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DeclaredArgFile {
+    pub path: String,
+    pub format: DeclaredArgFileFormat,
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeclaredArgFileFormat {
+    LineDelimited,
 }
 
 fn default_cacheable() -> bool {

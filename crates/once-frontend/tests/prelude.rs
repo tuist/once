@@ -4,7 +4,7 @@ use std::process::Command;
 
 use once_frontend::analysis::{
     globals_for_prelude, target_kind_has_impl, with_active_store, AnalysisStore,
-    DeclaredActionOperation, DeclaredCopyPathMode, DeclaredPreparePathMode,
+    DeclaredActionOperation, DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
 use once_frontend::{built_in_target_kind_schema, graph_from_targets, Target};
 use starlark::environment::Module;
@@ -1757,41 +1757,29 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
-    assert_eq!(store.actions.len(), 2);
-    let response = &store.actions[0];
-    assert_eq!(
-        response.identifier.as_deref(),
-        Some("write_path:.once/out/crates/app/app/rustc-features.rsp")
-    );
-    assert_eq!(
-        response.outputs,
-        vec![".once/out/crates/app/app/rustc-features.rsp"]
-    );
-    assert!(response.argv.is_empty());
-    let DeclaredActionOperation::WriteFile { path, bytes } = response
-        .operation
-        .as_ref()
-        .expect("write response file action")
-    else {
-        panic!("expected write file action");
-    };
-    assert_eq!(path, ".once/out/crates/app/app/rustc-features.rsp");
-    let content = String::from_utf8(bytes.clone()).unwrap();
-    assert!(content.len() > 4096);
-    assert!(content.contains("feature=\"default\""), "{content}");
-    assert!(content.contains("feature=\"std\""), "{content}");
-    assert!(content.contains("feature=\"feature_399\""), "{content}");
-
-    let rustc = &store.actions[1];
+    assert_eq!(store.actions.len(), 1);
+    let rustc = &store.actions[0];
     assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
     assert!(rustc
         .argv
         .iter()
         .any(|arg| arg == "@.once/out/crates/app/app/rustc-features.rsp"));
-    assert!(rustc
+    assert!(!rustc
         .inputs
         .iter()
         .any(|input| input == ".once/out/crates/app/app/rustc-features.rsp"));
+    assert_eq!(rustc.arg_files.len(), 1);
+    let arg_file = &rustc.arg_files[0];
+    assert_eq!(arg_file.path, ".once/out/crates/app/app/rustc-features.rsp");
+    assert_eq!(arg_file.format, DeclaredArgFileFormat::LineDelimited);
+    assert!(arg_file.args.len() > 800);
+    assert!(arg_file.args.iter().any(|arg| arg == "feature=\"default\""));
+    assert!(arg_file.args.iter().any(|arg| arg == "feature=\"std\""));
+    assert!(arg_file
+        .args
+        .iter()
+        .any(|arg| arg == "feature=\"feature_399\""));
+    assert!(!arg_file.args.iter().any(|arg| arg.contains("\\\"")));
     assert!(
         !rustc.argv.iter().any(|arg| arg.contains("feature=\"")),
         "{:?}",

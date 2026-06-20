@@ -22,8 +22,8 @@ use crate::target::AttrValue;
 pub use engine::{analyze_target, target_kind_has_impl, AnalysisEngine, AnalysisResult};
 pub use globals::globals_for_prelude;
 pub use store::{
-    with_active_store, AnalysisStore, DeclaredAction, DeclaredActionOperation,
-    DeclaredCopyPathMode, DeclaredPreparePathMode,
+    with_active_store, AnalysisStore, DeclaredAction, DeclaredActionOperation, DeclaredArgFile,
+    DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
 
 /// If `value` is the canonical select-shape Map (`{ "select": { ... }

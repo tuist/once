@@ -192,6 +192,13 @@ The Rust executor exposes generic primitives only:
   sorted workspace-relative file paths.
 - `declare_output(name)` reserves an output under the target build
   directory.
+- `cmd_args(args, use_arg_file = None)` creates a structured
+  command-line fragment. `args` is a list of strings. When
+  `use_arg_file` is set, it is a dictionary with `path` plus optional
+  `format` and `arg_format`. The supported `format` is
+  `line-delimited`, which writes one argument per line without shell
+  escaping. `arg_format` defaults to `@{}` and must contain exactly one
+  `{}` placeholder.
 - `run_action(...)` records a command action for the executor.
 - `write_path(path, content)` materializes generated text or byte-list
   files through normal actions.
@@ -215,7 +222,7 @@ compiler flags, provider conventions, and action layout.
 
 `run_action` accepts:
 
-- `argv`: command and arguments.
+- `argv`: command and arguments as strings or `cmd_args` fragments.
 - `inputs`: workspace-relative files and directories hashed into the
   action digest.
 - `outputs`: workspace-relative outputs the action must produce.
