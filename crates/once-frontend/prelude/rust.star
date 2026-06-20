@@ -536,17 +536,14 @@ def _rust_build_script_output_pipeline(runner, status, stdout):
 def _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports):
     status = run_env["OUT_DIR"] + "/.once-build-script-status"
     status_abs = _shell_quote(status)
-    rm = _shell_quote(host_which("rm"))
     lines = [
-        _shell_quote(host_which("mkdir")) + " -p " + _shell_quote(run_env["OUT_DIR"]) + " && cd " + _shell_quote(run_env["CARGO_MANIFEST_DIR"]),
+        "cd " + _shell_quote(run_env["CARGO_MANIFEST_DIR"]),
     ]
     if metadata_exports:
         lines.append(metadata_exports)
     lines.extend([
-        rm + " -f " + status_abs,
         _rust_build_script_output_pipeline(runner, status, stdout),
         "code=$(" + _shell_quote(host_which("cat")) + " " + status_abs + ")",
-        rm + " -f " + status_abs,
         "exit \"$code\"",
     ])
     return "\n".join(lines)
@@ -583,6 +580,8 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     )
     run_env = _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path)
     metadata_exports, metadata_inputs = _rust_dep_metadata_exports(metadata_deps)
+    ensure_dir(out_dir, identifier = ctx["label"]["id"] + ":build-script-out-dir")
+    remove_path(out_dir + "/.once-build-script-status", identifier = ctx["label"]["id"] + ":build-script-status-clean")
     run_script = _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports)
     run_action(
         argv = [host_which("sh"), "-c", run_script],
@@ -1555,8 +1554,7 @@ def _cargo_vendor_source_root(vendor_dir, package, target_name):
 def _cargo_vendor_candidate_matches(candidate, version):
     manifest = _workspace_absolute(candidate + "/Cargo.toml")
     version_line = "version = \"" + version + "\""
-    script = "if test -f " + _shell_quote(manifest) + " && " + _shell_quote(host_which("grep")) + " -F " + _shell_quote(version_line) + " " + _shell_quote(manifest) + " >/dev/null 2>/dev/null; then printf yes; fi"
-    return host_command([host_which("sh"), "-c", script]).strip() == "yes"
+    return host_file_exists(manifest) and host_file_contains(manifest, version_line)
 
 _RUST_COMMON_ATTRS = [
     attr("crate_name", "string", docs = "Rust crate name passed to rustc. Defaults to the target name with `-` and `.` rewritten as `_`.", configurable = False),

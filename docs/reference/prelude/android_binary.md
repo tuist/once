@@ -69,7 +69,7 @@ The target emits `android_application` and `android_apk`.
 | Output | Location |
 | --- | --- |
 | APK | `.once/out/<target>/<name>.apk` |
-| Debug keystore | `.once/out/<target>/debug.keystore` |
+| Debug keystore | `.once/out/<target>/debug.keystore` when `debug_keystore` is set |
 | Unsigned APK | `.once/out/<target>/unsigned.apk` |
 | Dex directory | `.once/out/<target>/dex` |
 | Linked resource package | `.once/out/<target>/resources.apk` |
@@ -82,11 +82,11 @@ Native library deps are copied into the unsigned APK under
 
 ## Signing
 
-`signing = "debug"` signs with `debug_keystore` when it is set. When it is
-omitted, Once uses `ANDROID_DEBUG_KEYSTORE` or `~/.android/debug.keystore`.
-Once does not ship debug private key material. The keystore SHA-256 is part
-of the signing action identity so changing the local key invalidates cached
-signing output.
+`signing = "debug"` stages and signs with `debug_keystore` when it is set.
+When it is omitted, Once signs with `ANDROID_DEBUG_KEYSTORE` or
+`~/.android/debug.keystore` in place. Once does not ship debug private key
+material. The keystore SHA-256 is part of the signing action identity so
+changing the local key invalidates cached signing output.
 
 `debug_keystore_password` must stay `android`. Custom signing passwords are
 not supported because action metadata and process arguments are not treated

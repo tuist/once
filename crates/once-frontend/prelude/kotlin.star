@@ -37,13 +37,7 @@ def _kotlin_apple_default_target(platform, sdk_variant, arch):
             return "watchos_x64"
     fail("unsupported Kotlin/Native Apple target for platform `" + platform + "`, sdk_variant `" + sdk_variant + "`, arch `" + arch + "`")
 
-def _kotlin_apple_host_shell(label_id):
-    if host_os() == "windows":
-        fail(label_id + ": Kotlin/Native Apple framework builds require a POSIX-compatible host shell")
-    return host_which("sh")
-
 def _kotlin_apple_tool(ctx, attrs):
-    label_id = ctx["label"]["id"]
     configured = _kotlin_apple_attr(attrs, "kotlinc_native", "")
     if configured:
         tool = configured
@@ -53,8 +47,7 @@ def _kotlin_apple_tool(ctx, attrs):
             tool = kotlin_home + "/bin/kotlinc-native"
         else:
             tool = host_which("kotlinc-native")
-    sh = _kotlin_apple_host_shell(label_id)
-    version = host_command([sh, "-c", "set -eu\n" + _shell_quote(tool) + " -version 2>&1 | sed -n '1p'\n"]).strip()
+    version = host_command([tool, "-version"]).strip()
     identity = "once.kotlin.apple.native.v1\x00" + tool + "\x00" + version
     return (tool, identity)
 
@@ -63,25 +56,6 @@ def _kotlin_apple_trim_framework_suffix(path):
     if _ends_with(path, suffix):
         return path[:len(path) - len(suffix)]
     return path
-
-def _kotlin_apple_compile_script(tool, target, module_name, framework_path, output_base, compiler_opts, sources, konan_data_dir):
-    env_prefix = ""
-    if konan_data_dir:
-        env_prefix = "KONAN_DATA_DIR=" + _shell_quote(konan_data_dir) + " "
-    return """set -eu
-rm -rf {framework_path}
-{env_prefix}{tool} -target {target} -produce framework -module-name {module_name} -o {output_base} {compiler_opts} {sources}
-test -d {framework_path}
-""".format(
-        framework_path = _shell_quote(framework_path),
-        env_prefix = env_prefix,
-        tool = _shell_quote(tool),
-        target = _shell_quote(target),
-        module_name = _shell_quote(module_name),
-        output_base = _shell_quote(output_base),
-        compiler_opts = " ".join([_shell_quote(opt) for opt in compiler_opts]),
-        sources = " ".join([_shell_quote(src) for src in sources]),
-    )
 
 def _kotlin_apple_framework_impl(ctx):
     attrs = ctx["attr"]
@@ -104,12 +78,24 @@ def _kotlin_apple_framework_impl(ctx):
     framework_dir = product_name + ".framework"
     framework_path = declare_output(framework_dir)
     output_base = _kotlin_apple_trim_framework_suffix(framework_path)
-    sh = _kotlin_apple_host_shell(ctx["label"]["id"])
+    compile_env = {}
+    if konan_data_dir:
+        compile_env["KONAN_DATA_DIR"] = konan_data_dir
+    argv = [
+        tool,
+        "-target", target,
+        "-produce", "framework",
+        "-module-name", module_name,
+        "-o", output_base,
+    ] + compiler_opts + sources
+
+    remove_path(framework_path, identifier = "kotlin_apple_framework_clean:" + ctx["label"]["id"])
 
     run_action(
-        argv = [sh, "-c", _kotlin_apple_compile_script(tool, target, module_name, framework_path, output_base, compiler_opts, sources, konan_data_dir)],
+        argv = argv,
         inputs = sources,
         outputs = [framework_path],
+        env = compile_env,
         toolchain_identity = identity + "\x00target\x00" + target + "\x00module\x00" + module_name,
         identifier = "kotlin_apple_framework:" + ctx["label"]["id"],
     )

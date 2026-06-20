@@ -4,6 +4,7 @@ use std::process::Command;
 
 use once_frontend::analysis::{
     globals_for_prelude, target_kind_has_impl, with_active_store, AnalysisStore,
+    DeclaredActionOperation,
 };
 use once_frontend::{built_in_target_kind_schema, graph_from_targets, Target};
 use starlark::environment::Module;
@@ -224,23 +225,37 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
-    assert_eq!(store.actions.len(), 1);
-    let action = &store.actions[0];
+    assert_eq!(store.actions.len(), 5);
     assert_eq!(
-        action.inputs,
-        vec![
-            ".once/out/apps/hello/Hello/resources.apk",
-            ".once/out/apps/hello/Hello/dex.sha256",
-            ".once/out/shared/libshared.so",
-        ]
+        store.actions[0].operation,
+        Some(DeclaredActionOperation::CopyFile {
+            source: ".once/out/apps/hello/Hello/resources.apk".to_string(),
+            destination: ".once/out/apps/hello/Hello/unsigned.apk".to_string(),
+        })
     );
-    let script = &action.argv[2];
-    assert!(script.contains("native_staging/lib/arm64-v8a"), "{script}");
-    assert!(script.contains("libshared.so"), "{script}");
-    assert!(
-        script.contains("-C '.once/out/apps/hello/Hello/native_staging' lib"),
-        "{script}"
+    assert_eq!(
+        store.actions[1].identifier.as_deref(),
+        Some("android_unsigned_apk_dex:apps/hello/Hello")
     );
+    assert_eq!(
+        store.actions[2].operation,
+        Some(DeclaredActionOperation::RemovePath {
+            path: ".once/out/apps/hello/Hello/native_staging".to_string(),
+        })
+    );
+    let action = &store.actions[3];
+    assert_eq!(
+        action.operation,
+        Some(DeclaredActionOperation::CopyFile {
+            source: ".once/out/shared/libshared.so".to_string(),
+            destination: ".once/out/apps/hello/Hello/native_staging/lib/arm64-v8a/libshared.so"
+                .to_string(),
+        })
+    );
+    assert_eq!(action.inputs, vec![".once/out/shared/libshared.so"]);
+    assert!(store.actions[4]
+        .argv
+        .contains(&".once/out/apps/hello/Hello/native_staging".to_string()));
 }
 
 #[cfg(unix)]
@@ -459,8 +474,22 @@ result = repr([classes_dir, classes_hash])
         out.unwrap(),
         "[\".once/out/apps/hello/Hello/classes\", \".once/out/apps/hello/Hello/classes.kotlin.sha256\"]"
     );
-    assert_eq!(store.actions.len(), 1);
-    let action = &store.actions[0];
+    assert_eq!(store.actions.len(), 4);
+    assert_eq!(
+        store.actions[0].operation,
+        Some(DeclaredActionOperation::CopyTree {
+            sources: vec![".once/out/apps/hello/Hello/java_classes".to_string()],
+            destination: ".once/out/apps/hello/Hello/classes".to_string(),
+        })
+    );
+    assert_eq!(
+        store.actions[1].operation,
+        Some(DeclaredActionOperation::WriteFile {
+            path: ".once/out/apps/hello/Hello/kotlin_sources.list".to_string(),
+            content: "apps/hello/src/MainActivity.kt\n".to_string(),
+        })
+    );
+    let action = &store.actions[2];
     assert_eq!(
         action.identifier.as_deref(),
         Some("android_kotlin_compile:apps/hello/Hello")
@@ -470,24 +499,24 @@ result = repr([classes_dir, classes_hash])
         vec![
             "apps/hello/src/MainActivity.kt",
             ".once/out/apps/hello/Hello/classes.sha256",
+            ".once/out/apps/hello/Hello/kotlin_sources.list",
             "apps/hello/Greeting.jar",
         ]
     );
+    assert_eq!(action.outputs, vec![".once/out/apps/hello/Hello/classes"]);
+    assert!(action
+        .argv
+        .iter()
+        .any(|arg| arg.contains("/kotlin/lib/kotlin-stdlib.jar")));
+    assert!(action.argv.contains(&"-Xjsr305=strict".to_string()));
     assert_eq!(
-        action.outputs,
-        vec![
-            ".once/out/apps/hello/Hello/classes",
-            ".once/out/apps/hello/Hello/classes.kotlin.sha256",
-        ]
+        store.actions[3].operation,
+        Some(DeclaredActionOperation::WriteTreeDigest {
+            root: ".once/out/apps/hello/Hello/classes".to_string(),
+            output: ".once/out/apps/hello/Hello/classes.kotlin.sha256".to_string(),
+            include_suffixes: vec![],
+        })
     );
-    let script = &action.argv[2];
-    assert!(script.contains("cp -R"), "{script}");
-    assert!(
-        script.contains(".once/out/apps/hello/Hello/java_classes"),
-        "{script}"
-    );
-    assert!(script.contains("/kotlin/lib/kotlin-stdlib.jar"), "{script}");
-    assert!(script.contains("-Xjsr305=strict"), "{script}");
 }
 
 #[cfg(unix)]
@@ -536,8 +565,15 @@ result = repr([apk, keystore])
         out.unwrap(),
         "[\".once/out/apps/hello/Hello/Hello.apk\", \".once/out/apps/hello/Hello/debug.keystore\"]"
     );
-    assert_eq!(store.actions.len(), 1);
-    let action = &store.actions[0];
+    assert_eq!(store.actions.len(), 2);
+    assert_eq!(
+        store.actions[0].operation,
+        Some(DeclaredActionOperation::CopyFile {
+            source: "apps/hello/debug.keystore".to_string(),
+            destination: ".once/out/apps/hello/Hello/debug.keystore".to_string(),
+        })
+    );
+    let action = &store.actions[1];
     assert_eq!(
         action.identifier.as_deref(),
         Some("android_sign:apps/hello/Hello")
@@ -547,21 +583,15 @@ result = repr([apk, keystore])
         vec![
             "apps/hello/debug.keystore",
             ".once/out/apps/hello/Hello/aligned.apk",
-        ]
-    );
-    assert_eq!(
-        action.outputs,
-        vec![
-            ".once/out/apps/hello/Hello/Hello.apk",
             ".once/out/apps/hello/Hello/debug.keystore",
         ]
     );
-    let script = &action.argv[2];
-    assert!(
-        script.contains("cp 'apps/hello/debug.keystore'"),
-        "{script}"
-    );
-    assert!(script.contains("apksigner' sign"), "{script}");
+    assert_eq!(action.outputs, vec![".once/out/apps/hello/Hello/Hello.apk"]);
+    assert_eq!(action.argv[0], "/sdk/build-tools/35.0.0/apksigner");
+    assert!(action.argv.contains(&"sign".to_string()));
+    assert!(action
+        .argv
+        .contains(&".once/out/apps/hello/Hello/debug.keystore".to_string()));
     let identity = action.toolchain_identity.as_deref().unwrap();
     assert!(
         identity.contains(

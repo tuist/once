@@ -38,6 +38,13 @@ pub enum Error {
     InvalidPath(#[from] WorkspacePathError),
     #[error("declared output `{path}` was not produced")]
     MissingOutput { path: String },
+    #[error("file action `{action}` failed for `{path}`: {source}")]
+    FileAction {
+        action: &'static str,
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("failed to read declared output `{path}`: {source}")]
     ReadOutput {
         path: String,

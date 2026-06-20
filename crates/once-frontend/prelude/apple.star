@@ -1547,9 +1547,8 @@ def _apple_framework_impl(ctx):
     # the embedding app loads it.
     cs_xcrun, codesign_path, cs_identity, cs_env = _xcrun_codesign(xcode_developer_dir)
     cs_stamp = declare_output(framework_dir + "/_CodeSignature/CodeResources")
-    cs_script = "set -e; " + codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(ctx["build_dir"] + "/" + framework_dir)
     run_action(
-        argv = ["/bin/sh", "-c", cs_script],
+        argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + framework_dir],
         inputs = [dylib, info_plist, modulemap, swiftmodule],
         outputs = [cs_stamp],
         env = cs_env,
@@ -1831,18 +1830,17 @@ def _apple_application_impl(ctx):
         embedded_stamp = declare_output(app_dir + "/Frameworks/" + framework_basename + "/_CodeSignature/CodeResources")
         if embedded_stamp not in embed_outputs:
             embed_outputs.append(embedded_stamp)
-        embed_script = (
-            "set -e; mkdir -p " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks") + "; " +
-            # Remove any prior copy so a re-run starts from a clean
-            # state; codesign --force inside the tree would otherwise
-            # carry stale signatures forward.
-            "rm -rf " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks/" + framework_basename) + "; " +
-            "cp -R " + shell_quote_for_action(framework_path) + " " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks/") + "; " +
-            codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks/" + framework_basename)
-        )
         embed_inputs = list(source_files)
+        embedded_framework_path = ctx["build_dir"] + "/" + app_dir + "/Frameworks/" + framework_basename
+        remove_path(embedded_framework_path, identifier = "apple_application_embed_clean_" + framework_basename)
+        copy_tree(
+            framework_path,
+            embedded_framework_path,
+            inputs = embed_inputs,
+            identifier = "apple_application_embed_copy_" + framework_basename,
+        )
         run_action(
-            argv = ["/bin/sh", "-c", embed_script],
+            argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", embedded_framework_path],
             inputs = embed_inputs,
             outputs = embed_outputs,
             env = cs_env,
@@ -1858,9 +1856,8 @@ def _apple_application_impl(ctx):
     cs_inputs = [executable, info_plist]
     for stamp in embedded_stamps:
         cs_inputs.append(stamp)
-    cs_script = "set -e; " + codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir)
     run_action(
-        argv = ["/bin/sh", "-c", cs_script],
+        argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + app_dir],
         inputs = cs_inputs,
         outputs = [app_cs_stamp],
         env = cs_env,
@@ -2058,9 +2055,8 @@ def _apple_test_bundle_impl(ctx):
         test_cs_stamp = declare_output(bundle_dir + "/Contents/_CodeSignature/CodeResources")
     else:
         test_cs_stamp = declare_output(bundle_dir + "/_CodeSignature/CodeResources")
-    cs_script = "set -e; " + codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(test_bundle_path)
     run_action(
-        argv = ["/bin/sh", "-c", cs_script],
+        argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", test_bundle_path],
         inputs = [test_binary, info_plist],
         outputs = [test_cs_stamp],
         env = cs_env,

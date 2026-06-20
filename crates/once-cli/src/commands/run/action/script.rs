@@ -282,23 +282,23 @@ mod tests {
         std::env::set_var("ONCE_TEST_HOST_SCRIPT_ENV", "present");
 
         let plan = script_action(tmp.path(), &target).unwrap();
-        match plan.action {
-            Action::RunCommand {
-                argv,
-                env,
-                cwd,
-                input_digest,
-                ..
-            } => {
-                assert_eq!(argv, vec!["/bin/sh".to_string(), "build.sh".to_string()]);
-                assert_eq!(cwd.unwrap().as_str(), "pkg/scripts");
-                assert!(input_digest.is_some());
-                assert_eq!(
-                    env.get("ONCE_TEST_HOST_SCRIPT_ENV").map(String::as_str),
-                    Some("present")
-                );
-            }
-        }
+        let Action::RunCommand {
+            argv,
+            env,
+            cwd,
+            input_digest,
+            ..
+        } = plan.action
+        else {
+            panic!("script target should produce a command action");
+        };
+        assert_eq!(argv, vec!["/bin/sh".to_string(), "build.sh".to_string()]);
+        assert_eq!(cwd.unwrap().as_str(), "pkg/scripts");
+        assert!(input_digest.is_some());
+        assert_eq!(
+            env.get("ONCE_TEST_HOST_SCRIPT_ENV").map(String::as_str),
+            Some("present")
+        );
     }
 
     #[test]

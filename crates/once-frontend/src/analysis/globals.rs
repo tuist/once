@@ -3,13 +3,16 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value as JsonValue;
+use sha2::Digest as ShaDigest;
 use starlark::environment::{Globals, GlobalsBuilder};
 use starlark::eval::Evaluator;
 use starlark::starlark_module;
 use starlark::values::none::NoneType;
 use starlark::values::Value;
 
-use super::store::{analysis_active, with_store, with_store_mut, DeclaredAction};
+use super::store::{
+    analysis_active, with_store, with_store_mut, DeclaredAction, DeclaredActionOperation,
+};
 use super::values::{
     json_to_value, toml_value_to_starlark, unpack_byte_list, unpack_string_dict, unpack_string_list,
 };
@@ -105,6 +108,34 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
+    /// Return the SHA-256 digest of one host file as lowercase hex.
+    /// This is for host-specific tool or signing inputs that cannot be
+    /// declared as workspace action inputs.
+    fn host_file_sha256(path: &str) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        file_sha256_hex(Path::new(path)).with_context(|| format!("hashing host file `{path}`"))
+    }
+
+    /// Return whether one host path currently exists as a file.
+    fn host_file_exists(path: &str) -> anyhow::Result<bool> {
+        if !analysis_active() {
+            return Ok(false);
+        }
+        Ok(Path::new(path).is_file())
+    }
+
+    /// Return whether one host file contains `needle` as text.
+    fn host_file_contains(path: &str, needle: &str) -> anyhow::Result<bool> {
+        if !analysis_active() {
+            return Ok(false);
+        }
+        let content =
+            std::fs::read_to_string(path).with_context(|| format!("reading host file `{path}`"))?;
+        Ok(content.contains(needle))
+    }
+
     /// Expand a list of glob patterns against the active target's
     /// package directory. Returns sorted, deduplicated, workspace-
     /// relative file paths. Schema parsing returns an empty list.
@@ -138,41 +169,25 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
-    /// Declare an action that materialises `content` at the workspace-
-    /// relative `path`. The content is hashed into the input digest so
-    /// any edit (including in starlark that produced it) invalidates
-    /// downstream consumers.
-    ///
-    /// Implementation note: the materialisation runs as `/bin/sh -c`
-    /// with the path bound to a shell variable first; the parent
-    /// directory is computed via the POSIX `${var%/*}` parameter
-    /// expansion. Passing `shell_quote(path)` directly inside
-    /// `$(dirname ...)` would re-tokenize the escaped quotes a path
-    /// like `a'b/c.h` ends up with, so binding once and dereferencing
-    /// twice keeps the action robust against single quotes in paths.
+    /// Declare a portable action that materialises `content` at the
+    /// workspace-relative `path`. The content is hashed into the
+    /// action digest so any edit invalidates downstream consumers.
     #[allow(clippy::unnecessary_wraps)]
     fn write_file(path: &str, content: &str) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
         }
-        let script = format!(
-            "set -eu\n\
-             __once_path={path_arg}\n\
-             case \"$__once_path\" in */*) mkdir -p \"${{__once_path%/*}}\" ;; esac\n\
-             printf '%s' {content_arg} > \"$__once_path\"\n",
-            path_arg = shell_quote(path),
-            content_arg = shell_quote(content),
-        );
         let action = DeclaredAction {
-            argv: vec!["/bin/sh".to_string(), "-c".to_string(), script],
+            operation: Some(DeclaredActionOperation::WriteFile {
+                path: path.to_string(),
+                content: content.to_string(),
+            }),
+            argv: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![path.to_string()],
             env: BTreeMap::new(),
             cacheable: true,
-            // Folding the literal content into the toolchain identity
-            // keeps the digest pinned to what the file should contain,
-            // so changing the content alone invalidates the action.
-            toolchain_identity: Some(format!("once.write_file.v1\0{content}")),
+            toolchain_identity: None,
             identifier: Some(format!("write_file:{path}")),
         };
         with_store_mut(|store| {
@@ -183,13 +198,9 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
-    /// Declare an action that materialises raw bytes at `path`.
-    /// `bytes` is a list of integers in `0..=255`. The content is
-    /// base64-encoded into the generated shell command so binary
-    /// payloads (including NULs) survive shell quoting, and is folded
-    /// into the toolchain identity so any change invalidates
-    /// downstream consumers. Domain-specific binary formats
-    /// (header-maps, mach-o, etc.) are constructed in the prelude
+    /// Declare a portable action that materialises raw bytes at
+    /// `path`. `bytes` is a list of integers in `0..=255`.
+    /// Domain-specific binary formats are constructed in the prelude
     /// and emitted through this primitive.
     #[allow(clippy::unnecessary_wraps)]
     fn write_bytes<'v>(path: &str, bytes: Value<'v>) -> anyhow::Result<NoneType> {
@@ -197,23 +208,236 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             return Ok(NoneType);
         }
         let bytes = unpack_byte_list(bytes, "bytes")?;
-        let encoded = base64_encode(&bytes);
-        let script = format!(
-            "set -eu\n\
-             __once_path={path_arg}\n\
-             case \"$__once_path\" in */*) mkdir -p \"${{__once_path%/*}}\" ;; esac\n\
-             printf '%s' {encoded_arg} | base64 -d > \"$__once_path\"\n",
-            path_arg = shell_quote(path),
-            encoded_arg = shell_quote(&encoded),
-        );
         let action = DeclaredAction {
-            argv: vec!["/bin/sh".to_string(), "-c".to_string(), script],
+            operation: Some(DeclaredActionOperation::WriteBytes {
+                path: path.to_string(),
+                bytes,
+            }),
+            argv: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![path.to_string()],
             env: BTreeMap::new(),
             cacheable: true,
-            toolchain_identity: Some(format!("once.write_bytes.v1\0{encoded}")),
+            toolchain_identity: None,
             identifier: Some(format!("write_bytes:{path}")),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
+    /// Declare a portable action that copies one file. `inputs`
+    /// should include `source` when it is a workspace source file.
+    /// Generated outputs from previous actions are already covered by
+    /// same-target action dependencies.
+    fn copy_file<'v>(
+        source: &str,
+        destination: &str,
+        inputs: Option<Value<'v>>,
+        toolchain_identity: Option<String>,
+        identifier: Option<String>,
+        cacheable: Option<bool>,
+    ) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let inputs = inputs
+            .map(|value| unpack_string_list(value, "inputs"))
+            .transpose()?
+            .unwrap_or_default();
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::CopyFile {
+                source: source.to_string(),
+                destination: destination.to_string(),
+            }),
+            argv: Vec::new(),
+            inputs,
+            outputs: vec![destination.to_string()],
+            env: BTreeMap::new(),
+            cacheable: cacheable.unwrap_or(true),
+            toolchain_identity,
+            identifier: Some(identifier.unwrap_or_else(|| format!("copy_file:{destination}"))),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
+    /// Declare a portable action that copies the contents of a source
+    /// directory into a destination directory. `inputs` should list
+    /// source files when the source tree is not produced by an earlier
+    /// action or dependency.
+    fn copy_tree<'v>(
+        source: &str,
+        destination: &str,
+        inputs: Option<Value<'v>>,
+        toolchain_identity: Option<String>,
+        identifier: Option<String>,
+        cacheable: Option<bool>,
+    ) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let inputs = inputs
+            .map(|value| unpack_string_list(value, "inputs"))
+            .transpose()?
+            .unwrap_or_default();
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::CopyTree {
+                sources: vec![source.to_string()],
+                destination: destination.to_string(),
+            }),
+            argv: Vec::new(),
+            inputs,
+            outputs: vec![destination.to_string()],
+            env: BTreeMap::new(),
+            cacheable: cacheable.unwrap_or(true),
+            toolchain_identity,
+            identifier: Some(identifier.unwrap_or_else(|| format!("copy_tree:{destination}"))),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
+    /// Declare a portable action that copies the contents of several
+    /// source directories into one destination directory.
+    fn copy_trees<'v>(
+        sources: Value<'v>,
+        destination: &str,
+        inputs: Option<Value<'v>>,
+        toolchain_identity: Option<String>,
+        identifier: Option<String>,
+        cacheable: Option<bool>,
+    ) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let sources = unpack_string_list(sources, "sources")?;
+        let inputs = inputs
+            .map(|value| unpack_string_list(value, "inputs"))
+            .transpose()?
+            .unwrap_or_default();
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::CopyTree {
+                sources,
+                destination: destination.to_string(),
+            }),
+            argv: Vec::new(),
+            inputs,
+            outputs: vec![destination.to_string()],
+            env: BTreeMap::new(),
+            cacheable: cacheable.unwrap_or(true),
+            toolchain_identity,
+            identifier: Some(identifier.unwrap_or_else(|| format!("copy_tree:{destination}"))),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
+    /// Declare an uncached portable action that removes a workspace
+    /// path if it exists. Use this before native tools that merge into
+    /// existing output directories.
+    #[allow(clippy::unnecessary_wraps)]
+    fn remove_path(path: &str, identifier: Option<String>) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::RemovePath {
+                path: path.to_string(),
+            }),
+            argv: Vec::new(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            env: BTreeMap::new(),
+            cacheable: false,
+            toolchain_identity: None,
+            identifier: Some(identifier.unwrap_or_else(|| format!("remove_path:{path}"))),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
+    /// Declare an uncached portable action that creates a workspace
+    /// directory and any missing parents.
+    #[allow(clippy::unnecessary_wraps)]
+    fn ensure_dir(path: &str, identifier: Option<String>) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::EnsureDir {
+                path: path.to_string(),
+            }),
+            argv: Vec::new(),
+            inputs: Vec::new(),
+            outputs: vec![path.to_string()],
+            env: BTreeMap::new(),
+            cacheable: false,
+            toolchain_identity: None,
+            identifier: Some(identifier.unwrap_or_else(|| format!("ensure_dir:{path}"))),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
+    /// Declare a portable action that writes a deterministic digest
+    /// listing for a workspace tree. Missing roots produce an empty
+    /// file. `include_suffixes` filters files by path suffix when set.
+    fn write_tree_digest<'v>(
+        root: &str,
+        output: &str,
+        include_suffixes: Option<Value<'v>>,
+        inputs: Option<Value<'v>>,
+        identifier: Option<String>,
+        cacheable: Option<bool>,
+    ) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let include_suffixes = include_suffixes
+            .map(|value| unpack_string_list(value, "include_suffixes"))
+            .transpose()?
+            .unwrap_or_default();
+        let inputs = inputs
+            .map(|value| unpack_string_list(value, "inputs"))
+            .transpose()?
+            .unwrap_or_default();
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::WriteTreeDigest {
+                root: root.to_string(),
+                output: output.to_string(),
+                include_suffixes,
+            }),
+            argv: Vec::new(),
+            inputs,
+            outputs: vec![output.to_string()],
+            env: BTreeMap::new(),
+            cacheable: cacheable.unwrap_or(true),
+            toolchain_identity: None,
+            identifier: Some(identifier.unwrap_or_else(|| format!("write_tree_digest:{output}"))),
         };
         with_store_mut(|store| {
             if let Some(store) = store {
@@ -253,6 +477,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .transpose()?
             .unwrap_or_default();
         let action = DeclaredAction {
+            operation: None,
             argv,
             inputs,
             outputs,
@@ -286,46 +511,29 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     }
 }
 
-pub(super) fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
+fn file_sha256_hex(path: &Path) -> Result<String> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
     }
-    let escaped = value.replace('\'', "'\"'\"'");
-    format!("'{escaped}'")
+    Ok(hex_lower(&hasher.finalize()))
 }
 
-/// Standard base64 alphabet encoder. The output is consumed by
-/// `base64 -d` in a generated shell script, so we need round-tripping
-/// fidelity, not a fancy MIME-line-wrapped form.
-pub(super) fn base64_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    let mut chunks = bytes.chunks_exact(3);
-    for chunk in &mut chunks {
-        let bits = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
-        out.push(ALPHABET[((bits >> 18) & 0x3F) as usize] as char);
-        out.push(ALPHABET[((bits >> 12) & 0x3F) as usize] as char);
-        out.push(ALPHABET[((bits >> 6) & 0x3F) as usize] as char);
-        out.push(ALPHABET[(bits & 0x3F) as usize] as char);
-    }
-    let remainder = chunks.remainder();
-    match remainder.len() {
-        0 => {}
-        1 => {
-            let bits = u32::from(remainder[0]) << 16;
-            out.push(ALPHABET[((bits >> 18) & 0x3F) as usize] as char);
-            out.push(ALPHABET[((bits >> 12) & 0x3F) as usize] as char);
-            out.push('=');
-            out.push('=');
-        }
-        2 => {
-            let bits = (u32::from(remainder[0]) << 16) | (u32::from(remainder[1]) << 8);
-            out.push(ALPHABET[((bits >> 18) & 0x3F) as usize] as char);
-            out.push(ALPHABET[((bits >> 12) & 0x3F) as usize] as char);
-            out.push(ALPHABET[((bits >> 6) & 0x3F) as usize] as char);
-            out.push('=');
-        }
-        _ => unreachable!(),
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
 }

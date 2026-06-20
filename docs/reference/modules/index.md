@@ -27,10 +27,10 @@ symbol name becomes the target kind unless the target kind explicitly sets
 def _copy_impl(ctx):
     out = declare_output("copied.txt")
     srcs = glob(ctx["srcs"])
-    run_action(
-        argv = [host_which("cp"), srcs[0], out],
+    copy_file(
+        srcs[0],
+        out,
         inputs = srcs,
-        outputs = [out],
         identifier = ctx["label"]["id"] + ":copy",
     )
     return {
@@ -38,7 +38,7 @@ def _copy_impl(ctx):
         "copied_file": out,
     }
 
-copy_file = target_kind(
+copy_generated = target_kind(
     docs = "Copy one declared source file into the target output directory.",
     attrs = [],
     providers = ["copied_file"],
@@ -183,6 +183,11 @@ The Rust executor exposes generic primitives only:
 - `host_command(argv, env = {})` runs a discovery command and returns
   stdout. Arguments and env values participate in the command-scoped
   cache key.
+- `host_file_exists(path)` checks whether a host path is currently a
+  file.
+- `host_file_sha256(path)` returns a host file's SHA-256 digest as
+  lowercase hex.
+- `host_file_contains(path, needle)` checks host file text content.
 - `glob(patterns)` expands patterns under the active package and returns
   sorted workspace-relative file paths.
 - `declare_output(name)` reserves an output under the target build
@@ -190,6 +195,15 @@ The Rust executor exposes generic primitives only:
 - `run_action(...)` records a command action for the executor.
 - `write_file(path, content)` and `write_bytes(path, bytes)` materialize
   generated files through normal actions.
+- `copy_file(source, destination, inputs = [])` copies one workspace
+  file through a portable Rust action.
+- `copy_tree(source, destination, inputs = [])` and
+  `copy_trees(sources, destination, inputs = [])` copy directory
+  contents through portable Rust actions.
+- `remove_path(path)` and `ensure_dir(path)` declare uncached portable
+  cleanup/setup actions for workspace paths.
+- `write_tree_digest(root, output, include_suffixes = [])` writes a
+  deterministic digest listing for a workspace tree.
 - `toml_decode(src)` and `json_decode(src)` decode data into Starlark
   values.
 

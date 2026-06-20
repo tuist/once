@@ -7,9 +7,45 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// A single command declared by a target kind impl through `run_action`.
+/// A portable filesystem operation declared by a target kind impl.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DeclaredActionOperation {
+    WriteFile {
+        path: String,
+        content: String,
+    },
+    WriteBytes {
+        path: String,
+        bytes: Vec<u8>,
+    },
+    CopyFile {
+        source: String,
+        destination: String,
+    },
+    CopyTree {
+        sources: Vec<String>,
+        destination: String,
+    },
+    RemovePath {
+        path: String,
+    },
+    EnsureDir {
+        path: String,
+    },
+    WriteTreeDigest {
+        root: String,
+        output: String,
+        include_suffixes: Vec<String>,
+    },
+}
+
+/// A single action declared by a target kind impl.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DeclaredAction {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<DeclaredActionOperation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,

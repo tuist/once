@@ -1,4 +1,4 @@
-use super::globals::{base64_encode, expand_globs, shell_quote};
+use super::globals::expand_globs;
 use super::store::HostCache;
 use super::*;
 use crate::graph::GraphTarget;
@@ -210,25 +210,7 @@ fn host_command_cache_keys_on_env() {
 }
 
 #[test]
-fn shell_quote_handles_empty_strings_quotes_and_specials() {
-    assert_eq!(shell_quote(""), "''");
-    // No special characters: single-quote wrap with no escapes.
-    assert_eq!(shell_quote("abc"), "'abc'");
-    // Single quote in the middle uses the close/escape/reopen form
-    // so the resulting word still expands to a single token.
-    assert_eq!(shell_quote("a'b"), "'a'\"'\"'b'");
-    // Backslashes, dollar signs, double quotes are inert inside the
-    // single-quoted POSIX form, so they pass through verbatim.
-    assert_eq!(shell_quote("$x \\n \"y\""), "'$x \\n \"y\"'");
-}
-
-/// [`write_file`] declares an action whose argv is
-/// `["/bin/sh", "-c", script]`. The script must (a) bind the path
-/// before computing its parent directory, (b) include the content
-/// as the only `printf` argument, and (c) declare the path as the
-/// only output.
-#[test]
-fn write_file_records_an_action_with_path_binding_and_content() {
+fn write_file_records_portable_operation() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "apps/ios/Mixed");
     let (store, ()) = with_active_store(store, || {
@@ -240,64 +222,18 @@ fn write_file_records_an_action_with_path_binding_and_content() {
         action.outputs,
         vec![".once/out/apps/ios/Mixed/module.modulemap".to_string()]
     );
-    assert_eq!(action.argv[0], "/bin/sh");
-    assert_eq!(action.argv[1], "-c");
-    let script = &action.argv[2];
-    assert!(script.contains("__once_path="), "{script}");
-    assert!(
-        script.contains("printf '%s' 'module Mixed { export * }"),
-        "{script}"
+    assert!(action.argv.is_empty());
+    assert_eq!(
+        action.operation,
+        Some(DeclaredActionOperation::WriteFile {
+            path: ".once/out/apps/ios/Mixed/module.modulemap".to_string(),
+            content: "module Mixed { export * }\n".to_string(),
+        })
     );
-    assert!(script.contains("> \"$__once_path\""), "{script}");
-    // The path is referenced via the binding, never inlined into
-    // the dirname call, so single quotes in the path can't escape
-    // the substitution.
-    assert!(!script.contains("$(dirname"), "{script}");
 }
 
-/// The end-to-end script the action declares must actually run and
-/// produce the file on a real shell. This catches scripting bugs
-/// that the structural assertions above would miss.
-#[cfg(unix)]
 #[test]
-fn write_file_script_actually_creates_the_file() {
-    let tmp = TempDir::new().unwrap();
-    let nested = tmp.path().join("nested/dir/holds/output.txt");
-    // Use a path with a single quote in a parent dir to lock in
-    // the fix from the review thread: the script must survive
-    // quotes inside `__once_path` without re-tokenising.
-    let quoted = tmp.path().join("a'b").join("out.txt");
-    let store = AnalysisStore::new(tmp.path().to_path_buf(), String::new(), String::new());
-    let (store, ()) = with_active_store(store, || {
-        run(&format!(
-            r#"write_file({nested:?}, "hello\n")
-write_file({quoted:?}, "quoted\n")
-"#,
-            nested = nested.display().to_string(),
-            quoted = quoted.display().to_string(),
-        ))
-        .unwrap();
-    });
-    assert_eq!(store.actions.len(), 2);
-    for action in &store.actions {
-        let status = std::process::Command::new(&action.argv[0])
-            .arg(&action.argv[1])
-            .arg(&action.argv[2])
-            .status()
-            .expect("script should spawn");
-        assert!(status.success(), "script failed: {:?}", action.argv);
-    }
-    assert_eq!(std::fs::read_to_string(&nested).unwrap(), "hello\n");
-    assert_eq!(std::fs::read_to_string(&quoted).unwrap(), "quoted\n");
-}
-
-/// `write_bytes` should accept a list of 0..=255 integers, encode
-/// them as base64 in the generated shell script, fold the encoded
-/// bytes into the toolchain identity, and declare the path as its
-/// only output. The primitive is intentionally domain-agnostic;
-/// callers compose arbitrary binary formats in the prelude.
-#[test]
-fn write_bytes_records_action_with_base64_payload() {
+fn write_bytes_records_portable_operation() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "p");
     let (store, ()) = with_active_store(store, || {
@@ -306,45 +242,71 @@ fn write_bytes_records_action_with_base64_payload() {
     assert_eq!(store.actions.len(), 1);
     let action = &store.actions[0];
     assert_eq!(action.outputs, vec![".once/out/p/blob.bin".to_string()]);
-    assert_eq!(action.argv[0], "/bin/sh");
-    let script = &action.argv[2];
-    assert!(script.contains("base64 -d"), "{script}");
-    assert!(
-        action
-            .toolchain_identity
-            .as_deref()
-            .is_some_and(|id| id.starts_with("once.write_bytes.v1\0")),
-        "{:?}",
-        action.toolchain_identity
+    assert!(action.argv.is_empty());
+    assert_eq!(
+        action.operation,
+        Some(DeclaredActionOperation::WriteBytes {
+            path: ".once/out/p/blob.bin".to_string(),
+            bytes: vec![0, 1, 2, 254, 255],
+        })
     );
 }
 
-/// The shell script the action declares must run end-to-end and
-/// reproduce the exact byte sequence on disk, NULs and 0xFF
-/// inclusive. Round-tripping through base64 + `base64 -d` is the
-/// part of `write_bytes` that domain-specific callers depend on.
-#[cfg(unix)]
 #[test]
-fn write_bytes_script_reproduces_exact_byte_sequence() {
+fn file_action_globals_record_portable_operations() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("blob.bin");
-    let store = AnalysisStore::new(tmp.path().to_path_buf(), String::new(), String::new());
+    let store = store_for(tmp.path(), "p");
     let (store, ()) = with_active_store(store, || {
-        run(&format!(
-            r"write_bytes({path:?}, [0, 1, 2, 255, 0, 128, 64])",
-            path = out.display().to_string(),
-        ))
+        run(
+            r#"
+copy_file("src/a.txt", ".once/out/p/a.txt", inputs = ["src/a.txt"], identifier = "copy-a")
+copy_trees(["src/res", "src/assets"], ".once/out/p/staged", inputs = ["src/res/v.txt", "src/assets/a.txt"])
+remove_path(".once/out/p/staged", identifier = "clean-staged")
+ensure_dir(".once/out/p/staged")
+write_tree_digest(".once/out/p/staged", ".once/out/p/staged.sha256", include_suffixes = [".txt"])
+"#,
+        )
         .unwrap();
     });
-    let action = &store.actions[0];
-    let status = std::process::Command::new(&action.argv[0])
-        .arg(&action.argv[1])
-        .arg(&action.argv[2])
-        .status()
-        .expect("script should spawn");
-    assert!(status.success(), "script failed: {:?}", action.argv);
-    let bytes = std::fs::read(&out).unwrap();
-    assert_eq!(bytes, vec![0, 1, 2, 255, 0, 128, 64]);
+
+    assert_eq!(store.actions.len(), 5);
+    assert_eq!(
+        store.actions[0].operation,
+        Some(DeclaredActionOperation::CopyFile {
+            source: "src/a.txt".to_string(),
+            destination: ".once/out/p/a.txt".to_string(),
+        })
+    );
+    assert_eq!(store.actions[0].identifier.as_deref(), Some("copy-a"));
+    assert_eq!(
+        store.actions[1].operation,
+        Some(DeclaredActionOperation::CopyTree {
+            sources: vec!["src/res".to_string(), "src/assets".to_string()],
+            destination: ".once/out/p/staged".to_string(),
+        })
+    );
+    assert_eq!(
+        store.actions[2].operation,
+        Some(DeclaredActionOperation::RemovePath {
+            path: ".once/out/p/staged".to_string(),
+        })
+    );
+    assert!(!store.actions[2].cacheable);
+    assert_eq!(
+        store.actions[3].operation,
+        Some(DeclaredActionOperation::EnsureDir {
+            path: ".once/out/p/staged".to_string(),
+        })
+    );
+    assert!(!store.actions[3].cacheable);
+    assert_eq!(
+        store.actions[4].operation,
+        Some(DeclaredActionOperation::WriteTreeDigest {
+            root: ".once/out/p/staged".to_string(),
+            output: ".once/out/p/staged.sha256".to_string(),
+            include_suffixes: vec![".txt".to_string()],
+        })
+    );
 }
 
 #[test]
@@ -356,17 +318,6 @@ fn write_bytes_rejects_out_of_range_integers() {
     });
     let message = format!("{err:?}");
     assert!(message.contains("0..=255"), "{message}");
-}
-
-#[test]
-fn base64_encode_round_trips_for_short_inputs() {
-    assert_eq!(base64_encode(b""), "");
-    assert_eq!(base64_encode(b"f"), "Zg==");
-    assert_eq!(base64_encode(b"fo"), "Zm8=");
-    assert_eq!(base64_encode(b"foo"), "Zm9v");
-    assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
-    assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
-    assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
 }
 
 #[test]

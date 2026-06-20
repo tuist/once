@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use once_cas::Digest;
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,10 @@ use crate::{ResourceRequest, WorkspacePath};
 /// that should invalidate the cache. Older action result JSON still
 /// deserializes through serde defaults; the domain only partitions new
 /// action lookups.
-pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v4\0";
+pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v5\0";
+
+static DEFAULT_RESOURCE_REQUEST: LazyLock<ResourceRequest> =
+    LazyLock::new(ResourceRequest::default);
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -77,6 +81,48 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         remote: Option<RemoteExecution>,
     },
+    WriteFile {
+        path: WorkspacePath,
+        content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
+    WriteBytes {
+        path: WorkspacePath,
+        bytes: Vec<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
+    CopyFile {
+        source: WorkspacePath,
+        destination: WorkspacePath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
+    CopyTree {
+        sources: Vec<WorkspacePath>,
+        destination: WorkspacePath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
+    RemovePath {
+        path: WorkspacePath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
+    EnsureDir {
+        path: WorkspacePath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
+    WriteTreeDigest {
+        root: WorkspacePath,
+        output: WorkspacePath,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        include_suffixes: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
 }
 
 impl Action {
@@ -96,12 +142,26 @@ impl Action {
     pub fn resource_request(&self) -> &ResourceRequest {
         match self {
             Action::RunCommand { resources, .. } => resources,
+            Action::WriteFile { .. }
+            | Action::WriteBytes { .. }
+            | Action::CopyFile { .. }
+            | Action::CopyTree { .. }
+            | Action::RemovePath { .. }
+            | Action::EnsureDir { .. }
+            | Action::WriteTreeDigest { .. } => &DEFAULT_RESOURCE_REQUEST,
         }
     }
 
     pub fn input_digest(&self) -> Option<Digest> {
         match self {
             Action::RunCommand { input_digest, .. } => *input_digest,
+            Action::WriteFile { input_digest, .. }
+            | Action::WriteBytes { input_digest, .. }
+            | Action::CopyFile { input_digest, .. }
+            | Action::CopyTree { input_digest, .. }
+            | Action::RemovePath { input_digest, .. }
+            | Action::EnsureDir { input_digest, .. }
+            | Action::WriteTreeDigest { input_digest, .. } => *input_digest,
         }
     }
 }

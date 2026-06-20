@@ -11,7 +11,7 @@ use once_core::{
     Action, EvidenceCacheState, EvidenceSubject, InputDigestBuilder, OutputSymlinkMode,
     ResourceRequest, RunOpts, WorkspacePath,
 };
-use once_frontend::analysis::{AnalysisResult, DeclaredAction};
+use once_frontend::analysis::{AnalysisResult, DeclaredAction, DeclaredActionOperation};
 use once_frontend::GraphTarget;
 use tokio::process::Command;
 
@@ -450,6 +450,17 @@ async fn run_uncached_action(
             }
             Ok(result)
         }
+        Action::WriteFile { .. }
+        | Action::WriteBytes { .. }
+        | Action::CopyFile { .. }
+        | Action::CopyTree { .. }
+        | Action::RemovePath { .. }
+        | Action::EnsureDir { .. }
+        | Action::WriteTreeDigest { .. } => {
+            once_core::run_uncached(action, workspace, cache, false)
+                .await
+                .map_err(Into::into)
+        }
     }
 }
 
@@ -613,18 +624,82 @@ fn declared_to_action(
         })
         .collect::<Result<Vec<_>>>()?;
     ensure_output_parent_dirs(workspace, &outputs)?;
-    let DeclaredAction { argv, env, .. } = declared;
-    Ok(Action::RunCommand {
+    let DeclaredAction {
+        operation,
         argv,
         env,
-        cwd: None,
-        input_digest: Some(input_digest),
-        outputs,
-        output_symlink_mode: OutputSymlinkMode::default(),
-        resources: ResourceRequest::default(),
-        timeout_ms: None,
-        remote: None,
+        ..
+    } = declared;
+    match operation {
+        None => Ok(Action::RunCommand {
+            argv,
+            env,
+            cwd: None,
+            input_digest: Some(input_digest),
+            outputs,
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: None,
+        }),
+        Some(operation) => operation_to_action(operation, input_digest),
+    }
+}
+
+fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest) -> Result<Action> {
+    Ok(match operation {
+        DeclaredActionOperation::WriteFile { path, content } => Action::WriteFile {
+            path: workspace_path(&path, "write_file path")?,
+            content,
+            input_digest: Some(input_digest),
+        },
+        DeclaredActionOperation::WriteBytes { path, bytes } => Action::WriteBytes {
+            path: workspace_path(&path, "write_bytes path")?,
+            bytes,
+            input_digest: Some(input_digest),
+        },
+        DeclaredActionOperation::CopyFile {
+            source,
+            destination,
+        } => Action::CopyFile {
+            source: workspace_path(&source, "copy_file source")?,
+            destination: workspace_path(&destination, "copy_file destination")?,
+            input_digest: Some(input_digest),
+        },
+        DeclaredActionOperation::CopyTree {
+            sources,
+            destination,
+        } => Action::CopyTree {
+            sources: sources
+                .iter()
+                .map(|source| workspace_path(source, "copy_tree source"))
+                .collect::<Result<Vec<_>>>()?,
+            destination: workspace_path(&destination, "copy_tree destination")?,
+            input_digest: Some(input_digest),
+        },
+        DeclaredActionOperation::RemovePath { path } => Action::RemovePath {
+            path: workspace_path(&path, "remove_path path")?,
+            input_digest: Some(input_digest),
+        },
+        DeclaredActionOperation::EnsureDir { path } => Action::EnsureDir {
+            path: workspace_path(&path, "ensure_dir path")?,
+            input_digest: Some(input_digest),
+        },
+        DeclaredActionOperation::WriteTreeDigest {
+            root,
+            output,
+            include_suffixes,
+        } => Action::WriteTreeDigest {
+            root: workspace_path(&root, "write_tree_digest root")?,
+            output: workspace_path(&output, "write_tree_digest output")?,
+            include_suffixes,
+            input_digest: Some(input_digest),
+        },
     })
+}
+
+fn workspace_path(path: &str, context: &str) -> Result<WorkspacePath> {
+    WorkspacePath::try_from(path).with_context(|| format!("invalid {context} `{path}`"))
 }
 
 fn ensure_output_parent_dirs(workspace: &Path, outputs: &[WorkspacePath]) -> Result<()> {
@@ -654,6 +729,11 @@ fn compose_input_digest(
     }
     if let Some(identifier) = &declared.identifier {
         builder.push_bytes(identifier.as_bytes());
+    }
+    if let Some(operation) = &declared.operation {
+        let encoded =
+            serde_json::to_vec(operation).context("serializing declared action operation")?;
+        builder.push_bytes(&encoded);
     }
     for arg in &declared.argv {
         builder.push_bytes(arg.as_bytes());
@@ -700,6 +780,7 @@ mod tests {
     fn declared_action_uses_direct_argv_and_creates_output_parents() {
         let workspace = tempfile::tempdir().unwrap();
         let declared = DeclaredAction {
+            operation: None,
             argv: vec!["tool".to_string(), "--version".to_string()],
             inputs: Vec::new(),
             outputs: vec![
@@ -716,7 +797,9 @@ mod tests {
 
         assert!(workspace.path().join(".once/out/x").is_dir());
         assert!(workspace.path().join(".once/out/x/sub").is_dir());
-        let Action::RunCommand { argv, .. } = action;
+        let Action::RunCommand { argv, .. } = action else {
+            panic!("command declaration should lower to RunCommand");
+        };
         assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
     }
 
@@ -945,6 +1028,7 @@ mod tests {
         };
         let analysis = AnalysisResult {
             actions: vec![DeclaredAction {
+                operation: None,
                 argv: vec![
                     "/bin/sh".to_string(),
                     "-c".to_string(),
@@ -1012,6 +1096,7 @@ mod tests {
             diagnostics: Vec::new(),
         };
         let action = |name: &str| DeclaredAction {
+            operation: None,
             argv: vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
@@ -1096,6 +1181,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
+            operation: None,
             argv: vec!["tool".to_string()],
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
@@ -1118,6 +1204,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
+            operation: None,
             argv: vec!["tool".to_string()],
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
@@ -1149,6 +1236,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
+            operation: None,
             argv: vec!["tool".to_string()],
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],

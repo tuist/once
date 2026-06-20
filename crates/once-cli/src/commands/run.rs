@@ -142,11 +142,13 @@ fn set_remote(action: &mut Action, provider: &str) {
                 provider: provider.to_string(),
             });
         }
+        _ => {}
     }
 }
 
 fn action_remote(action: &Action) -> Option<&RemoteExecution> {
     match action {
         Action::RunCommand { remote, .. } => remote.as_ref(),
+        _ => None,
     }
 }
