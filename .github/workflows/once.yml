@@ -264,22 +264,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          dump_rustc_feature_response_files() {
-            if [ ! -d .once/out ]; then
-              return 0
-            fi
-            local printed=0
-            while IFS= read -r file; do
-              printf '::group::%s\n' "$file"
-              sed -n '1,20p' "$file"
-              printf '::endgroup::\n'
-              printed=$((printed + 1))
-              if [ "$printed" -ge 5 ]; then
-                break
-              fi
-            done < <(find .once/out -path '*/rustc-features.rsp' -print | sort)
-          }
-
           once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
           target="x86_64-pc-windows-msvc"
           suffix="$(printf '%s' "${target}" | tr '.-' '__')"
@@ -287,10 +271,7 @@ jobs:
           trap './mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true' EXIT
           ./mise/tasks/release/prepare-rust-graph-deps.sh --target "${target}"
           ./mise/tasks/release/write-rust-release-manifests.sh --target "${target}" --version 0.0.0
-          if ! "${once_bin}" build "${target_id}" --format json --quiet; then
-            dump_rustc_feature_response_files
-            exit 1
-          fi
+          "${once_bin}" build "${target_id}" --format json --quiet
           test -f ".once/out/${target_id}/once.exe"
 
   windows-cas-test:
