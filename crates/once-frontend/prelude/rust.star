@@ -206,13 +206,17 @@ def _rust_response_file(ctx, name, content):
     write_path(path, content)
     return path
 
+def _rust_response_file_arg(arg):
+    return arg.replace("\"", "\\\"")
+
 def _rust_feature_args(ctx):
     flags = _rust_feature_flags(ctx)
     if not flags:
         return ([], [])
     if host_os() != "windows":
         return (flags, [])
-    path = _rust_response_file(ctx, "rustc-features.rsp", "\n".join(flags) + "\n")
+    content = "\n".join([_rust_response_file_arg(flag) for flag in flags]) + "\n"
+    path = _rust_response_file(ctx, "rustc-features.rsp", content)
     return (["@" + path], [path])
 
 def _rust_user_flags(ctx):
