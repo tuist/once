@@ -37,6 +37,13 @@ sdk_frameworks = ["UIKit"]
 Dependency references are root-relative by default. `./` and `../`
 references resolve from the package that owns the manifest.
 
+Apple targets can also depend on native providers from other ecosystems.
+[`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework)
+emits an Apple framework provider that application and test targets can
+link and embed. [`rust_library`](/reference/prelude/rust_library) with
+`crate_type = "staticlib"` emits archive fields that Apple link targets
+consume through the same `deps` edge.
+
 ## Commands
 
 Inspect the graph with [`once query`](/reference/cli/query):

@@ -1,0 +1,10 @@
+[[target]]
+name = "SharedKotlin"
+kind = "kotlin_apple_framework"
+srcs = ["Sources/**/*.kt"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+arch = "arm64"
+module_name = "SharedKotlin"

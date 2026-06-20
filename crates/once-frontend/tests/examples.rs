@@ -9,6 +9,7 @@
 //! intentional follow-up work; it needs an Apple toolchain in the test
 //! environment and a configured cache provider.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -130,6 +131,85 @@ fn every_impl_backed_target_kind_has_a_schema_example() {
             );
         }
     }
+}
+
+#[test]
+fn native_mobile_shared_code_example_wires_cross_platform_apps() {
+    let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
+    for kind in [
+        "swift_android_library",
+        "kotlin_apple_framework",
+        "rust_library",
+        "android_binary",
+        "apple_application",
+    ] {
+        let schema = schemas
+            .iter()
+            .find(|schema| schema.kind == kind)
+            .unwrap_or_else(|| panic!("missing `{kind}` schema"));
+        assert!(
+            schema
+                .examples
+                .iter()
+                .any(|example| example.slug == "native-mobile-shared-code-e2e"),
+            "`{kind}` should expose the composed shared-code example"
+        );
+    }
+
+    let swift_schema = schemas
+        .iter()
+        .find(|schema| schema.kind == "swift_android_library")
+        .expect("swift_android_library schema");
+    let bundle = load_target_kind_example(swift_schema, "native-mobile-shared-code-e2e")
+        .expect("native mobile example materializes");
+    let tmp = TempDir::new().expect("tempdir");
+    materialize(tmp.path(), &bundle);
+    let graph = once_frontend::load_graph_workspace(tmp.path()).expect("example graph loads");
+    let by_id = graph
+        .iter()
+        .map(|target| (target.label.id.as_str(), target))
+        .collect::<BTreeMap<_, _>>();
+
+    let android_app = by_id.get("AndroidApp").expect("AndroidApp target");
+    assert_eq!(android_app.kind, "android_binary");
+    assert_eq!(
+        android_app.deps,
+        vec![
+            "SharedSwiftAndroid".to_string(),
+            "SharedRustAndroid".to_string()
+        ]
+    );
+
+    let apple_app = by_id.get("AppleApp").expect("AppleApp target");
+    assert_eq!(apple_app.kind, "apple_application");
+    assert_eq!(
+        apple_app.deps,
+        vec![
+            "SharedKotlinApple".to_string(),
+            "SharedRustApple".to_string()
+        ]
+    );
+
+    assert!(by_id
+        .get("SharedSwiftAndroid")
+        .expect("SharedSwiftAndroid target")
+        .providers
+        .contains(&"android_native_library".to_string()));
+    assert!(by_id
+        .get("SharedRustAndroid")
+        .expect("SharedRustAndroid target")
+        .providers
+        .contains(&"android_native_library".to_string()));
+    assert!(by_id
+        .get("SharedKotlinApple")
+        .expect("SharedKotlinApple target")
+        .providers
+        .contains(&"apple_framework".to_string()));
+    assert!(by_id
+        .get("SharedRustApple")
+        .expect("SharedRustApple target")
+        .providers
+        .contains(&"apple_linkable".to_string()));
 }
 
 fn materialize(root: &Path, example: &once_frontend::TargetKindExampleBundle) {

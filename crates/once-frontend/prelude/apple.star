@@ -1822,6 +1822,9 @@ def _apple_application_impl(ctx):
         framework_prefix = framework_path + "/"
         embed_outputs = []
         for source in source_files:
+            if source == framework_path:
+                embed_outputs.append(declare_output(app_dir + "/Frameworks/" + framework_basename))
+                continue
             if source.startswith(framework_prefix):
                 rel = source[len(framework_prefix):]
                 embed_outputs.append(declare_output(app_dir + "/Frameworks/" + framework_basename + "/" + rel))
@@ -2198,7 +2201,7 @@ apple_library = target_kind(
         attr("enable_modules", "bool", default = "false", docs = "Emit a `module.modulemap` for `exported_headers` and pass `-fmodules` to Clang so consumers can `import` the module instead of #importing each header"),
     ],
     deps = [
-        dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin"], "Libraries, frameworks, resources, or Swift compiler plugins consumed by this library"),
+        dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin", "native_linkable"], "Libraries, frameworks, resources, native linkables, or Swift compiler plugins consumed by this library"),
     ],
     providers = ["apple_linkable", "apple_module"],
     capabilities = [
@@ -2242,7 +2245,7 @@ apple_framework = target_kind(
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
     ],
     deps = [
-        dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin"], "Libraries, resources, or Swift compiler plugins linked or embedded by the framework"),
+        dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin", "native_linkable"], "Libraries, resources, native linkables, or Swift compiler plugins linked or embedded by the framework"),
     ],
     providers = ["apple_linkable", "apple_framework", "apple_bundle"],
     capabilities = [
@@ -2284,7 +2287,7 @@ apple_application = target_kind(
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
     ],
     deps = [
-        dep("deps", ["apple_linkable", "apple_framework", "apple_resource", "apple_swift_plugin"], "Libraries, frameworks, resources, and Swift compiler plugins embedded in the app"),
+        dep("deps", ["apple_linkable", "apple_framework", "apple_resource", "apple_swift_plugin", "native_linkable"], "Libraries, frameworks, resources, native linkables, and Swift compiler plugins embedded in the app"),
     ],
     providers = ["apple_application", "apple_bundle"],
     capabilities = [
@@ -2296,6 +2299,11 @@ apple_application = target_kind(
             "apple-application-minimal",
             name = "Minimal iOS application",
             use_when = "You want the smallest viable iOS app target wired into a Once workspace.",
+        ),
+        example(
+            "native-mobile-shared-code-e2e",
+            name = "Apple app with shared native code",
+            use_when = "Use this when an Apple app should embed a Kotlin/Native framework and link a Rust static library.",
         ),
     ],
 )
@@ -2323,7 +2331,7 @@ apple_test_bundle = target_kind(
         attr("labels", "list<string>", default = "[]", docs = "Agent-readable labels used for filtering or policy"),
     ],
     deps = [
-        dep("deps", ["apple_linkable", "apple_application", "apple_swift_plugin"], "Code under test, optional host application, and Swift compiler plugins"),
+        dep("deps", ["apple_linkable", "apple_application", "apple_swift_plugin", "native_linkable"], "Code under test, optional host application, native linkables, and Swift compiler plugins"),
     ],
     providers = ["apple_test_bundle", "apple_bundle", "once_test_info"],
     capabilities = [

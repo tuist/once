@@ -34,7 +34,7 @@ launch action declared by the target kind that bypasses the action cache.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable`, `apple_framework`, `apple_resource`, `apple_swift_plugin` | Libraries, frameworks, resources, and Swift compiler plugins embedded in the app |
+| `deps` | `apple_linkable`, `apple_framework`, `apple_resource`, `apple_swift_plugin`, `native_linkable` | Libraries, frameworks, resources, native linkables, and Swift compiler plugins embedded in the app |
 
 ## Providers
 

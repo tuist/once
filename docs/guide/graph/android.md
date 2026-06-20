@@ -5,8 +5,9 @@ Once builds Android resources, Java and Kotlin libraries, and APKs from declarat
 compiles `res/` trees with `aapt2` and propagates assets to package targets.
 [`android_library`](/reference/prelude/android_library) compiles Java and Kotlin sources,
 generates R classes, emits a classes jar, and packages an AAR. [`android_binary`](/reference/prelude/android_binary)
-links resources, compiles Java and Kotlin sources, dexes runtime jars with `d8`, packages
-an APK, zipaligns it, and signs it with a debug key by default.
+links resources, compiles Java and Kotlin sources, dexes runtime jars with `d8`,
+packages native shared library providers, assembles an APK, zipaligns it, and
+signs it with a debug key by default.
 
 For the per-target-kind attribute, dep, provider, and capability tables see
 the [target kind reference](/reference/prelude/).
@@ -70,6 +71,13 @@ srcs = ["src/**/*.kt"]
 namespace = "dev.once.greeting"
 manifest = "AndroidManifest.xml"
 ```
+
+Android binaries can also depend on targets that emit
+`android_native_library`, such as
+[`swift_android_library`](/reference/prelude/swift_android_library) or
+[`rust_library`](/reference/prelude/rust_library) with
+`crate_type = "cdylib"`. The APK packages each native provider under
+`lib/<abi>/`.
 
 ## Resources
 
@@ -167,12 +175,12 @@ The local debug keystore is expected to use the public Android debug password,
 `android`. Use `signing = "none"` when an unsigned APK is enough.
 
 The current implementation supports Java sources, Kotlin sources, Android
-resources, assets, static resource packages, AAR packaging, dexing, APK
-packaging, zipalign, and debug signing. AIDL, data binding, annotation
-processors, native libraries, instrumentation tests, manifest placeholder
-expansion, shrinking, density filtering, no-compress packaging, startup
-profiles, and production signing are not implemented yet. Non-empty
-unsupported attributes fail analysis instead of being ignored.
+resources, assets, static resource packages, AAR packaging, native shared
+library packaging, dexing, APK packaging, zipalign, and debug signing. AIDL,
+data binding, annotation processors, native splits, instrumentation tests,
+manifest placeholder expansion, shrinking, density filtering, no-compress
+packaging, startup profiles, and production signing are not implemented yet.
+Non-empty unsupported attributes fail analysis instead of being ignored.
 
 ## Configurable Attributes
 

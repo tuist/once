@@ -61,6 +61,38 @@ downstream build scripts as `DEP_<LINKS>_<KEY>` environment variables.
 Generated Cargo dependencies set `cap_lints = "allow"` so dependency
 crates follow Cargo's lint-capping behavior.
 
+## Native Mobile Outputs
+
+Rust shared code can feed Apple and Android targets through native provider
+fields. Use `crate_type = "staticlib"` for Apple consumers such as
+`apple_application`, and use `crate_type = "cdylib"` for Android consumers
+such as `android_binary`. Android dynamic libraries also need an ABI, which
+Once can infer from common Android target triples or read from
+`android_abi`.
+
+```toml
+[[target]]
+name = "SharedRustApple"
+kind = "rust_library"
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "shared_rust"
+crate_type = "staticlib"
+target = "aarch64-apple-ios"
+
+[[target]]
+name = "SharedRustAndroid"
+kind = "rust_library"
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "shared_rust"
+crate_type = "cdylib"
+target = "aarch64-linux-android"
+android_abi = "arm64-v8a"
+```
+
 ## Dependency Resolution
 
 Keep external Rust dependencies in `Cargo.toml` and `Cargo.lock`.

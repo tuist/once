@@ -114,6 +114,15 @@ def _android_abs_path(path):
         return root + "/" + path
     return path
 
+def _android_basename(path):
+    idx = -1
+    for i in range(len(path)):
+        if path[i] == "/":
+            idx = i
+    if idx < 0:
+        return path
+    return path[idx + 1:]
+
 def _android_existing_file(label_id, path):
     if not path:
         return ""
@@ -424,6 +433,38 @@ def _android_asset_files_from_deps(deps):
         files.extend(dep.get("transitive_asset_files") or [])
     return _unique(files)
 
+def _android_native_library_key(library):
+    return (library.get("abi") or "") + "\x00" + (library.get("path") or "")
+
+def _android_unique_native_libraries(libraries):
+    seen = {}
+    out = []
+    for library in libraries:
+        abi = library.get("abi") or ""
+        path = library.get("path") or ""
+        if not abi or not path:
+            continue
+        key = _android_native_library_key(library)
+        if key not in seen:
+            seen[key] = True
+            out.append({"abi": abi, "path": path})
+    return out
+
+def _android_native_libraries(deps):
+    libraries = []
+    for dep in deps:
+        libraries.extend(dep.get("transitive_android_native_libraries") or [])
+        libraries.extend(dep.get("android_native_libraries") or [])
+    return _android_unique_native_libraries(libraries)
+
+def _android_native_library_paths(libraries):
+    out = []
+    for library in libraries:
+        path = library.get("path") or ""
+        if path and path not in out:
+            out.append(path)
+    return out
+
 def _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs):
     if len(resource_files) == 0:
         return []
@@ -714,27 +755,44 @@ set -- {base_args}
     )
     return (dex_dir, dex_hash)
 
-def _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash):
+def _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash, native_libraries):
     sh = _android_host_shell(ctx["label"]["id"])
     unsigned_apk = declare_output("unsigned.apk")
+    native_staging = ctx["build_dir"] + "/native_staging"
+    native_copy_lines = []
+    for library in native_libraries:
+        abi = library.get("abi") or ""
+        path = library.get("path") or ""
+        if not abi or not path:
+            continue
+        destination_dir = native_staging + "/lib/" + abi
+        native_copy_lines.append("mkdir -p " + _shell_quote(destination_dir))
+        native_copy_lines.append("cp " + _shell_quote(path) + " " + _shell_quote(destination_dir + "/" + _android_basename(path)))
     script = """set -eu
 rm -f {unsigned_apk}
 cp {resource_apk} {unsigned_apk}
 if [ -d {dex_dir} ]; then
   {jar} uf {unsigned_apk} -C {dex_dir} .
 fi
+rm -rf {native_staging}
+{native_copy_lines}
+if [ -d {native_staging}/lib ]; then
+  {jar} uf {unsigned_apk} -C {native_staging} lib
+fi
 """.format(
         unsigned_apk = _shell_quote(unsigned_apk),
         resource_apk = _shell_quote(resource_apk),
         dex_dir = _shell_quote(dex_dir),
         jar = _shell_quote(tools["jar"]),
+        native_staging = _shell_quote(native_staging),
+        native_copy_lines = "\n".join(native_copy_lines),
     )
     run_action(
         argv = [sh, "-c", script],
-        inputs = [resource_apk, dex_hash],
+        inputs = _unique([resource_apk, dex_hash] + _android_native_library_paths(native_libraries)),
         outputs = [unsigned_apk],
         env = _android_env(tools),
-        toolchain_identity = tools["identity"] + "\x00unsigned_apk",
+        toolchain_identity = tools["identity"] + "\x00unsigned_apk\x00native_libraries\x00" + str(native_libraries),
         identifier = "android_unsigned_apk:" + ctx["label"]["id"],
     )
     return unsigned_apk
@@ -896,6 +954,7 @@ def _android_library_impl(ctx):
     dep_resource_apks = _android_resource_apks(ctx["deps"])
     dep_asset_roots = _android_asset_roots_from_deps(ctx["deps"])
     dep_asset_files = _android_asset_files_from_deps(ctx["deps"])
+    dep_native_libraries = _android_native_libraries(ctx["deps"])
     compiled_zips = _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
     resource_apk, r_src_dir, r_src_hash, r_txt = _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, True, [], [])
     classes_dir, classes_hash = _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars)
@@ -920,6 +979,7 @@ def _android_library_impl(ctx):
         "transitive_compiled_resource_zips": _unique(compiled_zips + dep_compiled_zips),
         "transitive_asset_roots": _unique(asset_roots + dep_asset_roots),
         "transitive_asset_files": _unique(asset_files + dep_asset_files),
+        "transitive_android_native_libraries": dep_native_libraries,
         "affected_inputs": _android_source_inputs(ctx, attrs, True) + [manifest],
     }
 
@@ -946,6 +1006,7 @@ def _android_binary_impl(ctx):
     runtime_jars = _android_runtime_jars(ctx["deps"])
     dep_asset_roots = _android_asset_roots_from_deps(ctx["deps"])
     dep_asset_files = _android_asset_files_from_deps(ctx["deps"])
+    native_libraries = _android_native_libraries(ctx["deps"])
     compiled_zips = _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
     resource_apk, r_src_dir, r_src_hash, _ = _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, False, _unique(asset_roots + dep_asset_roots), _unique(asset_files + dep_asset_files))
     classes_dir, classes_hash = _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars)
@@ -954,7 +1015,7 @@ def _android_binary_impl(ctx):
     if len(kotlin_sources) > 0:
         runtime_jars = _unique([tools["kotlin_stdlib"]] + runtime_jars)
     dex_dir, dex_hash = _android_dex(ctx, attrs, tools, _unique([classes_jar] + runtime_jars))
-    unsigned_apk = _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash)
+    unsigned_apk = _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash, native_libraries)
     aligned_apk = _android_zipalign(ctx, tools, unsigned_apk)
     apk, debug_keystore = _android_sign_or_copy(ctx, attrs, tools, aligned_apk)
     return {
@@ -968,6 +1029,7 @@ def _android_binary_impl(ctx):
         "unsigned_apk": unsigned_apk,
         "apk": apk,
         "debug_keystore": debug_keystore,
+        "android_native_libraries": native_libraries,
         "affected_inputs": _android_source_inputs(ctx, attrs, True) + [manifest],
     }
 
@@ -1029,7 +1091,7 @@ android_resource = target_kind(
 )
 
 android_library = target_kind(
-    docs = "Compiles Android Java and Kotlin sources with optional resources into a classes jar, static resource package, and AAR consumed by Android app targets.",
+    docs = "Compiles Android Java and Kotlin sources with optional resources into a classes jar, static resource package, AAR, and transitive native-library package inputs consumed by Android app targets.",
     attrs = _ANDROID_RESOURCE_ATTRS + _ANDROID_JAVA_ATTRS + [
         attr("namespace", "string", docs = "Java package for generated R classes.", configurable = False),
         attr("custom_package", "string", docs = "Alias for the generated R package.", configurable = False),
@@ -1044,7 +1106,7 @@ android_library = target_kind(
         attr("proguard_specs", "list<string>", default = "[]", docs = "Reserved for consumer ProGuard specs.", configurable = False),
     ],
     deps = [
-        dep("deps", ["android_library", "android_resource"], "Android libraries and resources consumed by this library."),
+        dep("deps", ["android_library", "android_resource", "android_native_library", "native_linkable"], "Android libraries, resources, and native libraries consumed by this library."),
     ],
     providers = ["android_library", "android_archive", "java_library"],
     capabilities = [capability("build", ["default", "jar", "aar", "resources"])],
@@ -1059,7 +1121,7 @@ android_library = target_kind(
 )
 
 android_binary = target_kind(
-    docs = "Builds an Android APK from Java and Kotlin sources, Android resources, android_resource deps, and android_library deps.",
+    docs = "Builds an Android APK from Java and Kotlin sources, Android resources, native shared libraries, android_resource deps, and android_library deps.",
     attrs = _ANDROID_RESOURCE_ATTRS + _ANDROID_JAVA_ATTRS + _ANDROID_APK_ATTRS + [
         attr("application_id", "string", required = True, docs = "Android application id used for generated R classes and version metadata.", configurable = False),
         attr("namespace", "string", docs = "Java package for generated R classes. Defaults to application_id.", configurable = False),
@@ -1084,7 +1146,7 @@ android_binary = target_kind(
         attr("native_target", "target", docs = "Reserved for native Android split support.", configurable = False),
     ],
     deps = [
-        dep("deps", ["android_library", "android_resource"], "Android libraries and resources packaged into the APK."),
+        dep("deps", ["android_library", "android_resource", "android_native_library", "native_linkable"], "Android libraries, resources, and native shared libraries packaged into the APK."),
     ],
     providers = ["android_application", "android_apk"],
     capabilities = [
@@ -1096,6 +1158,11 @@ android_binary = target_kind(
             "android-binary-minimal",
             name = "Minimal Android APK",
             use_when = "Use this for a small Android application target backed by Android SDK build-tools.",
+        ),
+        example(
+            "native-mobile-shared-code-e2e",
+            name = "Android app with shared native code",
+            use_when = "Use this when an Android app should package native libraries built from Swift and Rust sources.",
         ),
     ],
     impl = _android_binary_impl,

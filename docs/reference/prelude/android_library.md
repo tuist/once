@@ -6,9 +6,9 @@ Android library target.
 
 Compiles Android Java and Kotlin sources with optional resources into a classes
 jar, a static resource package, and an AAR. Downstream Android targets
-consume the emitted jars and resource package through the normal `deps`
-edge. Prefer a separate `android_resource` target for reusable resources
-and assets.
+consume the emitted jars, resource package, and any transitive native library
+providers through the normal `deps` edge. Prefer a separate
+`android_resource` target for reusable resources and assets.
 
 ## Attributes
 
@@ -39,7 +39,7 @@ Tool override attrs are also available for `javac`, `jar`, `java`,
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `android_library`, `android_resource` | Android libraries and resources consumed by this library |
+| `deps` | `android_library`, `android_resource`, `android_native_library`, `native_linkable` | Android libraries, resources, and native libraries consumed by this library |
 
 ## Providers
 
@@ -64,11 +64,11 @@ The target emits `android_library`, `android_archive`, and
 ## Limitations
 
 The first Android implementation supports Java sources, Kotlin sources, Android
-resources, assets, AAR packaging, Android resource deps, and Android
-library deps. AIDL, data binding, annotation processors, native
-libraries, ProGuard consumer rules, and `neverlink` runtime pruning are
-not implemented yet. Non-empty values for unsupported attrs fail
-analysis instead of being ignored.
+resources, assets, AAR packaging, Android resource deps, Android library deps,
+and transitive native-library provider propagation. AIDL, data binding,
+annotation processors, embedding native libraries directly into AARs, ProGuard
+consumer rules, and `neverlink` runtime pruning are not implemented yet.
+Non-empty values for unsupported attrs fail analysis instead of being ignored.
 
 ## Example
 

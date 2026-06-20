@@ -30,7 +30,7 @@ generate a Swift package wrapper for them.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable`, `apple_application`, `apple_swift_plugin` | Code under test, optional host application, and Swift compiler plugins |
+| `deps` | `apple_linkable`, `apple_application`, `apple_swift_plugin`, `native_linkable` | Code under test, optional host application, native linkables, and Swift compiler plugins |
 
 ## Providers
 

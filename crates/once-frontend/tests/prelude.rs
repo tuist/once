@@ -38,10 +38,13 @@ fn android_prelude_source() -> String {
 
 fn all_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple.star"),
-        include_str!("../prelude/rust.star")
+        include_str!("../prelude/android.star"),
+        include_str!("../prelude/rust.star"),
+        include_str!("../prelude/swift.star"),
+        include_str!("../prelude/kotlin.star")
     )
 }
 
@@ -126,6 +129,34 @@ fn android_target_kind_schemas_expose_all_target_kinds() {
 }
 
 #[test]
+fn cross_platform_target_kind_schemas_are_discoverable() {
+    let swift =
+        built_in_target_kind_schema("swift_android_library").expect("swift_android_library schema");
+    assert!(target_kind_has_impl("swift_android_library").unwrap());
+    assert!(swift
+        .providers
+        .iter()
+        .any(|p| p == "android_native_library"));
+    assert!(swift.providers.iter().any(|p| p == "native_linkable"));
+    assert!(swift
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "android_abi" && !attr.required));
+
+    let kotlin = built_in_target_kind_schema("kotlin_apple_framework")
+        .expect("kotlin_apple_framework schema");
+    assert!(target_kind_has_impl("kotlin_apple_framework").unwrap());
+    assert!(kotlin.providers.iter().any(|p| p == "apple_framework"));
+    assert!(kotlin.providers.iter().any(|p| p == "native_linkable"));
+
+    let rust = built_in_target_kind_schema("rust_library").expect("rust_library schema");
+    assert!(rust.providers.iter().any(|p| p == "apple_linkable"));
+    assert!(rust.providers.iter().any(|p| p == "android_native_library"));
+    assert!(rust.attrs.iter().any(|attr| attr.name == "android_abi"));
+    assert!(rust.attrs.iter().any(|attr| attr.name == "native_linkopts"));
+}
+
+#[test]
 fn prelude_android_kotlin_toolchain_helpers_resolve_stdlib() {
     let prelude = android_prelude_source();
 
@@ -152,6 +183,233 @@ fn prelude_android_kotlin_toolchain_helpers_resolve_stdlib() {
     )
     .unwrap();
     assert_eq!(configured_stdlib, "/third_party/kotlin-stdlib.jar");
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_android_unsigned_apk_packages_native_libraries() {
+    let prelude = android_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "apps/hello",
+        "name": "Hello",
+        "id": "apps/hello/Hello",
+    }},
+    "attr": {{}},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/apps/hello/Hello",
+}}
+tools = {{
+    "jar": "/jdk/bin/jar",
+    "identity": "android-tools",
+    "sdk_root": "/sdk",
+}}
+_android_package_unsigned_apk(
+    ctx,
+    tools,
+    ".once/out/apps/hello/Hello/resources.apk",
+    ".once/out/apps/hello/Hello/dex",
+    ".once/out/apps/hello/Hello/dex.sha256",
+    [{{"abi": "arm64-v8a", "path": ".once/out/shared/libshared.so"}}],
+)
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "apps/hello/Hello");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    assert_eq!(store.actions.len(), 1);
+    let action = &store.actions[0];
+    assert_eq!(
+        action.inputs,
+        vec![
+            ".once/out/apps/hello/Hello/resources.apk",
+            ".once/out/apps/hello/Hello/dex.sha256",
+            ".once/out/shared/libshared.so",
+        ]
+    );
+    let script = &action.argv[2];
+    assert!(script.contains("native_staging/lib/arm64-v8a"), "{script}");
+    assert!(script.contains("libshared.so"), "{script}");
+    assert!(
+        script.contains("-C '.once/out/apps/hello/Hello/native_staging' lib"),
+        "{script}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_swift_android_library_declares_native_provider() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("shared/swift/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("Greeting.swift"),
+        "public func greeting() {}\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "swiftc":
+        return "/toolchains/swift/bin/swiftc"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 2 and argv[1] == "--version":
+        return "Swift version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "shared/swift",
+        "name": "SharedSwift",
+        "id": "shared/swift/SharedSwift",
+    }},
+    "attr": {{
+        "android_abi": "arm64-v8a",
+        "module_name": "SharedSwift",
+    }},
+    "deps": [{{
+        "transitive_swiftmodule_dirs": [".once/out/shared/swift/Dep"],
+        "transitive_android_native_libraries": [{{"abi": "arm64-v8a", "path": ".once/out/shared/swift/libdep.so"}}],
+    }}],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/shared/swift/SharedSwift",
+}}
+provider = _swift_android_library_impl(ctx)
+result = repr([
+    provider["target"],
+    provider["android_abi"],
+    provider["android_native_libraries"],
+    provider["transitive_android_native_libraries"],
+])
+"#
+    );
+    let store = store_for(workspace.path(), "shared/swift");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("aarch64-unknown-linux-android"), "{out}");
+    assert!(out.contains("arm64-v8a"), "{out}");
+    assert!(out.contains("libSharedSwift.so"), "{out}");
+    assert!(out.contains("libdep.so"), "{out}");
+    assert_eq!(store.actions.len(), 1);
+    let action = &store.actions[0];
+    assert_eq!(
+        action.identifier.as_deref(),
+        Some("swift_android_compile:shared/swift/SharedSwift")
+    );
+    assert!(action.argv.iter().any(|arg| arg == "-emit-library"));
+    assert!(action.argv.iter().any(|arg| arg == "-target"));
+    assert!(action
+        .inputs
+        .iter()
+        .any(|input| input == "shared/swift/Sources/Greeting.swift"));
+    assert!(action
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/shared/swift/libdep.so"));
+}
+
+#[test]
+fn prelude_kotlin_apple_target_inference_covers_ios_simulator() {
+    let prelude = all_prelude_source();
+    let out = eval_prelude_function_in(
+        &prelude,
+        "_kotlin_apple_default_target",
+        r#"("ios", "simulator", "arm64")"#,
+    )
+    .unwrap();
+
+    assert_eq!(out, "\"ios_simulator_arm64\"");
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_rust_native_outputs_emit_mobile_provider_fields() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("shared/rust/src");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("lib.rs"), "pub fn greeting() {}\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "rustc":
+        return "/toolchains/rust/bin/rustc"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
+        return "/toolchains/rust\n"
+    if len(argv) >= 2 and argv[1] == "--version":
+        return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    fail("unexpected host_command: " + str(argv))
+
+android_ctx = {{
+    "label": {{
+        "package": "shared/rust",
+        "name": "SharedRustAndroid",
+        "id": "shared/rust/SharedRustAndroid",
+    }},
+    "attr": {{
+        "crate_name": "shared_rust",
+        "crate_root": "src/lib.rs",
+        "target": "aarch64-linux-android",
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+    "build_dir": ".once/out/shared/rust/SharedRustAndroid",
+}}
+apple_ctx = {{
+    "label": {{
+        "package": "shared/rust",
+        "name": "SharedRustApple",
+        "id": "shared/rust/SharedRustApple",
+    }},
+    "attr": {{
+        "crate_name": "shared_rust",
+        "crate_root": "src/lib.rs",
+        "target": "aarch64-apple-ios",
+        "native_linkopts": ["-lc++"],
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+    "build_dir": ".once/out/shared/rust/SharedRustApple",
+}}
+android = _rust_compile(android_ctx, "cdylib", "src/lib.rs", "libshared_rust.so")
+apple = _rust_compile(apple_ctx, "staticlib", "src/lib.rs", "libshared_rust.a")
+result = repr([
+    android["android_abi"],
+    android["android_native_libraries"],
+    android["transitive_android_native_libraries"],
+    apple["archive"],
+    apple["transitive_archives"],
+    apple["transitive_linkopts"],
+])
+"#
+    );
+    let store = store_for(workspace.path(), "shared/rust");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("arm64-v8a"), "{out}");
+    assert!(out.contains("libshared_rust.so"), "{out}");
+    assert!(out.contains("libshared_rust.a"), "{out}");
+    assert!(out.contains("-lc++"), "{out}");
+    assert_eq!(store.actions.len(), 2);
+    assert!(store.actions[0].argv.iter().any(|arg| arg == "--target"));
+    assert!(store.actions[1].argv.iter().any(|arg| arg == "--target"));
 }
 
 #[cfg(unix)]
