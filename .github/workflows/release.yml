@@ -72,6 +72,10 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v6
+      - name: Set HOME for mise templates
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"HOME=$env:USERPROFILE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
@@ -152,6 +156,10 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v6
+      - name: Set HOME for mise templates
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"HOME=$env:USERPROFILE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
