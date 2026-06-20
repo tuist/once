@@ -1378,14 +1378,20 @@ result = repr("ok")
     assert_eq!(arg_file.format, DeclaredArgFileFormat::RustcResponse);
     assert!(arg_file
         .args
-        .windows(2)
-        .any(|pair| pair[0] == "--cfg" && pair[1] == "feature=\"default\""));
-    assert!(!arg_file.args.iter().any(|arg| arg == "feature=default"));
+        .iter()
+        .any(|arg| arg == "--cfg=feature=\"default\""));
     assert!(!arg_file
         .args
         .iter()
-        .any(|arg| arg == "feature=\\\"default\\\""));
-    assert!(!arg_file.args.iter().any(|arg| arg == "feature=r#default#"));
+        .any(|arg| arg == "--cfg=feature=default"));
+    assert!(!arg_file
+        .args
+        .iter()
+        .any(|arg| arg == "--cfg=feature=\\\"default\\\""));
+    assert!(!arg_file
+        .args
+        .iter()
+        .any(|arg| arg == "--cfg=feature=r#default#"));
 }
 
 #[test]
@@ -1867,19 +1873,31 @@ result = repr("ok")
     let arg_file = &rustc.arg_files[0];
     assert_eq!(arg_file.path, ".once/out/crates/app/app/rustc-features.rsp");
     assert_eq!(arg_file.format, DeclaredArgFileFormat::RustcResponse);
-    assert!(arg_file.args.len() > 800);
-    assert!(arg_file.args.iter().any(|arg| arg == "feature=\"default\""));
-    assert!(arg_file.args.iter().any(|arg| arg == "feature=\"std\""));
+    assert!(arg_file.args.len() > 400);
     assert!(arg_file
         .args
         .iter()
-        .any(|arg| arg == "feature=\"feature_399\""));
-    assert!(!arg_file.args.iter().any(|arg| arg == "feature=default"));
+        .any(|arg| arg == "--cfg=feature=\"default\""));
+    assert!(arg_file
+        .args
+        .iter()
+        .any(|arg| arg == "--cfg=feature=\"std\""));
+    assert!(arg_file
+        .args
+        .iter()
+        .any(|arg| arg == "--cfg=feature=\"feature_399\""));
     assert!(!arg_file
         .args
         .iter()
-        .any(|arg| arg == "feature=\\\"default\\\""));
-    assert!(!arg_file.args.iter().any(|arg| arg == "feature=r#default#"));
+        .any(|arg| arg == "--cfg=feature=default"));
+    assert!(!arg_file
+        .args
+        .iter()
+        .any(|arg| arg == "--cfg=feature=\\\"default\\\""));
+    assert!(!arg_file
+        .args
+        .iter()
+        .any(|arg| arg == "--cfg=feature=r#default#"));
     assert!(
         !rustc.argv.iter().any(|arg| arg.contains("feature=\"")),
         "{:?}",
@@ -1936,12 +1954,9 @@ result = repr("ok")
     assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
     assert!(rustc
         .argv
-        .windows(2)
-        .any(|pair| pair[0] == "--cfg" && pair[1] == "feature=\"default\""));
-    assert!(rustc
-        .argv
-        .windows(2)
-        .any(|pair| pair[0] == "--cfg" && pair[1] == "feature=\"std\""));
+        .iter()
+        .any(|arg| arg == "--cfg=feature=\"default\""));
+    assert!(rustc.argv.iter().any(|arg| arg == "--cfg=feature=\"std\""));
     assert!(
         !rustc.argv.iter().any(|arg| arg.starts_with('@')),
         "{:?}",
@@ -2007,8 +2022,8 @@ result = repr("ok")
     assert!(
         !rustc
             .argv
-            .windows(2)
-            .any(|pair| pair[0] == "--cfg" && pair[1].starts_with("feature=")),
+            .iter()
+            .any(|arg| arg.starts_with("--cfg=feature=")),
         "{:?}",
         rustc.argv
     );

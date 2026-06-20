@@ -16,7 +16,7 @@ identity.
 | `crate_name` | string | no | target name | Rust crate name passed to `rustc`; `-` and `.` are rewritten as `_` when omitted |
 | `crate_root` | string | no | `src/main.rs` | Package-relative binary root |
 | `edition` | string | no | `2021` | Rust edition passed to `rustc` |
-| `features` | list&lt;string&gt; | no | `[]` | Cargo feature names lowered to `--cfg feature=...` flags |
+| `features` | list&lt;string&gt; | no | `[]` | Cargo feature names lowered to `--cfg=feature=...` flags |
 | `crate_features` | list&lt;string&gt; | no | `[]` | Bazel-compatible alias for `features` |
 | `target` | string | no | host target | Rust target triple passed to `rustc --target` |
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables for rustc, matching Buck2's `env` attribute |

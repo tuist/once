@@ -195,8 +195,8 @@ def _rust_android_compile_env(ctx, target):
         env["PATH"] = path
     return env
 
-def _rust_feature_cfg(feature):
-    return "feature=\"" + feature + "\""
+def _rust_feature_cfg_arg(feature):
+    return "--cfg=feature=\"" + feature + "\""
 
 def _rust_feature_flags(ctx):
     flags = []
@@ -204,7 +204,7 @@ def _rust_feature_flags(ctx):
     features.extend(_rust_attr(ctx, "features", []))
     features.extend(_rust_attr(ctx, "crate_features", []))
     for feature in _unique(features):
-        flags.extend(["--cfg", _rust_feature_cfg(feature)])
+        flags.append(_rust_feature_cfg_arg(feature))
     return flags
 
 def _rust_feature_args(ctx):
@@ -1668,7 +1668,7 @@ _RUST_COMMON_ATTRS = [
     attr("crate_name", "string", docs = "Rust crate name passed to rustc. Defaults to the target name with `-` and `.` rewritten as `_`.", configurable = False),
     attr("crate_root", "string", docs = "Package-relative path to lib.rs or main.rs. Defaults to src/lib.rs for libraries and src/main.rs for binaries.", configurable = False),
     attr("edition", "string", default = "2021", docs = "Rust edition passed to rustc.", configurable = False),
-    attr("features", "list<string>", default = "[]", docs = "Cargo feature names lowered to rustc `--cfg feature=...` flags."),
+    attr("features", "list<string>", default = "[]", docs = "Cargo feature names lowered to rustc `--cfg=feature=...` flags."),
     attr("crate_features", "list<string>", default = "[]", docs = "Bazel-compatible alias for `features`."),
     attr("target", "string", docs = "Rust target triple passed to `rustc --target`. Defaults to the host target.", configurable = False),
     attr("env", "map<string, string>", default = "{}", docs = "Environment variables for rustc, matching Buck2's `env` attribute.", configurable = False),
