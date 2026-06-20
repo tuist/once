@@ -78,7 +78,7 @@ jobs:
           # Restrict to the build tools needed on every matrix host.
           install_args: "rust jq"
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential libcap-ng-dev
+        run: sudo apt-get update && sudo apt-get install -y binutils build-essential libcap-ng-dev
       - name: Cache Rust
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
@@ -157,7 +157,7 @@ jobs:
           version: ${{ env.MISE_VERSION }}
           install_args: "rust jq"
       - if: startsWith(matrix.runner, 'ubuntu-')
-        run: sudo apt-get update && sudo apt-get install -y build-essential libcap-ng-dev
+        run: sudo apt-get update && sudo apt-get install -y binutils build-essential libcap-ng-dev
       - name: Cache Rust
         continue-on-error: true
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
