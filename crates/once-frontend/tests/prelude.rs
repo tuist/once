@@ -1294,7 +1294,7 @@ result = repr([
 }
 
 #[test]
-fn prelude_cargo_metadata_windows_features_escape_response_file_cfgs() {
+fn prelude_cargo_metadata_windows_features_keep_response_file_cfgs_literal() {
     let prelude = all_prelude_source();
     let source = format!(
         r#"{prelude}

@@ -198,8 +198,7 @@ The Rust executor exposes generic primitives only:
   `format` and `arg_format`. The supported `format` values are
   `line-delimited`, which writes one argument per line without shell
   escaping, and `rustc-response`, which writes one `rustc` argument per
-  line and applies the host-specific quote escaping expected by
-  `rustc @path` files. `arg_format` defaults to `@{}` and must contain
+  line verbatim. `arg_format` defaults to `@{}` and must contain
   exactly one `{}` placeholder.
 - `run_action(...)` records a command action for the executor.
 - `write_path(path, content)` materializes generated text or byte-list
