@@ -667,20 +667,70 @@ fn materialize_declared_arg_files(workspace: &Path, arg_files: &[DeclaredArgFile
 
 fn declared_arg_file_content(arg_file: &DeclaredArgFile) -> Result<Vec<u8>> {
     match arg_file.format {
-        DeclaredArgFileFormat::LineDelimited => {
-            let mut content = Vec::new();
-            for arg in &arg_file.args {
-                if arg.contains('\n') || arg.contains('\r') {
-                    anyhow::bail!(
-                        "line-delimited arg file `{}` contains an argument with a newline",
-                        arg_file.path
-                    );
-                }
-                content.extend_from_slice(arg.as_bytes());
-                content.push(b'\n');
+        DeclaredArgFileFormat::LineDelimited => declared_arg_file_lines(arg_file, |arg| {
+            validate_arg_file_line(arg_file, arg)?;
+            Ok(arg.to_string())
+        }),
+        DeclaredArgFileFormat::RustcResponse => declared_arg_file_lines(arg_file, |arg| {
+            rustc_response_arg(arg_file, arg, cfg!(windows))
+        }),
+    }
+}
+
+fn declared_arg_file_lines(
+    arg_file: &DeclaredArgFile,
+    format: impl Fn(&str) -> Result<String>,
+) -> Result<Vec<u8>> {
+    let mut content = Vec::new();
+    for arg in &arg_file.args {
+        let line = format(arg)?;
+        content.extend_from_slice(line.as_bytes());
+        content.push(b'\n');
+    }
+    Ok(content)
+}
+
+fn rustc_response_arg(arg_file: &DeclaredArgFile, arg: &str, windows_host: bool) -> Result<String> {
+    validate_arg_file_line(arg_file, arg)?;
+    if windows_host {
+        Ok(rustc_windows_response_arg(arg))
+    } else {
+        Ok(arg.to_string())
+    }
+}
+
+fn rustc_windows_response_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "\"\"".to_string();
+    }
+    let mut escaped = String::new();
+    for character in arg.chars() {
+        match character {
+            '\\' | '"' | '\'' | ' ' | '\t' => {
+                escaped.push('\\');
+                escaped.push(character);
             }
-            Ok(content)
+            _ => escaped.push(character),
         }
+    }
+    escaped
+}
+
+fn validate_arg_file_line(arg_file: &DeclaredArgFile, arg: &str) -> Result<()> {
+    if arg.contains('\n') || arg.contains('\r') {
+        anyhow::bail!(
+            "{} arg file `{}` contains an argument with a newline",
+            declared_arg_file_format_name(arg_file.format),
+            arg_file.path
+        );
+    }
+    Ok(())
+}
+
+fn declared_arg_file_format_name(format: DeclaredArgFileFormat) -> &'static str {
+    match format {
+        DeclaredArgFileFormat::LineDelimited => "line-delimited",
+        DeclaredArgFileFormat::RustcResponse => "rustc-response",
     }
 }
 
@@ -852,6 +902,75 @@ mod tests {
             std::fs::read_to_string(workspace.path().join(".once/out/rust/rustc-features.rsp"))
                 .unwrap(),
             "--cfg\nfeature=\"alloc\"\n"
+        );
+    }
+
+    #[test]
+    fn materialize_declared_arg_files_writes_rustc_response_args() {
+        let workspace = tempfile::tempdir().unwrap();
+        let arg_files = vec![DeclaredArgFile {
+            path: ".once/out/rust/rustc-features.rsp".to_string(),
+            format: DeclaredArgFileFormat::RustcResponse,
+            args: vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()],
+        }];
+
+        materialize_declared_arg_files(workspace.path(), &arg_files).unwrap();
+
+        let expected = if cfg!(windows) {
+            "--cfg\nfeature=\\\"alloc\\\"\n"
+        } else {
+            "--cfg\nfeature=\"alloc\"\n"
+        };
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/rust/rustc-features.rsp"))
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn rustc_response_args_escape_quotes_for_windows_hosts() {
+        let arg_file = DeclaredArgFile {
+            path: ".once/out/rust/rustc-features.rsp".to_string(),
+            format: DeclaredArgFileFormat::RustcResponse,
+            args: Vec::new(),
+        };
+
+        assert_eq!(
+            rustc_response_arg(&arg_file, "feature=\"alloc\"", true).unwrap(),
+            "feature=\\\"alloc\\\""
+        );
+    }
+
+    #[test]
+    fn rustc_response_args_escape_windows_shell_characters() {
+        assert_eq!(rustc_windows_response_arg(""), "\"\"");
+        assert_eq!(
+            rustc_windows_response_arg("arg with spaces"),
+            "arg\\ with\\ spaces"
+        );
+        assert_eq!(
+            rustc_windows_response_arg("C:\\Program Files\\Rust\\rustc.exe"),
+            "C:\\\\Program\\ Files\\\\Rust\\\\rustc.exe"
+        );
+        assert_eq!(
+            rustc_windows_response_arg("feature=\\\"alloc\\\""),
+            "feature=\\\\\\\"alloc\\\\\\\""
+        );
+        assert_eq!(rustc_windows_response_arg("it's"), "it\\'s");
+    }
+
+    #[test]
+    fn rustc_response_args_keep_quotes_for_non_windows_hosts() {
+        let arg_file = DeclaredArgFile {
+            path: ".once/out/rust/rustc-features.rsp".to_string(),
+            format: DeclaredArgFileFormat::RustcResponse,
+            args: Vec::new(),
+        };
+
+        assert_eq!(
+            rustc_response_arg(&arg_file, "feature=\"alloc\"", false).unwrap(),
+            "feature=\"alloc\""
         );
     }
 
