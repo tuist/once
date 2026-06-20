@@ -2162,7 +2162,7 @@ result = repr("ok")
     let path = action.env.get("PATH").expect("merged linker PATH");
     let entries = path.split(':').collect::<Vec<_>>();
     assert_eq!(entries[0], "/custom/bin");
-    assert!(entries.iter().any(|entry| *entry == "/bin"), "{path}");
+    assert!(entries.contains(&"/bin"), "{path}");
     assert_eq!(action.env.get("CC").map(String::as_str), Some("/custom/cc"));
     assert!(action
         .env
