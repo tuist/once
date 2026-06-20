@@ -119,6 +119,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     }
 
     /// Return whether one host path currently exists as a file.
+    #[allow(clippy::unnecessary_wraps)]
     fn host_file_exists(path: &str) -> anyhow::Result<bool> {
         if !analysis_active() {
             return Ok(false);
@@ -517,7 +518,7 @@ fn file_sha256_hex(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)?;
     let mut reader = std::io::BufReader::new(file);
     let mut hasher = sha2::Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = vec![0u8; 64 * 1024];
     loop {
         let read = reader.read(&mut buf)?;
         if read == 0 {

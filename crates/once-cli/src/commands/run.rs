@@ -136,13 +136,10 @@ async fn finish_run(
 }
 
 fn set_remote(action: &mut Action, provider: &str) {
-    match action {
-        Action::RunCommand { remote, .. } => {
-            *remote = Some(RemoteExecution {
-                provider: provider.to_string(),
-            });
-        }
-        _ => {}
+    if let Action::RunCommand { remote, .. } = action {
+        *remote = Some(RemoteExecution {
+            provider: provider.to_string(),
+        });
     }
 }
 

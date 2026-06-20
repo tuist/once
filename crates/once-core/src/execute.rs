@@ -14,53 +14,12 @@ pub(crate) async fn run(
 ) -> Result<ActionResult> {
     match action {
         Action::RunCommand {
-            argv,
-            env,
-            cwd,
-            input_digest: _,
             outputs,
             output_symlink_mode,
-            resources: _,
-            timeout_ms,
-            remote,
+            ..
         } => {
-            let mut result = match (remote, stream_to_parent) {
-                (Some(remote), _) => {
-                    remote::execute_command(
-                        remote,
-                        argv,
-                        env,
-                        cwd.as_ref(),
-                        *timeout_ms,
-                        workspace_root,
-                        cache,
-                        stream_to_parent,
-                    )
-                    .await?
-                }
-                (None, true) => {
-                    local::execute_command_streaming(
-                        argv,
-                        env,
-                        cwd.as_ref(),
-                        *timeout_ms,
-                        workspace_root,
-                        cache,
-                    )
-                    .await?
-                }
-                (None, false) => {
-                    local::execute_command(
-                        argv,
-                        env,
-                        cwd.as_ref(),
-                        *timeout_ms,
-                        workspace_root,
-                        cache,
-                    )
-                    .await?
-                }
-            };
+            let mut result =
+                execute_command(action, workspace_root, cache, stream_to_parent).await?;
             if result.exit_code == 0 {
                 result.outputs =
                     outputs::capture(outputs, workspace_root, cache, *output_symlink_mode).await?;
@@ -109,6 +68,56 @@ pub(crate) async fn run(
         } => {
             write_tree_digest(root, output, include_suffixes, workspace_root).await?;
             capture_file_action_outputs(std::slice::from_ref(output), workspace_root, cache).await
+        }
+    }
+}
+
+async fn execute_command(
+    action: &Action,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    let Action::RunCommand {
+        argv,
+        env,
+        cwd,
+        timeout_ms,
+        remote,
+        ..
+    } = action
+    else {
+        unreachable!("execute_command only accepts command actions")
+    };
+
+    match (remote, stream_to_parent) {
+        (Some(remote), _) => {
+            remote::execute_command(
+                remote,
+                argv,
+                env,
+                cwd.as_ref(),
+                *timeout_ms,
+                workspace_root,
+                cache,
+                stream_to_parent,
+            )
+            .await
+        }
+        (None, true) => {
+            local::execute_command_streaming(
+                argv,
+                env,
+                cwd.as_ref(),
+                *timeout_ms,
+                workspace_root,
+                cache,
+            )
+            .await
+        }
+        (None, false) => {
+            local::execute_command(argv, env, cwd.as_ref(), *timeout_ms, workspace_root, cache)
+                .await
         }
     }
 }
@@ -425,7 +434,7 @@ fn file_sha256_hex(path: &Path) -> std::io::Result<String> {
     let file = std::fs::File::open(path)?;
     let mut reader = std::io::BufReader::new(file);
     let mut hasher = sha2::Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = vec![0u8; 64 * 1024];
     loop {
         let read = reader.read(&mut buf)?;
         if read == 0 {

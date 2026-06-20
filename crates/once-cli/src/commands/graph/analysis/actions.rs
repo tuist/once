@@ -101,7 +101,7 @@ pub(super) fn run_declared_actions<'a>(
                     .map(|(prior_index, digest)| (format!("same-target:{prior_index}"), *digest)),
             );
 
-            let outcome = run_declared_action(DeclaredActionRun {
+            let outcome = Box::pin(run_declared_action(DeclaredActionRun {
                 workspace,
                 cache,
                 module_source_digest,
@@ -111,7 +111,7 @@ pub(super) fn run_declared_actions<'a>(
                 declared,
                 input_action_digests: &input_action_digests,
                 record_success_evidence,
-            })
+            }))
             .await?;
             action_digests.push(outcome.digest);
             if let Some(input_digest) = outcome.input_digest {

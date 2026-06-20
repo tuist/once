@@ -154,8 +154,8 @@ impl Action {
 
     pub fn input_digest(&self) -> Option<Digest> {
         match self {
-            Action::RunCommand { input_digest, .. } => *input_digest,
-            Action::WriteFile { input_digest, .. }
+            Action::RunCommand { input_digest, .. }
+            | Action::WriteFile { input_digest, .. }
             | Action::WriteBytes { input_digest, .. }
             | Action::CopyFile { input_digest, .. }
             | Action::CopyTree { input_digest, .. }
