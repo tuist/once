@@ -909,11 +909,18 @@ mod tests {
             format: DeclaredArgFileFormat::RustcResponse,
             args: Vec::new(),
         };
+        let cases = [
+            "",
+            "argument with spaces",
+            r"C:\Program Files\Rust\lib",
+            "tab\tseparated",
+            "feature='alloc'",
+            "feature=\"alloc\"",
+        ];
 
-        assert_eq!(
-            rustc_response_arg(&arg_file, "feature=\"alloc\"").unwrap(),
-            "feature=\"alloc\""
-        );
+        for case in cases {
+            assert_eq!(rustc_response_arg(&arg_file, case).unwrap(), case);
+        }
     }
 
     #[test]
