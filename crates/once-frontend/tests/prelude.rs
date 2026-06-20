@@ -977,6 +977,38 @@ result = repr(env.get("CARGO_ENCODED_RUSTFLAGS"))
     assert_eq!(out.unwrap(), "\"-C\\x1fopt-level=3\"");
 }
 
+#[test]
+fn prelude_rustc_wrapper_passes_initial_argv_positionally() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "sh":
+        return "/usr/bin/sh"
+    fail("unexpected host_which call: " + name)
+
+args = _rustc_with_build_script_args(
+    ["rustc", "arg with spaces", "O'Reilly"],
+    ".once/out/pkg/build script.stdout",
+)
+result = repr(args)
+"#
+    );
+
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    let values: Vec<String> = serde_json::from_str(&out).unwrap();
+
+    assert_eq!(values[0], "/usr/bin/sh");
+    assert_eq!(values[1], "-c");
+    assert_eq!(values[3], "once-rustc");
+    assert_eq!(&values[4..], ["rustc", "arg with spaces", "O'Reilly"]);
+    let script = &values[2];
+    assert_eq!(script.lines().nth(1), Some("while IFS= read -r line; do"));
+    assert!(script.contains("done < '.once/out/pkg/build script.stdout'"));
+    assert!(script.contains("exec \"$@\""));
+    assert!(!script.contains("O'Reilly"), "{script}");
+}
+
 #[cfg(unix)]
 #[test]
 fn prelude_rust_proc_macro_compile_uses_host_target() {

@@ -1,6 +1,3 @@
-def _shell_join(argv):
-    return " ".join([_shell_quote(arg) for arg in argv])
-
 def _ascii_env_key(value):
     upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     out = []
@@ -598,7 +595,6 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
 
 def _rustc_with_build_script_args(argv, stdout):
     script = """set -eu
-set -- {argv}
 while IFS= read -r line; do
   case "$line" in
     cargo:rustc-cfg=*|cargo::rustc-cfg=*)
@@ -634,8 +630,8 @@ while IFS= read -r line; do
   esac
 done < {stdout}
 exec "$@"
-""".format(argv = _shell_join(argv), stdout = _shell_quote(stdout))
-    return [host_which("sh"), "-c", script]
+""".format(stdout = _shell_quote(stdout))
+    return [host_which("sh"), "-c", script, "once-rustc"] + argv
 
 def _rust_dep_inputs(deps):
     inputs = []
