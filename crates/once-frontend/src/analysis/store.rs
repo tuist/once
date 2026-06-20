@@ -268,7 +268,7 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-fn which_candidate_names(name: &str) -> Vec<String> {
+pub(super) fn which_candidate_names(name: &str) -> Vec<String> {
     let path_ext = std::env::var_os("PATHEXT").map(|value| value.to_string_lossy().into_owned());
     which_candidate_names_for(name, cfg!(windows), path_ext.as_deref())
 }

@@ -1,4 +1,6 @@
 use super::globals::expand_globs;
+#[cfg(windows)]
+use super::store::which_candidate_names;
 use super::store::{which_candidate_names_for, HostCache};
 use super::*;
 use crate::graph::GraphTarget;
@@ -127,6 +129,33 @@ fn unix_host_which_candidates_keep_name_verbatim() {
         which_candidate_names_for("rustc", false, Some(".COM;.EXE;.CMD")),
         vec!["rustc".to_string()]
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_host_which_candidates_use_live_pathext() {
+    static PATHEXT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    let _guard = PATHEXT_LOCK.lock().unwrap();
+    let previous = std::env::var_os("PATHEXT");
+    std::env::set_var("PATHEXT", ".COM;.EXE;.CMD");
+
+    assert_eq!(
+        which_candidate_names("rustc"),
+        vec![
+            "rustc.COM".to_string(),
+            "rustc.com".to_string(),
+            "rustc.EXE".to_string(),
+            "rustc.exe".to_string(),
+            "rustc.CMD".to_string(),
+            "rustc.cmd".to_string(),
+        ]
+    );
+
+    match previous {
+        Some(value) => std::env::set_var("PATHEXT", value),
+        None => std::env::remove_var("PATHEXT"),
+    }
 }
 
 #[test]
