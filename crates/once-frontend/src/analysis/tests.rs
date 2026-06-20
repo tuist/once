@@ -1,5 +1,5 @@
 use super::globals::expand_globs;
-use super::store::HostCache;
+use super::store::{which_candidate_names_for, HostCache};
 use super::*;
 use crate::graph::GraphTarget;
 use crate::target::AttrValue;
@@ -96,6 +96,37 @@ fn host_file_contains_matches_binary_host_files() {
     let store = store_for(tmp.path(), "pkg");
     let (_, contains) = with_active_store(store, || eval_bool(&source).unwrap());
     assert!(contains);
+}
+
+#[test]
+fn windows_host_which_candidates_skip_extensionless_names() {
+    assert_eq!(
+        which_candidate_names_for("rustc", true, Some(".COM;.EXE;.CMD")),
+        vec![
+            "rustc.COM".to_string(),
+            "rustc.com".to_string(),
+            "rustc.EXE".to_string(),
+            "rustc.exe".to_string(),
+            "rustc.CMD".to_string(),
+            "rustc.cmd".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn windows_host_which_candidates_keep_explicit_extensions() {
+    assert_eq!(
+        which_candidate_names_for("rustc.exe", true, Some(".COM;.EXE;.CMD")),
+        vec!["rustc.exe".to_string()]
+    );
+}
+
+#[test]
+fn unix_host_which_candidates_keep_name_verbatim() {
+    assert_eq!(
+        which_candidate_names_for("rustc", false, Some(".COM;.EXE;.CMD")),
+        vec!["rustc".to_string()]
+    );
 }
 
 #[test]
