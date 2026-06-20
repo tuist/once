@@ -21,9 +21,7 @@ fn emit_rerun_if_changed(
     root: &Path,
     visited: &mut BTreeSet<PathBuf>,
 ) -> io::Result<()> {
-    let Some(canonical) = canonical_path(path)? else {
-        return Ok(());
-    };
+    let canonical = path.canonicalize()?;
     if !canonical.starts_with(root) {
         return Ok(());
     }
@@ -46,18 +44,4 @@ fn emit_rerun_if_changed(
     }
 
     Ok(())
-}
-
-fn canonical_path(path: &Path) -> io::Result<Option<PathBuf>> {
-    match path.canonicalize() {
-        Ok(path) => Ok(Some(path)),
-        Err(error) if unresolved_symlink(path) || error.kind() == io::ErrorKind::NotFound => {
-            Ok(None)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-fn unresolved_symlink(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink())
 }
