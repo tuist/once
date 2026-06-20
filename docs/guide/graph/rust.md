@@ -68,7 +68,9 @@ fields. Use `crate_type = "staticlib"` for Apple consumers such as
 `apple_application`, and use `crate_type = "cdylib"` for Android consumers
 such as `android_binary`. Android dynamic libraries also need an ABI, which
 Once can infer from common Android target triples or read from
-`android_abi`.
+`android_abi`. When `ANDROID_NDK_HOME` or `android_ndk` is available,
+Once uses the NDK clang wrapper as the default linker for Android targets.
+Set `android_api` to choose the wrapper API level.
 
 ```toml
 [[target]]
@@ -91,6 +93,7 @@ crate_name = "shared_rust"
 crate_type = "cdylib"
 target = "aarch64-linux-android"
 android_abi = "arm64-v8a"
+android_api = 23
 ```
 
 ## Dependency Resolution

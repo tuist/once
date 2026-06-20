@@ -239,7 +239,10 @@ mod tests {
     use std::time::Duration;
 
     use crate::action::ACTION_DIGEST_DOMAIN;
-    use crate::{Error, OutputSymlinkMode, RemoteExecution, ResourceRequest, WorkspacePath};
+    use crate::{
+        CopyPathMode, Error, OutputSymlinkMode, PreparePathMode, RemoteExecution, ResourceRequest,
+        WorkspacePath,
+    };
     use once_cas::{CacheProvider, Cas, Digest};
     use tempfile::TempDir;
 
@@ -301,7 +304,7 @@ mod tests {
         let (tmp, cas) = fresh_cas();
         let action = Action::WriteFile {
             path: WorkspacePath::try_from("out/generated.txt").unwrap(),
-            content: "generated".to_string(),
+            bytes: b"generated".to_vec(),
             input_digest: Some(Digest::of_bytes(b"write-file")),
         };
 
@@ -330,9 +333,10 @@ mod tests {
         let (tmp, cas) = fresh_cas();
         std::fs::create_dir_all(tmp.path().join("src")).unwrap();
         std::fs::write(tmp.path().join("src/input.txt"), "input").unwrap();
-        let action = Action::CopyFile {
-            source: WorkspacePath::try_from("src/input.txt").unwrap(),
+        let action = Action::CopyPath {
+            sources: vec![WorkspacePath::try_from("src/input.txt").unwrap()],
             destination: WorkspacePath::try_from("out/copied.txt").unwrap(),
+            mode: CopyPathMode::File,
             input_digest: Some(Digest::of_bytes(b"copy-file")),
         };
 
@@ -357,12 +361,13 @@ mod tests {
         std::fs::write(tmp.path().join("src/b/two.txt"), "two").unwrap();
         std::fs::create_dir_all(tmp.path().join("out/tree")).unwrap();
         std::fs::write(tmp.path().join("out/tree/stale.txt"), "stale").unwrap();
-        let action = Action::CopyTree {
+        let action = Action::CopyPath {
             sources: vec![
                 WorkspacePath::try_from("src/a").unwrap(),
                 WorkspacePath::try_from("src/b").unwrap(),
             ],
             destination: WorkspacePath::try_from("out/tree").unwrap(),
+            mode: CopyPathMode::Tree,
             input_digest: Some(Digest::of_bytes(b"copy-tree")),
         };
 
@@ -421,12 +426,14 @@ mod tests {
         let cache = CacheProvider::Local(cas);
         std::fs::create_dir_all(tmp.path().join("out/stale")).unwrap();
         std::fs::write(tmp.path().join("out/stale/file.txt"), "stale").unwrap();
-        let remove = Action::RemovePath {
+        let remove = Action::PreparePath {
             path: WorkspacePath::try_from("out/stale").unwrap(),
+            mode: PreparePathMode::Remove,
             input_digest: Some(Digest::of_bytes(b"remove")),
         };
-        let ensure = Action::EnsureDir {
+        let ensure = Action::PreparePath {
             path: WorkspacePath::try_from("out/stale").unwrap(),
+            mode: PreparePathMode::Directory,
             input_digest: Some(Digest::of_bytes(b"ensure")),
         };
 

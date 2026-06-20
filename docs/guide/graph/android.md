@@ -151,6 +151,11 @@ Android targets find the SDK from `android_sdk`, `ANDROID_HOME`, or
 the target kind picks the highest installed platform or build-tools version
 under the SDK root.
 
+Android APKs that package Swift or Rust native library deps also need the
+Android NDK. Swift Android targets use `ANDROID_NDK_HOME`, `android_ndk`, or
+`tools_directory` to find the NDK linker tools. Rust Android targets use
+`ANDROID_NDK_HOME` or `android_ndk` to choose the default clang wrapper linker.
+
 Java-backed Android targets use `javac`, `jar`, and `java` from the host
 toolchain unless those paths are overridden. The Android SDK tools also
 receive `JAVA_HOME` when it is available, which keeps `d8` and `apksigner`

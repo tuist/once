@@ -210,11 +210,11 @@ fn host_command_cache_keys_on_env() {
 }
 
 #[test]
-fn write_file_records_portable_operation() {
+fn write_path_records_text_operation() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "apps/ios/Mixed");
     let (store, ()) = with_active_store(store, || {
-        run(r#"write_file(".once/out/apps/ios/Mixed/module.modulemap", "module Mixed { export * }\n")"#).unwrap();
+        run(r#"write_path(".once/out/apps/ios/Mixed/module.modulemap", "module Mixed { export * }\n")"#).unwrap();
     });
     assert_eq!(store.actions.len(), 1);
     let action = &store.actions[0];
@@ -227,17 +227,17 @@ fn write_file_records_portable_operation() {
         action.operation,
         Some(DeclaredActionOperation::WriteFile {
             path: ".once/out/apps/ios/Mixed/module.modulemap".to_string(),
-            content: "module Mixed { export * }\n".to_string(),
+            bytes: b"module Mixed { export * }\n".to_vec(),
         })
     );
 }
 
 #[test]
-fn write_bytes_records_portable_operation() {
+fn write_path_records_byte_operation() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "p");
     let (store, ()) = with_active_store(store, || {
-        run(r#"write_bytes(".once/out/p/blob.bin", [0, 1, 2, 254, 255])"#).unwrap();
+        run(r#"write_path(".once/out/p/blob.bin", [0, 1, 2, 254, 255])"#).unwrap();
     });
     assert_eq!(store.actions.len(), 1);
     let action = &store.actions[0];
@@ -245,7 +245,7 @@ fn write_bytes_records_portable_operation() {
     assert!(action.argv.is_empty());
     assert_eq!(
         action.operation,
-        Some(DeclaredActionOperation::WriteBytes {
+        Some(DeclaredActionOperation::WriteFile {
             path: ".once/out/p/blob.bin".to_string(),
             bytes: vec![0, 1, 2, 254, 255],
         })
@@ -259,10 +259,10 @@ fn file_action_globals_record_portable_operations() {
     let (store, ()) = with_active_store(store, || {
         run(
             r#"
-copy_file("src/a.txt", ".once/out/p/a.txt", inputs = ["src/a.txt"], identifier = "copy-a")
-copy_trees(["src/res", "src/assets"], ".once/out/p/staged", inputs = ["src/res/v.txt", "src/assets/a.txt"])
-remove_path(".once/out/p/staged", identifier = "clean-staged")
-ensure_dir(".once/out/p/staged")
+copy_path("src/a.txt", ".once/out/p/a.txt", inputs = ["src/a.txt"], identifier = "copy-a")
+copy_path(["src/res", "src/assets"], ".once/out/p/staged", kind = "tree", inputs = ["src/res/v.txt", "src/assets/a.txt"])
+prepare_path(".once/out/p/staged", kind = "remove", identifier = "clean-staged")
+prepare_path(".once/out/p/staged", kind = "directory")
 write_tree_digest(".once/out/p/staged", ".once/out/p/staged.sha256", include_suffixes = [".txt"])
 "#,
         )
@@ -272,30 +272,34 @@ write_tree_digest(".once/out/p/staged", ".once/out/p/staged.sha256", include_suf
     assert_eq!(store.actions.len(), 5);
     assert_eq!(
         store.actions[0].operation,
-        Some(DeclaredActionOperation::CopyFile {
-            source: "src/a.txt".to_string(),
+        Some(DeclaredActionOperation::CopyPath {
+            sources: vec!["src/a.txt".to_string()],
             destination: ".once/out/p/a.txt".to_string(),
+            mode: DeclaredCopyPathMode::File,
         })
     );
     assert_eq!(store.actions[0].identifier.as_deref(), Some("copy-a"));
     assert_eq!(
         store.actions[1].operation,
-        Some(DeclaredActionOperation::CopyTree {
+        Some(DeclaredActionOperation::CopyPath {
             sources: vec!["src/res".to_string(), "src/assets".to_string()],
             destination: ".once/out/p/staged".to_string(),
+            mode: DeclaredCopyPathMode::Tree,
         })
     );
     assert_eq!(
         store.actions[2].operation,
-        Some(DeclaredActionOperation::RemovePath {
+        Some(DeclaredActionOperation::PreparePath {
             path: ".once/out/p/staged".to_string(),
+            mode: DeclaredPreparePathMode::Remove,
         })
     );
     assert!(!store.actions[2].cacheable);
     assert_eq!(
         store.actions[3].operation,
-        Some(DeclaredActionOperation::EnsureDir {
+        Some(DeclaredActionOperation::PreparePath {
             path: ".once/out/p/staged".to_string(),
+            mode: DeclaredPreparePathMode::Directory,
         })
     );
     assert!(!store.actions[3].cacheable);
@@ -314,7 +318,7 @@ fn write_bytes_rejects_out_of_range_integers() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "p");
     let (_, err) = with_active_store(store, || {
-        run(r#"write_bytes(".once/out/p/blob.bin", [256])"#).unwrap_err()
+        run(r#"write_path(".once/out/p/blob.bin", [256])"#).unwrap_err()
     });
     let message = format!("{err:?}");
     assert!(message.contains("0..=255"), "{message}");

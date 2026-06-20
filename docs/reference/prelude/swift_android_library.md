@@ -15,10 +15,14 @@ Swift SDK, Android NDK sysroot, or extra compiler flags.
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `android_abi` | string | no | inferred | Android ABI directory such as `arm64-v8a`, `armeabi-v7a`, `x86`, or `x86_64`. Inferred from common Android target triples when omitted |
-| `target` | string | no | inferred | Swift target triple. Inferred from `android_abi` when omitted, or set directly when the ABI is inferable |
+| `android_api` | int | no | `28` | Android API level appended to API-less Android target triples |
+| `target` | string | no | inferred | Swift target triple. Inferred from `android_abi` and `android_api` when omitted, or set directly when the ABI is inferable |
 | `module_name` | string | no | target name | Swift module name |
 | `sdk` | string | no |  | Optional sysroot passed to `swiftc -sdk` |
 | `resource_dir` | string | no |  | Optional Swift resource directory passed to `swiftc -resource-dir` |
+| `swift_sdk` | string | no | first Android SDK | Installed Swift SDK identifier used to discover default Android sysroot and Swift resource paths |
+| `android_ndk` | string | no | `ANDROID_NDK_HOME` | Android NDK root used to find the LLVM tool directory |
+| `tools_directory` | string | no | inferred | Directory containing Android clang and linker tools passed as `-tools-directory` |
 | `swiftc` | string | no | `PATH` | Override Swift compiler path |
 | `swift_flags` | list&lt;string&gt; | no | `[]` | Additional Swift compiler flags |
 | `linkopts` | list&lt;string&gt; | no | `[]` | Additional linker flags appended after Once-managed flags |
@@ -73,6 +77,7 @@ srcs = ["Sources/**/*.swift"]
 [target.attrs]
 android_abi = "arm64-v8a"
 module_name = "SharedSwift"
-sdk = "/opt/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/sysroot"
+swift_sdk = "swift-6.3.2-RELEASE_android"
+android_ndk = "/opt/android-ndk"
 swift_flags = ["-O"]
 ```

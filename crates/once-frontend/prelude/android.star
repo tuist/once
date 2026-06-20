@@ -493,8 +493,8 @@ def _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_comp
         argv.extend(["-R", zip])
     for dir in asset_roots:
         argv.extend(["-A", dir])
-    remove_path(r_src_dir, identifier = "android_resource_link_clean:" + label_id)
-    ensure_dir(r_src_dir, identifier = "android_resource_link_prepare:" + label_id)
+    prepare_path(r_src_dir, kind = "remove", identifier = "android_resource_link_clean:" + label_id)
+    prepare_path(r_src_dir, kind = "directory", identifier = "android_resource_link_prepare:" + label_id)
     run_action(
         argv = argv,
         inputs = _unique([manifest] + compiled_zips + dep_compiled_zips + asset_files),
@@ -531,9 +531,9 @@ def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash
     r_java = _android_r_java_source(attrs, r_src_dir)
     if r_java:
         sources_to_compile.append(r_java)
-    remove_path(classes_dir, identifier = "android_java_clean:" + ctx["label"]["id"])
-    ensure_dir(classes_dir, identifier = "android_java_prepare:" + ctx["label"]["id"])
-    write_file(source_list, "\n".join(sources_to_compile) + "\n")
+    prepare_path(classes_dir, kind = "remove", identifier = "android_java_clean:" + ctx["label"]["id"])
+    prepare_path(classes_dir, kind = "directory", identifier = "android_java_prepare:" + ctx["label"]["id"])
+    write_path(source_list, "\n".join(sources_to_compile) + "\n")
     if len(sources_to_compile) > 0:
         run_action(
             argv = base_args + ["@" + source_list],
@@ -564,13 +564,14 @@ def _android_compile_kotlin(ctx, attrs, tools, kotlin_sources, classes_dir, clas
         "-classpath", classpath,
         "-d", merged_classes_dir,
     ] + kotlinc_opts
-    copy_tree(
+    copy_path(
         classes_dir,
         merged_classes_dir,
+        kind = "tree",
         inputs = [classes_hash],
         identifier = "android_kotlin_copy_java_classes:" + ctx["label"]["id"],
     )
-    write_file(source_list, "\n".join(kotlin_sources) + "\n")
+    write_path(source_list, "\n".join(kotlin_sources) + "\n")
     run_action(
         argv = base_args + ["@" + source_list],
         inputs = _unique(kotlin_sources + [classes_hash, source_list] + _android_workspace_inputs(dep_jars)),
@@ -601,22 +602,24 @@ def _android_jar_classes(ctx, tools, classes_dir, classes_hash):
 def _android_package_aar(ctx, attrs, tools, manifest, classes_jar, r_txt, resource_dirs, asset_roots, resource_files, asset_files):
     aar = declare_output(ctx["label"]["name"] + ".aar")
     staging = ctx["build_dir"] + "/aar_staging"
-    remove_path(staging, identifier = "android_aar_clean:" + ctx["label"]["id"])
-    ensure_dir(staging, identifier = "android_aar_prepare:" + ctx["label"]["id"])
-    copy_file(manifest, staging + "/AndroidManifest.xml", inputs = [manifest], identifier = "android_aar_manifest:" + ctx["label"]["id"])
-    copy_file(classes_jar, staging + "/classes.jar", inputs = [classes_jar], identifier = "android_aar_classes:" + ctx["label"]["id"])
-    copy_file(r_txt, staging + "/R.txt", inputs = [r_txt], identifier = "android_aar_rtxt:" + ctx["label"]["id"])
+    prepare_path(staging, kind = "remove", identifier = "android_aar_clean:" + ctx["label"]["id"])
+    prepare_path(staging, kind = "directory", identifier = "android_aar_prepare:" + ctx["label"]["id"])
+    copy_path(manifest, staging + "/AndroidManifest.xml", inputs = [manifest], identifier = "android_aar_manifest:" + ctx["label"]["id"])
+    copy_path(classes_jar, staging + "/classes.jar", inputs = [classes_jar], identifier = "android_aar_classes:" + ctx["label"]["id"])
+    copy_path(r_txt, staging + "/R.txt", inputs = [r_txt], identifier = "android_aar_rtxt:" + ctx["label"]["id"])
     if len(resource_dirs) > 0:
-        copy_trees(
+        copy_path(
             resource_dirs,
             staging + "/res",
+            kind = "tree",
             inputs = resource_files,
             identifier = "android_aar_resources:" + ctx["label"]["id"],
         )
     if len(asset_roots) > 0:
-        copy_trees(
+        copy_path(
             asset_roots,
             staging + "/assets",
+            kind = "tree",
             inputs = asset_files,
             identifier = "android_aar_assets:" + ctx["label"]["id"],
         )
@@ -641,8 +644,8 @@ def _android_dex(ctx, attrs, tools, runtime_jars):
         "--lib", tools["android_jar"],
         "--output", dex_dir,
     ] + dexopts + runtime_jars
-    remove_path(dex_dir, identifier = "android_dex_clean:" + ctx["label"]["id"])
-    ensure_dir(dex_dir, identifier = "android_dex_prepare:" + ctx["label"]["id"])
+    prepare_path(dex_dir, kind = "remove", identifier = "android_dex_clean:" + ctx["label"]["id"])
+    prepare_path(dex_dir, kind = "directory", identifier = "android_dex_prepare:" + ctx["label"]["id"])
     run_action(
         argv = base_args,
         inputs = _android_workspace_inputs(runtime_jars),
@@ -662,7 +665,7 @@ def _android_dex(ctx, attrs, tools, runtime_jars):
 def _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash, native_libraries):
     unsigned_apk = declare_output("unsigned.apk")
     native_staging = ctx["build_dir"] + "/native_staging"
-    copy_file(
+    copy_path(
         resource_apk,
         unsigned_apk,
         inputs = [resource_apk],
@@ -676,14 +679,14 @@ def _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash, n
         toolchain_identity = tools["identity"] + "\x00unsigned_apk_dex",
         identifier = "android_unsigned_apk_dex:" + ctx["label"]["id"],
     )
-    remove_path(native_staging, identifier = "android_native_staging_clean:" + ctx["label"]["id"])
+    prepare_path(native_staging, kind = "remove", identifier = "android_native_staging_clean:" + ctx["label"]["id"])
     for library in native_libraries:
         abi = library.get("abi") or ""
         path = library.get("path") or ""
         if not abi or not path:
             continue
         destination_dir = native_staging + "/lib/" + abi
-        copy_file(
+        copy_path(
             path,
             destination_dir + "/" + _android_basename(path),
             inputs = [path],
@@ -716,7 +719,7 @@ def _android_sign_or_copy(ctx, attrs, tools, aligned_apk):
     apk = _android_apk_output(ctx)
     signing = _android_attr(attrs, "signing", "debug")
     if signing == "none":
-        copy_file(
+        copy_path(
             aligned_apk,
             apk,
             inputs = [aligned_apk],
@@ -735,7 +738,7 @@ def _android_sign_or_copy(ctx, attrs, tools, aligned_apk):
     if debug_keystore:
         source_keystore = _package_relative(ctx, debug_keystore)
         inputs.append(source_keystore)
-        copy_file(
+        copy_path(
             source_keystore,
             keystore,
             inputs = [source_keystore],

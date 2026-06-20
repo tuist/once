@@ -57,6 +57,14 @@ def _kotlin_apple_trim_framework_suffix(path):
         return path[:len(path) - len(suffix)]
     return path
 
+def _kotlin_apple_java_env(attrs):
+    env = {}
+    java_home = _kotlin_apple_attr(attrs, "java_home", "") or host_env("JAVA_HOME")
+    if java_home:
+        env["JAVA_HOME"] = java_home
+        env["PATH"] = java_home + "/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    return env
+
 def _kotlin_apple_framework_impl(ctx):
     attrs = ctx["attr"]
     platform = _kotlin_apple_attr(attrs, "platform", "")
@@ -76,9 +84,19 @@ def _kotlin_apple_framework_impl(ctx):
 
     tool, identity = _kotlin_apple_tool(ctx, attrs)
     framework_dir = product_name + ".framework"
-    framework_path = declare_output(framework_dir)
+    framework_path = ctx["build_dir"] + "/" + framework_dir
+    framework_binary = declare_output(framework_dir + "/" + product_name)
+    framework_header = declare_output(framework_dir + "/Headers/" + product_name + ".h")
+    framework_modulemap = declare_output(framework_dir + "/Modules/module.modulemap")
+    framework_info_plist = declare_output(framework_dir + "/Info.plist")
+    framework_files = [
+        framework_binary,
+        framework_header,
+        framework_modulemap,
+        framework_info_plist,
+    ]
     output_base = _kotlin_apple_trim_framework_suffix(framework_path)
-    compile_env = {}
+    compile_env = _kotlin_apple_java_env(attrs)
     if konan_data_dir:
         compile_env["KONAN_DATA_DIR"] = konan_data_dir
     argv = [
@@ -89,18 +107,17 @@ def _kotlin_apple_framework_impl(ctx):
         "-o", output_base,
     ] + compiler_opts + sources
 
-    remove_path(framework_path, identifier = "kotlin_apple_framework_clean:" + ctx["label"]["id"])
+    prepare_path(framework_path, kind = "remove", identifier = "kotlin_apple_framework_clean:" + ctx["label"]["id"])
 
     run_action(
         argv = argv,
         inputs = sources,
-        outputs = [framework_path],
+        outputs = framework_files,
         env = compile_env,
         toolchain_identity = identity + "\x00target\x00" + target + "\x00module\x00" + module_name,
         identifier = "kotlin_apple_framework:" + ctx["label"]["id"],
     )
 
-    framework_files = [framework_path]
     return {
         "label_id": ctx["label"]["id"],
         "target_kind": "kotlin_apple_framework",
@@ -126,6 +143,7 @@ kotlin_apple_framework = target_kind(
         attr("module_name", "string", docs = "Swift/ObjC module name exported by the framework. Defaults to product_name.", configurable = False),
         attr("kotlinc_native", "string", docs = "Override kotlinc-native path.", configurable = False),
         attr("kotlin_home", "string", docs = "Kotlin/Native installation root used to find bin/kotlinc-native.", configurable = False),
+        attr("java_home", "string", docs = "Java runtime home exposed to kotlinc-native. Defaults to JAVA_HOME when available.", configurable = False),
         attr("konan_data_dir", "string", docs = "Optional Kotlin/Native cache directory exposed as KONAN_DATA_DIR.", configurable = False),
         attr("compiler_opts", "list<string>", default = "[]", docs = "Additional kotlinc-native arguments appended after Once-managed flags.", configurable = False),
     ],

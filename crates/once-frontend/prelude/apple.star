@@ -296,7 +296,7 @@ def _serialize_hmap(entries):
     return out
 
 def _write_hmap(path, entries):
-    write_bytes(path, _serialize_hmap(entries))
+    write_path(path, _serialize_hmap(entries))
 
 # Normalise a dep reference written in `[target.attrs]` (`./AppCore`,
 # `../web/Common`, or a root-relative `apps/ios/AppCore`) to the
@@ -838,7 +838,7 @@ def _apple_library_impl(ctx):
         modulemap_lines.append("    export *")
         modulemap_lines.append("}")
         modulemap_lines.append("")
-        write_file(modulemap_path, "\n".join(modulemap_lines))
+        write_path(modulemap_path, "\n".join(modulemap_lines))
 
     # Header map generation: cover the `#include "Foo.h"` and
     # `#include <Module/Foo.h>` lookup styles that a pure modulemap
@@ -1361,11 +1361,6 @@ def _collect_dep_compile_inputs(deps, build_dir):
             module_name = dep.get("framework_module_name")
             if module_name and module_name not in framework_module_names:
                 framework_module_names.append(module_name)
-            # The framework's Modules/ directory hosts the swiftmodule
-            # consumers need on their `-I` search path.
-            modules_dir = framework_path + "/Modules"
-            if modules_dir not in swiftmodule_dirs:
-                swiftmodule_dirs.append(modules_dir)
         for fw in dep.get("transitive_sdk_frameworks") or []:
             if fw and fw not in sdk_frameworks:
                 sdk_frameworks.append(fw)
@@ -1528,7 +1523,7 @@ def _apple_framework_impl(ctx):
     # header declaration, and the bundled framework relies on the
     # Swift compiler reading the `.swiftmodule` in this same Modules/
     # directory rather than on an inferred ObjC submodule.
-    write_file(modulemap, "framework module " + module_name + " {\n    export *\n}\n")
+    write_path(modulemap, "framework module " + module_name + " {\n    export *\n}\n")
 
     plist_entries = {
         "CFBundleDevelopmentRegion": "en",
@@ -1541,7 +1536,7 @@ def _apple_framework_impl(ctx):
         "CFBundleVersion": "1",
         "MinimumOSVersion": minimum_os,
     }
-    write_file(info_plist, _render_plist(plist_entries))
+    write_path(info_plist, _render_plist(plist_entries))
 
     # Ad-hoc codesign so iOS simulator's dyld accepts the dylib when
     # the embedding app loads it.
@@ -1795,7 +1790,7 @@ def _apple_application_impl(ctx):
         elif family == "ipad":
             device_family_codes.append({"integer": 2})
     array_entries = {"UIDeviceFamily": device_family_codes}
-    write_file(info_plist, _render_plist(plist_entries, bool_entries, array_entries))
+    write_path(info_plist, _render_plist(plist_entries, bool_entries, array_entries))
 
     # Embed each transitive dep framework into App.app/Frameworks/.
     # Each framework is copied as a whole bundle directory and
@@ -1832,10 +1827,11 @@ def _apple_application_impl(ctx):
             embed_outputs.append(embedded_stamp)
         embed_inputs = list(source_files)
         embedded_framework_path = ctx["build_dir"] + "/" + app_dir + "/Frameworks/" + framework_basename
-        remove_path(embedded_framework_path, identifier = "apple_application_embed_clean_" + framework_basename)
-        copy_tree(
+        prepare_path(embedded_framework_path, kind = "remove", identifier = "apple_application_embed_clean_" + framework_basename)
+        copy_path(
             framework_path,
             embedded_framework_path,
+            kind = "tree",
             inputs = embed_inputs,
             identifier = "apple_application_embed_copy_" + framework_basename,
         )
@@ -2048,7 +2044,7 @@ def _apple_test_bundle_impl(ctx):
         "CFBundleVersion": "1",
         "MinimumOSVersion": minimum_os,
     }
-    write_file(info_plist, _render_plist(plist_entries))
+    write_path(info_plist, _render_plist(plist_entries))
 
     cs_xcrun, codesign_path, cs_identity, cs_env = _xcrun_codesign(xcode_developer_dir)
     if platform == "macos" or platform == "macosx":

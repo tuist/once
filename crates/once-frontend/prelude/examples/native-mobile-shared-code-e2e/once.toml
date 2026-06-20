@@ -51,6 +51,7 @@ deps = ["./SharedSwiftAndroid", "./SharedRustAndroid"]
 application_id = "dev.once.shared"
 manifest = "android/AndroidManifest.xml"
 resource_files = ["android/res/**"]
+resource_dirs = ["android/res"]
 min_sdk_version = 23
 version_code = 1
 version_name = "1.0"

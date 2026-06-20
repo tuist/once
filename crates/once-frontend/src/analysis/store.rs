@@ -13,31 +13,36 @@ use serde::{Deserialize, Serialize};
 pub enum DeclaredActionOperation {
     WriteFile {
         path: String,
-        content: String,
-    },
-    WriteBytes {
-        path: String,
         bytes: Vec<u8>,
     },
-    CopyFile {
-        source: String,
-        destination: String,
-    },
-    CopyTree {
+    CopyPath {
         sources: Vec<String>,
         destination: String,
+        mode: DeclaredCopyPathMode,
     },
-    RemovePath {
+    PreparePath {
         path: String,
-    },
-    EnsureDir {
-        path: String,
+        mode: DeclaredPreparePathMode,
     },
     WriteTreeDigest {
         root: String,
         output: String,
         include_suffixes: Vec<String>,
     },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredCopyPathMode {
+    File,
+    Tree,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredPreparePathMode {
+    Remove,
+    Directory,
 }
 
 /// A single action declared by a target kind impl.

@@ -131,11 +131,69 @@ def _rust_linker(ctx, crate_type, target, host_triple):
     if crate_type != "bin" and crate_type != "staticlib" and crate_type != "cdylib" and crate_type != "dylib" and crate_type != "proc-macro":
         return ([], "")
     linker = _rust_attr(ctx, "linker", "")
+    if not linker and "android" in target:
+        linker = _rust_android_linker(ctx, target)
     if not linker and host_os() != "windows" and (not target or target == host_triple):
         linker = host_which("cc")
     if not linker:
         return ([], "")
     return (["-C", "linker=" + linker], "\x00linker\x00" + linker + "\x00target\x00" + target)
+
+def _rust_android_tool_prefix(target):
+    if target.startswith("aarch64"):
+        return "aarch64-linux-android"
+    if target.startswith("armv7"):
+        return "armv7a-linux-androideabi"
+    if target.startswith("i686"):
+        return "i686-linux-android"
+    if target.startswith("x86_64"):
+        return "x86_64-linux-android"
+    return ""
+
+def _rust_android_ndk_root(ctx):
+    return _rust_attr(ctx, "android_ndk", "") or host_env("ANDROID_NDK_HOME")
+
+def _rust_android_ndk_tool_dir(ctx):
+    ndk = _rust_android_ndk_root(ctx)
+    if not ndk:
+        return ""
+    candidates = []
+    os = host_os()
+    arch = host_arch()
+    if os == "macos":
+        candidates.extend(["darwin-" + arch, "darwin-arm64", "darwin-x86_64"])
+    elif os == "linux":
+        candidates.extend(["linux-" + arch, "linux-x86_64", "linux-arm64"])
+    elif os == "windows":
+        candidates.extend(["windows-" + arch, "windows-x86_64"])
+    for tag in _unique(candidates):
+        directory = ndk + "/toolchains/llvm/prebuilt/" + tag + "/bin"
+        if host_file_exists(directory + "/" + _host_exe("clang")):
+            return directory
+    fail(ctx["label"]["id"] + ": Android NDK under `" + ndk + "` has no usable LLVM prebuilt for this host")
+
+def _rust_android_linker(ctx, target):
+    prefix = _rust_android_tool_prefix(target)
+    if not prefix:
+        fail(ctx["label"]["id"] + ": set `linker`; Once could not infer an Android NDK linker for target `" + target + "`")
+    tool_dir = _rust_android_ndk_tool_dir(ctx)
+    if not tool_dir:
+        fail(ctx["label"]["id"] + ": set `android_ndk`, ANDROID_NDK_HOME, or `linker` so Once can find the Android NDK linker")
+    api = str(_rust_attr(ctx, "android_api", 23))
+    return tool_dir + "/" + prefix + api + "-clang"
+
+def _rust_android_compile_env(ctx, target):
+    if "android" not in target:
+        return {}
+    tool_dir = _rust_android_ndk_tool_dir(ctx)
+    env = {}
+    ndk = _rust_android_ndk_root(ctx)
+    if ndk:
+        env["ANDROID_NDK_HOME"] = ndk
+    path = _rust_tool_path([tool_dir + "/" + _host_exe("clang")])
+    if path:
+        env["PATH"] = path
+    return env
 
 def _rust_features(ctx):
     flags = []
@@ -580,8 +638,8 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     )
     run_env = _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path)
     metadata_exports, metadata_inputs = _rust_dep_metadata_exports(metadata_deps)
-    ensure_dir(out_dir, identifier = ctx["label"]["id"] + ":build-script-out-dir")
-    remove_path(out_dir + "/.once-build-script-status", identifier = ctx["label"]["id"] + ":build-script-status-clean")
+    prepare_path(out_dir, kind = "directory", identifier = ctx["label"]["id"] + ":build-script-out-dir")
+    prepare_path(out_dir + "/.once-build-script-status", kind = "remove", identifier = ctx["label"]["id"] + ":build-script-status-clean")
     run_script = _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports)
     run_action(
         argv = [host_which("sh"), "-c", run_script],
@@ -763,6 +821,9 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     build_dep_inputs = _rust_dep_inputs(build_deps)
     build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps)
     compile_env = build_env if build_env else _rust_compile_env(ctx)
+    for key, value in _rust_android_compile_env(ctx, target).items():
+        if key not in compile_env:
+            compile_env[key] = value
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
     argv = [
         rustc,
@@ -1567,10 +1628,12 @@ _RUST_COMMON_ATTRS = [
     attr("rustc_env", "map<string, string>", default = "{}", docs = "Bazel-compatible rustc environment variables.", configurable = False),
     attr("rustc_flags", "list<string>", default = "[]", docs = "Additional rustc flags appended after Once-managed flags.", configurable = False),
     attr("cap_lints", "string", docs = "Optional rustc lint cap passed as `--cap-lints`; generated Cargo dependencies use `allow` to match Cargo dependency builds.", configurable = False),
-    attr("linker", "string", docs = "Optional linker path passed as `-C linker=...`. Defaults to `cc` for host Unix binary-like targets and is omitted for cross targets unless set.", configurable = False),
+    attr("linker", "string", docs = "Optional linker path passed as `-C linker=...`. Defaults to `cc` for host Unix binary-like targets and to the Android NDK clang wrapper for Android targets when ANDROID_NDK_HOME or android_ndk is set.", configurable = False),
     attr("linker_flags", "list<string>", default = "[]", docs = "Additional linker flags lowered to `-C link-arg=...`.", configurable = False),
     attr("native_linkopts", "list<string>", default = "[]", docs = "Linker flags propagated to native consumers such as Apple app or framework targets.", configurable = False),
     attr("android_abi", "string", docs = "Android ABI directory for cdylib or dylib outputs, such as `arm64-v8a`; inferred from common Android target triples when omitted.", configurable = False),
+    attr("android_api", "int", default = "23", docs = "Android API level used to select the NDK clang wrapper for Android targets.", configurable = False),
+    attr("android_ndk", "string", docs = "Android NDK root used to find clang wrapper linkers. Defaults to ANDROID_NDK_HOME.", configurable = False),
     attr("crate_aliases", "map<string, string>", default = "{}", docs = "Map dependency label, package name, or crate name to the local extern crate name.", configurable = False),
     attr("cargo_package", "string", docs = "Cargo package name used to select direct external deps from a cargo_dependencies dependency set. Defaults to CARGO_PKG_NAME when present.", configurable = False),
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),

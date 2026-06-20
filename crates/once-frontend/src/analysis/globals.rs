@@ -12,6 +12,7 @@ use starlark::values::Value;
 
 use super::store::{
     analysis_active, with_store, with_store_mut, DeclaredAction, DeclaredActionOperation,
+    DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
 use super::values::{
     json_to_value, toml_value_to_starlark, unpack_byte_list, unpack_string_dict, unpack_string_list,
@@ -170,47 +171,16 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
-    /// Declare a portable action that materialises `content` at the
-    /// workspace-relative `path`. The content is hashed into the
-    /// action digest so any edit invalidates downstream consumers.
-    #[allow(clippy::unnecessary_wraps)]
-    fn write_file(path: &str, content: &str) -> anyhow::Result<NoneType> {
+    /// Declare a portable action that writes text or bytes at the
+    /// workspace-relative `path`. `content` may be a string or a list
+    /// of integers in `0..=255`.
+    fn write_path<'v>(path: &str, content: Value<'v>) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
         }
+        let bytes = unpack_write_content(content)?;
         let action = DeclaredAction {
             operation: Some(DeclaredActionOperation::WriteFile {
-                path: path.to_string(),
-                content: content.to_string(),
-            }),
-            argv: Vec::new(),
-            inputs: Vec::new(),
-            outputs: vec![path.to_string()],
-            env: BTreeMap::new(),
-            cacheable: true,
-            toolchain_identity: None,
-            identifier: Some(format!("write_file:{path}")),
-        };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
-        Ok(NoneType)
-    }
-
-    /// Declare a portable action that materialises raw bytes at
-    /// `path`. `bytes` is a list of integers in `0..=255`.
-    /// Domain-specific binary formats are constructed in the prelude
-    /// and emitted through this primitive.
-    #[allow(clippy::unnecessary_wraps)]
-    fn write_bytes<'v>(path: &str, bytes: Value<'v>) -> anyhow::Result<NoneType> {
-        if !analysis_active() {
-            return Ok(NoneType);
-        }
-        let bytes = unpack_byte_list(bytes, "bytes")?;
-        let action = DeclaredAction {
-            operation: Some(DeclaredActionOperation::WriteBytes {
                 path: path.to_string(),
                 bytes,
             }),
@@ -220,7 +190,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             env: BTreeMap::new(),
             cacheable: true,
             toolchain_identity: None,
-            identifier: Some(format!("write_bytes:{path}")),
+            identifier: Some(format!("write_path:{path}")),
         };
         with_store_mut(|store| {
             if let Some(store) = store {
@@ -230,13 +200,13 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
-    /// Declare a portable action that copies one file. `inputs`
-    /// should include `source` when it is a workspace source file.
-    /// Generated outputs from previous actions are already covered by
-    /// same-target action dependencies.
-    fn copy_file<'v>(
-        source: &str,
+    /// Declare a portable copy action. `kind` is `"file"` by default
+    /// or `"tree"` to copy directory contents. Tree copies accept one
+    /// source string or a list of source directories.
+    fn copy_path<'v>(
+        source: Value<'v>,
         destination: &str,
+        kind: Option<String>,
         inputs: Option<Value<'v>>,
         toolchain_identity: Option<String>,
         identifier: Option<String>,
@@ -245,93 +215,17 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(NoneType);
         }
+        let mode = parse_copy_path_mode(kind.as_deref())?;
+        let sources = unpack_copy_sources(source, mode)?;
         let inputs = inputs
             .map(|value| unpack_string_list(value, "inputs"))
             .transpose()?
             .unwrap_or_default();
         let action = DeclaredAction {
-            operation: Some(DeclaredActionOperation::CopyFile {
-                source: source.to_string(),
-                destination: destination.to_string(),
-            }),
-            argv: Vec::new(),
-            inputs,
-            outputs: vec![destination.to_string()],
-            env: BTreeMap::new(),
-            cacheable: cacheable.unwrap_or(true),
-            toolchain_identity,
-            identifier: Some(identifier.unwrap_or_else(|| format!("copy_file:{destination}"))),
-        };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
-        Ok(NoneType)
-    }
-
-    /// Declare a portable action that copies the contents of a source
-    /// directory into a destination directory. `inputs` should list
-    /// source files when the source tree is not produced by an earlier
-    /// action or dependency.
-    fn copy_tree<'v>(
-        source: &str,
-        destination: &str,
-        inputs: Option<Value<'v>>,
-        toolchain_identity: Option<String>,
-        identifier: Option<String>,
-        cacheable: Option<bool>,
-    ) -> anyhow::Result<NoneType> {
-        if !analysis_active() {
-            return Ok(NoneType);
-        }
-        let inputs = inputs
-            .map(|value| unpack_string_list(value, "inputs"))
-            .transpose()?
-            .unwrap_or_default();
-        let action = DeclaredAction {
-            operation: Some(DeclaredActionOperation::CopyTree {
-                sources: vec![source.to_string()],
-                destination: destination.to_string(),
-            }),
-            argv: Vec::new(),
-            inputs,
-            outputs: vec![destination.to_string()],
-            env: BTreeMap::new(),
-            cacheable: cacheable.unwrap_or(true),
-            toolchain_identity,
-            identifier: Some(identifier.unwrap_or_else(|| format!("copy_tree:{destination}"))),
-        };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
-        Ok(NoneType)
-    }
-
-    /// Declare a portable action that copies the contents of several
-    /// source directories into one destination directory.
-    fn copy_trees<'v>(
-        sources: Value<'v>,
-        destination: &str,
-        inputs: Option<Value<'v>>,
-        toolchain_identity: Option<String>,
-        identifier: Option<String>,
-        cacheable: Option<bool>,
-    ) -> anyhow::Result<NoneType> {
-        if !analysis_active() {
-            return Ok(NoneType);
-        }
-        let sources = unpack_string_list(sources, "sources")?;
-        let inputs = inputs
-            .map(|value| unpack_string_list(value, "inputs"))
-            .transpose()?
-            .unwrap_or_default();
-        let action = DeclaredAction {
-            operation: Some(DeclaredActionOperation::CopyTree {
+            operation: Some(DeclaredActionOperation::CopyPath {
                 sources,
                 destination: destination.to_string(),
+                mode,
             }),
             argv: Vec::new(),
             inputs,
@@ -339,7 +233,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             env: BTreeMap::new(),
             cacheable: cacheable.unwrap_or(true),
             toolchain_identity,
-            identifier: Some(identifier.unwrap_or_else(|| format!("copy_tree:{destination}"))),
+            identifier: Some(identifier.unwrap_or_else(|| format!("copy_path:{destination}"))),
         };
         with_store_mut(|store| {
             if let Some(store) = store {
@@ -349,52 +243,33 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
-    /// Declare an uncached portable action that removes a workspace
-    /// path if it exists. Use this before native tools that merge into
-    /// existing output directories.
-    #[allow(clippy::unnecessary_wraps)]
-    fn remove_path(path: &str, identifier: Option<String>) -> anyhow::Result<NoneType> {
+    /// Declare an uncached portable path preparation action. `kind`
+    /// must be `"remove"` or `"directory"`.
+    fn prepare_path(
+        path: &str,
+        kind: &str,
+        identifier: Option<String>,
+    ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
         }
-        let action = DeclaredAction {
-            operation: Some(DeclaredActionOperation::RemovePath {
-                path: path.to_string(),
-            }),
-            argv: Vec::new(),
-            inputs: Vec::new(),
-            outputs: Vec::new(),
-            env: BTreeMap::new(),
-            cacheable: false,
-            toolchain_identity: None,
-            identifier: Some(identifier.unwrap_or_else(|| format!("remove_path:{path}"))),
+        let mode = parse_prepare_path_mode(kind)?;
+        let outputs = match mode {
+            DeclaredPreparePathMode::Remove => Vec::new(),
+            DeclaredPreparePathMode::Directory => vec![path.to_string()],
         };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
-        Ok(NoneType)
-    }
-
-    /// Declare an uncached portable action that creates a workspace
-    /// directory and any missing parents.
-    #[allow(clippy::unnecessary_wraps)]
-    fn ensure_dir(path: &str, identifier: Option<String>) -> anyhow::Result<NoneType> {
-        if !analysis_active() {
-            return Ok(NoneType);
-        }
         let action = DeclaredAction {
-            operation: Some(DeclaredActionOperation::EnsureDir {
+            operation: Some(DeclaredActionOperation::PreparePath {
                 path: path.to_string(),
+                mode,
             }),
             argv: Vec::new(),
             inputs: Vec::new(),
-            outputs: vec![path.to_string()],
+            outputs,
             env: BTreeMap::new(),
             cacheable: false,
             toolchain_identity: None,
-            identifier: Some(identifier.unwrap_or_else(|| format!("ensure_dir:{path}"))),
+            identifier: Some(identifier.unwrap_or_else(|| format!("prepare_path:{kind}:{path}"))),
         };
         with_store_mut(|store| {
             if let Some(store) = store {
@@ -509,6 +384,50 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     fn json_decode<'v>(src: &str, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
         let value: JsonValue = serde_json::from_str(src)?;
         Ok(json_to_value(eval, &value))
+    }
+}
+
+fn unpack_write_content(content: Value<'_>) -> Result<Vec<u8>> {
+    if let Some(string) = content.unpack_str() {
+        return Ok(string.as_bytes().to_vec());
+    }
+    unpack_byte_list(content, "content")
+}
+
+fn parse_copy_path_mode(kind: Option<&str>) -> Result<DeclaredCopyPathMode> {
+    match kind.unwrap_or("file") {
+        "file" => Ok(DeclaredCopyPathMode::File),
+        "tree" => Ok(DeclaredCopyPathMode::Tree),
+        other => Err(anyhow!(
+            "expected `kind` to be `file` or `tree`, got `{other}`"
+        )),
+    }
+}
+
+fn unpack_copy_sources(source: Value<'_>, mode: DeclaredCopyPathMode) -> Result<Vec<String>> {
+    let sources = if let Some(source) = source.unpack_str() {
+        vec![source.to_string()]
+    } else {
+        unpack_string_list(source, "source")?
+    };
+    match mode {
+        DeclaredCopyPathMode::File if sources.len() != 1 => Err(anyhow!(
+            "`copy_path` with kind `file` requires exactly one source"
+        )),
+        DeclaredCopyPathMode::Tree if sources.is_empty() => Err(anyhow!(
+            "`copy_path` with kind `tree` requires at least one source"
+        )),
+        _ => Ok(sources),
+    }
+}
+
+fn parse_prepare_path_mode(kind: &str) -> Result<DeclaredPreparePathMode> {
+    match kind {
+        "remove" => Ok(DeclaredPreparePathMode::Remove),
+        "directory" => Ok(DeclaredPreparePathMode::Directory),
+        other => Err(anyhow!(
+            "expected `kind` to be `remove` or `directory`, got `{other}`"
+        )),
     }
 }
 

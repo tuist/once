@@ -8,10 +8,13 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
-    Action, EvidenceCacheState, EvidenceSubject, InputDigestBuilder, OutputSymlinkMode,
-    ResourceRequest, RunOpts, WorkspacePath,
+    Action, CopyPathMode, EvidenceCacheState, EvidenceSubject, InputDigestBuilder,
+    OutputSymlinkMode, PreparePathMode, ResourceRequest, RunOpts, WorkspacePath,
 };
-use once_frontend::analysis::{AnalysisResult, DeclaredAction, DeclaredActionOperation};
+use once_frontend::analysis::{
+    AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredCopyPathMode,
+    DeclaredPreparePathMode,
+};
 use once_frontend::GraphTarget;
 use tokio::process::Command;
 
@@ -451,11 +454,8 @@ async fn run_uncached_action(
             Ok(result)
         }
         Action::WriteFile { .. }
-        | Action::WriteBytes { .. }
-        | Action::CopyFile { .. }
-        | Action::CopyTree { .. }
-        | Action::RemovePath { .. }
-        | Action::EnsureDir { .. }
+        | Action::CopyPath { .. }
+        | Action::PreparePath { .. }
         | Action::WriteTreeDigest { .. } => {
             once_core::run_uncached(action, workspace, cache, false)
                 .await
@@ -648,41 +648,33 @@ fn declared_to_action(
 
 fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest) -> Result<Action> {
     Ok(match operation {
-        DeclaredActionOperation::WriteFile { path, content } => Action::WriteFile {
-            path: workspace_path(&path, "write_file path")?,
-            content,
-            input_digest: Some(input_digest),
-        },
-        DeclaredActionOperation::WriteBytes { path, bytes } => Action::WriteBytes {
-            path: workspace_path(&path, "write_bytes path")?,
+        DeclaredActionOperation::WriteFile { path, bytes } => Action::WriteFile {
+            path: workspace_path(&path, "write_path path")?,
             bytes,
             input_digest: Some(input_digest),
         },
-        DeclaredActionOperation::CopyFile {
-            source,
-            destination,
-        } => Action::CopyFile {
-            source: workspace_path(&source, "copy_file source")?,
-            destination: workspace_path(&destination, "copy_file destination")?,
-            input_digest: Some(input_digest),
-        },
-        DeclaredActionOperation::CopyTree {
+        DeclaredActionOperation::CopyPath {
             sources,
             destination,
-        } => Action::CopyTree {
+            mode,
+        } => Action::CopyPath {
             sources: sources
                 .iter()
-                .map(|source| workspace_path(source, "copy_tree source"))
+                .map(|source| workspace_path(source, "copy_path source"))
                 .collect::<Result<Vec<_>>>()?,
-            destination: workspace_path(&destination, "copy_tree destination")?,
+            destination: workspace_path(&destination, "copy_path destination")?,
+            mode: match mode {
+                DeclaredCopyPathMode::File => CopyPathMode::File,
+                DeclaredCopyPathMode::Tree => CopyPathMode::Tree,
+            },
             input_digest: Some(input_digest),
         },
-        DeclaredActionOperation::RemovePath { path } => Action::RemovePath {
-            path: workspace_path(&path, "remove_path path")?,
-            input_digest: Some(input_digest),
-        },
-        DeclaredActionOperation::EnsureDir { path } => Action::EnsureDir {
-            path: workspace_path(&path, "ensure_dir path")?,
+        DeclaredActionOperation::PreparePath { path, mode } => Action::PreparePath {
+            path: workspace_path(&path, "prepare_path path")?,
+            mode: match mode {
+                DeclaredPreparePathMode::Remove => PreparePathMode::Remove,
+                DeclaredPreparePathMode::Directory => PreparePathMode::Directory,
+            },
             input_digest: Some(input_digest),
         },
         DeclaredActionOperation::WriteTreeDigest {

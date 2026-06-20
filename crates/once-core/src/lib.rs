@@ -24,7 +24,7 @@ mod store;
 mod stream;
 mod xdg;
 
-pub use action::{Action, OutputSymlinkMode, RemoteExecution};
+pub use action::{Action, CopyPathMode, OutputSymlinkMode, PreparePathMode, RemoteExecution};
 pub use env::{
     select_tool_env, tool_env, workspace_tool, workspace_tool_env, workspace_tool_var, ToolEnvError,
 };

@@ -4,7 +4,7 @@ use std::process::Command;
 
 use once_frontend::analysis::{
     globals_for_prelude, target_kind_has_impl, with_active_store, AnalysisStore,
-    DeclaredActionOperation,
+    DeclaredActionOperation, DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
 use once_frontend::{built_in_target_kind_schema, graph_from_targets, Target};
 use starlark::environment::Module;
@@ -228,9 +228,10 @@ result = repr("ok")
     assert_eq!(store.actions.len(), 5);
     assert_eq!(
         store.actions[0].operation,
-        Some(DeclaredActionOperation::CopyFile {
-            source: ".once/out/apps/hello/Hello/resources.apk".to_string(),
+        Some(DeclaredActionOperation::CopyPath {
+            sources: vec![".once/out/apps/hello/Hello/resources.apk".to_string()],
             destination: ".once/out/apps/hello/Hello/unsigned.apk".to_string(),
+            mode: DeclaredCopyPathMode::File,
         })
     );
     assert_eq!(
@@ -239,17 +240,19 @@ result = repr("ok")
     );
     assert_eq!(
         store.actions[2].operation,
-        Some(DeclaredActionOperation::RemovePath {
+        Some(DeclaredActionOperation::PreparePath {
             path: ".once/out/apps/hello/Hello/native_staging".to_string(),
+            mode: DeclaredPreparePathMode::Remove,
         })
     );
     let action = &store.actions[3];
     assert_eq!(
         action.operation,
-        Some(DeclaredActionOperation::CopyFile {
-            source: ".once/out/shared/libshared.so".to_string(),
+        Some(DeclaredActionOperation::CopyPath {
+            sources: vec![".once/out/shared/libshared.so".to_string()],
             destination: ".once/out/apps/hello/Hello/native_staging/lib/arm64-v8a/libshared.so"
                 .to_string(),
+            mode: DeclaredCopyPathMode::File,
         })
     );
     assert_eq!(action.inputs, vec![".once/out/shared/libshared.so"]);
@@ -291,6 +294,9 @@ ctx = {{
     "attr": {{
         "android_abi": "arm64-v8a",
         "module_name": "SharedSwift",
+        "sdk": "/android/sdk",
+        "resource_dir": "/swift/android/resources",
+        "tools_directory": "/android/ndk/bin",
     }},
     "deps": [{{
         "transitive_swiftmodule_dirs": [".once/out/shared/swift/Dep"],
@@ -313,7 +319,7 @@ result = repr([
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     let out = out.unwrap();
-    assert!(out.contains("aarch64-unknown-linux-android"), "{out}");
+    assert!(out.contains("aarch64-unknown-linux-android28"), "{out}");
     assert!(out.contains("arm64-v8a"), "{out}");
     assert!(out.contains("libSharedSwift.so"), "{out}");
     assert!(out.contains("libdep.so"), "{out}");
@@ -325,6 +331,7 @@ result = repr([
     );
     assert!(action.argv.iter().any(|arg| arg == "-emit-library"));
     assert!(action.argv.iter().any(|arg| arg == "-target"));
+    assert!(action.argv.iter().any(|arg| arg == "-tools-directory"));
     assert!(action
         .inputs
         .iter()
@@ -477,16 +484,17 @@ result = repr([classes_dir, classes_hash])
     assert_eq!(store.actions.len(), 4);
     assert_eq!(
         store.actions[0].operation,
-        Some(DeclaredActionOperation::CopyTree {
+        Some(DeclaredActionOperation::CopyPath {
             sources: vec![".once/out/apps/hello/Hello/java_classes".to_string()],
             destination: ".once/out/apps/hello/Hello/classes".to_string(),
+            mode: DeclaredCopyPathMode::Tree,
         })
     );
     assert_eq!(
         store.actions[1].operation,
         Some(DeclaredActionOperation::WriteFile {
             path: ".once/out/apps/hello/Hello/kotlin_sources.list".to_string(),
-            content: "apps/hello/src/MainActivity.kt\n".to_string(),
+            bytes: b"apps/hello/src/MainActivity.kt\n".to_vec(),
         })
     );
     let action = &store.actions[2];
@@ -568,9 +576,10 @@ result = repr([apk, keystore])
     assert_eq!(store.actions.len(), 2);
     assert_eq!(
         store.actions[0].operation,
-        Some(DeclaredActionOperation::CopyFile {
-            source: "apps/hello/debug.keystore".to_string(),
+        Some(DeclaredActionOperation::CopyPath {
+            sources: vec!["apps/hello/debug.keystore".to_string()],
             destination: ".once/out/apps/hello/Hello/debug.keystore".to_string(),
+            mode: DeclaredCopyPathMode::File,
         })
     );
     let action = &store.actions[1];

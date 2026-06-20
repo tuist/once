@@ -4,7 +4,10 @@ use std::path::Path;
 use once_cas::{ActionResult, CacheProvider};
 use sha2::Digest as ShaDigest;
 
-use crate::{local, outputs, remote, Action, Error, OutputSymlinkMode, Result, WorkspacePath};
+use crate::{
+    local, outputs, remote, Action, CopyPathMode, Error, OutputSymlinkMode, PreparePathMode,
+    Result, WorkspacePath,
+};
 
 pub(crate) async fn run(
     action: &Action,
@@ -26,40 +29,42 @@ pub(crate) async fn run(
             }
             Ok(result)
         }
-        Action::WriteFile { path, content, .. } => {
-            write_file(path, content.as_bytes(), workspace_root).await?;
-            capture_file_action_outputs(std::slice::from_ref(path), workspace_root, cache).await
-        }
-        Action::WriteBytes { path, bytes, .. } => {
+        Action::WriteFile { path, bytes, .. } => {
             write_file(path, bytes, workspace_root).await?;
             capture_file_action_outputs(std::slice::from_ref(path), workspace_root, cache).await
         }
-        Action::CopyFile {
-            source,
-            destination,
-            ..
-        } => {
-            copy_file(source, destination, workspace_root).await?;
-            capture_file_action_outputs(std::slice::from_ref(destination), workspace_root, cache)
-                .await
-        }
-        Action::CopyTree {
+        Action::CopyPath {
             sources,
             destination,
+            mode,
             ..
         } => {
-            copy_tree(sources, destination, workspace_root).await?;
+            match mode {
+                CopyPathMode::File => {
+                    if sources.len() != 1 {
+                        return Err(Error::InvalidCopyPath {
+                            reason: "file copy requires exactly one source".to_string(),
+                        });
+                    }
+                    copy_file(&sources[0], destination, workspace_root).await?;
+                }
+                CopyPathMode::Tree => {
+                    copy_tree(sources, destination, workspace_root).await?;
+                }
+            }
             capture_file_action_outputs(std::slice::from_ref(destination), workspace_root, cache)
                 .await
         }
-        Action::RemovePath { path, .. } => {
-            remove_path(path, workspace_root).await?;
-            Ok(empty_file_action_result())
-        }
-        Action::EnsureDir { path, .. } => {
-            ensure_dir(path, workspace_root).await?;
-            capture_file_action_outputs(std::slice::from_ref(path), workspace_root, cache).await
-        }
+        Action::PreparePath { path, mode, .. } => match mode {
+            PreparePathMode::Remove => {
+                remove_path(path, workspace_root).await?;
+                Ok(empty_file_action_result())
+            }
+            PreparePathMode::Directory => {
+                ensure_dir(path, workspace_root).await?;
+                capture_file_action_outputs(std::slice::from_ref(path), workspace_root, cache).await
+            }
+        },
         Action::WriteTreeDigest {
             root,
             output,

@@ -27,7 +27,7 @@ symbol name becomes the target kind unless the target kind explicitly sets
 def _copy_impl(ctx):
     out = declare_output("copied.txt")
     srcs = glob(ctx["srcs"])
-    copy_file(
+    copy_path(
         srcs[0],
         out,
         inputs = srcs,
@@ -193,15 +193,15 @@ The Rust executor exposes generic primitives only:
 - `declare_output(name)` reserves an output under the target build
   directory.
 - `run_action(...)` records a command action for the executor.
-- `write_file(path, content)` and `write_bytes(path, bytes)` materialize
-  generated files through normal actions.
-- `copy_file(source, destination, inputs = [])` copies one workspace
+- `write_path(path, content)` materializes generated text or byte-list
+  files through normal actions.
+- `copy_path(source, destination, inputs = [])` copies one workspace
   file through a portable Rust action.
-- `copy_tree(source, destination, inputs = [])` and
-  `copy_trees(sources, destination, inputs = [])` copy directory
-  contents through portable Rust actions.
-- `remove_path(path)` and `ensure_dir(path)` declare uncached portable
-  cleanup/setup actions for workspace paths.
+- `copy_path(source, destination, kind = "tree", inputs = [])` copies
+  one or more directory contents through portable Rust actions.
+- `prepare_path(path, kind = "remove")` and
+  `prepare_path(path, kind = "directory")` declare uncached portable
+  cleanup and setup actions for workspace paths.
 - `write_tree_digest(root, output, include_suffixes = [])` writes a
   deterministic digest listing for a workspace tree.
 - `toml_decode(src)` and `json_decode(src)` decode data into Starlark
