@@ -15,10 +15,14 @@ fn main() -> io::Result<()> {
 fn emit_rerun_if_changed(path: &Path) -> io::Result<()> {
     println!("cargo:rerun-if-changed={}", path.display());
 
-    if path.is_dir() {
-        for entry in fs::read_dir(path)? {
-            emit_rerun_if_changed(&entry?.path())?;
-        }
+    if !fs::symlink_metadata(path)?.is_dir() {
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(path)?.collect::<io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
+        emit_rerun_if_changed(&entry.path())?;
     }
 
     Ok(())
