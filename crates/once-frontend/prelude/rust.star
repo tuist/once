@@ -195,13 +195,24 @@ def _rust_android_compile_env(ctx, target):
         env["PATH"] = path
     return env
 
+def _rust_string_literal(value):
+    hashes = "#"
+    for _ in range(len(value) + 1):
+        if "\"" + hashes not in value:
+            return "r" + hashes + "\"" + value + "\"" + hashes
+        hashes += "#"
+    fail("could not quote Rust string literal")
+
+def _rust_feature_cfg(feature):
+    return "feature=" + _rust_string_literal(feature)
+
 def _rust_feature_flags(ctx):
     flags = []
     features = []
     features.extend(_rust_attr(ctx, "features", []))
     features.extend(_rust_attr(ctx, "crate_features", []))
     for feature in _unique(features):
-        flags.extend(["--cfg", "feature=\"" + feature + "\""])
+        flags.extend(["--cfg", _rust_feature_cfg(feature)])
     return flags
 
 def _rust_feature_args(ctx):

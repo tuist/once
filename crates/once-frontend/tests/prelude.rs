@@ -1294,6 +1294,96 @@ result = repr([
 }
 
 #[test]
+fn prelude_cargo_metadata_windows_features_escape_response_file_cfgs() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+targets = _cargo_metadata_targets({{
+    "attrs": {{
+        "target": "x86_64-pc-windows-msvc",
+        "vendor_dir": "third_party/rust/vendor",
+    }},
+}}, {{
+    "packages": [{{
+        "id": "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.102",
+        "name": "anyhow",
+        "version": "1.0.102",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "manifest_path": "C:\\Users\\runneradmin\\.cargo\\registry\\src\\index\\anyhow-1.0.102\\Cargo.toml",
+        "targets": [{{
+            "name": "anyhow",
+            "kind": ["lib"],
+            "crate_types": ["lib"],
+            "src_path": "C:\\Users\\runneradmin\\.cargo\\registry\\src\\index\\anyhow-1.0.102\\src\\lib.rs",
+            "edition": "2021",
+        }}],
+    }}],
+    "resolve": {{
+        "nodes": [{{
+            "id": "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.102",
+            "features": ["default"],
+            "deps": [],
+        }}],
+    }},
+}})
+target = {{target["name"]: target for target in targets}}["anyhow-1.0.102"]
+ctx = {{
+    "label": {{
+        "package": "cargo_dependencies_x86_64_pc_windows_msvc",
+        "name": target["name"],
+        "id": "cargo_dependencies_x86_64_pc_windows_msvc/" + target["name"],
+    }},
+    "attr": target["attrs"],
+    "deps": [],
+    "srcs": target["srcs"],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libanyhow.rlib")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(
+        workspace.path(),
+        "cargo_dependencies_x86_64_pc_windows_msvc/anyhow-1.0.102",
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| {
+            action.identifier.as_deref()
+                == Some("cargo_dependencies_x86_64_pc_windows_msvc/anyhow-1.0.102:rustc")
+        })
+        .expect("rustc action");
+    assert_eq!(rustc.arg_files.len(), 1);
+    let arg_file = &rustc.arg_files[0];
+    assert!(arg_file
+        .args
+        .windows(2)
+        .any(|pair| pair[0] == "--cfg" && pair[1] == "feature=r#\"default\"#"));
+    assert!(!arg_file.args.iter().any(|arg| arg == "feature=default"));
+    assert!(!arg_file.args.iter().any(|arg| arg == "feature=\"default\""));
+}
+
+#[test]
 fn prelude_cargo_metadata_targets_split_proc_macro_host_deps() {
     let prelude = all_prelude_source();
     let source = format!(
@@ -1773,13 +1863,17 @@ result = repr("ok")
     assert_eq!(arg_file.path, ".once/out/crates/app/app/rustc-features.rsp");
     assert_eq!(arg_file.format, DeclaredArgFileFormat::LineDelimited);
     assert!(arg_file.args.len() > 800);
-    assert!(arg_file.args.iter().any(|arg| arg == "feature=\"default\""));
-    assert!(arg_file.args.iter().any(|arg| arg == "feature=\"std\""));
     assert!(arg_file
         .args
         .iter()
-        .any(|arg| arg == "feature=\"feature_399\""));
-    assert!(!arg_file.args.iter().any(|arg| arg.contains("\\\"")));
+        .any(|arg| arg == "feature=r#\"default\"#"));
+    assert!(arg_file.args.iter().any(|arg| arg == "feature=r#\"std\"#"));
+    assert!(arg_file
+        .args
+        .iter()
+        .any(|arg| arg == "feature=r#\"feature_399\"#"));
+    assert!(!arg_file.args.iter().any(|arg| arg == "feature=default"));
+    assert!(!arg_file.args.iter().any(|arg| arg == "feature=\"default\""));
     assert!(
         !rustc.argv.iter().any(|arg| arg.contains("feature=\"")),
         "{:?}",
@@ -1837,11 +1931,11 @@ result = repr("ok")
     assert!(rustc
         .argv
         .windows(2)
-        .any(|pair| pair[0] == "--cfg" && pair[1] == "feature=\"default\""));
+        .any(|pair| pair[0] == "--cfg" && pair[1] == "feature=r#\"default\"#"));
     assert!(rustc
         .argv
         .windows(2)
-        .any(|pair| pair[0] == "--cfg" && pair[1] == "feature=\"std\""));
+        .any(|pair| pair[0] == "--cfg" && pair[1] == "feature=r#\"std\"#"));
     assert!(
         !rustc.argv.iter().any(|arg| arg.starts_with('@')),
         "{:?}",
