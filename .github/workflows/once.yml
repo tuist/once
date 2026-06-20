@@ -264,6 +264,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          probe_dir="$(mktemp -d)"
+          printf 'fn main() {}\n' > "${probe_dir}/probe.rs"
+          printf '%s\n' '--cfg=feature="default"' > "${probe_dir}/rustc-features.rsp"
+          rustc "@${probe_dir}/rustc-features.rsp" "${probe_dir}/probe.rs" \
+            --crate-name once_rustc_response_probe \
+            --emit metadata \
+            -o "${probe_dir}/probe.rmeta"
+
           dump_rustc_feature_response_files() {
             if [ ! -d .once/out ]; then
               return 0

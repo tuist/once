@@ -134,28 +134,16 @@ fn unix_host_which_candidates_keep_name_verbatim() {
 #[cfg(windows)]
 #[test]
 fn windows_host_which_candidates_use_live_pathext() {
-    static PATHEXT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    let _guard = PATHEXT_LOCK.lock().unwrap();
-    let previous = std::env::var_os("PATHEXT");
-    std::env::set_var("PATHEXT", ".COM;.EXE;.CMD");
-
     assert_eq!(
         which_candidate_names("rustc"),
-        vec![
-            "rustc.COM".to_string(),
-            "rustc.com".to_string(),
-            "rustc.EXE".to_string(),
-            "rustc.exe".to_string(),
-            "rustc.CMD".to_string(),
-            "rustc.cmd".to_string(),
-        ]
+        which_candidate_names_for(
+            "rustc",
+            true,
+            std::env::var_os("PATHEXT")
+                .map(|value| value.to_string_lossy().into_owned())
+                .as_deref()
+        )
     );
-
-    match previous {
-        Some(value) => std::env::set_var("PATHEXT", value),
-        None => std::env::remove_var("PATHEXT"),
-    }
 }
 
 #[test]

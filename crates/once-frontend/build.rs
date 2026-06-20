@@ -21,7 +21,22 @@ fn emit_rerun_if_changed(
     root: &Path,
     visited: &mut BTreeSet<PathBuf>,
 ) -> io::Result<()> {
-    let canonical = path.canonicalize()?;
+    let link_metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let canonical = match path.canonicalize() {
+        Ok(canonical) => canonical,
+        Err(error)
+            if link_metadata.file_type().is_symlink()
+                || error.kind() == io::ErrorKind::NotFound =>
+        {
+            println!("cargo:rerun-if-changed={}", path.display());
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
     if !canonical.starts_with(root) {
         return Ok(());
     }
