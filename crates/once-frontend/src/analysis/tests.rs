@@ -225,6 +225,49 @@ run_action(
 }
 
 #[test]
+fn run_action_flattens_cmd_args_with_rustc_response_arg_file() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "p");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+run_action(
+    argv = [
+        "rustc",
+        cmd_args(
+            args = ["--cfg", "feature=\"alloc\""],
+            use_arg_file = {
+                "path": ".once/out/p/rustc-features.rsp",
+                "format": "rustc-response",
+                "arg_format": "@{}",
+            },
+        ),
+    ],
+    outputs = [".once/out/p/lib.rlib"],
+)
+"#)
+        .unwrap();
+    });
+
+    assert_eq!(store.actions.len(), 1);
+    let action = &store.actions[0];
+    assert_eq!(
+        action.argv,
+        vec![
+            "rustc".to_string(),
+            "@.once/out/p/rustc-features.rsp".to_string()
+        ]
+    );
+    assert_eq!(action.arg_files.len(), 1);
+    let arg_file = &action.arg_files[0];
+    assert_eq!(arg_file.path, ".once/out/p/rustc-features.rsp");
+    assert_eq!(arg_file.format, DeclaredArgFileFormat::RustcResponse);
+    assert_eq!(
+        arg_file.args,
+        vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()]
+    );
+}
+
+#[test]
 fn run_action_rejects_line_delimited_arg_file_newlines() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "p");

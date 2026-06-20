@@ -195,10 +195,12 @@ The Rust executor exposes generic primitives only:
 - `cmd_args(args, use_arg_file = None)` creates a structured
   command-line fragment. `args` is a list of strings. When
   `use_arg_file` is set, it is a dictionary with `path` plus optional
-  `format` and `arg_format`. The supported `format` is
+  `format` and `arg_format`. The supported `format` values are
   `line-delimited`, which writes one argument per line without shell
-  escaping. `arg_format` defaults to `@{}` and must contain exactly one
-  `{}` placeholder.
+  escaping, and `rustc-response`, which writes one `rustc` argument per
+  line and applies the host-specific quote escaping expected by
+  `rustc @path` files. `arg_format` defaults to `@{}` and must contain
+  exactly one `{}` placeholder.
 - `run_action(...)` records a command action for the executor.
 - `write_path(path, content)` materializes generated text or byte-list
   files through normal actions.

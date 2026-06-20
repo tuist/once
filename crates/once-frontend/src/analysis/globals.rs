@@ -340,9 +340,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
 
     /// Build a structured command-line fragment. `args` is a list of
     /// string arguments. When `use_arg_file` is set, it must be a dict
-    /// with `path` plus optional `format` and `arg_format`. The only
-    /// supported format today is `"line-delimited"`, which writes one
-    /// argument per line without shell escaping.
+    /// with `path` plus optional `format` and `arg_format`. Supported
+    /// formats are `"line-delimited"` and `"rustc-response"`.
     fn cmd_args<'v>(
         args: Value<'v>,
         use_arg_file: Option<Value<'v>>,
@@ -456,6 +455,7 @@ impl DeclaredArgFileFormat {
     fn as_str(self) -> &'static str {
         match self {
             Self::LineDelimited => "line-delimited",
+            Self::RustcResponse => "rustc-response",
         }
     }
 }
@@ -607,8 +607,9 @@ fn unpack_cmd_args_arg_file(value: Value<'_>) -> anyhow::Result<Option<CmdArgsAr
 fn parse_arg_file_format(value: &str, field: &str) -> anyhow::Result<DeclaredArgFileFormat> {
     match value {
         "line-delimited" => Ok(DeclaredArgFileFormat::LineDelimited),
+        "rustc-response" => Ok(DeclaredArgFileFormat::RustcResponse),
         other => Err(anyhow!(
-            "expected `{field}` to be `line-delimited`, got `{other}`"
+            "expected `{field}` to be `line-delimited` or `rustc-response`, got `{other}`"
         )),
     }
 }
@@ -619,11 +620,12 @@ fn validate_declared_arg_file_args(
     path: &str,
 ) -> anyhow::Result<()> {
     match format {
-        DeclaredArgFileFormat::LineDelimited => {
+        DeclaredArgFileFormat::LineDelimited | DeclaredArgFileFormat::RustcResponse => {
             for arg in args {
                 if arg.contains('\n') || arg.contains('\r') {
                     return Err(anyhow!(
-                        "line-delimited arg file `{path}` contains an argument with a newline"
+                        "{} arg file `{path}` contains an argument with a newline",
+                        format.as_str()
                     ));
                 }
             }
