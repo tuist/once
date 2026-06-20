@@ -779,7 +779,9 @@ def host_which(name):
 def host_command(argv, env = None):
     if "--find" in argv:
         return "/toolchain/" + argv[len(argv) - 1] + "\n"
-    if "swiftc" in argv and "--version" in argv:
+    if "--show-sdk-path" in argv:
+        return "/sdks/iPhoneSimulator.sdk\n"
+    if "--version" in argv:
         return "Swift version test\n"
     fail("unexpected host_command: " + str(argv))
 
@@ -2547,71 +2549,24 @@ exit 1
         .contains("no booted or available iOS simulator found"));
 }
 
-#[cfg(unix)]
 #[test]
 fn prelude_swift_testing_macros_plugin_uses_swift_toolchain_path() {
-    let tmp = TempDir::new().unwrap();
-    let xcrun = tmp.path().join("xcrun");
-    let swiftc = tmp
-        .path()
-        .join("Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc");
-    std::fs::create_dir_all(swiftc.parent().unwrap()).unwrap();
-    write_executable(
-        &xcrun,
-        &format!(
-            r#"#!/bin/sh
-if [ "${{1:-}}" = "--find" ] && [ "${{2:-}}" = "swiftc" ]; then
-  printf '%s\n' {}
-  exit 0
-fi
-exit 1
-"#,
-            starlark_string_literal(&swiftc.display().to_string())
-        ),
-    );
-    let store = store_for(tmp.path(), "");
-    let call = format!(
-        "({}, {{}})",
-        starlark_string_literal(&xcrun.display().to_string())
-    );
+    let swiftc = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc";
+    let call = format!("({})", starlark_string_literal(swiftc));
 
-    let (_, out) = with_active_store(store, || {
-        eval_prelude_string_function("_swift_testing_macros_plugin", &call)
-    });
+    let out = eval_prelude_string_function("_swift_testing_macros_plugin", &call).unwrap();
 
     assert_eq!(
-            out.unwrap(),
-            tmp.path()
-                .join("Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib")
-                .display()
-                .to_string()
-        );
+        out,
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib"
+    );
 }
 
-#[cfg(unix)]
 #[test]
 fn prelude_swift_testing_macros_plugin_rejects_unexpected_swiftc_path() {
-    let tmp = TempDir::new().unwrap();
-    let xcrun = tmp.path().join("xcrun");
-    write_executable(
-        &xcrun,
-        r#"#!/bin/sh
-if [ "${1:-}" = "--find" ] && [ "${2:-}" = "swiftc" ]; then
-  printf '%s\n' '/tmp/swiftc'
-  exit 0
-fi
-exit 1
-"#,
-    );
-    let store = store_for(tmp.path(), "");
-    let call = format!(
-        "({}, {{}})",
-        starlark_string_literal(&xcrun.display().to_string())
-    );
+    let call = format!("({})", starlark_string_literal("/tmp/swiftc"));
 
-    let (_, err) = with_active_store(store, || {
-        eval_prelude_string_function("_swift_testing_macros_plugin", &call).unwrap_err()
-    });
+    let err = eval_prelude_string_function("_swift_testing_macros_plugin", &call).unwrap_err();
 
     assert!(
         err.contains("unable to derive Swift toolchain path"),
@@ -2623,11 +2578,13 @@ exit 1
 fn prelude_ios_simulator_selection_helper_feeds_run_and_test_scripts() {
     let source = include_str!("../prelude/apple.star");
 
+    // Both the application run script and the test runner concatenate
+    // the selection helper output. The xcrun argument name differs
+    // between callsites, so match on the closing paren + `+`.
     assert_eq!(
-        source
-            .matches("_ios_simulator_selection_script(xcrun) +")
-            .count(),
-        2
+        source.matches("_ios_simulator_selection_script(").count() - 1,
+        2,
+        "expected two callers of _ios_simulator_selection_script"
     );
 }
 
@@ -2690,6 +2647,213 @@ fn prelude_apple_config_tokens_rejects_select_on_platform() {
         err.contains("attribute `platform` cannot use select()"),
         "{err}"
     );
+}
+
+/// Direct-mode swiftc resolution must derive both the compiler and
+/// the active SDK from the configured developer dir without
+/// shelling out to xcrun. The returned argv is what every Swift
+/// action prepends to its flags, so it has to invoke swiftc by
+/// absolute path and pass `-sdk <path>` explicitly.
+#[test]
+fn prelude_resolve_swiftc_direct_mode_skips_xcrun() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode (asked for " + name + ")")
+
+def host_command(argv, env = None):
+    if "--version" in argv:
+        return "Swift version 6.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+swiftc = _resolve_swiftc("ios", "simulator", "/opt/Xcode/Developer")
+result = repr([
+    swiftc["argv"],
+    swiftc["sdk_name"],
+    swiftc["sdk_path"],
+    swiftc["swiftc_path"],
+    swiftc["env"],
+    "identity:" in ("identity:" if swiftc["identity"].startswith("once.apple.swiftc.v1") else ""),
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    assert!(out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"), "{out}");
+    assert!(out.contains("/opt/Xcode/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"), "{out}");
+    assert!(out.contains("\"iphonesimulator\""), "{out}");
+    assert!(out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""), "{out}");
+    assert!(out.contains("True"), "identity prefix should match: {out}");
+}
+
+/// Direct-mode clang resolution must produce both clang and
+/// clang++ under `Toolchains/XcodeDefault.xctoolchain/usr/bin/`
+/// without xcrun, and the SDK path must follow the standard
+/// Platforms layout so the per-source action passes a correct
+/// `-isysroot`.
+#[test]
+fn prelude_resolve_clang_direct_mode_finds_both_drivers() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode (asked for " + name + ")")
+
+def host_command(argv, env = None):
+    if "--version" in argv:
+        return "Apple clang version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+clang = _resolve_clang("ios", "device", "/opt/Xcode/Developer")
+result = repr([
+    clang["clang_path"],
+    clang["clangxx_path"],
+    clang["sdk_path"],
+    clang["sdk_name"],
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    assert!(out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang\""), "{out}");
+    assert!(out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"), "{out}");
+    assert!(out.contains("/opt/Xcode/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"), "{out}");
+    assert!(out.contains("\"iphoneos\""), "{out}");
+}
+
+/// codesign is a system tool, not part of the developer dir. In
+/// direct mode we hand back `/usr/bin/codesign` and skip xcrun
+/// discovery entirely — keeping the action argv stable regardless
+/// of which Xcode the user pinned.
+#[test]
+fn prelude_resolve_codesign_direct_mode_uses_system_path() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode")
+
+def host_command(argv, env = None):
+    fail("host_command must not be called for codesign in direct mode")
+
+codesign = _resolve_codesign("/opt/Xcode/Developer")
+result = repr([codesign["codesign_path"], codesign["env"]])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    assert!(out.contains("/usr/bin/codesign"), "{out}");
+    assert!(out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""), "{out}");
+}
+
+/// The xcrun fallback path is what every macOS user hits today
+/// (no `xcode_developer_dir` configured). The resolver should
+/// still produce a direct tool invocation — the action argv must
+/// not contain xcrun even when discovery went through it. This
+/// keeps cache keys identical whether or not the user pins a
+/// developer dir.
+#[test]
+fn prelude_resolve_swiftc_fallback_returns_direct_invocation() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "xcrun":
+        return "/usr/bin/xcrun"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if "--find" in argv and argv[len(argv) - 1] == "swiftc":
+        return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc\n"
+    if "--show-sdk-path" in argv:
+        return "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk\n"
+    if "--version" in argv:
+        return "Swift version 6.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+swiftc = _resolve_swiftc("ios", "simulator", "")
+result = repr([
+    swiftc["argv"],
+    swiftc["swiftc_path"],
+    swiftc["sdk_path"],
+    swiftc["env"],
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    assert!(!out.contains("/usr/bin/xcrun"), "fallback argv must not include xcrun: {out}");
+    assert!(out.contains("XcodeDefault.xctoolchain/usr/bin/swiftc"), "{out}");
+    assert!(out.contains("iPhoneSimulator.sdk"), "{out}");
+    // No developer dir was configured, so the action env stays empty.
+    assert!(out.contains("{}"), "{out}");
+}
+
+/// End-to-end direct-mode sanity check: building an `apple_library`
+/// against a configured developer dir must produce actions whose
+/// argv is rooted at the toolchain path. No action should contain
+/// `xcrun` as an argv element, and no `host_which` lookup should
+/// fire while the impl runs.
+#[test]
+fn prelude_apple_library_direct_mode_emits_xcrun_free_actions() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("ios/Lib/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("Lib.swift"), "public func hello() {}\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode (asked for " + name + ")")
+
+def host_command(argv, env = None):
+    if "--version" in argv:
+        return "Swift version 6.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "ios/Lib",
+        "name": "Lib",
+        "id": "ios/Lib/Lib",
+    }},
+    "attr": {{
+        "platform": "ios",
+        "sdk_variant": "simulator",
+        "xcode_developer_dir": "/opt/Xcode/Developer",
+    }},
+    "deps": [],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/ios/Lib/Lib",
+    "capability": "build",
+}}
+provider = _apple_library_impl(ctx)
+result = repr(provider["archive"])
+"#
+    );
+    let store = store_for(workspace.path(), "ios/Lib");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    out.unwrap();
+    assert!(!store.actions.is_empty(), "expected swiftc actions");
+    for action in &store.actions {
+        for arg in &action.argv {
+            assert!(
+                !arg.contains("xcrun"),
+                "direct-mode argv should not mention xcrun: {:?}",
+                action.argv
+            );
+        }
+        assert_eq!(
+            action.argv[0],
+            "/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+            "first argv element should be the resolved swiftc"
+        );
+        // The action env carries DEVELOPER_DIR through to the tool so
+        // it can find ancillary resources next to swiftc.
+        assert_eq!(
+            action.env.get("DEVELOPER_DIR").map(String::as_str),
+            Some("/opt/Xcode/Developer"),
+        );
+    }
 }
 
 /// `_resolve_attrs` must reject `select()` on attributes the target kind

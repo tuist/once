@@ -80,6 +80,29 @@ mkdir -p "$app/_CodeSignature"
 : > "$app/_CodeSignature/CodeResources"
 SH
     chmod +x "$WORKSPACE/bin/codesign"
+    cat > "$WORKSPACE/bin/swiftc" <<'SH'
+#!/bin/sh
+case "${1:-}" in
+  --version)
+    printf '%s\n' 'Apple Swift version mock'
+    exit 0
+    ;;
+esac
+out=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    out="${1:-}"
+    break
+  fi
+  shift
+done
+[ -n "$out" ] || exit 2
+mkdir -p "$(dirname "$out")"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$out"
+chmod 755 "$out"
+SH
+    chmod +x "$WORKSPACE/bin/swiftc"
     cat > "$WORKSPACE/bin/xcrun" <<SH
 #!/bin/sh
 log='$WORKSPACE/xcrun.log'
@@ -89,29 +112,13 @@ fi
 case "\${1:-}" in
   --find)
     case "\${2:-}" in
-      swiftc) printf '%s\\n' "\$0" ;;
+      swiftc) printf '%s\\n' '$WORKSPACE/bin/swiftc' ;;
       codesign) printf '%s\\n' '$WORKSPACE/bin/codesign' ;;
       *) printf '%s\\n' "\$0" ;;
     esac
     ;;
-  swiftc)
-    if [ "\${2:-}" = "--version" ]; then
-      printf '%s\\n' 'Apple Swift version mock'
-      exit 0
-    fi
-    out=''
-    while [ "\$#" -gt 0 ]; do
-      if [ "\$1" = "-o" ]; then
-        shift
-        out="\${1:-}"
-        break
-      fi
-      shift
-    done
-    [ -n "\$out" ] || exit 2
-    mkdir -p "\$(dirname "\$out")"
-    printf '%s\\n' '#!/bin/sh' 'exit 0' > "\$out"
-    chmod 755 "\$out"
+  --show-sdk-path)
+    printf '%s\\n' '$WORKSPACE/sdk'
     ;;
   simctl)
     printf '%s\\n' "\$*" >> "\$log"
@@ -157,6 +164,29 @@ mkdir -p "$app/_CodeSignature"
 : > "$app/_CodeSignature/CodeResources"
 SH
     chmod +x "$WORKSPACE/bin/codesign"
+    cat > "$WORKSPACE/toolchain/usr/bin/swiftc" <<'SH'
+#!/bin/sh
+case "${1:-}" in
+  --version)
+    printf '%s\n' 'Apple Swift version mock'
+    exit 0
+    ;;
+esac
+out=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    out="${1:-}"
+    break
+  fi
+  shift
+done
+[ -n "$out" ] || exit 2
+mkdir -p "$(dirname "$out")"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$out"
+chmod 755 "$out"
+SH
+    chmod +x "$WORKSPACE/toolchain/usr/bin/swiftc"
     cat > "$WORKSPACE/toolchain/usr/bin/xcrun" <<SH
 #!/bin/sh
 log='$WORKSPACE/xcrun.log'
@@ -176,24 +206,8 @@ case "\${1:-}" in
   --show-sdk-platform-path)
     printf '%s\\n' "\$platform_path"
     ;;
-  swiftc)
-    if [ "\${2:-}" = "--version" ]; then
-      printf '%s\\n' 'Apple Swift version mock'
-      exit 0
-    fi
-    out=''
-    while [ "\$#" -gt 0 ]; do
-      if [ "\$1" = "-o" ]; then
-        shift
-        out="\${1:-}"
-        break
-      fi
-      shift
-    done
-    [ -n "\$out" ] || exit 2
-    mkdir -p "\$(dirname "\$out")"
-    printf '%s\\n' '#!/bin/sh' 'exit 0' > "\$out"
-    chmod 755 "\$out"
+  --show-sdk-path)
+    printf '%s\\n' "\$platform_path/Developer/SDKs/iPhoneSimulator.sdk"
     ;;
   simctl)
     printf '%s\\n' "\$*" >> "\$log"
