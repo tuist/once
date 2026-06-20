@@ -93,3 +93,6 @@ def _shell_quote(value):
     if not value:
         return "''"
     return "'" + value.replace("'", "'\"'\"'") + "'"
+
+def _powershell_quote(value):
+    return "'" + value.replace("'", "''") + "'"

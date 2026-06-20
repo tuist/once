@@ -699,7 +699,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     compile_env["OUT_DIR"] = _workspace_absolute(out_dir)
     return (out_dir, [script_path, stdout], compile_env, stdout)
 
-def _rustc_with_build_script_args(argv, stdout):
+def _rustc_unix_build_script_args(argv, stdout):
     script = """set -eu
 while IFS= read -r line; do
   case "$line" in
@@ -738,6 +738,93 @@ done < {stdout}
 exec "$@"
 """.format(stdout = _shell_quote(stdout))
     return [host_which("sh"), "-c", script, "once-rustc"] + argv
+
+def _rustc_windows_build_script_args(ctx, argv, stdout):
+    wrapper = declare_output(_rust_declared_output(ctx, "rustc-build-script-wrapper.ps1"))
+    script = """$ErrorActionPreference = 'Stop'
+$rustcArgs = New-Object 'System.Collections.Generic.List[string]'
+foreach ($arg in $args) {
+  [void]$rustcArgs.Add($arg)
+}
+
+function Get-DirectiveValue($line, $name) {
+  $oldPrefix = 'cargo:' + $name + '='
+  if ($line.StartsWith($oldPrefix)) {
+    return $line.Substring($oldPrefix.Length)
+  }
+  $newPrefix = 'cargo::' + $name + '='
+  if ($line.StartsWith($newPrefix)) {
+    return $line.Substring($newPrefix.Length)
+  }
+  return $null
+}
+
+foreach ($line in [System.IO.File]::ReadLines(""" + _powershell_quote(stdout) + """)) {
+  $value = Get-DirectiveValue $line 'rustc-cfg'
+  if ($null -ne $value) {
+    [void]$rustcArgs.Add('--cfg')
+    [void]$rustcArgs.Add($value)
+    continue
+  }
+  $value = Get-DirectiveValue $line 'rustc-check-cfg'
+  if ($null -ne $value) {
+    [void]$rustcArgs.Add('--check-cfg')
+    [void]$rustcArgs.Add($value)
+    continue
+  }
+  $value = Get-DirectiveValue $line 'rustc-env'
+  if ($null -ne $value) {
+    $equals = $value.IndexOf('=')
+    if ($equals -ge 0) {
+      $name = $value.Substring(0, $equals)
+      $envValue = $value.Substring($equals + 1)
+      [System.Environment]::SetEnvironmentVariable($name, $envValue, 'Process')
+    }
+    continue
+  }
+  $value = Get-DirectiveValue $line 'rustc-link-arg'
+  if ($null -ne $value) {
+    [void]$rustcArgs.Add('-C')
+    [void]$rustcArgs.Add("link-arg=$value")
+    continue
+  }
+  $value = Get-DirectiveValue $line 'rustc-link-lib'
+  if ($null -ne $value) {
+    [void]$rustcArgs.Add('-l')
+    [void]$rustcArgs.Add($value)
+    continue
+  }
+  $value = Get-DirectiveValue $line 'rustc-link-search'
+  if ($null -ne $value) {
+    [void]$rustcArgs.Add('-L')
+    [void]$rustcArgs.Add($value)
+    continue
+  }
+}
+
+if ($rustcArgs.Count -eq 0) {
+  throw 'missing rustc argv'
+}
+$program = $rustcArgs[0]
+$rest = @()
+if ($rustcArgs.Count -gt 1) {
+  $rest = $rustcArgs.GetRange(1, $rustcArgs.Count - 1).ToArray()
+}
+& $program @rest
+if ($global:LASTEXITCODE -ne $null) {
+  exit $global:LASTEXITCODE
+}
+if (-not $?) {
+  exit 1
+}
+"""
+    write_path(wrapper, script)
+    return ([host_which("powershell"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapper] + argv, [wrapper])
+
+def _rustc_with_build_script_args(ctx, argv, stdout):
+    if host_os() == "windows":
+        return _rustc_windows_build_script_args(ctx, argv, stdout)
+    return (_rustc_unix_build_script_args(argv, stdout), [])
 
 def _rust_dep_inputs(deps):
     inputs = []
@@ -886,7 +973,9 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     argv.extend(linker_args)
     argv.extend(_rust_linker_flags(ctx))
     if build_stdout:
-        argv = _rustc_with_build_script_args(argv, build_stdout)
+        wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout)
+        argv = wrapped[0]
+        build_inputs.extend(wrapped[1])
     run_action(
         argv = argv,
         inputs = _unique(srcs + dep_inputs + build_inputs + feature_inputs + _rust_extra_inputs(ctx)),

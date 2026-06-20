@@ -1786,31 +1786,117 @@ fn prelude_rustc_wrapper_passes_initial_argv_positionally() {
     let prelude = all_prelude_source();
     let source = format!(
         r#"{prelude}
+def host_os():
+    return "macos"
+
 def host_which(name):
     if name == "sh":
         return "/usr/bin/sh"
     fail("unexpected host_which call: " + name)
 
-args = _rustc_with_build_script_args(
+wrapped = _rustc_with_build_script_args(
+    {{"attr": {{}}}},
     ["rustc", "arg with spaces", "O'Reilly"],
     ".once/out/pkg/build script.stdout",
 )
-result = repr(args)
+result = repr([wrapped[0], wrapped[1]])
 "#
     );
 
     let out = eval_prelude_source_to_repr(source).unwrap();
-    let values: Vec<String> = serde_json::from_str(&out).unwrap();
+    let values: Vec<Vec<String>> = serde_json::from_str(&out).unwrap();
+    let argv = &values[0];
 
-    assert_eq!(values[0], "/usr/bin/sh");
-    assert_eq!(values[1], "-c");
-    assert_eq!(values[3], "once-rustc");
-    assert_eq!(&values[4..], ["rustc", "arg with spaces", "O'Reilly"]);
-    let script = &values[2];
+    assert_eq!(argv[0], "/usr/bin/sh");
+    assert_eq!(argv[1], "-c");
+    assert_eq!(argv[3], "once-rustc");
+    assert_eq!(&argv[4..], ["rustc", "arg with spaces", "O'Reilly"]);
+    assert!(values[1].is_empty());
+    let script = &argv[2];
     assert_eq!(script.lines().nth(1), Some("while IFS= read -r line; do"));
     assert!(script.contains("done < '.once/out/pkg/build script.stdout'"));
     assert!(script.contains("exec \"$@\""));
     assert!(!script.contains("O'Reilly"), "{script}");
+}
+
+#[test]
+fn prelude_windows_rustc_wrapper_generates_powershell_trampoline() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_which(name):
+    if name == "powershell":
+        return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    fail("unexpected host_which call: " + name)
+
+ctx = {{
+    "label": {{
+        "id": "crates/app/app",
+    }},
+    "attr": {{}},
+}}
+wrapped = _rustc_with_build_script_args(
+    ctx,
+    ["rustc", "@.once/out/pkg/rustc-features.rsp", "arg with spaces"],
+    ".once/out/pkg/build script.stdout",
+)
+result = repr([wrapped[0], wrapped[1]])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let values: Vec<Vec<String>> = serde_json::from_str(&out.unwrap()).unwrap();
+    let argv = &values[0];
+    let inputs = &values[1];
+
+    assert_eq!(
+        argv[0],
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    );
+    assert_eq!(
+        &argv[1..6],
+        [
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File"
+        ]
+    );
+    assert_eq!(
+        argv[6],
+        ".once/out/crates/app/app/rustc-build-script-wrapper.ps1"
+    );
+    assert_eq!(
+        &argv[7..],
+        [
+            "rustc",
+            "@.once/out/pkg/rustc-features.rsp",
+            "arg with spaces"
+        ]
+    );
+    assert_eq!(
+        inputs,
+        &[".once/out/crates/app/app/rustc-build-script-wrapper.ps1".to_string()]
+    );
+    assert_eq!(store.actions.len(), 1);
+    let Some(DeclaredActionOperation::WriteFile { path, bytes }) = &store.actions[0].operation
+    else {
+        panic!("wrapper should be written before rustc action");
+    };
+    assert_eq!(
+        path,
+        ".once/out/crates/app/app/rustc-build-script-wrapper.ps1"
+    );
+    let script = String::from_utf8(bytes.clone()).unwrap();
+    assert!(script.contains("[System.IO.File]::ReadLines('.once/out/pkg/build script.stdout')"));
+    assert!(script.contains("[void]$rustcArgs.Add('--cfg')"));
+    assert!(script.contains("& $program @rest"));
 }
 
 #[test]
