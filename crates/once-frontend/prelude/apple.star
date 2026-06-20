@@ -231,9 +231,13 @@ def _resolve_lipo(platform, sdk_variant, xcode_developer_dir):
 
 def _resolve_codesign(xcode_developer_dir):
     env = _developer_env(xcode_developer_dir)
+    # codesign isn't under DEVELOPER_DIR; it's a system tool. Resolve it
+    # via PATH so a custom install (different macOS version, custom
+    # image, PATH-managed environment) is honored instead of hardcoding
+    # /usr/bin/codesign. The xcrun fallback uses `--find` for the same
+    # reason: it doesn't require codesign to live at the standard path.
     if xcode_developer_dir:
-        # codesign isn't under DEVELOPER_DIR; it's a system tool.
-        codesign_path = "/usr/bin/codesign"
+        codesign_path = host_which("codesign")
     else:
         xcrun = host_which("xcrun")
         codesign_path = host_command([xcrun, "--find", "codesign"], env = env).strip()
@@ -2007,10 +2011,13 @@ def _apple_test_bundle_impl(ctx):
         info_plist = declare_output(bundle_dir + "/Info.plist")
     test_bundle_path = ctx["build_dir"] + "/" + bundle_dir
     runner_type = "swift_testing" if swift_testing else "xctest"
-    # `xctest` and `simctl` are macOS-only runtime tools. We only
-    # resolve `xcrun` when the test capability fires; outside it the
-    # `command_argv` advertised by the provider is informational.
-    runner_xcrun = host_which("xcrun") if ctx["capability"] == "test" else "xcrun"
+    # `xctest` and `simctl` are macOS-only runtime tools. Resolve
+    # `xcrun` here so the provider's `command_argv` always carries an
+    # absolute path. Outside the test capability the value is
+    # informational, but we still emit a resolved path rather than the
+    # literal string `xcrun` so consumers don't have to special-case
+    # the placeholder.
+    runner_xcrun = host_which("xcrun")
     command_argv = [runner_xcrun, "xctest", test_bundle_path]
     provider = {
         "label_id": ctx["label"]["id"],

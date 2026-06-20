@@ -774,6 +774,8 @@ fn prelude_apple_application_embeds_framework_self_path_output() {
 def host_which(name):
     if name == "xcrun":
         return "/usr/bin/xcrun"
+    if name == "codesign":
+        return "/usr/bin/codesign"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None):
@@ -2578,13 +2580,34 @@ fn prelude_swift_testing_macros_plugin_rejects_unexpected_swiftc_path() {
 fn prelude_ios_simulator_selection_helper_feeds_run_and_test_scripts() {
     let source = include_str!("../prelude/apple.star");
 
-    // Both the application run script and the test runner concatenate
-    // the selection helper output. The xcrun argument name differs
-    // between callsites, so match on the closing paren + `+`.
+    // The helper is defined once and called from exactly two sites:
+    // the application run script (with `xcrun`) and the test runner
+    // (with `runner_xcrun`). Match each call site by its bound
+    // argument so the assertion doesn't break if the helper is
+    // mentioned in a comment or docstring and so the definition
+    // doesn't need to be subtracted out.
     assert_eq!(
-        source.matches("_ios_simulator_selection_script(").count() - 1,
-        2,
-        "expected two callers of _ios_simulator_selection_script"
+        source.matches("def _ios_simulator_selection_script(").count(),
+        1,
+        "expected exactly one definition of _ios_simulator_selection_script"
+    );
+    // Match the helper concatenated with the surrounding `+ """` to
+    // exclude the `def` line and to anchor each call site to its
+    // actual usage (script-building expression). The two call sites
+    // pass `xcrun` and `runner_xcrun` respectively.
+    assert_eq!(
+        source
+            .matches("_ios_simulator_selection_script(xcrun) + \"\"\"")
+            .count(),
+        1,
+        "expected the application run script to call _ios_simulator_selection_script(xcrun)"
+    );
+    assert_eq!(
+        source
+            .matches("_ios_simulator_selection_script(runner_xcrun) + \"\"\"")
+            .count(),
+        1,
+        "expected the test runner to call _ios_simulator_selection_script(runner_xcrun)"
     );
 }
 
@@ -2720,27 +2743,30 @@ result = repr([
     assert!(out.contains("\"iphoneos\""), "{out}");
 }
 
-/// codesign is a system tool, not part of the developer dir. In
-/// direct mode we hand back `/usr/bin/codesign` and skip xcrun
-/// discovery entirely — keeping the action argv stable regardless
-/// of which Xcode the user pinned.
+/// codesign is a system tool, not part of the developer dir. We
+/// resolve it via PATH so a custom install is honored instead of a
+/// hardcoded `/usr/bin/codesign`; xcrun is never involved, so the
+/// action argv stays stable regardless of which Xcode the user
+/// pinned.
 #[test]
-fn prelude_resolve_codesign_direct_mode_uses_system_path() {
+fn prelude_resolve_codesign_uses_path() {
     let prelude = apple_prelude_source();
     let source = format!(
         r#"{prelude}
 def host_which(name):
-    fail("host_which must not be called in direct mode")
+    if name == "codesign":
+        return "/opt/local/bin/codesign"
+    fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None):
-    fail("host_command must not be called for codesign in direct mode")
+    fail("host_command must not be called when resolving codesign")
 
 codesign = _resolve_codesign("/opt/Xcode/Developer")
 result = repr([codesign["codesign_path"], codesign["env"]])
 "#
     );
     let out = eval_prelude_source_to_repr(source).unwrap();
-    assert!(out.contains("/usr/bin/codesign"), "{out}");
+    assert!(out.contains("/opt/local/bin/codesign"), "{out}");
     assert!(out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""), "{out}");
 }
 
@@ -2784,6 +2810,199 @@ result = repr([
     assert!(out.contains("iPhoneSimulator.sdk"), "{out}");
     // No developer dir was configured, so the action env stays empty.
     assert!(out.contains("{}"), "{out}");
+}
+
+/// The SDK and platform path maps that direct mode relies on must
+/// have an entry for every SDK name `_apple_sdk_name` can return.
+/// If a new Apple platform is added to the SDK selector but its
+/// layout entries are forgotten, direct-mode builds against that
+/// SDK would fail at runtime with a `fail(...)` instead of being
+/// caught by this test.
+#[test]
+fn prelude_developer_sdk_and_platform_maps_cover_supported_sdks() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _collect_sdks():
+    platforms = [
+        ("macos", "device"),
+        ("macosx", "device"),
+        ("ios", "device"),
+        ("ios", "simulator"),
+        ("tvos", "device"),
+        ("tvos", "simulator"),
+        ("watchos", "device"),
+        ("watchos", "simulator"),
+        ("visionos", "device"),
+        ("visionos", "simulator"),
+        ("xros", "device"),
+        ("xros", "simulator"),
+    ]
+    sdks = []
+    for entry in platforms:
+        platform = entry[0]
+        sdk_variant = entry[1]
+        sdk = _apple_sdk_name(platform, sdk_variant)
+        # Both maps must cover the SDK. _developer_sdk_path /
+        # _developer_platform_path fail explicitly when an entry is
+        # missing, so a successful resolution proves coverage.
+        _developer_sdk_path("/dev", sdk)
+        _developer_platform_path("/dev", sdk)
+        sdks.append(sdk)
+    return sdks
+
+result = repr(_collect_sdks())
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    // Spot-check that the iteration actually produced an entry per
+    // platform, so a future refactor that empties the list fails
+    // loudly instead of passing vacuously.
+    for sdk in [
+        "macosx",
+        "iphoneos",
+        "iphonesimulator",
+        "appletvos",
+        "appletvsimulator",
+        "watchos",
+        "watchsimulator",
+        "xros",
+        "xrsimulator",
+    ] {
+        assert!(out.contains(sdk), "expected SDK {sdk} in {out}");
+    }
+}
+
+/// Direct-mode libtool resolution must come from the standard
+/// `Toolchains/XcodeDefault.xctoolchain/usr/bin/` layout and the
+/// returned argv must invoke libtool directly so the per-arch
+/// archive action keeps cache keys aligned with the rest of the
+/// build.
+#[test]
+fn prelude_resolve_libtool_direct_mode_uses_toolchain_layout() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode (asked for " + name + ")")
+
+def host_command(argv, env = None):
+    fail("host_command must not be called in direct mode")
+
+libtool = _resolve_libtool("ios", "simulator", "/opt/Xcode/Developer")
+result = repr([
+    libtool["argv"],
+    libtool["libtool_path"],
+    libtool["env"],
+    libtool["identity"].startswith("once.apple.libtool.v1"),
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    assert!(
+        out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/libtool"),
+        "{out}"
+    );
+    assert!(out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""), "{out}");
+    assert!(out.contains("True"), "identity prefix should match: {out}");
+}
+
+/// Libtool's xcrun fallback path (no `xcode_developer_dir`
+/// configured) must still produce a direct invocation: the argv
+/// stored in the action must contain libtool's absolute path, not
+/// `xcrun`, so cache keys match what the direct-mode path emits.
+#[test]
+fn prelude_resolve_libtool_fallback_returns_direct_invocation() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "xcrun":
+        return "/usr/bin/xcrun"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if "--find" in argv and argv[len(argv) - 1] == "libtool":
+        return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/libtool\n"
+    fail("unexpected host_command: " + str(argv))
+
+libtool = _resolve_libtool("ios", "simulator", "")
+result = repr([
+    libtool["argv"],
+    libtool["libtool_path"],
+    libtool["env"],
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    assert!(!out.contains("/usr/bin/xcrun"), "fallback argv must not include xcrun: {out}");
+    assert!(out.contains("XcodeDefault.xctoolchain/usr/bin/libtool"), "{out}");
+    assert!(out.contains("{}"), "no developer dir means an empty action env: {out}");
+}
+
+/// Direct-mode lipo resolution mirrors libtool: it resolves the
+/// universal-binary tool from the standard toolchain layout and the
+/// returned argv invokes lipo by absolute path, never via xcrun.
+#[test]
+fn prelude_resolve_lipo_direct_mode_uses_toolchain_layout() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode (asked for " + name + ")")
+
+def host_command(argv, env = None):
+    fail("host_command must not be called in direct mode")
+
+lipo = _resolve_lipo("ios", "simulator", "/opt/Xcode/Developer")
+result = repr([
+    lipo["argv"],
+    lipo["lipo_path"],
+    lipo["env"],
+    lipo["identity"].startswith("once.apple.lipo.v1"),
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    assert!(
+        out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo"),
+        "{out}"
+    );
+    assert!(out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""), "{out}");
+    assert!(out.contains("True"), "identity prefix should match: {out}");
+}
+
+/// Lipo's xcrun fallback must produce a direct invocation: the
+/// action argv carries the resolved tool path so multi-arch fat
+/// binary builds cache the same way regardless of whether the
+/// caller pinned a developer dir.
+#[test]
+fn prelude_resolve_lipo_fallback_returns_direct_invocation() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "xcrun":
+        return "/usr/bin/xcrun"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if "--find" in argv and argv[len(argv) - 1] == "lipo":
+        return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo\n"
+    fail("unexpected host_command: " + str(argv))
+
+lipo = _resolve_lipo("ios", "simulator", "")
+result = repr([
+    lipo["argv"],
+    lipo["lipo_path"],
+    lipo["env"],
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    assert!(!out.contains("/usr/bin/xcrun"), "fallback argv must not include xcrun: {out}");
+    assert!(out.contains("XcodeDefault.xctoolchain/usr/bin/lipo"), "{out}");
+    assert!(out.contains("{}"), "no developer dir means an empty action env: {out}");
 }
 
 /// End-to-end direct-mode sanity check: building an `apple_library`
