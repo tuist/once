@@ -7,9 +7,50 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// A single command declared by a target kind impl through `run_action`.
+/// A portable filesystem operation declared by a target kind impl.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DeclaredActionOperation {
+    WriteFile {
+        path: String,
+        bytes: Vec<u8>,
+    },
+    CopyPath {
+        sources: Vec<String>,
+        destination: String,
+        mode: DeclaredCopyPathMode,
+    },
+    PreparePath {
+        path: String,
+        mode: DeclaredPreparePathMode,
+    },
+    WriteTreeDigest {
+        root: String,
+        output: String,
+        include_suffixes: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredCopyPathMode {
+    File,
+    Tree,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredPreparePathMode {
+    Remove,
+    Directory,
+}
+
+/// A single action declared by a target kind impl.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DeclaredAction {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<DeclaredActionOperation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,

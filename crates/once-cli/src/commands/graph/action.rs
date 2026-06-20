@@ -252,7 +252,10 @@ mod tests {
             outputs: action_outputs,
             input_digest,
             ..
-        } = action_for(&target, "build", &outputs).unwrap();
+        } = action_for(&target, "build", &outputs).unwrap()
+        else {
+            panic!("graph fallback action should produce a command action");
+        };
         assert_eq!(argv[0], "/bin/sh");
         assert_eq!(argv[1], "-c");
         assert!(argv[2].contains("manifest.json"));

@@ -1,0 +1,8 @@
+[[target]]
+name = "SharedSwift"
+kind = "swift_android_library"
+srcs = ["Sources/**/*.swift"]
+
+[target.attrs]
+android_abi = "arm64-v8a"
+module_name = "SharedSwift"

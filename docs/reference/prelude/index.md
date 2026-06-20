@@ -26,15 +26,28 @@ metadata at the keyboard.
 - [`android_library`](/reference/prelude/android_library): Android
   Java library packaged as a jar, static resources, and AAR
 - [`android_binary`](/reference/prelude/android_binary): Android APK
-  built from Java sources, resources, Android resource deps, and Android
-  library deps
+  built from Java sources, resources, native libraries, Android resource
+  deps, and Android library deps
+
+## Swift target kinds
+
+- [`swift_android_library`](/reference/prelude/swift_android_library):
+  Swift shared library compiled for Android and packaged through APK
+  native-library providers
+
+## Kotlin target kinds
+
+- [`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework):
+  Kotlin/Native framework bundle consumed by Apple application and test
+  targets
 
 ## Rust target kinds
 
 - [`cargo_dependencies`](/reference/prelude/cargo_dependencies): cacheable
   Cargo dependency set consumed by Rust targets
 - [`rust_library`](/reference/prelude/rust_library): Rust rlib consumed
-  by downstream Rust targets
+  by downstream Rust targets, or native static/shared libraries consumed
+  by Apple and Android targets
 - [`rust_binary`](/reference/prelude/rust_binary): Rust executable built
   from a main crate and Rust deps
 - [`rust_crate`](/reference/prelude/rust_crate): resolved third-party

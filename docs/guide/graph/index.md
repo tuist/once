@@ -62,9 +62,20 @@ Today the built-in ecosystems cover these target kind sets:
   libraries, frameworks, applications, and test bundles for Apple
   platforms.
 - [Android](/guide/graph/android): Android resources, Java libraries,
-  and APKs built with Android SDK tools.
+  native library packaging, and APKs built with Android SDK tools.
 - [Rust](/guide/graph/rust): Rust libraries, binaries, procedural
-  macros, and Cargo dependency lowering.
+  macros, Cargo dependency lowering, and native artifacts for Apple and
+  Android consumers.
+- Swift and Kotlin shared-code entry points:
+  [`swift_android_library`](/reference/prelude/swift_android_library)
+  packages Swift into Android APKs, while
+  [`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework)
+  exposes Kotlin/Native frameworks to Apple targets.
+
+The shared-code target kinds also expose the
+`native-mobile-shared-code-e2e` schema example. It wires an Android app to
+Swift and Rust native libraries, and an Apple app to a Kotlin/Native
+framework plus a Rust static library.
 
 See [Ecosystems](/guide/graph/ecosystems) for the adoption model and
 the tradeoffs that come with letting Once own part of an ecosystem's

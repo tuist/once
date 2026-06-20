@@ -296,7 +296,7 @@ def _serialize_hmap(entries):
     return out
 
 def _write_hmap(path, entries):
-    write_bytes(path, _serialize_hmap(entries))
+    write_path(path, _serialize_hmap(entries))
 
 # Normalise a dep reference written in `[target.attrs]` (`./AppCore`,
 # `../web/Common`, or a root-relative `apps/ios/AppCore`) to the
@@ -340,6 +340,16 @@ def _collect_transitive(deps, key, own_values):
                 seen[value] = True
                 out.append(value)
     return out
+
+def _validate_apple_native_deps(deps, consumer_label):
+    for dep in deps:
+        if dep.get("target_kind") != "rust_library":
+            continue
+        crate_type = dep.get("crate_type") or ""
+        if crate_type == "staticlib":
+            continue
+        label = dep.get("label_id") or "dependency"
+        fail(consumer_label + ": Rust library dep `" + label + "` has crate_type `" + crate_type + "` and does not provide an Apple static library; set crate_type = \"staticlib\" for Apple consumers")
 
 # A select-shape attribute value is a dict with exactly one `select`
 # key whose value is itself a dict from configuration tokens to
@@ -763,6 +773,7 @@ def _apple_library_impl(ctx):
     archive = declare_output(module_name + ".a")
 
     deps = ctx["deps"]
+    _validate_apple_native_deps(deps, ctx["label"]["id"])
     # Split deps into compile-visible (exported) and link-only.
     # exported_deps entries come straight from `[target.attrs]` and may
     # be `./Sibling`, `../web/Common`, or already root-relative; we
@@ -838,7 +849,7 @@ def _apple_library_impl(ctx):
         modulemap_lines.append("    export *")
         modulemap_lines.append("}")
         modulemap_lines.append("")
-        write_file(modulemap_path, "\n".join(modulemap_lines))
+        write_path(modulemap_path, "\n".join(modulemap_lines))
 
     # Header map generation: cover the `#include "Foo.h"` and
     # `#include <Module/Foo.h>` lookup styles that a pure modulemap
@@ -1202,6 +1213,7 @@ def _swift_macro_impl(ctx):
     plugin_swiftmodule = declare_output(module_name + ".swiftmodule")
 
     deps = ctx["deps"]
+    _validate_apple_native_deps(deps, ctx["label"]["id"])
 
     # Aggregate dep archives, swiftmodule search paths, frameworks, and
     # linkopts so the plugin links against a real swift-syntax
@@ -1361,11 +1373,6 @@ def _collect_dep_compile_inputs(deps, build_dir):
             module_name = dep.get("framework_module_name")
             if module_name and module_name not in framework_module_names:
                 framework_module_names.append(module_name)
-            # The framework's Modules/ directory hosts the swiftmodule
-            # consumers need on their `-I` search path.
-            modules_dir = framework_path + "/Modules"
-            if modules_dir not in swiftmodule_dirs:
-                swiftmodule_dirs.append(modules_dir)
         for fw in dep.get("transitive_sdk_frameworks") or []:
             if fw and fw not in sdk_frameworks:
                 sdk_frameworks.append(fw)
@@ -1430,6 +1437,7 @@ def _apple_framework_impl(ctx):
     info_plist = declare_output(framework_dir + "/Info.plist")
 
     deps = ctx["deps"]
+    _validate_apple_native_deps(deps, ctx["label"]["id"])
     (
         compile_swiftmodule_dirs,
         compile_header_dirs,
@@ -1528,7 +1536,7 @@ def _apple_framework_impl(ctx):
     # header declaration, and the bundled framework relies on the
     # Swift compiler reading the `.swiftmodule` in this same Modules/
     # directory rather than on an inferred ObjC submodule.
-    write_file(modulemap, "framework module " + module_name + " {\n    export *\n}\n")
+    write_path(modulemap, "framework module " + module_name + " {\n    export *\n}\n")
 
     plist_entries = {
         "CFBundleDevelopmentRegion": "en",
@@ -1541,15 +1549,14 @@ def _apple_framework_impl(ctx):
         "CFBundleVersion": "1",
         "MinimumOSVersion": minimum_os,
     }
-    write_file(info_plist, _render_plist(plist_entries))
+    write_path(info_plist, _render_plist(plist_entries))
 
     # Ad-hoc codesign so iOS simulator's dyld accepts the dylib when
     # the embedding app loads it.
     cs_xcrun, codesign_path, cs_identity, cs_env = _xcrun_codesign(xcode_developer_dir)
     cs_stamp = declare_output(framework_dir + "/_CodeSignature/CodeResources")
-    cs_script = "set -e; " + codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(ctx["build_dir"] + "/" + framework_dir)
     run_action(
-        argv = ["/bin/sh", "-c", cs_script],
+        argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + framework_dir],
         inputs = [dylib, info_plist, modulemap, swiftmodule],
         outputs = [cs_stamp],
         env = cs_env,
@@ -1686,6 +1693,7 @@ def _apple_application_impl(ctx):
     info_plist = declare_output(app_dir + "/Info.plist")
 
     deps = ctx["deps"]
+    _validate_apple_native_deps(deps, ctx["label"]["id"])
     (
         compile_swiftmodule_dirs,
         compile_header_dirs,
@@ -1796,7 +1804,7 @@ def _apple_application_impl(ctx):
         elif family == "ipad":
             device_family_codes.append({"integer": 2})
     array_entries = {"UIDeviceFamily": device_family_codes}
-    write_file(info_plist, _render_plist(plist_entries, bool_entries, array_entries))
+    write_path(info_plist, _render_plist(plist_entries, bool_entries, array_entries))
 
     # Embed each transitive dep framework into App.app/Frameworks/.
     # Each framework is copied as a whole bundle directory and
@@ -1822,24 +1830,27 @@ def _apple_application_impl(ctx):
         framework_prefix = framework_path + "/"
         embed_outputs = []
         for source in source_files:
+            if source == framework_path:
+                embed_outputs.append(declare_output(app_dir + "/Frameworks/" + framework_basename))
+                continue
             if source.startswith(framework_prefix):
                 rel = source[len(framework_prefix):]
                 embed_outputs.append(declare_output(app_dir + "/Frameworks/" + framework_basename + "/" + rel))
         embedded_stamp = declare_output(app_dir + "/Frameworks/" + framework_basename + "/_CodeSignature/CodeResources")
         if embedded_stamp not in embed_outputs:
             embed_outputs.append(embedded_stamp)
-        embed_script = (
-            "set -e; mkdir -p " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks") + "; " +
-            # Remove any prior copy so a re-run starts from a clean
-            # state; codesign --force inside the tree would otherwise
-            # carry stale signatures forward.
-            "rm -rf " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks/" + framework_basename) + "; " +
-            "cp -R " + shell_quote_for_action(framework_path) + " " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks/") + "; " +
-            codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir + "/Frameworks/" + framework_basename)
-        )
         embed_inputs = list(source_files)
+        embedded_framework_path = ctx["build_dir"] + "/" + app_dir + "/Frameworks/" + framework_basename
+        prepare_path(embedded_framework_path, kind = "remove", identifier = "apple_application_embed_clean_" + framework_basename)
+        copy_path(
+            framework_path,
+            embedded_framework_path,
+            kind = "tree",
+            inputs = embed_inputs,
+            identifier = "apple_application_embed_copy_" + framework_basename,
+        )
         run_action(
-            argv = ["/bin/sh", "-c", embed_script],
+            argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", embedded_framework_path],
             inputs = embed_inputs,
             outputs = embed_outputs,
             env = cs_env,
@@ -1855,9 +1866,8 @@ def _apple_application_impl(ctx):
     cs_inputs = [executable, info_plist]
     for stamp in embedded_stamps:
         cs_inputs.append(stamp)
-    cs_script = "set -e; " + codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(ctx["build_dir"] + "/" + app_dir)
     run_action(
-        argv = ["/bin/sh", "-c", cs_script],
+        argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + app_dir],
         inputs = cs_inputs,
         outputs = [app_cs_stamp],
         env = cs_env,
@@ -1931,6 +1941,7 @@ def _apple_test_bundle_impl(ctx):
     }
 
     deps = ctx["deps"]
+    _validate_apple_native_deps(deps, ctx["label"]["id"])
     (
         compile_swiftmodule_dirs,
         compile_header_dirs,
@@ -2048,16 +2059,15 @@ def _apple_test_bundle_impl(ctx):
         "CFBundleVersion": "1",
         "MinimumOSVersion": minimum_os,
     }
-    write_file(info_plist, _render_plist(plist_entries))
+    write_path(info_plist, _render_plist(plist_entries))
 
     cs_xcrun, codesign_path, cs_identity, cs_env = _xcrun_codesign(xcode_developer_dir)
     if platform == "macos" or platform == "macosx":
         test_cs_stamp = declare_output(bundle_dir + "/Contents/_CodeSignature/CodeResources")
     else:
         test_cs_stamp = declare_output(bundle_dir + "/_CodeSignature/CodeResources")
-    cs_script = "set -e; " + codesign_path + " --force --sign - --timestamp=none " + shell_quote_for_action(test_bundle_path)
     run_action(
-        argv = ["/bin/sh", "-c", cs_script],
+        argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", test_bundle_path],
         inputs = [test_binary, info_plist],
         outputs = [test_cs_stamp],
         env = cs_env,
@@ -2198,7 +2208,7 @@ apple_library = target_kind(
         attr("enable_modules", "bool", default = "false", docs = "Emit a `module.modulemap` for `exported_headers` and pass `-fmodules` to Clang so consumers can `import` the module instead of #importing each header"),
     ],
     deps = [
-        dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin"], "Libraries, frameworks, resources, or Swift compiler plugins consumed by this library"),
+        dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin", "native_linkable"], "Libraries, frameworks, resources, native linkables, or Swift compiler plugins consumed by this library"),
     ],
     providers = ["apple_linkable", "apple_module"],
     capabilities = [
@@ -2242,7 +2252,7 @@ apple_framework = target_kind(
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
     ],
     deps = [
-        dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin"], "Libraries, resources, or Swift compiler plugins linked or embedded by the framework"),
+        dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin", "native_linkable"], "Libraries, resources, native linkables, or Swift compiler plugins linked or embedded by the framework"),
     ],
     providers = ["apple_linkable", "apple_framework", "apple_bundle"],
     capabilities = [
@@ -2284,7 +2294,7 @@ apple_application = target_kind(
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
     ],
     deps = [
-        dep("deps", ["apple_linkable", "apple_framework", "apple_resource", "apple_swift_plugin"], "Libraries, frameworks, resources, and Swift compiler plugins embedded in the app"),
+        dep("deps", ["apple_linkable", "apple_framework", "apple_resource", "apple_swift_plugin", "native_linkable"], "Libraries, frameworks, resources, native linkables, and Swift compiler plugins embedded in the app"),
     ],
     providers = ["apple_application", "apple_bundle"],
     capabilities = [
@@ -2296,6 +2306,11 @@ apple_application = target_kind(
             "apple-application-minimal",
             name = "Minimal iOS application",
             use_when = "You want the smallest viable iOS app target wired into a Once workspace.",
+        ),
+        example(
+            "native-mobile-shared-code-e2e",
+            name = "Apple app with shared native code",
+            use_when = "Use this when an Apple app should embed a Kotlin/Native framework and link a Rust static library.",
         ),
     ],
 )
@@ -2323,7 +2338,7 @@ apple_test_bundle = target_kind(
         attr("labels", "list<string>", default = "[]", docs = "Agent-readable labels used for filtering or policy"),
     ],
     deps = [
-        dep("deps", ["apple_linkable", "apple_application", "apple_swift_plugin"], "Code under test, optional host application, and Swift compiler plugins"),
+        dep("deps", ["apple_linkable", "apple_application", "apple_swift_plugin", "native_linkable"], "Code under test, optional host application, native linkables, and Swift compiler plugins"),
     ],
     providers = ["apple_test_bundle", "apple_bundle", "once_test_info"],
     capabilities = [

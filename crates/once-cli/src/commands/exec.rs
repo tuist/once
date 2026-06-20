@@ -233,6 +233,7 @@ fn remote_execution(provider: Option<&str>) -> Option<RemoteExecution> {
 fn action_remote(action: &Action) -> Option<&RemoteExecution> {
     match action {
         Action::RunCommand { remote, .. } => remote.as_ref(),
+        _ => None,
     }
 }
 
@@ -765,18 +766,18 @@ mod tests {
         .unwrap()
         .expect("annotated script should be autodetected");
 
-        match plan.1 {
-            Action::RunCommand {
-                argv,
-                cwd,
-                input_digest,
-                ..
-            } => {
-                assert_eq!(argv, vec!["/bin/bash".to_string(), "build.sh".to_string()]);
-                assert_eq!(cwd.unwrap().as_str(), "scripts");
-                assert!(input_digest.is_some());
-            }
-        }
+        let Action::RunCommand {
+            argv,
+            cwd,
+            input_digest,
+            ..
+        } = plan.1
+        else {
+            panic!("script autodetection should produce a command action");
+        };
+        assert_eq!(argv, vec!["/bin/bash".to_string(), "build.sh".to_string()]);
+        assert_eq!(cwd.unwrap().as_str(), "scripts");
+        assert!(input_digest.is_some());
     }
 
     #[test]
@@ -800,14 +801,14 @@ mod tests {
         )
         .unwrap();
 
-        match action {
-            Action::RunCommand {
-                output_symlink_mode,
-                ..
-            } => {
-                assert_eq!(output_symlink_mode, OutputSymlinkMode::Preserve);
-            }
-        }
+        let Action::RunCommand {
+            output_symlink_mode,
+            ..
+        } = action
+        else {
+            panic!("script action should produce a command action");
+        };
+        assert_eq!(output_symlink_mode, OutputSymlinkMode::Preserve);
     }
 
     #[test]

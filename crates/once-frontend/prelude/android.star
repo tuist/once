@@ -114,30 +114,26 @@ def _android_abs_path(path):
         return root + "/" + path
     return path
 
+def _android_basename(path):
+    idx = -1
+    for i in range(len(path)):
+        if path[i] == "/":
+            idx = i
+    if idx < 0:
+        return path
+    return path[idx + 1:]
+
 def _android_existing_file(label_id, path):
     if not path:
         return ""
-    sh = _android_host_shell(label_id)
-    script = "set -eu\nif [ -f " + _shell_quote(path) + " ]; then printf '%s' " + _shell_quote(path) + "; fi\n"
-    return host_command([sh, "-c", script]).strip()
+    if host_file_exists(path):
+        return path
+    return ""
 
 def _android_file_sha256(label_id, path):
-    sh = _android_host_shell(label_id)
-    script = """set -eu
-file={path}
-if [ ! -f "$file" ]; then
-  echo "missing file: $file" >&2
-  exit 1
-fi
-if command -v shasum >/dev/null 2>&1; then
-  shasum -a 256 "$file" | awk '{{print $1}}'
-else
-  sha256sum "$file" | awk '{{print $1}}'
-fi
-""".format(
-        path = _shell_quote(path),
-    )
-    return host_command([sh, "-c", script]).strip()
+    if not host_file_exists(path):
+        fail(label_id + ": missing file `" + path + "`")
+    return host_file_sha256(path)
 
 def _android_default_debug_keystore(label_id):
     candidates = []
@@ -169,24 +165,6 @@ def _android_file_globs(patterns):
         if _ends_with(pattern, "/**"):
             expanded.append(pattern + "/*")
     return glob(expanded)
-
-def _android_hash_tree_script(root, output, find_args):
-    return """rm -f {output}
-: > {output}
-if [ -d {root} ]; then
-  find {root} -type f {find_args} | sort | while IFS= read -r file; do
-    if command -v shasum >/dev/null 2>&1; then
-      shasum -a 256 "$file"
-    else
-      sha256sum "$file"
-    fi
-  done > {output}
-fi
-""".format(
-        root = _shell_quote(root),
-        output = _shell_quote(output),
-        find_args = find_args,
-    )
 
 def _android_resource_dirs(ctx, attrs, resource_files):
     declared = _android_attr(attrs, "resource_dirs", ["res"])
@@ -221,6 +199,12 @@ def _android_manifest(ctx, attrs):
 
 def _android_namespace(attrs):
     return _android_attr(attrs, "custom_package", "") or _android_attr(attrs, "namespace", "") or _android_attr(attrs, "package", "")
+
+def _android_r_java_source(attrs, r_src_dir):
+    namespace = _android_namespace(attrs) or _android_attr(attrs, "application_id", "")
+    if not namespace:
+        return ""
+    return r_src_dir + "/" + namespace.replace(".", "/") + "/R.java"
 
 def _android_sdk_root(attrs, label_id):
     configured = _android_attr(attrs, "android_sdk", "")
@@ -279,7 +263,7 @@ def _android_kotlin_stdlib(attrs, kotlinc):
         return ""
     return kotlin_home + "/lib/kotlin-stdlib.jar"
 
-def _android_tools(ctx, attrs, include_java, include_apk, include_kotlin = False):
+def _android_tools(ctx, attrs, include_java, include_apk, include_kotlin = False, include_jar = True):
     label_id = ctx["label"]["id"]
     sdk_root = _android_sdk_root(attrs, label_id)
     compile_sdk = str(_android_attr(attrs, "compile_sdk", "") or _android_highest_platform(sdk_root, label_id))
@@ -306,15 +290,17 @@ def _android_tools(ctx, attrs, include_java, include_apk, include_kotlin = False
     ]
     if include_java:
         javac = _android_attr(attrs, "javac", "") or host_which("javac")
-        jar = _android_attr(attrs, "jar", "") or host_which("jar")
         java = _android_attr(attrs, "java", "") or host_which("java")
         java_home = _android_attr(attrs, "java_home", "") or _android_host_env("JAVA_HOME")
         tools["javac"] = javac
-        tools["jar"] = jar
         tools["java"] = java
         if java_home:
             tools["java_home"] = java_home
-        identity.extend(["javac", javac, _android_javac_version(javac, label_id), "jar", jar, "java", java, "java_home", java_home])
+        identity.extend(["javac", javac, _android_javac_version(javac, label_id), "java", java, "java_home", java_home])
+        if include_jar:
+            jar = _android_attr(attrs, "jar", "") or host_which("jar")
+            tools["jar"] = jar
+            identity.extend(["jar", jar])
     if include_kotlin:
         kotlinc = _android_attr(attrs, "kotlinc", "") or host_which("kotlinc")
         kotlin_stdlib = _android_kotlin_stdlib(attrs, kotlinc)
@@ -424,36 +410,69 @@ def _android_asset_files_from_deps(deps):
         files.extend(dep.get("transitive_asset_files") or [])
     return _unique(files)
 
+def _android_native_library_key(library):
+    return (library.get("abi") or "") + "\x00" + (library.get("path") or "")
+
+def _android_unique_native_libraries(libraries):
+    seen = {}
+    out = []
+    for library in libraries:
+        abi = library.get("abi") or ""
+        path = library.get("path") or ""
+        if not abi or not path:
+            continue
+        key = _android_native_library_key(library)
+        if key not in seen:
+            seen[key] = True
+            out.append({"abi": abi, "path": path})
+    return out
+
+def _android_validate_native_library_dep(dep, consumer_label):
+    if dep.get("target_kind") != "rust_library":
+        return
+    crate_type = dep.get("crate_type") or ""
+    if crate_type == "cdylib" or crate_type == "dylib":
+        return
+    label = dep.get("label_id") or "dependency"
+    fail(consumer_label + ": Rust library dep `" + label + "` has crate_type `" + crate_type + "` and does not provide an Android shared library; set crate_type = \"cdylib\" or \"dylib\" for Android consumers")
+
+def _android_native_libraries(deps, consumer_label):
+    libraries = []
+    for dep in deps:
+        _android_validate_native_library_dep(dep, consumer_label)
+        libraries.extend(dep.get("transitive_android_native_libraries") or [])
+        libraries.extend(dep.get("android_native_libraries") or [])
+    return _android_unique_native_libraries(libraries)
+
+def _android_native_library_paths(libraries):
+    out = []
+    for library in libraries:
+        path = library.get("path") or ""
+        if path and path not in out:
+            out.append(path)
+    return out
+
 def _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs):
     if len(resource_files) == 0:
         return []
     compiled_zips = []
-    compile_lines = []
-    sh = _android_host_shell(ctx["label"]["id"])
     i = 0
     for resource_dir in resource_dirs:
         i = i + 1
         compiled_zip = declare_output("compiled_resources/resources_" + str(i) + ".zip")
         compiled_zips.append(compiled_zip)
-        compile_lines.append("mkdir -p " + _shell_quote(_parent_dir(compiled_zip)) + "\n" + _shell_quote(tools["aapt2"]) + " compile --dir " + _shell_quote(resource_dir) + " -o " + _shell_quote(compiled_zip))
-    script = """set -eu
-{compile_lines}
-""".format(
-        compile_lines = "\n".join(compile_lines),
-    )
-    run_action(
-        argv = [sh, "-c", script],
-        inputs = resource_files,
-        outputs = compiled_zips,
-        env = _android_env(tools),
-        toolchain_identity = tools["identity"] + "\x00aapt2_compile",
-        identifier = "android_resource_compile:" + ctx["label"]["id"],
-    )
+        run_action(
+            argv = [tools["aapt2"], "compile", "--dir", resource_dir, "-o", compiled_zip],
+            inputs = resource_files,
+            outputs = [compiled_zip],
+            env = _android_env(tools),
+            toolchain_identity = tools["identity"] + "\x00aapt2_compile\x00" + resource_dir,
+            identifier = "android_resource_compile:" + ctx["label"]["id"] + ":" + str(i),
+        )
     return compiled_zips
 
 def _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, static_lib, asset_roots, asset_files):
     label_id = ctx["label"]["id"]
-    sh = _android_host_shell(label_id)
     resource_apk = declare_output("resources.apk")
     r_src_dir = declare_output("generated/r")
     r_src_hash = declare_output("generated/r_sources.sha256")
@@ -481,42 +500,123 @@ def _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_comp
         version_code = _android_attr(attrs, "version_code", 1)
         version_name = _android_attr(attrs, "version_name", "1.0")
         base_args.extend(["--version-code", str(version_code), "--version-name", version_name])
-    script = """set -eu
-rm -rf {r_src_dir}
-mkdir -p {r_src_dir}
-set -- {base_args}
-for zip in {compiled_zips}; do
-  [ -f "$zip" ] || continue
-  set -- "$@" -R "$zip"
-done
-for dir in {asset_roots}; do
-  [ -d "$dir" ] || continue
-  set -- "$@" -A "$dir"
-done
-"$@"
-{hash_r_sources}
-""".format(
-        r_src_dir = _shell_quote(r_src_dir),
-        base_args = _android_shell_words(base_args),
-        compiled_zips = _android_shell_words(_unique(compiled_zips + dep_compiled_zips)),
-        asset_roots = _android_shell_words(asset_roots),
-        hash_r_sources = _android_hash_tree_script(r_src_dir, r_src_hash, "-name '*.java'"),
+    argv = list(base_args)
+    for zip in _unique(compiled_zips + dep_compiled_zips):
+        argv.extend(["-R", zip])
+    for dir in asset_roots:
+        argv.extend(["-A", dir])
+    link_tool_source = declare_output("aapt2_link_tool/OnceAndroidAapt2Link.java")
+    link_tool_classes = declare_output("aapt2_link_tool/classes")
+    prepare_path(r_src_dir, kind = "remove", identifier = "android_resource_link_clean:" + label_id)
+    prepare_path(r_src_dir, kind = "directory", identifier = "android_resource_link_prepare:" + label_id)
+    prepare_path(link_tool_classes, kind = "remove", identifier = "android_resource_link_tool_clean:" + label_id)
+    prepare_path(link_tool_classes, kind = "directory", identifier = "android_resource_link_tool_prepare:" + label_id)
+    write_path(link_tool_source, _android_aapt2_link_tool_source())
+    run_action(
+        argv = [tools["javac"], "-encoding", "UTF-8", "-d", link_tool_classes, link_tool_source],
+        inputs = [link_tool_source],
+        outputs = [link_tool_classes],
+        env = _android_env(tools),
+        toolchain_identity = tools["identity"] + "\x00aapt2_link_tool_javac.v1",
+        identifier = "android_resource_link_tool_compile:" + label_id,
     )
     run_action(
-        argv = [sh, "-c", script],
-        inputs = _unique([manifest] + compiled_zips + dep_compiled_zips + asset_files),
-        outputs = [resource_apk, r_src_dir, r_src_hash, r_txt],
+        argv = [tools["java"], "-cp", link_tool_classes, "OnceAndroidAapt2Link", r_txt] + argv,
+        inputs = _unique([manifest, link_tool_classes] + compiled_zips + dep_compiled_zips + asset_files),
+        outputs = [resource_apk, r_src_dir, r_txt],
         env = _android_env(tools),
         toolchain_identity = tools["identity"] + "\x00aapt2_link\x00static\x00" + str(static_lib),
         identifier = "android_resource_link:" + label_id,
     )
+    write_tree_digest(
+        r_src_dir,
+        r_src_hash,
+        include_suffixes = [".java"],
+        identifier = "android_resource_r_digest:" + label_id,
+    )
     return (resource_apk, r_src_dir, r_src_hash, r_txt)
 
+def _android_aapt2_link_tool_source():
+    return """import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+
+public final class OnceAndroidAapt2Link {
+  public static void main(String[] args) throws Exception {
+    Path rTxt = Paths.get(args[0]);
+    List<String> command = new ArrayList<>();
+    for (int i = 1; i < args.length; i++) {
+      command.add(args[i]);
+    }
+    Process process = new ProcessBuilder(command).inheritIO().start();
+    int exit = process.waitFor();
+    if (exit != 0) {
+      System.exit(exit);
+    }
+    Path parent = rTxt.getParent();
+    if (parent != null) {
+      Files.createDirectories(parent);
+    }
+    if (!Files.exists(rTxt)) {
+      Files.createFile(rTxt);
+    }
+  }
+}
+"""
+
+def _android_java_source_list_tool_source():
+    return """import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.stream.Stream;
+
+public final class OnceAndroidJavaSourceList {
+  public static void main(String[] args) throws Exception {
+    Path baseList = Paths.get(args[0]);
+    Path generatedRoot = Paths.get(args[1]);
+    Path output = Paths.get(args[2]);
+    List<String> sources = new ArrayList<>();
+    if (Files.isRegularFile(baseList)) {
+      for (String line : Files.readAllLines(baseList, StandardCharsets.UTF_8)) {
+        String trimmed = line.trim();
+        if (!trimmed.isEmpty()) {
+          sources.add(trimmed);
+        }
+      }
+    }
+    if (Files.isDirectory(generatedRoot)) {
+      try (Stream<Path> stream = Files.walk(generatedRoot)) {
+        stream
+            .filter(Files::isRegularFile)
+            .map(Path::toString)
+            .filter(path -> path.endsWith(".java"))
+            .sorted()
+            .forEach(sources::add);
+      }
+    }
+    LinkedHashSet<String> unique = new LinkedHashSet<>(sources);
+    Path parent = output.getParent();
+    if (parent != null) {
+      Files.createDirectories(parent);
+    }
+    Files.write(output, unique, StandardCharsets.UTF_8);
+  }
+}
+"""
+
 def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars):
-    sh = _android_host_shell(ctx["label"]["id"])
     classes_dir = declare_output("java_classes")
     classes_hash = declare_output("classes.sha256")
-    source_list = ctx["build_dir"] + "/java_sources.list"
+    source_list = declare_output("java_sources.list")
+    base_source_list = declare_output("java_sources.base.list")
+    source_list_tool = declare_output("java_source_list_tool/OnceAndroidJavaSourceList.java")
+    source_list_tool_classes = declare_output("java_source_list_tool/classes")
     classpath_entries = _unique([tools["android_jar"]] + dep_jars)
     classpath = _android_classpath_sep().join(classpath_entries)
     source_level = str(_android_attr(attrs, "java_language_level", "17"))
@@ -529,47 +629,54 @@ def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash
         "-classpath", classpath,
         "-d", classes_dir,
     ] + javac_opts
-    script = """set -eu
-rm -rf {classes_dir}
-mkdir -p {classes_dir}
-: > {source_list}
-for src in {java_sources}; do
-  [ -f "$src" ] || continue
-  printf '%s\\n' "$src" >> {source_list}
-done
-if [ -d {r_src_dir} ]; then
-  find {r_src_dir} -name '*.java' | sort >> {source_list}
-fi
-if [ -s {source_list} ]; then
-  set -- {base_args} @{source_list}
-  "$@"
-fi
-{hash_classes}
-""".format(
-        classes_dir = _shell_quote(classes_dir),
-        source_list = _shell_quote(source_list),
-        java_sources = _android_shell_words(java_sources),
-        r_src_dir = _shell_quote(r_src_dir),
-        base_args = _android_shell_words(base_args),
-        hash_classes = _android_hash_tree_script(classes_dir, classes_hash, ""),
+    sources_to_compile = list(java_sources)
+    r_java = _android_r_java_source(attrs, r_src_dir)
+    if r_java:
+        sources_to_compile.append(r_java)
+    prepare_path(classes_dir, kind = "remove", identifier = "android_java_clean:" + ctx["label"]["id"])
+    prepare_path(classes_dir, kind = "directory", identifier = "android_java_prepare:" + ctx["label"]["id"])
+    prepare_path(source_list_tool_classes, kind = "remove", identifier = "android_java_source_list_tool_clean:" + ctx["label"]["id"])
+    prepare_path(source_list_tool_classes, kind = "directory", identifier = "android_java_source_list_tool_prepare:" + ctx["label"]["id"])
+    write_path(base_source_list, "\n".join(java_sources) + "\n")
+    write_path(source_list_tool, _android_java_source_list_tool_source())
+    run_action(
+        argv = [tools["javac"], "-encoding", "UTF-8", "-d", source_list_tool_classes, source_list_tool],
+        inputs = [source_list_tool],
+        outputs = [source_list_tool_classes],
+        env = _android_env(tools),
+        toolchain_identity = tools["identity"] + "\x00java_source_list_tool_javac.v1",
+        identifier = "android_java_source_list_tool_compile:" + ctx["label"]["id"],
     )
     run_action(
-        argv = [sh, "-c", script],
-        inputs = _unique(java_sources + [r_src_hash] + _android_workspace_inputs(dep_jars)),
-        outputs = [classes_dir, classes_hash],
+        argv = [tools["java"], "-cp", source_list_tool_classes, "OnceAndroidJavaSourceList", base_source_list, r_src_dir, source_list],
+        inputs = [source_list_tool_classes, base_source_list, r_src_hash],
+        outputs = [source_list],
         env = _android_env(tools),
-        toolchain_identity = tools["identity"] + "\x00javac\x00level\x00" + source_level,
-        identifier = "android_java_compile:" + ctx["label"]["id"],
+        toolchain_identity = tools["identity"] + "\x00java_source_list.v1",
+        identifier = "android_java_source_list:" + ctx["label"]["id"],
+    )
+    if len(sources_to_compile) > 0:
+        run_action(
+            argv = base_args + ["@" + source_list],
+            inputs = _unique(java_sources + [r_src_hash, source_list] + _android_workspace_inputs(dep_jars)),
+            outputs = [classes_dir],
+            env = _android_env(tools),
+            toolchain_identity = tools["identity"] + "\x00javac\x00level\x00" + source_level,
+            identifier = "android_java_compile:" + ctx["label"]["id"],
+        )
+    write_tree_digest(
+        classes_dir,
+        classes_hash,
+        identifier = "android_java_classes_digest:" + ctx["label"]["id"],
     )
     return (classes_dir, classes_hash)
 
 def _android_compile_kotlin(ctx, attrs, tools, kotlin_sources, classes_dir, classes_hash, dep_jars):
     if len(kotlin_sources) == 0:
         return (classes_dir, classes_hash)
-    sh = _android_host_shell(ctx["label"]["id"])
     merged_classes_dir = declare_output("classes")
     kotlin_hash = declare_output("classes.kotlin.sha256")
-    source_list = ctx["build_dir"] + "/kotlin_sources.list"
+    source_list = declare_output("kotlin_sources.list")
     classpath_entries = _unique([tools["android_jar"], tools["kotlin_stdlib"], classes_dir] + dep_jars)
     classpath = _android_classpath_sep().join(classpath_entries)
     kotlinc_opts = _android_attr(attrs, "kotlinc_opts", [])
@@ -578,53 +685,33 @@ def _android_compile_kotlin(ctx, attrs, tools, kotlin_sources, classes_dir, clas
         "-classpath", classpath,
         "-d", merged_classes_dir,
     ] + kotlinc_opts
-    script = """set -eu
-rm -rf {merged_classes_dir}
-mkdir -p {merged_classes_dir}
-if [ -d {classes_dir} ]; then
-  cp -R {classes_dir}/. {merged_classes_dir}/
-fi
-: > {source_list}
-for src in {kotlin_sources}; do
-  [ -f "$src" ] || continue
-  printf '%s\\n' "$src" >> {source_list}
-done
-if [ -s {source_list} ]; then
-  set -- {base_args} @{source_list}
-  "$@"
-fi
-{hash_classes}
-""".format(
-        classes_dir = _shell_quote(classes_dir),
-        merged_classes_dir = _shell_quote(merged_classes_dir),
-        source_list = _shell_quote(source_list),
-        kotlin_sources = _android_shell_words(kotlin_sources),
-        base_args = _android_shell_words(base_args),
-        hash_classes = _android_hash_tree_script(merged_classes_dir, kotlin_hash, ""),
+    copy_path(
+        classes_dir,
+        merged_classes_dir,
+        kind = "tree",
+        inputs = [classes_hash],
+        identifier = "android_kotlin_copy_java_classes:" + ctx["label"]["id"],
     )
+    write_path(source_list, "\n".join(kotlin_sources) + "\n")
     run_action(
-        argv = [sh, "-c", script],
-        inputs = _unique(kotlin_sources + [classes_hash] + _android_workspace_inputs(dep_jars)),
-        outputs = [merged_classes_dir, kotlin_hash],
+        argv = base_args + ["@" + source_list],
+        inputs = _unique(kotlin_sources + [classes_hash, source_list] + _android_workspace_inputs(dep_jars)),
+        outputs = [merged_classes_dir],
         env = _android_env(tools),
         toolchain_identity = tools["identity"] + "\x00kotlinc",
         identifier = "android_kotlin_compile:" + ctx["label"]["id"],
     )
+    write_tree_digest(
+        merged_classes_dir,
+        kotlin_hash,
+        identifier = "android_kotlin_classes_digest:" + ctx["label"]["id"],
+    )
     return (merged_classes_dir, kotlin_hash)
 
 def _android_jar_classes(ctx, tools, classes_dir, classes_hash):
-    sh = _android_host_shell(ctx["label"]["id"])
     classes_jar = declare_output(ctx["label"]["name"] + ".jar")
-    script = """set -eu
-rm -f {classes_jar}
-{jar} cf {classes_jar} -C {classes_dir} .
-""".format(
-        classes_jar = _shell_quote(classes_jar),
-        jar = _shell_quote(tools["jar"]),
-        classes_dir = _shell_quote(classes_dir),
-    )
     run_action(
-        argv = [sh, "-c", script],
+        argv = [tools["jar"], "cf", classes_jar, "-C", classes_dir, "."],
         inputs = [classes_hash],
         outputs = [classes_jar],
         env = _android_env(tools),
@@ -634,45 +721,31 @@ rm -f {classes_jar}
     return classes_jar
 
 def _android_package_aar(ctx, attrs, tools, manifest, classes_jar, r_txt, resource_dirs, asset_roots, resource_files, asset_files):
-    sh = _android_host_shell(ctx["label"]["id"])
     aar = declare_output(ctx["label"]["name"] + ".aar")
     staging = ctx["build_dir"] + "/aar_staging"
-    script = """set -eu
-rm -rf {staging}
-mkdir -p {staging}
-cp {manifest} {staging}/AndroidManifest.xml
-cp {classes_jar} {staging}/classes.jar
-if [ -f {r_txt} ]; then cp {r_txt} {staging}/R.txt; else : > {staging}/R.txt; fi
-if [ -n {resource_dirs_joined} ]; then
-  mkdir -p {staging}/res
-  for dir in {resource_dirs}; do
-    [ -d "$dir" ] || continue
-    cp -R "$dir"/. {staging}/res/
-  done
-fi
-if [ -n {asset_roots_joined} ]; then
-  mkdir -p {staging}/assets
-  for dir in {asset_roots}; do
-    [ -d "$dir" ] || continue
-    cp -R "$dir"/. {staging}/assets/
-  done
-fi
-rm -f {aar}
-{jar} cf {aar} -C {staging} .
-""".format(
-        staging = _shell_quote(staging),
-        manifest = _shell_quote(manifest),
-        classes_jar = _shell_quote(classes_jar),
-        r_txt = _shell_quote(r_txt),
-        resource_dirs_joined = _shell_quote(" ".join(resource_dirs)),
-        resource_dirs = _android_shell_words(resource_dirs),
-        asset_roots_joined = _shell_quote(" ".join(asset_roots)),
-        asset_roots = _android_shell_words(asset_roots),
-        aar = _shell_quote(aar),
-        jar = _shell_quote(tools["jar"]),
-    )
+    prepare_path(staging, kind = "remove", identifier = "android_aar_clean:" + ctx["label"]["id"])
+    prepare_path(staging, kind = "directory", identifier = "android_aar_prepare:" + ctx["label"]["id"])
+    copy_path(manifest, staging + "/AndroidManifest.xml", inputs = [manifest], identifier = "android_aar_manifest:" + ctx["label"]["id"])
+    copy_path(classes_jar, staging + "/classes.jar", inputs = [classes_jar], identifier = "android_aar_classes:" + ctx["label"]["id"])
+    copy_path(r_txt, staging + "/R.txt", inputs = [r_txt], identifier = "android_aar_rtxt:" + ctx["label"]["id"])
+    if len(resource_dirs) > 0:
+        copy_path(
+            resource_dirs,
+            staging + "/res",
+            kind = "tree",
+            inputs = resource_files,
+            identifier = "android_aar_resources:" + ctx["label"]["id"],
+        )
+    if len(asset_roots) > 0:
+        copy_path(
+            asset_roots,
+            staging + "/assets",
+            kind = "tree",
+            inputs = asset_files,
+            identifier = "android_aar_assets:" + ctx["label"]["id"],
+        )
     run_action(
-        argv = [sh, "-c", script],
+        argv = [tools["jar"], "cf", aar, "-C", staging, "."],
         inputs = _unique([manifest, classes_jar, r_txt] + resource_files + asset_files),
         outputs = [aar],
         env = _android_env(tools),
@@ -682,7 +755,6 @@ rm -f {aar}
     return aar
 
 def _android_dex(ctx, attrs, tools, runtime_jars):
-    sh = _android_host_shell(ctx["label"]["id"])
     dex_dir = declare_output("dex")
     dex_hash = declare_output("dex.sha256")
     min_sdk = str(_android_attr(attrs, "min_sdk_version", 23))
@@ -693,50 +765,63 @@ def _android_dex(ctx, attrs, tools, runtime_jars):
         "--lib", tools["android_jar"],
         "--output", dex_dir,
     ] + dexopts + runtime_jars
-    script = """set -eu
-rm -rf {dex_dir}
-mkdir -p {dex_dir}
-set -- {base_args}
-"$@"
-{hash_dex}
-""".format(
-        dex_dir = _shell_quote(dex_dir),
-        base_args = _android_shell_words(base_args),
-        hash_dex = _android_hash_tree_script(dex_dir, dex_hash, "-name '*.dex'"),
-    )
+    prepare_path(dex_dir, kind = "remove", identifier = "android_dex_clean:" + ctx["label"]["id"])
+    prepare_path(dex_dir, kind = "directory", identifier = "android_dex_prepare:" + ctx["label"]["id"])
     run_action(
-        argv = [sh, "-c", script],
+        argv = base_args,
         inputs = _android_workspace_inputs(runtime_jars),
-        outputs = [dex_dir, dex_hash],
+        outputs = [dex_dir],
         env = _android_env(tools),
         toolchain_identity = tools["identity"] + "\x00d8\x00min\x00" + min_sdk,
         identifier = "android_dex:" + ctx["label"]["id"],
     )
+    write_tree_digest(
+        dex_dir,
+        dex_hash,
+        include_suffixes = [".dex"],
+        identifier = "android_dex_digest:" + ctx["label"]["id"],
+    )
     return (dex_dir, dex_hash)
 
-def _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash):
-    sh = _android_host_shell(ctx["label"]["id"])
+def _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash, native_libraries):
     unsigned_apk = declare_output("unsigned.apk")
-    script = """set -eu
-rm -f {unsigned_apk}
-cp {resource_apk} {unsigned_apk}
-if [ -d {dex_dir} ]; then
-  {jar} uf {unsigned_apk} -C {dex_dir} .
-fi
-""".format(
-        unsigned_apk = _shell_quote(unsigned_apk),
-        resource_apk = _shell_quote(resource_apk),
-        dex_dir = _shell_quote(dex_dir),
-        jar = _shell_quote(tools["jar"]),
+    native_staging = ctx["build_dir"] + "/native_staging"
+    copy_path(
+        resource_apk,
+        unsigned_apk,
+        inputs = [resource_apk],
+        identifier = "android_unsigned_apk_base:" + ctx["label"]["id"],
     )
     run_action(
-        argv = [sh, "-c", script],
-        inputs = [resource_apk, dex_hash],
+        argv = [tools["jar"], "uf", unsigned_apk, "-C", dex_dir, "."],
+        inputs = [unsigned_apk, dex_hash],
         outputs = [unsigned_apk],
         env = _android_env(tools),
-        toolchain_identity = tools["identity"] + "\x00unsigned_apk",
-        identifier = "android_unsigned_apk:" + ctx["label"]["id"],
+        toolchain_identity = tools["identity"] + "\x00unsigned_apk_dex",
+        identifier = "android_unsigned_apk_dex:" + ctx["label"]["id"],
     )
+    prepare_path(native_staging, kind = "remove", identifier = "android_native_staging_clean:" + ctx["label"]["id"])
+    for library in native_libraries:
+        abi = library.get("abi") or ""
+        path = library.get("path") or ""
+        if not abi or not path:
+            continue
+        destination_dir = native_staging + "/lib/" + abi
+        copy_path(
+            path,
+            destination_dir + "/" + _android_basename(path),
+            inputs = [path],
+            identifier = "android_native_library_stage:" + ctx["label"]["id"] + ":" + abi + ":" + _android_basename(path),
+        )
+    if len(native_libraries) > 0:
+        run_action(
+            argv = [tools["jar"], "uf", unsigned_apk, "-C", native_staging, "lib"],
+            inputs = _unique([unsigned_apk] + _android_native_library_paths(native_libraries)),
+            outputs = [unsigned_apk],
+            env = _android_env(tools),
+            toolchain_identity = tools["identity"] + "\x00unsigned_apk_native_libraries\x00" + str(native_libraries),
+            identifier = "android_unsigned_apk_native:" + ctx["label"]["id"],
+        )
     return unsigned_apk
 
 def _android_zipalign(ctx, tools, unsigned_apk):
@@ -752,15 +837,13 @@ def _android_zipalign(ctx, tools, unsigned_apk):
     return aligned_apk
 
 def _android_sign_or_copy(ctx, attrs, tools, aligned_apk):
-    sh = _android_host_shell(ctx["label"]["id"])
     apk = _android_apk_output(ctx)
     signing = _android_attr(attrs, "signing", "debug")
     if signing == "none":
-        run_action(
-            argv = [sh, "-c", "set -eu\ncp " + _shell_quote(aligned_apk) + " " + _shell_quote(apk) + "\n"],
-            outputs = [apk],
-            env = _android_env(tools),
-            toolchain_identity = tools["identity"] + "\x00unsigned_final",
+        copy_path(
+            aligned_apk,
+            apk,
+            inputs = [aligned_apk],
             identifier = "android_final_apk:" + ctx["label"]["id"],
         )
         return (apk, "")
@@ -776,32 +859,40 @@ def _android_sign_or_copy(ctx, attrs, tools, aligned_apk):
     if debug_keystore:
         source_keystore = _package_relative(ctx, debug_keystore)
         inputs.append(source_keystore)
+        copy_path(
+            source_keystore,
+            keystore,
+            inputs = [source_keystore],
+            identifier = "android_debug_keystore:" + ctx["label"]["id"],
+        )
+        signing_keystore = keystore
+        returned_keystore = keystore
     else:
         source_keystore = _android_default_debug_keystore(ctx["label"]["id"])
+        signing_keystore = source_keystore
+        returned_keystore = source_keystore
     keystore_digest = _android_file_sha256(ctx["label"]["id"], _android_abs_path(source_keystore))
-    script = """set -eu
-rm -f {apk}
-rm -f {keystore}
-cp {source_keystore} {keystore}
-{apksigner} sign --ks {keystore} --ks-pass {password_arg} --key-pass {password_arg} --ks-key-alias {alias_arg} --out {apk} {aligned_apk}
-""".format(
-        apk = _shell_quote(apk),
-        keystore = _shell_quote(keystore),
-        source_keystore = _shell_quote(source_keystore),
-        apksigner = _shell_quote(tools["apksigner"]),
-        password_arg = _shell_quote("pass:" + password),
-        alias_arg = _shell_quote(alias),
-        aligned_apk = _shell_quote(aligned_apk),
-    )
+    sign_inputs = _unique(inputs + [aligned_apk])
+    if signing_keystore == keystore:
+        sign_inputs.append(keystore)
     run_action(
-        argv = [sh, "-c", script],
-        inputs = _unique(inputs + [aligned_apk]),
-        outputs = [apk, keystore],
+        argv = [
+            tools["apksigner"],
+            "sign",
+            "--ks", signing_keystore,
+            "--ks-pass", "pass:" + password,
+            "--key-pass", "pass:" + password,
+            "--ks-key-alias", alias,
+            "--out", apk,
+            aligned_apk,
+        ],
+        inputs = _unique(sign_inputs),
+        outputs = [apk],
         env = _android_env(tools),
         toolchain_identity = tools["identity"] + "\x00debug_sign\x00keystore_sha256\x00" + keystore_digest,
         identifier = "android_sign:" + ctx["label"]["id"],
     )
-    return (apk, keystore)
+    return (apk, returned_keystore)
 
 def _android_run_app(ctx, attrs, tools):
     label_id = ctx["label"]["id"]
@@ -840,8 +931,8 @@ def _android_run_app(ctx, attrs, tools):
     }
 
 def _android_resource_impl(ctx):
-    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "custom_package", "namespace", "package", "aapt2"])
-    tools = _android_tools(ctx, attrs, False, False)
+    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "custom_package", "namespace", "package", "aapt2", "javac", "java", "java_home"])
+    tools = _android_tools(ctx, attrs, True, False, include_jar = False)
     manifest = _android_manifest(ctx, attrs)
     resource_files = _android_resource_files(attrs, True)
     asset_files = _android_asset_files(attrs)
@@ -896,6 +987,7 @@ def _android_library_impl(ctx):
     dep_resource_apks = _android_resource_apks(ctx["deps"])
     dep_asset_roots = _android_asset_roots_from_deps(ctx["deps"])
     dep_asset_files = _android_asset_files_from_deps(ctx["deps"])
+    dep_native_libraries = _android_native_libraries(ctx["deps"], ctx["label"]["id"])
     compiled_zips = _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
     resource_apk, r_src_dir, r_src_hash, r_txt = _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, True, [], [])
     classes_dir, classes_hash = _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars)
@@ -920,6 +1012,7 @@ def _android_library_impl(ctx):
         "transitive_compiled_resource_zips": _unique(compiled_zips + dep_compiled_zips),
         "transitive_asset_roots": _unique(asset_roots + dep_asset_roots),
         "transitive_asset_files": _unique(asset_files + dep_asset_files),
+        "transitive_android_native_libraries": dep_native_libraries,
         "affected_inputs": _android_source_inputs(ctx, attrs, True) + [manifest],
     }
 
@@ -946,6 +1039,7 @@ def _android_binary_impl(ctx):
     runtime_jars = _android_runtime_jars(ctx["deps"])
     dep_asset_roots = _android_asset_roots_from_deps(ctx["deps"])
     dep_asset_files = _android_asset_files_from_deps(ctx["deps"])
+    native_libraries = _android_native_libraries(ctx["deps"], ctx["label"]["id"])
     compiled_zips = _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
     resource_apk, r_src_dir, r_src_hash, _ = _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, False, _unique(asset_roots + dep_asset_roots), _unique(asset_files + dep_asset_files))
     classes_dir, classes_hash = _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars)
@@ -954,7 +1048,7 @@ def _android_binary_impl(ctx):
     if len(kotlin_sources) > 0:
         runtime_jars = _unique([tools["kotlin_stdlib"]] + runtime_jars)
     dex_dir, dex_hash = _android_dex(ctx, attrs, tools, _unique([classes_jar] + runtime_jars))
-    unsigned_apk = _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash)
+    unsigned_apk = _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash, native_libraries)
     aligned_apk = _android_zipalign(ctx, tools, unsigned_apk)
     apk, debug_keystore = _android_sign_or_copy(ctx, attrs, tools, aligned_apk)
     return {
@@ -968,6 +1062,7 @@ def _android_binary_impl(ctx):
         "unsigned_apk": unsigned_apk,
         "apk": apk,
         "debug_keystore": debug_keystore,
+        "android_native_libraries": native_libraries,
         "affected_inputs": _android_source_inputs(ctx, attrs, True) + [manifest],
     }
 
@@ -1012,6 +1107,9 @@ android_resource = target_kind(
         attr("namespace", "string", docs = "Java package for generated R classes.", configurable = False),
         attr("custom_package", "string", docs = "Alias for the generated R package.", configurable = False),
         attr("package", "string", docs = "Generated R package fallback.", configurable = False),
+        attr("javac", "string", docs = "Override javac path.", configurable = False),
+        attr("java", "string", docs = "Override java runtime path used by Android SDK tools.", configurable = False),
+        attr("java_home", "string", docs = "Override JAVA_HOME passed to Android SDK tools.", configurable = False),
     ],
     deps = [
         dep("deps", ["android_resource"], "Android resources merged into this resource package."),
@@ -1029,7 +1127,7 @@ android_resource = target_kind(
 )
 
 android_library = target_kind(
-    docs = "Compiles Android Java and Kotlin sources with optional resources into a classes jar, static resource package, and AAR consumed by Android app targets.",
+    docs = "Compiles Android Java and Kotlin sources with optional resources into a classes jar, static resource package, AAR, and transitive native-library package inputs consumed by Android app targets.",
     attrs = _ANDROID_RESOURCE_ATTRS + _ANDROID_JAVA_ATTRS + [
         attr("namespace", "string", docs = "Java package for generated R classes.", configurable = False),
         attr("custom_package", "string", docs = "Alias for the generated R package.", configurable = False),
@@ -1044,7 +1142,7 @@ android_library = target_kind(
         attr("proguard_specs", "list<string>", default = "[]", docs = "Reserved for consumer ProGuard specs.", configurable = False),
     ],
     deps = [
-        dep("deps", ["android_library", "android_resource"], "Android libraries and resources consumed by this library."),
+        dep("deps", ["android_library", "android_resource", "android_native_library"], "Android libraries, resources, and native libraries consumed by this library."),
     ],
     providers = ["android_library", "android_archive", "java_library"],
     capabilities = [capability("build", ["default", "jar", "aar", "resources"])],
@@ -1059,7 +1157,7 @@ android_library = target_kind(
 )
 
 android_binary = target_kind(
-    docs = "Builds an Android APK from Java and Kotlin sources, Android resources, android_resource deps, and android_library deps.",
+    docs = "Builds an Android APK from Java and Kotlin sources, Android resources, native shared libraries, android_resource deps, and android_library deps.",
     attrs = _ANDROID_RESOURCE_ATTRS + _ANDROID_JAVA_ATTRS + _ANDROID_APK_ATTRS + [
         attr("application_id", "string", required = True, docs = "Android application id used for generated R classes and version metadata.", configurable = False),
         attr("namespace", "string", docs = "Java package for generated R classes. Defaults to application_id.", configurable = False),
@@ -1084,7 +1182,7 @@ android_binary = target_kind(
         attr("native_target", "target", docs = "Reserved for native Android split support.", configurable = False),
     ],
     deps = [
-        dep("deps", ["android_library", "android_resource"], "Android libraries and resources packaged into the APK."),
+        dep("deps", ["android_library", "android_resource", "android_native_library"], "Android libraries, resources, and native shared libraries packaged into the APK."),
     ],
     providers = ["android_application", "android_apk"],
     capabilities = [
@@ -1096,6 +1194,11 @@ android_binary = target_kind(
             "android-binary-minimal",
             name = "Minimal Android APK",
             use_when = "Use this for a small Android application target backed by Android SDK build-tools.",
+        ),
+        example(
+            "native-mobile-shared-code-e2e",
+            name = "Android app with shared native code",
+            use_when = "Use this when an Android app should package native libraries built from Swift and Rust sources.",
         ),
     ],
     impl = _android_binary_impl,

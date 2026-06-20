@@ -3,4 +3,6 @@ PRELUDE_SOURCES = [
     "apple.star",
     "android.star",
     "rust.star",
+    "swift.star",
+    "kotlin.star",
 ]

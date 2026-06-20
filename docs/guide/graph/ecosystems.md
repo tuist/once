@@ -1,10 +1,10 @@
 # Ecosystems
 
 Ecosystems are Once's built-in target kind sets for a programming
-language, platform, or build domain. Apple, Android, and Rust are
-ecosystems because each one needs its own vocabulary: source files,
-native tools, dependency metadata, generated outputs, test runners, and
-runtime behavior.
+language, platform, or build domain. Apple, Android, Rust, Swift, and
+Kotlin are ecosystems because each one needs its own vocabulary: source
+files, native tools, dependency metadata, generated outputs, test runners,
+and runtime behavior.
 
 The lower-level [target kind reference](/reference/prelude/) lists the
 generated attribute, provider, and capability tables. In the guide, the
@@ -46,6 +46,14 @@ ecosystem. [Rust](/guide/graph/rust) may start from
 and [Apple](/guide/graph/apple) may start from source targets or
 [SwiftPM packages](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/).
 Those bridges will not support every native feature on day one.
+
+Some ecosystems intentionally cross platform boundaries. Swift can emit
+Android native shared libraries, Kotlin/Native can emit Apple frameworks,
+and Rust can emit either Apple static libraries or Android shared
+libraries from the same source shape. Once models those as provider
+contracts between target kinds instead of special cases in the core graph.
+The built-in `native-mobile-shared-code-e2e` example shows those provider
+contracts in a composed app graph.
 
 Toolchains are another commitment. Different projects source compilers,
 SDKs, linkers, and flags in different ways. Once ecosystems should avoid

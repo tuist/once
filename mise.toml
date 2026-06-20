@@ -24,6 +24,14 @@ CARGO_INCREMENTAL = "0"
 CARGO_PROFILE_DEV_DEBUG = "line-tables-only"
 CARGO_PROFILE_TEST_DEBUG = "line-tables-only"
 RUST_BACKTRACE = "1"
+KOTLIN_NATIVE_HOME = "{{env.HOME}}/.local/share/mise/installs/kotlin-native/2.4.0"
+ANDROID_NDK_HOME = "{{env.HOME}}/.local/share/mise/installs/android-sdk/21.0/ndk/27.3.13750724"
+_.path = [
+  "{{env.HOME}}/.local/share/mise/installs/android-sdk/21.0/platform-tools",
+  "{{env.HOME}}/.local/share/mise/installs/kotlin-native/2.4.0/bin",
+  "{{env.HOME}}/.swiftly/bin",
+  "{{env.HOME}}/.local/share/swiftly/bin",
+]
 
 [tasks."android:install-sdk"]
 description = "Install Android SDK packages used by Once Android rule validation."
@@ -33,7 +41,7 @@ responses="${TMPDIR:-/tmp}/once-android-sdk-licenses.$$"
 trap 'rm -f "$responses"' EXIT
 awk 'BEGIN { for (i = 0; i < 200; i++) print "y" }' > "$responses"
 sdkmanager --licenses < "$responses" >/dev/null || true
-sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" < "$responses"
+sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.3.13750724" < "$responses"
 mkdir -p "$HOME/.android"
 if [ ! -f "$HOME/.android/debug.keystore" ]; then
   keytool -genkeypair \
@@ -47,4 +55,101 @@ if [ ! -f "$HOME/.android/debug.keystore" ]; then
     -validity 10000 \
     -storetype JKS >/dev/null 2>&1
 fi
+'''
+
+[tasks."kotlin-native:install"]
+description = "Install Kotlin Native used by the mobile shared-code smoke examples."
+run = '''
+set -eu
+version="2.4.0"
+install_dir="${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs/kotlin-native/$version"
+if [ -x "$install_dir/bin/kotlinc-native" ]; then
+  exit 0
+fi
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64|Darwin-aarch64)
+    archive="kotlin-native-prebuilt-macos-aarch64-$version.tar.gz"
+    ;;
+  Darwin-x86_64)
+    archive="kotlin-native-prebuilt-macos-x86_64-$version.tar.gz"
+    ;;
+  Linux-x86_64)
+    archive="kotlin-native-prebuilt-linux-x86_64-$version.tar.gz"
+    ;;
+  *)
+    echo "Unsupported Kotlin Native host: $(uname -s)-$(uname -m)" >&2
+    exit 1
+    ;;
+esac
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+curl -fL "https://github.com/JetBrains/kotlin/releases/download/v$version/$archive" -o "$tmp_dir/$archive"
+rm -rf "$install_dir"
+mkdir -p "$install_dir"
+tar -xzf "$tmp_dir/$archive" --strip-components=1 -C "$install_dir"
+'''
+
+[tasks."swift:install-android-sdk"]
+description = "Install Swift Android SDK pieces used by the mobile shared-code smoke examples."
+run = '''
+set -eu
+swift_version="6.3.2"
+sdk_name="swift-6.3.2-RELEASE_android"
+sdk_url="https://download.swift.org/swift-6.3.2-release/android-sdk/swift-6.3.2-RELEASE/swift-6.3.2-RELEASE_android.artifactbundle.tar.gz"
+sdk_checksum="939e933549d12d28f2e0bf71019d734d309859e9773c572657ce565a81f85d68"
+if ! command -v swiftly >/dev/null 2>&1; then
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  case "$(uname -s)" in
+    Darwin)
+      curl -fL "https://download.swift.org/swiftly/darwin/swiftly.pkg" -o "$tmp_dir/swiftly.pkg"
+      installer -pkg "$tmp_dir/swiftly.pkg" -target CurrentUserHomeDirectory
+      ;;
+    Linux)
+      archive="swiftly-$(uname -m).tar.gz"
+      curl -fL "https://download.swift.org/swiftly/linux/$archive" -o "$tmp_dir/$archive"
+      tar -xzf "$tmp_dir/$archive" -C "$tmp_dir"
+      "$tmp_dir/swiftly" init --quiet-shell-followup --assume-yes --skip-install
+      ;;
+    *)
+      echo "Unsupported Swift Android host: $(uname -s)" >&2
+      exit 1
+      ;;
+  esac
+fi
+export PATH="$HOME/.swiftly/bin:$HOME/.local/share/swiftly/bin:$PATH"
+if [ ! -f "$HOME/.swiftly/config.json" ] && [ ! -f "$HOME/.local/share/swiftly/config.json" ]; then
+  swiftly init --quiet-shell-followup --assume-yes --skip-install
+fi
+swiftly install "$swift_version" --assume-yes >/dev/null 2>&1 || true
+swiftly use "$swift_version" --global-default --assume-yes
+if ! swift sdk list 2>/dev/null | grep -q "$sdk_name"; then
+  swift sdk install "$sdk_url" --checksum "$sdk_checksum"
+fi
+case "$(uname -s)" in
+  Darwin)
+    sdk_dir="$HOME/Library/org.swift.swiftpm/swift-sdks/$sdk_name.artifactbundle/swift-android"
+    ;;
+  Linux)
+    sdk_dir="$HOME/.swiftpm/swift-sdks/$sdk_name.artifactbundle/swift-android"
+    ;;
+  *)
+    echo "Unsupported Swift Android host: $(uname -s)" >&2
+    exit 1
+    ;;
+esac
+if [ -x "$sdk_dir/scripts/setup-android-sdk.sh" ]; then
+  ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.3.13750724}" \
+    "$sdk_dir/scripts/setup-android-sdk.sh"
+fi
+'''
+
+[tasks."mobile:install-smoke-toolchains"]
+description = "Install toolchain pieces used by the mobile shared-code smoke examples."
+run = '''
+set -eu
+mise run android:install-sdk
+rustup target add aarch64-linux-android
+mise run kotlin-native:install
+mise run swift:install-android-sdk
 '''

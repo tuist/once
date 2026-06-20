@@ -5,11 +5,11 @@ Android APK target.
 ## Description
 
 Builds an Android APK from Java and Kotlin sources, Android resources,
-`android_resource` deps, and `android_library` deps. The target kind
-links resources with `aapt2`, compiles Java sources with `javac`, compiles
-Kotlin sources with `kotlinc`, dexes runtime jars with `d8`, packages
-the APK, zipaligns it, and signs it
-with a debug key by default.
+native shared libraries, `android_resource` deps, and `android_library`
+deps. The target kind links resources with `aapt2`, compiles Java sources
+with `javac`, compiles Kotlin sources with `kotlinc`, dexes runtime jars
+with `d8`, packages dex and native libraries into the APK, zipaligns it,
+and signs it with a debug key by default.
 
 ## Attributes
 
@@ -51,7 +51,7 @@ Tool override attrs are also available for `javac`, `jar`, `java`,
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `android_library`, `android_resource` | Android libraries and resources packaged into the APK |
+| `deps` | `android_library`, `android_resource`, `android_native_library` | Android libraries, resources, and native shared libraries packaged into the APK |
 
 ## Providers
 
@@ -69,18 +69,24 @@ The target emits `android_application` and `android_apk`.
 | Output | Location |
 | --- | --- |
 | APK | `.once/out/<target>/<name>.apk` |
-| Debug keystore | `.once/out/<target>/debug.keystore` |
+| Debug keystore | `.once/out/<target>/debug.keystore` when `debug_keystore` is set |
 | Unsigned APK | `.once/out/<target>/unsigned.apk` |
 | Dex directory | `.once/out/<target>/dex` |
 | Linked resource package | `.once/out/<target>/resources.apk` |
 
+Native library deps are copied into the unsigned APK under
+`lib/<abi>/<library>`. Providers such as
+[`swift_android_library`](/reference/prelude/swift_android_library) and
+`rust_library` with `crate_type = "cdylib"` emit the required
+`android_native_libraries` records.
+
 ## Signing
 
-`signing = "debug"` signs with `debug_keystore` when it is set. When it is
-omitted, Once uses `ANDROID_DEBUG_KEYSTORE` or `~/.android/debug.keystore`.
-Once does not ship debug private key material. The keystore SHA-256 is part
-of the signing action identity so changing the local key invalidates cached
-signing output.
+`signing = "debug"` stages and signs with `debug_keystore` when it is set.
+When it is omitted, Once signs with `ANDROID_DEBUG_KEYSTORE` or
+`~/.android/debug.keystore` in place. Once does not ship debug private key
+material. The keystore SHA-256 is part of the signing action identity so
+changing the local key invalidates cached signing output.
 
 `debug_keystore_password` must stay `android`. Custom signing passwords are
 not supported because action metadata and process arguments are not treated
@@ -106,12 +112,12 @@ Set `adb_serial` when more than one Android device or emulator is connected.
 ## Limitations
 
 The first Android implementation supports Java sources, Kotlin sources,
-resources, debug signing, Android resource deps, Android library deps, APK
-install, and app launch. Data binding, instrumentation tests, manifest
-placeholder expansion, native splits, shrinking, resource filtering, density
-filtering, no-compress packaging, and startup profile packaging are not
-implemented yet. Non-empty values for unsupported attrs fail analysis instead
-of being ignored.
+resources, native shared library packaging, debug signing, Android resource
+deps, Android library deps, APK install, and app launch. Data binding,
+instrumentation tests, manifest placeholder expansion, native splits,
+shrinking, resource filtering, density filtering, no-compress packaging, and
+startup profile packaging are not implemented yet. Non-empty values for
+unsupported attrs fail analysis instead of being ignored.
 
 ## Example
 

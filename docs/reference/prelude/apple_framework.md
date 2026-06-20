@@ -27,7 +27,7 @@ Info.plist, and ad-hoc signing.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable`, `apple_resource`, `apple_swift_plugin` | Libraries, resources, and Swift compiler plugins linked or embedded by the framework |
+| `deps` | `apple_linkable`, `apple_resource`, `apple_swift_plugin`, `native_linkable` | Libraries, resources, native linkables, and Swift compiler plugins linked or embedded by the framework |
 
 ## Providers
 

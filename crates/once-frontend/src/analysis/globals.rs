@@ -3,13 +3,17 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value as JsonValue;
+use sha2::Digest as ShaDigest;
 use starlark::environment::{Globals, GlobalsBuilder};
 use starlark::eval::Evaluator;
 use starlark::starlark_module;
 use starlark::values::none::NoneType;
 use starlark::values::Value;
 
-use super::store::{analysis_active, with_store, with_store_mut, DeclaredAction};
+use super::store::{
+    analysis_active, with_store, with_store_mut, DeclaredAction, DeclaredActionOperation,
+    DeclaredCopyPathMode, DeclaredPreparePathMode,
+};
 use super::values::{
     json_to_value, toml_value_to_starlark, unpack_byte_list, unpack_string_dict, unpack_string_list,
 };
@@ -105,6 +109,42 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
+    /// Return the SHA-256 digest of one host file as lowercase hex.
+    /// This is for host-specific tool or signing inputs that cannot be
+    /// declared as workspace action inputs.
+    fn host_file_sha256(path: &str) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        file_sha256_hex(Path::new(path)).with_context(|| format!("hashing host file `{path}`"))
+    }
+
+    /// Return whether one host path currently exists as a file.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "starlark_module native functions use Result-returning signatures"
+    )]
+    fn host_file_exists(path: &str) -> anyhow::Result<bool> {
+        if !analysis_active() {
+            return Ok(false);
+        }
+        Ok(Path::new(path).is_file())
+    }
+
+    /// Return whether one host file contains `needle` as text.
+    fn host_file_contains(path: &str, needle: &str) -> anyhow::Result<bool> {
+        if !analysis_active() {
+            return Ok(false);
+        }
+        if needle.is_empty() {
+            return Ok(true);
+        }
+        let content = std::fs::read(path).with_context(|| format!("reading host file `{path}`"))?;
+        Ok(content
+            .windows(needle.len())
+            .any(|window| window == needle.as_bytes()))
+    }
+
     /// Expand a list of glob patterns against the active target's
     /// package directory. Returns sorted, deduplicated, workspace-
     /// relative file paths. Schema parsing returns an empty list.
@@ -138,42 +178,26 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
-    /// Declare an action that materialises `content` at the workspace-
-    /// relative `path`. The content is hashed into the input digest so
-    /// any edit (including in starlark that produced it) invalidates
-    /// downstream consumers.
-    ///
-    /// Implementation note: the materialisation runs as `/bin/sh -c`
-    /// with the path bound to a shell variable first; the parent
-    /// directory is computed via the POSIX `${var%/*}` parameter
-    /// expansion. Passing `shell_quote(path)` directly inside
-    /// `$(dirname ...)` would re-tokenize the escaped quotes a path
-    /// like `a'b/c.h` ends up with, so binding once and dereferencing
-    /// twice keeps the action robust against single quotes in paths.
-    #[allow(clippy::unnecessary_wraps)]
-    fn write_file(path: &str, content: &str) -> anyhow::Result<NoneType> {
+    /// Declare a portable action that writes text or bytes at the
+    /// workspace-relative `path`. `content` may be a string or a list
+    /// of integers in `0..=255`.
+    fn write_path<'v>(path: &str, content: Value<'v>) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
         }
-        let script = format!(
-            "set -eu\n\
-             __once_path={path_arg}\n\
-             case \"$__once_path\" in */*) mkdir -p \"${{__once_path%/*}}\" ;; esac\n\
-             printf '%s' {content_arg} > \"$__once_path\"\n",
-            path_arg = shell_quote(path),
-            content_arg = shell_quote(content),
-        );
+        let bytes = unpack_write_content(content)?;
         let action = DeclaredAction {
-            argv: vec!["/bin/sh".to_string(), "-c".to_string(), script],
+            operation: Some(DeclaredActionOperation::WriteFile {
+                path: path.to_string(),
+                bytes,
+            }),
+            argv: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![path.to_string()],
             env: BTreeMap::new(),
             cacheable: true,
-            // Folding the literal content into the toolchain identity
-            // keeps the digest pinned to what the file should contain,
-            // so changing the content alone invalidates the action.
-            toolchain_identity: Some(format!("once.write_file.v1\0{content}")),
-            identifier: Some(format!("write_file:{path}")),
+            toolchain_identity: None,
+            identifier: Some(format!("write_path:{path}")),
         };
         with_store_mut(|store| {
             if let Some(store) = store {
@@ -183,37 +207,120 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
-    /// Declare an action that materialises raw bytes at `path`.
-    /// `bytes` is a list of integers in `0..=255`. The content is
-    /// base64-encoded into the generated shell command so binary
-    /// payloads (including NULs) survive shell quoting, and is folded
-    /// into the toolchain identity so any change invalidates
-    /// downstream consumers. Domain-specific binary formats
-    /// (header-maps, mach-o, etc.) are constructed in the prelude
-    /// and emitted through this primitive.
-    #[allow(clippy::unnecessary_wraps)]
-    fn write_bytes<'v>(path: &str, bytes: Value<'v>) -> anyhow::Result<NoneType> {
+    /// Declare a portable copy action. `kind` is `"file"` by default
+    /// or `"tree"` to copy directory contents. Tree copies accept one
+    /// source string or a list of source directories.
+    fn copy_path<'v>(
+        source: Value<'v>,
+        destination: &str,
+        kind: Option<String>,
+        inputs: Option<Value<'v>>,
+        toolchain_identity: Option<String>,
+        identifier: Option<String>,
+        cacheable: Option<bool>,
+    ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
         }
-        let bytes = unpack_byte_list(bytes, "bytes")?;
-        let encoded = base64_encode(&bytes);
-        let script = format!(
-            "set -eu\n\
-             __once_path={path_arg}\n\
-             case \"$__once_path\" in */*) mkdir -p \"${{__once_path%/*}}\" ;; esac\n\
-             printf '%s' {encoded_arg} | base64 -d > \"$__once_path\"\n",
-            path_arg = shell_quote(path),
-            encoded_arg = shell_quote(&encoded),
-        );
+        let mode = parse_copy_path_mode(kind.as_deref())?;
+        let sources = unpack_copy_sources(source, mode)?;
+        let inputs = inputs
+            .map(|value| unpack_string_list(value, "inputs"))
+            .transpose()?
+            .unwrap_or_default();
         let action = DeclaredAction {
-            argv: vec!["/bin/sh".to_string(), "-c".to_string(), script],
-            inputs: Vec::new(),
-            outputs: vec![path.to_string()],
+            operation: Some(DeclaredActionOperation::CopyPath {
+                sources,
+                destination: destination.to_string(),
+                mode,
+            }),
+            argv: Vec::new(),
+            inputs,
+            outputs: vec![destination.to_string()],
             env: BTreeMap::new(),
-            cacheable: true,
-            toolchain_identity: Some(format!("once.write_bytes.v1\0{encoded}")),
-            identifier: Some(format!("write_bytes:{path}")),
+            cacheable: cacheable.unwrap_or(true),
+            toolchain_identity,
+            identifier: Some(identifier.unwrap_or_else(|| format!("copy_path:{destination}"))),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
+    /// Declare an uncached portable path preparation action. `kind`
+    /// must be `"remove"` or `"directory"`.
+    fn prepare_path(
+        path: &str,
+        kind: &str,
+        identifier: Option<String>,
+    ) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let mode = parse_prepare_path_mode(kind)?;
+        let outputs = match mode {
+            DeclaredPreparePathMode::Remove => Vec::new(),
+            DeclaredPreparePathMode::Directory => vec![path.to_string()],
+        };
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::PreparePath {
+                path: path.to_string(),
+                mode,
+            }),
+            argv: Vec::new(),
+            inputs: Vec::new(),
+            outputs,
+            env: BTreeMap::new(),
+            cacheable: false,
+            toolchain_identity: None,
+            identifier: Some(identifier.unwrap_or_else(|| format!("prepare_path:{kind}:{path}"))),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
+    /// Declare a portable action that writes a deterministic digest
+    /// listing for a workspace tree. Missing roots produce an empty
+    /// file. `include_suffixes` filters files by path suffix when set.
+    fn write_tree_digest<'v>(
+        root: &str,
+        output: &str,
+        include_suffixes: Option<Value<'v>>,
+        inputs: Option<Value<'v>>,
+        identifier: Option<String>,
+        cacheable: Option<bool>,
+    ) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let include_suffixes = include_suffixes
+            .map(|value| unpack_string_list(value, "include_suffixes"))
+            .transpose()?
+            .unwrap_or_default();
+        let inputs = inputs
+            .map(|value| unpack_string_list(value, "inputs"))
+            .transpose()?
+            .unwrap_or_default();
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::WriteTreeDigest {
+                root: root.to_string(),
+                output: output.to_string(),
+                include_suffixes,
+            }),
+            argv: Vec::new(),
+            inputs,
+            outputs: vec![output.to_string()],
+            env: BTreeMap::new(),
+            cacheable: cacheable.unwrap_or(true),
+            toolchain_identity: None,
+            identifier: Some(identifier.unwrap_or_else(|| format!("write_tree_digest:{output}"))),
         };
         with_store_mut(|store| {
             if let Some(store) = store {
@@ -253,6 +360,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .transpose()?
             .unwrap_or_default();
         let action = DeclaredAction {
+            operation: None,
             argv,
             inputs,
             outputs,
@@ -286,46 +394,73 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     }
 }
 
-pub(super) fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
+fn unpack_write_content(content: Value<'_>) -> Result<Vec<u8>> {
+    if let Some(string) = content.unpack_str() {
+        return Ok(string.as_bytes().to_vec());
     }
-    let escaped = value.replace('\'', "'\"'\"'");
-    format!("'{escaped}'")
+    unpack_byte_list(content, "content")
 }
 
-/// Standard base64 alphabet encoder. The output is consumed by
-/// `base64 -d` in a generated shell script, so we need round-tripping
-/// fidelity, not a fancy MIME-line-wrapped form.
-pub(super) fn base64_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    let mut chunks = bytes.chunks_exact(3);
-    for chunk in &mut chunks {
-        let bits = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
-        out.push(ALPHABET[((bits >> 18) & 0x3F) as usize] as char);
-        out.push(ALPHABET[((bits >> 12) & 0x3F) as usize] as char);
-        out.push(ALPHABET[((bits >> 6) & 0x3F) as usize] as char);
-        out.push(ALPHABET[(bits & 0x3F) as usize] as char);
+fn parse_copy_path_mode(kind: Option<&str>) -> Result<DeclaredCopyPathMode> {
+    match kind.unwrap_or("file") {
+        "file" => Ok(DeclaredCopyPathMode::File),
+        "tree" => Ok(DeclaredCopyPathMode::Tree),
+        other => Err(anyhow!(
+            "expected `kind` to be `file` or `tree`, got `{other}`"
+        )),
     }
-    let remainder = chunks.remainder();
-    match remainder.len() {
-        0 => {}
-        1 => {
-            let bits = u32::from(remainder[0]) << 16;
-            out.push(ALPHABET[((bits >> 18) & 0x3F) as usize] as char);
-            out.push(ALPHABET[((bits >> 12) & 0x3F) as usize] as char);
-            out.push('=');
-            out.push('=');
+}
+
+fn unpack_copy_sources(source: Value<'_>, mode: DeclaredCopyPathMode) -> Result<Vec<String>> {
+    let sources = if let Some(source) = source.unpack_str() {
+        vec![source.to_string()]
+    } else {
+        unpack_string_list(source, "source")?
+    };
+    match mode {
+        DeclaredCopyPathMode::File if sources.len() != 1 => Err(anyhow!(
+            "`copy_path` with kind `file` requires exactly one source"
+        )),
+        DeclaredCopyPathMode::Tree if sources.is_empty() => Err(anyhow!(
+            "`copy_path` with kind `tree` requires at least one source"
+        )),
+        _ => Ok(sources),
+    }
+}
+
+fn parse_prepare_path_mode(kind: &str) -> Result<DeclaredPreparePathMode> {
+    match kind {
+        "remove" => Ok(DeclaredPreparePathMode::Remove),
+        "directory" => Ok(DeclaredPreparePathMode::Directory),
+        other => Err(anyhow!(
+            "expected `kind` to be `remove` or `directory`, got `{other}`"
+        )),
+    }
+}
+
+fn file_sha256_hex(path: &Path) -> Result<String> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buf)?;
+        if read == 0 {
+            break;
         }
-        2 => {
-            let bits = (u32::from(remainder[0]) << 16) | (u32::from(remainder[1]) << 8);
-            out.push(ALPHABET[((bits >> 18) & 0x3F) as usize] as char);
-            out.push(ALPHABET[((bits >> 12) & 0x3F) as usize] as char);
-            out.push(ALPHABET[((bits >> 6) & 0x3F) as usize] as char);
-            out.push('=');
-        }
-        _ => unreachable!(),
+        hasher.update(&buf[..read]);
+    }
+    Ok(hex_lower(&hasher.finalize()))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
 }

@@ -177,6 +177,18 @@ pub async fn run_with_cache_streaming(
     })
 }
 
+/// Execute one action without reading or writing the action cache.
+/// Callers that need cache-aware execution should use [`Runner`] or
+/// [`run_with_cache`] instead.
+pub async fn run_uncached(
+    action: &Action,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    execute::run(action, workspace_root, cache, stream_to_parent).await
+}
+
 #[instrument(skip(cache), fields(action_digest = %key))]
 async fn lookup_cached(
     cache: &CacheProvider,
@@ -227,7 +239,10 @@ mod tests {
     use std::time::Duration;
 
     use crate::action::ACTION_DIGEST_DOMAIN;
-    use crate::{Error, OutputSymlinkMode, RemoteExecution, ResourceRequest, WorkspacePath};
+    use crate::{
+        CopyPathMode, Error, OutputSymlinkMode, PreparePathMode, RemoteExecution, ResourceRequest,
+        WorkspacePath,
+    };
     use once_cas::{CacheProvider, Cas, Digest};
     use tempfile::TempDir;
 
@@ -282,6 +297,211 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(a.action, b.action);
+    }
+
+    #[tokio::test]
+    async fn write_file_action_restores_from_cache() {
+        let (tmp, cas) = fresh_cas();
+        let action = Action::WriteFile {
+            path: WorkspacePath::try_from("out/generated.txt").unwrap(),
+            bytes: b"generated".to_vec(),
+            input_digest: Some(Digest::of_bytes(b"write-file")),
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/generated.txt")).unwrap(),
+            "generated"
+        );
+        std::fs::remove_file(tmp.path().join("out/generated.txt")).unwrap();
+
+        let second = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.cache, CacheState::Hit);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/generated.txt")).unwrap(),
+            "generated"
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_file_action_materializes_destination() {
+        let (tmp, cas) = fresh_cas();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/input.txt"), "input").unwrap();
+        let action = Action::CopyPath {
+            sources: vec![WorkspacePath::try_from("src/input.txt").unwrap()],
+            destination: WorkspacePath::try_from("out/copied.txt").unwrap(),
+            mode: CopyPathMode::File,
+            input_digest: Some(Digest::of_bytes(b"copy-file")),
+        };
+
+        let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.cache, CacheState::Miss);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/copied.txt")).unwrap(),
+            "input"
+        );
+        assert!(outcome.result.outputs.contains_key("out/copied.txt"));
+    }
+
+    #[tokio::test]
+    async fn copy_tree_action_replaces_destination_and_restores_from_cache() {
+        let (tmp, cas) = fresh_cas();
+        std::fs::create_dir_all(tmp.path().join("src/a")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("src/b")).unwrap();
+        std::fs::write(tmp.path().join("src/a/one.txt"), "one").unwrap();
+        std::fs::write(tmp.path().join("src/b/two.txt"), "two").unwrap();
+        std::fs::create_dir_all(tmp.path().join("out/tree")).unwrap();
+        std::fs::write(tmp.path().join("out/tree/stale.txt"), "stale").unwrap();
+        let action = Action::CopyPath {
+            sources: vec![
+                WorkspacePath::try_from("src/a").unwrap(),
+                WorkspacePath::try_from("src/b").unwrap(),
+            ],
+            destination: WorkspacePath::try_from("out/tree").unwrap(),
+            mode: CopyPathMode::Tree,
+            input_digest: Some(Digest::of_bytes(b"copy-tree")),
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/tree/one.txt")).unwrap(),
+            "one"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/tree/two.txt")).unwrap(),
+            "two"
+        );
+        assert!(!tmp.path().join("out/tree/stale.txt").exists());
+        std::fs::remove_dir_all(tmp.path().join("out/tree")).unwrap();
+
+        let second = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.cache, CacheState::Hit);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/tree/one.txt")).unwrap(),
+            "one"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_tree_action_preserves_framework_symlinks() {
+        let (tmp, cas) = fresh_cas();
+        let framework = tmp.path().join("src/Shared.framework");
+        std::fs::create_dir_all(framework.join("Versions/A/Headers")).unwrap();
+        std::fs::create_dir_all(framework.join("Versions/A/Modules")).unwrap();
+        std::fs::write(framework.join("Versions/A/Shared"), "binary").unwrap();
+        std::fs::write(framework.join("Versions/A/Headers/Shared.h"), "header").unwrap();
+        std::os::unix::fs::symlink("A", framework.join("Versions/Current")).unwrap();
+        std::os::unix::fs::symlink("Versions/Current/Headers", framework.join("Headers")).unwrap();
+        std::os::unix::fs::symlink("Versions/Current/Modules", framework.join("Modules")).unwrap();
+        std::os::unix::fs::symlink("Versions/Current/Shared", framework.join("Shared")).unwrap();
+        let action = Action::CopyPath {
+            sources: vec![WorkspacePath::try_from("src/Shared.framework").unwrap()],
+            destination: WorkspacePath::try_from("out/Frameworks/Shared.framework").unwrap(),
+            mode: CopyPathMode::Tree,
+            input_digest: Some(Digest::of_bytes(b"copy-framework")),
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        let copied = tmp.path().join("out/Frameworks/Shared.framework");
+        assert!(std::fs::symlink_metadata(copied.join("Headers"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_link(copied.join("Headers")).unwrap(),
+            std::path::PathBuf::from("Versions/Current/Headers")
+        );
+        assert!(std::fs::symlink_metadata(copied.join("Shared"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(copied.join("Headers/Shared.h")).unwrap(),
+            "header"
+        );
+
+        std::fs::remove_dir_all(tmp.path().join("out/Frameworks")).unwrap();
+        let second = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.cache, CacheState::Hit);
+        assert!(std::fs::symlink_metadata(copied.join("Modules"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_link(copied.join("Shared")).unwrap(),
+            std::path::PathBuf::from("Versions/Current/Shared")
+        );
+    }
+
+    #[tokio::test]
+    async fn write_tree_digest_action_filters_by_suffix() {
+        let (tmp, cas) = fresh_cas();
+        std::fs::create_dir_all(tmp.path().join("tree/sub")).unwrap();
+        std::fs::write(tmp.path().join("tree/sub/a.java"), "java").unwrap();
+        std::fs::write(tmp.path().join("tree/sub/b.txt"), "text").unwrap();
+        let action = Action::WriteTreeDigest {
+            root: WorkspacePath::try_from("tree").unwrap(),
+            output: WorkspacePath::try_from("out/tree.sha256").unwrap(),
+            include_suffixes: vec![".java".to_string()],
+            input_digest: Some(Digest::of_bytes(b"tree-digest")),
+        };
+
+        let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.cache, CacheState::Miss);
+        let digest_file = std::fs::read_to_string(tmp.path().join("out/tree.sha256")).unwrap();
+        assert!(digest_file.contains("sub/a.java"), "{digest_file}");
+        assert!(!digest_file.contains("sub/b.txt"), "{digest_file}");
+        assert!(outcome.result.outputs.contains_key("out/tree.sha256"));
+    }
+
+    #[tokio::test]
+    async fn remove_path_and_ensure_dir_run_uncached() {
+        let (tmp, cas) = fresh_cas();
+        let cache = CacheProvider::Local(cas);
+        std::fs::create_dir_all(tmp.path().join("out/stale")).unwrap();
+        std::fs::write(tmp.path().join("out/stale/file.txt"), "stale").unwrap();
+        let remove = Action::PreparePath {
+            path: WorkspacePath::try_from("out/stale").unwrap(),
+            mode: PreparePathMode::Remove,
+            input_digest: Some(Digest::of_bytes(b"remove")),
+        };
+        let ensure = Action::PreparePath {
+            path: WorkspacePath::try_from("out/stale").unwrap(),
+            mode: PreparePathMode::Directory,
+            input_digest: Some(Digest::of_bytes(b"ensure")),
+        };
+
+        run_uncached(&remove, tmp.path(), &cache, false)
+            .await
+            .unwrap();
+        assert!(!tmp.path().join("out/stale").exists());
+        run_uncached(&ensure, tmp.path(), &cache, false)
+            .await
+            .unwrap();
+        assert!(tmp.path().join("out/stale").is_dir());
     }
 
     #[tokio::test]

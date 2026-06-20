@@ -9,10 +9,17 @@
 //! intentional follow-up work; it needs an Apple toolchain in the test
 //! environment and a configured cache provider.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+#[cfg(unix)]
+use once_frontend::analysis::{AnalysisEngine, AnalysisResult};
 use once_frontend::{built_in_target_kind_schemas_result, load_target_kind_example};
+#[cfg(unix)]
+use once_frontend::{AttrValue, GraphTarget};
+#[cfg(unix)]
+use serde_json::json;
 use tempfile::TempDir;
 
 #[test]
@@ -132,6 +139,252 @@ fn every_impl_backed_target_kind_has_a_schema_example() {
     }
 }
 
+#[test]
+fn native_mobile_shared_code_example_wires_cross_platform_apps() {
+    let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
+    for kind in [
+        "swift_android_library",
+        "kotlin_apple_framework",
+        "rust_library",
+        "android_binary",
+        "apple_application",
+    ] {
+        let schema = schemas
+            .iter()
+            .find(|schema| schema.kind == kind)
+            .unwrap_or_else(|| panic!("missing `{kind}` schema"));
+        assert!(
+            schema
+                .examples
+                .iter()
+                .any(|example| example.slug == "native-mobile-shared-code-e2e"),
+            "`{kind}` should expose the composed shared-code example"
+        );
+    }
+
+    let swift_schema = schemas
+        .iter()
+        .find(|schema| schema.kind == "swift_android_library")
+        .expect("swift_android_library schema");
+    let bundle = load_target_kind_example(swift_schema, "native-mobile-shared-code-e2e")
+        .expect("native mobile example materializes");
+    let tmp = TempDir::new().expect("tempdir");
+    materialize(tmp.path(), &bundle);
+    let graph = once_frontend::load_graph_workspace(tmp.path()).expect("example graph loads");
+    let by_id = graph
+        .iter()
+        .map(|target| (target.label.id.as_str(), target))
+        .collect::<BTreeMap<_, _>>();
+
+    let android_app = by_id.get("AndroidApp").expect("AndroidApp target");
+    assert_eq!(android_app.kind, "android_binary");
+    assert_eq!(
+        android_app.deps,
+        vec![
+            "SharedSwiftAndroid".to_string(),
+            "SharedRustAndroid".to_string()
+        ]
+    );
+
+    let apple_app = by_id.get("AppleApp").expect("AppleApp target");
+    assert_eq!(apple_app.kind, "apple_application");
+    assert_eq!(
+        apple_app.deps,
+        vec![
+            "SharedKotlinApple".to_string(),
+            "SharedRustApple".to_string()
+        ]
+    );
+
+    assert!(by_id
+        .get("SharedSwiftAndroid")
+        .expect("SharedSwiftAndroid target")
+        .providers
+        .contains(&"android_native_library".to_string()));
+    assert!(by_id
+        .get("SharedRustAndroid")
+        .expect("SharedRustAndroid target")
+        .providers
+        .contains(&"android_native_library".to_string()));
+    assert!(by_id
+        .get("SharedKotlinApple")
+        .expect("SharedKotlinApple target")
+        .providers
+        .contains(&"apple_framework".to_string()));
+    assert!(by_id
+        .get("SharedRustApple")
+        .expect("SharedRustApple target")
+        .providers
+        .contains(&"apple_linkable".to_string()));
+}
+
+#[cfg(unix)]
+#[test]
+fn native_mobile_shared_code_example_declares_android_native_packaging_actions() {
+    let tmp = TempDir::new().expect("tempdir");
+    let android_app = native_mobile_android_app(tmp.path());
+    let result = analyze_native_mobile_android_app(tmp.path(), &android_app);
+    let staged_sources = staged_android_native_sources(&result);
+
+    assert!(
+        staged_sources
+            .iter()
+            .any(|source| source.ends_with("libSharedSwift.so")),
+        "{staged_sources:?}"
+    );
+    assert!(
+        staged_sources
+            .iter()
+            .any(|source| source.ends_with("libshared_rust.so")),
+        "{staged_sources:?}"
+    );
+    assert!(declares_android_native_apk_action(&result));
+}
+
+#[cfg(unix)]
+fn native_mobile_android_app(root: &Path) -> GraphTarget {
+    let graph = materialized_native_mobile_graph(root);
+    let mut android_app = graph
+        .into_iter()
+        .find(|target| target.label.id == "AndroidApp")
+        .expect("AndroidApp target");
+    configure_fake_android_tools(root, &mut android_app);
+    android_app
+}
+
+#[cfg(unix)]
+fn materialized_native_mobile_graph(root: &Path) -> Vec<GraphTarget> {
+    let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
+    let swift_schema = schemas
+        .iter()
+        .find(|schema| schema.kind == "swift_android_library")
+        .expect("swift_android_library schema");
+    let bundle = load_target_kind_example(swift_schema, "native-mobile-shared-code-e2e")
+        .expect("native mobile example materializes");
+
+    materialize(root, &bundle);
+    once_frontend::load_graph_workspace(root).expect("example graph loads")
+}
+
+#[cfg(unix)]
+fn configure_fake_android_tools(root: &Path, android_app: &mut GraphTarget) {
+    let tools = root.join("tools");
+    fs::create_dir_all(&tools).unwrap();
+    for tool in [
+        "aapt2",
+        "apksigner",
+        "d8",
+        "java",
+        "javac",
+        "jar",
+        "kotlinc",
+        "zipalign",
+    ] {
+        write_executable(
+            &tools.join(tool),
+            "#!/bin/sh\ncase \"$1\" in version|--version|-version) echo \"$0 test\" ;; *) echo \"$0 test\" ;; esac\n",
+        );
+    }
+    let sdk = root.join("android-sdk");
+    let attr_paths = [
+        ("android_sdk", sdk.to_string_lossy().into_owned()),
+        ("compile_sdk", "35".to_string()),
+        ("build_tools_version", "35.0.0".to_string()),
+        ("signing", "none".to_string()),
+        ("aapt2", tools.join("aapt2").to_string_lossy().into_owned()),
+        (
+            "apksigner",
+            tools.join("apksigner").to_string_lossy().into_owned(),
+        ),
+        ("d8", tools.join("d8").to_string_lossy().into_owned()),
+        ("java", tools.join("java").to_string_lossy().into_owned()),
+        ("javac", tools.join("javac").to_string_lossy().into_owned()),
+        ("jar", tools.join("jar").to_string_lossy().into_owned()),
+        (
+            "kotlinc",
+            tools.join("kotlinc").to_string_lossy().into_owned(),
+        ),
+        (
+            "kotlin_stdlib",
+            tools
+                .join("kotlin-stdlib.jar")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (
+            "zipalign",
+            tools.join("zipalign").to_string_lossy().into_owned(),
+        ),
+    ];
+    for (key, value) in attr_paths {
+        android_app
+            .attrs
+            .insert(key.to_string(), AttrValue::String(value));
+    }
+}
+
+#[cfg(unix)]
+fn analyze_native_mobile_android_app(root: &Path, android_app: &GraphTarget) -> AnalysisResult {
+    let engine = AnalysisEngine::for_workspace(root).expect("analysis engine");
+    engine
+        .analyze_target(android_app, root, &native_mobile_android_dep_providers())
+        .expect("AndroidApp analysis")
+}
+
+#[cfg(unix)]
+fn native_mobile_android_dep_providers() -> [serde_json::Value; 2] {
+    [
+        json!({
+            "label_id": "SharedSwiftAndroid",
+            "target_kind": "swift_android_library",
+            "android_native_libraries": [
+                {"abi": "arm64-v8a", "path": ".once/out/SharedSwiftAndroid/libSharedSwift.so"}
+            ],
+            "transitive_android_native_libraries": [
+                {"abi": "arm64-v8a", "path": ".once/out/SharedSwiftAndroid/libSharedSwift.so"}
+            ],
+        }),
+        json!({
+            "label_id": "SharedRustAndroid",
+            "target_kind": "rust_library",
+            "crate_type": "cdylib",
+            "android_native_libraries": [
+                {"abi": "arm64-v8a", "path": ".once/out/SharedRustAndroid/libshared_rust.so"}
+            ],
+            "transitive_android_native_libraries": [
+                {"abi": "arm64-v8a", "path": ".once/out/SharedRustAndroid/libshared_rust.so"}
+            ],
+        }),
+    ]
+}
+
+#[cfg(unix)]
+fn staged_android_native_sources(result: &AnalysisResult) -> Vec<String> {
+    result
+        .actions
+        .iter()
+        .filter_map(|action| match &action.operation {
+            Some(once_frontend::analysis::DeclaredActionOperation::CopyPath {
+                sources,
+                destination,
+                ..
+            }) if destination.contains("native_staging/lib/arm64-v8a") => sources.first(),
+            _ => None,
+        })
+        .cloned()
+        .collect()
+}
+
+#[cfg(unix)]
+fn declares_android_native_apk_action(result: &AnalysisResult) -> bool {
+    result.actions.iter().any(|action| {
+        action
+            .identifier
+            .as_deref()
+            .is_some_and(|id| id == "android_unsigned_apk_native:AndroidApp")
+    })
+}
+
 fn materialize(root: &Path, example: &once_frontend::TargetKindExampleBundle) {
     for file in &example.files {
         let path = root.join(&file.path);
@@ -152,4 +405,14 @@ fn materialize(root: &Path, example: &once_frontend::TargetKindExampleBundle) {
             )
         });
     }
+}
+
+#[cfg(unix)]
+fn write_executable(path: &Path, contents: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::write(path, contents).unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
 }
