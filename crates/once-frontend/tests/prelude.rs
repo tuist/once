@@ -610,6 +610,234 @@ result = repr([
     );
 }
 
+#[test]
+#[allow(clippy::too_many_lines)]
+fn prelude_cargo_metadata_targets_use_host_metadata_for_host_variants() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "attrs": {{
+        "target": "x86_64-apple-darwin",
+        "vendor_dir": "third_party/rust/vendor",
+    }},
+}}
+packages = [
+    {{
+        "id": "registry+https://github.com/rust-lang/crates.io-index#builder@1.0.0",
+        "name": "builder",
+        "version": "1.0.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "manifest_path": "/workspace/vendor/builder-1.0.0/Cargo.toml",
+        "targets": [
+            {{
+                "name": "builder",
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "src_path": "/workspace/vendor/builder-1.0.0/src/lib.rs",
+                "edition": "2021",
+            }},
+            {{
+                "name": "build-script-build",
+                "kind": ["custom-build"],
+                "crate_types": ["bin"],
+                "src_path": "/workspace/vendor/builder-1.0.0/build.rs",
+                "edition": "2021",
+            }},
+        ],
+    }},
+    {{
+        "id": "registry+https://github.com/rust-lang/crates.io-index#cpufeatures@0.2.17",
+        "name": "cpufeatures",
+        "version": "0.2.17",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "manifest_path": "/workspace/vendor/cpufeatures-0.2.17/Cargo.toml",
+        "targets": [{{
+            "name": "cpufeatures",
+            "kind": ["lib"],
+            "crate_types": ["lib"],
+            "src_path": "/workspace/vendor/cpufeatures-0.2.17/src/lib.rs",
+            "edition": "2018",
+        }}],
+    }},
+    {{
+        "id": "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.186",
+        "name": "libc",
+        "version": "0.2.186",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "manifest_path": "/workspace/vendor/libc-0.2.186/Cargo.toml",
+        "targets": [{{
+            "name": "libc",
+            "kind": ["lib"],
+            "crate_types": ["lib"],
+            "src_path": "/workspace/vendor/libc-0.2.186/src/lib.rs",
+            "edition": "2021",
+        }}],
+    }},
+]
+target_metadata = {{
+    "packages": packages,
+    "resolve": {{
+        "nodes": [
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#builder@1.0.0",
+                "features": [],
+                "deps": [{{
+                    "name": "cpufeatures",
+                    "pkg": "registry+https://github.com/rust-lang/crates.io-index#cpufeatures@0.2.17",
+                    "dep_kinds": [{{"kind": "build"}}],
+                }}],
+            }},
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#cpufeatures@0.2.17",
+                "features": [],
+                "deps": [],
+            }},
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.186",
+                "features": [],
+                "deps": [],
+            }},
+        ],
+    }},
+}}
+host_metadata = {{
+    "packages": packages,
+    "resolve": {{
+        "nodes": [
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#builder@1.0.0",
+                "features": [],
+                "deps": [{{
+                    "name": "cpufeatures",
+                    "pkg": "registry+https://github.com/rust-lang/crates.io-index#cpufeatures@0.2.17",
+                    "dep_kinds": [{{"kind": "build"}}],
+                }}],
+            }},
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#cpufeatures@0.2.17",
+                "features": [],
+                "deps": [{{
+                    "name": "libc",
+                    "pkg": "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.186",
+                    "dep_kinds": [{{"kind": None}}],
+                }}],
+            }},
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.186",
+                "features": [],
+                "deps": [],
+            }},
+        ],
+    }},
+}}
+targets = _cargo_metadata_targets(ctx, target_metadata, host_metadata)
+by_name = {{target["name"]: target for target in targets}}
+result = repr([
+    by_name["cpufeatures-0.2.17"]["deps"],
+    by_name["cpufeatures-0.2.17-host"]["deps"],
+    by_name["cpufeatures-0.2.17-host"]["attrs"].get("target"),
+    by_name["libc-0.2.186-host"]["attrs"].get("target"),
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(out, "[[], [\"./libc-0.2.186-host\"], None, None]");
+}
+
+#[test]
+fn prelude_cargo_metadata_targets_use_host_metadata_for_proc_macro_features() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "attrs": {{
+        "target": "x86_64-apple-darwin",
+        "vendor_dir": "third_party/rust/vendor",
+    }},
+}}
+packages = [
+    {{
+        "id": "registry+https://github.com/rust-lang/crates.io-index#document-features@0.2.12",
+        "name": "document-features",
+        "version": "0.2.12",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "manifest_path": "/workspace/vendor/document-features-0.2.12/Cargo.toml",
+        "targets": [{{
+            "name": "document_features",
+            "kind": ["proc-macro"],
+            "crate_types": ["proc-macro"],
+            "src_path": "/workspace/vendor/document-features-0.2.12/lib.rs",
+            "edition": "2018",
+        }}],
+    }},
+    {{
+        "id": "registry+https://github.com/rust-lang/crates.io-index#litrs@1.0.0",
+        "name": "litrs",
+        "version": "1.0.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "manifest_path": "/workspace/vendor/litrs-1.0.0/Cargo.toml",
+        "targets": [{{
+            "name": "litrs",
+            "kind": ["lib"],
+            "crate_types": ["lib"],
+            "src_path": "/workspace/vendor/litrs-1.0.0/src/lib.rs",
+            "edition": "2021",
+        }}],
+    }},
+]
+target_metadata = {{
+    "packages": packages,
+    "resolve": {{
+        "nodes": [
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#document-features@0.2.12",
+                "features": [],
+                "deps": [],
+            }},
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#litrs@1.0.0",
+                "features": [],
+                "deps": [],
+            }},
+        ],
+    }},
+}}
+host_metadata = {{
+    "packages": packages,
+    "resolve": {{
+        "nodes": [
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#document-features@0.2.12",
+                "features": ["default"],
+                "deps": [{{
+                    "name": "litrs",
+                    "pkg": "registry+https://github.com/rust-lang/crates.io-index#litrs@1.0.0",
+                    "dep_kinds": [{{"kind": None}}],
+                }}],
+            }},
+            {{
+                "id": "registry+https://github.com/rust-lang/crates.io-index#litrs@1.0.0",
+                "features": [],
+                "deps": [],
+            }},
+        ],
+    }},
+}}
+targets = _cargo_metadata_targets(ctx, target_metadata, host_metadata)
+by_name = {{target["name"]: target for target in targets}}
+result = repr([
+    by_name["document-features-0.2.12"]["attrs"]["features"],
+    by_name["document-features-0.2.12"]["deps"],
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(out, "[[\"default\"], [\"./litrs-1.0.0-host\"]]");
+}
+
 #[cfg(unix)]
 #[test]
 fn prelude_rust_build_script_metadata_deps_are_not_duplicated() {
@@ -764,12 +992,16 @@ build_env = _rust_build_script_env(
     "third_party/rust/vendor/pkg-1.0.0/build.rs",
 )
 result = repr([
-    tool_env.get("CC"),
-    tool_env.get("AR"),
-    tool_env.get("PATH"),
-    build_env.get("CC"),
-    build_env.get("AR"),
-    build_env.get("PATH"),
+    tool_env.get("CC") or "",
+    tool_env.get("AR") or "",
+    tool_env.get("RANLIB") or "",
+    tool_env.get("PKG_CONFIG") or "",
+    tool_env.get("PATH") or "",
+    build_env.get("CC") or "",
+    build_env.get("AR") or "",
+    build_env.get("RANLIB") or "",
+    build_env.get("PKG_CONFIG") or "",
+    build_env.get("PATH") or "",
 ])
 "#
     );
@@ -781,17 +1013,127 @@ result = repr([
 
     assert!(std::path::Path::new(&values[0]).is_absolute());
     assert!(std::path::Path::new(&values[1]).is_absolute());
-    assert_eq!(values[0], values[3]);
-    assert_eq!(values[1], values[4]);
-    assert_eq!(values[2], values[5]);
-    for entry in values[2].split(':') {
+    if !values[2].is_empty() {
+        assert!(std::path::Path::new(&values[2]).is_absolute());
+    }
+    if !values[3].is_empty() {
+        assert!(std::path::Path::new(&values[3]).is_absolute());
+    }
+    assert_eq!(values[0], values[5]);
+    assert_eq!(values[1], values[6]);
+    assert_eq!(values[2], values[7]);
+    assert_eq!(values[3], values[8]);
+    assert_eq!(values[4], values[9]);
+    for entry in values[4].split(':') {
         assert!(std::path::Path::new(entry).is_absolute());
     }
-    let cc_dir = std::path::Path::new(&values[0])
-        .parent()
-        .unwrap()
-        .to_string_lossy();
-    assert!(values[2].split(':').any(|entry| entry == cc_dir));
+    for tool in [&values[0], &values[1], &values[2], &values[3]] {
+        if tool.is_empty() {
+            continue;
+        }
+        let tool_dir = std::path::Path::new(tool)
+            .parent()
+            .unwrap()
+            .to_string_lossy();
+        assert!(values[4].split(':').any(|entry| entry == tool_dir));
+    }
+    assert!(values[4].split(':').any(|entry| entry == "/bin"));
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_rust_compile_env_does_not_forward_unix_host_path() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{}},
+    "srcs": [],
+}}
+env = _rust_compile_env(ctx)
+result = repr([
+    env.get("PATH"),
+    env.get("LIB"),
+    env.get("INCLUDE"),
+])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "");
+
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "[None, None, None]");
+}
+
+#[test]
+fn prelude_rust_compile_env_forwards_windows_tool_env_without_overrides() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+_host_values = {{
+    "PATH": "C:/msvc/bin;C:/windows/system32",
+    "Path": "C:/ignored",
+    "INCLUDE": "C:/include",
+    "LIB": "C:/lib",
+    "SystemRoot": "C:/Windows",
+    "TEMP": "C:/Temp",
+    "VCINSTALLDIR": "C:/VS/VC",
+}}
+
+def host_env(name):
+    return _host_values.get(name, "")
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "env": {{
+            "CUSTOM": "configured",
+            "LIB": "configured-lib",
+        }},
+        "rustc_env": {{
+            "INCLUDE": "configured-include",
+        }},
+    }},
+    "srcs": [],
+}}
+env = _rust_compile_env(ctx)
+result = repr([
+    env.get("PATH"),
+    env.get("INCLUDE"),
+    env.get("LIB"),
+    env.get("SystemRoot"),
+    env.get("TEMP"),
+    env.get("VCINSTALLDIR"),
+    env.get("CUSTOM"),
+    env.get("PATHEXT"),
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(
+        out,
+        "[\"C:/msvc/bin;C:/windows/system32\", \"configured-include\", \"configured-lib\", \"C:/Windows\", \"C:/Temp\", \"C:/VS/VC\", \"configured\", None]"
+    );
 }
 
 #[cfg(unix)]

@@ -29,15 +29,45 @@ for tool in jq mise; do
   fi
 done
 
+export CARGO_NET_RETRY="${CARGO_NET_RETRY:-10}"
+
+retry_command() {
+  local description="$1"
+  shift
+
+  local attempt=1
+  local max_attempts=3
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if ((attempt >= max_attempts)); then
+      return 1
+    fi
+    echo "${description} failed; retrying (${attempt}/${max_attempts})" >&2
+    sleep $((attempt * 5))
+    attempt=$((attempt + 1))
+  done
+}
+
+cargo_vendor() {
+  mise exec -- cargo vendor --locked --versioned-dirs third_party/rust/vendor >/tmp/once-cargo-vendor-config
+}
+
 rm -rf third_party/rust/vendor
 mkdir -p third_party/rust
-mise exec -- cargo vendor --locked --versioned-dirs third_party/rust/vendor >/tmp/once-cargo-vendor-config
+retry_command "cargo vendor" cargo_vendor
 
 metadata_args=(metadata --locked --format-version 1)
 if [[ -n "${target}" ]]; then
   metadata_args+=(--filter-platform "${target}")
 fi
-metadata="$(mise exec -- cargo "${metadata_args[@]}")"
+
+cargo_metadata() {
+  mise exec -- cargo "${metadata_args[@]}"
+}
+
+metadata="$(retry_command "cargo metadata" cargo_metadata)"
 schlussel_manifest="$(
   jq -r '
     .packages[]
