@@ -396,6 +396,63 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_tree_action_preserves_framework_symlinks() {
+        let (tmp, cas) = fresh_cas();
+        let framework = tmp.path().join("src/Shared.framework");
+        std::fs::create_dir_all(framework.join("Versions/A/Headers")).unwrap();
+        std::fs::create_dir_all(framework.join("Versions/A/Modules")).unwrap();
+        std::fs::write(framework.join("Versions/A/Shared"), "binary").unwrap();
+        std::fs::write(framework.join("Versions/A/Headers/Shared.h"), "header").unwrap();
+        std::os::unix::fs::symlink("A", framework.join("Versions/Current")).unwrap();
+        std::os::unix::fs::symlink("Versions/Current/Headers", framework.join("Headers")).unwrap();
+        std::os::unix::fs::symlink("Versions/Current/Modules", framework.join("Modules")).unwrap();
+        std::os::unix::fs::symlink("Versions/Current/Shared", framework.join("Shared")).unwrap();
+        let action = Action::CopyPath {
+            sources: vec![WorkspacePath::try_from("src/Shared.framework").unwrap()],
+            destination: WorkspacePath::try_from("out/Frameworks/Shared.framework").unwrap(),
+            mode: CopyPathMode::Tree,
+            input_digest: Some(Digest::of_bytes(b"copy-framework")),
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        let copied = tmp.path().join("out/Frameworks/Shared.framework");
+        assert!(std::fs::symlink_metadata(copied.join("Headers"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_link(copied.join("Headers")).unwrap(),
+            std::path::PathBuf::from("Versions/Current/Headers")
+        );
+        assert!(std::fs::symlink_metadata(copied.join("Shared"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(copied.join("Headers/Shared.h")).unwrap(),
+            "header"
+        );
+
+        std::fs::remove_dir_all(tmp.path().join("out/Frameworks")).unwrap();
+        let second = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.cache, CacheState::Hit);
+        assert!(std::fs::symlink_metadata(copied.join("Modules"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_link(copied.join("Shared")).unwrap(),
+            std::path::PathBuf::from("Versions/Current/Shared")
+        );
+    }
+
     #[tokio::test]
     async fn write_tree_digest_action_filters_by_suffix() {
         let (tmp, cas) = fresh_cas();

@@ -335,7 +335,17 @@ fn remove_path_blocking(path: &Path) -> std::io::Result<()> {
 }
 
 fn copy_tree_contents_blocking(source: &Path, destination: &Path) -> std::io::Result<()> {
-    let metadata = std::fs::metadata(source)?;
+    let metadata = std::fs::symlink_metadata(source)?;
+    if metadata.file_type().is_symlink() {
+        let file_name = source.file_name().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("source `{}` has no file name", source.display()),
+            )
+        })?;
+        copy_symlink_blocking(source, &destination.join(file_name))?;
+        return Ok(());
+    }
     if metadata.is_file() {
         let file_name = source.file_name().ok_or_else(|| {
             std::io::Error::new(
@@ -359,14 +369,50 @@ fn copy_directory_contents_blocking(source: &Path, destination: &Path) -> std::i
     for child in children {
         let child_path = child.path();
         let child_destination = destination.join(child.file_name());
-        let metadata = std::fs::metadata(&child_path)?;
-        if metadata.is_dir() {
+        let metadata = std::fs::symlink_metadata(&child_path)?;
+        if metadata.file_type().is_symlink() {
+            copy_symlink_blocking(&child_path, &child_destination)?;
+        } else if metadata.is_dir() {
             copy_directory_contents_blocking(&child_path, &child_destination)?;
         } else if metadata.is_file() {
             copy_file_blocking(&child_path, &child_destination)?;
         }
     }
     Ok(())
+}
+
+fn copy_symlink_blocking(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let target = std::fs::read_link(source)?;
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    remove_path_blocking(destination)?;
+    create_symlink_blocking(&target, destination, source)
+}
+
+#[cfg(unix)]
+fn create_symlink_blocking(
+    target: &Path,
+    destination: &Path,
+    _source: &Path,
+) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, destination)
+}
+
+#[cfg(windows)]
+fn create_symlink_blocking(
+    target: &Path,
+    destination: &Path,
+    source: &Path,
+) -> std::io::Result<()> {
+    let target_is_dir = std::fs::metadata(source)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false);
+    if target_is_dir {
+        std::os::windows::fs::symlink_dir(target, destination)
+    } else {
+        std::os::windows::fs::symlink_file(target, destination)
+    }
 }
 
 fn copy_file_blocking(source: &Path, destination: &Path) -> std::io::Result<()> {
