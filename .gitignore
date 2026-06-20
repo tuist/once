@@ -1,6 +1,5 @@
 /target
 /.once/
-/.fabrik
 /.blick/runs/
 /vendor
 /third_party/rust/src/
