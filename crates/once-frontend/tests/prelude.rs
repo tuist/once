@@ -1778,9 +1778,9 @@ result = repr("ok")
     assert_eq!(path, ".once/out/crates/app/app/rustc-features.rsp");
     let content = String::from_utf8(bytes.clone()).unwrap();
     assert!(content.len() > 4096);
-    assert!(content.contains("feature=\"default\""), "{content}");
-    assert!(content.contains("feature=\"std\""), "{content}");
-    assert!(content.contains("feature=\"feature_399\""), "{content}");
+    assert!(content.contains(r#"feature=\"default\""#), "{content}");
+    assert!(content.contains(r#"feature=\"std\""#), "{content}");
+    assert!(content.contains(r#"feature=\"feature_399\""#), "{content}");
 
     let rustc = &store.actions[1];
     assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
