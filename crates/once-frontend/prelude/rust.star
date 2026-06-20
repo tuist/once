@@ -1143,15 +1143,18 @@ def _cargo_resolver_impl(ctx):
         })
     return targets
 
+def _cargo_normalized_path(path):
+    return path.replace("\\", "/")
+
 def _cargo_package_root(package):
-    manifest = package.get("manifest_path") or ""
+    manifest = _cargo_normalized_path(package.get("manifest_path") or "")
     if manifest:
         return _parent_dir(manifest)
     return ""
 
 def _cargo_source_rel(package, target):
-    src = target.get("src_path") or ""
-    root = _cargo_package_root(package)
+    src = _cargo_normalized_path(target.get("src_path") or "")
+    root = _cargo_normalized_path(_cargo_package_root(package))
     prefix = root + "/"
     if root and src.startswith(prefix):
         return src[len(prefix):]

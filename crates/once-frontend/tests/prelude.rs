@@ -534,6 +534,63 @@ fn prelude_cargo_metadata_targets_preserve_rust_target() {
 }
 
 #[test]
+fn prelude_cargo_metadata_targets_normalize_windows_build_script_paths() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+targets = _cargo_metadata_targets({{
+    "attrs": {{
+        "target": "x86_64-pc-windows-msvc",
+        "vendor_dir": "third_party/rust/vendor",
+    }},
+}}, {{
+    "packages": [{{
+        "id": "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.102",
+        "name": "anyhow",
+        "version": "1.0.102",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "manifest_path": "C:\\Users\\runneradmin\\.cargo\\registry\\src\\index\\anyhow-1.0.102\\Cargo.toml",
+        "targets": [
+            {{
+                "name": "anyhow",
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "src_path": "C:\\Users\\runneradmin\\.cargo\\registry\\src\\index\\anyhow-1.0.102\\src\\lib.rs",
+                "edition": "2021",
+            }},
+            {{
+                "name": "build-script-build",
+                "kind": ["custom-build"],
+                "crate_types": ["bin"],
+                "src_path": "C:\\Users\\runneradmin\\.cargo\\registry\\src\\index\\anyhow-1.0.102\\build.rs",
+                "edition": "2021",
+            }},
+        ],
+    }}],
+    "resolve": {{
+        "nodes": [{{
+            "id": "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.102",
+            "features": [],
+            "deps": [],
+        }}],
+    }},
+}})
+by_name = {{target["name"]: target for target in targets}}
+result = repr([
+    by_name["anyhow-1.0.102"]["attrs"]["crate_root"],
+    by_name["anyhow-1.0.102"]["attrs"]["build_script"],
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(
+        out,
+        "[\"third_party/rust/vendor/anyhow-1.0.102/src/lib.rs\", \"third_party/rust/vendor/anyhow-1.0.102/build.rs\"]"
+    );
+}
+
+#[test]
 fn prelude_cargo_metadata_targets_split_proc_macro_host_deps() {
     let prelude = all_prelude_source();
     let source = format!(
