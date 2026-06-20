@@ -919,7 +919,11 @@ mod tests {
         ];
 
         for case in cases {
-            assert_eq!(rustc_response_arg(&arg_file, case).unwrap(), case);
+            assert_eq!(
+                rustc_response_arg(&arg_file, case).unwrap(),
+                case,
+                "rustc response argument should stay verbatim: {case:?}"
+            );
         }
     }
 
