@@ -201,21 +201,9 @@ def _rust_feature_flags(ctx):
         flags.extend(["--cfg", "feature=\"" + feature + "\""])
     return flags
 
-def _rust_response_file(ctx, name, content, identifier_suffix):
+def _rust_response_file(ctx, name, content):
     path = declare_output(_rust_declared_output(ctx, name))
-    mkdir = _shell_quote(host_which("mkdir"))
-    script = """set -eu
-__once_path={path}
-case "$__once_path" in */*) {mkdir} -p "${{__once_path%/*}}" ;; esac
-printf '%s' {content} > "$__once_path"
-""".format(path = _shell_quote(path), mkdir = mkdir, content = _shell_quote(content))
-    run_action(
-        argv = [host_which("sh"), "-c", script],
-        outputs = [path],
-        env = _rust_windows_tool_env(),
-        toolchain_identity = "once.rust.response.v1\x00" + content,
-        identifier = ctx["label"]["id"] + ":" + identifier_suffix,
-    )
+    write_path(path, content)
     return path
 
 def _rust_feature_args(ctx):
@@ -224,7 +212,7 @@ def _rust_feature_args(ctx):
         return ([], [])
     if host_os() != "windows":
         return (flags, [])
-    path = _rust_response_file(ctx, "rustc-features.rsp", "\n".join(flags) + "\n", "rustc-features")
+    path = _rust_response_file(ctx, "rustc-features.rsp", "\n".join(flags) + "\n")
     return (["@" + path], [path])
 
 def _rust_user_flags(ctx):
@@ -300,6 +288,26 @@ def _rust_tool_path(tools):
     dirs.extend(_rust_unix_tool_dirs())
     return ":".join(_unique(dirs))
 
+def _rust_path_separator():
+    return ";" if host_os() == "windows" else ":"
+
+def _rust_merge_paths(primary, fallback):
+    if not primary:
+        return fallback
+    if not fallback:
+        return primary
+    separator = _rust_path_separator()
+    return separator.join(_unique(primary.split(separator) + fallback.split(separator)))
+
+def _rust_merge_env_lower_precedence(env, fallback_env):
+    for key, value in fallback_env.items():
+        if key == "PATH":
+            path = _rust_merge_paths(env.get("PATH") or "", value)
+            if path:
+                env["PATH"] = path
+        elif key not in env:
+            env[key] = value
+
 def _rust_c_tool_env(target, host_triple):
     env = {}
     if host_os() == "windows" or target != host_triple:
@@ -370,13 +378,8 @@ def _rust_manifest_dir(ctx, manifest_dir):
 
 def _rust_compile_action_env(ctx, target, host_triple):
     env = _rust_compile_env(ctx)
-    for key, value in _rust_android_compile_env(ctx, target or host_triple).items():
-        if key not in env:
-            env[key] = value
-    c_env = _rust_c_tool_env(target or host_triple, host_triple)
-    path = c_env.get("PATH")
-    if path and "PATH" not in env:
-        env["PATH"] = path
+    _rust_merge_env_lower_precedence(env, _rust_android_compile_env(ctx, target or host_triple))
+    _rust_merge_env_lower_precedence(env, _rust_c_tool_env(target or host_triple, host_triple))
     return env
 
 def _rust_target_args(target):
@@ -542,9 +545,7 @@ def _rust_builtin_extern_args(crate_type):
 
 def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path):
     env = _rust_compile_env(ctx)
-    for key, value in _rust_c_tool_env(target or host_triple, host_triple).items():
-        if key not in env:
-            env[key] = value
+    _rust_merge_env_lower_precedence(env, _rust_c_tool_env(target or host_triple, host_triple))
     for key, value in _rust_cfg_env(rustc, target).items():
         if key not in env:
             env[key] = value
