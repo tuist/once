@@ -363,6 +363,25 @@ fn prelude_rust_native_outputs_emit_mobile_provider_fields() {
     let package_dir = workspace.path().join("shared/rust/src");
     std::fs::create_dir_all(&package_dir).unwrap();
     std::fs::write(package_dir.join("lib.rs"), "pub fn greeting() {}\n").unwrap();
+    let fake_ndk = workspace.path().join("android-ndk");
+    for tag in [
+        "darwin-arm64",
+        "darwin-x86_64",
+        "linux-arm64",
+        "linux-x86_64",
+    ] {
+        let bin_dir = fake_ndk
+            .join("toolchains/llvm/prebuilt")
+            .join(tag)
+            .join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join("clang"), "").unwrap();
+    }
+    let fake_linker =
+        fake_ndk.join("toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android23-clang");
+    let fake_linker_arg = format!("linker={}", fake_linker.to_string_lossy());
+    let fake_ndk = fake_ndk.to_string_lossy();
+    let fake_linker = fake_linker.to_string_lossy();
     let source = format!(
         r#"{prelude}
 def host_which(name):
@@ -387,7 +406,8 @@ android_ctx = {{
         "crate_name": "shared_rust",
         "crate_root": "src/lib.rs",
         "target": "aarch64-linux-android",
-        "linker": "/android/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android23-clang",
+        "linker": "{fake_linker}",
+        "android_ndk": "{fake_ndk}",
     }},
     "deps": [],
     "srcs": ["src/**/*.rs"],
@@ -432,8 +452,10 @@ result = repr([
     assert!(out.contains("-lc++"), "{out}");
     assert_eq!(store.actions.len(), 2);
     assert!(store.actions[0].argv.iter().any(|arg| arg == "--target"));
-    assert!(store.actions[0].argv.iter().any(|arg| arg
-        == "linker=/android/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android23-clang"));
+    assert!(store.actions[0]
+        .argv
+        .iter()
+        .any(|arg| arg == &fake_linker_arg));
     assert!(store.actions[1].argv.iter().any(|arg| arg == "--target"));
 }
 
