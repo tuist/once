@@ -261,6 +261,143 @@ result = repr("ok")
         .contains(&".once/out/apps/hello/Hello/native_staging".to_string()));
 }
 
+#[test]
+fn prelude_android_resource_link_seeds_empty_r_txt() {
+    let prelude = android_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "apps/hello",
+        "name": "Hello",
+        "id": "apps/hello/Hello",
+    }},
+    "attr": {{
+        "application_id": "dev.once.hello",
+    }},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/apps/hello/Hello",
+}}
+tools = {{
+    "aapt2": "/sdk/build-tools/35.0.0/aapt2",
+    "android_jar": "/sdk/platforms/android-35/android.jar",
+    "compile_sdk": "35",
+    "identity": "android-tools",
+    "sdk_root": "/sdk",
+}}
+_android_link_resources(
+    ctx,
+    ctx["attr"],
+    tools,
+    "apps/hello/AndroidManifest.xml",
+    [],
+    [],
+    False,
+    [],
+    [],
+)
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "apps/hello/Hello");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    assert_eq!(
+        store.actions[2].operation,
+        Some(DeclaredActionOperation::WriteFile {
+            path: ".once/out/apps/hello/Hello/R.txt".to_string(),
+            bytes: Vec::new(),
+        })
+    );
+    let link = &store.actions[3];
+    assert_eq!(
+        link.identifier.as_deref(),
+        Some("android_resource_link:apps/hello/Hello")
+    );
+    assert!(link
+        .outputs
+        .iter()
+        .any(|output| output == ".once/out/apps/hello/Hello/R.txt"));
+}
+
+#[test]
+fn prelude_android_java_compile_discovers_generated_sources() {
+    let prelude = android_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "apps/hello",
+        "name": "Hello",
+        "id": "apps/hello/Hello",
+    }},
+    "attr": {{
+        "namespace": "dev.once.hello",
+    }},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/apps/hello/Hello",
+}}
+tools = {{
+    "android_jar": "/sdk/platforms/android-35/android.jar",
+    "javac": "/jdk/bin/javac",
+    "java": "/jdk/bin/java",
+    "identity": "android-tools",
+    "sdk_root": "/sdk",
+}}
+_android_compile_java(
+    ctx,
+    ctx["attr"],
+    tools,
+    ["apps/hello/src/MainActivity.java"],
+    ".once/out/apps/hello/Hello/generated/r",
+    ".once/out/apps/hello/Hello/generated/r_sources.sha256",
+    [],
+)
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "apps/hello/Hello");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    let source_list = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .identifier
+                .as_deref()
+                .is_some_and(|id| id == "android_java_source_list:apps/hello/Hello")
+        })
+        .expect("source list action");
+    assert_eq!(source_list.argv[0], "/jdk/bin/java");
+    assert!(source_list
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/apps/hello/Hello/generated/r_sources.sha256"));
+    let javac = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .identifier
+                .as_deref()
+                .is_some_and(|id| id == "android_java_compile:apps/hello/Hello")
+        })
+        .expect("javac action");
+    assert!(javac
+        .argv
+        .iter()
+        .any(|arg| arg == "@.once/out/apps/hello/Hello/java_sources.list"));
+}
+
 #[cfg(unix)]
 #[test]
 fn prelude_swift_android_library_declares_native_provider() {
@@ -343,6 +480,27 @@ result = repr([
 }
 
 #[test]
+fn prelude_swift_android_native_libraries_skip_empty_records() {
+    let prelude = all_prelude_source();
+    let out = eval_prelude_function_in(
+        prelude,
+        "_swift_android_unique_native_libraries",
+        r#"([
+            {"abi": "", "path": ""},
+            {"abi": "arm64-v8a", "path": ".once/out/libshared.so"},
+            {"abi": "arm64-v8a", "path": ".once/out/libshared.so"},
+            {"abi": "x86_64", "path": ""},
+        ])"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        out,
+        "[{\"abi\": \"arm64-v8a\", \"path\": \".once/out/libshared.so\"}]"
+    );
+}
+
+#[test]
 fn prelude_kotlin_apple_target_inference_covers_ios_simulator() {
     let prelude = all_prelude_source();
     let out = eval_prelude_function_in(
@@ -353,6 +511,105 @@ fn prelude_kotlin_apple_target_inference_covers_ios_simulator() {
     .unwrap();
 
     assert_eq!(out, "\"ios_simulator_arm64\"");
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_kotlin_apple_identity_includes_konan_data_dir() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("shared/kotlin/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("Greeting.kt"), "fun greeting() = \"hi\"\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "kotlinc-native":
+        return "/kotlin/bin/kotlinc-native"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 2 and argv[1] == "-version":
+        return "kotlinc-native test\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "shared/kotlin",
+        "name": "SharedKotlin",
+        "id": "shared/kotlin/SharedKotlin",
+    }},
+    "attr": {{
+        "platform": "ios",
+        "sdk_variant": "simulator",
+        "arch": "arm64",
+        "module_name": "SharedKotlin",
+        "konan_data_dir": "/tmp/konan",
+    }},
+    "deps": [],
+    "srcs": ["Sources/**/*.kt"],
+    "build_dir": ".once/out/shared/kotlin/SharedKotlin",
+}}
+provider = _kotlin_apple_framework_impl(ctx)
+result = repr(provider["framework_path"])
+"#
+    );
+    let store = store_for(workspace.path(), "shared/kotlin");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert!(out.unwrap().contains("SharedKotlin.framework"));
+    let identity = store.actions[1].toolchain_identity.as_deref().unwrap();
+    assert!(
+        identity.contains("\x00konan_data_dir\x00/tmp/konan"),
+        "{identity:?}"
+    );
+}
+
+#[test]
+fn prelude_android_rejects_rust_rlib_native_dep() {
+    let prelude = all_prelude_source();
+    let err = eval_prelude_function_in(
+        prelude,
+        "_android_native_libraries",
+        r#"([
+            {
+                "target_kind": "rust_library",
+                "label_id": "SharedRust",
+                "crate_type": "rlib",
+                "rlib": ".once/out/libshared.rlib",
+            },
+        ], "AndroidApp")"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.contains("does not provide an Android shared library"),
+        "{err}"
+    );
+}
+
+#[test]
+fn prelude_apple_rejects_rust_rlib_native_dep() {
+    let prelude = all_prelude_source();
+    let err = eval_prelude_function_in(
+        prelude,
+        "_validate_apple_native_deps",
+        r#"([
+            {
+                "target_kind": "rust_library",
+                "label_id": "SharedRust",
+                "crate_type": "rlib",
+                "rlib": ".once/out/libshared.rlib",
+            },
+        ], "AppleApp")"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.contains("does not provide an Apple static library"),
+        "{err}"
+    );
 }
 
 #[cfg(unix)]
@@ -457,6 +714,85 @@ result = repr([
         .iter()
         .any(|arg| arg == &fake_linker_arg));
     assert!(store.actions[1].argv.iter().any(|arg| arg == "--target"));
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_apple_application_embeds_framework_self_path_output() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("app/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("App.swift"), "import Shared\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "xcrun":
+        return "/usr/bin/xcrun"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if "--find" in argv:
+        return "/toolchain/" + argv[len(argv) - 1] + "\n"
+    if "swiftc" in argv and "--version" in argv:
+        return "Swift version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "app",
+        "name": "App",
+        "id": "app/App",
+    }},
+    "attr": {{
+        "platform": "ios",
+        "bundle_id": "dev.once.App",
+        "minimum_os": "17.0",
+        "sdk_variant": "simulator",
+        "families": ["iphone"],
+    }},
+    "deps": [{{
+        "label_id": "shared/Shared",
+        "framework_path": ".once/out/shared/Shared.framework",
+        "framework_module_name": "Shared",
+        "framework_files": [
+            ".once/out/shared/Shared.framework",
+            ".once/out/shared/Shared.framework/Shared",
+        ],
+        "transitive_frameworks": [".once/out/shared/Shared.framework"],
+    }}],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/app/App",
+    "capability": "build",
+}}
+provider = _apple_application_impl(ctx)
+result = repr(provider["app_path"])
+"#
+    );
+    let store = store_for(workspace.path(), "app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("App.app"), "{out}");
+    let embed = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .identifier
+                .as_deref()
+                .is_some_and(|id| id == "apple_application_embed_Shared.framework")
+        })
+        .expect("embed action");
+    assert!(
+        embed
+            .outputs
+            .iter()
+            .any(|output| output == ".once/out/app/App.app/Frameworks/Shared.framework"),
+        "{:?}",
+        embed.outputs
+    );
 }
 
 #[cfg(unix)]

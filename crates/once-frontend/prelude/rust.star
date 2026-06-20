@@ -859,6 +859,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     own_native_archives = [output] if crate_type == "staticlib" else []
     provider = {
         "label_id": ctx["label"]["id"],
+        "target_kind": "rust_library",
         "crate_name": crate_name,
         "crate_type": crate_type,
         "target": target,

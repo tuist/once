@@ -39,7 +39,7 @@ Tool override attrs are also available for `javac`, `jar`, `java`,
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `android_library`, `android_resource`, `android_native_library`, `native_linkable` | Android libraries, resources, and native libraries consumed by this library |
+| `deps` | `android_library`, `android_resource`, `android_native_library` | Android libraries, resources, and native libraries consumed by this library |
 
 ## Providers
 

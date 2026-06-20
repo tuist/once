@@ -114,7 +114,7 @@ def _kotlin_apple_framework_impl(ctx):
         inputs = sources,
         outputs = framework_files,
         env = compile_env,
-        toolchain_identity = identity + "\x00target\x00" + target + "\x00module\x00" + module_name,
+        toolchain_identity = identity + "\x00target\x00" + target + "\x00module\x00" + module_name + "\x00konan_data_dir\x00" + konan_data_dir,
         identifier = "kotlin_apple_framework:" + ctx["label"]["id"],
     )
 

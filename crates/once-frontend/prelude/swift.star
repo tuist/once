@@ -135,10 +135,14 @@ def _swift_android_unique_native_libraries(libraries):
     seen = {}
     out = []
     for library in libraries:
+        abi = library.get("abi") or ""
+        path = library.get("path") or ""
+        if not abi or not path:
+            continue
         key = _swift_android_native_key(library)
         if key not in seen:
             seen[key] = True
-            out.append(library)
+            out.append({"abi": abi, "path": path})
     return out
 
 def _swift_android_collect_native_libraries(deps, own):
@@ -272,7 +276,7 @@ swift_android_library = target_kind(
         attr("linkopts", "list<string>", default = "[]", docs = "Additional linker flags appended after Once-managed flags.", configurable = False),
     ],
     deps = [
-        dep("deps", ["swift_module", "android_native_library", "native_linkable"], "Swift modules and Android native libraries linked or packaged with this library."),
+        dep("deps", ["swift_module", "android_native_library"], "Swift modules and Android native libraries linked or packaged with this library."),
     ],
     providers = ["swift_module", "android_native_library", "native_linkable"],
     capabilities = [capability("build", ["default", "native_library", "swiftmodule"])],

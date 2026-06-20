@@ -31,7 +31,7 @@ Swift SDK, Android NDK sysroot, or extra compiler flags.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `swift_module`, `android_native_library`, `native_linkable` | Swift modules and Android native libraries linked or packaged with this library |
+| `deps` | `swift_module`, `android_native_library` | Swift modules and Android native libraries linked or packaged with this library |
 
 ## Providers
 

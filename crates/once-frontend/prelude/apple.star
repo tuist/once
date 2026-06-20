@@ -341,6 +341,16 @@ def _collect_transitive(deps, key, own_values):
                 out.append(value)
     return out
 
+def _validate_apple_native_deps(deps, consumer_label):
+    for dep in deps:
+        if dep.get("target_kind") != "rust_library":
+            continue
+        crate_type = dep.get("crate_type") or ""
+        if crate_type == "staticlib":
+            continue
+        label = dep.get("label_id") or "dependency"
+        fail(consumer_label + ": Rust library dep `" + label + "` has crate_type `" + crate_type + "` and does not provide an Apple static library; set crate_type = \"staticlib\" for Apple consumers")
+
 # A select-shape attribute value is a dict with exactly one `select`
 # key whose value is itself a dict from configuration tokens to
 # branches:
@@ -763,6 +773,7 @@ def _apple_library_impl(ctx):
     archive = declare_output(module_name + ".a")
 
     deps = ctx["deps"]
+    _validate_apple_native_deps(deps, ctx["label"]["id"])
     # Split deps into compile-visible (exported) and link-only.
     # exported_deps entries come straight from `[target.attrs]` and may
     # be `./Sibling`, `../web/Common`, or already root-relative; we
@@ -1202,6 +1213,7 @@ def _swift_macro_impl(ctx):
     plugin_swiftmodule = declare_output(module_name + ".swiftmodule")
 
     deps = ctx["deps"]
+    _validate_apple_native_deps(deps, ctx["label"]["id"])
 
     # Aggregate dep archives, swiftmodule search paths, frameworks, and
     # linkopts so the plugin links against a real swift-syntax
@@ -1425,6 +1437,7 @@ def _apple_framework_impl(ctx):
     info_plist = declare_output(framework_dir + "/Info.plist")
 
     deps = ctx["deps"]
+    _validate_apple_native_deps(deps, ctx["label"]["id"])
     (
         compile_swiftmodule_dirs,
         compile_header_dirs,
@@ -1680,6 +1693,7 @@ def _apple_application_impl(ctx):
     info_plist = declare_output(app_dir + "/Info.plist")
 
     deps = ctx["deps"]
+    _validate_apple_native_deps(deps, ctx["label"]["id"])
     (
         compile_swiftmodule_dirs,
         compile_header_dirs,
@@ -1927,6 +1941,7 @@ def _apple_test_bundle_impl(ctx):
     }
 
     deps = ctx["deps"]
+    _validate_apple_native_deps(deps, ctx["label"]["id"])
     (
         compile_swiftmodule_dirs,
         compile_header_dirs,

@@ -425,9 +425,19 @@ def _android_unique_native_libraries(libraries):
             out.append({"abi": abi, "path": path})
     return out
 
-def _android_native_libraries(deps):
+def _android_validate_native_library_dep(dep, consumer_label):
+    if dep.get("target_kind") != "rust_library":
+        return
+    crate_type = dep.get("crate_type") or ""
+    if crate_type == "cdylib" or crate_type == "dylib":
+        return
+    label = dep.get("label_id") or "dependency"
+    fail(consumer_label + ": Rust library dep `" + label + "` has crate_type `" + crate_type + "` and does not provide an Android shared library; set crate_type = \"cdylib\" or \"dylib\" for Android consumers")
+
+def _android_native_libraries(deps, consumer_label):
     libraries = []
     for dep in deps:
+        _android_validate_native_library_dep(dep, consumer_label)
         libraries.extend(dep.get("transitive_android_native_libraries") or [])
         libraries.extend(dep.get("android_native_libraries") or [])
     return _android_unique_native_libraries(libraries)
@@ -495,6 +505,7 @@ def _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_comp
         argv.extend(["-A", dir])
     prepare_path(r_src_dir, kind = "remove", identifier = "android_resource_link_clean:" + label_id)
     prepare_path(r_src_dir, kind = "directory", identifier = "android_resource_link_prepare:" + label_id)
+    write_path(r_txt, "")
     run_action(
         argv = argv,
         inputs = _unique([manifest] + compiled_zips + dep_compiled_zips + asset_files),
@@ -511,10 +522,56 @@ def _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_comp
     )
     return (resource_apk, r_src_dir, r_src_hash, r_txt)
 
+def _android_java_source_list_tool_source():
+    return """import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.stream.Stream;
+
+public final class OnceAndroidJavaSourceList {
+  public static void main(String[] args) throws Exception {
+    Path baseList = Paths.get(args[0]);
+    Path generatedRoot = Paths.get(args[1]);
+    Path output = Paths.get(args[2]);
+    List<String> sources = new ArrayList<>();
+    if (Files.isRegularFile(baseList)) {
+      for (String line : Files.readAllLines(baseList, StandardCharsets.UTF_8)) {
+        String trimmed = line.trim();
+        if (!trimmed.isEmpty()) {
+          sources.add(trimmed);
+        }
+      }
+    }
+    if (Files.isDirectory(generatedRoot)) {
+      try (Stream<Path> stream = Files.walk(generatedRoot)) {
+        stream
+            .filter(Files::isRegularFile)
+            .map(Path::toString)
+            .filter(path -> path.endsWith(".java"))
+            .sorted()
+            .forEach(sources::add);
+      }
+    }
+    LinkedHashSet<String> unique = new LinkedHashSet<>(sources);
+    Path parent = output.getParent();
+    if (parent != null) {
+      Files.createDirectories(parent);
+    }
+    Files.write(output, unique, StandardCharsets.UTF_8);
+  }
+}
+"""
+
 def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars):
     classes_dir = declare_output("java_classes")
     classes_hash = declare_output("classes.sha256")
     source_list = declare_output("java_sources.list")
+    base_source_list = declare_output("java_sources.base.list")
+    source_list_tool = declare_output("java_source_list_tool/OnceAndroidJavaSourceList.java")
     classpath_entries = _unique([tools["android_jar"]] + dep_jars)
     classpath = _android_classpath_sep().join(classpath_entries)
     source_level = str(_android_attr(attrs, "java_language_level", "17"))
@@ -533,7 +590,16 @@ def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash
         sources_to_compile.append(r_java)
     prepare_path(classes_dir, kind = "remove", identifier = "android_java_clean:" + ctx["label"]["id"])
     prepare_path(classes_dir, kind = "directory", identifier = "android_java_prepare:" + ctx["label"]["id"])
-    write_path(source_list, "\n".join(sources_to_compile) + "\n")
+    write_path(base_source_list, "\n".join(java_sources) + "\n")
+    write_path(source_list_tool, _android_java_source_list_tool_source())
+    run_action(
+        argv = [tools["java"], source_list_tool, base_source_list, r_src_dir, source_list],
+        inputs = [source_list_tool, base_source_list, r_src_hash],
+        outputs = [source_list],
+        env = _android_env(tools),
+        toolchain_identity = tools["identity"] + "\x00java_source_list.v1",
+        identifier = "android_java_source_list:" + ctx["label"]["id"],
+    )
     if len(sources_to_compile) > 0:
         run_action(
             argv = base_args + ["@" + source_list],
@@ -866,7 +932,7 @@ def _android_library_impl(ctx):
     dep_resource_apks = _android_resource_apks(ctx["deps"])
     dep_asset_roots = _android_asset_roots_from_deps(ctx["deps"])
     dep_asset_files = _android_asset_files_from_deps(ctx["deps"])
-    dep_native_libraries = _android_native_libraries(ctx["deps"])
+    dep_native_libraries = _android_native_libraries(ctx["deps"], ctx["label"]["id"])
     compiled_zips = _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
     resource_apk, r_src_dir, r_src_hash, r_txt = _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, True, [], [])
     classes_dir, classes_hash = _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars)
@@ -918,7 +984,7 @@ def _android_binary_impl(ctx):
     runtime_jars = _android_runtime_jars(ctx["deps"])
     dep_asset_roots = _android_asset_roots_from_deps(ctx["deps"])
     dep_asset_files = _android_asset_files_from_deps(ctx["deps"])
-    native_libraries = _android_native_libraries(ctx["deps"])
+    native_libraries = _android_native_libraries(ctx["deps"], ctx["label"]["id"])
     compiled_zips = _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
     resource_apk, r_src_dir, r_src_hash, _ = _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, False, _unique(asset_roots + dep_asset_roots), _unique(asset_files + dep_asset_files))
     classes_dir, classes_hash = _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars)
@@ -1018,7 +1084,7 @@ android_library = target_kind(
         attr("proguard_specs", "list<string>", default = "[]", docs = "Reserved for consumer ProGuard specs.", configurable = False),
     ],
     deps = [
-        dep("deps", ["android_library", "android_resource", "android_native_library", "native_linkable"], "Android libraries, resources, and native libraries consumed by this library."),
+        dep("deps", ["android_library", "android_resource", "android_native_library"], "Android libraries, resources, and native libraries consumed by this library."),
     ],
     providers = ["android_library", "android_archive", "java_library"],
     capabilities = [capability("build", ["default", "jar", "aar", "resources"])],
@@ -1058,7 +1124,7 @@ android_binary = target_kind(
         attr("native_target", "target", docs = "Reserved for native Android split support.", configurable = False),
     ],
     deps = [
-        dep("deps", ["android_library", "android_resource", "android_native_library", "native_linkable"], "Android libraries, resources, and native shared libraries packaged into the APK."),
+        dep("deps", ["android_library", "android_resource", "android_native_library"], "Android libraries, resources, and native shared libraries packaged into the APK."),
     ],
     providers = ["android_application", "android_apk"],
     capabilities = [
