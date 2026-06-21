@@ -2587,7 +2587,9 @@ fn prelude_ios_simulator_selection_helper_feeds_run_and_test_scripts() {
     // mentioned in a comment or docstring and so the definition
     // doesn't need to be subtracted out.
     assert_eq!(
-        source.matches("def _ios_simulator_selection_script(").count(),
+        source
+            .matches("def _ios_simulator_selection_script(")
+            .count(),
         1,
         "expected exactly one definition of _ios_simulator_selection_script"
     );
@@ -2702,10 +2704,16 @@ result = repr([
 "#
     );
     let out = eval_prelude_source_to_repr(source).unwrap();
-    assert!(out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"), "{out}");
+    assert!(
+        out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"),
+        "{out}"
+    );
     assert!(out.contains("/opt/Xcode/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"), "{out}");
     assert!(out.contains("\"iphonesimulator\""), "{out}");
-    assert!(out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""), "{out}");
+    assert!(
+        out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""),
+        "{out}"
+    );
     assert!(out.contains("True"), "identity prefix should match: {out}");
 }
 
@@ -2737,37 +2745,51 @@ result = repr([
 "#
     );
     let out = eval_prelude_source_to_repr(source).unwrap();
-    assert!(out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang\""), "{out}");
-    assert!(out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"), "{out}");
-    assert!(out.contains("/opt/Xcode/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"), "{out}");
+    assert!(
+        out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang\""),
+        "{out}"
+    );
+    assert!(
+        out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "/opt/Xcode/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+        ),
+        "{out}"
+    );
     assert!(out.contains("\"iphoneos\""), "{out}");
 }
 
-/// codesign is a system tool, not part of the developer dir. We
-/// resolve it via PATH so a custom install is honored instead of a
-/// hardcoded `/usr/bin/codesign`; xcrun is never involved, so the
-/// action argv stays stable regardless of which Xcode the user
-/// pinned.
+/// codesign is a system tool, not part of the developer dir. Direct
+/// mode resolves it through xcrun instead of the shell search path,
+/// so signing actions do not pick up a replacement.
 #[test]
-fn prelude_resolve_codesign_uses_path() {
+fn prelude_resolve_codesign_direct_mode_uses_xcrun_find() {
     let prelude = apple_prelude_source();
     let source = format!(
         r#"{prelude}
 def host_which(name):
-    if name == "codesign":
-        return "/opt/local/bin/codesign"
+    if name == "xcrun":
+        return "/usr/bin/xcrun"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None):
-    fail("host_command must not be called when resolving codesign")
+    if argv == ["/usr/bin/xcrun", "--find", "codesign"] and env == {{"DEVELOPER_DIR": "/opt/Xcode/Developer"}}:
+        return "/usr/bin/codesign\n"
+    fail("unexpected host_command: " + str(argv) + " env=" + str(env))
 
 codesign = _resolve_codesign("/opt/Xcode/Developer")
 result = repr([codesign["codesign_path"], codesign["env"]])
 "#
     );
     let out = eval_prelude_source_to_repr(source).unwrap();
-    assert!(out.contains("/opt/local/bin/codesign"), "{out}");
-    assert!(out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""), "{out}");
+    assert!(out.contains("/usr/bin/codesign"), "{out}");
+    assert!(
+        out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""),
+        "{out}"
+    );
 }
 
 /// The xcrun fallback path is what every macOS user hits today
@@ -2805,8 +2827,14 @@ result = repr([
 "#
     );
     let out = eval_prelude_source_to_repr(source).unwrap();
-    assert!(!out.contains("/usr/bin/xcrun"), "fallback argv must not include xcrun: {out}");
-    assert!(out.contains("XcodeDefault.xctoolchain/usr/bin/swiftc"), "{out}");
+    assert!(
+        !out.contains("/usr/bin/xcrun"),
+        "fallback argv must not include xcrun: {out}"
+    );
+    assert!(
+        out.contains("XcodeDefault.xctoolchain/usr/bin/swiftc"),
+        "{out}"
+    );
     assert!(out.contains("iPhoneSimulator.sdk"), "{out}");
     // No developer dir was configured, so the action env stays empty.
     assert!(out.contains("{}"), "{out}");
@@ -2903,7 +2931,10 @@ result = repr([
         out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/libtool"),
         "{out}"
     );
-    assert!(out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""), "{out}");
+    assert!(
+        out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""),
+        "{out}"
+    );
     assert!(out.contains("True"), "identity prefix should match: {out}");
 }
 
@@ -2935,9 +2966,18 @@ result = repr([
 "#
     );
     let out = eval_prelude_source_to_repr(source).unwrap();
-    assert!(!out.contains("/usr/bin/xcrun"), "fallback argv must not include xcrun: {out}");
-    assert!(out.contains("XcodeDefault.xctoolchain/usr/bin/libtool"), "{out}");
-    assert!(out.contains("{}"), "no developer dir means an empty action env: {out}");
+    assert!(
+        !out.contains("/usr/bin/xcrun"),
+        "fallback argv must not include xcrun: {out}"
+    );
+    assert!(
+        out.contains("XcodeDefault.xctoolchain/usr/bin/libtool"),
+        "{out}"
+    );
+    assert!(
+        out.contains("{}"),
+        "no developer dir means an empty action env: {out}"
+    );
 }
 
 /// Direct-mode lipo resolution mirrors libtool: it resolves the
@@ -2968,7 +3008,10 @@ result = repr([
         out.contains("/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo"),
         "{out}"
     );
-    assert!(out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""), "{out}");
+    assert!(
+        out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""),
+        "{out}"
+    );
     assert!(out.contains("True"), "identity prefix should match: {out}");
 }
 
@@ -3000,9 +3043,18 @@ result = repr([
 "#
     );
     let out = eval_prelude_source_to_repr(source).unwrap();
-    assert!(!out.contains("/usr/bin/xcrun"), "fallback argv must not include xcrun: {out}");
-    assert!(out.contains("XcodeDefault.xctoolchain/usr/bin/lipo"), "{out}");
-    assert!(out.contains("{}"), "no developer dir means an empty action env: {out}");
+    assert!(
+        !out.contains("/usr/bin/xcrun"),
+        "fallback argv must not include xcrun: {out}"
+    );
+    assert!(
+        out.contains("XcodeDefault.xctoolchain/usr/bin/lipo"),
+        "{out}"
+    );
+    assert!(
+        out.contains("{}"),
+        "no developer dir means an empty action env: {out}"
+    );
 }
 
 /// End-to-end direct-mode sanity check: building an `apple_library`

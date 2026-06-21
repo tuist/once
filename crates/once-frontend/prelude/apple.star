@@ -231,16 +231,11 @@ def _resolve_lipo(platform, sdk_variant, xcode_developer_dir):
 
 def _resolve_codesign(xcode_developer_dir):
     env = _developer_env(xcode_developer_dir)
-    # codesign isn't under DEVELOPER_DIR; it's a system tool. Resolve it
-    # via PATH so a custom install (different macOS version, custom
-    # image, PATH-managed environment) is honored instead of hardcoding
-    # /usr/bin/codesign. The xcrun fallback uses `--find` for the same
-    # reason: it doesn't require codesign to live at the standard path.
-    if xcode_developer_dir:
-        codesign_path = host_which("codesign")
-    else:
-        xcrun = host_which("xcrun")
-        codesign_path = host_command([xcrun, "--find", "codesign"], env = env).strip()
+    # codesign is a system tool, not a toolchain binary under
+    # DEVELOPER_DIR. Resolve it through xcrun so signing does not
+    # depend on a shell search path replacement.
+    xcrun = host_which("xcrun")
+    codesign_path = host_command([xcrun, "--find", "codesign"], env = env).strip()
     identity = "once.apple.codesign.v1\x00" + codesign_path + "\x00" + (xcode_developer_dir or "")
     return {
         "codesign_path": codesign_path,
