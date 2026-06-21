@@ -213,6 +213,15 @@ def _rust_response_file_args(ctx, args, name):
     # its dependency graph. Route the full argument list through a rustc
     # response file so only `@path` ends up on the command line. Other hosts
     # have generous limits, so the arguments stay inline there.
+    #
+    # The routing is intentionally unconditional on Windows rather than gated on
+    # an estimated argv length. Estimating the command line length is fragile
+    # (it has to account for quoting and process startup overhead, and getting
+    # it wrong reintroduces the spawn failure this guards against), while the
+    # cost of always routing is one small file write per compile. It does not
+    # grow the action cache surface either: the arguments already participate in
+    # the action digest, just by way of the response file contents instead of
+    # the inline argv.
     if host_os() != "windows" or not args:
         return args
     path = _rust_build_dir(ctx) + "/" + _rust_declared_output(ctx, name)
