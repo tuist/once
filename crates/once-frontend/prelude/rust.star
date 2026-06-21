@@ -17,6 +17,9 @@ def _rust_metadata_suffix(ctx):
 def _rust_build_dir(ctx):
     return ctx.get("build_dir") or (".once/out/" + ctx["label"]["id"])
 
+def _rust_scratch_dir(ctx):
+    return ctx.get("scratch_dir") or (".once/tmp/analysis/" + ctx["label"]["id"])
+
 def _crate_name_from_label(ctx):
     return ctx["label"]["name"].replace("-", "_").replace(".", "_")
 
@@ -224,7 +227,7 @@ def _rust_response_file_args(ctx, args, name):
     # the inline argv.
     if host_os() != "windows" or not args:
         return args
-    path = _rust_build_dir(ctx) + "/" + _rust_declared_output(ctx, name)
+    path = _rust_scratch_dir(ctx) + "/" + _rust_declared_output(ctx, name)
     return [
         cmd_args(
             args = args,
@@ -676,13 +679,13 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
         "--crate-type", "bin",
         "--edition", edition,
         "-C", "metadata=" + _rust_metadata_suffix(ctx) + "_BUILD",
-        script_path,
         "-o", runner,
     ]
     compile_args.extend(feature_flags)
     compile_args.extend(_rust_cap_lints(ctx))
     compile_args.extend(dep_args)
     compile_args.extend(linker_args)
+    compile_args.append(script_path)
     compile_argv = [rustc] + _rust_response_file_args(ctx, compile_args, "build-script-rustc.rsp")
     build_script_compile_env = _rust_compile_action_env(ctx, host_triple, host_triple)
     run_action(
@@ -985,7 +988,6 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "--crate-type", crate_type,
         "--edition", edition,
         "-C", "metadata=" + _rust_metadata_suffix(ctx),
-        crate_root,
         "-o", output,
     ]
     rustc_args.extend(_rust_target_args(target))
@@ -996,6 +998,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     rustc_args.extend(dep_args)
     rustc_args.extend(linker_args)
     rustc_args.extend(_rust_linker_flags(ctx))
+    rustc_args.append(crate_root)
     argv = [rustc] + _rust_response_file_args(ctx, rustc_args, "rustc.rsp")
     if build_stdout:
         wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout)

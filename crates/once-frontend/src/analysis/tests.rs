@@ -652,7 +652,7 @@ def _demo_impl(ctx):
         outputs = [out],
         identifier = "demo_build",
     )
-    return {"out": out}
+    return {"out": out, "scratch": ctx["scratch_dir"]}
 
 demo_kind = target_kind(
     docs = "Demo",
@@ -678,6 +678,10 @@ demo_kind = target_kind(
     assert_eq!(
         result.provider["out"],
         ".once/out/apps/ios/Sample/hello.txt"
+    );
+    assert_eq!(
+        result.provider["scratch"],
+        ".once/tmp/analysis/apps/ios/Sample"
     );
 }
 

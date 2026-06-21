@@ -167,6 +167,7 @@ fn analyze_target_with_host_cache(
     capability: &str,
 ) -> Result<AnalysisResult> {
     let build_dir = format!(".once/out/{}", target.label.id);
+    let scratch_dir = format!(".once/tmp/analysis/{}", target.label.id);
     let store = AnalysisStore::with_host_cache(
         workspace_root.to_path_buf(),
         target.label.package.clone(),
@@ -181,6 +182,7 @@ fn analyze_target_with_host_cache(
             target,
             dep_providers,
             &build_dir,
+            &scratch_dir,
             capability,
         )
     });
@@ -236,6 +238,7 @@ fn analyze_in_starlark(
     target: &GraphTarget,
     dep_providers: &[JsonValue],
     build_dir: &str,
+    scratch_dir: &str,
     capability: &str,
 ) -> Result<JsonValue> {
     Module::with_temp_heap(|module| {
@@ -250,7 +253,14 @@ fn analyze_in_starlark(
         let Some(impl_value) = impl_value else {
             return Ok(JsonValue::Null);
         };
-        let ctx = build_ctx(&eval, target, dep_providers, build_dir, capability);
+        let ctx = build_ctx(
+            &eval,
+            target,
+            dep_providers,
+            build_dir,
+            scratch_dir,
+            capability,
+        );
         let provider = eval
             .eval_function(impl_value, &[ctx], &[])
             .map_err(|error| anyhow!("impl eval failed for {}: {error:?}", target.label.id))?;
@@ -285,6 +295,7 @@ fn build_ctx<'v>(
     target: &GraphTarget,
     dep_providers: &[JsonValue],
     build_dir: &str,
+    scratch_dir: &str,
     capability: &str,
 ) -> Value<'v> {
     let heap = eval.heap();
@@ -311,6 +322,7 @@ fn build_ctx<'v>(
         ("srcs", srcs_value),
         ("deps", deps),
         ("build_dir", heap.alloc(build_dir.to_string())),
+        ("scratch_dir", heap.alloc(scratch_dir.to_string())),
         ("capability", heap.alloc(capability.to_string())),
     ]))
 }

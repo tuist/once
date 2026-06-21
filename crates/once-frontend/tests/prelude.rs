@@ -1960,17 +1960,17 @@ result = repr("ok")
     assert!(rustc
         .argv
         .iter()
-        .any(|arg| arg == "@.once/out/crates/app/app/rustc.rsp"));
+        .any(|arg| arg == "@.once/tmp/analysis/crates/app/app/rustc.rsp"));
     assert!(!rustc
         .inputs
         .iter()
-        .any(|input| input == ".once/out/crates/app/app/rustc.rsp"));
+        .any(|input| input == ".once/tmp/analysis/crates/app/app/rustc.rsp"));
     // Only the toolchain and the response-file reference remain on the command
     // line; everything else is written to the response file.
     assert_eq!(rustc.argv.len(), 2);
     assert_eq!(rustc.arg_files.len(), 1);
     let arg_file = &rustc.arg_files[0];
-    assert_eq!(arg_file.path, ".once/out/crates/app/app/rustc.rsp");
+    assert_eq!(arg_file.path, ".once/tmp/analysis/crates/app/app/rustc.rsp");
     assert_eq!(arg_file.format, DeclaredArgFileFormat::RustcResponse);
     assert!(arg_file.args.len() > 400);
     // The full rustc invocation, not just feature cfgs, is routed through the
@@ -2100,7 +2100,11 @@ ctx = {{
         "target": "x86_64-pc-windows-msvc",
         "crate_root": "src/lib.rs",
     }},
-    "deps": [],
+    "deps": [{{
+        "label_id": "crates/dep/dep",
+        "crate_name": "dep",
+        "rlib": ".once/out/crates/dep/dep/libdep.rlib",
+    }}],
     "srcs": ["src/**/*.rs"],
 }}
 _rust_compile(ctx, "rlib", "src/lib.rs", "libapp.rlib")
@@ -2123,14 +2127,34 @@ result = repr("ok")
         rustc
             .argv
             .iter()
-            .any(|arg| arg == "@.once/out/crates/app/app/rustc.rsp"),
+            .any(|arg| arg == "@.once/tmp/analysis/crates/app/app/rustc.rsp"),
         "{:?}",
         rustc.argv
     );
     assert_eq!(rustc.arg_files.len(), 1);
     let arg_file = &rustc.arg_files[0];
-    assert_eq!(arg_file.path, ".once/out/crates/app/app/rustc.rsp");
+    assert_eq!(arg_file.path, ".once/tmp/analysis/crates/app/app/rustc.rsp");
     assert!(arg_file.args.iter().any(|arg| arg == "--crate-name"));
+    let extern_arg = "--extern=dep=.once/out/crates/dep/dep/libdep.rlib";
+    let extern_position = arg_file
+        .args
+        .iter()
+        .position(|arg| arg == extern_arg)
+        .expect("dependency extern flag");
+    let root_position = arg_file
+        .args
+        .iter()
+        .position(|arg| arg == "crates/app/src/lib.rs")
+        .expect("crate root");
+    assert!(
+        extern_position < root_position,
+        "dependency flags should precede the crate root: {:?}",
+        arg_file.args
+    );
+    assert_eq!(
+        arg_file.args.last().map(String::as_str),
+        Some("crates/app/src/lib.rs")
+    );
     assert!(
         !arg_file
             .args
