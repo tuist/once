@@ -165,6 +165,9 @@ An implementation receives `ctx` with generic graph data:
 - `ctx["deps"]`: provider records returned by analyzed dependencies.
 - `ctx["build_dir"]`: workspace-relative output directory for the
   target.
+- `ctx["scratch_dir"]`: workspace-relative scratch directory for
+  action-private helper files that are materialized before an action
+  runs but are not durable target outputs.
 - `ctx["capability"]`: active capability being analyzed.
 
 The implementation returns a JSON-shaped provider record. Downstream
@@ -198,7 +201,9 @@ The Rust executor exposes generic primitives only:
   `format` and `arg_format`. The supported `format` values are
   `line-delimited`, which writes one argument per line without shell
   escaping, and `rustc-response`, which writes one `rustc` argument per
-  line verbatim. `arg_format` defaults to `@{}` and must contain
+  line verbatim. The caller chooses `path`; use `ctx["scratch_dir"]`
+  for action-private helper files and `declare_output` for durable
+  target outputs. `arg_format` defaults to `@{}` and must contain
   exactly one `{}` placeholder.
 - `run_action(...)` records a command action for the executor.
 - `write_path(path, content)` materializes generated text or byte-list

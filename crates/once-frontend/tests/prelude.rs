@@ -1960,17 +1960,17 @@ result = repr("ok")
     assert!(rustc
         .argv
         .iter()
-        .any(|arg| arg == "@.once/out/crates/app/app/rustc.rsp"));
+        .any(|arg| arg == "@.once/tmp/analysis/crates/app/app/rustc.rsp"));
     assert!(!rustc
         .inputs
         .iter()
-        .any(|input| input == ".once/out/crates/app/app/rustc.rsp"));
+        .any(|input| input == ".once/tmp/analysis/crates/app/app/rustc.rsp"));
     // Only the toolchain and the response-file reference remain on the command
     // line; everything else is written to the response file.
     assert_eq!(rustc.argv.len(), 2);
     assert_eq!(rustc.arg_files.len(), 1);
     let arg_file = &rustc.arg_files[0];
-    assert_eq!(arg_file.path, ".once/out/crates/app/app/rustc.rsp");
+    assert_eq!(arg_file.path, ".once/tmp/analysis/crates/app/app/rustc.rsp");
     assert_eq!(arg_file.format, DeclaredArgFileFormat::RustcResponse);
     assert!(arg_file.args.len() > 400);
     // The full rustc invocation, not just feature cfgs, is routed through the
@@ -2123,13 +2123,13 @@ result = repr("ok")
         rustc
             .argv
             .iter()
-            .any(|arg| arg == "@.once/out/crates/app/app/rustc.rsp"),
+            .any(|arg| arg == "@.once/tmp/analysis/crates/app/app/rustc.rsp"),
         "{:?}",
         rustc.argv
     );
     assert_eq!(rustc.arg_files.len(), 1);
     let arg_file = &rustc.arg_files[0];
-    assert_eq!(arg_file.path, ".once/out/crates/app/app/rustc.rsp");
+    assert_eq!(arg_file.path, ".once/tmp/analysis/crates/app/app/rustc.rsp");
     assert!(arg_file.args.iter().any(|arg| arg == "--crate-name"));
     assert!(
         !arg_file

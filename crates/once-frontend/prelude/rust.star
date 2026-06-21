@@ -17,6 +17,9 @@ def _rust_metadata_suffix(ctx):
 def _rust_build_dir(ctx):
     return ctx.get("build_dir") or (".once/out/" + ctx["label"]["id"])
 
+def _rust_scratch_dir(ctx):
+    return ctx.get("scratch_dir") or (".once/tmp/analysis/" + ctx["label"]["id"])
+
 def _crate_name_from_label(ctx):
     return ctx["label"]["name"].replace("-", "_").replace(".", "_")
 
@@ -224,7 +227,7 @@ def _rust_response_file_args(ctx, args, name):
     # the inline argv.
     if host_os() != "windows" or not args:
         return args
-    path = _rust_build_dir(ctx) + "/" + _rust_declared_output(ctx, name)
+    path = _rust_scratch_dir(ctx) + "/" + _rust_declared_output(ctx, name)
     return [
         cmd_args(
             args = args,
