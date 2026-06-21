@@ -1960,16 +1960,22 @@ result = repr("ok")
     assert!(rustc
         .argv
         .iter()
-        .any(|arg| arg == "@.once/out/crates/app/app/rustc-features.rsp"));
+        .any(|arg| arg == "@.once/out/crates/app/app/rustc.rsp"));
     assert!(!rustc
         .inputs
         .iter()
-        .any(|input| input == ".once/out/crates/app/app/rustc-features.rsp"));
+        .any(|input| input == ".once/out/crates/app/app/rustc.rsp"));
+    // Only the toolchain and the response-file reference remain on the command
+    // line; everything else is written to the response file.
+    assert_eq!(rustc.argv.len(), 2);
     assert_eq!(rustc.arg_files.len(), 1);
     let arg_file = &rustc.arg_files[0];
-    assert_eq!(arg_file.path, ".once/out/crates/app/app/rustc-features.rsp");
+    assert_eq!(arg_file.path, ".once/out/crates/app/app/rustc.rsp");
     assert_eq!(arg_file.format, DeclaredArgFileFormat::RustcResponse);
     assert!(arg_file.args.len() > 400);
+    // The full rustc invocation, not just feature cfgs, is routed through the
+    // response file so the command line cannot exceed the Windows limit.
+    assert!(arg_file.args.iter().any(|arg| arg == "--crate-name"));
     assert!(arg_file
         .args
         .iter()
@@ -2065,7 +2071,7 @@ result = repr("ok")
 }
 
 #[test]
-fn prelude_rust_empty_feature_list_emits_no_response_file() {
+fn prelude_rust_windows_routes_invocation_through_response_file_without_features() {
     let prelude = all_prelude_source();
     let source = format!(
         r#"{prelude}
@@ -2110,18 +2116,28 @@ result = repr("ok")
     assert_eq!(store.actions.len(), 1);
     let rustc = &store.actions[0];
     assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
+    // On Windows the invocation is always routed through a response file, even
+    // when the crate has no features, because the command line still carries
+    // the crate metadata, source, and dependency flags.
     assert!(
-        !rustc.argv.iter().any(|arg| arg.starts_with('@')),
+        rustc
+            .argv
+            .iter()
+            .any(|arg| arg == "@.once/out/crates/app/app/rustc.rsp"),
         "{:?}",
         rustc.argv
     );
+    assert_eq!(rustc.arg_files.len(), 1);
+    let arg_file = &rustc.arg_files[0];
+    assert_eq!(arg_file.path, ".once/out/crates/app/app/rustc.rsp");
+    assert!(arg_file.args.iter().any(|arg| arg == "--crate-name"));
     assert!(
-        !rustc
-            .argv
+        !arg_file
+            .args
             .iter()
             .any(|arg| arg.starts_with("--cfg=feature=")),
         "{:?}",
-        rustc.argv
+        arg_file.args
     );
 }
 
