@@ -82,22 +82,85 @@ def _apple_triple(platform, minimum_os, sdk_variant, arch, mac_catalyst):
     suffix = _apple_triple_suffix(platform, sdk_variant)
     return arch + "-apple-" + triple_os + minimum_os + suffix
 
-def _xcrun_env(xcode_developer_dir):
+def _developer_env(xcode_developer_dir):
     env = {}
     if xcode_developer_dir:
         env["DEVELOPER_DIR"] = xcode_developer_dir
     return env
 
-def _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir):
-    xcrun = host_which("xcrun")
+# When a target sets `xcode_developer_dir`, the build resolves tools and
+# SDK paths directly from the layout under that directory rather than
+# shelling out to `xcrun`. The xcrun fallback still applies when no
+# developer dir is configured.
+_XCTOOLCHAIN_BIN_REL = "Toolchains/XcodeDefault.xctoolchain/usr/bin"
+
+_SDK_PATH_REL = {
+    "macosx": "Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+    "iphoneos": "Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk",
+    "iphonesimulator": "Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk",
+    "appletvos": "Platforms/AppleTVOS.platform/Developer/SDKs/AppleTVOS.sdk",
+    "appletvsimulator": "Platforms/AppleTVSimulator.platform/Developer/SDKs/AppleTVSimulator.sdk",
+    "watchos": "Platforms/WatchOS.platform/Developer/SDKs/WatchOS.sdk",
+    "watchsimulator": "Platforms/WatchSimulator.platform/Developer/SDKs/WatchSimulator.sdk",
+    "xros": "Platforms/XROS.platform/Developer/SDKs/XROS.sdk",
+    "xrsimulator": "Platforms/XRSimulator.platform/Developer/SDKs/XRSimulator.sdk",
+}
+
+_PLATFORM_PATH_REL = {
+    "macosx": "Platforms/MacOSX.platform",
+    "iphoneos": "Platforms/iPhoneOS.platform",
+    "iphonesimulator": "Platforms/iPhoneSimulator.platform",
+    "appletvos": "Platforms/AppleTVOS.platform",
+    "appletvsimulator": "Platforms/AppleTVSimulator.platform",
+    "watchos": "Platforms/WatchOS.platform",
+    "watchsimulator": "Platforms/WatchSimulator.platform",
+    "xros": "Platforms/XROS.platform",
+    "xrsimulator": "Platforms/XRSimulator.platform",
+}
+
+def _developer_sdk_path(xcode_developer_dir, sdk_name):
+    rel = _SDK_PATH_REL.get(sdk_name)
+    if not rel:
+        fail("no SDK layout entry for `" + sdk_name + "`; add it to _SDK_PATH_REL")
+    return xcode_developer_dir + "/" + rel
+
+def _developer_platform_path(xcode_developer_dir, sdk_name):
+    rel = _PLATFORM_PATH_REL.get(sdk_name)
+    if not rel:
+        fail("no platform layout entry for `" + sdk_name + "`; add it to _PLATFORM_PATH_REL")
+    return xcode_developer_dir + "/" + rel
+
+def _xctoolchain_bin(xcode_developer_dir, name):
+    return xcode_developer_dir + "/" + _XCTOOLCHAIN_BIN_REL + "/" + name
+
+# Resolves a build tool and the active SDK path to absolute file paths.
+# Returns a dict so the action helper can invoke the tool directly
+# (`[tool_path, ...flags]`) instead of going through `xcrun --sdk X
+# <tool>`. Direct mode skips `xcrun` entirely; the fallback still uses
+# `xcrun --find` / `--show-sdk-path` for discovery but the cached
+# action argv contains only the resolved tool path.
+def _resolve_swiftc(platform, sdk_variant, xcode_developer_dir):
     sdk = _apple_sdk_name(platform, sdk_variant)
-    env = _xcrun_env(xcode_developer_dir)
-    swiftc_path = host_command([xcrun, "--sdk", sdk, "--find", "swiftc"], env = env).strip()
-    version = host_command([xcrun, "--sdk", sdk, "swiftc", "--version"], env = env).strip()
-    # Identity also folds in the developer dir override so different
-    # Xcode installations partition the action cache cleanly.
+    env = _developer_env(xcode_developer_dir)
+    if xcode_developer_dir:
+        swiftc_path = _xctoolchain_bin(xcode_developer_dir, "swiftc")
+        sdk_path = _developer_sdk_path(xcode_developer_dir, sdk)
+    else:
+        xcrun = host_which("xcrun")
+        swiftc_path = host_command([xcrun, "--sdk", sdk, "--find", "swiftc"], env = env).strip()
+        sdk_path = host_command([xcrun, "--sdk", sdk, "--show-sdk-path"], env = env).strip()
+    version = host_command([swiftc_path, "--version"], env = env).strip()
+    # Identity folds in the developer dir override so different Xcode
+    # installations partition the action cache cleanly.
     identity = "once.apple.swiftc.v1\x00" + swiftc_path + "\x00" + version + "\x00" + (xcode_developer_dir or "")
-    return (xcrun, sdk, identity, env)
+    return {
+        "argv": [swiftc_path, "-sdk", sdk_path],
+        "swiftc_path": swiftc_path,
+        "sdk_name": sdk,
+        "sdk_path": sdk_path,
+        "identity": identity,
+        "env": env,
+    }
 
 def _filter_swift_sources(paths):
     return _filter_by_extensions(paths, [".swift"])
@@ -111,53 +174,81 @@ def _filter_c_sources(paths):
 def _filter_cxx_sources(paths):
     return _filter_by_extensions(paths, [".cc", ".cpp", ".cxx"])
 
-def _xcrun_clang(platform, sdk_variant, xcode_developer_dir):
-    xcrun = host_which("xcrun")
+def _resolve_clang(platform, sdk_variant, xcode_developer_dir):
     sdk = _apple_sdk_name(platform, sdk_variant)
-    env = _xcrun_env(xcode_developer_dir)
-    clang_path = host_command([xcrun, "--sdk", sdk, "--find", "clang"], env = env).strip()
-    sdk_path = host_command([xcrun, "--sdk", sdk, "--show-sdk-path"], env = env).strip()
-    version = host_command([xcrun, "--sdk", sdk, "clang", "--version"], env = env).strip()
+    env = _developer_env(xcode_developer_dir)
+    if xcode_developer_dir:
+        clang_path = _xctoolchain_bin(xcode_developer_dir, "clang")
+        clangxx_path = _xctoolchain_bin(xcode_developer_dir, "clang++")
+        sdk_path = _developer_sdk_path(xcode_developer_dir, sdk)
+    else:
+        xcrun = host_which("xcrun")
+        clang_path = host_command([xcrun, "--sdk", sdk, "--find", "clang"], env = env).strip()
+        clangxx_path = host_command([xcrun, "--sdk", sdk, "--find", "clang++"], env = env).strip()
+        sdk_path = host_command([xcrun, "--sdk", sdk, "--show-sdk-path"], env = env).strip()
+    version = host_command([clang_path, "--version"], env = env).strip()
     identity = "once.apple.clang.v1\x00" + clang_path + "\x00" + version + "\x00" + (xcode_developer_dir or "")
-    return (xcrun, sdk, sdk_path, identity, env)
+    return {
+        "clang_path": clang_path,
+        "clangxx_path": clangxx_path,
+        "sdk_name": sdk,
+        "sdk_path": sdk_path,
+        "identity": identity,
+        "env": env,
+    }
 
-def _xcrun_libtool(platform, sdk_variant, xcode_developer_dir):
-    xcrun = host_which("xcrun")
+def _resolve_libtool(platform, sdk_variant, xcode_developer_dir):
     sdk = _apple_sdk_name(platform, sdk_variant)
-    env = _xcrun_env(xcode_developer_dir)
-    libtool_path = host_command([xcrun, "--sdk", sdk, "--find", "libtool"], env = env).strip()
+    env = _developer_env(xcode_developer_dir)
+    if xcode_developer_dir:
+        libtool_path = _xctoolchain_bin(xcode_developer_dir, "libtool")
+    else:
+        xcrun = host_which("xcrun")
+        libtool_path = host_command([xcrun, "--sdk", sdk, "--find", "libtool"], env = env).strip()
     identity = "once.apple.libtool.v1\x00" + libtool_path + "\x00" + (xcode_developer_dir or "")
-    return (xcrun, sdk, identity, env)
+    return {
+        "argv": [libtool_path],
+        "libtool_path": libtool_path,
+        "identity": identity,
+        "env": env,
+    }
 
-def _xcrun_lipo(platform, sdk_variant, xcode_developer_dir):
-    xcrun = host_which("xcrun")
+def _resolve_lipo(platform, sdk_variant, xcode_developer_dir):
     sdk = _apple_sdk_name(platform, sdk_variant)
-    env = _xcrun_env(xcode_developer_dir)
-    lipo_path = host_command([xcrun, "--sdk", sdk, "--find", "lipo"], env = env).strip()
+    env = _developer_env(xcode_developer_dir)
+    if xcode_developer_dir:
+        lipo_path = _xctoolchain_bin(xcode_developer_dir, "lipo")
+    else:
+        xcrun = host_which("xcrun")
+        lipo_path = host_command([xcrun, "--sdk", sdk, "--find", "lipo"], env = env).strip()
     identity = "once.apple.lipo.v1\x00" + lipo_path + "\x00" + (xcode_developer_dir or "")
-    return (xcrun, sdk, identity, env)
+    return {
+        "argv": [lipo_path],
+        "lipo_path": lipo_path,
+        "identity": identity,
+        "env": env,
+    }
 
-def _xcrun_codesign(xcode_developer_dir):
+def _resolve_codesign(xcode_developer_dir):
+    env = _developer_env(xcode_developer_dir)
+    # codesign is a system tool, not a toolchain binary under
+    # DEVELOPER_DIR. Resolve it through xcrun so signing does not
+    # depend on a shell search path replacement.
     xcrun = host_which("xcrun")
-    env = _xcrun_env(xcode_developer_dir)
     codesign_path = host_command([xcrun, "--find", "codesign"], env = env).strip()
     identity = "once.apple.codesign.v1\x00" + codesign_path + "\x00" + (xcode_developer_dir or "")
-    return (xcrun, codesign_path, identity, env)
+    return {
+        "codesign_path": codesign_path,
+        "identity": identity,
+        "env": env,
+    }
 
-def _swift_testing_macros_plugin(xcrun, xcrun_env):
-    swiftc_path = host_command([xcrun, "--find", "swiftc"], env = xcrun_env).strip()
+def _swift_testing_macros_plugin(swiftc_path):
     suffix = "/usr/bin/swiftc"
     if not _ends_with(swiftc_path, suffix):
         fail("unable to derive Swift toolchain path from swiftc at " + swiftc_path)
     toolchain_dir = swiftc_path[:len(swiftc_path) - len(suffix)]
     return toolchain_dir + "/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib"
-
-def _xcrun_actool(xcode_developer_dir):
-    xcrun = host_which("xcrun")
-    env = _xcrun_env(xcode_developer_dir)
-    actool_path = host_command([xcrun, "--find", "actool"], env = env).strip()
-    identity = "once.apple.actool.v1\x00" + actool_path + "\x00" + (xcode_developer_dir or "")
-    return (xcrun, actool_path, identity, env)
 
 def _unique_dirs(paths):
     seen = {}
@@ -769,7 +860,7 @@ def _apple_library_impl(ctx):
         fail("apple_library " + ctx["label"]["id"] + " sets mac_catalyst = true but platform = `" + platform + "`; mac_catalyst requires platform = macos")
     is_universal = len(archs) > 1
 
-    xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
+    swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
     archive = declare_output(module_name + ".a")
 
     deps = ctx["deps"]
@@ -931,11 +1022,7 @@ def _apple_library_impl(ctx):
         swift_archive = per_arch_archive if swift_only else (declare_output(module_name + "-swift" + arch_suffix + ".a") if len(swift_srcs) > 0 else "")
 
         if len(swift_srcs) > 0:
-            swift_base_argv = [
-                xcrun,
-                "--sdk",
-                sdk,
-                "swiftc",
+            swift_base_argv = list(swiftc["argv"]) + [
                 "-module-name",
                 module_name,
                 "-target",
@@ -1013,8 +1100,8 @@ def _apple_library_impl(ctx):
                 argv = swift_module_argv,
                 inputs = swift_inputs,
                 outputs = [swiftmodule, swiftdoc, swift_objc_header],
-                env = xcrun_env,
-                toolchain_identity = swiftc_identity,
+                env = swiftc["env"],
+                toolchain_identity = swiftc["identity"],
                 identifier = "swift_module_compile_" + module_name + arch_suffix,
             )
 
@@ -1027,14 +1114,14 @@ def _apple_library_impl(ctx):
                 argv = swift_archive_argv,
                 inputs = swift_inputs,
                 outputs = [swift_archive],
-                env = xcrun_env,
-                toolchain_identity = swiftc_identity,
+                env = swiftc["env"],
+                toolchain_identity = swiftc["identity"],
                 identifier = "swift_archive_compile_" + module_name + arch_suffix,
             )
 
         arch_clang_objects = []
         if len(objc_srcs) > 0 or len(c_srcs) > 0 or len(cxx_srcs) > 0:
-            clang_xcrun, clang_sdk, sdk_path, clang_identity, clang_env = _xcrun_clang(platform, sdk_variant, xcode_developer_dir)
+            clang = _resolve_clang(platform, sdk_variant, xcode_developer_dir)
 
             def compile_with_clang(src, language):
                 # Sanitise the source path into a stable .o filename
@@ -1044,17 +1131,14 @@ def _apple_library_impl(ctx):
                 sanitised = src.replace("/", "_")
                 obj = declare_output(sanitised + arch_suffix + ".o")
                 argv = [
-                    clang_xcrun,
-                    "--sdk",
-                    clang_sdk,
-                    "clang" if language != "c++" else "clang++",
+                    clang["clang_path"] if language != "c++" else clang["clangxx_path"],
                     "-c",
                     "-x",
                     language,
                     "-arch",
                     arch,
                     "-isysroot",
-                    sdk_path,
+                    clang["sdk_path"],
                     "-target",
                     triple,
                     "-o",
@@ -1091,8 +1175,8 @@ def _apple_library_impl(ctx):
                     argv = argv,
                     inputs = inputs,
                     outputs = [obj],
-                    env = clang_env,
-                    toolchain_identity = clang_identity,
+                    env = clang["env"],
+                    toolchain_identity = clang["identity"],
                     identifier = "clang_compile_" + module_name + arch_suffix + "_" + sanitised,
                 )
                 arch_clang_objects.append(obj)
@@ -1108,12 +1192,8 @@ def _apple_library_impl(ctx):
         # is at least one non-Swift input alongside Swift; Swift-only
         # and C-only libraries already wrote into per_arch_archive.
         if not swift_only and len(swift_srcs) > 0:
-            libtool_xcrun, libtool_sdk, libtool_identity, libtool_env = _xcrun_libtool(platform, sdk_variant, xcode_developer_dir)
-            libtool_argv = [
-                libtool_xcrun,
-                "--sdk",
-                libtool_sdk,
-                "libtool",
+            libtool = _resolve_libtool(platform, sdk_variant, xcode_developer_dir)
+            libtool_argv = list(libtool["argv"]) + [
                 "-static",
                 "-o",
                 per_arch_archive,
@@ -1126,20 +1206,20 @@ def _apple_library_impl(ctx):
                 argv = libtool_argv,
                 inputs = libtool_inputs,
                 outputs = [per_arch_archive],
-                env = libtool_env,
-                toolchain_identity = libtool_identity,
+                env = libtool["env"],
+                toolchain_identity = libtool["identity"],
                 identifier = "libtool_merge_" + module_name + arch_suffix,
             )
         elif len(swift_srcs) == 0 and len(arch_clang_objects) > 0:
-            libtool_xcrun, libtool_sdk, libtool_identity, libtool_env = _xcrun_libtool(platform, sdk_variant, xcode_developer_dir)
-            libtool_argv = [libtool_xcrun, "--sdk", libtool_sdk, "libtool", "-static", "-o", per_arch_archive]
+            libtool = _resolve_libtool(platform, sdk_variant, xcode_developer_dir)
+            libtool_argv = list(libtool["argv"]) + ["-static", "-o", per_arch_archive]
             libtool_argv.extend(arch_clang_objects)
             run_action(
                 argv = libtool_argv,
                 inputs = list(arch_clang_objects),
                 outputs = [per_arch_archive],
-                env = libtool_env,
-                toolchain_identity = libtool_identity,
+                env = libtool["env"],
+                toolchain_identity = libtool["identity"],
                 identifier = "libtool_archive_" + module_name + arch_suffix,
             )
 
@@ -1153,15 +1233,15 @@ def _apple_library_impl(ctx):
     # final fat archive. Single-arch builds skip this entirely; the
     # one per-arch archive already wrote into `archive` directly.
     if is_universal:
-        lipo_xcrun, lipo_sdk, lipo_identity, lipo_env = _xcrun_lipo(platform, sdk_variant, xcode_developer_dir)
-        lipo_argv = [lipo_xcrun, "--sdk", lipo_sdk, "lipo", "-create", "-output", archive]
+        lipo = _resolve_lipo(platform, sdk_variant, xcode_developer_dir)
+        lipo_argv = list(lipo["argv"]) + ["-create", "-output", archive]
         lipo_argv.extend(per_arch_archives)
         run_action(
             argv = lipo_argv,
             inputs = list(per_arch_archives),
             outputs = [archive],
-            env = lipo_env,
-            toolchain_identity = lipo_identity,
+            env = lipo["env"],
+            toolchain_identity = lipo["identity"],
             identifier = "lipo_" + module_name,
         )
 
@@ -1206,7 +1286,7 @@ def _swift_macro_impl(ctx):
     # Swift macros are host-loaded compiler plugins. They always build
     # for macOS in the simulator-equivalent SDK; macOS ignores the
     # variant anyway.
-    xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc("macos", "simulator", xcode_developer_dir)
+    swiftc = _resolve_swiftc("macos", "simulator", xcode_developer_dir)
     triple = _apple_triple("macos", minimum_os, "simulator", host_arch(), False)
 
     plugin_dylib = declare_output("lib" + module_name + ".dylib")
@@ -1239,11 +1319,7 @@ def _swift_macro_impl(ctx):
             if opt and opt not in dep_linkopts:
                 dep_linkopts.append(opt)
 
-    swift_argv = [
-        xcrun,
-        "--sdk",
-        sdk,
-        "swiftc",
+    swift_argv = list(swiftc["argv"]) + [
         "-emit-library",
         "-emit-module",
         "-module-name",
@@ -1280,8 +1356,8 @@ def _swift_macro_impl(ctx):
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [plugin_dylib, plugin_swiftmodule],
-        env = xcrun_env,
-        toolchain_identity = swiftc_identity,
+        env = swiftc["env"],
+        toolchain_identity = swiftc["identity"],
         identifier = "swift_macro_compile_" + module_name,
     )
 
@@ -1426,7 +1502,7 @@ def _apple_framework_impl(ctx):
     # lands in a follow-up; today the same machinery as `apple_library`
     # can be wired in but the demo path doesn't need it.
     arch = host_arch()
-    xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
+    swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
     triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
 
     framework_dir = product_name + ".framework"
@@ -1453,11 +1529,7 @@ def _apple_framework_impl(ctx):
         plugin_dylibs,
     ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
 
-    swift_argv = [
-        xcrun,
-        "--sdk",
-        sdk,
-        "swiftc",
+    swift_argv = list(swiftc["argv"]) + [
         "-emit-library",
         "-emit-module",
         "-module-name",
@@ -1527,8 +1599,8 @@ def _apple_framework_impl(ctx):
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [dylib, swiftmodule, swiftdoc],
-        env = xcrun_env,
-        toolchain_identity = swiftc_identity,
+        env = swiftc["env"],
+        toolchain_identity = swiftc["identity"],
         identifier = "apple_framework_compile_" + module_name,
     )
 
@@ -1553,14 +1625,14 @@ def _apple_framework_impl(ctx):
 
     # Ad-hoc codesign so iOS simulator's dyld accepts the dylib when
     # the embedding app loads it.
-    cs_xcrun, codesign_path, cs_identity, cs_env = _xcrun_codesign(xcode_developer_dir)
+    codesign = _resolve_codesign(xcode_developer_dir)
     cs_stamp = declare_output(framework_dir + "/_CodeSignature/CodeResources")
     run_action(
-        argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + framework_dir],
+        argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + framework_dir],
         inputs = [dylib, info_plist, modulemap, swiftmodule],
         outputs = [cs_stamp],
-        env = cs_env,
-        toolchain_identity = cs_identity,
+        env = codesign["env"],
+        toolchain_identity = codesign["identity"],
         identifier = "apple_framework_codesign_" + module_name,
     )
 
@@ -1666,7 +1738,7 @@ def _apple_application_impl(ctx):
         fail("apple_application " + ctx["label"]["id"] + " has no Swift sources (.swift)")
 
     arch = host_arch()
-    xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
+    swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
     triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
 
     app_dir = product_name + ".app"
@@ -1675,12 +1747,15 @@ def _apple_application_impl(ctx):
         run_dir = ctx["build_dir"] + "/run"
         run_record = run_dir + "/run.json"
         run_log = run_dir + "/run.log"
+        # simctl-based runners need `xcrun` on PATH at execution time;
+        # resolve it here so the build path stays xcrun-free.
+        runner_xcrun = host_which("xcrun") if platform == "ios" and sdk_variant == "simulator" else ""
         run_action(
-            argv = ["/bin/sh", "-c", _apple_application_run_script(ctx["label"]["id"], platform, sdk_variant, xcrun, app_path, bundle_id, run_dir, run_record, run_log)],
+            argv = ["/bin/sh", "-c", _apple_application_run_script(ctx["label"]["id"], platform, sdk_variant, runner_xcrun, app_path, bundle_id, run_dir, run_record, run_log)],
             outputs = [run_dir, run_record, run_log],
-            env = xcrun_env,
+            env = swiftc["env"],
             cacheable = False,
-            toolchain_identity = "once.apple.application.run.v1\x00" + swiftc_identity,
+            toolchain_identity = "once.apple.application.run.v1\x00" + swiftc["identity"],
             identifier = "apple_application_run_" + product_name,
         )
         return {
@@ -1709,11 +1784,7 @@ def _apple_application_impl(ctx):
         plugin_dylibs,
     ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
 
-    swift_argv = [
-        xcrun,
-        "--sdk",
-        sdk,
-        "swiftc",
+    swift_argv = list(swiftc["argv"]) + [
         "-module-name",
         product_name,
         "-target",
@@ -1779,8 +1850,8 @@ def _apple_application_impl(ctx):
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [executable],
-        env = xcrun_env,
-        toolchain_identity = swiftc_identity,
+        env = swiftc["env"],
+        toolchain_identity = swiftc["identity"],
         identifier = "apple_application_compile_" + product_name,
     )
 
@@ -1794,7 +1865,7 @@ def _apple_application_impl(ctx):
         "CFBundleShortVersionString": "1.0",
         "CFBundleVersion": "1",
         "MinimumOSVersion": minimum_os,
-        "DTPlatformName": sdk,
+        "DTPlatformName": swiftc["sdk_name"],
     }
     bool_entries = {"LSRequiresIPhoneOS": True}
     device_family_codes = []
@@ -1810,7 +1881,7 @@ def _apple_application_impl(ctx):
     # Each framework is copied as a whole bundle directory and
     # individually ad-hoc codesigned so the app's dyld loads them
     # without rejecting the signature.
-    cs_xcrun, codesign_path, cs_identity, cs_env = _xcrun_codesign(xcode_developer_dir)
+    codesign = _resolve_codesign(xcode_developer_dir)
     embedded_stamps = []
     dep_framework_paths = []
     dep_framework_files = {}
@@ -1850,11 +1921,11 @@ def _apple_application_impl(ctx):
             identifier = "apple_application_embed_copy_" + framework_basename,
         )
         run_action(
-            argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", embedded_framework_path],
+            argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", embedded_framework_path],
             inputs = embed_inputs,
             outputs = embed_outputs,
-            env = cs_env,
-            toolchain_identity = cs_identity,
+            env = codesign["env"],
+            toolchain_identity = codesign["identity"],
             identifier = "apple_application_embed_" + framework_basename,
         )
         embedded_stamps.append(embedded_stamp)
@@ -1867,11 +1938,11 @@ def _apple_application_impl(ctx):
     for stamp in embedded_stamps:
         cs_inputs.append(stamp)
     run_action(
-        argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + app_dir],
+        argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + app_dir],
         inputs = cs_inputs,
         outputs = [app_cs_stamp],
-        env = cs_env,
-        toolchain_identity = cs_identity,
+        env = codesign["env"],
+        toolchain_identity = codesign["identity"],
         identifier = "apple_application_codesign_" + product_name,
     )
 
@@ -1909,19 +1980,22 @@ def _apple_test_bundle_impl(ctx):
     for key in test_env:
         action_env[key] = test_env[key]
     arch = host_arch()
-    xcrun, sdk, swiftc_identity, xcrun_env = _xcrun_swiftc(platform, sdk_variant, xcode_developer_dir)
+    swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
     triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
-    for key in xcrun_env:
-        action_env[key] = xcrun_env[key]
+    for key in swiftc["env"]:
+        action_env[key] = swiftc["env"][key]
 
-    # XCTest lives in the platform's developer-frameworks tree, not
-    # the SDK's default search path. Resolve `<platform>/Developer/
-    # Library/Frameworks` via xcrun and add it as `-F`/`-rpath` so the
-    # linker finds the framework and dyld locates it at runtime.
-    platform_path = host_command([xcrun, "--sdk", sdk, "--show-sdk-platform-path"], env = xcrun_env).strip()
+    # XCTest lives in the platform's developer-frameworks tree, not the
+    # SDK's default search path. With a developer dir we resolve it
+    # directly; otherwise we ask xcrun for `--show-sdk-platform-path`.
+    if xcode_developer_dir:
+        platform_path = _developer_platform_path(xcode_developer_dir, swiftc["sdk_name"])
+    else:
+        xcrun = host_which("xcrun")
+        platform_path = host_command([xcrun, "--sdk", swiftc["sdk_name"], "--show-sdk-platform-path"], env = swiftc["env"]).strip()
     xctest_framework_dir = platform_path + "/Developer/Library/Frameworks"
     xctest_usr_lib_dir = platform_path + "/Developer/usr/lib"
-    testing_macros_plugin = _swift_testing_macros_plugin(xcrun, xcrun_env)
+    testing_macros_plugin = _swift_testing_macros_plugin(swiftc["swiftc_path"])
 
     bundle_dir = product_name + ".xctest"
     if platform == "macos" or platform == "macosx":
@@ -1932,7 +2006,14 @@ def _apple_test_bundle_impl(ctx):
         info_plist = declare_output(bundle_dir + "/Info.plist")
     test_bundle_path = ctx["build_dir"] + "/" + bundle_dir
     runner_type = "swift_testing" if swift_testing else "xctest"
-    command_argv = [xcrun, "xctest", test_bundle_path]
+    # `xctest` and `simctl` are macOS-only runtime tools. Resolve
+    # `xcrun` here so the provider's `command_argv` always carries an
+    # absolute path. Outside the test capability the value is
+    # informational, but we still emit a resolved path rather than the
+    # literal string `xcrun` so consumers don't have to special-case
+    # the placeholder.
+    runner_xcrun = host_which("xcrun")
+    command_argv = [runner_xcrun, "xctest", test_bundle_path]
     provider = {
         "label_id": ctx["label"]["id"],
         "test_bundle_path": test_bundle_path,
@@ -1963,11 +2044,7 @@ def _apple_test_bundle_impl(ctx):
     # `Developer/Library/Frameworks`; add it to both the framework
     # search path (`-F`) and the dyld rpath so the test runner can
     # load it at simulator launch time.
-    swift_argv = [
-        xcrun,
-        "--sdk",
-        sdk,
-        "swiftc",
+    swift_argv = list(swiftc["argv"]) + [
         "-emit-library",
         "-module-name",
         module_name,
@@ -2043,8 +2120,8 @@ def _apple_test_bundle_impl(ctx):
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [test_binary],
-        env = xcrun_env,
-        toolchain_identity = swiftc_identity,
+        env = swiftc["env"],
+        toolchain_identity = swiftc["identity"],
         identifier = "apple_test_bundle_compile_" + module_name,
     )
 
@@ -2061,17 +2138,17 @@ def _apple_test_bundle_impl(ctx):
     }
     write_path(info_plist, _render_plist(plist_entries))
 
-    cs_xcrun, codesign_path, cs_identity, cs_env = _xcrun_codesign(xcode_developer_dir)
+    codesign = _resolve_codesign(xcode_developer_dir)
     if platform == "macos" or platform == "macosx":
         test_cs_stamp = declare_output(bundle_dir + "/Contents/_CodeSignature/CodeResources")
     else:
         test_cs_stamp = declare_output(bundle_dir + "/_CodeSignature/CodeResources")
     run_action(
-        argv = [codesign_path, "--force", "--sign", "-", "--timestamp=none", test_bundle_path],
+        argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", test_bundle_path],
         inputs = [test_binary, info_plist],
         outputs = [test_cs_stamp],
-        env = cs_env,
-        toolchain_identity = cs_identity,
+        env = codesign["env"],
+        toolchain_identity = codesign["identity"],
         identifier = "apple_test_bundle_codesign_" + module_name,
     )
 
@@ -2081,10 +2158,10 @@ def _apple_test_bundle_impl(ctx):
             runner_command = """DYLD_LIBRARY_PATH={usr_lib}${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}} DYLD_FALLBACK_FRAMEWORK_PATH={frameworks}${{DYLD_FALLBACK_FRAMEWORK_PATH:+:$DYLD_FALLBACK_FRAMEWORK_PATH}} {command}""".format(
                 usr_lib = _shell_literal(xctest_usr_lib_dir),
                 frameworks = _shell_literal(xctest_framework_dir),
-                command = _shell_words([xcrun, "xctest", test_bundle_path]),
+                command = _shell_words([runner_xcrun, "xctest", test_bundle_path]),
             )
         elif sdk_variant == "simulator":
-            runner_command = _ios_simulator_selection_script(xcrun) + """
+            runner_command = _ios_simulator_selection_script(runner_xcrun) + """
 {xcrun} simctl boot "$simulator_id" >/dev/null 2>&1 || true
 {xcrun} simctl bootstatus "$simulator_id" -b
 tmpdir=$(mktemp -d "${{TMPDIR:-/tmp}}/once-xctest.XXXXXX")
@@ -2095,7 +2172,7 @@ find "$tmpdir/{bundle_name}" -type f -exec chmod 644 {{}} +
 chmod 755 "$tmpdir/{bundle_name}/{binary_name}"
 SIMCTL_CHILD_DYLD_LIBRARY_PATH={usr_lib} SIMCTL_CHILD_DYLD_FALLBACK_FRAMEWORK_PATH={frameworks} {xcrun} simctl spawn "$simulator_id" {xctest_agent} -XCTest All "$tmpdir/{bundle_name}"
 """.format(
-                xcrun = _shell_literal(xcrun),
+                xcrun = _shell_literal(runner_xcrun),
                 bundle = _shell_literal(test_bundle_path),
                 bundle_name = bundle_dir,
                 binary_name = product_name,
@@ -2147,7 +2224,7 @@ exit "$status"
             outputs = [test_dir, results, log, native_results],
             env = action_env,
             cacheable = False,
-            toolchain_identity = "once.apple." + runner_type + ".runner.v1\x00" + swiftc_identity,
+            toolchain_identity = "once.apple." + runner_type + ".runner.v1\x00" + swiftc["identity"],
             identifier = "apple_" + runner_type + ":" + ctx["label"]["id"],
         )
 
