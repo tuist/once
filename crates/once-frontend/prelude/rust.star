@@ -746,6 +746,7 @@ $rustcArgs = New-Object 'System.Collections.Generic.List[string]'
 foreach ($arg in $args) {
   [void]$rustcArgs.Add($arg)
 }
+$dynamicRustcArgs = New-Object 'System.Collections.Generic.List[string]'
 
 function Get-DirectiveValue($line, $name) {
   $oldPrefix = 'cargo:' + $name + '='
@@ -762,14 +763,14 @@ function Get-DirectiveValue($line, $name) {
 foreach ($line in [System.IO.File]::ReadLines(""" + _powershell_quote(stdout) + """)) {
   $value = Get-DirectiveValue $line 'rustc-cfg'
   if ($null -ne $value) {
-    [void]$rustcArgs.Add('--cfg')
-    [void]$rustcArgs.Add($value)
+    [void]$dynamicRustcArgs.Add('--cfg')
+    [void]$dynamicRustcArgs.Add($value)
     continue
   }
   $value = Get-DirectiveValue $line 'rustc-check-cfg'
   if ($null -ne $value) {
-    [void]$rustcArgs.Add('--check-cfg')
-    [void]$rustcArgs.Add($value)
+    [void]$dynamicRustcArgs.Add('--check-cfg')
+    [void]$dynamicRustcArgs.Add($value)
     continue
   }
   $value = Get-DirectiveValue $line 'rustc-env'
@@ -784,20 +785,20 @@ foreach ($line in [System.IO.File]::ReadLines(""" + _powershell_quote(stdout) + 
   }
   $value = Get-DirectiveValue $line 'rustc-link-arg'
   if ($null -ne $value) {
-    [void]$rustcArgs.Add('-C')
-    [void]$rustcArgs.Add("link-arg=$value")
+    [void]$dynamicRustcArgs.Add('-C')
+    [void]$dynamicRustcArgs.Add("link-arg=$value")
     continue
   }
   $value = Get-DirectiveValue $line 'rustc-link-lib'
   if ($null -ne $value) {
-    [void]$rustcArgs.Add('-l')
-    [void]$rustcArgs.Add($value)
+    [void]$dynamicRustcArgs.Add('-l')
+    [void]$dynamicRustcArgs.Add($value)
     continue
   }
   $value = Get-DirectiveValue $line 'rustc-link-search'
   if ($null -ne $value) {
-    [void]$rustcArgs.Add('-L')
-    [void]$rustcArgs.Add($value)
+    [void]$dynamicRustcArgs.Add('-L')
+    [void]$dynamicRustcArgs.Add($value)
     continue
   }
 }
@@ -806,16 +807,29 @@ if ($rustcArgs.Count -eq 0) {
   throw 'missing rustc argv'
 }
 $program = $rustcArgs[0]
-$rest = @()
-if ($rustcArgs.Count -gt 1) {
-  $rest = $rustcArgs.GetRange(1, $rustcArgs.Count - 1).ToArray()
-}
-& $program @rest
-if ($global:LASTEXITCODE -ne $null) {
-  exit $global:LASTEXITCODE
-}
-if (-not $?) {
-  exit 1
+$responseFile = $null
+try {
+  if ($dynamicRustcArgs.Count -gt 0) {
+    $responseFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.IO.Path]::GetRandomFileName() + '.rsp')
+    $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    [System.IO.File]::WriteAllLines($responseFile, $dynamicRustcArgs.ToArray(), $encoding)
+    [void]$rustcArgs.Add("@$responseFile")
+  }
+  $rest = @()
+  if ($rustcArgs.Count -gt 1) {
+    $rest = $rustcArgs.GetRange(1, $rustcArgs.Count - 1).ToArray()
+  }
+  & $program @rest
+  if ($global:LASTEXITCODE -ne $null) {
+    exit $global:LASTEXITCODE
+  }
+  if (-not $?) {
+    exit 1
+  }
+} finally {
+  if ($null -ne $responseFile -and [System.IO.File]::Exists($responseFile)) {
+    [System.IO.File]::Delete($responseFile)
+  }
 }
 """
     write_path(wrapper, script)

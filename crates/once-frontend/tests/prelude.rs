@@ -1895,7 +1895,13 @@ result = repr([wrapped[0], wrapped[1]])
     );
     let script = String::from_utf8(bytes.clone()).unwrap();
     assert!(script.contains("[System.IO.File]::ReadLines('.once/out/pkg/build script.stdout')"));
-    assert!(script.contains("[void]$rustcArgs.Add('--cfg')"));
+    assert!(script.contains("[void]$dynamicRustcArgs.Add('--cfg')"));
+    assert!(script.contains("[void]$dynamicRustcArgs.Add('--check-cfg')"));
+    assert!(script.contains("New-Object System.Text.UTF8Encoding -ArgumentList $false"));
+    assert!(script.contains(
+        "[System.IO.File]::WriteAllLines($responseFile, $dynamicRustcArgs.ToArray(), $encoding)"
+    ));
+    assert!(script.contains("[void]$rustcArgs.Add(\"@$responseFile\")"));
     assert!(script.contains("& $program @rest"));
 }
 
