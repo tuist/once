@@ -207,23 +207,34 @@ def _rust_feature_flags(ctx):
         flags.append(_rust_feature_cfg_arg(feature))
     return flags
 
-def _rust_feature_args(ctx):
-    flags = _rust_feature_flags(ctx)
-    if not flags:
-        return ([], [])
-    if host_os() != "windows":
-        return (flags, [])
-    path = _rust_build_dir(ctx) + "/" + _rust_declared_output(ctx, "rustc-features.rsp")
-    return ([
+def _rust_response_file_args(ctx, args, name):
+    # On Windows the command line passed to rustc can exceed the operating
+    # system limit once a crate accumulates enough --extern and -L flags from
+    # its dependency graph. Route the full argument list through a rustc
+    # response file so only `@path` ends up on the command line. Other hosts
+    # have generous limits, so the arguments stay inline there.
+    #
+    # The routing is intentionally unconditional on Windows rather than gated on
+    # an estimated argv length. Estimating the command line length is fragile
+    # (it has to account for quoting and process startup overhead, and getting
+    # it wrong reintroduces the spawn failure this guards against), while the
+    # cost of always routing is one small file write per compile. It does not
+    # grow the action cache surface either: the arguments already participate in
+    # the action digest, just by way of the response file contents instead of
+    # the inline argv.
+    if host_os() != "windows" or not args:
+        return args
+    path = _rust_build_dir(ctx) + "/" + _rust_declared_output(ctx, name)
+    return [
         cmd_args(
-            args = flags,
+            args = args,
             use_arg_file = {
                 "path": path,
                 "format": "rustc-response",
                 "arg_format": "@{}",
             },
         ),
-    ], [])
+    ]
 
 def _rust_user_flags(ctx):
     return _rust_attr(ctx, "rustc_flags", [])
@@ -651,7 +662,7 @@ def _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports):
     ])
     return "\n".join(lines)
 
-def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps, metadata_deps, feature_args, feature_inputs):
+def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps, metadata_deps, feature_flags):
     build_script = _rust_attr(ctx, "build_script", "")
     if not build_script:
         return (None, [], {}, None)
@@ -660,8 +671,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     out_dir = declare_output(_rust_declared_output(ctx, "build"))
     stdout = declare_output(_rust_declared_output(ctx, "build-script.stdout"))
     linker_args, linker_identity = _rust_linker(ctx, "bin", "", host_triple)
-    compile_argv = [
-        rustc,
+    compile_args = [
         "--crate-name", "build_script_build",
         "--crate-type", "bin",
         "--edition", edition,
@@ -669,14 +679,15 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
         script_path,
         "-o", runner,
     ]
-    compile_argv.extend(feature_args)
-    compile_argv.extend(_rust_cap_lints(ctx))
-    compile_argv.extend(dep_args)
-    compile_argv.extend(linker_args)
+    compile_args.extend(feature_flags)
+    compile_args.extend(_rust_cap_lints(ctx))
+    compile_args.extend(dep_args)
+    compile_args.extend(linker_args)
+    compile_argv = [rustc] + _rust_response_file_args(ctx, compile_args, "build-script-rustc.rsp")
     build_script_compile_env = _rust_compile_action_env(ctx, host_triple, host_triple)
     run_action(
         argv = compile_argv,
-        inputs = _unique([script_path] + dep_inputs + feature_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique([script_path] + dep_inputs + _rust_extra_inputs(ctx)),
         outputs = [runner],
         env = build_script_compile_env,
         toolchain_identity = identity + linker_identity + "\x00build-script",
@@ -965,12 +976,11 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         build_deps = []
     build_dep_args = _rust_dep_args(build_deps, aliases)
     build_dep_inputs = _rust_dep_inputs(build_deps)
-    feature_args, feature_inputs = _rust_feature_args(ctx)
-    build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_args, feature_inputs)
+    feature_flags = _rust_feature_flags(ctx)
+    build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_flags)
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
-    argv = [
-        rustc,
+    rustc_args = [
         "--crate-name", crate_name,
         "--crate-type", crate_type,
         "--edition", edition,
@@ -978,21 +988,22 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         crate_root,
         "-o", output,
     ]
-    argv.extend(_rust_target_args(target))
-    argv.extend(feature_args)
-    argv.extend(_rust_user_flags(ctx))
-    argv.extend(_rust_cap_lints(ctx))
-    argv.extend(_rust_builtin_extern_args(crate_type))
-    argv.extend(dep_args)
-    argv.extend(linker_args)
-    argv.extend(_rust_linker_flags(ctx))
+    rustc_args.extend(_rust_target_args(target))
+    rustc_args.extend(feature_flags)
+    rustc_args.extend(_rust_user_flags(ctx))
+    rustc_args.extend(_rust_cap_lints(ctx))
+    rustc_args.extend(_rust_builtin_extern_args(crate_type))
+    rustc_args.extend(dep_args)
+    rustc_args.extend(linker_args)
+    rustc_args.extend(_rust_linker_flags(ctx))
+    argv = [rustc] + _rust_response_file_args(ctx, rustc_args, "rustc.rsp")
     if build_stdout:
         wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout)
         argv = wrapped[0]
         build_inputs.extend(wrapped[1])
     run_action(
         argv = argv,
-        inputs = _unique(srcs + dep_inputs + build_inputs + feature_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique(srcs + dep_inputs + build_inputs + _rust_extra_inputs(ctx)),
         outputs = [output],
         env = compile_env,
         toolchain_identity = identity + linker_identity,
