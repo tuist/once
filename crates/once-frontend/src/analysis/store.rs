@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -268,23 +268,35 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-fn which_candidate_names(name: &str) -> Vec<String> {
-    if !cfg!(windows) || Path::new(name).extension().is_some() {
+pub(super) fn which_candidate_names(name: &str) -> Vec<String> {
+    let path_ext = std::env::var_os("PATHEXT").map(|value| value.to_string_lossy().into_owned());
+    which_candidate_names_for(name, cfg!(windows), path_ext.as_deref())
+}
+
+pub(super) fn which_candidate_names_for(
+    name: &str,
+    windows: bool,
+    path_ext: Option<&str>,
+) -> Vec<String> {
+    if !windows || Path::new(name).extension().is_some() {
         return vec![name.to_string()];
     }
-    let mut candidates = vec![name.to_string()];
-    let path_ext = std::env::var_os("PATHEXT")
-        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into())
-        .to_string_lossy()
-        .into_owned();
-    for ext in path_ext.split(';') {
+
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+    let path_ext = path_ext.unwrap_or(".COM;.EXE;.BAT;.CMD");
+    for ext in path_ext.split(';').map(str::trim) {
         if ext.is_empty() {
             continue;
         }
-        candidates.push(format!("{name}{ext}"));
-        candidates.push(format!("{name}{}", ext.to_ascii_lowercase()));
+        for candidate in [
+            format!("{name}{ext}"),
+            format!("{name}{}", ext.to_ascii_lowercase()),
+        ] {
+            if seen.insert(candidate.clone()) {
+                candidates.push(candidate);
+            }
+        }
     }
-    candidates.sort();
-    candidates.dedup();
     candidates
 }
