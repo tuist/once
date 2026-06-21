@@ -679,13 +679,13 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
         "--crate-type", "bin",
         "--edition", edition,
         "-C", "metadata=" + _rust_metadata_suffix(ctx) + "_BUILD",
-        script_path,
         "-o", runner,
     ]
     compile_args.extend(feature_flags)
     compile_args.extend(_rust_cap_lints(ctx))
     compile_args.extend(dep_args)
     compile_args.extend(linker_args)
+    compile_args.append(script_path)
     compile_argv = [rustc] + _rust_response_file_args(ctx, compile_args, "build-script-rustc.rsp")
     build_script_compile_env = _rust_compile_action_env(ctx, host_triple, host_triple)
     run_action(
@@ -988,7 +988,6 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "--crate-type", crate_type,
         "--edition", edition,
         "-C", "metadata=" + _rust_metadata_suffix(ctx),
-        crate_root,
         "-o", output,
     ]
     rustc_args.extend(_rust_target_args(target))
@@ -999,6 +998,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     rustc_args.extend(dep_args)
     rustc_args.extend(linker_args)
     rustc_args.extend(_rust_linker_flags(ctx))
+    rustc_args.append(crate_root)
     argv = [rustc] + _rust_response_file_args(ctx, rustc_args, "rustc.rsp")
     if build_stdout:
         wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout)
