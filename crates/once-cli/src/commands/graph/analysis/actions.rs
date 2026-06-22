@@ -50,7 +50,7 @@ struct DeclaredActionContext<'a> {
     capability: &'a str,
     index: usize,
     identifier: &'a str,
-    arg_files: Vec<DeclaredArgFile>,
+    arg_files: &'a [DeclaredArgFile],
     record_success_evidence: bool,
 }
 
@@ -172,10 +172,9 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     materialize_declared_arg_files(workspace, &declared.arg_files).with_context(|| {
         format!("writing arg files for action {index} for {target_id} ({identifier_for_error})")
     })?;
-    let arg_files_for_error = declared.arg_files.clone();
     let action = declared_to_action(
         workspace,
-        declared,
+        &declared,
         module_source_digest,
         input_action_digests,
     )
@@ -187,7 +186,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         capability,
         index,
         identifier: &identifier_for_error,
-        arg_files: arg_files_for_error,
+        arg_files: &declared.arg_files,
         record_success_evidence,
     };
 
@@ -235,7 +234,7 @@ async fn run_cacheable_declared_action(
                 context.index,
                 context.target_id,
                 exit_code,
-                &context.arg_files,
+                context.arg_files,
                 &outcome.result,
             )
             .await
@@ -305,7 +304,7 @@ async fn run_uncacheable_declared_action(
                 context.index,
                 context.target_id,
                 exit_code,
-                &context.arg_files,
+                context.arg_files,
                 &result,
             )
             .await
@@ -391,40 +390,24 @@ fn append_declared_arg_files(message: &mut String, arg_files: &[DeclaredArgFile]
             arg_file.args.len()
         );
         append_arg_file_arg_list(message, "first args", arg_file.args.iter().take(32));
-        append_arg_file_arg_list(
-            message,
-            "extern args",
-            arg_file
-                .args
-                .iter()
-                .filter(|arg| arg.starts_with("--extern"))
-                .take(64),
-        );
-        append_arg_file_arg_list(
-            message,
-            "dependency search dirs",
-            arg_file
-                .args
-                .iter()
-                .filter(|arg| arg.starts_with("dependency="))
-                .take(64),
-        );
         let start = arg_file.args.len().saturating_sub(16);
-        append_arg_file_arg_list(message, "last args", arg_file.args.iter().skip(start));
+        if start > 32 {
+            append_arg_file_arg_list(message, "last args", arg_file.args.iter().skip(start));
+        }
     }
 }
 
 fn append_arg_file_arg_list<'a>(
     message: &mut String,
     label: &str,
-    args: impl Iterator<Item = &'a String>,
+    mut args: impl Iterator<Item = &'a String>,
 ) {
-    let args = args.collect::<Vec<_>>();
-    if args.is_empty() {
+    let Some(first_arg) = args.next() else {
         return;
-    }
+    };
 
     let _ = write!(message, "\n{label}:");
+    let _ = write!(message, "\n  {first_arg}");
     for arg in args {
         let _ = write!(message, "\n  {arg}");
     }
@@ -661,7 +644,7 @@ fn compose_target_input_digest(input_digests: &[Digest]) -> Option<Digest> {
 
 fn declared_to_action(
     workspace: &Path,
-    declared: DeclaredAction,
+    declared: &DeclaredAction,
     module_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
 ) -> Result<Action> {
@@ -676,7 +659,7 @@ fn declared_to_action(
     );
     let input_digest = compose_input_digest(
         workspace,
-        &declared,
+        declared,
         module_source_digest,
         dep_action_digests,
     )?;
@@ -689,16 +672,10 @@ fn declared_to_action(
         })
         .collect::<Result<Vec<_>>>()?;
     ensure_output_parent_dirs(workspace, &outputs)?;
-    let DeclaredAction {
-        operation,
-        argv,
-        env,
-        ..
-    } = declared;
-    match operation {
+    match &declared.operation {
         None => Ok(Action::RunCommand {
-            argv,
-            env,
+            argv: declared.argv.clone(),
+            env: declared.env.clone(),
             cwd: None,
             input_digest: Some(input_digest),
             outputs,
@@ -707,7 +684,7 @@ fn declared_to_action(
             timeout_ms: None,
             remote: None,
         }),
-        Some(operation) => operation_to_action(operation, input_digest),
+        Some(operation) => operation_to_action(operation.clone(), input_digest),
     }
 }
 
@@ -918,7 +895,7 @@ mod tests {
             identifier: None,
         };
 
-        let action = declared_to_action(workspace.path(), declared, module_digest(), &[]).unwrap();
+        let action = declared_to_action(workspace.path(), &declared, module_digest(), &[]).unwrap();
 
         assert!(workspace.path().join(".once/out/x").is_dir());
         assert!(workspace.path().join(".once/out/x/sub").is_dir());
@@ -1059,17 +1036,19 @@ mod tests {
             stderr: None,
             outputs: BTreeMap::new(),
         };
+        let mut args = vec![
+            "--crate-name".to_string(),
+            "app".to_string(),
+            "--extern=dep=.once/out/crates/dep/dep/libdep.rlib".to_string(),
+            "-L".to_string(),
+            "dependency=.once/out/crates/dep/dep".to_string(),
+        ];
+        args.extend((0..60).map(|index| format!("arg-{index}")));
+        args.push("crates/app/src/lib.rs".to_string());
         let arg_files = vec![DeclaredArgFile {
             path: ".once/tmp/analysis/crates/app/app/rustc.rsp".to_string(),
             format: DeclaredArgFileFormat::RustcResponse,
-            args: vec![
-                "--crate-name".to_string(),
-                "app".to_string(),
-                "--extern=dep=.once/out/crates/dep/dep/libdep.rlib".to_string(),
-                "-L".to_string(),
-                "dependency=.once/out/crates/dep/dep".to_string(),
-                "crates/app/src/lib.rs".to_string(),
-            ],
+            args,
         }];
 
         let message =
@@ -1078,9 +1057,11 @@ mod tests {
 
         assert!(message.contains("arg files:"));
         assert!(message.contains(".once/tmp/analysis/crates/app/app/rustc.rsp [rustc-response]"));
-        assert!(message.contains("extern args:\n  --extern=dep="));
-        assert!(message.contains("dependency search dirs:\n  dependency=.once/out/crates/dep/dep"));
+        assert!(message.contains("first args:\n  --crate-name"));
         assert!(message.contains("last args:"));
+        assert!(message.contains("crates/app/src/lib.rs"));
+        assert!(!message.contains("extern args:"));
+        assert!(!message.contains("dependency search dirs:"));
     }
 
     #[tokio::test]

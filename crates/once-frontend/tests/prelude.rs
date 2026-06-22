@@ -2165,11 +2165,7 @@ result = repr("ok")
     );
 }
 
-#[test]
-fn prelude_rust_windows_response_file_keeps_release_dependency_args() {
-    let prelude = all_prelude_source();
-    let source = format!(
-        r#"{prelude}
+const RELEASE_DEPENDENCY_RESPONSE_FILE_SOURCE: &str = r#"
 def host_os():
     return "windows"
 
@@ -2185,56 +2181,63 @@ def host_command(argv, env = None):
 def _rustc_toolchain(target):
     return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
 
-ctx = {{
-    "label": {{
+ctx = {
+    "label": {
         "package": "crates/once-core",
         "name": "once_core_x86_64_pc_windows_msvc",
         "id": "crates/once-core/once_core_x86_64_pc_windows_msvc",
-    }},
-    "attr": {{
+    },
+    "attr": {
         "crate_name": "once_core",
         "crate_root": "src/lib.rs",
         "target": "x86_64-pc-windows-msvc",
         "cargo_package": "once-core",
-    }},
+    },
     "deps": [
-        {{
+        {
             "label_id": "crates/once-cas/once_cas_x86_64_pc_windows_msvc",
             "crate_name": "once_cas",
             "rlib": ".once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas.rlib",
             "transitive_rlibs": [
                 ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib",
             ],
-        }},
-        {{
+        },
+        {
             "dependency_set": True,
             "deps": [],
-            "workspace_deps": {{
+            "workspace_deps": {
                 "once-core": [
-                    {{
+                    {
                         "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3",
                         "crate_name": "tokio",
                         "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio.rlib",
-                    }},
-                    {{
+                    },
+                    {
                         "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228",
                         "crate_name": "serde",
                         "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib",
-                    }},
-                    {{
+                    },
+                    {
                         "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43",
                         "crate_name": "tracing",
                         "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing.rlib",
-                    }},
+                    },
                 ],
-            }},
-        }},
+            },
+        },
     ],
     "srcs": ["src/**/*.rs"],
-}}
+}
 _rust_compile(ctx, "rlib", "src/lib.rs", "libonce_core.rlib")
 result = repr("ok")
-"#
+"#;
+
+#[test]
+fn prelude_rust_windows_response_file_keeps_release_dependency_args() {
+    let source = format!(
+        "{}\n{}",
+        all_prelude_source(),
+        RELEASE_DEPENDENCY_RESPONSE_FILE_SOURCE
     );
     let workspace = TempDir::new().unwrap();
     let store = store_for(
@@ -2245,6 +2248,10 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
+    assert_release_dependency_response_file(&store);
+}
+
+fn assert_release_dependency_response_file(store: &AnalysisStore) {
     assert_eq!(store.actions.len(), 1);
     let rustc = &store.actions[0];
     assert_eq!(
