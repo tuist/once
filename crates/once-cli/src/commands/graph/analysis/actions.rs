@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
@@ -49,6 +50,7 @@ struct DeclaredActionContext<'a> {
     capability: &'a str,
     index: usize,
     identifier: &'a str,
+    arg_files: Vec<DeclaredArgFile>,
     record_success_evidence: bool,
 }
 
@@ -170,6 +172,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     materialize_declared_arg_files(workspace, &declared.arg_files).with_context(|| {
         format!("writing arg files for action {index} for {target_id} ({identifier_for_error})")
     })?;
+    let arg_files_for_error = declared.arg_files.clone();
     let action = declared_to_action(
         workspace,
         declared,
@@ -184,6 +187,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         capability,
         index,
         identifier: &identifier_for_error,
+        arg_files: arg_files_for_error,
         record_success_evidence,
     };
 
@@ -231,6 +235,7 @@ async fn run_cacheable_declared_action(
                 context.index,
                 context.target_id,
                 exit_code,
+                &context.arg_files,
                 &outcome.result,
             )
             .await
@@ -300,6 +305,7 @@ async fn run_uncacheable_declared_action(
                 context.index,
                 context.target_id,
                 exit_code,
+                &context.arg_files,
                 &result,
             )
             .await
@@ -359,13 +365,69 @@ async fn declared_action_failure_message(
     index: usize,
     target: &str,
     exit_code: i32,
+    arg_files: &[DeclaredArgFile],
     result: &ActionResult,
 ) -> String {
     let mut message =
         format!("{identifier} ({index}) failed for {target} with exit code {exit_code}");
+    append_declared_arg_files(&mut message, arg_files);
     append_captured_output(cache, &mut message, "stdout", result.stdout.as_ref()).await;
     append_captured_output(cache, &mut message, "stderr", result.stderr.as_ref()).await;
     message
+}
+
+fn append_declared_arg_files(message: &mut String, arg_files: &[DeclaredArgFile]) {
+    if arg_files.is_empty() {
+        return;
+    }
+
+    message.push_str("\n\narg files:");
+    for arg_file in arg_files {
+        let _ = write!(
+            message,
+            "\n{} [{}], {} args",
+            arg_file.path,
+            declared_arg_file_format_name(arg_file.format),
+            arg_file.args.len()
+        );
+        append_arg_file_arg_list(message, "first args", arg_file.args.iter().take(32));
+        append_arg_file_arg_list(
+            message,
+            "extern args",
+            arg_file
+                .args
+                .iter()
+                .filter(|arg| arg.starts_with("--extern"))
+                .take(64),
+        );
+        append_arg_file_arg_list(
+            message,
+            "dependency search dirs",
+            arg_file
+                .args
+                .iter()
+                .filter(|arg| arg.starts_with("dependency="))
+                .take(64),
+        );
+        let start = arg_file.args.len().saturating_sub(16);
+        append_arg_file_arg_list(message, "last args", arg_file.args.iter().skip(start));
+    }
+}
+
+fn append_arg_file_arg_list<'a>(
+    message: &mut String,
+    label: &str,
+    args: impl Iterator<Item = &'a String>,
+) {
+    let args = args.collect::<Vec<_>>();
+    if args.is_empty() {
+        return;
+    }
+
+    let _ = write!(message, "\n{label}:");
+    for arg in args {
+        let _ = write!(message, "\n  {arg}");
+    }
 }
 
 async fn append_captured_output(
@@ -957,7 +1019,8 @@ mod tests {
         };
 
         let message =
-            declared_action_failure_message(&cache, "target:action", 2, "target", 7, &result).await;
+            declared_action_failure_message(&cache, "target:action", 2, "target", 7, &[], &result)
+                .await;
 
         assert!(message.contains("target:action (2) failed for target with exit code 7"));
         assert!(message.contains("stdout:\nvisible stdout"));
@@ -978,11 +1041,46 @@ mod tests {
             outputs: BTreeMap::new(),
         };
 
-        let message = declared_action_failure_message(&cache, "id", 0, "target", 1, &result).await;
+        let message =
+            declared_action_failure_message(&cache, "id", 0, "target", 1, &[], &result).await;
 
         assert!(message.contains("last 16384 bytes of stdout:\n"));
         assert!(!message.contains("drop-me"));
         assert!(message.ends_with(&"x".repeat(FAILURE_OUTPUT_LIMIT)));
+    }
+
+    #[tokio::test]
+    async fn declared_action_failure_message_appends_arg_file_context() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let result = ActionResult {
+            exit_code: 1,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::new(),
+        };
+        let arg_files = vec![DeclaredArgFile {
+            path: ".once/tmp/analysis/crates/app/app/rustc.rsp".to_string(),
+            format: DeclaredArgFileFormat::RustcResponse,
+            args: vec![
+                "--crate-name".to_string(),
+                "app".to_string(),
+                "--extern=dep=.once/out/crates/dep/dep/libdep.rlib".to_string(),
+                "-L".to_string(),
+                "dependency=.once/out/crates/dep/dep".to_string(),
+                "crates/app/src/lib.rs".to_string(),
+            ],
+        }];
+
+        let message =
+            declared_action_failure_message(&cache, "id", 0, "target", 1, &arg_files, &result)
+                .await;
+
+        assert!(message.contains("arg files:"));
+        assert!(message.contains(".once/tmp/analysis/crates/app/app/rustc.rsp [rustc-response]"));
+        assert!(message.contains("extern args:\n  --extern=dep="));
+        assert!(message.contains("dependency search dirs:\n  dependency=.once/out/crates/dep/dep"));
+        assert!(message.contains("last args:"));
     }
 
     #[tokio::test]

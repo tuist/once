@@ -2165,6 +2165,141 @@ result = repr("ok")
     );
 }
 
+#[test]
+fn prelude_rust_windows_response_file_keeps_release_dependency_args() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+ctx = {{
+    "label": {{
+        "package": "crates/once-core",
+        "name": "once_core_x86_64_pc_windows_msvc",
+        "id": "crates/once-core/once_core_x86_64_pc_windows_msvc",
+    }},
+    "attr": {{
+        "crate_name": "once_core",
+        "crate_root": "src/lib.rs",
+        "target": "x86_64-pc-windows-msvc",
+        "cargo_package": "once-core",
+    }},
+    "deps": [
+        {{
+            "label_id": "crates/once-cas/once_cas_x86_64_pc_windows_msvc",
+            "crate_name": "once_cas",
+            "rlib": ".once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas.rlib",
+            "transitive_rlibs": [
+                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib",
+            ],
+        }},
+        {{
+            "dependency_set": True,
+            "deps": [],
+            "workspace_deps": {{
+                "once-core": [
+                    {{
+                        "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3",
+                        "crate_name": "tokio",
+                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio.rlib",
+                    }},
+                    {{
+                        "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228",
+                        "crate_name": "serde",
+                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib",
+                    }},
+                    {{
+                        "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43",
+                        "crate_name": "tracing",
+                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing.rlib",
+                    }},
+                ],
+            }},
+        }},
+    ],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libonce_core.rlib")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(
+        workspace.path(),
+        "crates/once-core/once_core_x86_64_pc_windows_msvc",
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    assert_eq!(store.actions.len(), 1);
+    let rustc = &store.actions[0];
+    assert_eq!(
+        rustc.identifier.as_deref(),
+        Some("crates/once-core/once_core_x86_64_pc_windows_msvc:rustc")
+    );
+    assert_eq!(rustc.argv.len(), 2);
+    assert_eq!(rustc.arg_files.len(), 1);
+    let arg_file = &rustc.arg_files[0];
+    assert_eq!(
+        arg_file.path,
+        ".once/tmp/analysis/crates/once-core/once_core_x86_64_pc_windows_msvc/rustc.rsp"
+    );
+    for extern_arg in [
+        "--extern=once_cas=.once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas.rlib",
+        "--extern=tokio=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio.rlib",
+        "--extern=serde=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib",
+        "--extern=tracing=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing.rlib",
+    ] {
+        assert!(
+            arg_file.args.iter().any(|arg| arg == extern_arg),
+            "{extern_arg} missing from {:?}",
+            arg_file.args
+        );
+    }
+    let root_position = arg_file
+        .args
+        .iter()
+        .position(|arg| arg == "crates/once-core/src/lib.rs")
+        .expect("crate root");
+    for extern_arg in arg_file
+        .args
+        .iter()
+        .filter(|arg| arg.starts_with("--extern="))
+    {
+        let extern_position = arg_file
+            .args
+            .iter()
+            .position(|arg| arg == extern_arg)
+            .unwrap();
+        assert!(
+            extern_position < root_position,
+            "dependency flags should precede the crate root: {:?}",
+            arg_file.args
+        );
+    }
+    assert!(arg_file.args.iter().any(|arg| {
+        arg == "dependency=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3"
+    }));
+    assert_eq!(
+        arg_file.args.last().map(String::as_str),
+        Some("crates/once-core/src/lib.rs")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn prelude_rust_proc_macro_compile_uses_host_target() {
