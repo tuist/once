@@ -21,6 +21,10 @@ fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
     )
 }
 
+fn workspace_arg(workspace: &Path, path: &str) -> String {
+    workspace.join(path).to_string_lossy().into_owned()
+}
+
 fn apple_prelude_source() -> String {
     format!(
         "{}\n{}",
@@ -2135,16 +2139,20 @@ result = repr("ok")
     let arg_file = &rustc.arg_files[0];
     assert_eq!(arg_file.path, ".once/tmp/analysis/crates/app/app/rustc.rsp");
     assert!(arg_file.args.iter().any(|arg| arg == "--crate-name"));
-    let extern_arg = "dep=.once/out/crates/dep/dep/libdep.rlib";
+    let extern_arg = format!(
+        "dep={}",
+        workspace_arg(workspace.path(), ".once/out/crates/dep/dep/libdep.rlib")
+    );
     let extern_position = arg_file
         .args
         .windows(2)
         .position(|args| args[0] == "--extern" && args[1] == extern_arg)
         .expect("dependency extern flag");
+    let crate_root = workspace_arg(workspace.path(), "crates/app/src/lib.rs");
     let root_position = arg_file
         .args
         .iter()
-        .position(|arg| arg == "crates/app/src/lib.rs")
+        .position(|arg| arg == &crate_root)
         .expect("crate root");
     assert!(
         extern_position < root_position,
@@ -2153,7 +2161,7 @@ result = repr("ok")
     );
     assert_eq!(
         arg_file.args.last().map(String::as_str),
-        Some("crates/app/src/lib.rs")
+        Some(crate_root.as_str())
     );
     assert!(
         !arg_file
@@ -2248,10 +2256,10 @@ fn prelude_rust_windows_response_file_keeps_release_dependency_args() {
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
-    assert_release_dependency_response_file(&store);
+    assert_release_dependency_response_file(&store, workspace.path());
 }
 
-fn assert_release_dependency_response_file(store: &AnalysisStore) {
+fn assert_release_dependency_response_file(store: &AnalysisStore, workspace: &Path) {
     assert_eq!(store.actions.len(), 1);
     let rustc = &store.actions[0];
     assert_eq!(
@@ -2266,24 +2274,49 @@ fn assert_release_dependency_response_file(store: &AnalysisStore) {
         ".once/tmp/analysis/crates/once-core/once_core_x86_64_pc_windows_msvc/rustc.rsp"
     );
     for extern_arg in [
-        "once_cas=.once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas.rlib",
-        "tokio=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio.rlib",
-        "serde=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib",
-        "tracing=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing.rlib",
+        format!(
+            "once_cas={}",
+            workspace_arg(
+                workspace,
+                ".once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas.rlib"
+            )
+        ),
+        format!(
+            "tokio={}",
+            workspace_arg(
+                workspace,
+                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio.rlib"
+            )
+        ),
+        format!(
+            "serde={}",
+            workspace_arg(
+                workspace,
+                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib"
+            )
+        ),
+        format!(
+            "tracing={}",
+            workspace_arg(
+                workspace,
+                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing.rlib"
+            )
+        ),
     ] {
         assert!(
             arg_file
                 .args
                 .windows(2)
-                .any(|args| args[0] == "--extern" && args[1] == extern_arg),
+                .any(|args| args[0] == "--extern" && args[1] == extern_arg.as_str()),
             "{extern_arg} missing from {:?}",
             arg_file.args
         );
     }
+    let crate_root = workspace_arg(workspace, "crates/once-core/src/lib.rs");
     let root_position = arg_file
         .args
         .iter()
-        .position(|arg| arg == "crates/once-core/src/lib.rs")
+        .position(|arg| arg == &crate_root)
         .expect("crate root");
     for extern_position in arg_file
         .args
@@ -2297,12 +2330,17 @@ fn assert_release_dependency_response_file(store: &AnalysisStore) {
             arg_file.args
         );
     }
-    assert!(arg_file.args.iter().any(|arg| {
-        arg == "dependency=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3"
-    }));
+    let tokio_dependency = format!(
+        "dependency={}",
+        workspace_arg(
+            workspace,
+            ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3"
+        )
+    );
+    assert!(arg_file.args.iter().any(|arg| { arg == &tokio_dependency }));
     assert_eq!(
         arg_file.args.last().map(String::as_str),
-        Some("crates/once-core/src/lib.rs")
+        Some(crate_root.as_str())
     );
 }
 

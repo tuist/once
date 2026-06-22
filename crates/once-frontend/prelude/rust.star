@@ -210,6 +210,41 @@ def _rust_feature_flags(ctx):
         flags.append(_rust_feature_cfg_arg(feature))
     return flags
 
+def _is_absolute_path(path):
+    if not path:
+        return False
+    if path.startswith("/") or path.startswith("\\"):
+        return True
+    return len(path) >= 3 and path[1] == ":" and (path[2] == "/" or path[2] == "\\")
+
+def _is_workspace_path_arg(arg):
+    if not arg or arg.startswith("-") or _is_absolute_path(arg):
+        return False
+    return arg.startswith(".") or "/" in arg or "\\" in arg
+
+def _workspace_arg(arg):
+    if _is_workspace_path_arg(arg):
+        return _workspace_absolute(arg)
+    return arg
+
+def _split_once(value, separator):
+    for index in range(len(value)):
+        if value[index:index + len(separator)] == separator:
+            return [value[:index], value[index + len(separator):]]
+    return []
+
+def _workspace_extern_arg(arg):
+    parts = _split_once(arg, "=")
+    if len(parts) != 2:
+        return arg
+    return parts[0] + "=" + _workspace_arg(parts[1])
+
+def _workspace_search_path_arg(arg):
+    parts = _split_once(arg, "=")
+    if len(parts) != 2:
+        return _workspace_arg(arg)
+    return parts[0] + "=" + _workspace_arg(parts[1])
+
 def _rust_response_file_args(ctx, args, name):
     # On Windows the command line passed to rustc can exceed the operating
     # system limit once a crate accumulates enough --extern and -L flags from
@@ -228,9 +263,31 @@ def _rust_response_file_args(ctx, args, name):
     if host_os() != "windows" or not args:
         return args
     path = _rust_scratch_dir(ctx) + "/" + _rust_declared_output(ctx, name)
+    response_args = []
+    mode = ""
+    for arg in args:
+        if mode == "path":
+            response_args.append(_workspace_arg(arg))
+            mode = ""
+            continue
+        if mode == "extern":
+            response_args.append(_workspace_extern_arg(arg))
+            mode = ""
+            continue
+        if mode == "search":
+            response_args.append(_workspace_search_path_arg(arg))
+            mode = ""
+            continue
+        response_args.append(_workspace_arg(arg))
+        if arg == "-o":
+            mode = "path"
+        elif arg == "--extern":
+            mode = "extern"
+        elif arg == "-L":
+            mode = "search"
     return [
         cmd_args(
-            args = args,
+            args = response_args,
             use_arg_file = {
                 "path": path,
                 "format": "rustc-response",
@@ -368,7 +425,7 @@ def _rust_env(ctx):
     return env
 
 def _workspace_absolute(path):
-    if not path or path.startswith("/"):
+    if not path or _is_absolute_path(path):
         return path
     root = workspace_root()
     if not root:
