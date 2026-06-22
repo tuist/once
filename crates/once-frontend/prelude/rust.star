@@ -227,6 +227,12 @@ def _workspace_arg(arg):
         return _workspace_absolute(arg)
     return arg
 
+def _rust_response_path_arg(arg):
+    workspace_arg = _workspace_arg(arg)
+    if workspace_arg != arg or _is_absolute_path(arg) or _is_workspace_path_arg(arg):
+        return workspace_arg.replace("\\", "/")
+    return workspace_arg
+
 def _split_once(value, separator):
     for index in range(len(value)):
         if value[index:index + len(separator)] == separator:
@@ -237,13 +243,13 @@ def _workspace_extern_arg(arg):
     parts = _split_once(arg, "=")
     if len(parts) != 2:
         return arg
-    return parts[0] + "=" + _workspace_arg(parts[1])
+    return parts[0] + "=" + _rust_response_path_arg(parts[1])
 
 def _workspace_search_path_arg(arg):
     parts = _split_once(arg, "=")
     if len(parts) != 2:
-        return _workspace_arg(arg)
-    return parts[0] + "=" + _workspace_arg(parts[1])
+        return _rust_response_path_arg(arg)
+    return parts[0] + "=" + _rust_response_path_arg(parts[1])
 
 def _rust_response_file_args(ctx, args, name):
     # On Windows the command line passed to rustc can exceed the operating
@@ -267,7 +273,7 @@ def _rust_response_file_args(ctx, args, name):
     mode = ""
     for arg in args:
         if mode == "path":
-            response_args.append(_workspace_arg(arg))
+            response_args.append(_rust_response_path_arg(arg))
             mode = ""
             continue
         if mode == "extern":
@@ -278,7 +284,7 @@ def _rust_response_file_args(ctx, args, name):
             response_args.append(_workspace_search_path_arg(arg))
             mode = ""
             continue
-        response_args.append(_workspace_arg(arg))
+        response_args.append(_rust_response_path_arg(arg))
         if arg == "-o":
             mode = "path"
         elif arg == "--extern":

@@ -2259,6 +2259,31 @@ fn prelude_rust_windows_response_file_keeps_release_dependency_args() {
     assert_release_dependency_response_file(&store, workspace.path());
 }
 
+#[test]
+fn prelude_rust_windows_response_file_paths_use_forward_slashes() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "D:\\a\\once\\once"
+
+result = repr([
+    _rust_response_path_arg(".once/out/libfoo.rlib"),
+    _workspace_extern_arg("foo=.once/out/libfoo.rlib"),
+    _workspace_search_path_arg("dependency=.once/out/foo"),
+    _rust_response_path_arg("D:\\a\\once\\once\\crates\\foo\\src\\lib.rs"),
+    _rust_response_path_arg("--cfg=feature=\"default\""),
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(
+        out,
+        "[\"D:/a/once/once/.once/out/libfoo.rlib\", \"foo=D:/a/once/once/.once/out/libfoo.rlib\", \"dependency=D:/a/once/once/.once/out/foo\", \"D:/a/once/once/crates/foo/src/lib.rs\", \"--cfg=feature=\\\"default\\\"\"]"
+    );
+}
+
 fn assert_release_dependency_response_file(store: &AnalysisStore, workspace: &Path) {
     assert_eq!(store.actions.len(), 1);
     let rustc = &store.actions[0];
