@@ -1039,7 +1039,8 @@ mod tests {
         let mut args = vec![
             "--crate-name".to_string(),
             "app".to_string(),
-            "--extern=dep=.once/out/crates/dep/dep/libdep.rlib".to_string(),
+            "--extern".to_string(),
+            "dep=.once/out/crates/dep/dep/libdep.rlib".to_string(),
             "-L".to_string(),
             "dependency=.once/out/crates/dep/dep".to_string(),
         ];

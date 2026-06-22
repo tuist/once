@@ -2135,11 +2135,11 @@ result = repr("ok")
     let arg_file = &rustc.arg_files[0];
     assert_eq!(arg_file.path, ".once/tmp/analysis/crates/app/app/rustc.rsp");
     assert!(arg_file.args.iter().any(|arg| arg == "--crate-name"));
-    let extern_arg = "--extern=dep=.once/out/crates/dep/dep/libdep.rlib";
+    let extern_arg = "dep=.once/out/crates/dep/dep/libdep.rlib";
     let extern_position = arg_file
         .args
-        .iter()
-        .position(|arg| arg == extern_arg)
+        .windows(2)
+        .position(|args| args[0] == "--extern" && args[1] == extern_arg)
         .expect("dependency extern flag");
     let root_position = arg_file
         .args
@@ -2266,13 +2266,16 @@ fn assert_release_dependency_response_file(store: &AnalysisStore) {
         ".once/tmp/analysis/crates/once-core/once_core_x86_64_pc_windows_msvc/rustc.rsp"
     );
     for extern_arg in [
-        "--extern=once_cas=.once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas.rlib",
-        "--extern=tokio=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio.rlib",
-        "--extern=serde=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib",
-        "--extern=tracing=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing.rlib",
+        "once_cas=.once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas.rlib",
+        "tokio=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio.rlib",
+        "serde=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib",
+        "tracing=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing.rlib",
     ] {
         assert!(
-            arg_file.args.iter().any(|arg| arg == extern_arg),
+            arg_file
+                .args
+                .windows(2)
+                .any(|args| args[0] == "--extern" && args[1] == extern_arg),
             "{extern_arg} missing from {:?}",
             arg_file.args
         );
@@ -2282,18 +2285,14 @@ fn assert_release_dependency_response_file(store: &AnalysisStore) {
         .iter()
         .position(|arg| arg == "crates/once-core/src/lib.rs")
         .expect("crate root");
-    for extern_arg in arg_file
+    for extern_position in arg_file
         .args
         .iter()
-        .filter(|arg| arg.starts_with("--extern="))
+        .enumerate()
+        .filter_map(|(index, arg)| (arg == "--extern").then_some(index))
     {
-        let extern_position = arg_file
-            .args
-            .iter()
-            .position(|arg| arg == extern_arg)
-            .unwrap();
         assert!(
-            extern_position < root_position,
+            extern_position + 1 < root_position,
             "dependency flags should precede the crate root: {:?}",
             arg_file.args
         );
