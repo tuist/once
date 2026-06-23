@@ -625,6 +625,27 @@ def _rust_dep_args(deps, aliases):
         args.extend(["-L", "dependency=" + directory])
     return args
 
+def _rust_search_path_args(deps):
+    args = []
+    dirs = []
+    for dep in deps:
+        artifact = dep.get("rlib") or dep.get("proc_macro")
+        if artifact:
+            directory = _parent_dir(artifact)
+            if directory:
+                dirs.append(directory)
+        for transitive in dep.get("transitive_rlibs") or []:
+            directory = _parent_dir(transitive)
+            if directory:
+                dirs.append(directory)
+        for transitive in dep.get("transitive_proc_macros") or []:
+            directory = _parent_dir(transitive)
+            if directory:
+                dirs.append(directory)
+    for directory in _unique(dirs):
+        args.extend(["-L", "dependency=" + directory])
+    return args
+
 def _rust_builtin_extern_args(crate_type):
     if crate_type == "proc-macro":
         return ["--extern", "proc_macro"]
@@ -1037,11 +1058,15 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     deps = _rust_resolved_deps(ctx)
     dep_args = _rust_dep_args(deps, aliases)
     dep_inputs = _rust_dep_inputs(deps)
+    search_deps = ctx.get("search_deps") or []
+    search_args = _rust_search_path_args(search_deps)
+    search_inputs = _rust_dep_inputs(search_deps)
     build_deps = ctx.get("build_deps")
     if build_deps == None:
         build_deps = []
     build_dep_args = _rust_dep_args(build_deps, aliases)
-    build_dep_inputs = _rust_dep_inputs(build_deps)
+    build_dep_args.extend(search_args)
+    build_dep_inputs = _unique(_rust_dep_inputs(build_deps) + search_inputs)
     feature_flags = _rust_feature_flags(ctx)
     build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_flags)
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
@@ -1059,6 +1084,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     rustc_args.extend(_rust_cap_lints(ctx))
     rustc_args.extend(_rust_builtin_extern_args(crate_type))
     rustc_args.extend(dep_args)
+    rustc_args.extend(search_args)
     rustc_args.extend(linker_args)
     rustc_args.extend(_rust_linker_flags(ctx))
     rustc_args.append(crate_root)
@@ -1069,7 +1095,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         build_inputs.extend(wrapped[1])
     run_action(
         argv = argv,
-        inputs = _unique(srcs + dep_inputs + build_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique(srcs + dep_inputs + search_inputs + build_inputs + _rust_extra_inputs(ctx)),
         outputs = [output],
         env = compile_env,
         toolchain_identity = identity + linker_identity,
@@ -1250,7 +1276,7 @@ def _cargo_compile_resolved_specs(ctx, specs):
             if not ready:
                 next_remaining.append(spec)
                 continue
-            provider = _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs)
+            provider = _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs, _cargo_search_deps(providers))
             providers_by_name[spec["name"]] = provider
             providers.append(provider)
             progressed = True
@@ -1263,7 +1289,12 @@ def _cargo_compile_resolved_specs(ctx, specs):
         fail(ctx["label"]["id"] + ": Cargo dependency graph has a cycle or missing dependency among " + ", ".join(names))
     return (providers, providers_by_name)
 
-def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs):
+def _cargo_search_deps(providers):
+    if host_os() != "windows":
+        return []
+    return providers
+
+def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs, search_deps):
     attrs = _cargo_copy_attrs(spec.get("attrs") or {})
     attrs["_output_prefix"] = spec["name"] + "/"
     attrs["_extra_inputs"] = metadata_inputs
@@ -1276,6 +1307,7 @@ def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, 
         "attr": attrs,
         "deps": dep_providers,
         "build_deps": build_dep_providers,
+        "search_deps": search_deps,
         "srcs": spec.get("srcs") or [],
     }
     if spec.get("kind") == "rust_proc_macro":

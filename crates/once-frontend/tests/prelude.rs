@@ -1403,6 +1403,109 @@ result = repr("ok")
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn prelude_cargo_metadata_windows_adds_prior_dependency_search_paths() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+ctx = {{
+    "label": {{
+        "package": "cargo_dependencies_x86_64_pc_windows_msvc",
+        "name": "cargo_dependencies_x86_64_pc_windows_msvc",
+        "id": "cargo_dependencies_x86_64_pc_windows_msvc",
+    }},
+    "attr": {{}},
+    "deps": [],
+    "srcs": [],
+}}
+specs = [
+    {{
+        "name": "alpha-1.0.0",
+        "kind": "rust_crate",
+        "deps": [],
+        "srcs": [],
+        "attrs": {{
+            "package_name": "alpha",
+            "crate_name": "alpha",
+            "version": "1.0.0",
+            "crate_root": "third_party/rust/vendor/alpha-1.0.0/src/lib.rs",
+            "edition": "2021",
+        }},
+    }},
+    {{
+        "name": "beta-1.0.0",
+        "kind": "rust_crate",
+        "deps": [],
+        "srcs": [],
+        "attrs": {{
+            "package_name": "beta",
+            "crate_name": "beta",
+            "version": "1.0.0",
+            "crate_root": "third_party/rust/vendor/beta-1.0.0/src/lib.rs",
+            "edition": "2021",
+        }},
+    }},
+]
+providers, _ = _cargo_compile_resolved_specs(ctx, specs)
+result = repr([provider["label_id"] for provider in providers])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(
+        workspace.path(),
+        "cargo_dependencies_x86_64_pc_windows_msvc",
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        "[\"cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0\", \"cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0\"]"
+    );
+    let beta_rustc = store
+        .actions
+        .iter()
+        .find(|action| {
+            action.identifier.as_deref()
+                == Some("cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0:rustc")
+        })
+        .expect("beta rustc action");
+    let arg_file = beta_rustc.arg_files.first().expect("beta response file");
+    let alpha_search_path = format!(
+        "dependency={}",
+        workspace_arg(
+            workspace.path(),
+            ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0"
+        )
+    );
+
+    assert!(
+        arg_file
+            .args
+            .windows(2)
+            .any(|args| args[0] == "-L" && args[1] == alpha_search_path),
+        "{alpha_search_path} missing from {:?}",
+        arg_file.args
+    );
+    assert!(!arg_file.args.iter().any(|arg| arg.starts_with("alpha=")));
+}
+
+#[test]
 fn prelude_cargo_metadata_targets_split_proc_macro_host_deps() {
     let prelude = all_prelude_source();
     let source = format!(
