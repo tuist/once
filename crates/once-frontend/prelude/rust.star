@@ -233,6 +233,9 @@ def _rust_response_path_arg(arg):
         return workspace_arg.replace("\\", "/")
     return workspace_arg
 
+def _rust_command_path_arg(arg):
+    return _workspace_arg(arg)
+
 def _split_once(value, separator):
     for index in range(len(value)):
         if value[index:index + len(separator)] == separator:
@@ -638,7 +641,7 @@ def _rust_inline_proc_macro_extern_args(deps, aliases):
         crate_name = _rust_dep_crate_name(dep, aliases)
         proc_macro = dep.get("proc_macro")
         if crate_name and proc_macro:
-            args.extend(["--extern", crate_name + "=" + _rust_response_path_arg(proc_macro)])
+            args.extend(["--extern", crate_name + "=" + _rust_command_path_arg(proc_macro)])
     return args
 
 def _rust_search_path_args(deps):

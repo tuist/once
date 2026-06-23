@@ -2673,6 +2673,32 @@ result = repr([
     );
 }
 
+#[test]
+fn prelude_rust_windows_direct_proc_macro_externs_use_command_paths() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def workspace_root():
+    return "D:\\a\\once\\once"
+
+deps = [{{
+    "crate_name": "futures_macro",
+    "proc_macro": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/futures_macro.dll",
+}}]
+result = repr(_rust_inline_proc_macro_extern_args(deps, {{}}))
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(
+        out,
+        "[\"--extern\", \"futures_macro=D:\\\\a\\\\once\\\\once/.once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/futures_macro.dll\"]"
+    );
+}
+
 fn assert_release_dependency_response_file(store: &AnalysisStore, workspace: &Path) {
     assert_eq!(store.actions.len(), 1);
     let rustc = &store.actions[0];
