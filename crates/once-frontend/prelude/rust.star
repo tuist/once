@@ -1099,6 +1099,17 @@ def _rust_output_extension(crate_type, target):
         return ".exe" if "windows" in os_key else ""
     return ""
 
+def _rust_extra_filename(ctx, crate_type):
+    if crate_type == "proc-macro" and host_os() == "windows":
+        return "-" + _rust_metadata_suffix(ctx)
+    return ""
+
+def _rust_extra_filename_args(ctx, crate_type):
+    extra_filename = _rust_extra_filename(ctx, crate_type)
+    if extra_filename:
+        return ["-C", "extra-filename=" + extra_filename]
+    return []
+
 def _rust_effective_target(ctx, crate_type):
     if crate_type == "proc-macro":
         return ""
@@ -1111,7 +1122,7 @@ def _rust_output_name(ctx, crate_type):
         return crate_name + _rust_output_extension(crate_type, target)
     if crate_type == "rlib" or crate_type == "staticlib" or crate_type == "cdylib" or crate_type == "dylib" or crate_type == "proc-macro":
         prefix = "" if "windows" in (target or host_os()) and crate_type != "rlib" else "lib"
-        return prefix + crate_name + _rust_output_extension(crate_type, target)
+        return prefix + crate_name + _rust_extra_filename(ctx, crate_type) + _rust_output_extension(crate_type, target)
     return crate_name
 
 def _rust_declared_output(ctx, name):
@@ -1156,6 +1167,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "--edition", edition,
         "-C", "metadata=" + _rust_metadata_suffix(ctx),
     ]
+    rustc_args.extend(_rust_extra_filename_args(ctx, crate_type))
     rustc_args.extend(_rust_output_args(crate_type, output))
     rustc_args.extend(_rust_target_args(target))
     rustc_args.extend(_rust_proc_macro_codegen_args(crate_type))

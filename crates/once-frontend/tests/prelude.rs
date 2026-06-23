@@ -1608,13 +1608,25 @@ result = repr([provider["label_id"] for provider in providers])
         workspace.path(),
         ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32",
     );
-    let macro_declared_artifact =
-        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/futures_macro.dll";
-    let macro_artifact = format!("{macro_dir}/futures_macro.dll");
+    let macro_name =
+        "futures_macro-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_FUTURES_MACRO_0_3_32.dll";
+    let macro_declared_artifact = format!(
+        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/{macro_name}"
+    );
+    let macro_artifact = format!("{macro_dir}/{macro_name}");
     let macro_search_path = format!("dependency={macro_dir}");
     let macro_extern = format!("futures_macro={macro_artifact}");
 
     assert_eq!(macro_rustc.outputs, vec![macro_declared_artifact]);
+    assert!(
+        macro_arg_file.args.windows(2).any(|args| {
+            args[0] == "-C"
+                && args[1]
+                    == "extra-filename=-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_FUTURES_MACRO_0_3_32"
+        }),
+        "proc macro extra filename missing from {:?}",
+        macro_arg_file.args
+    );
     assert!(
         macro_arg_file
             .args
@@ -1807,7 +1819,9 @@ result = repr([provider["label_id"] for provider in deps])
         workspace.path(),
         ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32",
     );
-    let macro_artifact = format!("{macro_dir}/futures_macro.dll");
+    let macro_artifact = format!(
+        "{macro_dir}/futures_macro-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_FUTURES_MACRO_0_3_32.dll"
+    );
     let macro_extern = format!("futures_macro={macro_artifact}");
 
     assert!(
