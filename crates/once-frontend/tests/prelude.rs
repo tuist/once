@@ -1608,10 +1608,13 @@ result = repr([provider["label_id"] for provider in providers])
         workspace.path(),
         ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32",
     );
+    let macro_declared_artifact =
+        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/futures_macro.dll";
     let macro_artifact = format!("{macro_dir}/futures_macro.dll");
     let macro_search_path = format!("dependency={macro_dir}");
     let macro_extern = format!("futures_macro={macro_artifact}");
 
+    assert_eq!(macro_rustc.outputs, vec![macro_declared_artifact]);
     assert!(
         macro_arg_file
             .args
@@ -2870,12 +2873,12 @@ result = repr("ok")
         action
             .argv
             .windows(2)
-            .any(|args| args[0] == "--out-dir" && args[1] == ".once/out/macros/stringify"),
+            .any(|args| args[0] == "-o" && args[1] == ".once/out/macros/stringify/libstringify.so"),
         "{:?}",
         action.argv
     );
     assert!(
-        !action.argv.iter().any(|arg| arg == "-o"),
+        !action.argv.iter().any(|arg| arg == "--out-dir"),
         "{:?}",
         action.argv
     );

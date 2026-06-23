@@ -1119,7 +1119,7 @@ def _rust_declared_output(ctx, name):
     return prefix + name
 
 def _rust_output_args(crate_type, output):
-    if crate_type == "proc-macro":
+    if crate_type == "proc-macro" and host_os() == "windows":
         return ["--out-dir", _parent_dir(output)]
     return ["-o", output]
 
