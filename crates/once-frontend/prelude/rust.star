@@ -708,7 +708,7 @@ def _rust_staged_search_path_args(ctx, deps, tag):
         copy_path(
             artifact,
             staged_artifact,
-            inputs = [artifact, staging_dir],
+            inputs = [artifact],
             identifier = ctx["label"]["id"] + ":search-" + tag + ":" + _basename(staged_artifact),
         )
         staged.append(staged_artifact)

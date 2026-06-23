@@ -1518,17 +1518,27 @@ result = repr([provider["label_id"] for provider in providers])
         arg_file.args
     );
     assert!(!arg_file.args.iter().any(|arg| arg.starts_with("alpha=")));
+    let staged_dir =
+        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0/search/prior-deps";
     let staged_alpha =
         ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0/search/prior-deps/libalpha-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_ALPHA_1_0_0.rlib";
+    let staged_alpha_copy = store
+        .actions
+        .iter()
+        .find(|action| action.outputs.iter().any(|output| output == staged_alpha))
+        .expect("staged alpha copy action");
     assert!(
-        store.actions.iter().any(|action| {
-            action.outputs.iter().any(|output| output == staged_alpha)
-                && action.inputs.iter().any(|input| {
-                    input
-                        == ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0/libalpha.rlib"
-                })
+        staged_alpha_copy.inputs.iter().any(|input| {
+            input == ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0/libalpha.rlib"
         }),
-        "{staged_alpha} copy action missing"
+        "{staged_alpha} source input missing"
+    );
+    assert!(
+        !staged_alpha_copy
+            .inputs
+            .iter()
+            .any(|input| input == staged_dir),
+        "{staged_dir} should not be hashed as a copy input"
     );
 }
 
