@@ -1583,6 +1583,18 @@ result = repr([provider["label_id"] for provider in providers])
         out.unwrap(),
         "[\"cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32\", \"cargo_dependencies_x86_64_pc_windows_msvc/futures-util-0.3.32\"]"
     );
+    let macro_rustc = store
+        .actions
+        .iter()
+        .find(|action| {
+            action.identifier.as_deref()
+                == Some("cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32:rustc")
+        })
+        .expect("futures-macro rustc action");
+    let macro_arg_file = macro_rustc
+        .arg_files
+        .first()
+        .expect("futures-macro response file");
     let rustc = store
         .actions
         .iter()
@@ -1600,6 +1612,19 @@ result = repr([provider["label_id"] for provider in providers])
     let macro_search_path = format!("dependency={macro_dir}");
     let macro_extern = format!("futures_macro={macro_artifact}");
 
+    assert!(
+        macro_arg_file
+            .args
+            .windows(2)
+            .any(|args| args[0] == "--out-dir" && args[1] == macro_dir),
+        "{macro_dir} out dir missing from {:?}",
+        macro_arg_file.args
+    );
+    assert!(
+        !macro_arg_file.args.iter().any(|arg| arg == "-o"),
+        "proc macro should let rustc choose the output filename: {:?}",
+        macro_arg_file.args
+    );
     assert!(
         rustc
             .argv
@@ -2838,6 +2863,19 @@ result = repr("ok")
             .argv
             .windows(2)
             .any(|args| args[0] == "-C" && args[1] == "prefer-dynamic"),
+        "{:?}",
+        action.argv
+    );
+    assert!(
+        action
+            .argv
+            .windows(2)
+            .any(|args| args[0] == "--out-dir" && args[1] == ".once/out/macros/stringify"),
+        "{:?}",
+        action.argv
+    );
+    assert!(
+        !action.argv.iter().any(|arg| arg == "-o"),
         "{:?}",
         action.argv
     );

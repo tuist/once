@@ -1118,6 +1118,11 @@ def _rust_declared_output(ctx, name):
     prefix = ctx["attr"].get("_output_prefix") or ""
     return prefix + name
 
+def _rust_output_args(crate_type, output):
+    if crate_type == "proc-macro":
+        return ["--out-dir", _parent_dir(output)]
+    return ["-o", output]
+
 def _rust_compile(ctx, crate_type, default_root, output_name):
     target = _rust_effective_target(ctx, crate_type)
     rustc, identity, host_triple = _rustc_toolchain(target)
@@ -1150,8 +1155,8 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "--crate-type", crate_type,
         "--edition", edition,
         "-C", "metadata=" + _rust_metadata_suffix(ctx),
-        "-o", output,
     ]
+    rustc_args.extend(_rust_output_args(crate_type, output))
     rustc_args.extend(_rust_target_args(target))
     rustc_args.extend(_rust_proc_macro_codegen_args(crate_type))
     rustc_args.extend(feature_flags)
