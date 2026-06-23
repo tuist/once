@@ -1601,11 +1601,19 @@ result = repr([provider["label_id"] for provider in providers])
     let macro_extern = format!("futures_macro={macro_artifact}");
 
     assert!(
-        arg_file
-            .args
+        rustc
+            .argv
             .windows(2)
             .any(|args| args[0] == "--extern" && args[1] == macro_extern),
         "{macro_extern} extern missing from {:?}",
+        rustc.argv
+    );
+    assert!(
+        !arg_file
+            .args
+            .windows(2)
+            .any(|args| args[0] == "--extern" && args[1] == macro_extern),
+        "{macro_extern} should stay out of {:?}",
         arg_file.args
     );
     assert!(
@@ -1620,6 +1628,166 @@ result = repr([provider["label_id"] for provider in providers])
     assert!(
         path.starts_with(&macro_dir),
         "{macro_dir} missing from {path}"
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn prelude_cargo_metadata_windows_proc_macro_deps_from_metadata_are_direct_externs() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+ctx = {{
+    "attrs": {{
+        "target": "x86_64-pc-windows-msvc",
+        "vendor_dir": "third_party/rust/vendor",
+    }},
+}}
+
+def package(name, version, target_name, kind = "lib"):
+    crate_types = ["proc-macro"] if kind == "proc-macro" else ["lib"]
+    return {{
+        "id": "registry+https://github.com/rust-lang/crates.io-index#" + name + "@" + version,
+        "name": name,
+        "version": version,
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "manifest_path": "/workspace/vendor/" + name + "-" + version + "/Cargo.toml",
+        "targets": [{{
+            "name": target_name,
+            "kind": [kind],
+            "crate_types": crate_types,
+            "src_path": "/workspace/vendor/" + name + "-" + version + "/src/lib.rs",
+            "edition": "2018",
+        }}],
+    }}
+
+def dep(name, package, version):
+    return {{
+        "name": name,
+        "pkg": "registry+https://github.com/rust-lang/crates.io-index#" + package + "@" + version,
+        "dep_kinds": [{{"kind": None, "target": None}}],
+    }}
+
+packages = [
+    package("futures-channel", "0.3.32", "futures_channel"),
+    package("futures-core", "0.3.32", "futures_core"),
+    package("futures-io", "0.3.32", "futures_io"),
+    package("futures-macro", "0.3.32", "futures_macro", "proc-macro"),
+    package("futures-sink", "0.3.32", "futures_sink"),
+    package("futures-task", "0.3.32", "futures_task"),
+    package("memchr", "2.8.0", "memchr"),
+    package("pin-project-lite", "0.2.17", "pin_project_lite"),
+    package("slab", "0.4.12", "slab"),
+    package("futures-util", "0.3.32", "futures_util"),
+]
+metadata = {{
+    "packages": packages,
+    "resolve": {{
+        "nodes": [
+            {{"id": package["id"], "features": [], "deps": []}}
+            for package in packages
+            if package["name"] != "futures-util"
+        ] + [{{
+            "id": "registry+https://github.com/rust-lang/crates.io-index#futures-util@0.3.32",
+            "features": [
+                "alloc",
+                "async-await",
+                "async-await-macro",
+                "channel",
+                "default",
+                "futures-channel",
+                "futures-io",
+                "futures-macro",
+                "futures-sink",
+                "io",
+                "memchr",
+                "sink",
+                "slab",
+                "std",
+            ],
+            "deps": [
+                dep("futures_channel", "futures-channel", "0.3.32"),
+                dep("futures_core", "futures-core", "0.3.32"),
+                dep("futures_io", "futures-io", "0.3.32"),
+                dep("futures_macro", "futures-macro", "0.3.32"),
+                dep("futures_sink", "futures-sink", "0.3.32"),
+                dep("futures_task", "futures-task", "0.3.32"),
+                dep("memchr", "memchr", "2.8.0"),
+                dep("pin_project_lite", "pin-project-lite", "0.2.17"),
+                dep("slab", "slab", "0.4.12"),
+            ],
+        }}],
+    }},
+}}
+specs = _cargo_metadata_targets(ctx, metadata)
+deps, _ = _cargo_compile_resolved_specs({{
+    "label": {{
+        "package": "cargo_dependencies_x86_64_pc_windows_msvc",
+        "name": "cargo_dependencies_x86_64_pc_windows_msvc",
+        "id": "cargo_dependencies_x86_64_pc_windows_msvc",
+    }},
+    "attr": {{}},
+    "deps": [],
+    "srcs": [],
+}}, specs)
+result = repr([provider["label_id"] for provider in deps])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(
+        workspace.path(),
+        "cargo_dependencies_x86_64_pc_windows_msvc",
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert!(out.unwrap().contains("futures-util-0.3.32"));
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| {
+            action.identifier.as_deref()
+                == Some("cargo_dependencies_x86_64_pc_windows_msvc/futures-util-0.3.32:rustc")
+        })
+        .expect("futures-util rustc action");
+    let arg_file = rustc.arg_files.first().expect("futures-util response file");
+    let macro_dir = workspace_arg(
+        workspace.path(),
+        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32",
+    );
+    let macro_artifact = format!("{macro_dir}/futures_macro.dll");
+    let macro_extern = format!("futures_macro={macro_artifact}");
+
+    assert!(
+        rustc
+            .argv
+            .windows(2)
+            .any(|args| args[0] == "--extern" && args[1] == macro_extern),
+        "{macro_extern} extern missing from {:?}",
+        rustc.argv
+    );
+    assert!(
+        !arg_file
+            .args
+            .windows(2)
+            .any(|args| args[0] == "--extern" && args[1] == macro_extern),
+        "{macro_extern} should stay out of {:?}",
+        arg_file.args
     );
 }
 

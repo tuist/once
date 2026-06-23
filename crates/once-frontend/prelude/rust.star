@@ -607,10 +607,15 @@ def _rust_dep_args(deps, aliases):
     for dep in deps:
         crate_name = _rust_dep_crate_name(dep, aliases)
         rlib = dep.get("rlib")
-        artifact = rlib or dep.get("proc_macro")
+        proc_macro = dep.get("proc_macro")
+        artifact = rlib or (None if host_os() == "windows" else proc_macro)
         if crate_name and artifact:
             args.extend(["--extern", crate_name + "=" + artifact])
             directory = _parent_dir(artifact)
+            if directory:
+                dirs.append(directory)
+        if proc_macro:
+            directory = _parent_dir(proc_macro)
             if directory:
                 dirs.append(directory)
         for transitive in dep.get("transitive_rlibs") or []:
@@ -623,6 +628,17 @@ def _rust_dep_args(deps, aliases):
                 dirs.append(directory)
     for directory in _unique(dirs):
         args.extend(["-L", "dependency=" + directory])
+    return args
+
+def _rust_inline_proc_macro_extern_args(deps, aliases):
+    if host_os() != "windows":
+        return []
+    args = []
+    for dep in deps:
+        crate_name = _rust_dep_crate_name(dep, aliases)
+        proc_macro = dep.get("proc_macro")
+        if crate_name and proc_macro:
+            args.extend(["--extern", crate_name + "=" + _rust_response_path_arg(proc_macro)])
     return args
 
 def _rust_search_path_args(deps):
@@ -791,7 +807,11 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     compile_args.extend(dep_args)
     compile_args.extend(linker_args)
     compile_args.append(script_path)
-    compile_argv = [rustc] + _rust_response_file_args(ctx, compile_args, "build-script-rustc.rsp")
+    compile_argv = (
+        [rustc] +
+        _rust_inline_proc_macro_extern_args(deps, _rust_aliases(ctx)) +
+        _rust_response_file_args(ctx, compile_args, "build-script-rustc.rsp")
+    )
     build_script_compile_env = _rust_compile_action_env(ctx, host_triple, host_triple)
     _rust_add_windows_proc_macro_path(build_script_compile_env, deps)
     run_action(
@@ -1111,7 +1131,11 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     rustc_args.extend(linker_args)
     rustc_args.extend(_rust_linker_flags(ctx))
     rustc_args.append(crate_root)
-    argv = [rustc] + _rust_response_file_args(ctx, rustc_args, "rustc.rsp")
+    argv = (
+        [rustc] +
+        _rust_inline_proc_macro_extern_args(deps, aliases) +
+        _rust_response_file_args(ctx, rustc_args, "rustc.rsp")
+    )
     if build_stdout:
         wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout)
         argv = wrapped[0]
