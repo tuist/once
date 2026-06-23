@@ -234,7 +234,7 @@ def _rust_response_path_arg(arg):
     return workspace_arg
 
 def _rust_command_path_arg(arg):
-    return _workspace_arg(arg)
+    return _workspace_arg(arg).replace("\\", "/")
 
 def _split_once(value, separator):
     for index in range(len(value)):
@@ -471,6 +471,27 @@ def _rust_compile_action_env(ctx, target, host_triple):
     _rust_merge_env_lower_precedence(env, _rust_android_compile_env(ctx, target or host_triple))
     _rust_merge_env_lower_precedence(env, _rust_c_tool_env(target or host_triple, host_triple))
     return env
+
+def _rustc_sysroot(rustc):
+    return _parent_dir(_parent_dir(rustc))
+
+def _rustc_runtime_dirs(rustc, host_triple):
+    if host_os() != "windows":
+        return []
+    sysroot = _rustc_sysroot(rustc)
+    if not sysroot or not host_triple:
+        return []
+    return [
+        sysroot + "/bin",
+        sysroot + "/lib/rustlib/" + host_triple + "/bin",
+    ]
+
+def _rust_add_windows_rustc_runtime_path(env, rustc, host_triple):
+    if host_os() != "windows":
+        return
+    path = _rust_path_separator().join(_rustc_runtime_dirs(rustc, host_triple))
+    if path:
+        env["PATH"] = _rust_merge_paths(path, env.get("PATH") or "")
 
 def _rust_target_args(target):
     if target:
@@ -821,6 +842,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
         _rust_response_file_args(ctx, compile_args, "build-script-rustc.rsp")
     )
     build_script_compile_env = _rust_compile_action_env(ctx, host_triple, host_triple)
+    _rust_add_windows_rustc_runtime_path(build_script_compile_env, rustc, host_triple)
     _rust_add_windows_proc_macro_path(build_script_compile_env, deps)
     run_action(
         argv = compile_argv,
@@ -1120,6 +1142,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     feature_flags = _rust_feature_flags(ctx)
     build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_flags)
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
+    _rust_add_windows_rustc_runtime_path(compile_env, rustc, host_triple)
     _rust_add_windows_proc_macro_path(compile_env, deps)
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
     rustc_args = [

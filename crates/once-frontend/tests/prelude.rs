@@ -1629,6 +1629,15 @@ result = repr([provider["label_id"] for provider in providers])
         path.starts_with(&macro_dir),
         "{macro_dir} missing from {path}"
     );
+    let path_entries = path.split(';').collect::<Vec<_>>();
+    assert!(
+        path_entries.contains(&"C:/Rust/bin"),
+        "rustc bin missing from {path}"
+    );
+    assert!(
+        path_entries.contains(&"C:/Rust/lib/rustlib/x86_64-pc-windows-msvc/bin"),
+        "rustc runtime bin missing from {path}"
+    );
 }
 
 #[test]
@@ -2695,7 +2704,7 @@ result = repr(_rust_inline_proc_macro_extern_args(deps, {{}}))
 
     assert_eq!(
         out,
-        "[\"--extern\", \"futures_macro=D:\\\\a\\\\once\\\\once/.once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/futures_macro.dll\"]"
+        "[\"--extern\", \"futures_macro=D:/a/once/once/.once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/futures_macro.dll\"]"
     );
 }
 
