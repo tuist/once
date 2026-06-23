@@ -607,9 +607,13 @@ def _rust_dep_args(deps, aliases):
     for dep in deps:
         crate_name = _rust_dep_crate_name(dep, aliases)
         rlib = dep.get("rlib")
-        artifact = rlib or dep.get("proc_macro")
+        proc_macro = dep.get("proc_macro")
+        artifact = rlib or proc_macro
         if crate_name and artifact:
-            args.extend(["--extern", crate_name + "=" + artifact])
+            if proc_macro and not rlib and host_os() == "windows" and crate_name == dep.get("crate_name"):
+                args.extend(["--extern", crate_name])
+            else:
+                args.extend(["--extern", crate_name + "=" + artifact])
             directory = _parent_dir(artifact)
             if directory:
                 dirs.append(directory)

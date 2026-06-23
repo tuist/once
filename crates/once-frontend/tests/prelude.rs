@@ -1506,6 +1506,127 @@ result = repr([provider["label_id"] for provider in providers])
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn prelude_cargo_metadata_windows_proc_macro_deps_use_search_externs() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+ctx = {{
+    "label": {{
+        "package": "cargo_dependencies_x86_64_pc_windows_msvc",
+        "name": "cargo_dependencies_x86_64_pc_windows_msvc",
+        "id": "cargo_dependencies_x86_64_pc_windows_msvc",
+    }},
+    "attr": {{}},
+    "deps": [],
+    "srcs": [],
+}}
+specs = [
+    {{
+        "name": "futures-macro-0.3.32",
+        "kind": "rust_proc_macro",
+        "deps": [],
+        "srcs": [],
+        "attrs": {{
+            "package_name": "futures-macro",
+            "crate_name": "futures_macro",
+            "version": "0.3.32",
+            "crate_root": "third_party/rust/vendor/futures-macro-0.3.32/src/lib.rs",
+            "edition": "2018",
+        }},
+    }},
+    {{
+        "name": "futures-util-0.3.32",
+        "kind": "rust_crate",
+        "deps": ["./futures-macro-0.3.32"],
+        "srcs": [],
+        "attrs": {{
+            "package_name": "futures-util",
+            "crate_name": "futures_util",
+            "version": "0.3.32",
+            "crate_root": "third_party/rust/vendor/futures-util-0.3.32/src/lib.rs",
+            "edition": "2018",
+            "crate_aliases": {{
+                "futures-macro-0.3.32": "futures_macro",
+            }},
+        }},
+    }},
+]
+providers, _ = _cargo_compile_resolved_specs(ctx, specs)
+result = repr([provider["label_id"] for provider in providers])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(
+        workspace.path(),
+        "cargo_dependencies_x86_64_pc_windows_msvc",
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        "[\"cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32\", \"cargo_dependencies_x86_64_pc_windows_msvc/futures-util-0.3.32\"]"
+    );
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| {
+            action.identifier.as_deref()
+                == Some("cargo_dependencies_x86_64_pc_windows_msvc/futures-util-0.3.32:rustc")
+        })
+        .expect("futures-util rustc action");
+    let arg_file = rustc.arg_files.first().expect("futures-util response file");
+    let macro_search_path = format!(
+        "dependency={}",
+        workspace_arg(
+            workspace.path(),
+            ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32"
+        )
+    );
+
+    assert!(
+        arg_file
+            .args
+            .windows(2)
+            .any(|args| args[0] == "--extern" && args[1] == "futures_macro"),
+        "futures_macro extern missing from {:?}",
+        arg_file.args
+    );
+    assert!(
+        arg_file
+            .args
+            .windows(2)
+            .any(|args| args[0] == "-L" && args[1] == macro_search_path),
+        "{macro_search_path} missing from {:?}",
+        arg_file.args
+    );
+    assert!(
+        !arg_file
+            .args
+            .iter()
+            .any(|arg| arg.starts_with("futures_macro=")),
+        "futures_macro should be resolved through the search path: {:?}",
+        arg_file.args
+    );
+}
+
+#[test]
 fn prelude_cargo_metadata_targets_split_proc_macro_host_deps() {
     let prelude = all_prelude_source();
     let source = format!(
