@@ -2824,6 +2824,14 @@ result = repr("ok")
         "{:?}",
         action.argv
     );
+    assert!(
+        action
+            .argv
+            .windows(2)
+            .any(|args| args[0] == "-C" && args[1] == "prefer-dynamic"),
+        "{:?}",
+        action.argv
+    );
     assert_eq!(
         action.outputs,
         vec![".once/out/macros/stringify/libstringify.so".to_string()]

@@ -477,6 +477,11 @@ def _rust_target_args(target):
         return ["--target", target]
     return []
 
+def _rust_proc_macro_codegen_args(crate_type):
+    if crate_type == "proc-macro":
+        return ["-C", "prefer-dynamic"]
+    return []
+
 def _rust_cfg_env(rustc, target):
     argv = [rustc, "--print", "cfg"]
     argv.extend(_rust_target_args(target))
@@ -1125,6 +1130,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "-o", output,
     ]
     rustc_args.extend(_rust_target_args(target))
+    rustc_args.extend(_rust_proc_macro_codegen_args(crate_type))
     rustc_args.extend(feature_flags)
     rustc_args.extend(_rust_user_flags(ctx))
     rustc_args.extend(_rust_cap_lints(ctx))
