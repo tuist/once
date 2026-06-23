@@ -50,8 +50,20 @@ struct DeclaredActionContext<'a> {
     capability: &'a str,
     index: usize,
     identifier: &'a str,
+    argv: &'a [String],
     arg_files: &'a [DeclaredArgFile],
     record_success_evidence: bool,
+}
+
+struct DeclaredActionFailure<'a> {
+    cache: &'a CacheProvider,
+    identifier: &'a str,
+    index: usize,
+    target: &'a str,
+    exit_code: i32,
+    argv: &'a [String],
+    arg_files: &'a [DeclaredArgFile],
+    result: &'a ActionResult,
 }
 
 /// Materialise each declared action through the action cache, then
@@ -186,6 +198,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         capability,
         index,
         identifier: &identifier_for_error,
+        argv: &declared.argv,
         arg_files: &declared.arg_files,
         record_success_evidence,
     };
@@ -228,15 +241,16 @@ async fn run_cacheable_declared_action(
         .await;
         anyhow::bail!(
             "{}",
-            declared_action_failure_message(
-                context.cache,
-                context.identifier,
-                context.index,
-                context.target_id,
+            declared_action_failure_message(DeclaredActionFailure {
+                cache: context.cache,
+                identifier: context.identifier,
+                index: context.index,
+                target: context.target_id,
                 exit_code,
-                context.arg_files,
-                &outcome.result,
-            )
+                argv: context.argv,
+                arg_files: context.arg_files,
+                result: &outcome.result,
+            })
             .await
         );
     }
@@ -298,15 +312,16 @@ async fn run_uncacheable_declared_action(
         .await;
         anyhow::bail!(
             "{}",
-            declared_action_failure_message(
-                context.cache,
-                context.identifier,
-                context.index,
-                context.target_id,
+            declared_action_failure_message(DeclaredActionFailure {
+                cache: context.cache,
+                identifier: context.identifier,
+                index: context.index,
+                target: context.target_id,
                 exit_code,
-                context.arg_files,
-                &result,
-            )
+                argv: context.argv,
+                arg_files: context.arg_files,
+                result: &result,
+            })
             .await
         );
     }
@@ -358,21 +373,37 @@ async fn record_declared_action_evidence(
     .await;
 }
 
-async fn declared_action_failure_message(
-    cache: &CacheProvider,
-    identifier: &str,
-    index: usize,
-    target: &str,
-    exit_code: i32,
-    arg_files: &[DeclaredArgFile],
-    result: &ActionResult,
-) -> String {
+async fn declared_action_failure_message(failure: DeclaredActionFailure<'_>) -> String {
+    let DeclaredActionFailure {
+        cache,
+        identifier,
+        index,
+        target,
+        exit_code,
+        argv,
+        arg_files,
+        result,
+    } = failure;
     let mut message =
         format!("{identifier} ({index}) failed for {target} with exit code {exit_code}");
+    append_declared_argv(&mut message, argv);
     append_declared_arg_files(&mut message, arg_files);
     append_captured_output(cache, &mut message, "stdout", result.stdout.as_ref()).await;
     append_captured_output(cache, &mut message, "stderr", result.stderr.as_ref()).await;
     message
+}
+
+fn append_declared_argv(message: &mut String, argv: &[String]) {
+    if argv.is_empty() {
+        return;
+    }
+
+    message.push_str("\n\nargv:");
+    append_arg_file_arg_list(message, "first args", argv.iter().take(32));
+    let start = argv.len().saturating_sub(16);
+    if start > 32 {
+        append_arg_file_arg_list(message, "last args", argv.iter().skip(start));
+    }
 }
 
 fn append_declared_arg_files(message: &mut String, arg_files: &[DeclaredArgFile]) {
@@ -995,9 +1026,17 @@ mod tests {
             outputs: BTreeMap::new(),
         };
 
-        let message =
-            declared_action_failure_message(&cache, "target:action", 2, "target", 7, &[], &result)
-                .await;
+        let message = declared_action_failure_message(DeclaredActionFailure {
+            cache: &cache,
+            identifier: "target:action",
+            index: 2,
+            target: "target",
+            exit_code: 7,
+            argv: &[],
+            arg_files: &[],
+            result: &result,
+        })
+        .await;
 
         assert!(message.contains("target:action (2) failed for target with exit code 7"));
         assert!(message.contains("stdout:\nvisible stdout"));
@@ -1018,8 +1057,17 @@ mod tests {
             outputs: BTreeMap::new(),
         };
 
-        let message =
-            declared_action_failure_message(&cache, "id", 0, "target", 1, &[], &result).await;
+        let message = declared_action_failure_message(DeclaredActionFailure {
+            cache: &cache,
+            identifier: "id",
+            index: 0,
+            target: "target",
+            exit_code: 1,
+            argv: &[],
+            arg_files: &[],
+            result: &result,
+        })
+        .await;
 
         assert!(message.contains("last 16384 bytes of stdout:\n"));
         assert!(!message.contains("drop-me"));
@@ -1036,7 +1084,7 @@ mod tests {
             stderr: None,
             outputs: BTreeMap::new(),
         };
-        let mut args = vec![
+        let mut response_args = vec![
             "--crate-name".to_string(),
             "app".to_string(),
             "--extern".to_string(),
@@ -1044,18 +1092,35 @@ mod tests {
             "-L".to_string(),
             "dependency=.once/out/crates/dep/dep".to_string(),
         ];
-        args.extend((0..60).map(|index| format!("arg-{index}")));
-        args.push("crates/app/src/lib.rs".to_string());
+        response_args.extend((0..60).map(|index| format!("arg-{index}")));
+        response_args.push("crates/app/src/lib.rs".to_string());
         let arg_files = vec![DeclaredArgFile {
             path: ".once/tmp/analysis/crates/app/app/rustc.rsp".to_string(),
             format: DeclaredArgFileFormat::RustcResponse,
-            args,
+            args: response_args,
         }];
 
-        let message =
-            declared_action_failure_message(&cache, "id", 0, "target", 1, &arg_files, &result)
-                .await;
+        let command_argv = vec![
+            "rustc".to_string(),
+            "--extern".to_string(),
+            "macro=.once/out/deps/macro.dll".to_string(),
+            "@.once/tmp/analysis/crates/app/app/rustc.rsp".to_string(),
+        ];
+        let message = declared_action_failure_message(DeclaredActionFailure {
+            cache: &cache,
+            identifier: "id",
+            index: 0,
+            target: "target",
+            exit_code: 1,
+            argv: &command_argv,
+            arg_files: &arg_files,
+            result: &result,
+        })
+        .await;
 
+        assert!(message.contains("argv:"));
+        assert!(message.contains("first args:\n  rustc"));
+        assert!(message.contains("macro=.once/out/deps/macro.dll"));
         assert!(message.contains("arg files:"));
         assert!(message.contains(".once/tmp/analysis/crates/app/app/rustc.rsp [rustc-response]"));
         assert!(message.contains("first args:\n  --crate-name"));
