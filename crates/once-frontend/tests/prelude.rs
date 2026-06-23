@@ -1486,11 +1486,18 @@ result = repr([provider["label_id"] for provider in providers])
         })
         .expect("beta rustc action");
     let arg_file = beta_rustc.arg_files.first().expect("beta response file");
-    let alpha_search_path = format!(
+    let raw_alpha_search_path = format!(
         "dependency={}",
         workspace_arg(
             workspace.path(),
             ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0"
+        )
+    );
+    let staged_search_path = format!(
+        "dependency={}",
+        workspace_arg(
+            workspace.path(),
+            ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0/search/prior-deps"
         )
     );
 
@@ -1498,11 +1505,31 @@ result = repr([provider["label_id"] for provider in providers])
         arg_file
             .args
             .windows(2)
-            .any(|args| args[0] == "-L" && args[1] == alpha_search_path),
-        "{alpha_search_path} missing from {:?}",
+            .any(|args| args[0] == "-L" && args[1] == staged_search_path),
+        "{staged_search_path} missing from {:?}",
+        arg_file.args
+    );
+    assert!(
+        !arg_file
+            .args
+            .iter()
+            .any(|arg| arg == &raw_alpha_search_path),
+        "{raw_alpha_search_path} should be staged out of {:?}",
         arg_file.args
     );
     assert!(!arg_file.args.iter().any(|arg| arg.starts_with("alpha=")));
+    let staged_alpha =
+        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0/search/prior-deps/libalpha-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_ALPHA_1_0_0.rlib";
+    assert!(
+        store.actions.iter().any(|action| {
+            action.outputs.iter().any(|output| output == staged_alpha)
+                && action.inputs.iter().any(|input| {
+                    input
+                        == ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0/libalpha.rlib"
+                })
+        }),
+        "{staged_alpha} copy action missing"
+    );
 }
 
 #[test]
@@ -1614,7 +1641,14 @@ result = repr([provider["label_id"] for provider in providers])
         ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/{macro_name}"
     );
     let macro_artifact = format!("{macro_dir}/{macro_name}");
-    let macro_search_path = format!("dependency={macro_dir}");
+    let raw_macro_search_path = format!("dependency={macro_dir}");
+    let staged_search_path = format!(
+        "dependency={}",
+        workspace_arg(
+            workspace.path(),
+            ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-util-0.3.32/search/deps"
+        )
+    );
     let macro_extern = format!("futures_macro={macro_artifact}");
 
     assert_eq!(macro_rustc.outputs, vec![macro_declared_artifact]);
@@ -1660,8 +1694,16 @@ result = repr([provider["label_id"] for provider in providers])
         arg_file
             .args
             .windows(2)
-            .any(|args| args[0] == "-L" && args[1] == macro_search_path),
-        "{macro_search_path} missing from {:?}",
+            .any(|args| args[0] == "-L" && args[1] == staged_search_path),
+        "{staged_search_path} missing from {:?}",
+        arg_file.args
+    );
+    assert!(
+        !arg_file
+            .args
+            .iter()
+            .any(|arg| arg == &raw_macro_search_path),
+        "{raw_macro_search_path} should be staged out of {:?}",
         arg_file.args
     );
     let path = rustc.env.get("PATH").expect("rustc PATH");
@@ -2398,8 +2440,11 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
-    assert_eq!(store.actions.len(), 1);
-    let rustc = &store.actions[0];
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| action.identifier.as_deref() == Some("crates/app/app:rustc"))
+        .expect("app rustc action");
     assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
     assert!(rustc
         .argv
@@ -2495,8 +2540,11 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
-    assert_eq!(store.actions.len(), 1);
-    let rustc = &store.actions[0];
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| action.identifier.as_deref() == Some("crates/app/app:rustc"))
+        .expect("app rustc action");
     assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
     assert!(rustc
         .argv
@@ -2561,8 +2609,11 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
-    assert_eq!(store.actions.len(), 1);
-    let rustc = &store.actions[0];
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| action.identifier.as_deref() == Some("crates/app/app:rustc"))
+        .expect("app rustc action");
     assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
     // On Windows the invocation is always routed through a response file, even
     // when the crate has no features, because the command line still carries
@@ -2751,8 +2802,14 @@ result = repr(_rust_inline_proc_macro_extern_args(deps, {{}}))
 }
 
 fn assert_release_dependency_response_file(store: &AnalysisStore, workspace: &Path) {
-    assert_eq!(store.actions.len(), 1);
-    let rustc = &store.actions[0];
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| {
+            action.identifier.as_deref()
+                == Some("crates/once-core/once_core_x86_64_pc_windows_msvc:rustc")
+        })
+        .expect("once-core rustc action");
     assert_eq!(
         rustc.identifier.as_deref(),
         Some("crates/once-core/once_core_x86_64_pc_windows_msvc:rustc")
@@ -2821,6 +2878,14 @@ fn assert_release_dependency_response_file(store: &AnalysisStore, workspace: &Pa
             arg_file.args
         );
     }
+    assert_release_dependency_search_path(&arg_file.args, workspace);
+    assert_eq!(
+        arg_file.args.last().map(String::as_str),
+        Some(crate_root.as_str())
+    );
+}
+
+fn assert_release_dependency_search_path(args: &[String], workspace: &Path) {
     let tokio_dependency = format!(
         "dependency={}",
         workspace_arg(
@@ -2828,10 +2893,20 @@ fn assert_release_dependency_response_file(store: &AnalysisStore, workspace: &Pa
             ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3"
         )
     );
-    assert!(arg_file.args.iter().any(|arg| { arg == &tokio_dependency }));
-    assert_eq!(
-        arg_file.args.last().map(String::as_str),
-        Some(crate_root.as_str())
+    let staged_dependency = format!(
+        "dependency={}",
+        workspace_arg(
+            workspace,
+            ".once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/search/deps"
+        )
+    );
+    assert!(
+        args.iter().any(|arg| { arg == &staged_dependency }),
+        "{staged_dependency} missing from {args:?}"
+    );
+    assert!(
+        !args.iter().any(|arg| { arg == &tokio_dependency }),
+        "{tokio_dependency} should be staged out of {args:?}"
     );
 }
 

@@ -632,7 +632,6 @@ def _rust_dep_crate_name(dep, aliases):
 
 def _rust_dep_args(deps, aliases):
     args = []
-    dirs = []
     for dep in deps:
         crate_name = _rust_dep_crate_name(dep, aliases)
         rlib = dep.get("rlib")
@@ -640,24 +639,86 @@ def _rust_dep_args(deps, aliases):
         artifact = rlib or (None if host_os() == "windows" else proc_macro)
         if crate_name and artifact:
             args.extend(["--extern", crate_name + "=" + artifact])
-            directory = _parent_dir(artifact)
-            if directory:
-                dirs.append(directory)
+    return args
+
+def _rust_dep_search_artifacts(deps):
+    artifacts = []
+    for dep in deps:
+        rlib = dep.get("rlib")
+        if rlib:
+            artifacts.append(rlib)
+        proc_macro = dep.get("proc_macro")
         if proc_macro:
-            directory = _parent_dir(proc_macro)
-            if directory:
-                dirs.append(directory)
+            artifacts.append(proc_macro)
         for transitive in dep.get("transitive_rlibs") or []:
-            directory = _parent_dir(transitive)
-            if directory:
-                dirs.append(directory)
+            artifacts.append(transitive)
         for transitive in dep.get("transitive_proc_macros") or []:
-            directory = _parent_dir(transitive)
-            if directory:
-                dirs.append(directory)
+            artifacts.append(transitive)
+    return _unique(artifacts)
+
+def _basename(path):
+    normalized = path.replace("\\", "/")
+    parts = normalized.split("/")
+    return parts[len(parts) - 1]
+
+def _split_extension(name):
+    dot = -1
+    for index in range(len(name)):
+        if name[index] == ".":
+            dot = index
+    if dot <= 0:
+        return (name, "")
+    return (name[:dot], name[dot:])
+
+def _rust_artifact_suffix(artifact):
+    parent = _parent_dir(artifact).replace("\\", "/")
+    prefix = ".once/out/"
+    if parent.startswith(prefix):
+        parent = parent[len(prefix):]
+    return _ascii_env_key(parent)
+
+def _rust_staged_artifact_name(artifact):
+    stem, extension = _split_extension(_basename(artifact))
+    return stem + "-" + _rust_artifact_suffix(artifact) + extension
+
+def _rust_raw_search_path_args(deps):
+    dirs = []
+    for artifact in _rust_dep_search_artifacts(deps):
+        directory = _parent_dir(artifact)
+        if directory:
+            dirs.append(directory)
+    args = []
     for directory in _unique(dirs):
         args.extend(["-L", "dependency=" + directory])
     return args
+
+def _rust_staged_search_path_args(ctx, deps, tag):
+    artifacts = _rust_dep_search_artifacts(deps)
+    if not artifacts:
+        return ([], [])
+    staging_dir = declare_output(_rust_declared_output(ctx, "search/" + tag))
+    prepare_path(staging_dir, kind = "remove", identifier = ctx["label"]["id"] + ":search-" + tag + "-clean")
+    prepare_path(staging_dir, kind = "directory", identifier = ctx["label"]["id"] + ":search-" + tag + "-prepare")
+    staged = []
+    seen = {}
+    for artifact in artifacts:
+        staged_artifact = staging_dir + "/" + _rust_staged_artifact_name(artifact)
+        if staged_artifact in seen:
+            continue
+        copy_path(
+            artifact,
+            staged_artifact,
+            inputs = [artifact, staging_dir],
+            identifier = ctx["label"]["id"] + ":search-" + tag + ":" + _basename(staged_artifact),
+        )
+        staged.append(staged_artifact)
+        seen[staged_artifact] = True
+    return (["-L", "dependency=" + staging_dir], staged)
+
+def _rust_search_path_args(ctx, deps, tag):
+    if host_os() == "windows":
+        return _rust_staged_search_path_args(ctx, deps, tag)
+    return (_rust_raw_search_path_args(deps), [])
 
 def _rust_inline_proc_macro_extern_args(deps, aliases):
     if host_os() != "windows":
@@ -668,27 +729,6 @@ def _rust_inline_proc_macro_extern_args(deps, aliases):
         proc_macro = dep.get("proc_macro")
         if crate_name and proc_macro:
             args.extend(["--extern", crate_name + "=" + _rust_command_path_arg(proc_macro)])
-    return args
-
-def _rust_search_path_args(deps):
-    args = []
-    dirs = []
-    for dep in deps:
-        artifact = dep.get("rlib") or dep.get("proc_macro")
-        if artifact:
-            directory = _parent_dir(artifact)
-            if directory:
-                dirs.append(directory)
-        for transitive in dep.get("transitive_rlibs") or []:
-            directory = _parent_dir(transitive)
-            if directory:
-                dirs.append(directory)
-        for transitive in dep.get("transitive_proc_macros") or []:
-            directory = _parent_dir(transitive)
-            if directory:
-                dirs.append(directory)
-    for directory in _unique(dirs):
-        args.extend(["-L", "dependency=" + directory])
     return args
 
 def _rust_proc_macro_dirs(deps):
@@ -1145,16 +1185,18 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     aliases = _rust_aliases(ctx)
     deps = _rust_resolved_deps(ctx)
     dep_args = _rust_dep_args(deps, aliases)
+    dep_search_args, dep_search_inputs = _rust_search_path_args(ctx, deps, "deps")
     dep_inputs = _rust_dep_inputs(deps)
     search_deps = ctx.get("search_deps") or []
-    search_args = _rust_search_path_args(search_deps)
-    search_inputs = _rust_dep_inputs(search_deps)
+    search_args, search_inputs = _rust_search_path_args(ctx, search_deps, "prior-deps")
     build_deps = ctx.get("build_deps")
     if build_deps == None:
         build_deps = []
     build_dep_args = _rust_dep_args(build_deps, aliases)
+    build_dep_search_args, build_dep_search_inputs = _rust_search_path_args(ctx, build_deps, "build-deps")
+    build_dep_args.extend(build_dep_search_args)
     build_dep_args.extend(search_args)
-    build_dep_inputs = _unique(_rust_dep_inputs(build_deps) + search_inputs)
+    build_dep_inputs = _unique(_rust_dep_inputs(build_deps) + build_dep_search_inputs + search_inputs)
     feature_flags = _rust_feature_flags(ctx)
     build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_flags)
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
@@ -1176,6 +1218,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     rustc_args.extend(_rust_cap_lints(ctx))
     rustc_args.extend(_rust_builtin_extern_args(crate_type))
     rustc_args.extend(dep_args)
+    rustc_args.extend(dep_search_args)
     rustc_args.extend(search_args)
     rustc_args.extend(linker_args)
     rustc_args.extend(_rust_linker_flags(ctx))
@@ -1191,7 +1234,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         build_inputs.extend(wrapped[1])
     run_action(
         argv = argv,
-        inputs = _unique(srcs + dep_inputs + search_inputs + build_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique(srcs + dep_inputs + dep_search_inputs + search_inputs + build_inputs + _rust_extra_inputs(ctx)),
         outputs = [output],
         env = compile_env,
         toolchain_identity = identity + linker_identity,
