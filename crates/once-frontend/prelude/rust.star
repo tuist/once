@@ -607,13 +607,9 @@ def _rust_dep_args(deps, aliases):
     for dep in deps:
         crate_name = _rust_dep_crate_name(dep, aliases)
         rlib = dep.get("rlib")
-        proc_macro = dep.get("proc_macro")
-        artifact = rlib or proc_macro
+        artifact = rlib or dep.get("proc_macro")
         if crate_name and artifact:
-            if proc_macro and not rlib and host_os() == "windows" and crate_name == dep.get("crate_name"):
-                args.extend(["--extern", crate_name])
-            else:
-                args.extend(["--extern", crate_name + "=" + artifact])
+            args.extend(["--extern", crate_name + "=" + artifact])
             directory = _parent_dir(artifact)
             if directory:
                 dirs.append(directory)
@@ -649,6 +645,27 @@ def _rust_search_path_args(deps):
     for directory in _unique(dirs):
         args.extend(["-L", "dependency=" + directory])
     return args
+
+def _rust_proc_macro_dirs(deps):
+    dirs = []
+    for dep in deps:
+        proc_macro = dep.get("proc_macro")
+        if proc_macro:
+            directory = _parent_dir(proc_macro)
+            if directory:
+                dirs.append(_workspace_absolute(directory))
+        for transitive in dep.get("transitive_proc_macros") or []:
+            directory = _parent_dir(transitive)
+            if directory:
+                dirs.append(_workspace_absolute(directory))
+    return _unique(dirs)
+
+def _rust_add_windows_proc_macro_path(env, deps):
+    if host_os() != "windows":
+        return
+    path = _rust_path_separator().join(_rust_proc_macro_dirs(deps))
+    if path:
+        env["PATH"] = _rust_merge_paths(path, env.get("PATH") or "")
 
 def _rust_builtin_extern_args(crate_type):
     if crate_type == "proc-macro":
@@ -776,6 +793,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     compile_args.append(script_path)
     compile_argv = [rustc] + _rust_response_file_args(ctx, compile_args, "build-script-rustc.rsp")
     build_script_compile_env = _rust_compile_action_env(ctx, host_triple, host_triple)
+    _rust_add_windows_proc_macro_path(build_script_compile_env, deps)
     run_action(
         argv = compile_argv,
         inputs = _unique([script_path] + dep_inputs + _rust_extra_inputs(ctx)),
@@ -1074,6 +1092,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     feature_flags = _rust_feature_flags(ctx)
     build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_flags)
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
+    _rust_add_windows_proc_macro_path(compile_env, deps)
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
     rustc_args = [
         "--crate-name", crate_name,

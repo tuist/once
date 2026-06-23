@@ -1507,7 +1507,7 @@ result = repr([provider["label_id"] for provider in providers])
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn prelude_cargo_metadata_windows_proc_macro_deps_use_search_externs() {
+fn prelude_cargo_metadata_windows_proc_macro_deps_extend_action_path() {
     let prelude = all_prelude_source();
     let source = format!(
         r#"{prelude}
@@ -1592,20 +1592,20 @@ result = repr([provider["label_id"] for provider in providers])
         })
         .expect("futures-util rustc action");
     let arg_file = rustc.arg_files.first().expect("futures-util response file");
-    let macro_search_path = format!(
-        "dependency={}",
-        workspace_arg(
-            workspace.path(),
-            ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32"
-        )
+    let macro_dir = workspace_arg(
+        workspace.path(),
+        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32",
     );
+    let macro_artifact = format!("{macro_dir}/futures_macro.dll");
+    let macro_search_path = format!("dependency={macro_dir}");
+    let macro_extern = format!("futures_macro={macro_artifact}");
 
     assert!(
         arg_file
             .args
             .windows(2)
-            .any(|args| args[0] == "--extern" && args[1] == "futures_macro"),
-        "futures_macro extern missing from {:?}",
+            .any(|args| args[0] == "--extern" && args[1] == macro_extern),
+        "{macro_extern} extern missing from {:?}",
         arg_file.args
     );
     assert!(
@@ -1616,13 +1616,10 @@ result = repr([provider["label_id"] for provider in providers])
         "{macro_search_path} missing from {:?}",
         arg_file.args
     );
+    let path = rustc.env.get("PATH").expect("rustc PATH");
     assert!(
-        !arg_file
-            .args
-            .iter()
-            .any(|arg| arg.starts_with("futures_macro=")),
-        "futures_macro should be resolved through the search path: {:?}",
-        arg_file.args
+        path.starts_with(&macro_dir),
+        "{macro_dir} missing from {path}"
     );
 }
 
