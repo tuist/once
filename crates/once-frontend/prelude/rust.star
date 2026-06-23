@@ -661,26 +661,6 @@ def _basename(path):
     parts = normalized.split("/")
     return parts[len(parts) - 1]
 
-def _split_extension(name):
-    dot = -1
-    for index in range(len(name)):
-        if name[index] == ".":
-            dot = index
-    if dot <= 0:
-        return (name, "")
-    return (name[:dot], name[dot:])
-
-def _rust_artifact_suffix(artifact):
-    parent = _parent_dir(artifact).replace("\\", "/")
-    prefix = ".once/out/"
-    if parent.startswith(prefix):
-        parent = parent[len(prefix):]
-    return _ascii_env_key(parent)
-
-def _rust_staged_artifact_name(artifact):
-    stem, extension = _split_extension(_basename(artifact))
-    return stem + "-" + _rust_artifact_suffix(artifact) + extension
-
 def _rust_raw_search_path_args(deps):
     dirs = []
     for artifact in _rust_dep_search_artifacts(deps):
@@ -692,33 +672,68 @@ def _rust_raw_search_path_args(deps):
         args.extend(["-L", "dependency=" + directory])
     return args
 
-def _rust_staged_search_path_args(ctx, deps, tag):
-    artifacts = _rust_dep_search_artifacts(deps)
+def _rust_rlib_search_path_args(deps):
+    dirs = []
+    for dep in deps:
+        rlib = dep.get("rlib")
+        if rlib:
+            directory = _parent_dir(rlib)
+            if directory:
+                dirs.append(directory)
+        for transitive in dep.get("transitive_rlibs") or []:
+            directory = _parent_dir(transitive)
+            if directory:
+                dirs.append(directory)
+    args = []
+    for directory in _unique(dirs):
+        args.extend(["-L", "dependency=" + directory])
+    return args
+
+def _rust_proc_macro_search_artifacts(deps):
+    artifacts = []
+    for dep in deps:
+        for staged in dep.get("transitive_proc_macro_search") or []:
+            artifacts.append(staged)
+    return _unique(artifacts)
+
+def _rust_proc_macro_search_path_args(deps):
+    # rustc only matches a Windows proc-macro dylib through a search directory
+    # that holds the dynamic library by itself, away from the sibling import
+    # library rustc emits next to it. Each proc-macro is staged once, next to
+    # where it is built, into a dedicated directory the dependents point at;
+    # rlibs resolve fine from their original directories.
+    artifacts = _rust_proc_macro_search_artifacts(deps)
     if not artifacts:
         return ([], [])
-    staging_dir = declare_output(_rust_declared_output(ctx, "search/" + tag))
-    prepare_path(staging_dir, kind = "remove", identifier = ctx["label"]["id"] + ":search-" + tag + "-clean")
-    prepare_path(staging_dir, kind = "directory", identifier = ctx["label"]["id"] + ":search-" + tag + "-prepare")
-    staged = []
-    seen = {}
+    dirs = []
     for artifact in artifacts:
-        staged_artifact = staging_dir + "/" + _rust_staged_artifact_name(artifact)
-        if staged_artifact in seen:
-            continue
-        copy_path(
-            artifact,
-            staged_artifact,
-            inputs = [artifact],
-            identifier = ctx["label"]["id"] + ":search-" + tag + ":" + _basename(staged_artifact),
-        )
-        staged.append(staged_artifact)
-        seen[staged_artifact] = True
-    return (["-L", "dependency=" + staging_dir], staged)
+        directory = _parent_dir(artifact)
+        if directory:
+            dirs.append(directory)
+    args = []
+    for directory in _unique(dirs):
+        args.extend(["-L", "dependency=" + directory])
+    return (args, artifacts)
 
 def _rust_search_path_args(ctx, deps, tag):
-    if host_os() == "windows":
-        return _rust_staged_search_path_args(ctx, deps, tag)
-    return (_rust_raw_search_path_args(deps), [])
+    if host_os() != "windows":
+        return (_rust_raw_search_path_args(deps), [])
+    rlib_args = _rust_rlib_search_path_args(deps)
+    proc_macro_args, staged = _rust_proc_macro_search_path_args(deps)
+    return (rlib_args + proc_macro_args, staged)
+
+def _rust_stage_proc_macro_for_search(ctx, output):
+    search_dir = declare_output(_rust_declared_output(ctx, "proc-macro-search"))
+    prepare_path(search_dir, kind = "remove", identifier = ctx["label"]["id"] + ":proc-macro-search-clean")
+    prepare_path(search_dir, kind = "directory", identifier = ctx["label"]["id"] + ":proc-macro-search-prepare")
+    staged = search_dir + "/" + _basename(output)
+    copy_path(
+        output,
+        staged,
+        inputs = [output],
+        identifier = ctx["label"]["id"] + ":proc-macro-search:" + _basename(output),
+    )
+    return staged
 
 def _rust_inline_proc_macro_extern_args(deps, aliases):
     if host_os() != "windows":
@@ -1240,6 +1255,9 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         toolchain_identity = identity + linker_identity,
         identifier = ctx["label"]["id"] + ":rustc",
     )
+    own_proc_macro_search = []
+    if crate_type == "proc-macro" and host_os() == "windows":
+        own_proc_macro_search = [_rust_stage_proc_macro_for_search(ctx, output)]
     own_android_native_libraries = []
     android_abi = _rust_android_abi(ctx, target, crate_type)
     if android_abi and (crate_type == "cdylib" or crate_type == "dylib"):
@@ -1262,6 +1280,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "proc_macro": output if crate_type == "proc-macro" else None,
         "transitive_rlibs": _collect_transitive(deps, "transitive_rlibs", [output] if crate_type == "rlib" else []),
         "transitive_proc_macros": _collect_transitive(deps, "transitive_proc_macros", [output] if crate_type == "proc-macro" else []),
+        "transitive_proc_macro_search": _collect_transitive(deps, "transitive_proc_macro_search", own_proc_macro_search),
         "transitive_sources": _collect_transitive(deps, "transitive_sources", srcs),
         "archive": output if crate_type == "staticlib" else "",
         "transitive_archives": _collect_transitive(deps, "transitive_archives", own_native_archives),
@@ -1429,9 +1448,11 @@ def _cargo_compile_resolved_specs(ctx, specs):
     return (providers, providers_by_name)
 
 def _cargo_search_deps(providers):
-    if host_os() != "windows":
-        return []
-    return providers
+    # A crate's own resolved dependencies already contribute their direct and
+    # transitive search directories, so there is no need to fold every prior
+    # provider in the graph into each crate's search path. Doing so made the
+    # Windows search set grow with the whole dependency closure.
+    return []
 
 def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs, search_deps):
     attrs = _cargo_copy_attrs(spec.get("attrs") or {})

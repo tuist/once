@@ -1404,7 +1404,7 @@ result = repr("ok")
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn prelude_cargo_metadata_windows_adds_prior_dependency_search_paths() {
+fn prelude_cargo_metadata_windows_omits_unrelated_prior_dependency_search_paths() {
     let prelude = all_prelude_source();
     let source = format!(
         r#"{prelude}
@@ -1486,59 +1486,27 @@ result = repr([provider["label_id"] for provider in providers])
         })
         .expect("beta rustc action");
     let arg_file = beta_rustc.arg_files.first().expect("beta response file");
-    let raw_alpha_search_path = format!(
-        "dependency={}",
-        workspace_arg(
-            workspace.path(),
-            ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0"
-        )
-    );
-    let staged_search_path = format!(
-        "dependency={}",
-        workspace_arg(
-            workspace.path(),
-            ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0/search/prior-deps"
-        )
-    );
-
-    assert!(
-        arg_file
-            .args
-            .windows(2)
-            .any(|args| args[0] == "-L" && args[1] == staged_search_path),
-        "{staged_search_path} missing from {:?}",
-        arg_file.args
-    );
+    // beta does not depend on alpha, so an unrelated prior provider must never
+    // leak into beta's externs or search path. Folding every prior provider
+    // into each crate grew the Windows search set with the whole dependency
+    // closure and exhausted the runner's disk.
     assert!(
         !arg_file
             .args
             .iter()
-            .any(|arg| arg == &raw_alpha_search_path),
-        "{raw_alpha_search_path} should be staged out of {:?}",
+            .any(|arg| arg.contains("cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0")),
+        "unrelated prior provider alpha leaked into {:?}",
         arg_file.args
     );
     assert!(!arg_file.args.iter().any(|arg| arg.starts_with("alpha=")));
-    let staged_dir =
-        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0/search/prior-deps";
-    let staged_alpha =
-        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0/search/prior-deps/libalpha-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_ALPHA_1_0_0.rlib";
-    let staged_alpha_copy = store
-        .actions
-        .iter()
-        .find(|action| action.outputs.iter().any(|output| output == staged_alpha))
-        .expect("staged alpha copy action");
     assert!(
-        staged_alpha_copy.inputs.iter().any(|input| {
-            input == ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0/libalpha.rlib"
+        !store.actions.iter().any(|action| {
+            action
+                .outputs
+                .iter()
+                .any(|output| output.contains("/search/prior-deps"))
         }),
-        "{staged_alpha} source input missing"
-    );
-    assert!(
-        !staged_alpha_copy
-            .inputs
-            .iter()
-            .any(|input| input == staged_dir),
-        "{staged_dir} should not be hashed as a copy input"
+        "no per-crate prior-deps staging directory should be created",
     );
 }
 
@@ -1656,7 +1624,7 @@ result = repr([provider["label_id"] for provider in providers])
         "dependency={}",
         workspace_arg(
             workspace.path(),
-            ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-util-0.3.32/search/deps"
+            ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/proc-macro-search"
         )
     );
     let macro_extern = format!("futures_macro={macro_artifact}");
@@ -1715,6 +1683,21 @@ result = repr([provider["label_id"] for provider in providers])
             .any(|arg| arg == &raw_macro_search_path),
         "{raw_macro_search_path} should be staged out of {:?}",
         arg_file.args
+    );
+    // The proc-macro is staged once, next to where it is built, so every
+    // dependent reuses the same clean directory instead of copying it again.
+    let staged_macro = ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/proc-macro-search/futures_macro-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_FUTURES_MACRO_0_3_32.dll";
+    let staged_copy = store
+        .actions
+        .iter()
+        .find(|action| action.outputs.iter().any(|output| output == staged_macro))
+        .expect("proc-macro search staging action");
+    assert!(
+        staged_copy.inputs.iter().any(|input| {
+            input == ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/futures_macro-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_FUTURES_MACRO_0_3_32.dll"
+        }),
+        "proc-macro search staging should copy the built dylib, inputs were {:?}",
+        staged_copy.inputs
     );
     let path = rustc.env.get("PATH").expect("rustc PATH");
     assert!(
@@ -2896,6 +2879,9 @@ fn assert_release_dependency_response_file(store: &AnalysisStore, workspace: &Pa
 }
 
 fn assert_release_dependency_search_path(args: &[String], workspace: &Path) {
+    // rlib dependencies resolve directly from their original output
+    // directories; only proc-macro dylibs are staged, and these deps are all
+    // rlibs, so no staging directory should be referenced.
     let tokio_dependency = format!(
         "dependency={}",
         workspace_arg(
@@ -2903,20 +2889,14 @@ fn assert_release_dependency_search_path(args: &[String], workspace: &Path) {
             ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3"
         )
     );
-    let staged_dependency = format!(
-        "dependency={}",
-        workspace_arg(
-            workspace,
-            ".once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/search/deps"
-        )
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "-L" && pair[1] == tokio_dependency),
+        "{tokio_dependency} missing from {args:?}"
     );
     assert!(
-        args.iter().any(|arg| { arg == &staged_dependency }),
-        "{staged_dependency} missing from {args:?}"
-    );
-    assert!(
-        !args.iter().any(|arg| { arg == &tokio_dependency }),
-        "{tokio_dependency} should be staged out of {args:?}"
+        !args.iter().any(|arg| arg.contains("/search/deps")),
+        "rlib-only deps should not create a proc-macro staging directory: {args:?}"
     );
 }
 
