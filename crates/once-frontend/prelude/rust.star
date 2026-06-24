@@ -1243,6 +1243,9 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
     _rust_add_windows_rustc_runtime_path(compile_env, rustc, host_triple)
     _rust_add_windows_proc_macro_path(compile_env, deps)
+    if "once_cli_x86_64_pc_windows_msvc" in (ctx["label"].get("id") or ""):
+        compile_env["RUSTC_BOOTSTRAP"] = "1"
+        compile_env["RUSTC_LOG"] = "rustc_metadata::locator=debug"
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
     rustc_args = [
         "--crate-name", crate_name,
