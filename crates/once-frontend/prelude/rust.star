@@ -674,12 +674,11 @@ def _rust_raw_search_path_args(deps):
 
 def _rust_rlib_search_path_args(deps):
     dirs = []
-    for dep in deps:
+    for dep in _rust_rlib_deps(deps):
         rlib = dep.get("rlib")
-        if rlib:
-            directory = _parent_dir(rlib)
-            if directory:
-                dirs.append(directory)
+        directory = _parent_dir(rlib)
+        if directory:
+            dirs.append(directory)
         for transitive in dep.get("transitive_rlibs") or []:
             directory = _parent_dir(transitive)
             if directory:
@@ -1080,6 +1079,15 @@ def _rust_dep_inputs(deps):
             inputs.append(transitive)
     return _unique(inputs)
 
+def _rust_rlib_deps(deps):
+    # Only crates compiled as rlibs contribute rlibs that downstream target
+    # crates link against. Proc-macro dependencies carry a transitive rlib
+    # closure built for the host (their own proc-macro toolchain deps); pulling
+    # that in would put host-built copies of crates like proc-macro2 alongside
+    # their target builds on the search path, so rustc on Windows finds two
+    # identically named rlibs and fails to load the dependent crate.
+    return [dep for dep in deps if dep.get("rlib")]
+
 def _collect_transitive(deps, key, own_values):
     out = []
     for value in own_values:
@@ -1200,8 +1208,6 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     aliases = _rust_aliases(ctx)
     deps = _rust_resolved_deps(ctx)
     dep_args = _rust_dep_args(deps, aliases)
-    if "sea-schema-0.16.2" in (ctx["label"].get("id") or ""):
-        fail("SEA-COMPILE ctxdeps=" + repr([(d.get("crate_name"), _rust_dep_crate_name(d, aliases), d.get("rlib") != None, d.get("dependency_set") != None) for d in ctx["deps"]]) + " resolved=" + repr([d.get("crate_name") for d in deps]) + " aliases=" + repr(aliases) + " dep_args=" + repr(dep_args))
     dep_search_args, dep_search_inputs = _rust_search_path_args(ctx, deps, "deps")
     dep_inputs = _rust_dep_inputs(deps)
     search_deps = ctx.get("search_deps") or []
@@ -1280,7 +1286,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "staticlib": output if crate_type == "staticlib" else None,
         "dylib": output if crate_type == "cdylib" or crate_type == "dylib" else None,
         "proc_macro": output if crate_type == "proc-macro" else None,
-        "transitive_rlibs": _collect_transitive(deps, "transitive_rlibs", [output] if crate_type == "rlib" else []),
+        "transitive_rlibs": _collect_transitive(_rust_rlib_deps(deps), "transitive_rlibs", [output] if crate_type == "rlib" else []),
         "transitive_proc_macros": _collect_transitive(deps, "transitive_proc_macros", [output] if crate_type == "proc-macro" else []),
         "transitive_proc_macro_search": _collect_transitive(deps, "transitive_proc_macro_search", own_proc_macro_search),
         "transitive_sources": _collect_transitive(deps, "transitive_sources", srcs),
