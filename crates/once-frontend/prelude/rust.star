@@ -1208,22 +1208,6 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     aliases = _rust_aliases(ctx)
     deps = _rust_resolved_deps(ctx)
     dep_args = _rust_dep_args(deps, aliases)
-    dep_search_args, dep_search_inputs = _rust_search_path_args(ctx, deps, "deps")
-    if "once_cli_x86_64_pc_windows_msvc" in (ctx["label"].get("id") or ""):
-        ldirs = [a[len("dependency="):] for a in dep_search_args if a.startswith("dependency=")]
-        targets = {}
-        hosts = {}
-        for d in ldirs:
-            base = d.replace("\\", "/").split("/")[-1]
-            if base.endswith("-host"):
-                hosts[base[:len(base) - 5]] = True
-            else:
-                targets[base] = True
-        collisions = [k for k in hosts if k in targets]
-        serde_dirs = [d for d in ldirs if "/serde-" in d or "serde-1" in d]
-        serde_externs = [a for a in dep_args if a.startswith("serde=") or a.startswith("tokio=")]
-        proc_search = [a for a in dep_search_args if "proc-macro-search" in a]
-        fail("CLI-SEARCH2 Ldirs=" + str(len(ldirs)) + " serde_dirs=" + repr(serde_dirs[:4]) + " serde_tokio_externs=" + repr(serde_externs) + " procsearch_count=" + str(len(proc_search)) + " sample_proc=" + repr(proc_search[:3]))
     dep_inputs = _rust_dep_inputs(deps)
     search_deps = ctx.get("search_deps") or []
     search_args, search_inputs = _rust_search_path_args(ctx, search_deps, "prior-deps")
