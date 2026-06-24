@@ -1434,8 +1434,6 @@ def _cargo_compile_resolved_specs(ctx, specs):
             if not ready:
                 next_remaining.append(spec)
                 continue
-            if spec["name"] == "sea-schema-0.16.2":
-                fail("SEA-DIAG2 deps=" + repr([(p.get("crate_name"), p.get("crate_type"), p.get("rlib"), p.get("proc_macro")) for p in dep_providers]) + " dep_args=" + repr(_rust_dep_args(dep_providers, {})))
             provider = _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs, _cargo_search_deps(providers))
             providers_by_name[spec["name"]] = provider
             providers.append(provider)
