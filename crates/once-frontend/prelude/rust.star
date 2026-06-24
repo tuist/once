@@ -1208,6 +1208,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     aliases = _rust_aliases(ctx)
     deps = _rust_resolved_deps(ctx)
     dep_args = _rust_dep_args(deps, aliases)
+    dep_search_args, dep_search_inputs = _rust_search_path_args(ctx, deps, "deps")
     dep_inputs = _rust_dep_inputs(deps)
     search_deps = ctx.get("search_deps") or []
     search_args, search_inputs = _rust_search_path_args(ctx, search_deps, "prior-deps")
@@ -1465,6 +1466,7 @@ def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, 
     attrs = _cargo_copy_attrs(spec.get("attrs") or {})
     attrs["_output_prefix"] = spec["name"] + "/"
     attrs["_extra_inputs"] = metadata_inputs
+    attrs["rustc_flags"] = _cargo_spec_rustc_flags(ctx, spec)
     spec_ctx = {
         "label": {
             "package": ctx["label"]["package"],
@@ -1480,6 +1482,34 @@ def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, 
     if spec.get("kind") == "rust_proc_macro":
         return _rust_proc_macro_impl(spec_ctx)
     return _rust_crate_impl(spec_ctx)
+
+def _rust_strip_panic_flags(flags):
+    out = []
+    index = 0
+    for _ in range(len(flags) + 1):
+        if index >= len(flags):
+            break
+        flag = flags[index]
+        if flag == "-C" and index + 1 < len(flags) and flags[index + 1].startswith("panic="):
+            index += 2
+            continue
+        if flag.startswith("-Cpanic="):
+            index += 1
+            continue
+        out.append(flag)
+        index += 1
+    return out
+
+def _cargo_spec_rustc_flags(ctx, spec):
+    # Match the panic strategy of the final binary for target crates; proc-macro
+    # and host-tool crates are loaded by the compiler itself and must keep the
+    # default unwind strategy, so the panic flag is stripped for them.
+    flags = _rust_attr(ctx, "dep_rustc_flags", [])
+    if not flags:
+        return []
+    if spec.get("kind") == "rust_proc_macro" or spec["name"].endswith("-host"):
+        return _rust_strip_panic_flags(flags)
+    return flags
 
 def _cargo_workspace_deps(ctx, metadata, providers_by_name):
     packages = metadata.get("packages") or []
@@ -2076,6 +2106,7 @@ cargo_dependencies = target_kind(
         attr("all_features", "bool", default = "false", docs = "Pass `--all-features` to Cargo metadata.", configurable = True),
         attr("no_default_features", "bool", default = "false", docs = "Pass `--no-default-features` to Cargo metadata.", configurable = True),
         attr("target", "string", docs = "Rust target triple passed to Cargo as `--filter-platform`. Defaults to the host target.", configurable = False),
+        attr("dep_rustc_flags", "list<string>", default = "[]", docs = "Additional rustc flags applied to each resolved crate build. The panic strategy is stripped for proc-macro and host-tool crates so they keep the compiler's unwind strategy.", configurable = False),
     ],
     providers = ["rust_dependency_set"],
     capabilities = [capability("build", [])],
