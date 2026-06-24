@@ -735,14 +735,32 @@ def _rust_stage_proc_macro_for_search(ctx, output):
     return staged
 
 def _rust_inline_proc_macro_extern_args(deps, aliases):
+    # Pass every proc-macro this crate can reach as an explicit `--extern`.
+    # Under `--target` rustc partitions the search path into host and target
+    # directories, so a proc-macro re-exported through a dependency (for
+    # example serde's `Deserialize` from serde_derive) is not reliably found by
+    # `-L dependency` search alone. An explicit `--extern name=path` points
+    # rustc straight at the host dylib and bypasses that partition.
     if host_os() != "windows":
         return []
     args = []
+    seen = {}
     for dep in deps:
         crate_name = _rust_dep_crate_name(dep, aliases)
         proc_macro = dep.get("proc_macro")
-        if crate_name and proc_macro:
+        if crate_name and proc_macro and crate_name not in seen:
+            seen[crate_name] = True
             args.extend(["--extern", crate_name + "=" + _rust_command_path_arg(proc_macro)])
+    for dep in deps:
+        for extern in dep.get("transitive_proc_macro_externs") or []:
+            parts = _split_once(extern, "=")
+            if len(parts) != 2:
+                continue
+            name = parts[0]
+            if name in seen:
+                continue
+            seen[name] = True
+            args.extend(["--extern", name + "=" + _rust_command_path_arg(parts[1])])
     return args
 
 def _rust_proc_macro_dirs(deps):
@@ -1264,8 +1282,10 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         identifier = ctx["label"]["id"] + ":rustc",
     )
     own_proc_macro_search = []
+    own_proc_macro_extern = []
     if crate_type == "proc-macro" and host_os() == "windows":
         own_proc_macro_search = [_rust_stage_proc_macro_for_search(ctx, output)]
+        own_proc_macro_extern = [crate_name + "=" + output]
     own_android_native_libraries = []
     android_abi = _rust_android_abi(ctx, target, crate_type)
     if android_abi and (crate_type == "cdylib" or crate_type == "dylib"):
@@ -1289,6 +1309,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "transitive_rlibs": _collect_transitive(_rust_rlib_deps(deps), "transitive_rlibs", [output] if crate_type == "rlib" else []),
         "transitive_proc_macros": _collect_transitive(deps, "transitive_proc_macros", [output] if crate_type == "proc-macro" else []),
         "transitive_proc_macro_search": _collect_transitive(deps, "transitive_proc_macro_search", own_proc_macro_search),
+        "transitive_proc_macro_externs": _collect_transitive(deps, "transitive_proc_macro_externs", own_proc_macro_extern),
         "transitive_sources": _collect_transitive(deps, "transitive_sources", srcs),
         "archive": output if crate_type == "staticlib" else "",
         "transitive_archives": _collect_transitive(deps, "transitive_archives", own_native_archives),
