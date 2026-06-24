@@ -294,11 +294,12 @@ jobs:
         run: |
           cargo --version
           cargo metadata --locked --format-version 1 --filter-platform x86_64-pc-windows-msvc > meta.json
-          echo "=== sea-schema node features ==="
-          cargo metadata --locked --format-version 1 --filter-platform x86_64-pc-windows-msvc \
-            | python -c "import json,sys; d=json.load(sys.stdin); n=[x for x in d['resolve']['nodes'] if '#sea-schema@' in x['id']][0]; print('FEATURES', n['features']); print('DEPS', [ (dd['name'], dd['pkg'].split('#')[-1], dd.get('dep_kinds')) for dd in n['deps']])"
-          echo "=== sqlx / sea-query-binder present in packages? ==="
-          python -c "import json; d=json.load(open('meta.json')); ps=[p['name'] for p in d['packages']]; print('sqlx' in ps, 'sea-query-binder' in ps)"
+          python -c "import io,json; d=json.load(io.open('meta.json',encoding='utf-8')); ps=set(p['name'] for p in d['packages']); n=[x for x in d['resolve']['nodes'] if '#sea-schema@' in x['id']][0]; print('SQLX_IN_PACKAGES', 'sqlx' in ps); print('BINDER_IN_PACKAGES', 'sea-query-binder' in ps); print('SEA_DEPS', [dd['pkg'].split('#')[-1] for dd in n['deps']]); print('SQLX_PKG_COUNT', sum(1 for p in d['packages'] if p['name']=='sqlx')); print('SQLX_PKG_IDS', [p['id'] for p in d['packages'] if p['name'] in ('sqlx','sea-query-binder')])"
+      - name: upload metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-cargo-metadata
+          path: meta.json
 
   windows-cas-test:
     name: windows cas test
