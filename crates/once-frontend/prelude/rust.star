@@ -1220,7 +1220,10 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
             else:
                 targets[base] = True
         collisions = [k for k in hosts if k in targets]
-        fail("CLI-SEARCH Ldirs=" + str(len(ldirs)) + " hosts=" + str(len(hosts)) + " collisions=" + repr(collisions) + " dep_externs=" + repr([d.get("crate_name") for d in deps]))
+        serde_dirs = [d for d in ldirs if "/serde-" in d or "serde-1" in d]
+        serde_externs = [a for a in dep_args if a.startswith("serde=") or a.startswith("tokio=")]
+        proc_search = [a for a in dep_search_args if "proc-macro-search" in a]
+        fail("CLI-SEARCH2 Ldirs=" + str(len(ldirs)) + " serde_dirs=" + repr(serde_dirs[:4]) + " serde_tokio_externs=" + repr(serde_externs) + " procsearch_count=" + str(len(proc_search)) + " sample_proc=" + repr(proc_search[:3]))
     dep_inputs = _rust_dep_inputs(deps)
     search_deps = ctx.get("search_deps") or []
     search_args, search_inputs = _rust_search_path_args(ctx, search_deps, "prior-deps")
