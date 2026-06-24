@@ -1983,6 +1983,13 @@ def _cargo_metadata_targets(ctx, metadata, host_metadata = None):
     target_package_ids = _cargo_package_id_set(target_packages)
     duplicate_counts = _cargo_duplicate_counts(packages)
     nodes = _cargo_resolve_nodes(metadata)
+    sea_nodes = [nid for nid in nodes if "#sea-schema@" in nid]
+    sea_deps = []
+    for nid in sea_nodes:
+        for d in (nodes[nid].get("deps") or []):
+            sea_deps.append(d.get("name") + "<-" + str(d.get("pkg")).split("#")[-1])
+    sqlx_pkgs = [p.get("name") for p in packages if p.get("name") in ["sqlx", "sea-query-binder"]]
+    fail("SEA-META nodes=" + repr(sea_nodes) + " deps=" + repr(sea_deps) + " sqlx_pkgs=" + repr(sqlx_pkgs) + " host_meta=" + repr(host_metadata != None))
     host_nodes = _cargo_resolve_nodes(host_metadata) if host_metadata != None else nodes
     host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, host_nodes)
     id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids)
