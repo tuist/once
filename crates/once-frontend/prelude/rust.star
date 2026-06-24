@@ -1209,6 +1209,18 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     deps = _rust_resolved_deps(ctx)
     dep_args = _rust_dep_args(deps, aliases)
     dep_search_args, dep_search_inputs = _rust_search_path_args(ctx, deps, "deps")
+    if "once_cli_x86_64_pc_windows_msvc" in (ctx["label"].get("id") or ""):
+        ldirs = [a[len("dependency="):] for a in dep_search_args if a.startswith("dependency=")]
+        targets = {}
+        hosts = {}
+        for d in ldirs:
+            base = d.replace("\\", "/").split("/")[-1]
+            if base.endswith("-host"):
+                hosts[base[:len(base) - 5]] = True
+            else:
+                targets[base] = True
+        collisions = [k for k in hosts if k in targets]
+        fail("CLI-SEARCH Ldirs=" + str(len(ldirs)) + " hosts=" + str(len(hosts)) + " collisions=" + repr(collisions) + " dep_externs=" + repr([d.get("crate_name") for d in deps]))
     dep_inputs = _rust_dep_inputs(deps)
     search_deps = ctx.get("search_deps") or []
     search_args, search_inputs = _rust_search_path_args(ctx, search_deps, "prior-deps")
