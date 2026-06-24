@@ -1200,6 +1200,8 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     aliases = _rust_aliases(ctx)
     deps = _rust_resolved_deps(ctx)
     dep_args = _rust_dep_args(deps, aliases)
+    if "sea-schema-0.16.2" in (ctx["label"].get("id") or ""):
+        fail("SEA-COMPILE ctxdeps=" + repr([(d.get("crate_name"), _rust_dep_crate_name(d, aliases), d.get("rlib") != None, d.get("dependency_set") != None) for d in ctx["deps"]]) + " resolved=" + repr([d.get("crate_name") for d in deps]) + " aliases=" + repr(aliases) + " dep_args=" + repr(dep_args))
     dep_search_args, dep_search_inputs = _rust_search_path_args(ctx, deps, "deps")
     dep_inputs = _rust_dep_inputs(deps)
     search_deps = ctx.get("search_deps") or []
@@ -1983,13 +1985,6 @@ def _cargo_metadata_targets(ctx, metadata, host_metadata = None):
     target_package_ids = _cargo_package_id_set(target_packages)
     duplicate_counts = _cargo_duplicate_counts(packages)
     nodes = _cargo_resolve_nodes(metadata)
-    sea_nodes = [nid for nid in nodes if "#sea-schema@" in nid]
-    sea_deps = []
-    for nid in sea_nodes:
-        for d in (nodes[nid].get("deps") or []):
-            sea_deps.append(d.get("name") + "<-" + str(d.get("pkg")).split("#")[-1])
-    sqlx_pkgs = [p.get("name") for p in packages if p.get("name") in ["sqlx", "sea-query-binder"]]
-    fail("SEA-META nodes=" + repr(sea_nodes) + " deps=" + repr(sea_deps) + " sqlx_pkgs=" + repr(sqlx_pkgs) + " host_meta=" + repr(host_metadata != None))
     host_nodes = _cargo_resolve_nodes(host_metadata) if host_metadata != None else nodes
     host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, host_nodes)
     id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids)
