@@ -274,6 +274,32 @@ jobs:
           "${once_bin}" build "${target_id}" --format json --quiet
           test -f ".once/out/${target_id}/once.exe"
 
+  windows-metadata-diag:
+    name: windows metadata diag
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - name: install pinned rust
+        run: |
+          rust_version="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          rustup toolchain install "$rust_version" --profile minimal --no-self-update
+          rustup default "$rust_version"
+          rustup target add x86_64-pc-windows-msvc
+      - name: dump sea-schema resolved deps (windows host)
+        run: |
+          cargo --version
+          cargo metadata --locked --format-version 1 --filter-platform x86_64-pc-windows-msvc > meta.json
+          echo "=== sea-schema node features ==="
+          cargo metadata --locked --format-version 1 --filter-platform x86_64-pc-windows-msvc \
+            | python -c "import json,sys; d=json.load(sys.stdin); n=[x for x in d['resolve']['nodes'] if '#sea-schema@' in x['id']][0]; print('FEATURES', n['features']); print('DEPS', [ (dd['name'], dd['pkg'].split('#')[-1], dd.get('dep_kinds')) for dd in n['deps']])"
+          echo "=== sqlx / sea-query-binder present in packages? ==="
+          python -c "import json; d=json.load(open('meta.json')); ps=[p['name'] for p in d['packages']]; print('sqlx' in ps, 'sea-query-binder' in ps)"
+
   windows-cas-test:
     name: windows cas test
     needs: changes
