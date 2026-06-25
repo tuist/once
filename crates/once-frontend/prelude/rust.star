@@ -1230,7 +1230,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     ]
     rustc_args.extend(_rust_extra_filename_args(ctx, crate_type))
     rustc_args.extend(_rust_output_args(crate_type, output))
-    rustc_args.extend(_rust_target_args(target))
+    rustc_args.extend(_rust_compile_target_args(target, host_triple))
     rustc_args.extend(_rust_proc_macro_codegen_args(crate_type))
     rustc_args.extend(feature_flags)
     rustc_args.extend(_rust_user_flags(ctx))
