@@ -297,7 +297,7 @@ jobs:
             done
             echo "::endgroup::"
             echo "::group::DIAG: rustc response file"
-            rsp=".once/tmp/analysis/${target_id}/${target_id##*/}/rustc.rsp"
+            rsp=".once/tmp/analysis/${target_id}/rustc.rsp"
             if [ -f "$rsp" ]; then
               echo "rsp: $rsp ($(wc -c <"$rsp") bytes)"
               echo "--- all --extern entries ---"
