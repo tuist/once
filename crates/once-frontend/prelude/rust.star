@@ -646,7 +646,11 @@ def _rust_dep_args(deps, aliases):
         crate_name = _rust_dep_crate_name(dep, aliases)
         rlib = dep.get("rlib")
         proc_macro = dep.get("proc_macro")
-        artifact = rlib or proc_macro
+        # On windows proc-macros are passed through _rust_inline_proc_macro_extern_args
+        # so the dependent crate gets a uniform `--extern name=path` for every
+        # proc-macro it can reach transitively. Routing them here too would
+        # double the entry and confuse rustc.
+        artifact = rlib or (None if host_os() == "windows" else proc_macro)
         if crate_name and artifact:
             args.extend(["--extern", crate_name + "=" + artifact])
     return args
@@ -741,9 +745,32 @@ def _rust_stage_proc_macro_for_search(ctx, output):
     return staged
 
 def _rust_inline_proc_macro_extern_args(deps, aliases):
-    # Proc-macros are passed through the standard `--extern name=path` list
-    # built by `_rust_dep_args`, the same way as on other platforms.
-    return []
+    # Pass every proc-macro this crate can reach as an explicit `--extern`.
+    # On windows, rustc does not reliably discover a proc-macro re-exported
+    # through a dependency (for example serde's Deserialize from serde_derive)
+    # via `-L dependency` search alone, so we route every reachable proc-macro
+    # to rustc by name and path directly.
+    if host_os() != "windows":
+        return []
+    args = []
+    seen = {}
+    for dep in deps:
+        crate_name = _rust_dep_crate_name(dep, aliases)
+        proc_macro = dep.get("proc_macro")
+        if crate_name and proc_macro and crate_name not in seen:
+            seen[crate_name] = True
+            args.extend(["--extern", crate_name + "=" + _rust_command_path_arg(proc_macro)])
+    for dep in deps:
+        for extern in dep.get("transitive_proc_macro_externs") or []:
+            parts = _split_once(extern, "=")
+            if len(parts) != 2:
+                continue
+            name = parts[0]
+            if name in seen:
+                continue
+            seen[name] = True
+            args.extend(["--extern", name + "=" + _rust_command_path_arg(parts[1])])
+    return args
 
 def _rust_proc_macro_dirs(deps):
     dirs = []
@@ -1247,8 +1274,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     rustc_args.append(crate_root)
     argv = (
         [rustc] +
-        _rust_inline_proc_macro_extern_args(deps, aliases) +
-        _rust_response_file_args(ctx, rustc_args, "rustc.rsp")
+        _rust_response_file_args(ctx, _rust_inline_proc_macro_extern_args(deps, aliases) + rustc_args, "rustc.rsp")
     )
     if build_stdout:
         wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout)
@@ -1264,6 +1290,8 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     )
     own_proc_macro_search = []
     own_proc_macro_extern = []
+    if crate_type == "proc-macro" and host_os() == "windows":
+        own_proc_macro_extern = [crate_name + "=" + output]
     own_android_native_libraries = []
     android_abi = _rust_android_abi(ctx, target, crate_type)
     if android_abi and (crate_type == "cdylib" or crate_type == "dylib"):
