@@ -271,7 +271,45 @@ jobs:
           trap './mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true' EXIT
           ./mise/tasks/release/prepare-rust-graph-deps.sh --target "${target}"
           ./mise/tasks/release/write-rust-release-manifests.sh --target "${target}" --version 0.0.0
-          "${once_bin}" build "${target_id}" --format json --quiet
+          rc=0
+          "${once_bin}" build "${target_id}" --format json --quiet || rc=$?
+          if [ "${rc}" != "0" ]; then
+            echo "::group::DIAG: cargo_dependencies dir listing"
+            ls -la ".once/out/cargo_dependencies_${suffix}/" 2>&1 || echo "<dir missing>"
+            echo "::endgroup::"
+            echo "::group::DIAG: failing-crate dirs (rlib + proc-macro artifacts)"
+            for crate in serde clap tokio tracing tracing-subscriber tracing-appender serde_derive clap_derive tokio-macros tracing-attributes; do
+              for d in ".once/out/cargo_dependencies_${suffix}/${crate}"*/; do
+                if [ -d "$d" ]; then
+                  echo "--- $d ---"
+                  ls -la "$d" 2>&1 | head -20
+                fi
+              done
+            done
+            echo "::endgroup::"
+            echo "::group::DIAG: workspace crate output dirs"
+            for c in once-cas once-core once-frontend; do
+              d=".once/out/crates/${c}/${c//-/_}_${suffix}/"
+              if [ -d "$d" ]; then
+                echo "--- $d ---"
+                ls -la "$d" 2>&1
+              fi
+            done
+            echo "::endgroup::"
+            echo "::group::DIAG: rustc response file"
+            rsp=".once/tmp/analysis/${target_id}/${target_id##*/}/rustc.rsp"
+            if [ -f "$rsp" ]; then
+              echo "rsp: $rsp ($(wc -c <"$rsp") bytes)"
+              echo "--- all --extern entries ---"
+              grep -oE -- "--extern[[:space:]]+[a-z_][a-z_0-9]*=[^[:space:]]+" "$rsp" | sort
+              echo "--- all -L dependency entries ---"
+              grep -oE -- "-L[[:space:]]+dependency=[^[:space:]]+" "$rsp" | sort -u
+            else
+              echo "rsp not found at $rsp"
+            fi
+            echo "::endgroup::"
+            exit $rc
+          fi
           test -f ".once/out/${target_id}/once.exe"
 
   windows-cas-test:
