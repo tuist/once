@@ -271,24 +271,7 @@ jobs:
           trap './mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true' EXIT
           ./mise/tasks/release/prepare-rust-graph-deps.sh --target "${target}"
           ./mise/tasks/release/write-rust-release-manifests.sh --target "${target}" --version 0.0.0
-          rc=0
-          "${once_bin}" build "${target_id}" --format json --quiet || rc=$?
-          if [ "${rc}" != "0" ]; then
-            echo "=== DIAG: do dep rlibs exist on disk? ==="
-            ls -l ".once/out/cargo_dependencies_${suffix}/serde-1.0.228/libserde.rlib" 2>&1 || echo "serde rlib MISSING"
-            ls -l ".once/out/cargo_dependencies_${suffix}/tokio-1.52.3/libtokio.rlib" 2>&1 || echo "tokio rlib MISSING"
-            ls -l ".once/out/crates/once-cas/once_cas_${suffix}/libonce_cas.rlib" 2>&1 || echo "once_cas rlib MISSING"
-            echo "=== DIAG: rsp extern count + first/last 5 externs ==="
-            rsp=".once/tmp/analysis/${target_id}/${target_id##*/}/rustc.rsp"
-            test -f "$rsp" && {
-              echo "rsp path: $rsp"
-              grep -oE "[a-z_]+=[^ ]*\\.rlib" "$rsp" | wc -l
-              grep -oE "(serde|tokio|clap|once_cas)=[^ ]*\\.rlib" "$rsp" | head
-            } || echo "rsp not found at $rsp"
-            echo "=== DIAG: out dir listing of serde ==="
-            ls -la ".once/out/cargo_dependencies_${suffix}/serde-1.0.228/" 2>&1 | head
-            exit $rc
-          fi
+          "${once_bin}" build "${target_id}" --format json --quiet
           test -f ".once/out/${target_id}/once.exe"
 
   windows-cas-test:
