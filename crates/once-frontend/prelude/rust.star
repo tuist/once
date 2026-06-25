@@ -498,6 +498,16 @@ def _rust_target_args(target):
         return ["--target", target]
     return []
 
+def _rust_compile_target_args(target, host_triple):
+    # Compile natively when the requested target is the host. Passing an
+    # explicit `--target` equal to the host makes rustc partition the
+    # dependency graph into separate host and target search contexts, which
+    # breaks resolution of proc-macros (host artifacts) re-exported through a
+    # dependency. Cargo likewise omits `--target` for native host builds.
+    if target and target != host_triple:
+        return ["--target", target]
+    return []
+
 def _rust_proc_macro_codegen_args(crate_type):
     if crate_type == "proc-macro":
         return ["-C", "prefer-dynamic"]
@@ -1243,9 +1253,6 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
     _rust_add_windows_rustc_runtime_path(compile_env, rustc, host_triple)
     _rust_add_windows_proc_macro_path(compile_env, deps)
-    if "once_cli_x86_64_pc_windows_msvc" in (ctx["label"].get("id") or ""):
-        compile_env["RUSTC_BOOTSTRAP"] = "1"
-        compile_env["RUSTC_LOG"] = "rustc_metadata::locator=debug"
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
     rustc_args = [
         "--crate-name", crate_name,
@@ -1255,7 +1262,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     ]
     rustc_args.extend(_rust_extra_filename_args(ctx, crate_type))
     rustc_args.extend(_rust_output_args(crate_type, output))
-    rustc_args.extend(_rust_target_args(target))
+    rustc_args.extend(_rust_compile_target_args(target, host_triple))
     rustc_args.extend(_rust_proc_macro_codegen_args(crate_type))
     rustc_args.extend(feature_flags)
     rustc_args.extend(_rust_user_flags(ctx))
