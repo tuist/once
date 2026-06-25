@@ -1486,10 +1486,10 @@ def _rust_strip_panic_flags(flags):
         if index >= len(flags):
             break
         flag = flags[index]
-        if flag == "-C" and index + 1 < len(flags) and flags[index + 1].startswith("panic="):
+        if flag in ("-C", "--codegen") and index + 1 < len(flags) and flags[index + 1].startswith("panic="):
             index += 2
             continue
-        if flag.startswith("-Cpanic="):
+        if flag.startswith("-Cpanic=") or flag.startswith("--codegen=panic="):
             index += 1
             continue
         out.append(flag)
