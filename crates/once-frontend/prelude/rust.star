@@ -719,7 +719,20 @@ def _rust_proc_macro_search_path_args(deps):
     return (args, artifacts)
 
 def _rust_search_path_args(ctx, deps, tag):
-    return (_rust_raw_search_path_args(deps), [])
+    # On windows, the rustc-emitted proc-macro dylib shares its output
+    # directory with MSVC sibling files (.dll.lib, .dll.exp, .pdb,
+    # incremental data). Pointing `-L dependency=` at that directory exposes
+    # those siblings to rustc's metadata locator, which finds matching
+    # filenames and rejects them in a way that surfaces as a generic E0463 on
+    # the consuming crate rather than a structured "Rejecting via X" trace.
+    # Stage every reachable proc-macro into a dedicated directory containing
+    # only the dylib, and point search there. Rlibs do not have this problem
+    # and resolve fine from their original output directories.
+    if host_os() != "windows":
+        return (_rust_raw_search_path_args(deps), [])
+    rlib_args = _rust_rlib_search_path_args(deps)
+    proc_macro_args, staged = _rust_proc_macro_search_path_args(deps)
+    return (rlib_args + proc_macro_args, staged)
 
 def _rust_stage_proc_macro_for_search(ctx, output):
     search_dir = declare_output(_rust_declared_output(ctx, "proc-macro-search"))
@@ -1281,6 +1294,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     own_proc_macro_search = []
     own_proc_macro_extern = []
     if crate_type == "proc-macro" and host_os() == "windows":
+        own_proc_macro_search = [_rust_stage_proc_macro_for_search(ctx, output)]
         own_proc_macro_extern = [crate_name + "=" + output]
     own_android_native_libraries = []
     android_abi = _rust_android_abi(ctx, target, crate_type)
