@@ -943,12 +943,16 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
         _rust_inline_proc_macro_extern_args(deps, _rust_aliases(ctx)) +
         _rust_response_file_args(ctx, compile_args, "build-script-rustc.rsp")
     )
+    dependency_build_outputs = _rust_dep_build_script_outputs(deps)
+    dependency_build_inputs = _rust_dep_build_script_native_inputs(deps)
+    wrapped = _rustc_with_build_script_args(ctx, compile_argv, dependency_stdouts = dependency_build_outputs, wrapper_name = "build-script-rustc-wrapper.ps1")
+    compile_argv = wrapped[0]
     build_script_compile_env = _rust_compile_action_env(ctx, host_triple, host_triple)
     _rust_add_windows_rustc_runtime_path(build_script_compile_env, rustc, host_triple)
     _rust_add_windows_proc_macro_path(build_script_compile_env, deps)
     run_action(
         argv = compile_argv,
-        inputs = _unique([script_path] + dep_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique([script_path] + dep_inputs + dependency_build_outputs + dependency_build_inputs + wrapped[1] + _rust_extra_inputs(ctx)),
         outputs = [runner],
         env = build_script_compile_env,
         toolchain_identity = identity + linker_identity + "\x00build-script",
@@ -971,9 +975,20 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     compile_env["OUT_DIR"] = _workspace_absolute(out_dir)
     return (out_dir, [script_path, stdout], compile_env, stdout)
 
-def _rustc_unix_build_script_args(argv, stdout):
-    script = """set -eu
-while IFS= read -r line; do
+def _rustc_unix_read_dependency_link_searches(stdout):
+    return """while IFS= read -r line; do
+  case "$line" in
+    cargo:rustc-link-search=*|cargo::rustc-link-search=*)
+      value=${{line#cargo:rustc-link-search=}}
+      value=${{value#cargo::rustc-link-search=}}
+      set -- "$@" -L "$value"
+      ;;
+  esac
+done < {stdout}
+""".format(stdout = _shell_quote(stdout))
+
+def _rustc_unix_read_own_build_script_args(stdout):
+    return """while IFS= read -r line; do
   case "$line" in
     cargo:rustc-cfg=*|cargo::rustc-cfg=*)
       value=${{line#cargo:rustc-cfg=}}
@@ -1007,12 +1022,28 @@ while IFS= read -r line; do
       ;;
   esac
 done < {stdout}
-exec "$@"
 """.format(stdout = _shell_quote(stdout))
+
+def _rustc_unix_build_script_args(argv, own_stdout, dependency_stdouts):
+    snippets = []
+    if own_stdout:
+        snippets.append(_rustc_unix_read_own_build_script_args(own_stdout))
+    for stdout in dependency_stdouts:
+        snippets.append(_rustc_unix_read_dependency_link_searches(stdout))
+    script = """set -eu
+{snippets}exec "$@"
+""".format(snippets = "".join(snippets))
     return [host_which("sh"), "-c", script, "once-rustc"] + argv
 
-def _rustc_windows_build_script_args(ctx, argv, stdout):
-    wrapper = declare_output(_rust_declared_output(ctx, "rustc-build-script-wrapper.ps1"))
+def _rustc_windows_stdout_array(stdouts):
+    if not stdouts:
+        return "@()"
+    return "@(" + ", ".join([_powershell_quote(stdout) for stdout in stdouts]) + ")"
+
+def _rustc_windows_build_script_args(ctx, argv, own_stdout, dependency_stdouts, wrapper_name):
+    wrapper = declare_output(_rust_declared_output(ctx, wrapper_name))
+    own_stdout_value = _powershell_quote(own_stdout) if own_stdout else "$null"
+    dependency_stdout_array = _rustc_windows_stdout_array(dependency_stdouts)
     script = """$ErrorActionPreference = 'Stop'
 $rustcArgs = New-Object 'System.Collections.Generic.List[string]'
 foreach ($arg in $args) {
@@ -1032,47 +1063,68 @@ function Get-DirectiveValue($line, $name) {
   return $null
 }
 
-foreach ($line in [System.IO.File]::ReadLines(""" + _powershell_quote(stdout) + """)) {
-  $value = Get-DirectiveValue $line 'rustc-cfg'
-  if ($null -ne $value) {
-    [void]$dynamicRustcArgs.Add('--cfg')
-    [void]$dynamicRustcArgs.Add($value)
-    continue
-  }
-  $value = Get-DirectiveValue $line 'rustc-check-cfg'
-  if ($null -ne $value) {
-    [void]$dynamicRustcArgs.Add('--check-cfg')
-    [void]$dynamicRustcArgs.Add($value)
-    continue
-  }
-  $value = Get-DirectiveValue $line 'rustc-env'
-  if ($null -ne $value) {
-    $equals = $value.IndexOf('=')
-    if ($equals -ge 0) {
-      $name = $value.Substring(0, $equals)
-      $envValue = $value.Substring($equals + 1)
-      [System.Environment]::SetEnvironmentVariable($name, $envValue, 'Process')
+function Add-LinkSearchDirectives($path) {
+  foreach ($line in [System.IO.File]::ReadLines($path)) {
+    $value = Get-DirectiveValue $line 'rustc-link-search'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('-L')
+      [void]$dynamicRustcArgs.Add($value)
+      continue
     }
-    continue
   }
-  $value = Get-DirectiveValue $line 'rustc-link-arg'
-  if ($null -ne $value) {
-    [void]$dynamicRustcArgs.Add('-C')
-    [void]$dynamicRustcArgs.Add("link-arg=$value")
-    continue
+}
+
+function Add-OwnBuildScriptDirectives($path) {
+  foreach ($line in [System.IO.File]::ReadLines($path)) {
+    $value = Get-DirectiveValue $line 'rustc-cfg'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('--cfg')
+      [void]$dynamicRustcArgs.Add($value)
+      continue
+    }
+    $value = Get-DirectiveValue $line 'rustc-check-cfg'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('--check-cfg')
+      [void]$dynamicRustcArgs.Add($value)
+      continue
+    }
+    $value = Get-DirectiveValue $line 'rustc-env'
+    if ($null -ne $value) {
+      $equals = $value.IndexOf('=')
+      if ($equals -ge 0) {
+        $name = $value.Substring(0, $equals)
+        $envValue = $value.Substring($equals + 1)
+        [System.Environment]::SetEnvironmentVariable($name, $envValue, 'Process')
+      }
+      continue
+    }
+    $value = Get-DirectiveValue $line 'rustc-link-arg'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('-C')
+      [void]$dynamicRustcArgs.Add("link-arg=$value")
+      continue
+    }
+    $value = Get-DirectiveValue $line 'rustc-link-lib'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('-l')
+      [void]$dynamicRustcArgs.Add($value)
+      continue
+    }
+    $value = Get-DirectiveValue $line 'rustc-link-search'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('-L')
+      [void]$dynamicRustcArgs.Add($value)
+      continue
+    }
   }
-  $value = Get-DirectiveValue $line 'rustc-link-lib'
-  if ($null -ne $value) {
-    [void]$dynamicRustcArgs.Add('-l')
-    [void]$dynamicRustcArgs.Add($value)
-    continue
-  }
-  $value = Get-DirectiveValue $line 'rustc-link-search'
-  if ($null -ne $value) {
-    [void]$dynamicRustcArgs.Add('-L')
-    [void]$dynamicRustcArgs.Add($value)
-    continue
-  }
+}
+
+$ownBuildScriptStdout = """ + own_stdout_value + """
+if ($null -ne $ownBuildScriptStdout) {
+  Add-OwnBuildScriptDirectives $ownBuildScriptStdout
+}
+foreach ($dependencyBuildScriptStdout in """ + dependency_stdout_array + """) {
+  Add-LinkSearchDirectives $dependencyBuildScriptStdout
 }
 
 if ($rustcArgs.Count -eq 0) {
@@ -1107,10 +1159,29 @@ try {
     write_path(wrapper, script)
     return ([host_which("powershell"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapper] + argv, [wrapper])
 
-def _rustc_with_build_script_args(ctx, argv, stdout):
+def _rustc_with_build_script_args(ctx, argv, own_stdout = None, dependency_stdouts = [], wrapper_name = "rustc-build-script-wrapper.ps1"):
+    if not own_stdout and not dependency_stdouts:
+        return (argv, [])
     if host_os() == "windows":
-        return _rustc_windows_build_script_args(ctx, argv, stdout)
-    return (_rustc_unix_build_script_args(argv, stdout), [])
+        return _rustc_windows_build_script_args(ctx, argv, own_stdout, dependency_stdouts, wrapper_name)
+    return (_rustc_unix_build_script_args(argv, own_stdout, dependency_stdouts), [])
+
+def _rust_dep_build_script_outputs(deps):
+    outputs = []
+    for dep in _rust_rlib_deps(deps):
+        for output in dep.get("transitive_build_script_outputs") or []:
+            outputs.append(output)
+        output = dep.get("build_script_stdout")
+        if output:
+            outputs.append(output)
+    return _unique(outputs)
+
+def _rust_dep_build_script_native_inputs(deps):
+    inputs = []
+    for dep in _rust_rlib_deps(deps):
+        for input in dep.get("transitive_build_script_inputs") or []:
+            inputs.append(input)
+    return _unique(inputs)
 
 def _rust_dep_inputs(deps):
     inputs = []
@@ -1306,13 +1377,14 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         [rustc] +
         _rust_response_file_args(ctx, _rust_inline_proc_macro_extern_args(deps, aliases) + rustc_args, "rustc.rsp")
     )
-    if build_stdout:
-        wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout)
-        argv = wrapped[0]
-        build_inputs.extend(wrapped[1])
+    dependency_build_outputs = _rust_dep_build_script_outputs(deps)
+    dependency_build_inputs = _rust_dep_build_script_native_inputs(deps)
+    wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout, dependency_build_outputs)
+    argv = wrapped[0]
+    build_inputs.extend(wrapped[1])
     run_action(
         argv = argv,
-        inputs = _unique(srcs + dep_inputs + dep_search_inputs + search_inputs + build_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique(srcs + dep_inputs + dep_search_inputs + search_inputs + build_inputs + dependency_build_outputs + dependency_build_inputs + _rust_extra_inputs(ctx)),
         outputs = [output],
         env = compile_env,
         toolchain_identity = identity + linker_identity,
@@ -1329,6 +1401,8 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     if android_abi and (crate_type == "cdylib" or crate_type == "dylib"):
         own_android_native_libraries.append({"abi": android_abi, "path": output})
     own_native_archives = [output] if crate_type == "staticlib" else []
+    own_build_script_outputs = [build_stdout] if build_stdout else []
+    own_build_script_inputs = _rust_build_script_inputs(ctx) if build_stdout else []
     provider = {
         "label_id": ctx["label"]["id"],
         "target_kind": "rust_library",
@@ -1346,6 +1420,8 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "proc_macro": output if crate_type == "proc-macro" else None,
         "transitive_rlibs": _collect_transitive(_rust_rlib_deps(deps), "transitive_rlibs", [output] if crate_type == "rlib" else []),
         "transitive_proc_macros": _collect_transitive(deps, "transitive_proc_macros", [output] if crate_type == "proc-macro" else []),
+        "transitive_build_script_outputs": _collect_transitive(_rust_rlib_deps(deps), "transitive_build_script_outputs", own_build_script_outputs),
+        "transitive_build_script_inputs": _collect_transitive(_rust_rlib_deps(deps), "transitive_build_script_inputs", own_build_script_inputs),
         "transitive_proc_macro_search": _collect_transitive(deps, "transitive_proc_macro_search", own_proc_macro_search),
         "transitive_proc_macro_externs": _collect_transitive(deps, "transitive_proc_macro_externs", own_proc_macro_extern),
         "transitive_sources": _collect_transitive(deps, "transitive_sources", srcs),

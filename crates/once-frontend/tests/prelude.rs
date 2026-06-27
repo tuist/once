@@ -2174,7 +2174,9 @@ result = repr([wrapped[0], wrapped[1]])
         ".once/out/crates/app/app/rustc-build-script-wrapper.ps1"
     );
     let script = String::from_utf8(bytes.clone()).unwrap();
-    assert!(script.contains("[System.IO.File]::ReadLines('.once/out/pkg/build script.stdout')"));
+    assert!(script.contains("$ownBuildScriptStdout = '.once/out/pkg/build script.stdout'"));
+    assert!(script.contains("Add-OwnBuildScriptDirectives $ownBuildScriptStdout"));
+    assert!(script.contains("function Add-LinkSearchDirectives($path)"));
     assert!(script.contains("[void]$dynamicRustcArgs.Add('--cfg')"));
     assert!(script.contains("[void]$dynamicRustcArgs.Add('--check-cfg')"));
     assert!(script.contains("New-Object System.Text.UTF8Encoding -ArgumentList $false"));
@@ -2183,6 +2185,105 @@ result = repr([wrapped[0], wrapped[1]])
     ));
     assert!(script.contains("[void]$rustcArgs.Add(\"@$responseFile\")"));
     assert!(script.contains("& $program @rest"));
+}
+
+#[test]
+fn prelude_windows_rustc_replays_dependency_build_script_link_searches() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    if name == "powershell":
+        return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "target": "x86_64-pc-windows-msvc",
+        "crate_root": "src/main.rs",
+    }},
+    "deps": [{{
+        "label_id": "third_party/native",
+        "crate_name": "native",
+        "rlib": ".once/out/native/libnative-THIRD_PARTY_NATIVE.rlib",
+        "transitive_build_script_outputs": [
+            ".once/out/native/build-script.stdout",
+        ],
+        "transitive_build_script_inputs": [
+            "third_party/rust/vendor/windows_x86_64_msvc-0.52.6/lib/windows.0.52.0.lib",
+        ],
+    }}],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "bin", "src/main.rs", "app.exe")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| action.identifier.as_deref() == Some("crates/app/app:rustc"))
+        .expect("app rustc action");
+    assert_eq!(
+        rustc.argv[0],
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    );
+    assert!(rustc
+        .argv
+        .iter()
+        .any(|arg| arg == "@.once/tmp/analysis/crates/app/app/rustc.rsp"));
+    for input in [
+        ".once/out/native/build-script.stdout",
+        "third_party/rust/vendor/windows_x86_64_msvc-0.52.6/lib/windows.0.52.0.lib",
+    ] {
+        assert!(
+            rustc.inputs.iter().any(|candidate| candidate == input),
+            "{input} missing from {:?}",
+            rustc.inputs
+        );
+    }
+    let wrapper_write = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .outputs
+                .iter()
+                .any(|output| output == ".once/out/crates/app/app/rustc-build-script-wrapper.ps1")
+        })
+        .expect("wrapper should be written before rustc action");
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &wrapper_write.operation else {
+        panic!("wrapper action should write a file");
+    };
+    let script = String::from_utf8(bytes.clone()).unwrap();
+    assert!(script.contains(
+        "foreach ($dependencyBuildScriptStdout in @('.once/out/native/build-script.stdout'))"
+    ));
+    assert!(script.contains("Add-LinkSearchDirectives $dependencyBuildScriptStdout"));
+    assert!(script.contains("[void]$dynamicRustcArgs.Add('-L')"));
 }
 
 #[test]
