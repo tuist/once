@@ -99,6 +99,7 @@ manifest = "Cargo.toml"
 lockfile = "Cargo.lock"
 vendor_dir = "third_party/rust/vendor"
 target = "${target}"
+dep_rustc_flags = ${release_flags}
 # once release generated targets end
 EOF
 

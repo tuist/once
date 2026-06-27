@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
@@ -49,7 +50,20 @@ struct DeclaredActionContext<'a> {
     capability: &'a str,
     index: usize,
     identifier: &'a str,
+    argv: &'a [String],
+    arg_files: &'a [DeclaredArgFile],
     record_success_evidence: bool,
+}
+
+struct DeclaredActionFailure<'a> {
+    cache: &'a CacheProvider,
+    identifier: &'a str,
+    index: usize,
+    target: &'a str,
+    exit_code: i32,
+    argv: &'a [String],
+    arg_files: &'a [DeclaredArgFile],
+    result: &'a ActionResult,
 }
 
 /// Materialise each declared action through the action cache, then
@@ -172,7 +186,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     })?;
     let action = declared_to_action(
         workspace,
-        declared,
+        &declared,
         module_source_digest,
         input_action_digests,
     )
@@ -184,6 +198,8 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         capability,
         index,
         identifier: &identifier_for_error,
+        argv: &declared.argv,
+        arg_files: &declared.arg_files,
         record_success_evidence,
     };
 
@@ -225,14 +241,16 @@ async fn run_cacheable_declared_action(
         .await;
         anyhow::bail!(
             "{}",
-            declared_action_failure_message(
-                context.cache,
-                context.identifier,
-                context.index,
-                context.target_id,
+            declared_action_failure_message(DeclaredActionFailure {
+                cache: context.cache,
+                identifier: context.identifier,
+                index: context.index,
+                target: context.target_id,
                 exit_code,
-                &outcome.result,
-            )
+                argv: context.argv,
+                arg_files: context.arg_files,
+                result: &outcome.result,
+            })
             .await
         );
     }
@@ -294,14 +312,16 @@ async fn run_uncacheable_declared_action(
         .await;
         anyhow::bail!(
             "{}",
-            declared_action_failure_message(
-                context.cache,
-                context.identifier,
-                context.index,
-                context.target_id,
+            declared_action_failure_message(DeclaredActionFailure {
+                cache: context.cache,
+                identifier: context.identifier,
+                index: context.index,
+                target: context.target_id,
                 exit_code,
-                &result,
-            )
+                argv: context.argv,
+                arg_files: context.arg_files,
+                result: &result,
+            })
             .await
         );
     }
@@ -353,19 +373,75 @@ async fn record_declared_action_evidence(
     .await;
 }
 
-async fn declared_action_failure_message(
-    cache: &CacheProvider,
-    identifier: &str,
-    index: usize,
-    target: &str,
-    exit_code: i32,
-    result: &ActionResult,
-) -> String {
+async fn declared_action_failure_message(failure: DeclaredActionFailure<'_>) -> String {
+    let DeclaredActionFailure {
+        cache,
+        identifier,
+        index,
+        target,
+        exit_code,
+        argv,
+        arg_files,
+        result,
+    } = failure;
     let mut message =
         format!("{identifier} ({index}) failed for {target} with exit code {exit_code}");
+    append_declared_argv(&mut message, argv);
+    append_declared_arg_files(&mut message, arg_files);
     append_captured_output(cache, &mut message, "stdout", result.stdout.as_ref()).await;
     append_captured_output(cache, &mut message, "stderr", result.stderr.as_ref()).await;
     message
+}
+
+fn append_declared_argv(message: &mut String, argv: &[String]) {
+    if argv.is_empty() {
+        return;
+    }
+
+    message.push_str("\n\nargv:");
+    append_arg_file_arg_list(message, "first args", argv.iter().take(32));
+    let start = argv.len().saturating_sub(16);
+    if start > 32 {
+        append_arg_file_arg_list(message, "last args", argv.iter().skip(start));
+    }
+}
+
+fn append_declared_arg_files(message: &mut String, arg_files: &[DeclaredArgFile]) {
+    if arg_files.is_empty() {
+        return;
+    }
+
+    message.push_str("\n\narg files:");
+    for arg_file in arg_files {
+        let _ = write!(
+            message,
+            "\n{} [{}], {} args",
+            arg_file.path,
+            declared_arg_file_format_name(arg_file.format),
+            arg_file.args.len()
+        );
+        append_arg_file_arg_list(message, "first args", arg_file.args.iter().take(32));
+        let start = arg_file.args.len().saturating_sub(16);
+        if start > 32 {
+            append_arg_file_arg_list(message, "last args", arg_file.args.iter().skip(start));
+        }
+    }
+}
+
+fn append_arg_file_arg_list<'a>(
+    message: &mut String,
+    label: &str,
+    mut args: impl Iterator<Item = &'a String>,
+) {
+    let Some(first_arg) = args.next() else {
+        return;
+    };
+
+    let _ = write!(message, "\n{label}:");
+    let _ = write!(message, "\n  {first_arg}");
+    for arg in args {
+        let _ = write!(message, "\n  {arg}");
+    }
 }
 
 async fn append_captured_output(
@@ -599,7 +675,7 @@ fn compose_target_input_digest(input_digests: &[Digest]) -> Option<Digest> {
 
 fn declared_to_action(
     workspace: &Path,
-    declared: DeclaredAction,
+    declared: &DeclaredAction,
     module_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
 ) -> Result<Action> {
@@ -614,7 +690,7 @@ fn declared_to_action(
     );
     let input_digest = compose_input_digest(
         workspace,
-        &declared,
+        declared,
         module_source_digest,
         dep_action_digests,
     )?;
@@ -627,16 +703,10 @@ fn declared_to_action(
         })
         .collect::<Result<Vec<_>>>()?;
     ensure_output_parent_dirs(workspace, &outputs)?;
-    let DeclaredAction {
-        operation,
-        argv,
-        env,
-        ..
-    } = declared;
-    match operation {
+    match &declared.operation {
         None => Ok(Action::RunCommand {
-            argv,
-            env,
+            argv: declared.argv.clone(),
+            env: declared.env.clone(),
             cwd: None,
             input_digest: Some(input_digest),
             outputs,
@@ -645,7 +715,7 @@ fn declared_to_action(
             timeout_ms: None,
             remote: None,
         }),
-        Some(operation) => operation_to_action(operation, input_digest),
+        Some(operation) => operation_to_action(operation.clone(), input_digest),
     }
 }
 
@@ -671,9 +741,6 @@ fn declared_arg_file_content(arg_file: &DeclaredArgFile) -> Result<Vec<u8>> {
             validate_arg_file_line(arg_file, arg)?;
             Ok(arg.to_string())
         }),
-        DeclaredArgFileFormat::RustcResponse => {
-            declared_arg_file_lines(arg_file, |arg| rustc_response_arg(arg_file, arg))
-        }
     }
 }
 
@@ -690,11 +757,6 @@ fn declared_arg_file_lines(
     Ok(content)
 }
 
-fn rustc_response_arg(arg_file: &DeclaredArgFile, arg: &str) -> Result<String> {
-    validate_arg_file_line(arg_file, arg)?;
-    Ok(arg.to_string())
-}
-
 fn validate_arg_file_line(arg_file: &DeclaredArgFile, arg: &str) -> Result<()> {
     if arg.contains('\n') || arg.contains('\r') {
         anyhow::bail!(
@@ -709,7 +771,6 @@ fn validate_arg_file_line(arg_file: &DeclaredArgFile, arg: &str) -> Result<()> {
 fn declared_arg_file_format_name(format: DeclaredArgFileFormat) -> &'static str {
     match format {
         DeclaredArgFileFormat::LineDelimited => "line-delimited",
-        DeclaredArgFileFormat::RustcResponse => "rustc-response",
     }
 }
 
@@ -856,7 +917,7 @@ mod tests {
             identifier: None,
         };
 
-        let action = declared_to_action(workspace.path(), declared, module_digest(), &[]).unwrap();
+        let action = declared_to_action(workspace.path(), &declared, module_digest(), &[]).unwrap();
 
         assert!(workspace.path().join(".once/out/x").is_dir());
         assert!(workspace.path().join(".once/out/x/sub").is_dir());
@@ -870,70 +931,26 @@ mod tests {
     fn materialize_declared_arg_files_writes_line_delimited_args() {
         let workspace = tempfile::tempdir().unwrap();
         let arg_files = vec![DeclaredArgFile {
-            path: ".once/out/rust/rustc-features.rsp".to_string(),
+            path: ".once/out/tool/args.txt".to_string(),
             format: DeclaredArgFileFormat::LineDelimited,
-            args: vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()],
+            args: vec!["--flag".to_string(), "value with spaces".to_string()],
         }];
 
         materialize_declared_arg_files(workspace.path(), &arg_files).unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(workspace.path().join(".once/out/rust/rustc-features.rsp"))
-                .unwrap(),
-            "--cfg\nfeature=\"alloc\"\n"
+            std::fs::read_to_string(workspace.path().join(".once/out/tool/args.txt")).unwrap(),
+            "--flag\nvalue with spaces\n"
         );
-    }
-
-    #[test]
-    fn materialize_declared_arg_files_writes_rustc_response_args() {
-        let workspace = tempfile::tempdir().unwrap();
-        let arg_files = vec![DeclaredArgFile {
-            path: ".once/out/rust/rustc-features.rsp".to_string(),
-            format: DeclaredArgFileFormat::RustcResponse,
-            args: vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()],
-        }];
-
-        materialize_declared_arg_files(workspace.path(), &arg_files).unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(workspace.path().join(".once/out/rust/rustc-features.rsp"))
-                .unwrap(),
-            "--cfg\nfeature=\"alloc\"\n"
-        );
-    }
-
-    #[test]
-    fn rustc_response_args_keep_arguments_verbatim() {
-        let arg_file = DeclaredArgFile {
-            path: ".once/out/rust/rustc-features.rsp".to_string(),
-            format: DeclaredArgFileFormat::RustcResponse,
-            args: Vec::new(),
-        };
-        let cases = [
-            "",
-            "argument with spaces",
-            r"C:\Program Files\Rust\lib",
-            "tab\tseparated",
-            "feature='alloc'",
-            "feature=\"alloc\"",
-        ];
-
-        for case in cases {
-            assert_eq!(
-                rustc_response_arg(&arg_file, case).unwrap(),
-                case,
-                "rustc response argument should stay verbatim: {case:?}"
-            );
-        }
     }
 
     #[test]
     fn materialize_declared_arg_files_rejects_newline_args() {
         let workspace = tempfile::tempdir().unwrap();
         let arg_files = vec![DeclaredArgFile {
-            path: ".once/out/rust/rustc-features.rsp".to_string(),
+            path: ".once/out/tool/args.txt".to_string(),
             format: DeclaredArgFileFormat::LineDelimited,
-            args: vec!["feature=\"alloc\"\n--cfg".to_string()],
+            args: vec!["value\n--flag".to_string()],
         }];
 
         let err = materialize_declared_arg_files(workspace.path(), &arg_files)
@@ -956,8 +973,17 @@ mod tests {
             outputs: BTreeMap::new(),
         };
 
-        let message =
-            declared_action_failure_message(&cache, "target:action", 2, "target", 7, &result).await;
+        let message = declared_action_failure_message(DeclaredActionFailure {
+            cache: &cache,
+            identifier: "target:action",
+            index: 2,
+            target: "target",
+            exit_code: 7,
+            argv: &[],
+            arg_files: &[],
+            result: &result,
+        })
+        .await;
 
         assert!(message.contains("target:action (2) failed for target with exit code 7"));
         assert!(message.contains("stdout:\nvisible stdout"));
@@ -978,11 +1004,77 @@ mod tests {
             outputs: BTreeMap::new(),
         };
 
-        let message = declared_action_failure_message(&cache, "id", 0, "target", 1, &result).await;
+        let message = declared_action_failure_message(DeclaredActionFailure {
+            cache: &cache,
+            identifier: "id",
+            index: 0,
+            target: "target",
+            exit_code: 1,
+            argv: &[],
+            arg_files: &[],
+            result: &result,
+        })
+        .await;
 
         assert!(message.contains("last 16384 bytes of stdout:\n"));
         assert!(!message.contains("drop-me"));
         assert!(message.ends_with(&"x".repeat(FAILURE_OUTPUT_LIMIT)));
+    }
+
+    #[tokio::test]
+    async fn declared_action_failure_message_appends_arg_file_context() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let result = ActionResult {
+            exit_code: 1,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::new(),
+        };
+        let mut response_args = vec![
+            "--name".to_string(),
+            "app".to_string(),
+            "--input".to_string(),
+            ".once/out/deps/dep.bin".to_string(),
+            "--search".to_string(),
+            ".once/out/deps".to_string(),
+        ];
+        response_args.extend((0..60).map(|index| format!("arg-{index}")));
+        response_args.push("src/input.txt".to_string());
+        let arg_files = vec![DeclaredArgFile {
+            path: ".once/tmp/analysis/app/tool.args".to_string(),
+            format: DeclaredArgFileFormat::LineDelimited,
+            args: response_args,
+        }];
+
+        let command_argv = vec![
+            "tool".to_string(),
+            "--config".to_string(),
+            ".once/out/deps/config.json".to_string(),
+            "@.once/tmp/analysis/app/tool.args".to_string(),
+        ];
+        let message = declared_action_failure_message(DeclaredActionFailure {
+            cache: &cache,
+            identifier: "id",
+            index: 0,
+            target: "target",
+            exit_code: 1,
+            argv: &command_argv,
+            arg_files: &arg_files,
+            result: &result,
+        })
+        .await;
+
+        assert!(message.contains("argv:"));
+        assert!(message.contains("first args:\n  tool"));
+        assert!(message.contains(".once/out/deps/config.json"));
+        assert!(message.contains("arg files:"));
+        assert!(message.contains(".once/tmp/analysis/app/tool.args [line-delimited]"));
+        assert!(message.contains("first args:\n  --name"));
+        assert!(message.contains("last args:"));
+        assert!(message.contains("src/input.txt"));
+        assert!(!message.contains("extern args:"));
+        assert!(!message.contains("dependency search dirs:"));
     }
 
     #[tokio::test]

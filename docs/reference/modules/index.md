@@ -4,7 +4,7 @@ Once graph modules are Starlark files that export graph primitives. Today the
 primary exported primitive is a target kind: a schema and optional
 implementation function that lowers one target into cacheable actions. Built-in
 target kinds and project target kinds use the same shape, so a project can add a
-target kind without changing the Rust executor.
+target kind without changing Once's native executor.
 The built-in prelude also declares its source order in Starlark, so
 adding a target kind family updates the prelude rather than hardcoding a new
 toolchain in Rust.
@@ -176,7 +176,7 @@ inspecting target identities.
 
 ## Host Globals
 
-The Rust executor exposes generic primitives only:
+The Starlark executor exposes generic primitives only:
 
 - `host_arch()` and `host_os()` return normalized host identifiers.
 - `host_env(name)` returns one host environment variable, or an empty
@@ -198,10 +198,9 @@ The Rust executor exposes generic primitives only:
 - `cmd_args(args, use_arg_file = None)` creates a structured
   command-line fragment. `args` is a list of strings. When
   `use_arg_file` is set, it is a dictionary with `path` plus optional
-  `format` and `arg_format`. The supported `format` values are
+  `format` and `arg_format`. The supported `format` value is
   `line-delimited`, which writes one argument per line without shell
-  escaping, and `rustc-response`, which writes one `rustc` argument per
-  line verbatim. The caller chooses `path`; use `ctx["scratch_dir"]`
+  escaping. The caller chooses `path`; use `ctx["scratch_dir"]`
   for action-private helper files and `declare_output` for durable
   target outputs. `arg_format` defaults to `@{}` and must contain
   exactly one `{}` placeholder.

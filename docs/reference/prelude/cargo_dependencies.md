@@ -25,6 +25,7 @@ Rust targets depend on this target and identify their Cargo package via
 | `all_features` | bool | no | `false` | Pass `--all-features` to Cargo metadata |
 | `no_default_features` | bool | no | `false` | Pass `--no-default-features` to Cargo metadata |
 | `target` | string | no | host target | Rust target triple passed to Cargo as `--filter-platform` |
+| `dep_rustc_flags` | list&lt;string&gt; | no | `[]` | Additional rustc flags applied to resolved crate builds. Panic strategy flags are stripped for procedural macro and host-tool crates so they keep the compiler's unwind strategy |
 
 ## Providers
 
