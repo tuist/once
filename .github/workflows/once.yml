@@ -274,6 +274,58 @@ jobs:
           rc=0
           "${once_bin}" build "${target_id}" --format json --quiet || rc=$?
           if [ "${rc}" != "0" ]; then
+            echo "::group::DIAG: original Once rustc stderr from evidence"
+            evidence_json="${RUNNER_TEMP:-/tmp}/once-evidence.json"
+            stderr_digest=""
+            if "${once_bin}" query evidence "${target_id}:build" --format json >"${evidence_json}"; then
+              echo "--- failed evidence records ---"
+              jq -r '.[] | select(.status == "failed") | {created_at_unix_ms, action_digest, stderr, exit_code}' "${evidence_json}" || true
+              stderr_digest="$(
+                jq -r '[.[] | select(.status == "failed" and .stderr != null)] | sort_by(.created_at_unix_ms) | last | .stderr // ""' "${evidence_json}"
+              )"
+            else
+              echo "failed to query Once evidence"
+            fi
+            if [ -n "${stderr_digest}" ]; then
+              original_stderr="${RUNNER_TEMP:-/tmp}/once-original-rustc-stderr.log"
+              if "${once_bin}" cache blob get "${stderr_digest}" >"${original_stderr}"; then
+                echo "stderr digest: ${stderr_digest}"
+                echo "stderr: ${original_stderr} ($(wc -c <"${original_stderr}") bytes)"
+                echo "--- first compiler failure with surrounding loader trace ---"
+                awk '
+                  /error\[|^error:/ && first == 0 { first = NR }
+                  { lines[NR] = $0 }
+                  END {
+                    if (NR == 0) {
+                      exit
+                    }
+                    if (first == 0) {
+                      start = 1
+                      end = NR < 240 ? NR : 240
+                    } else {
+                      start = first - 220
+                      if (start < 1) {
+                        start = 1
+                      }
+                      end = first + 120
+                      if (end > NR) {
+                        end = NR
+                      }
+                    }
+                    for (i = start; i <= end; i++) {
+                      print lines[i]
+                    }
+                  }
+                ' "${original_stderr}"
+                echo "--- first loader failures ---"
+                grep -nE 'failed to resolve crate|StableCrateId|colliding|conflict|error\[|^error:|register newly loaded|register crate|resolving crate `once_|resolving dep `once_|resolving crate `core`' "${original_stderr}" | head -500 || true
+              else
+                echo "failed to read stderr blob ${stderr_digest}"
+              fi
+            else
+              echo "no failed stderr digest found"
+            fi
+            echo "::endgroup::"
             echo "::group::DIAG: cargo_dependencies dir listing"
             ls -la ".once/out/cargo_dependencies_${suffix}/" 2>&1 || echo "<dir missing>"
             echo "::endgroup::"
