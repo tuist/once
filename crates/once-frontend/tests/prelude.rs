@@ -2486,9 +2486,9 @@ ctx = {
         {
             "label_id": "crates/once-cas/once_cas_x86_64_pc_windows_msvc",
             "crate_name": "once_cas",
-            "rlib": ".once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas.rlib",
+            "rlib": ".once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas-CRATES_ONCE_CAS_ONCE_CAS_X86_64_PC_WINDOWS_MSVC.rlib",
             "transitive_rlibs": [
-                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib",
+                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_SERDE_1_0_228.rlib",
             ],
         },
         {
@@ -2499,17 +2499,17 @@ ctx = {
                     {
                         "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3",
                         "crate_name": "tokio",
-                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio.rlib",
+                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TOKIO_1_52_3.rlib",
                     },
                     {
                         "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228",
                         "crate_name": "serde",
-                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib",
+                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_SERDE_1_0_228.rlib",
                     },
                     {
                         "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43",
                         "crate_name": "tracing",
-                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing.rlib",
+                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TRACING_0_1_43.rlib",
                     },
                 ],
             },
@@ -2590,28 +2590,28 @@ fn assert_release_dependency_response_file(store: &AnalysisStore, workspace: &Pa
             "once_cas={}",
             workspace_arg(
                 workspace,
-                ".once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas.rlib"
+                ".once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas-CRATES_ONCE_CAS_ONCE_CAS_X86_64_PC_WINDOWS_MSVC.rlib"
             )
         ),
         format!(
             "tokio={}",
             workspace_arg(
                 workspace,
-                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio.rlib"
+                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TOKIO_1_52_3.rlib"
             )
         ),
         format!(
             "serde={}",
             workspace_arg(
                 workspace,
-                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde.rlib"
+                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_SERDE_1_0_228.rlib"
             )
         ),
         format!(
             "tracing={}",
             workspace_arg(
                 workspace,
-                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing.rlib"
+                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TRACING_0_1_43.rlib"
             )
         ),
     ] {
@@ -2650,20 +2650,17 @@ fn assert_release_dependency_response_file(store: &AnalysisStore, workspace: &Pa
 }
 
 fn assert_release_dependency_search_path(args: &[String], workspace: &Path) {
-    // rlib dependencies resolve directly from their original output
-    // directories; only proc-macro dylibs are staged, and these deps are all
-    // rlibs, so no staging directory should be referenced.
-    let tokio_dependency = format!(
+    let staged_dependency = format!(
         "dependency={}",
         workspace_arg(
             workspace,
-            ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3"
+            ".once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/deps-rlib-search"
         )
     );
     assert!(
         args.windows(2)
-            .any(|pair| pair[0] == "-L" && pair[1] == tokio_dependency),
-        "{tokio_dependency} missing from {args:?}"
+            .any(|pair| pair[0] == "-L" && pair[1] == staged_dependency),
+        "{staged_dependency} missing from {args:?}"
     );
     assert!(
         !args.iter().any(|arg| arg.contains("/search/deps")),

@@ -676,21 +676,39 @@ def _rust_raw_search_path_args(deps):
         args.extend(["-L", "dependency=" + directory])
     return args
 
-def _rust_rlib_search_path_args(deps):
-    dirs = []
+def _rust_rlib_search_artifacts(deps):
+    artifacts = []
     for dep in _rust_rlib_deps(deps):
         rlib = dep.get("rlib")
-        directory = _parent_dir(rlib)
-        if directory:
-            dirs.append(directory)
+        if rlib:
+            artifacts.append(rlib)
         for transitive in dep.get("transitive_rlibs") or []:
-            directory = _parent_dir(transitive)
-            if directory:
-                dirs.append(directory)
-    args = []
-    for directory in _unique(dirs):
-        args.extend(["-L", "dependency=" + directory])
-    return args
+            artifacts.append(transitive)
+    return _unique(artifacts)
+
+def _rust_stage_rlibs_for_search(ctx, deps, tag):
+    artifacts = _rust_rlib_search_artifacts(deps)
+    if not artifacts:
+        return ([], [])
+    search_dir = declare_output(_rust_declared_output(ctx, tag + "-rlib-search"))
+    prepare_path(search_dir, kind = "remove", identifier = ctx["label"]["id"] + ":" + tag + "-rlib-search-clean")
+    prepare_path(search_dir, kind = "directory", identifier = ctx["label"]["id"] + ":" + tag + "-rlib-search-prepare")
+    staged = []
+    seen = {}
+    for artifact in artifacts:
+        name = _basename(artifact)
+        if name in seen:
+            continue
+        seen[name] = True
+        output = search_dir + "/" + name
+        copy_path(
+            artifact,
+            output,
+            inputs = [artifact],
+            identifier = ctx["label"]["id"] + ":" + tag + "-rlib-search:" + name,
+        )
+        staged.append(output)
+    return (["-L", "dependency=" + search_dir], staged)
 
 def _rust_proc_macro_search_artifacts(deps):
     artifacts = []
@@ -730,9 +748,9 @@ def _rust_search_path_args(ctx, deps, tag):
     # and resolve fine from their original output directories.
     if host_os() != "windows":
         return (_rust_raw_search_path_args(deps), [])
-    rlib_args = _rust_rlib_search_path_args(deps)
+    rlib_args, staged_rlibs = _rust_stage_rlibs_for_search(ctx, deps, tag)
     proc_macro_args, staged = _rust_proc_macro_search_path_args(deps)
-    return (rlib_args + proc_macro_args, staged)
+    return (rlib_args + proc_macro_args, staged_rlibs + staged)
 
 def _rust_stage_proc_macro_for_search(ctx, output):
     search_dir = declare_output(_rust_declared_output(ctx, "proc-macro-search"))
