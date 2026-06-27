@@ -1647,7 +1647,7 @@ result = repr([provider["label_id"] for provider in deps])
     let arg_file = rustc.arg_files.first().expect("futures-util response file");
     let macro_dir = workspace_arg(
         workspace.path(),
-        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32",
+        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/proc-macro-search",
     );
     let macro_artifact = format!("{macro_dir}/futures_macro.dll");
     let macro_extern = format!("futures_macro={macro_artifact}");

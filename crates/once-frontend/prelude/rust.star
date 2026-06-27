@@ -758,12 +758,6 @@ def _rust_inline_proc_macro_extern_args(deps, aliases):
     args = []
     seen = {}
     for dep in deps:
-        crate_name = _rust_dep_crate_name(dep, aliases)
-        proc_macro = dep.get("proc_macro")
-        if crate_name and proc_macro and crate_name not in seen:
-            seen[crate_name] = True
-            args.extend(["--extern", crate_name + "=" + _rust_command_path_arg(proc_macro)])
-    for dep in deps:
         for extern in dep.get("transitive_proc_macro_externs") or []:
             parts = _split_once(extern, "=")
             if len(parts) != 2:
@@ -773,6 +767,12 @@ def _rust_inline_proc_macro_extern_args(deps, aliases):
                 continue
             seen[name] = True
             args.extend(["--extern", name + "=" + _rust_command_path_arg(parts[1])])
+    for dep in deps:
+        crate_name = _rust_dep_crate_name(dep, aliases)
+        proc_macro = dep.get("proc_macro")
+        if crate_name and proc_macro and crate_name not in seen:
+            seen[crate_name] = True
+            args.extend(["--extern", crate_name + "=" + _rust_command_path_arg(proc_macro)])
     return args
 
 def _rust_proc_macro_dirs(deps):
@@ -1294,8 +1294,9 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     own_proc_macro_search = []
     own_proc_macro_extern = []
     if crate_type == "proc-macro" and host_os() == "windows":
-        own_proc_macro_search = [_rust_stage_proc_macro_for_search(ctx, output)]
-        own_proc_macro_extern = [crate_name + "=" + output]
+        staged = _rust_stage_proc_macro_for_search(ctx, output)
+        own_proc_macro_search = [staged]
+        own_proc_macro_extern = [crate_name + "=" + staged]
     own_android_native_libraries = []
     android_abi = _rust_android_abi(ctx, target, crate_type)
     if android_abi and (crate_type == "cdylib" or crate_type == "dylib"):
