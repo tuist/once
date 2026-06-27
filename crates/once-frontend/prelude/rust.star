@@ -217,24 +217,17 @@ def _is_absolute_path(path):
         return True
     return len(path) >= 3 and path[1] == ":" and (path[2] == "/" or path[2] == "\\")
 
-def _is_workspace_path_arg(arg):
-    if not arg or arg.startswith("-") or _is_absolute_path(arg):
+def _is_response_path_arg(arg):
+    if not arg:
         return False
+    if _is_absolute_path(arg):
+        return True
     return arg.startswith(".") or "/" in arg or "\\" in arg
 
-def _workspace_arg(arg):
-    if _is_workspace_path_arg(arg):
-        return _workspace_absolute(arg)
-    return arg
-
 def _rust_response_path_arg(arg):
-    workspace_arg = _workspace_arg(arg)
-    if workspace_arg != arg or _is_absolute_path(arg) or _is_workspace_path_arg(arg):
-        return workspace_arg.replace("\\", "/")
-    return workspace_arg
-
-def _rust_command_path_arg(arg):
-    return _workspace_arg(arg).replace("\\", "/")
+    if _is_response_path_arg(arg):
+        return arg.replace("\\", "/")
+    return arg
 
 def _split_once(value, separator):
     for index in range(len(value)):
@@ -242,17 +235,26 @@ def _split_once(value, separator):
             return [value[:index], value[index + len(separator):]]
     return []
 
-def _workspace_extern_arg(arg):
+def _rust_response_extern_arg(arg):
     parts = _split_once(arg, "=")
     if len(parts) != 2:
         return arg
     return parts[0] + "=" + _rust_response_path_arg(parts[1])
 
-def _workspace_search_path_arg(arg):
+def _rust_response_search_path_arg(arg):
     parts = _split_once(arg, "=")
     if len(parts) != 2:
         return _rust_response_path_arg(arg)
     return parts[0] + "=" + _rust_response_path_arg(parts[1])
+
+def _rust_response_arg(arg):
+    if arg.startswith("--extern="):
+        return "--extern=" + _rust_response_extern_arg(arg[len("--extern="):])
+    if arg.startswith("--out-dir="):
+        return "--out-dir=" + _rust_response_path_arg(arg[len("--out-dir="):])
+    if arg.startswith("-L") and arg != "-L":
+        return "-L" + _rust_response_search_path_arg(arg[2:])
+    return _rust_response_path_arg(arg)
 
 def _rust_response_file_args(ctx, args, name):
     # On Windows the command line passed to rustc can exceed the operating
@@ -280,15 +282,15 @@ def _rust_response_file_args(ctx, args, name):
             mode = ""
             continue
         if mode == "extern":
-            response_args.append(_workspace_extern_arg(arg))
+            response_args.append(_rust_response_extern_arg(arg))
             mode = ""
             continue
         if mode == "search":
-            response_args.append(_workspace_search_path_arg(arg))
+            response_args.append(_rust_response_search_path_arg(arg))
             mode = ""
             continue
-        response_args.append(_rust_response_path_arg(arg))
-        if arg == "-o":
+        response_args.append(_rust_response_arg(arg))
+        if arg == "-o" or arg == "--out-dir":
             mode = "path"
         elif arg == "--extern":
             mode = "extern"
@@ -299,7 +301,7 @@ def _rust_response_file_args(ctx, args, name):
             args = response_args,
             use_arg_file = {
                 "path": path,
-                "format": "rustc-response",
+                "format": "line-delimited",
                 "arg_format": "@{}",
             },
         ),
@@ -496,6 +498,11 @@ def _rust_add_windows_rustc_runtime_path(env, rustc, host_triple):
 def _rust_target_args(target):
     if target:
         return ["--target", target]
+    return []
+
+def _rust_compile_target_args(target, host_triple):
+    if target and target != host_triple:
+        return _rust_target_args(target)
     return []
 
 def _rust_proc_macro_codegen_args(crate_type):
@@ -775,22 +782,30 @@ def _rust_inline_proc_macro_extern_args(deps, aliases):
         return []
     args = []
     seen = {}
+    direct_proc_macro_aliases = {}
+    for dep in deps:
+        proc_macro = dep.get("proc_macro")
+        crate_name = _rust_dep_crate_name(dep, aliases)
+        original_name = dep.get("crate_name") or crate_name
+        if proc_macro and crate_name and original_name:
+            direct_proc_macro_aliases[original_name] = crate_name
     for dep in deps:
         for extern in dep.get("transitive_proc_macro_externs") or []:
             parts = _split_once(extern, "=")
             if len(parts) != 2:
                 continue
             name = parts[0]
+            name = direct_proc_macro_aliases.get(name) or name
             if name in seen:
                 continue
             seen[name] = True
-            args.extend(["--extern", name + "=" + _rust_command_path_arg(parts[1])])
+            args.extend(["--extern", name + "=" + _rust_response_path_arg(parts[1])])
     for dep in deps:
         crate_name = _rust_dep_crate_name(dep, aliases)
         proc_macro = dep.get("proc_macro")
         if crate_name and proc_macro and crate_name not in seen:
             seen[crate_name] = True
-            args.extend(["--extern", crate_name + "=" + _rust_command_path_arg(proc_macro)])
+            args.extend(["--extern", crate_name + "=" + _rust_response_path_arg(proc_macro)])
     return args
 
 def _rust_proc_macro_dirs(deps):
@@ -810,6 +825,9 @@ def _rust_proc_macro_dirs(deps):
 def _rust_add_windows_proc_macro_path(env, deps):
     if host_os() != "windows":
         return
+    # Windows loads proc-macro dynamic libraries at compile time, including
+    # their sibling dynamic library dependencies, so rustc needs their output
+    # directories on PATH.
     path = _rust_path_separator().join(_rust_proc_macro_dirs(deps))
     if path:
         env["PATH"] = _rust_merge_paths(path, env.get("PATH") or "")
@@ -1337,16 +1355,13 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     dep_args = _rust_dep_args(deps, aliases)
     dep_search_args, dep_search_inputs = _rust_search_path_args(ctx, deps, "deps")
     dep_inputs = _rust_dep_inputs(deps)
-    search_deps = ctx.get("search_deps") or []
-    search_args, search_inputs = _rust_search_path_args(ctx, search_deps, "prior-deps")
     build_deps = ctx.get("build_deps")
     if build_deps == None:
         build_deps = []
     build_dep_args = _rust_dep_args(build_deps, aliases)
     build_dep_search_args, build_dep_search_inputs = _rust_search_path_args(ctx, build_deps, "build-deps")
     build_dep_args.extend(build_dep_search_args)
-    build_dep_args.extend(search_args)
-    build_dep_inputs = _unique(_rust_dep_inputs(build_deps) + build_dep_search_inputs + search_inputs)
+    build_dep_inputs = _unique(_rust_dep_inputs(build_deps) + build_dep_search_inputs)
     feature_flags = _rust_feature_flags(ctx)
     build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_flags)
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
@@ -1361,7 +1376,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     ]
     rustc_args.extend(_rust_extra_filename_args(ctx, crate_type))
     rustc_args.extend(_rust_output_args(crate_type, output))
-    rustc_args.extend(_rust_target_args(target))
+    rustc_args.extend(_rust_compile_target_args(target, host_triple))
     rustc_args.extend(_rust_proc_macro_codegen_args(crate_type))
     rustc_args.extend(feature_flags)
     rustc_args.extend(_rust_user_flags(ctx))
@@ -1369,7 +1384,6 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     rustc_args.extend(_rust_builtin_extern_args(crate_type))
     rustc_args.extend(dep_args)
     rustc_args.extend(dep_search_args)
-    rustc_args.extend(search_args)
     rustc_args.extend(linker_args)
     rustc_args.extend(_rust_linker_flags(ctx))
     rustc_args.append(crate_root)
@@ -1384,7 +1398,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     build_inputs.extend(wrapped[1])
     run_action(
         argv = argv,
-        inputs = _unique(srcs + dep_inputs + dep_search_inputs + search_inputs + build_inputs + dependency_build_outputs + dependency_build_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique(srcs + dep_inputs + dep_search_inputs + build_inputs + dependency_build_outputs + dependency_build_inputs + _rust_extra_inputs(ctx)),
         outputs = [output],
         env = compile_env,
         toolchain_identity = identity + linker_identity,
@@ -1577,7 +1591,7 @@ def _cargo_compile_resolved_specs(ctx, specs):
             if not ready:
                 next_remaining.append(spec)
                 continue
-            provider = _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs, _cargo_search_deps(providers))
+            provider = _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs)
             providers_by_name[spec["name"]] = provider
             providers.append(provider)
             progressed = True
@@ -1590,14 +1604,7 @@ def _cargo_compile_resolved_specs(ctx, specs):
         fail(ctx["label"]["id"] + ": Cargo dependency graph has a cycle or missing dependency among " + ", ".join(names))
     return (providers, providers_by_name)
 
-def _cargo_search_deps(providers):
-    # A crate's own resolved dependencies already contribute their direct and
-    # transitive search directories, so there is no need to fold every prior
-    # provider in the graph into each crate's search path. Doing so made the
-    # Windows search set grow with the whole dependency closure.
-    return []
-
-def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs, search_deps):
+def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, metadata_inputs):
     attrs = _cargo_copy_attrs(spec.get("attrs") or {})
     attrs["_output_prefix"] = spec["name"] + "/"
     attrs["_extra_inputs"] = metadata_inputs
@@ -1611,7 +1618,6 @@ def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, 
         "attr": attrs,
         "deps": dep_providers,
         "build_deps": build_dep_providers,
-        "search_deps": search_deps,
         "srcs": spec.get("srcs") or [],
     }
     if spec.get("kind") == "rust_proc_macro":
@@ -1642,7 +1648,7 @@ def _cargo_spec_rustc_flags(ctx, spec):
     flags = _rust_attr(ctx, "dep_rustc_flags", [])
     if not flags:
         return []
-    if spec.get("kind") == "rust_proc_macro" or spec["name"].endswith("-host"):
+    if spec.get("kind") == "rust_proc_macro" or spec.get("host_tool"):
         return _rust_strip_panic_flags(flags)
     return flags
 
@@ -2128,7 +2134,7 @@ def _cargo_merge_aliases(left, right):
         out[key] = value
     return out
 
-def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target):
+def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target, host_tool = False):
     attrs = _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases)
     if rust_target:
         attrs["target"] = rust_target
@@ -2143,6 +2149,7 @@ def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, 
         "deps": deps,
         "srcs": _cargo_package_source_globs(source_root),
         "attrs": attrs,
+        "host_tool": host_tool,
     }
     if build_deps:
         spec["build_deps"] = build_deps
@@ -2191,7 +2198,7 @@ def _cargo_metadata_targets(ctx, metadata, host_metadata = None):
         if host_name:
             host_deps, host_aliases = _cargo_metadata_deps(host_node, id_to_host_name, False)
             host_build_deps, host_build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name)
-            targets.append(_cargo_metadata_target_spec(package, target, host_node, source_root, crate_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), ""))
+            targets.append(_cargo_metadata_target_spec(package, target, host_node, source_root, crate_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), "", host_tool = True))
     return targets
 
 def _cargo_vendor_source_root(vendor_dir, package, target_name):

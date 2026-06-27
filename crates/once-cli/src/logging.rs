@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 const INTERNAL_DEFAULT_FILTER: &str =
     "once=debug,once_cli=debug,once_core=debug,once_cas=debug,once_frontend=debug,warn";
+const STDERR_ONCE_TARGETS: &[&str] =
+    &["once", "once_cli", "once_core", "once_cas", "once_frontend"];
 
 pub struct Logging {
     session_id: Uuid,
@@ -89,16 +91,23 @@ fn file_filter() -> EnvFilter {
 
 fn stderr_filter(verbose: u8) -> EnvFilter {
     let default = stderr_default_filter(verbose);
-    stderr_filter_from_env(env::var("RUST_LOG").ok().as_deref(), default)
+    stderr_filter_from_env(env::var("RUST_LOG").ok().as_deref(), &default)
 }
 
-fn stderr_default_filter(verbose: u8) -> &'static str {
-    match verbose {
-        0 => "once=warn,once_cli=warn,once_core=warn,once_cas=warn,once_frontend=warn,error",
-        1 => "once=info,once_cli=info,once_core=info,once_cas=info,once_frontend=info,error",
-        2 => "once=debug,once_cli=debug,once_core=debug,once_cas=debug,once_frontend=debug,error",
-        _ => "once=trace,once_cli=trace,once_core=trace,once_cas=trace,once_frontend=trace,error",
-    }
+fn stderr_default_filter(verbose: u8) -> String {
+    let level = match verbose {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    let mut filter = STDERR_ONCE_TARGETS
+        .iter()
+        .map(|target| format!("{target}={level}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    filter.push_str(",error");
+    filter
 }
 
 fn file_filter_from_env(once_log: Option<&str>, rust_log: Option<&str>) -> EnvFilter {

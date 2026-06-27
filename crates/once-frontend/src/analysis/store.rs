@@ -78,7 +78,6 @@ pub struct DeclaredArgFile {
 #[serde(rename_all = "kebab-case")]
 pub enum DeclaredArgFileFormat {
     LineDelimited,
-    RustcResponse,
 }
 
 fn default_cacheable() -> bool {

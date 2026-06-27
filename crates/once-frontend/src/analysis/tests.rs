@@ -103,14 +103,14 @@ fn host_file_contains_matches_binary_host_files() {
 #[test]
 fn windows_host_which_candidates_skip_extensionless_names() {
     assert_eq!(
-        which_candidate_names_for("rustc", true, Some(".COM;.EXE;.CMD")),
+        which_candidate_names_for("tool", true, Some(".COM;.EXE;.CMD")),
         vec![
-            "rustc.COM".to_string(),
-            "rustc.com".to_string(),
-            "rustc.EXE".to_string(),
-            "rustc.exe".to_string(),
-            "rustc.CMD".to_string(),
-            "rustc.cmd".to_string(),
+            "tool.COM".to_string(),
+            "tool.com".to_string(),
+            "tool.EXE".to_string(),
+            "tool.exe".to_string(),
+            "tool.CMD".to_string(),
+            "tool.cmd".to_string(),
         ]
     );
 }
@@ -118,16 +118,16 @@ fn windows_host_which_candidates_skip_extensionless_names() {
 #[test]
 fn windows_host_which_candidates_keep_explicit_extensions() {
     assert_eq!(
-        which_candidate_names_for("rustc.exe", true, Some(".COM;.EXE;.CMD")),
-        vec!["rustc.exe".to_string()]
+        which_candidate_names_for("tool.exe", true, Some(".COM;.EXE;.CMD")),
+        vec!["tool.exe".to_string()]
     );
 }
 
 #[test]
 fn unix_host_which_candidates_keep_name_verbatim() {
     assert_eq!(
-        which_candidate_names_for("rustc", false, Some(".COM;.EXE;.CMD")),
-        vec!["rustc".to_string()]
+        which_candidate_names_for("tool", false, Some(".COM;.EXE;.CMD")),
+        vec!["tool".to_string()]
     );
 }
 
@@ -135,9 +135,9 @@ fn unix_host_which_candidates_keep_name_verbatim() {
 #[test]
 fn windows_host_which_candidates_use_live_pathext() {
     assert_eq!(
-        which_candidate_names("rustc"),
+        which_candidate_names("tool"),
         which_candidate_names_for(
-            "rustc",
+            "tool",
             true,
             std::env::var_os("PATHEXT")
                 .map(|value| value.to_string_lossy().into_owned())
@@ -237,17 +237,17 @@ fn run_action_flattens_cmd_args_with_arg_file() {
         run(r#"
 run_action(
     argv = [
-        "rustc",
+        "tool",
         cmd_args(
-            args = ["--cfg", "feature=\"alloc\""],
+            args = ["--flag", "value with spaces"],
             use_arg_file = {
-                "path": ".once/out/p/rustc-features.rsp",
+                "path": ".once/out/p/args.txt",
                 "format": "line-delimited",
                 "arg_format": "@{}",
             },
         ),
     ],
-    outputs = [".once/out/p/lib.rlib"],
+    outputs = [".once/out/p/out.bin"],
 )
 "#)
         .unwrap();
@@ -257,61 +257,46 @@ run_action(
     let action = &store.actions[0];
     assert_eq!(
         action.argv,
-        vec![
-            "rustc".to_string(),
-            "@.once/out/p/rustc-features.rsp".to_string()
-        ]
+        vec!["tool".to_string(), "@.once/out/p/args.txt".to_string()]
     );
     assert_eq!(action.arg_files.len(), 1);
     let arg_file = &action.arg_files[0];
-    assert_eq!(arg_file.path, ".once/out/p/rustc-features.rsp");
+    assert_eq!(arg_file.path, ".once/out/p/args.txt");
     assert_eq!(arg_file.format, DeclaredArgFileFormat::LineDelimited);
     assert_eq!(
         arg_file.args,
-        vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()]
+        vec!["--flag".to_string(), "value with spaces".to_string()]
     );
 }
 
 #[test]
-fn run_action_flattens_cmd_args_with_rustc_response_arg_file() {
+fn run_action_rejects_unknown_arg_file_format() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "p");
-    let (store, ()) = with_active_store(store, || {
+    let (_, err) = with_active_store(store, || {
         run(r#"
 run_action(
     argv = [
-        "rustc",
+        "tool",
         cmd_args(
-            args = ["--cfg", "feature=\"alloc\""],
+            args = ["--flag", "value"],
             use_arg_file = {
-                "path": ".once/out/p/rustc-features.rsp",
-                "format": "rustc-response",
+                "path": ".once/out/p/args.txt",
+                "format": "custom",
                 "arg_format": "@{}",
             },
         ),
     ],
-    outputs = [".once/out/p/lib.rlib"],
+    outputs = [".once/out/p/out.bin"],
 )
 "#)
-        .unwrap();
+        .unwrap_err()
     });
 
-    assert_eq!(store.actions.len(), 1);
-    let action = &store.actions[0];
-    assert_eq!(
-        action.argv,
-        vec![
-            "rustc".to_string(),
-            "@.once/out/p/rustc-features.rsp".to_string()
-        ]
-    );
-    assert_eq!(action.arg_files.len(), 1);
-    let arg_file = &action.arg_files[0];
-    assert_eq!(arg_file.path, ".once/out/p/rustc-features.rsp");
-    assert_eq!(arg_file.format, DeclaredArgFileFormat::RustcResponse);
-    assert_eq!(
-        arg_file.args,
-        vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()]
+    let message = format!("{err:?}");
+    assert!(
+        message.contains("expected `cmd_args.use_arg_file.format` to be `line-delimited`"),
+        "{message}"
     );
 }
 
@@ -324,8 +309,8 @@ fn run_action_rejects_line_delimited_arg_file_newlines() {
 run_action(
     argv = [
         cmd_args(
-            args = ["--cfg", "feature=\"alloc\"\n--cfg"],
-            use_arg_file = {"path": ".once/out/p/rustc-features.rsp"},
+            args = ["--flag", "value\n--other"],
+            use_arg_file = {"path": ".once/out/p/args.txt"},
         ),
     ],
 )

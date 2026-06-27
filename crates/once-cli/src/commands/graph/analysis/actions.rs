@@ -741,9 +741,6 @@ fn declared_arg_file_content(arg_file: &DeclaredArgFile) -> Result<Vec<u8>> {
             validate_arg_file_line(arg_file, arg)?;
             Ok(arg.to_string())
         }),
-        DeclaredArgFileFormat::RustcResponse => {
-            declared_arg_file_lines(arg_file, |arg| rustc_response_arg(arg_file, arg))
-        }
     }
 }
 
@@ -760,11 +757,6 @@ fn declared_arg_file_lines(
     Ok(content)
 }
 
-fn rustc_response_arg(arg_file: &DeclaredArgFile, arg: &str) -> Result<String> {
-    validate_arg_file_line(arg_file, arg)?;
-    Ok(arg.to_string())
-}
-
 fn validate_arg_file_line(arg_file: &DeclaredArgFile, arg: &str) -> Result<()> {
     if arg.contains('\n') || arg.contains('\r') {
         anyhow::bail!(
@@ -779,7 +771,6 @@ fn validate_arg_file_line(arg_file: &DeclaredArgFile, arg: &str) -> Result<()> {
 fn declared_arg_file_format_name(format: DeclaredArgFileFormat) -> &'static str {
     match format {
         DeclaredArgFileFormat::LineDelimited => "line-delimited",
-        DeclaredArgFileFormat::RustcResponse => "rustc-response",
     }
 }
 
@@ -940,70 +931,26 @@ mod tests {
     fn materialize_declared_arg_files_writes_line_delimited_args() {
         let workspace = tempfile::tempdir().unwrap();
         let arg_files = vec![DeclaredArgFile {
-            path: ".once/out/rust/rustc-features.rsp".to_string(),
+            path: ".once/out/tool/args.txt".to_string(),
             format: DeclaredArgFileFormat::LineDelimited,
-            args: vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()],
+            args: vec!["--flag".to_string(), "value with spaces".to_string()],
         }];
 
         materialize_declared_arg_files(workspace.path(), &arg_files).unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(workspace.path().join(".once/out/rust/rustc-features.rsp"))
-                .unwrap(),
-            "--cfg\nfeature=\"alloc\"\n"
+            std::fs::read_to_string(workspace.path().join(".once/out/tool/args.txt")).unwrap(),
+            "--flag\nvalue with spaces\n"
         );
-    }
-
-    #[test]
-    fn materialize_declared_arg_files_writes_rustc_response_args() {
-        let workspace = tempfile::tempdir().unwrap();
-        let arg_files = vec![DeclaredArgFile {
-            path: ".once/out/rust/rustc-features.rsp".to_string(),
-            format: DeclaredArgFileFormat::RustcResponse,
-            args: vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()],
-        }];
-
-        materialize_declared_arg_files(workspace.path(), &arg_files).unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(workspace.path().join(".once/out/rust/rustc-features.rsp"))
-                .unwrap(),
-            "--cfg\nfeature=\"alloc\"\n"
-        );
-    }
-
-    #[test]
-    fn rustc_response_args_keep_arguments_verbatim() {
-        let arg_file = DeclaredArgFile {
-            path: ".once/out/rust/rustc-features.rsp".to_string(),
-            format: DeclaredArgFileFormat::RustcResponse,
-            args: Vec::new(),
-        };
-        let cases = [
-            "",
-            "argument with spaces",
-            r"C:\Program Files\Rust\lib",
-            "tab\tseparated",
-            "feature='alloc'",
-            "feature=\"alloc\"",
-        ];
-
-        for case in cases {
-            assert_eq!(
-                rustc_response_arg(&arg_file, case).unwrap(),
-                case,
-                "rustc response argument should stay verbatim: {case:?}"
-            );
-        }
     }
 
     #[test]
     fn materialize_declared_arg_files_rejects_newline_args() {
         let workspace = tempfile::tempdir().unwrap();
         let arg_files = vec![DeclaredArgFile {
-            path: ".once/out/rust/rustc-features.rsp".to_string(),
+            path: ".once/out/tool/args.txt".to_string(),
             format: DeclaredArgFileFormat::LineDelimited,
-            args: vec!["feature=\"alloc\"\n--cfg".to_string()],
+            args: vec!["value\n--flag".to_string()],
         }];
 
         let err = materialize_declared_arg_files(workspace.path(), &arg_files)
@@ -1085,26 +1032,26 @@ mod tests {
             outputs: BTreeMap::new(),
         };
         let mut response_args = vec![
-            "--crate-name".to_string(),
+            "--name".to_string(),
             "app".to_string(),
-            "--extern".to_string(),
-            "dep=.once/out/crates/dep/dep/libdep.rlib".to_string(),
-            "-L".to_string(),
-            "dependency=.once/out/crates/dep/dep".to_string(),
+            "--input".to_string(),
+            ".once/out/deps/dep.bin".to_string(),
+            "--search".to_string(),
+            ".once/out/deps".to_string(),
         ];
         response_args.extend((0..60).map(|index| format!("arg-{index}")));
-        response_args.push("crates/app/src/lib.rs".to_string());
+        response_args.push("src/input.txt".to_string());
         let arg_files = vec![DeclaredArgFile {
-            path: ".once/tmp/analysis/crates/app/app/rustc.rsp".to_string(),
-            format: DeclaredArgFileFormat::RustcResponse,
+            path: ".once/tmp/analysis/app/tool.args".to_string(),
+            format: DeclaredArgFileFormat::LineDelimited,
             args: response_args,
         }];
 
         let command_argv = vec![
-            "rustc".to_string(),
-            "--extern".to_string(),
-            "macro=.once/out/deps/macro.dll".to_string(),
-            "@.once/tmp/analysis/crates/app/app/rustc.rsp".to_string(),
+            "tool".to_string(),
+            "--config".to_string(),
+            ".once/out/deps/config.json".to_string(),
+            "@.once/tmp/analysis/app/tool.args".to_string(),
         ];
         let message = declared_action_failure_message(DeclaredActionFailure {
             cache: &cache,
@@ -1119,13 +1066,13 @@ mod tests {
         .await;
 
         assert!(message.contains("argv:"));
-        assert!(message.contains("first args:\n  rustc"));
-        assert!(message.contains("macro=.once/out/deps/macro.dll"));
+        assert!(message.contains("first args:\n  tool"));
+        assert!(message.contains(".once/out/deps/config.json"));
         assert!(message.contains("arg files:"));
-        assert!(message.contains(".once/tmp/analysis/crates/app/app/rustc.rsp [rustc-response]"));
-        assert!(message.contains("first args:\n  --crate-name"));
+        assert!(message.contains(".once/tmp/analysis/app/tool.args [line-delimited]"));
+        assert!(message.contains("first args:\n  --name"));
         assert!(message.contains("last args:"));
-        assert!(message.contains("crates/app/src/lib.rs"));
+        assert!(message.contains("src/input.txt"));
         assert!(!message.contains("extern args:"));
         assert!(!message.contains("dependency search dirs:"));
     }
