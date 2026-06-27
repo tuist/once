@@ -308,6 +308,43 @@ jobs:
               echo "rsp not found at $rsp"
             fi
             echo "::endgroup::"
+            echo "::group::diagnostic: replay final rustc metadata trace"
+            if [ -f "$rsp" ]; then
+              stderr_log="${RUNNER_TEMP:-/tmp}/once-rustc-stderr.log"
+              RUSTC_BOOTSTRAP=1 RUSTC_LOG=rustc_metadata::creader=info,rustc_metadata::locator=info rustc "@${rsp}" 2>"${stderr_log}" || true
+              echo "stderr: ${stderr_log} ($(wc -c <"${stderr_log}") bytes)"
+              echo "--- first compiler failure with surrounding metadata trace ---"
+              awk '
+                /error\[|^error:/ && first == 0 { first = NR }
+                { lines[NR] = $0 }
+                END {
+                  if (NR == 0) {
+                    exit
+                  }
+                  if (first == 0) {
+                    start = 1
+                    end = NR < 240 ? NR : 240
+                  } else {
+                    start = first - 180
+                    if (start < 1) {
+                      start = 1
+                    }
+                    end = first + 80
+                    if (end > NR) {
+                      end = NR
+                    }
+                  }
+                  for (i = start; i <= end; i++) {
+                    print lines[i]
+                  }
+                }
+              ' "${stderr_log}"
+              echo "--- loader highlights ---"
+              grep -nE 'resolving dep|register crate|register newly loaded|Rejecting|error\[|can'\''t find crate' "${stderr_log}" | head -400 || true
+            else
+              echo "rsp not found at $rsp"
+            fi
+            echo "::endgroup::"
             echo "::group::DIAG: rlib archive contents (verify they are real rlibs, not metadata-only)"
             for rlib in \
               ".once/out/crates/once-cas/once_cas_${suffix}/libonce_cas.rlib" \
@@ -316,7 +353,7 @@ jobs:
               ".once/out/cargo_dependencies_${suffix}/clap-4.6.1/libclap.rlib"; do
               if [ -f "$rlib" ]; then
                 echo "--- $rlib ($(wc -c <"$rlib") bytes) ---"
-                "C:/Users/runneradmin/.rustup/toolchains/1.96.0-x86_64-pc-windows-msvc/lib/rustlib/x86_64-pc-windows-msvc/bin/llvm-ar" t "$rlib" 2>&1 | head -8 || echo "(ar failed)"
+                llvm-ar t "$rlib" 2>&1 | head -8 || echo "(ar failed)"
               fi
             done
             echo "::endgroup::"
