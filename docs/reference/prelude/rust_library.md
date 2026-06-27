@@ -73,7 +73,7 @@ use.
 
 | Output | Location |
 | --- | --- |
-| Rlib | `.once/out/<target>/lib<crate_name>.rlib` |
+| Rust library | `.once/out/<target>/lib<crate_name>-<metadata>.rlib` |
 | Static library | `.once/out/<target>/lib<crate_name>.a` or `.lib` |
 | Dynamic library | `.once/out/<target>/lib<crate_name>.dylib`, `.so`, or `.dll` |
 

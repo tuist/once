@@ -1649,7 +1649,9 @@ result = repr([provider["label_id"] for provider in deps])
         workspace.path(),
         ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/proc-macro-search",
     );
-    let macro_artifact = format!("{macro_dir}/futures_macro.dll");
+    let macro_artifact = format!(
+        "{macro_dir}/futures_macro-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_FUTURES_MACRO_0_3_32.dll"
+    );
     let macro_extern = format!("futures_macro={macro_artifact}");
 
     // Proc-macros are passed as ordinary externs in the response file, the
@@ -2721,18 +2723,28 @@ result = repr("ok")
         action
             .argv
             .windows(2)
-            .any(|args| args[0] == "-o" && args[1] == ".once/out/macros/stringify/libstringify.so"),
+            .any(|args| args[0] == "--out-dir" && args[1] == ".once/out/macros/stringify"),
         "{:?}",
         action.argv
     );
     assert!(
-        !action.argv.iter().any(|arg| arg == "--out-dir"),
+        action
+            .argv
+            .windows(2)
+            .any(|args| args[0] == "-C" && args[1] == "extra-filename=-MACROS_STRINGIFY"),
         "{:?}",
         action.argv
     );
+    let dylib_ext = if cfg!(target_os = "macos") {
+        ".dylib"
+    } else {
+        ".so"
+    };
     assert_eq!(
         action.outputs,
-        vec![".once/out/macros/stringify/libstringify.so".to_string()]
+        vec![format!(
+            ".once/out/macros/stringify/libstringify-MACROS_STRINGIFY{dylib_ext}"
+        )]
     );
 }
 

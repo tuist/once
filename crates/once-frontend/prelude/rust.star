@@ -1193,6 +1193,8 @@ def _rust_output_extension(crate_type, target):
     return ""
 
 def _rust_extra_filename(ctx, crate_type):
+    if crate_type == "rlib" or crate_type == "proc-macro":
+        return "-" + _rust_metadata_suffix(ctx)
     return ""
 
 def _rust_extra_filename_args(ctx, crate_type):
@@ -1216,11 +1218,21 @@ def _rust_output_name(ctx, crate_type):
         return prefix + crate_name + _rust_extra_filename(ctx, crate_type) + _rust_output_extension(crate_type, target)
     return crate_name
 
+def _rust_compile_output_name(ctx, crate_type, output_name):
+    if crate_type == "rlib" or crate_type == "proc-macro":
+        return _rust_output_name(ctx, crate_type)
+    return output_name
+
 def _rust_declared_output(ctx, name):
     prefix = ctx["attr"].get("_output_prefix") or ""
     return prefix + name
 
 def _rust_output_args(crate_type, output):
+    if crate_type == "rlib" or crate_type == "proc-macro":
+        output_dir = _parent_dir(output)
+        if not output_dir:
+            output_dir = "."
+        return ["--out-dir", output_dir]
     return ["-o", output]
 
 def _rust_compile(ctx, crate_type, default_root, output_name):
@@ -1230,7 +1242,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     edition = _rust_attr(ctx, "edition", "2021")
     crate_root = _rust_crate_root(ctx, default_root)
     srcs = _rust_sources(ctx, crate_root)
-    output = declare_output(_rust_declared_output(ctx, output_name))
+    output = declare_output(_rust_declared_output(ctx, _rust_compile_output_name(ctx, crate_type, output_name)))
     aliases = _rust_aliases(ctx)
     deps = _rust_resolved_deps(ctx)
     dep_args = _rust_dep_args(deps, aliases)
@@ -1251,9 +1263,6 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
     _rust_add_windows_rustc_runtime_path(compile_env, rustc, host_triple)
     _rust_add_windows_proc_macro_path(compile_env, deps)
-    if "once_cli_x86_64_pc_windows_msvc" in (ctx["label"].get("id") or ""):
-        compile_env["RUSTC_BOOTSTRAP"] = "1"
-        compile_env["RUSTC_LOG"] = "rustc_metadata::creader=info,rustc_metadata::locator=info"
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
     rustc_args = [
         "--crate-name", crate_name,

@@ -56,7 +56,7 @@ The target emits `rust_crate`.
 
 | Output | Location |
 | --- | --- |
-| Rlib | `.once/out/<target>/lib<crate_name>.rlib` |
+| Rust library | `.once/out/<target>/lib<crate_name>-<metadata>.rlib` |
 
 ## Example
 
