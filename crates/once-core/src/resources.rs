@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
+use tracing::debug;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceRequest {
@@ -181,11 +182,29 @@ impl ResourcePool {
                     for (name, count) in &request.slots {
                         *state.slots.entry(name.clone()).or_insert(0) += count;
                     }
+                    debug!(
+                        request_cpu_slots = request.cpu_slots,
+                        request_memory_bytes = request.memory_bytes,
+                        request_slots = ?request.slots,
+                        used_cpu_slots = state.cpu_slots,
+                        used_memory_bytes = state.memory_bytes,
+                        used_slots = ?state.slots,
+                        "resource request acquired"
+                    );
                     return ResourcePermit {
                         pool: Arc::clone(self),
                         request,
                     };
                 }
+                debug!(
+                    request_cpu_slots = request.cpu_slots,
+                    request_memory_bytes = request.memory_bytes,
+                    request_slots = ?request.slots,
+                    used_cpu_slots = state.cpu_slots,
+                    used_memory_bytes = state.memory_bytes,
+                    used_slots = ?state.slots,
+                    "resource request waiting"
+                );
             }
             notified.await;
         }
@@ -223,6 +242,15 @@ impl Drop for ResourcePermit {
                     *entry = entry.saturating_sub(*count);
                 }
             }
+            debug!(
+                request_cpu_slots = self.request.cpu_slots,
+                request_memory_bytes = self.request.memory_bytes,
+                request_slots = ?self.request.slots,
+                used_cpu_slots = state.cpu_slots,
+                used_memory_bytes = state.memory_bytes,
+                used_slots = ?state.slots,
+                "resource request released"
+            );
         }
         self.pool.notify.notify_waiters();
     }

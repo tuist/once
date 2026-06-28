@@ -63,7 +63,10 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(String::new());
         }
-        Ok(std::env::var(name).unwrap_or_default())
+        with_store(|store| -> Result<String> {
+            let store = store.ok_or_else(|| anyhow!("host_env called outside analysis"))?;
+            Ok(store.host_cache.env(name).unwrap_or_default())
+        })
     }
 
     /// Active workspace root as an absolute path. Schema parsing

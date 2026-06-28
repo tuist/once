@@ -21,8 +21,13 @@ pub(crate) async fn run(
             output_symlink_mode,
             ..
         } => {
-            let mut result =
-                execute_command(action, workspace_root, cache, stream_to_parent).await?;
+            let mut result = Box::pin(execute_command(
+                action,
+                workspace_root,
+                cache,
+                stream_to_parent,
+            ))
+            .await?;
             if result.exit_code == 0 {
                 result.outputs =
                     outputs::capture(outputs, workspace_root, cache, *output_symlink_mode).await?;
@@ -121,8 +126,15 @@ async fn execute_command(
             .await
         }
         (None, false) => {
-            local::execute_command(argv, env, cwd.as_ref(), *timeout_ms, workspace_root, cache)
-                .await
+            Box::pin(local::execute_command(
+                argv,
+                env,
+                cwd.as_ref(),
+                *timeout_ms,
+                workspace_root,
+                cache,
+            ))
+            .await
         }
     }
 }

@@ -137,13 +137,55 @@ struct CommandKey {
     env: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Default)]
+type HostEnvLookup = dyn Fn(&str) -> Option<String> + Send + Sync;
+
 pub(super) struct HostCache {
     which: Arc<Mutex<BTreeMap<String, Option<String>>>>,
     commands: Arc<Mutex<BTreeMap<CommandKey, String>>>,
+    host_env: Arc<HostEnvLookup>,
+}
+
+impl std::fmt::Debug for HostCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostCache").finish_non_exhaustive()
+    }
+}
+
+impl Clone for HostCache {
+    fn clone(&self) -> Self {
+        Self {
+            which: Arc::clone(&self.which),
+            commands: Arc::clone(&self.commands),
+            host_env: Arc::clone(&self.host_env),
+        }
+    }
+}
+
+impl Default for HostCache {
+    fn default() -> Self {
+        Self::with_env_lookup(|name| std::env::var(name).ok())
+    }
 }
 
 impl HostCache {
+    fn with_env_lookup(host_env: impl Fn(&str) -> Option<String> + Send + Sync + 'static) -> Self {
+        Self {
+            which: Arc::new(Mutex::new(BTreeMap::new())),
+            commands: Arc::new(Mutex::new(BTreeMap::new())),
+            host_env: Arc::new(host_env),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_env(vars: BTreeMap<String, String>) -> Self {
+        let vars = Arc::new(vars);
+        Self::with_env_lookup(move |name| vars.get(name).cloned())
+    }
+
+    pub(super) fn env(&self, name: &str) -> Option<String> {
+        (self.host_env)(name)
+    }
+
     /// Resolve `name` on `PATH`, caching the result.
     ///
     /// The lock is released before the filesystem walk so concurrent

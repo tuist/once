@@ -21,6 +21,14 @@ pub(super) fn script_action(
     workspace: &std::path::Path,
     target: &once_frontend::Target,
 ) -> Result<ActionPlan> {
+    script_action_with_env(workspace, target, &|name| env::var(name).ok())
+}
+
+fn script_action_with_env(
+    workspace: &std::path::Path,
+    target: &once_frontend::Target,
+    host_env_value: &dyn Fn(&str) -> Option<String>,
+) -> Result<ActionPlan> {
     let cache = target
         .attrs
         .get("cache")
@@ -53,6 +61,7 @@ pub(super) fn script_action(
         timeout_ms,
         remote,
         output_symlink_mode,
+        host_env_value,
     )
 }
 
@@ -67,6 +76,7 @@ fn file_script_action(
     timeout_ms: Option<u64>,
     remote: Option<RemoteExecution>,
     output_symlink_mode: OutputSymlinkMode,
+    host_env_value: &dyn Fn(&str) -> Option<String>,
 ) -> Result<ActionPlan> {
     let runtime = target
         .attrs
@@ -88,7 +98,7 @@ fn file_script_action(
     Ok(ActionPlan {
         action: Action::RunCommand {
             argv,
-            env: host_env(workspace, target, &runtime)?,
+            env: host_env(workspace, target, &runtime, host_env_value)?,
             cwd,
             input_digest,
             outputs,
@@ -127,10 +137,13 @@ fn tracked_env_names(target: &once_frontend::Target) -> Result<Vec<String>> {
     }
 }
 
-fn tracked_env(target: &once_frontend::Target) -> Result<BTreeMap<String, String>> {
+fn tracked_env(
+    target: &once_frontend::Target,
+    host_env_value: &dyn Fn(&str) -> Option<String>,
+) -> Result<BTreeMap<String, String>> {
     let mut out = BTreeMap::new();
     for name in tracked_env_names(target)? {
-        if let Ok(value) = env::var(&name) {
+        if let Some(value) = host_env_value(&name) {
             out.insert(name, value);
         }
     }
@@ -141,6 +154,7 @@ fn host_env(
     workspace: &std::path::Path,
     target: &once_frontend::Target,
     runtime: &str,
+    host_env_value: &dyn Fn(&str) -> Option<String>,
 ) -> Result<BTreeMap<String, String>> {
     let env_names = tracked_env_names(target)?;
     let env_keys = env_names.iter().map(String::as_str).collect::<Vec<_>>();
@@ -150,7 +164,7 @@ fn host_env(
         workspace_tool_env(workspace, &[runtime], &env_keys)
             .with_context(|| format!("building tool environment for script {}", target.id()))?
     };
-    for (key, value) in tracked_env(target)? {
+    for (key, value) in tracked_env(target, host_env_value)? {
         out.insert(key, value);
     }
     Ok(out)
@@ -279,9 +293,10 @@ mod tests {
             "script_env_json".into(),
             "[\"ONCE_TEST_HOST_SCRIPT_ENV\"]".into(),
         );
-        std::env::set_var("ONCE_TEST_HOST_SCRIPT_ENV", "present");
-
-        let plan = script_action(tmp.path(), &target).unwrap();
+        let plan = script_action_with_env(tmp.path(), &target, &|name| {
+            (name == "ONCE_TEST_HOST_SCRIPT_ENV").then(|| "present".to_string())
+        })
+        .unwrap();
         let Action::RunCommand {
             argv,
             env,
