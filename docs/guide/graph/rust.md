@@ -55,9 +55,12 @@ build script before `rustc`; Once sets `OUT_DIR` for generated files.
 Once consumes common build-script stdout directives:
 `cargo:rustc-cfg`, `cargo:rustc-check-cfg`, `cargo:rustc-env`,
 `cargo:rustc-link-arg`, `cargo:rustc-link-lib`, and
-`cargo:rustc-link-search`. For crates with Cargo `links` metadata,
-custom metadata from direct dependency build scripts is exposed to
-downstream build scripts as `DEP_<LINKS>_<KEY>` environment variables.
+`cargo:rustc-link-search`. Dependency `cargo:rustc-link-search`
+outputs are also replayed for downstream Rust targets, so native
+libraries referenced by dependency metadata can be found at final link
+time. For crates with Cargo `links` metadata, custom metadata from
+direct dependency build scripts is exposed to downstream build scripts
+as `DEP_<LINKS>_<KEY>` environment variables.
 Generated Cargo dependencies set `cap_lints = "allow"` so dependency
 crates follow Cargo's lint-capping behavior.
 

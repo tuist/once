@@ -50,7 +50,21 @@ latest_release() {
 
 fallback_cargo_build() {
   echo "falling back to a Cargo-built bootstrap Once for this host" >&2
-  mise exec -- cargo build --locked --release --package once-cli >&2
+  export CARGO_NET_RETRY="${CARGO_NET_RETRY:-10}"
+  export CARGO_HTTP_MULTIPLEXING="${CARGO_HTTP_MULTIPLEXING:-false}"
+  local attempt=1
+  local max_attempts="${ONCE_BOOTSTRAP_CARGO_ATTEMPTS:-3}"
+  while true; do
+    if mise exec -- cargo build --locked --release --package once-cli >&2; then
+      break
+    fi
+    if (( attempt >= max_attempts )); then
+      return 1
+    fi
+    echo "Cargo bootstrap build failed, retrying (${attempt}/${max_attempts})" >&2
+    sleep $((attempt * 2))
+    attempt=$((attempt + 1))
+  done
   case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
       printf '%s\n' "target/release/once.exe"

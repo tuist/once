@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 const INTERNAL_DEFAULT_FILTER: &str =
     "once=debug,once_cli=debug,once_core=debug,once_cas=debug,once_frontend=debug,warn";
+const STDERR_ONCE_TARGETS: &[&str] =
+    &["once", "once_cli", "once_core", "once_cas", "once_frontend"];
 
 pub struct Logging {
     session_id: Uuid,
@@ -88,13 +90,24 @@ fn file_filter() -> EnvFilter {
 }
 
 fn stderr_filter(verbose: u8) -> EnvFilter {
-    let default = match verbose {
+    let default = stderr_default_filter(verbose);
+    stderr_filter_from_env(env::var("RUST_LOG").ok().as_deref(), &default)
+}
+
+fn stderr_default_filter(verbose: u8) -> String {
+    let level = match verbose {
         0 => "warn",
         1 => "info",
         2 => "debug",
         _ => "trace",
     };
-    stderr_filter_from_env(env::var("RUST_LOG").ok().as_deref(), default)
+    let mut filter = STDERR_ONCE_TARGETS
+        .iter()
+        .map(|target| format!("{target}={level}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    filter.push_str(",error");
+    filter
 }
 
 fn file_filter_from_env(once_log: Option<&str>, rust_log: Option<&str>) -> EnvFilter {
@@ -200,6 +213,14 @@ mod tests {
     fn stderr_filter_uses_verbose_default() {
         let filter = stderr_filter_from_env(None, "info");
         assert_eq!(filter.max_level_hint(), Some(LevelFilter::INFO));
+    }
+
+    #[test]
+    fn stderr_default_filter_scopes_dependency_warnings() {
+        assert_eq!(
+            stderr_default_filter(0),
+            "once=warn,once_cli=warn,once_core=warn,once_cas=warn,once_frontend=warn,error"
+        );
     }
 
     #[test]

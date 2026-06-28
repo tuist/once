@@ -229,15 +229,13 @@ PY
     The status should be success
   End
 
-  It 'reports the cache hit in well under 100ms'
+  It 'returns a cached result without rerunning the command'
     # Warm the cache with a deliberately slow command.
-    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'sleep 0.3' >/dev/null 2>&1
-    start_ns=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))')
-    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'sleep 0.3' >/dev/null 2>&1
-    end_ns=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))')
-    elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
-    When call test "$elapsed_ms" -lt 100
+    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'sleep 0.3; printf warmed' >/dev/null 2>&1
+    When call once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'sleep 0.3; printf warmed'
     The status should be success
+    The stdout should equal 'warmed'
+    The stderr should include 'cache hit'
   End
 
   Describe 'cwd'

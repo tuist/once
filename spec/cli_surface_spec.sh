@@ -86,6 +86,7 @@ Describe 'once exec -e'
     When call once exec -e MALFORMED -- /bin/sh -c 'true'
     The status should not equal 0
     The stderr should include 'KEY=VALUE'
+    The stderr should not include 'argument parsing stopped'
     log_dir="$(once_log_dir)"
     log_file="$(find "$log_dir" -type f -name '*.log' | sort | head -n 1)"
     The path "$log_file" should be file

@@ -1312,6 +1312,8 @@ def host_which(name):
     fail("unexpected host_which call: " + name)
 
 def host_command(argv, env = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
+        return "target_arch=\"x86_64\"\nwindows\n"
     fail("unexpected host_command call")
 
 def _rustc_toolchain(target):
@@ -1379,7 +1381,7 @@ result = repr("ok")
         .expect("rustc action");
     assert_eq!(rustc.arg_files.len(), 1);
     let arg_file = &rustc.arg_files[0];
-    assert_eq!(arg_file.format, DeclaredArgFileFormat::RustcResponse);
+    assert_eq!(arg_file.format, DeclaredArgFileFormat::LineDelimited);
     assert!(arg_file
         .args
         .iter()
@@ -1396,6 +1398,280 @@ result = repr("ok")
         .args
         .iter()
         .any(|arg| arg == "--cfg=feature=r#default#"));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn prelude_cargo_metadata_windows_omits_unrelated_prior_dependency_search_paths() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
+        return "target_arch=\"x86_64\"\nwindows\n"
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+ctx = {{
+    "label": {{
+        "package": "cargo_dependencies_x86_64_pc_windows_msvc",
+        "name": "cargo_dependencies_x86_64_pc_windows_msvc",
+        "id": "cargo_dependencies_x86_64_pc_windows_msvc",
+    }},
+    "attr": {{}},
+    "deps": [],
+    "srcs": [],
+}}
+specs = [
+    {{
+        "name": "alpha-1.0.0",
+        "kind": "rust_crate",
+        "deps": [],
+        "srcs": [],
+        "attrs": {{
+            "package_name": "alpha",
+            "crate_name": "alpha",
+            "version": "1.0.0",
+            "crate_root": "third_party/rust/vendor/alpha-1.0.0/src/lib.rs",
+            "edition": "2021",
+        }},
+    }},
+    {{
+        "name": "beta-1.0.0",
+        "kind": "rust_crate",
+        "deps": [],
+        "srcs": [],
+        "attrs": {{
+            "package_name": "beta",
+            "crate_name": "beta",
+            "version": "1.0.0",
+            "crate_root": "third_party/rust/vendor/beta-1.0.0/src/lib.rs",
+            "edition": "2021",
+        }},
+    }},
+]
+providers, _ = _cargo_compile_resolved_specs(ctx, specs)
+result = repr([provider["label_id"] for provider in providers])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(
+        workspace.path(),
+        "cargo_dependencies_x86_64_pc_windows_msvc",
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        "[\"cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0\", \"cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0\"]"
+    );
+    let beta_rustc = store
+        .actions
+        .iter()
+        .find(|action| {
+            action.identifier.as_deref()
+                == Some("cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0:rustc")
+        })
+        .expect("beta rustc action");
+    let arg_file = beta_rustc.arg_files.first().expect("beta response file");
+    // beta does not depend on alpha, so an unrelated prior provider must never
+    // leak into beta's externs or search path. Folding every prior provider
+    // into each crate grew the Windows search set with the whole dependency
+    // closure and exhausted the runner's disk.
+    assert!(
+        !arg_file
+            .args
+            .iter()
+            .any(|arg| arg.contains("cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0")),
+        "unrelated prior provider alpha leaked into {:?}",
+        arg_file.args
+    );
+    assert!(!arg_file.args.iter().any(|arg| arg.starts_with("alpha=")));
+    assert!(
+        !store.actions.iter().any(|action| {
+            action
+                .outputs
+                .iter()
+                .any(|output| output.contains("/search/prior-deps"))
+        }),
+        "no per-crate prior-deps staging directory should be created",
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn prelude_cargo_metadata_windows_proc_macro_deps_from_metadata_are_direct_externs() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
+        return "target_arch=\"x86_64\"\nwindows\n"
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+ctx = {{
+    "attrs": {{
+        "target": "x86_64-pc-windows-msvc",
+        "vendor_dir": "third_party/rust/vendor",
+    }},
+}}
+
+def package(name, version, target_name, kind = "lib"):
+    crate_types = ["proc-macro"] if kind == "proc-macro" else ["lib"]
+    return {{
+        "id": "registry+https://github.com/rust-lang/crates.io-index#" + name + "@" + version,
+        "name": name,
+        "version": version,
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "manifest_path": "/workspace/vendor/" + name + "-" + version + "/Cargo.toml",
+        "targets": [{{
+            "name": target_name,
+            "kind": [kind],
+            "crate_types": crate_types,
+            "src_path": "/workspace/vendor/" + name + "-" + version + "/src/lib.rs",
+            "edition": "2018",
+        }}],
+    }}
+
+def dep(name, package, version):
+    return {{
+        "name": name,
+        "pkg": "registry+https://github.com/rust-lang/crates.io-index#" + package + "@" + version,
+        "dep_kinds": [{{"kind": None, "target": None}}],
+    }}
+
+packages = [
+    package("futures-channel", "0.3.32", "futures_channel"),
+    package("futures-core", "0.3.32", "futures_core"),
+    package("futures-io", "0.3.32", "futures_io"),
+    package("futures-macro", "0.3.32", "futures_macro", "proc-macro"),
+    package("futures-sink", "0.3.32", "futures_sink"),
+    package("futures-task", "0.3.32", "futures_task"),
+    package("memchr", "2.8.0", "memchr"),
+    package("pin-project-lite", "0.2.17", "pin_project_lite"),
+    package("slab", "0.4.12", "slab"),
+    package("futures-util", "0.3.32", "futures_util"),
+]
+metadata = {{
+    "packages": packages,
+    "resolve": {{
+        "nodes": [
+            {{"id": package["id"], "features": [], "deps": []}}
+            for package in packages
+            if package["name"] != "futures-util"
+        ] + [{{
+            "id": "registry+https://github.com/rust-lang/crates.io-index#futures-util@0.3.32",
+            "features": [
+                "alloc",
+                "async-await",
+                "async-await-macro",
+                "channel",
+                "default",
+                "futures-channel",
+                "futures-io",
+                "futures-macro",
+                "futures-sink",
+                "io",
+                "memchr",
+                "sink",
+                "slab",
+                "std",
+            ],
+            "deps": [
+                dep("futures_channel", "futures-channel", "0.3.32"),
+                dep("futures_core", "futures-core", "0.3.32"),
+                dep("futures_io", "futures-io", "0.3.32"),
+                dep("futures_macro_alias", "futures-macro", "0.3.32"),
+                dep("futures_sink", "futures-sink", "0.3.32"),
+                dep("futures_task", "futures-task", "0.3.32"),
+                dep("memchr", "memchr", "2.8.0"),
+                dep("pin_project_lite", "pin-project-lite", "0.2.17"),
+                dep("slab", "slab", "0.4.12"),
+            ],
+        }}],
+    }},
+}}
+specs = _cargo_metadata_targets(ctx, metadata)
+deps, _ = _cargo_compile_resolved_specs({{
+    "label": {{
+        "package": "cargo_dependencies_x86_64_pc_windows_msvc",
+        "name": "cargo_dependencies_x86_64_pc_windows_msvc",
+        "id": "cargo_dependencies_x86_64_pc_windows_msvc",
+    }},
+    "attr": {{}},
+    "deps": [],
+    "srcs": [],
+}}, specs)
+result = repr([provider["label_id"] for provider in deps])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(
+        workspace.path(),
+        "cargo_dependencies_x86_64_pc_windows_msvc",
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert!(out.unwrap().contains("futures-util-0.3.32"));
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| {
+            action.identifier.as_deref()
+                == Some("cargo_dependencies_x86_64_pc_windows_msvc/futures-util-0.3.32:rustc")
+        })
+        .expect("futures-util rustc action");
+    let arg_file = rustc.arg_files.first().expect("futures-util response file");
+    let macro_dir =
+        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/proc-macro-search";
+    let macro_artifact = format!(
+        "{macro_dir}/futures_macro-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_FUTURES_MACRO_0_3_32.dll"
+    );
+    let macro_extern = format!("futures_macro_alias={macro_artifact}");
+
+    // Proc-macros are passed as ordinary externs in the response file, the
+    // same way as rlibs and as on other platforms.
+    assert!(
+        arg_file
+            .args
+            .windows(2)
+            .any(|args| args[0] == "--extern" && args[1] == macro_extern),
+        "{macro_extern} extern missing from {:?}",
+        arg_file.args
+    );
+    assert!(
+        !rustc
+            .argv
+            .windows(2)
+            .any(|args| args[0] == "--extern" && args[1] == macro_extern),
+        "{macro_extern} should not be passed inline: {:?}",
+        rustc.argv
+    );
 }
 
 #[test]
@@ -1603,12 +1879,64 @@ result = repr([
     by_name["cpufeatures-0.2.17-host"]["deps"],
     by_name["cpufeatures-0.2.17-host"]["attrs"].get("target"),
     by_name["libc-0.2.186-host"]["attrs"].get("target"),
+    by_name["cpufeatures-0.2.17"].get("host_tool"),
+    by_name["cpufeatures-0.2.17-host"].get("host_tool"),
 ])
 "#
     );
     let out = eval_prelude_source_to_repr(source).unwrap();
 
-    assert_eq!(out, "[[], [\"./libc-0.2.186-host\"], None, None]");
+    assert_eq!(
+        out,
+        "[[], [\"./libc-0.2.186-host\"], None, None, False, True]"
+    );
+}
+
+#[test]
+fn prelude_cargo_spec_rustc_flags_strip_panic_for_host_loaded_crates() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "cargo_dependencies",
+        "name": "cargo_dependencies",
+        "id": "cargo_dependencies",
+    }},
+    "attr": {{
+        "dep_rustc_flags": [
+            "-C", "panic=abort",
+            "-Cpanic=abort",
+            "--codegen", "panic=abort",
+            "--codegen=panic=abort",
+            "-C", "opt-level=3",
+            "--codegen", "units=1",
+            "--cfg", "keep",
+        ],
+    }},
+}}
+normal = _cargo_spec_rustc_flags(ctx, {{
+    "name": "normal-1.0.0",
+    "kind": "rust_crate",
+}})
+proc_macro = _cargo_spec_rustc_flags(ctx, {{
+    "name": "macro-1.0.0",
+    "kind": "rust_proc_macro",
+}})
+host_tool = _cargo_spec_rustc_flags(ctx, {{
+    "name": "normal-1.0.0-host",
+    "kind": "rust_crate",
+    "host_tool": True,
+}})
+result = repr([normal, proc_macro, host_tool])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(
+        out,
+        "[[\"-C\", \"panic=abort\", \"-Cpanic=abort\", \"--codegen\", \"panic=abort\", \"--codegen=panic=abort\", \"-C\", \"opt-level=3\", \"--codegen\", \"units=1\", \"--cfg\", \"keep\"], [\"-C\", \"opt-level=3\", \"--codegen\", \"units=1\", \"--cfg\", \"keep\"], [\"-C\", \"opt-level=3\", \"--codegen\", \"units=1\", \"--cfg\", \"keep\"]]"
+    );
 }
 
 #[test]
@@ -1834,6 +2162,8 @@ def host_os():
 def host_which(name):
     if name == "powershell":
         return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    if name in ["cat", "printf", "sh", "tee"]:
+        return "C:/Tools/" + name + ".exe"
     fail("unexpected host_which call: " + name)
 
 ctx = {{
@@ -1898,7 +2228,9 @@ result = repr([wrapped[0], wrapped[1]])
         ".once/out/crates/app/app/rustc-build-script-wrapper.ps1"
     );
     let script = String::from_utf8(bytes.clone()).unwrap();
-    assert!(script.contains("[System.IO.File]::ReadLines('.once/out/pkg/build script.stdout')"));
+    assert!(script.contains("$ownBuildScriptStdout = '.once/out/pkg/build script.stdout'"));
+    assert!(script.contains("Add-OwnBuildScriptDirectives $ownBuildScriptStdout"));
+    assert!(script.contains("function Add-LinkSearchDirectives($path)"));
     assert!(script.contains("[void]$dynamicRustcArgs.Add('--cfg')"));
     assert!(script.contains("[void]$dynamicRustcArgs.Add('--check-cfg')"));
     assert!(script.contains("New-Object System.Text.UTF8Encoding -ArgumentList $false"));
@@ -1907,6 +2239,279 @@ result = repr([wrapped[0], wrapped[1]])
     ));
     assert!(script.contains("[void]$rustcArgs.Add(\"@$responseFile\")"));
     assert!(script.contains("& $program @rest"));
+}
+
+#[test]
+fn prelude_windows_rustc_replays_dependency_build_script_link_searches() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    if name == "powershell":
+        return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
+        return "target_arch=\"x86_64\"\nwindows\n"
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "target": "x86_64-pc-windows-msvc",
+        "crate_root": "src/main.rs",
+    }},
+    "deps": [{{
+        "label_id": "third_party/native",
+        "crate_name": "native",
+        "rlib": ".once/out/native/libnative-THIRD_PARTY_NATIVE.rlib",
+        "transitive_build_script_outputs": [
+            ".once/out/native/build-script.stdout",
+        ],
+        "transitive_build_script_inputs": [
+            "third_party/rust/vendor/windows_x86_64_msvc-0.52.6/lib/windows.0.52.0.lib",
+        ],
+    }}],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "bin", "src/main.rs", "app.exe")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| action.identifier.as_deref() == Some("crates/app/app:rustc"))
+        .expect("app rustc action");
+    assert_eq!(
+        rustc.argv[0],
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    );
+    assert!(rustc
+        .argv
+        .iter()
+        .any(|arg| arg == "@.once/tmp/analysis/crates/app/app/rustc.rsp"));
+    for input in [
+        ".once/out/native/build-script.stdout",
+        "third_party/rust/vendor/windows_x86_64_msvc-0.52.6/lib/windows.0.52.0.lib",
+    ] {
+        assert!(
+            rustc.inputs.iter().any(|candidate| candidate == input),
+            "{input} missing from {:?}",
+            rustc.inputs
+        );
+    }
+    let wrapper_write = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .outputs
+                .iter()
+                .any(|output| output == ".once/out/crates/app/app/rustc-build-script-wrapper.ps1")
+        })
+        .expect("wrapper should be written before rustc action");
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &wrapper_write.operation else {
+        panic!("wrapper action should write a file");
+    };
+    let script = String::from_utf8(bytes.clone()).unwrap();
+    assert!(script.contains(
+        "foreach ($dependencyBuildScriptStdout in @('.once/out/native/build-script.stdout'))"
+    ));
+    assert!(script.contains("Add-LinkSearchDirectives $dependencyBuildScriptStdout"));
+    assert!(script.contains("[void]$dynamicRustcArgs.Add('-L')"));
+}
+
+#[test]
+fn prelude_windows_build_script_compile_env_includes_proc_macro_path() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    if name == "PATH":
+        return "C:/Windows/System32"
+    return ""
+
+def host_which(name):
+    if name == "powershell":
+        return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    if name in ["cat", "printf", "sh", "tee"]:
+        return "C:/Tools/" + name + ".exe"
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
+        return "target_arch=\"x86_64\"\nwindows\n"
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "target": "x86_64-pc-windows-msvc",
+        "crate_root": "src/lib.rs",
+        "build_script": "build.rs",
+    }},
+    "deps": [],
+    "build_deps": [{{
+        "label_id": "macros/derive",
+        "crate_name": "derive",
+        "proc_macro": ".once/out/macros/derive/derive.dll",
+    }}],
+    "srcs": ["src/**/*.rs"],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libapp.rlib")
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    let action = store
+        .actions
+        .iter()
+        .find(|action| action.identifier.as_deref() == Some("crates/app/app:build-script-rustc"))
+        .expect("build script rustc action");
+    let path = action.env.get("PATH").expect("build script compile PATH");
+    let proc_macro_dir = workspace
+        .path()
+        .join(".once/out/macros/derive")
+        .to_string_lossy()
+        .into_owned();
+    for expected in [
+        proc_macro_dir.as_str(),
+        "C:/Rust/bin",
+        "C:/Rust/lib/rustlib/x86_64-pc-windows-msvc/bin",
+        "C:/Windows/System32",
+    ] {
+        assert!(path.split(';').any(|entry| entry == expected), "{path}");
+    }
+}
+
+#[test]
+fn prelude_windows_proc_macro_search_is_reused_and_transitive() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+def rust_ctx(package, name, deps = []):
+    return {{
+        "label": {{
+            "package": package,
+            "name": name,
+            "id": package + "/" + name,
+        }},
+        "attr": {{
+            "target": "x86_64-pc-windows-msvc",
+            "crate_name": name,
+            "crate_root": "src/lib.rs",
+            "_output_prefix": package + "/" + name + "/",
+        }},
+        "deps": deps,
+        "srcs": ["src/**/*.rs"],
+    }}
+
+derive_b = _rust_compile(rust_ctx("macros/derive_b", "derive_b"), "proc-macro", "src/lib.rs", "derive_b.dll")
+derive_a = _rust_compile(rust_ctx("macros/derive_a", "derive_a", [derive_b]), "proc-macro", "src/lib.rs", "derive_a.dll")
+_rust_compile(rust_ctx("crates/one", "one", [derive_a]), "rlib", "src/lib.rs", "libone.rlib")
+_rust_compile(rust_ctx("crates/two", "two", [derive_a]), "rlib", "src/lib.rs", "libtwo.rlib")
+result = repr([
+    derive_a["transitive_proc_macro_search"],
+    derive_a["transitive_proc_macro_externs"],
+])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/one");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    for expected in [
+        ".once/out/crates/one/macros/derive_a/derive_a/proc-macro-search/derive_a-MACROS_DERIVE_A_DERIVE_A.dll",
+        ".once/out/crates/one/macros/derive_b/derive_b/proc-macro-search/derive_b-MACROS_DERIVE_B_DERIVE_B.dll",
+        "derive_a=.once/out/crates/one/macros/derive_a/derive_a/proc-macro-search/derive_a-MACROS_DERIVE_A_DERIVE_A.dll",
+        "derive_b=.once/out/crates/one/macros/derive_b/derive_b/proc-macro-search/derive_b-MACROS_DERIVE_B_DERIVE_B.dll",
+    ] {
+        assert!(out.contains(expected), "{out}");
+    }
+    for staged in [
+        ".once/out/crates/one/macros/derive_a/derive_a/proc-macro-search/derive_a-MACROS_DERIVE_A_DERIVE_A.dll",
+        ".once/out/crates/one/macros/derive_b/derive_b/proc-macro-search/derive_b-MACROS_DERIVE_B_DERIVE_B.dll",
+    ] {
+        let count = store
+            .actions
+            .iter()
+            .filter(|action| action.outputs.iter().any(|output| output == staged))
+            .count();
+        assert_eq!(count, 1, "{staged} should be staged once");
+    }
+    for target in ["crates/one/one:rustc", "crates/two/two:rustc"] {
+        let action = store
+            .actions
+            .iter()
+            .find(|action| action.identifier.as_deref() == Some(target))
+            .expect("dependent rustc action");
+        let arg_file = action.arg_files.first().expect("dependent response file");
+        for expected in [
+            "dependency=.once/out/crates/one/macros/derive_a/derive_a/proc-macro-search",
+            "dependency=.once/out/crates/one/macros/derive_b/derive_b/proc-macro-search",
+            "derive_a=.once/out/crates/one/macros/derive_a/derive_a/proc-macro-search/derive_a-MACROS_DERIVE_A_DERIVE_A.dll",
+            "derive_b=.once/out/crates/one/macros/derive_b/derive_b/proc-macro-search/derive_b-MACROS_DERIVE_B_DERIVE_B.dll",
+        ] {
+            assert!(
+                arg_file.args.iter().any(|arg| arg == expected),
+                "{expected} missing from {:?}",
+                arg_file.args
+            );
+        }
+    }
 }
 
 #[test]
@@ -1954,8 +2559,11 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
-    assert_eq!(store.actions.len(), 1);
-    let rustc = &store.actions[0];
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| action.identifier.as_deref() == Some("crates/app/app:rustc"))
+        .expect("app rustc action");
     assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
     assert!(rustc
         .argv
@@ -1971,7 +2579,7 @@ result = repr("ok")
     assert_eq!(rustc.arg_files.len(), 1);
     let arg_file = &rustc.arg_files[0];
     assert_eq!(arg_file.path, ".once/tmp/analysis/crates/app/app/rustc.rsp");
-    assert_eq!(arg_file.format, DeclaredArgFileFormat::RustcResponse);
+    assert_eq!(arg_file.format, DeclaredArgFileFormat::LineDelimited);
     assert!(arg_file.args.len() > 400);
     // The full rustc invocation, not just feature cfgs, is routed through the
     // response file so the command line cannot exceed the Windows limit.
@@ -2051,8 +2659,11 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
-    assert_eq!(store.actions.len(), 1);
-    let rustc = &store.actions[0];
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| action.identifier.as_deref() == Some("crates/app/app:rustc"))
+        .expect("app rustc action");
     assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
     assert!(rustc
         .argv
@@ -2098,12 +2709,17 @@ ctx = {{
     }},
     "attr": {{
         "target": "x86_64-pc-windows-msvc",
-        "crate_root": "src/lib.rs",
+        "crate_root": "src\\lib.rs",
+        "rustc_flags": [
+            "--extern=combined=.once\\out\\manual\\libcombined.rlib",
+            "-Ldependency=.once\\out\\manual",
+            "--out-dir=.once\\out\\manual-out",
+        ],
     }},
     "deps": [{{
         "label_id": "crates/dep/dep",
         "crate_name": "dep",
-        "rlib": ".once/out/crates/dep/dep/libdep.rlib",
+        "rlib": ".once\\out\\crates\\dep\\dep\\libdep.rlib",
     }}],
     "srcs": ["src/**/*.rs"],
 }}
@@ -2117,8 +2733,11 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
-    assert_eq!(store.actions.len(), 1);
-    let rustc = &store.actions[0];
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| action.identifier.as_deref() == Some("crates/app/app:rustc"))
+        .expect("app rustc action");
     assert_eq!(rustc.identifier.as_deref(), Some("crates/app/app:rustc"));
     // On Windows the invocation is always routed through a response file, even
     // when the crate has no features, because the command line still carries
@@ -2134,27 +2753,37 @@ result = repr("ok")
     assert_eq!(rustc.arg_files.len(), 1);
     let arg_file = &rustc.arg_files[0];
     assert_eq!(arg_file.path, ".once/tmp/analysis/crates/app/app/rustc.rsp");
+    assert_eq!(arg_file.format, DeclaredArgFileFormat::LineDelimited);
     assert!(arg_file.args.iter().any(|arg| arg == "--crate-name"));
-    let extern_arg = "--extern=dep=.once/out/crates/dep/dep/libdep.rlib";
+    let extern_arg = "dep=.once/out/crates/dep/dep/libdep.rlib";
     let extern_position = arg_file
         .args
-        .iter()
-        .position(|arg| arg == extern_arg)
+        .windows(2)
+        .position(|args| args[0] == "--extern" && args[1] == extern_arg)
         .expect("dependency extern flag");
+    let crate_root = "crates/app/src/lib.rs";
     let root_position = arg_file
         .args
         .iter()
-        .position(|arg| arg == "crates/app/src/lib.rs")
+        .position(|arg| arg == crate_root)
         .expect("crate root");
     assert!(
         extern_position < root_position,
         "dependency flags should precede the crate root: {:?}",
         arg_file.args
     );
-    assert_eq!(
-        arg_file.args.last().map(String::as_str),
-        Some("crates/app/src/lib.rs")
-    );
+    for expected in [
+        "--extern=combined=.once/out/manual/libcombined.rlib",
+        "-Ldependency=.once/out/manual",
+        "--out-dir=.once/out/manual-out",
+    ] {
+        assert!(
+            arg_file.args.iter().any(|arg| arg == expected),
+            "{expected} missing from {:?}",
+            arg_file.args
+        );
+    }
+    assert_eq!(arg_file.args.last().map(String::as_str), Some(crate_root));
     assert!(
         !arg_file
             .args
@@ -2162,6 +2791,203 @@ result = repr("ok")
             .any(|arg| arg.starts_with("--cfg=feature=")),
         "{:?}",
         arg_file.args
+    );
+}
+
+const RELEASE_DEPENDENCY_RESPONSE_FILE_SOURCE: &str = r#"
+def host_os():
+    return "windows"
+
+def host_env(name):
+    return ""
+
+def host_which(name):
+    fail("unexpected host_which call: " + name)
+
+def host_command(argv, env = None):
+    fail("unexpected host_command call")
+
+def _rustc_toolchain(target):
+    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
+
+ctx = {
+    "label": {
+        "package": "crates/once-core",
+        "name": "once_core_x86_64_pc_windows_msvc",
+        "id": "crates/once-core/once_core_x86_64_pc_windows_msvc",
+    },
+    "attr": {
+        "crate_name": "once_core",
+        "crate_root": "src/lib.rs",
+        "target": "x86_64-pc-windows-msvc",
+        "cargo_package": "once-core",
+    },
+    "deps": [
+        {
+            "label_id": "crates/once-cas/once_cas_x86_64_pc_windows_msvc",
+            "crate_name": "once_cas",
+            "rlib": ".once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas-CRATES_ONCE_CAS_ONCE_CAS_X86_64_PC_WINDOWS_MSVC.rlib",
+            "transitive_rlibs": [
+                ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_SERDE_1_0_228.rlib",
+            ],
+        },
+        {
+            "dependency_set": True,
+            "deps": [],
+            "workspace_deps": {
+                "once-core": [
+                    {
+                        "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3",
+                        "crate_name": "tokio",
+                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TOKIO_1_52_3.rlib",
+                    },
+                    {
+                        "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228",
+                        "crate_name": "serde",
+                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_SERDE_1_0_228.rlib",
+                    },
+                    {
+                        "label_id": "cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43",
+                        "crate_name": "tracing",
+                        "rlib": ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TRACING_0_1_43.rlib",
+                    },
+                ],
+            },
+        },
+    ],
+    "srcs": ["src/**/*.rs"],
+}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libonce_core.rlib")
+result = repr("ok")
+"#;
+
+#[test]
+fn prelude_rust_windows_response_file_keeps_release_dependency_args() {
+    let source = format!(
+        "{}\n{}",
+        all_prelude_source(),
+        RELEASE_DEPENDENCY_RESPONSE_FILE_SOURCE
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(
+        workspace.path(),
+        "crates/once-core/once_core_x86_64_pc_windows_msvc",
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    assert_release_dependency_response_file(&store);
+}
+
+#[test]
+fn prelude_rust_windows_response_file_paths_use_forward_slashes() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "D:\\a\\once\\once"
+
+result = repr([
+    _rust_response_path_arg(".once/out/libfoo.rlib"),
+    _rust_response_extern_arg("foo=.once\\out\\libfoo.rlib"),
+    _rust_response_search_path_arg("dependency=.once\\out\\foo"),
+    _rust_response_arg("--extern=bar=.once\\out\\libbar.rlib"),
+    _rust_response_arg("-Ldependency=.once\\out\\bar"),
+    _rust_response_arg("--out-dir=.once\\out\\bar"),
+    _rust_response_path_arg("D:\\a\\once\\once\\crates\\foo\\src\\lib.rs"),
+    _rust_response_path_arg("--cfg=feature=\"default\""),
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(
+        out,
+        "[\".once/out/libfoo.rlib\", \"foo=.once/out/libfoo.rlib\", \"dependency=.once/out/foo\", \"--extern=bar=.once/out/libbar.rlib\", \"-Ldependency=.once/out/bar\", \"--out-dir=.once/out/bar\", \"D:/a/once/once/crates/foo/src/lib.rs\", \"--cfg=feature=\\\"default\\\"\"]"
+    );
+}
+
+fn assert_release_dependency_response_file(store: &AnalysisStore) {
+    let rustc = store
+        .actions
+        .iter()
+        .find(|action| {
+            action.identifier.as_deref()
+                == Some("crates/once-core/once_core_x86_64_pc_windows_msvc:rustc")
+        })
+        .expect("once-core rustc action");
+    assert_eq!(
+        rustc.identifier.as_deref(),
+        Some("crates/once-core/once_core_x86_64_pc_windows_msvc:rustc")
+    );
+    assert_eq!(rustc.argv.len(), 2);
+    assert_eq!(rustc.arg_files.len(), 1);
+    let arg_file = &rustc.arg_files[0];
+    assert_eq!(
+        arg_file.path,
+        ".once/tmp/analysis/crates/once-core/once_core_x86_64_pc_windows_msvc/rustc.rsp"
+    );
+    for extern_arg in [
+        "once_cas=.once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas-CRATES_ONCE_CAS_ONCE_CAS_X86_64_PC_WINDOWS_MSVC.rlib",
+        "tokio=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TOKIO_1_52_3.rlib",
+        "serde=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/serde-1.0.228/libserde-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_SERDE_1_0_228.rlib",
+        "tracing=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tracing-0.1.43/libtracing-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TRACING_0_1_43.rlib",
+    ] {
+        assert!(
+            arg_file
+                .args
+                .windows(2)
+                .any(|args| args[0] == "--extern" && args[1] == extern_arg),
+            "{extern_arg} missing from {:?}",
+            arg_file.args
+        );
+    }
+    for input in [
+        ".once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/deps-rlib-search/libonce_cas-CRATES_ONCE_CAS_ONCE_CAS_X86_64_PC_WINDOWS_MSVC.rlib",
+        ".once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/deps-rlib-search/libtokio-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TOKIO_1_52_3.rlib",
+        ".once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/deps-rlib-search/libserde-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_SERDE_1_0_228.rlib",
+        ".once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/deps-rlib-search/libtracing-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TRACING_0_1_43.rlib",
+    ] {
+        assert!(
+            rustc.inputs.iter().any(|candidate| candidate == input),
+            "{input} missing from {:?}",
+            rustc.inputs
+        );
+    }
+    let crate_root = "crates/once-core/src/lib.rs";
+    let root_position = arg_file
+        .args
+        .iter()
+        .position(|arg| arg == crate_root)
+        .expect("crate root");
+    for extern_position in arg_file
+        .args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, arg)| (arg == "--extern").then_some(index))
+    {
+        assert!(
+            extern_position + 1 < root_position,
+            "dependency flags should precede the crate root: {:?}",
+            arg_file.args
+        );
+    }
+    assert_release_dependency_search_path(&arg_file.args);
+    assert_eq!(arg_file.args.last().map(String::as_str), Some(crate_root));
+}
+
+fn assert_release_dependency_search_path(args: &[String]) {
+    let staged_dependency =
+        "dependency=.once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/deps-rlib-search";
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "-L" && pair[1] == staged_dependency),
+        "{staged_dependency} missing from {args:?}"
+    );
+    assert!(
+        !args.iter().any(|arg| arg.contains("/search/deps")),
+        "rlib-only deps should not create a proc-macro staging directory: {args:?}"
     );
 }
 
@@ -2205,9 +3031,40 @@ result = repr("ok")
         "{:?}",
         action.argv
     );
+    assert!(
+        action
+            .argv
+            .windows(2)
+            .any(|args| args[0] == "-C" && args[1] == "prefer-dynamic"),
+        "{:?}",
+        action.argv
+    );
+    assert!(
+        action
+            .argv
+            .windows(2)
+            .any(|args| args[0] == "--out-dir" && args[1] == ".once/out/macros/stringify"),
+        "{:?}",
+        action.argv
+    );
+    assert!(
+        action
+            .argv
+            .windows(2)
+            .any(|args| args[0] == "-C" && args[1] == "extra-filename=-MACROS_STRINGIFY"),
+        "{:?}",
+        action.argv
+    );
+    let dylib_ext = if cfg!(target_os = "macos") {
+        ".dylib"
+    } else {
+        ".so"
+    };
     assert_eq!(
         action.outputs,
-        vec![".once/out/macros/stringify/libstringify.so".to_string()]
+        vec![format!(
+            ".once/out/macros/stringify/libstringify-MACROS_STRINGIFY{dylib_ext}"
+        )]
     );
 }
 
@@ -2356,6 +3213,11 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
+    assert!(
+        !store.actions[0].argv.iter().any(|arg| arg == "--target"),
+        "{:?}",
+        store.actions[0].argv
+    );
     let path = store.actions[0].env.get("PATH").expect("host linker PATH");
     assert!(path.split(':').any(|entry| entry == "/bin"), "{path}");
     for entry in path.split(':') {

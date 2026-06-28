@@ -210,6 +210,52 @@ def _rust_feature_flags(ctx):
         flags.append(_rust_feature_cfg_arg(feature))
     return flags
 
+def _is_absolute_path(path):
+    if not path:
+        return False
+    if path.startswith("/") or path.startswith("\\"):
+        return True
+    return len(path) >= 3 and path[1] == ":" and (path[2] == "/" or path[2] == "\\")
+
+def _is_response_path_arg(arg):
+    if not arg:
+        return False
+    if _is_absolute_path(arg):
+        return True
+    return arg.startswith(".") or "/" in arg or "\\" in arg
+
+def _rust_response_path_arg(arg):
+    if _is_response_path_arg(arg):
+        return arg.replace("\\", "/")
+    return arg
+
+def _split_once(value, separator):
+    for index in range(len(value)):
+        if value[index:index + len(separator)] == separator:
+            return [value[:index], value[index + len(separator):]]
+    return []
+
+def _rust_response_extern_arg(arg):
+    parts = _split_once(arg, "=")
+    if len(parts) != 2:
+        return arg
+    return parts[0] + "=" + _rust_response_path_arg(parts[1])
+
+def _rust_response_search_path_arg(arg):
+    parts = _split_once(arg, "=")
+    if len(parts) != 2:
+        return _rust_response_path_arg(arg)
+    return parts[0] + "=" + _rust_response_path_arg(parts[1])
+
+def _rust_response_arg(arg):
+    if arg.startswith("--extern="):
+        return "--extern=" + _rust_response_extern_arg(arg[len("--extern="):])
+    if arg.startswith("--out-dir="):
+        return "--out-dir=" + _rust_response_path_arg(arg[len("--out-dir="):])
+    if arg.startswith("-L") and arg != "-L":
+        return "-L" + _rust_response_search_path_arg(arg[2:])
+    return _rust_response_path_arg(arg)
+
 def _rust_response_file_args(ctx, args, name):
     # On Windows the command line passed to rustc can exceed the operating
     # system limit once a crate accumulates enough --extern and -L flags from
@@ -228,12 +274,34 @@ def _rust_response_file_args(ctx, args, name):
     if host_os() != "windows" or not args:
         return args
     path = _rust_scratch_dir(ctx) + "/" + _rust_declared_output(ctx, name)
+    response_args = []
+    mode = ""
+    for arg in args:
+        if mode == "path":
+            response_args.append(_rust_response_path_arg(arg))
+            mode = ""
+            continue
+        if mode == "extern":
+            response_args.append(_rust_response_extern_arg(arg))
+            mode = ""
+            continue
+        if mode == "search":
+            response_args.append(_rust_response_search_path_arg(arg))
+            mode = ""
+            continue
+        response_args.append(_rust_response_arg(arg))
+        if arg == "-o" or arg == "--out-dir":
+            mode = "path"
+        elif arg == "--extern":
+            mode = "extern"
+        elif arg == "-L":
+            mode = "search"
     return [
         cmd_args(
-            args = args,
+            args = response_args,
             use_arg_file = {
                 "path": path,
-                "format": "rustc-response",
+                "format": "line-delimited",
                 "arg_format": "@{}",
             },
         ),
@@ -368,7 +436,7 @@ def _rust_env(ctx):
     return env
 
 def _workspace_absolute(path):
-    if not path or path.startswith("/"):
+    if not path or _is_absolute_path(path):
         return path
     root = workspace_root()
     if not root:
@@ -406,9 +474,40 @@ def _rust_compile_action_env(ctx, target, host_triple):
     _rust_merge_env_lower_precedence(env, _rust_c_tool_env(target or host_triple, host_triple))
     return env
 
+def _rustc_sysroot(rustc):
+    return _parent_dir(_parent_dir(rustc))
+
+def _rustc_runtime_dirs(rustc, host_triple):
+    if host_os() != "windows":
+        return []
+    sysroot = _rustc_sysroot(rustc)
+    if not sysroot or not host_triple:
+        return []
+    return [
+        sysroot + "/bin",
+        sysroot + "/lib/rustlib/" + host_triple + "/bin",
+    ]
+
+def _rust_add_windows_rustc_runtime_path(env, rustc, host_triple):
+    if host_os() != "windows":
+        return
+    path = _rust_path_separator().join(_rustc_runtime_dirs(rustc, host_triple))
+    if path:
+        env["PATH"] = _rust_merge_paths(path, env.get("PATH") or "")
+
 def _rust_target_args(target):
     if target:
         return ["--target", target]
+    return []
+
+def _rust_compile_target_args(target, host_triple):
+    if target and target != host_triple:
+        return _rust_target_args(target)
+    return []
+
+def _rust_proc_macro_codegen_args(crate_type):
+    if crate_type == "proc-macro":
+        return ["-C", "prefer-dynamic"]
     return []
 
 def _rust_cfg_env(rustc, target):
@@ -540,27 +639,198 @@ def _rust_dep_crate_name(dep, aliases):
 
 def _rust_dep_args(deps, aliases):
     args = []
-    dirs = []
     for dep in deps:
         crate_name = _rust_dep_crate_name(dep, aliases)
         rlib = dep.get("rlib")
-        artifact = rlib or dep.get("proc_macro")
+        proc_macro = dep.get("proc_macro")
+        # On windows proc-macros are passed through _rust_inline_proc_macro_extern_args
+        # so the dependent crate gets a uniform `--extern name=path` for every
+        # proc-macro it can reach transitively. Routing them here too would
+        # double the entry and confuse rustc.
+        artifact = rlib or (None if host_os() == "windows" else proc_macro)
         if crate_name and artifact:
-            args.append("--extern=" + crate_name + "=" + artifact)
-            directory = _parent_dir(artifact)
-            if directory:
-                dirs.append(directory)
+            args.extend(["--extern", crate_name + "=" + artifact])
+    return args
+
+def _rust_dep_search_artifacts(deps):
+    artifacts = []
+    for dep in deps:
+        rlib = dep.get("rlib")
+        if rlib:
+            artifacts.append(rlib)
+        proc_macro = dep.get("proc_macro")
+        if proc_macro:
+            artifacts.append(proc_macro)
         for transitive in dep.get("transitive_rlibs") or []:
-            directory = _parent_dir(transitive)
-            if directory:
-                dirs.append(directory)
+            artifacts.append(transitive)
         for transitive in dep.get("transitive_proc_macros") or []:
-            directory = _parent_dir(transitive)
-            if directory:
-                dirs.append(directory)
+            artifacts.append(transitive)
+    return _unique(artifacts)
+
+def _basename(path):
+    normalized = path.replace("\\", "/")
+    parts = normalized.split("/")
+    return parts[len(parts) - 1]
+
+def _rust_raw_search_path_args(deps):
+    dirs = []
+    for artifact in _rust_dep_search_artifacts(deps):
+        directory = _parent_dir(artifact)
+        if directory:
+            dirs.append(directory)
+    args = []
     for directory in _unique(dirs):
         args.extend(["-L", "dependency=" + directory])
     return args
+
+def _rust_rlib_search_artifacts(deps):
+    artifacts = []
+    for dep in _rust_rlib_deps(deps):
+        rlib = dep.get("rlib")
+        if rlib:
+            artifacts.append(rlib)
+        for transitive in dep.get("transitive_rlibs") or []:
+            artifacts.append(transitive)
+    return _unique(artifacts)
+
+def _rust_stage_rlibs_for_search(ctx, deps, tag):
+    artifacts = _rust_rlib_search_artifacts(deps)
+    if not artifacts:
+        return ([], [])
+    search_dir = declare_output(_rust_declared_output(ctx, tag + "-rlib-search"))
+    prepare_path(search_dir, kind = "remove", identifier = ctx["label"]["id"] + ":" + tag + "-rlib-search-clean")
+    prepare_path(search_dir, kind = "directory", identifier = ctx["label"]["id"] + ":" + tag + "-rlib-search-prepare")
+    staged = []
+    seen = {}
+    for artifact in artifacts:
+        name = _basename(artifact)
+        if name in seen:
+            continue
+        seen[name] = True
+        output = search_dir + "/" + name
+        copy_path(
+            artifact,
+            output,
+            inputs = [artifact],
+            identifier = ctx["label"]["id"] + ":" + tag + "-rlib-search:" + name,
+        )
+        staged.append(output)
+    return (["-L", "dependency=" + search_dir], staged)
+
+def _rust_proc_macro_search_artifacts(deps):
+    artifacts = []
+    for dep in deps:
+        for staged in dep.get("transitive_proc_macro_search") or []:
+            artifacts.append(staged)
+    return _unique(artifacts)
+
+def _rust_proc_macro_search_path_args(deps):
+    # rustc only matches a Windows proc-macro dylib through a search directory
+    # that holds the dynamic library by itself, away from the sibling import
+    # library rustc emits next to it. Each proc-macro is staged once, next to
+    # where it is built, into a dedicated directory the dependents point at;
+    # rlibs resolve fine from their original directories.
+    artifacts = _rust_proc_macro_search_artifacts(deps)
+    if not artifacts:
+        return ([], [])
+    dirs = []
+    for artifact in artifacts:
+        directory = _parent_dir(artifact)
+        if directory:
+            dirs.append(directory)
+    args = []
+    for directory in _unique(dirs):
+        args.extend(["-L", "dependency=" + directory])
+    return (args, artifacts)
+
+def _rust_search_path_args(ctx, deps, tag):
+    # On windows, the rustc-emitted proc-macro dylib shares its output
+    # directory with MSVC sibling files (.dll.lib, .dll.exp, .pdb,
+    # incremental data). Pointing `-L dependency=` at that directory exposes
+    # those siblings to rustc's metadata locator, which finds matching
+    # filenames and rejects them in a way that surfaces as a generic E0463 on
+    # the consuming crate rather than a structured "Rejecting via X" trace.
+    # Stage every reachable proc-macro into a dedicated directory containing
+    # only the dylib, and point search there. Rlibs do not have this problem
+    # and resolve fine from their original output directories.
+    if host_os() != "windows":
+        return (_rust_raw_search_path_args(deps), [])
+    rlib_args, staged_rlibs = _rust_stage_rlibs_for_search(ctx, deps, tag)
+    proc_macro_args, staged = _rust_proc_macro_search_path_args(deps)
+    return (rlib_args + proc_macro_args, staged_rlibs + staged)
+
+def _rust_stage_proc_macro_for_search(ctx, output):
+    search_dir = declare_output(_rust_declared_output(ctx, "proc-macro-search"))
+    prepare_path(search_dir, kind = "remove", identifier = ctx["label"]["id"] + ":proc-macro-search-clean")
+    prepare_path(search_dir, kind = "directory", identifier = ctx["label"]["id"] + ":proc-macro-search-prepare")
+    staged = search_dir + "/" + _basename(output)
+    copy_path(
+        output,
+        staged,
+        inputs = [output],
+        identifier = ctx["label"]["id"] + ":proc-macro-search:" + _basename(output),
+    )
+    return staged
+
+def _rust_inline_proc_macro_extern_args(deps, aliases):
+    # Pass every proc-macro this crate can reach as an explicit `--extern`.
+    # On windows, rustc does not reliably discover a proc-macro re-exported
+    # through a dependency (for example serde's Deserialize from serde_derive)
+    # via `-L dependency` search alone, so we route every reachable proc-macro
+    # to rustc by name and path directly.
+    if host_os() != "windows":
+        return []
+    args = []
+    seen = {}
+    direct_proc_macro_aliases = {}
+    for dep in deps:
+        proc_macro = dep.get("proc_macro")
+        crate_name = _rust_dep_crate_name(dep, aliases)
+        original_name = dep.get("crate_name") or crate_name
+        if proc_macro and crate_name and original_name:
+            direct_proc_macro_aliases[original_name] = crate_name
+    for dep in deps:
+        for extern in dep.get("transitive_proc_macro_externs") or []:
+            parts = _split_once(extern, "=")
+            if len(parts) != 2:
+                continue
+            name = parts[0]
+            name = direct_proc_macro_aliases.get(name) or name
+            if name in seen:
+                continue
+            seen[name] = True
+            args.extend(["--extern", name + "=" + _rust_response_path_arg(parts[1])])
+    for dep in deps:
+        crate_name = _rust_dep_crate_name(dep, aliases)
+        proc_macro = dep.get("proc_macro")
+        if crate_name and proc_macro and crate_name not in seen:
+            seen[crate_name] = True
+            args.extend(["--extern", crate_name + "=" + _rust_response_path_arg(proc_macro)])
+    return args
+
+def _rust_proc_macro_dirs(deps):
+    dirs = []
+    for dep in deps:
+        proc_macro = dep.get("proc_macro")
+        if proc_macro:
+            directory = _parent_dir(proc_macro)
+            if directory:
+                dirs.append(_workspace_absolute(directory))
+        for transitive in dep.get("transitive_proc_macros") or []:
+            directory = _parent_dir(transitive)
+            if directory:
+                dirs.append(_workspace_absolute(directory))
+    return _unique(dirs)
+
+def _rust_add_windows_proc_macro_path(env, deps):
+    if host_os() != "windows":
+        return
+    # Windows loads proc-macro dynamic libraries at compile time, including
+    # their sibling dynamic library dependencies, so rustc needs their output
+    # directories on PATH.
+    path = _rust_path_separator().join(_rust_proc_macro_dirs(deps))
+    if path:
+        env["PATH"] = _rust_merge_paths(path, env.get("PATH") or "")
 
 def _rust_builtin_extern_args(crate_type):
     if crate_type == "proc-macro":
@@ -686,11 +956,21 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     compile_args.extend(dep_args)
     compile_args.extend(linker_args)
     compile_args.append(script_path)
-    compile_argv = [rustc] + _rust_response_file_args(ctx, compile_args, "build-script-rustc.rsp")
+    compile_argv = (
+        [rustc] +
+        _rust_inline_proc_macro_extern_args(deps, _rust_aliases(ctx)) +
+        _rust_response_file_args(ctx, compile_args, "build-script-rustc.rsp")
+    )
+    dependency_build_outputs = _rust_dep_build_script_outputs(deps)
+    dependency_build_inputs = _rust_dep_build_script_native_inputs(deps)
+    wrapped = _rustc_with_build_script_args(ctx, compile_argv, dependency_stdouts = dependency_build_outputs, wrapper_name = "build-script-rustc-wrapper.ps1")
+    compile_argv = wrapped[0]
     build_script_compile_env = _rust_compile_action_env(ctx, host_triple, host_triple)
+    _rust_add_windows_rustc_runtime_path(build_script_compile_env, rustc, host_triple)
+    _rust_add_windows_proc_macro_path(build_script_compile_env, deps)
     run_action(
         argv = compile_argv,
-        inputs = _unique([script_path] + dep_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique([script_path] + dep_inputs + dependency_build_outputs + dependency_build_inputs + wrapped[1] + _rust_extra_inputs(ctx)),
         outputs = [runner],
         env = build_script_compile_env,
         toolchain_identity = identity + linker_identity + "\x00build-script",
@@ -713,9 +993,20 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     compile_env["OUT_DIR"] = _workspace_absolute(out_dir)
     return (out_dir, [script_path, stdout], compile_env, stdout)
 
-def _rustc_unix_build_script_args(argv, stdout):
-    script = """set -eu
-while IFS= read -r line; do
+def _rustc_unix_read_dependency_link_searches(stdout):
+    return """while IFS= read -r line; do
+  case "$line" in
+    cargo:rustc-link-search=*|cargo::rustc-link-search=*)
+      value=${{line#cargo:rustc-link-search=}}
+      value=${{value#cargo::rustc-link-search=}}
+      set -- "$@" -L "$value"
+      ;;
+  esac
+done < {stdout}
+""".format(stdout = _shell_quote(stdout))
+
+def _rustc_unix_read_own_build_script_args(stdout):
+    return """while IFS= read -r line; do
   case "$line" in
     cargo:rustc-cfg=*|cargo::rustc-cfg=*)
       value=${{line#cargo:rustc-cfg=}}
@@ -749,12 +1040,28 @@ while IFS= read -r line; do
       ;;
   esac
 done < {stdout}
-exec "$@"
 """.format(stdout = _shell_quote(stdout))
+
+def _rustc_unix_build_script_args(argv, own_stdout, dependency_stdouts):
+    snippets = []
+    if own_stdout:
+        snippets.append(_rustc_unix_read_own_build_script_args(own_stdout))
+    for stdout in dependency_stdouts:
+        snippets.append(_rustc_unix_read_dependency_link_searches(stdout))
+    script = """set -eu
+{snippets}exec "$@"
+""".format(snippets = "".join(snippets))
     return [host_which("sh"), "-c", script, "once-rustc"] + argv
 
-def _rustc_windows_build_script_args(ctx, argv, stdout):
-    wrapper = declare_output(_rust_declared_output(ctx, "rustc-build-script-wrapper.ps1"))
+def _rustc_windows_stdout_array(stdouts):
+    if not stdouts:
+        return "@()"
+    return "@(" + ", ".join([_powershell_quote(stdout) for stdout in stdouts]) + ")"
+
+def _rustc_windows_build_script_args(ctx, argv, own_stdout, dependency_stdouts, wrapper_name):
+    wrapper = declare_output(_rust_declared_output(ctx, wrapper_name))
+    own_stdout_value = _powershell_quote(own_stdout) if own_stdout else "$null"
+    dependency_stdout_array = _rustc_windows_stdout_array(dependency_stdouts)
     script = """$ErrorActionPreference = 'Stop'
 $rustcArgs = New-Object 'System.Collections.Generic.List[string]'
 foreach ($arg in $args) {
@@ -774,47 +1081,68 @@ function Get-DirectiveValue($line, $name) {
   return $null
 }
 
-foreach ($line in [System.IO.File]::ReadLines(""" + _powershell_quote(stdout) + """)) {
-  $value = Get-DirectiveValue $line 'rustc-cfg'
-  if ($null -ne $value) {
-    [void]$dynamicRustcArgs.Add('--cfg')
-    [void]$dynamicRustcArgs.Add($value)
-    continue
-  }
-  $value = Get-DirectiveValue $line 'rustc-check-cfg'
-  if ($null -ne $value) {
-    [void]$dynamicRustcArgs.Add('--check-cfg')
-    [void]$dynamicRustcArgs.Add($value)
-    continue
-  }
-  $value = Get-DirectiveValue $line 'rustc-env'
-  if ($null -ne $value) {
-    $equals = $value.IndexOf('=')
-    if ($equals -ge 0) {
-      $name = $value.Substring(0, $equals)
-      $envValue = $value.Substring($equals + 1)
-      [System.Environment]::SetEnvironmentVariable($name, $envValue, 'Process')
+function Add-LinkSearchDirectives($path) {
+  foreach ($line in [System.IO.File]::ReadLines($path)) {
+    $value = Get-DirectiveValue $line 'rustc-link-search'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('-L')
+      [void]$dynamicRustcArgs.Add($value)
+      continue
     }
-    continue
   }
-  $value = Get-DirectiveValue $line 'rustc-link-arg'
-  if ($null -ne $value) {
-    [void]$dynamicRustcArgs.Add('-C')
-    [void]$dynamicRustcArgs.Add("link-arg=$value")
-    continue
+}
+
+function Add-OwnBuildScriptDirectives($path) {
+  foreach ($line in [System.IO.File]::ReadLines($path)) {
+    $value = Get-DirectiveValue $line 'rustc-cfg'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('--cfg')
+      [void]$dynamicRustcArgs.Add($value)
+      continue
+    }
+    $value = Get-DirectiveValue $line 'rustc-check-cfg'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('--check-cfg')
+      [void]$dynamicRustcArgs.Add($value)
+      continue
+    }
+    $value = Get-DirectiveValue $line 'rustc-env'
+    if ($null -ne $value) {
+      $equals = $value.IndexOf('=')
+      if ($equals -ge 0) {
+        $name = $value.Substring(0, $equals)
+        $envValue = $value.Substring($equals + 1)
+        [System.Environment]::SetEnvironmentVariable($name, $envValue, 'Process')
+      }
+      continue
+    }
+    $value = Get-DirectiveValue $line 'rustc-link-arg'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('-C')
+      [void]$dynamicRustcArgs.Add("link-arg=$value")
+      continue
+    }
+    $value = Get-DirectiveValue $line 'rustc-link-lib'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('-l')
+      [void]$dynamicRustcArgs.Add($value)
+      continue
+    }
+    $value = Get-DirectiveValue $line 'rustc-link-search'
+    if ($null -ne $value) {
+      [void]$dynamicRustcArgs.Add('-L')
+      [void]$dynamicRustcArgs.Add($value)
+      continue
+    }
   }
-  $value = Get-DirectiveValue $line 'rustc-link-lib'
-  if ($null -ne $value) {
-    [void]$dynamicRustcArgs.Add('-l')
-    [void]$dynamicRustcArgs.Add($value)
-    continue
-  }
-  $value = Get-DirectiveValue $line 'rustc-link-search'
-  if ($null -ne $value) {
-    [void]$dynamicRustcArgs.Add('-L')
-    [void]$dynamicRustcArgs.Add($value)
-    continue
-  }
+}
+
+$ownBuildScriptStdout = """ + own_stdout_value + """
+if ($null -ne $ownBuildScriptStdout) {
+  Add-OwnBuildScriptDirectives $ownBuildScriptStdout
+}
+foreach ($dependencyBuildScriptStdout in """ + dependency_stdout_array + """) {
+  Add-LinkSearchDirectives $dependencyBuildScriptStdout
 }
 
 if ($rustcArgs.Count -eq 0) {
@@ -849,10 +1177,29 @@ try {
     write_path(wrapper, script)
     return ([host_which("powershell"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapper] + argv, [wrapper])
 
-def _rustc_with_build_script_args(ctx, argv, stdout):
+def _rustc_with_build_script_args(ctx, argv, own_stdout = None, dependency_stdouts = [], wrapper_name = "rustc-build-script-wrapper.ps1"):
+    if not own_stdout and not dependency_stdouts:
+        return (argv, [])
     if host_os() == "windows":
-        return _rustc_windows_build_script_args(ctx, argv, stdout)
-    return (_rustc_unix_build_script_args(argv, stdout), [])
+        return _rustc_windows_build_script_args(ctx, argv, own_stdout, dependency_stdouts, wrapper_name)
+    return (_rustc_unix_build_script_args(argv, own_stdout, dependency_stdouts), [])
+
+def _rust_dep_build_script_outputs(deps):
+    outputs = []
+    for dep in _rust_rlib_deps(deps):
+        for output in dep.get("transitive_build_script_outputs") or []:
+            outputs.append(output)
+        output = dep.get("build_script_stdout")
+        if output:
+            outputs.append(output)
+    return _unique(outputs)
+
+def _rust_dep_build_script_native_inputs(deps):
+    inputs = []
+    for dep in _rust_rlib_deps(deps):
+        for input in dep.get("transitive_build_script_inputs") or []:
+            inputs.append(input)
+    return _unique(inputs)
 
 def _rust_dep_inputs(deps):
     inputs = []
@@ -868,6 +1215,15 @@ def _rust_dep_inputs(deps):
         for transitive in dep.get("transitive_proc_macros") or []:
             inputs.append(transitive)
     return _unique(inputs)
+
+def _rust_rlib_deps(deps):
+    # Only crates compiled as rlibs contribute rlibs that downstream target
+    # crates link against. Proc-macro dependencies carry a transitive rlib
+    # closure built for the host (their own proc-macro toolchain deps); pulling
+    # that in would put host-built copies of crates like proc-macro2 alongside
+    # their target builds on the search path, so rustc on Windows finds two
+    # identically named rlibs and fails to load the dependent crate.
+    return [dep for dep in deps if dep.get("rlib")]
 
 def _collect_transitive(deps, key, own_values):
     out = []
@@ -943,6 +1299,17 @@ def _rust_output_extension(crate_type, target):
         return ".exe" if "windows" in os_key else ""
     return ""
 
+def _rust_extra_filename(ctx, crate_type):
+    if crate_type == "rlib" or crate_type == "proc-macro":
+        return "-" + _rust_metadata_suffix(ctx)
+    return ""
+
+def _rust_extra_filename_args(ctx, crate_type):
+    extra_filename = _rust_extra_filename(ctx, crate_type)
+    if extra_filename:
+        return ["-C", "extra-filename=" + extra_filename]
+    return []
+
 def _rust_effective_target(ctx, crate_type):
     if crate_type == "proc-macro":
         return ""
@@ -955,12 +1322,25 @@ def _rust_output_name(ctx, crate_type):
         return crate_name + _rust_output_extension(crate_type, target)
     if crate_type == "rlib" or crate_type == "staticlib" or crate_type == "cdylib" or crate_type == "dylib" or crate_type == "proc-macro":
         prefix = "" if "windows" in (target or host_os()) and crate_type != "rlib" else "lib"
-        return prefix + crate_name + _rust_output_extension(crate_type, target)
+        return prefix + crate_name + _rust_extra_filename(ctx, crate_type) + _rust_output_extension(crate_type, target)
     return crate_name
+
+def _rust_compile_output_name(ctx, crate_type, output_name):
+    if crate_type == "rlib" or crate_type == "proc-macro":
+        return _rust_output_name(ctx, crate_type)
+    return output_name
 
 def _rust_declared_output(ctx, name):
     prefix = ctx["attr"].get("_output_prefix") or ""
     return prefix + name
+
+def _rust_output_args(crate_type, output):
+    if crate_type == "rlib" or crate_type == "proc-macro":
+        output_dir = _parent_dir(output)
+        if not output_dir:
+            output_dir = "."
+        return ["--out-dir", output_dir]
+    return ["-o", output]
 
 def _rust_compile(ctx, crate_type, default_root, output_name):
     target = _rust_effective_target(ctx, crate_type)
@@ -969,54 +1349,74 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     edition = _rust_attr(ctx, "edition", "2021")
     crate_root = _rust_crate_root(ctx, default_root)
     srcs = _rust_sources(ctx, crate_root)
-    output = declare_output(_rust_declared_output(ctx, output_name))
+    output = declare_output(_rust_declared_output(ctx, _rust_compile_output_name(ctx, crate_type, output_name)))
     aliases = _rust_aliases(ctx)
     deps = _rust_resolved_deps(ctx)
     dep_args = _rust_dep_args(deps, aliases)
+    dep_search_args, dep_search_inputs = _rust_search_path_args(ctx, deps, "deps")
     dep_inputs = _rust_dep_inputs(deps)
     build_deps = ctx.get("build_deps")
     if build_deps == None:
         build_deps = []
     build_dep_args = _rust_dep_args(build_deps, aliases)
-    build_dep_inputs = _rust_dep_inputs(build_deps)
+    build_dep_search_args, build_dep_search_inputs = _rust_search_path_args(ctx, build_deps, "build-deps")
+    build_dep_args.extend(build_dep_search_args)
+    build_dep_inputs = _unique(_rust_dep_inputs(build_deps) + build_dep_search_inputs)
     feature_flags = _rust_feature_flags(ctx)
     build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_flags)
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
+    _rust_add_windows_rustc_runtime_path(compile_env, rustc, host_triple)
+    _rust_add_windows_proc_macro_path(compile_env, deps)
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
     rustc_args = [
         "--crate-name", crate_name,
         "--crate-type", crate_type,
         "--edition", edition,
         "-C", "metadata=" + _rust_metadata_suffix(ctx),
-        "-o", output,
     ]
-    rustc_args.extend(_rust_target_args(target))
+    rustc_args.extend(_rust_extra_filename_args(ctx, crate_type))
+    rustc_args.extend(_rust_output_args(crate_type, output))
+    rustc_args.extend(_rust_compile_target_args(target, host_triple))
+    rustc_args.extend(_rust_proc_macro_codegen_args(crate_type))
     rustc_args.extend(feature_flags)
     rustc_args.extend(_rust_user_flags(ctx))
     rustc_args.extend(_rust_cap_lints(ctx))
     rustc_args.extend(_rust_builtin_extern_args(crate_type))
     rustc_args.extend(dep_args)
+    rustc_args.extend(dep_search_args)
     rustc_args.extend(linker_args)
     rustc_args.extend(_rust_linker_flags(ctx))
     rustc_args.append(crate_root)
-    argv = [rustc] + _rust_response_file_args(ctx, rustc_args, "rustc.rsp")
-    if build_stdout:
-        wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout)
-        argv = wrapped[0]
-        build_inputs.extend(wrapped[1])
+    argv = (
+        [rustc] +
+        _rust_response_file_args(ctx, _rust_inline_proc_macro_extern_args(deps, aliases) + rustc_args, "rustc.rsp")
+    )
+    dependency_build_outputs = _rust_dep_build_script_outputs(deps)
+    dependency_build_inputs = _rust_dep_build_script_native_inputs(deps)
+    wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout, dependency_build_outputs)
+    argv = wrapped[0]
+    build_inputs.extend(wrapped[1])
     run_action(
         argv = argv,
-        inputs = _unique(srcs + dep_inputs + build_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique(srcs + dep_inputs + dep_search_inputs + build_inputs + dependency_build_outputs + dependency_build_inputs + _rust_extra_inputs(ctx)),
         outputs = [output],
         env = compile_env,
         toolchain_identity = identity + linker_identity,
         identifier = ctx["label"]["id"] + ":rustc",
     )
+    own_proc_macro_search = []
+    own_proc_macro_extern = []
+    if crate_type == "proc-macro" and host_os() == "windows":
+        staged = _rust_stage_proc_macro_for_search(ctx, output)
+        own_proc_macro_search = [staged]
+        own_proc_macro_extern = [crate_name + "=" + staged]
     own_android_native_libraries = []
     android_abi = _rust_android_abi(ctx, target, crate_type)
     if android_abi and (crate_type == "cdylib" or crate_type == "dylib"):
         own_android_native_libraries.append({"abi": android_abi, "path": output})
     own_native_archives = [output] if crate_type == "staticlib" else []
+    own_build_script_outputs = [build_stdout] if build_stdout else []
+    own_build_script_inputs = _rust_build_script_inputs(ctx) if build_stdout else []
     provider = {
         "label_id": ctx["label"]["id"],
         "target_kind": "rust_library",
@@ -1032,8 +1432,12 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "staticlib": output if crate_type == "staticlib" else None,
         "dylib": output if crate_type == "cdylib" or crate_type == "dylib" else None,
         "proc_macro": output if crate_type == "proc-macro" else None,
-        "transitive_rlibs": _collect_transitive(deps, "transitive_rlibs", [output] if crate_type == "rlib" else []),
+        "transitive_rlibs": _collect_transitive(_rust_rlib_deps(deps), "transitive_rlibs", [output] if crate_type == "rlib" else []),
         "transitive_proc_macros": _collect_transitive(deps, "transitive_proc_macros", [output] if crate_type == "proc-macro" else []),
+        "transitive_build_script_outputs": _collect_transitive(_rust_rlib_deps(deps), "transitive_build_script_outputs", own_build_script_outputs),
+        "transitive_build_script_inputs": _collect_transitive(_rust_rlib_deps(deps), "transitive_build_script_inputs", own_build_script_inputs),
+        "transitive_proc_macro_search": _collect_transitive(deps, "transitive_proc_macro_search", own_proc_macro_search),
+        "transitive_proc_macro_externs": _collect_transitive(deps, "transitive_proc_macro_externs", own_proc_macro_extern),
         "transitive_sources": _collect_transitive(deps, "transitive_sources", srcs),
         "archive": output if crate_type == "staticlib" else "",
         "transitive_archives": _collect_transitive(deps, "transitive_archives", own_native_archives),
@@ -1204,6 +1608,7 @@ def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, 
     attrs = _cargo_copy_attrs(spec.get("attrs") or {})
     attrs["_output_prefix"] = spec["name"] + "/"
     attrs["_extra_inputs"] = metadata_inputs
+    attrs["rustc_flags"] = _cargo_spec_rustc_flags(ctx, spec)
     spec_ctx = {
         "label": {
             "package": ctx["label"]["package"],
@@ -1218,6 +1623,34 @@ def _cargo_compile_resolved_spec(ctx, spec, dep_providers, build_dep_providers, 
     if spec.get("kind") == "rust_proc_macro":
         return _rust_proc_macro_impl(spec_ctx)
     return _rust_crate_impl(spec_ctx)
+
+def _rust_strip_panic_flags(flags):
+    out = []
+    index = 0
+    for _ in range(len(flags) + 1):
+        if index >= len(flags):
+            break
+        flag = flags[index]
+        if flag in ("-C", "--codegen") and index + 1 < len(flags) and flags[index + 1].startswith("panic="):
+            index += 2
+            continue
+        if flag.startswith("-Cpanic=") or flag.startswith("--codegen=panic="):
+            index += 1
+            continue
+        out.append(flag)
+        index += 1
+    return out
+
+def _cargo_spec_rustc_flags(ctx, spec):
+    # Match the panic strategy of the final binary for target crates; proc-macro
+    # and host-tool crates are loaded by the compiler itself and must keep the
+    # default unwind strategy, so the panic flag is stripped for them.
+    flags = _rust_attr(ctx, "dep_rustc_flags", [])
+    if not flags:
+        return []
+    if spec.get("kind") == "rust_proc_macro" or spec.get("host_tool"):
+        return _rust_strip_panic_flags(flags)
+    return flags
 
 def _cargo_workspace_deps(ctx, metadata, providers_by_name):
     packages = metadata.get("packages") or []
@@ -1701,7 +2134,7 @@ def _cargo_merge_aliases(left, right):
         out[key] = value
     return out
 
-def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target):
+def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target, host_tool = False):
     attrs = _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases)
     if rust_target:
         attrs["target"] = rust_target
@@ -1716,6 +2149,7 @@ def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, 
         "deps": deps,
         "srcs": _cargo_package_source_globs(source_root),
         "attrs": attrs,
+        "host_tool": host_tool,
     }
     if build_deps:
         spec["build_deps"] = build_deps
@@ -1764,7 +2198,7 @@ def _cargo_metadata_targets(ctx, metadata, host_metadata = None):
         if host_name:
             host_deps, host_aliases = _cargo_metadata_deps(host_node, id_to_host_name, False)
             host_build_deps, host_build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name)
-            targets.append(_cargo_metadata_target_spec(package, target, host_node, source_root, crate_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), ""))
+            targets.append(_cargo_metadata_target_spec(package, target, host_node, source_root, crate_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), "", host_tool = True))
     return targets
 
 def _cargo_vendor_source_root(vendor_dir, package, target_name):
@@ -1814,6 +2248,7 @@ cargo_dependencies = target_kind(
         attr("all_features", "bool", default = "false", docs = "Pass `--all-features` to Cargo metadata.", configurable = True),
         attr("no_default_features", "bool", default = "false", docs = "Pass `--no-default-features` to Cargo metadata.", configurable = True),
         attr("target", "string", docs = "Rust target triple passed to Cargo as `--filter-platform`. Defaults to the host target.", configurable = False),
+        attr("dep_rustc_flags", "list<string>", default = "[]", docs = "Additional rustc flags applied to each resolved crate build. The panic strategy is stripped for proc-macro and host-tool crates so they keep the compiler's unwind strategy.", configurable = False),
     ],
     providers = ["rust_dependency_set"],
     capabilities = [capability("build", [])],

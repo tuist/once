@@ -33,7 +33,7 @@ Android dynamic libraries expose APK native-library provider fields.
 | `android_ndk` | string | no | `ANDROID_NDK_HOME` | Android NDK root used to find clang wrapper linkers |
 | `crate_aliases` | map&lt;string, string&gt; | no | `{}` | Map dependency label, package name, or crate name to the local extern crate name |
 | `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set. Defaults to `CARGO_PKG_NAME` when present |
-| `build_script` | string | no | empty | Package-relative Cargo build script path run before `rustc`; common `cargo:rustc-*` stdout directives and direct dependency `links` metadata are consumed |
+| `build_script` | string | no | empty | Package-relative Cargo build script path run before `rustc`; common `cargo:rustc-*` stdout directives are consumed, dependency `cargo:rustc-link-search` outputs are replayed downstream, and direct dependency `links` metadata is consumed |
 | `crate_type` | string | no | `rlib` | Rust crate type for the output |
 
 ## Dep Edges
@@ -73,7 +73,7 @@ use.
 
 | Output | Location |
 | --- | --- |
-| Rlib | `.once/out/<target>/lib<crate_name>.rlib` |
+| Rust library | `.once/out/<target>/lib<crate_name>-<metadata>.rlib` |
 | Static library | `.once/out/<target>/lib<crate_name>.a` or `.lib` |
 | Dynamic library | `.once/out/<target>/lib<crate_name>.dylib`, `.so`, or `.dll` |
 
