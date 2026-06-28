@@ -10,6 +10,7 @@
 
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
+use tracing::{debug, warn};
 
 use crate::{Action, Outcome, Runner};
 
@@ -142,6 +143,25 @@ struct Done {
     result: std::result::Result<Outcome, crate::Error>,
 }
 
+fn log_plan_node_completed(index: usize, label: &str, outcome: &Outcome) {
+    debug!(
+        node_index = index,
+        node_label = %label,
+        cache = ?outcome.cache,
+        exit_code = outcome.result.exit_code,
+        "plan node completed"
+    );
+}
+
+fn log_plan_node_errored(index: usize, label: &str, error: &crate::Error) {
+    warn!(
+        node_index = index,
+        node_label = %label,
+        error = %error,
+        "plan node errored"
+    );
+}
+
 impl Runner {
     /// Execute every node in `plan` in dependency order, with eligible
     /// nodes running concurrently subject to the runner's permit cap.
@@ -154,6 +174,7 @@ impl Runner {
         if n == 0 {
             return Ok(Vec::new());
         }
+        debug!(node_count = n, "starting plan execution");
 
         // Reverse-edge map and in-degree counter, owned by the single
         // driver loop. No locking needed because only the loop touches
@@ -197,6 +218,7 @@ impl Runner {
             in_flight -= 1;
             match done.result {
                 Ok(outcome) => {
+                    log_plan_node_completed(done.index, &done.label, &outcome);
                     if outcome.result.exit_code != 0 {
                         if aborted.is_none() {
                             aborted = Some(PlanError::Failed {
@@ -228,6 +250,7 @@ impl Runner {
                     }
                 }
                 Err(e) => {
+                    log_plan_node_errored(done.index, &done.label, &e);
                     if aborted.is_none() {
                         aborted = Some(PlanError::Core(e));
                     }
@@ -243,11 +266,13 @@ impl Runner {
         // and execution errors already routed through the channel.
         while let Some(joined) = tasks.join_next().await {
             if joined.is_err() && aborted.is_none() {
+                warn!("plan node task failed to join");
                 aborted = Some(PlanError::Core(crate::Error::EmptyArgv));
             }
         }
 
         if let Some(err) = aborted {
+            warn!(error = %err, "plan execution aborted");
             return Err(err);
         }
 
@@ -266,9 +291,17 @@ fn spawn(
     index: usize,
     node: PlanNode,
 ) {
+    let action_digest = node.action.digest();
+    debug!(
+        node_index = index,
+        node_label = %node.label,
+        action_digest = %action_digest,
+        dependency_count = node.deps.len(),
+        "spawning plan node"
+    );
     tasks.spawn(async move {
         let label = node.label.clone();
-        let result = runner.run(&node.action).await;
+        let result = Box::pin(runner.run(&node.action)).await;
         // Send first; dropping the sender after closes the channel
         // when this is the last live task.
         let _ = tx.send(Done {

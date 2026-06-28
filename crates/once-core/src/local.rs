@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
 use once_cas::{ActionResult, CacheProvider};
 use tokio::process::Command;
+use tracing::debug;
 
 use crate::stream::{self, Destination};
 use crate::{Error, Result, WorkspacePath};
@@ -29,11 +31,20 @@ pub(crate) async fn execute_command(
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    command.current_dir(cwd.map_or_else(
+    let command_cwd = cwd.map_or_else(
         || workspace_root.to_path_buf(),
         |c| c.resolve(workspace_root),
-    ));
+    );
+    command.current_dir(&command_cwd);
     command.kill_on_drop(true);
+    debug!(
+        program = %program,
+        arg_count = rest.len(),
+        env_count = env.len(),
+        cwd = %command_cwd.display(),
+        timeout_ms,
+        "spawning local command"
+    );
 
     let mut child = command.spawn().map_err(|source| Error::Spawn {
         program: program.clone(),
@@ -49,24 +60,21 @@ pub(crate) async fn execute_command(
             program: program.clone(),
             source,
         })?;
+        let exit_code = status.code().unwrap_or(-1);
+        debug!(
+            program = %program,
+            exit_code,
+            "local command finished"
+        );
         Ok::<_, Error>(ActionResult {
-            exit_code: status.code().unwrap_or(-1),
+            exit_code,
             stdout: Some(stdout),
             stderr: Some(stderr),
             outputs: BTreeMap::new(),
         })
     };
 
-    match timeout_ms {
-        Some(ms) => {
-            let dur = Duration::from_millis(ms);
-            match tokio::time::timeout(dur, work).await {
-                Ok(res) => res,
-                Err(_) => Err(Error::Timeout(dur)),
-            }
-        }
-        None => work.await,
-    }
+    Box::pin(with_timeout(program, timeout_ms, work)).await
 }
 
 pub(crate) async fn execute_command_streaming(
@@ -115,11 +123,22 @@ async fn execute_child_streaming(
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    command.current_dir(cwd.map_or_else(
+    let command_cwd = cwd.map_or_else(
         || workspace_root.to_path_buf(),
         |c| c.resolve(workspace_root),
-    ));
+    );
+    command.current_dir(&command_cwd);
     command.kill_on_drop(true);
+    debug!(
+        program = %program,
+        arg_count = rest.len(),
+        env_count = env.len(),
+        cwd = %command_cwd.display(),
+        timeout_ms,
+        stream_to_parent,
+        inherit_parent_env,
+        "spawning local command"
+    );
 
     let mut child = command.spawn().map_err(|source| Error::Spawn {
         program: program.clone(),
@@ -137,22 +156,40 @@ async fn execute_child_streaming(
             program: program.clone(),
             source,
         })?;
+        let exit_code = status.code().unwrap_or(-1);
+        debug!(
+            program = %program,
+            exit_code,
+            "local command finished"
+        );
         Ok::<_, Error>(ActionResult {
-            exit_code: status.code().unwrap_or(-1),
+            exit_code,
             stdout: Some(stdout),
             stderr: Some(stderr),
             outputs: BTreeMap::new(),
         })
     });
 
-    match timeout_ms {
-        Some(ms) => {
-            let dur = Duration::from_millis(ms);
-            match tokio::time::timeout(dur, work).await {
-                Ok(res) => res,
-                Err(_) => Err(Error::Timeout(dur)),
-            }
-        }
-        None => work.await,
+    Box::pin(with_timeout(program, timeout_ms, work)).await
+}
+
+async fn with_timeout<T>(
+    program: &str,
+    timeout_ms: Option<u64>,
+    work: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    let Some(ms) = timeout_ms else {
+        return work.await;
+    };
+    let dur = Duration::from_millis(ms);
+    if let Ok(res) = tokio::time::timeout(dur, work).await {
+        res
+    } else {
+        debug!(
+            program = %program,
+            timeout_ms = ms,
+            "local command timed out"
+        );
+        Err(Error::Timeout(dur))
     }
 }
