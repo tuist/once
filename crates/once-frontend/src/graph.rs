@@ -224,7 +224,7 @@ pub struct DepSchema {
 pub fn load_graph_workspace(root: &Path) -> Result<Vec<GraphTarget>> {
     let targets = load_workspace(root)?;
     let schemas = target_kind_schemas_for_workspace(root)?;
-    Ok(graph_from_targets_with_schemas(&targets, &schemas))
+    Ok(graph_from_owned_targets_with_schemas(targets, &schemas))
 }
 
 #[must_use]
@@ -245,6 +245,16 @@ fn graph_from_targets_with_schemas(
     targets
         .iter()
         .map(|target| graph_target_from_schema(target, schemas))
+        .collect()
+}
+
+fn graph_from_owned_targets_with_schemas(
+    targets: Vec<Target>,
+    schemas: &[TargetKindSchema],
+) -> Vec<GraphTarget> {
+    targets
+        .into_iter()
+        .map(|target| graph_target_from_owned_schema(target, schemas))
         .collect()
 }
 
@@ -345,6 +355,68 @@ fn graph_target_from_schema(target: &Target, schemas: &[TargetKindSchema]) -> Gr
     }
 }
 
+fn graph_target_from_owned_schema(target: Target, schemas: &[TargetKindSchema]) -> GraphTarget {
+    let Target {
+        package,
+        kind,
+        name,
+        deps,
+        srcs,
+        attrs,
+        typed_attrs,
+    } = target;
+    let schema = schemas.iter().find(|schema| schema.kind == kind);
+    let target_id = crate::target_ref::target_id(&package, &name);
+    let mut diagnostics = if schema.is_some() {
+        Vec::new()
+    } else {
+        vec![Diagnostic::new(
+            "unknown_target_kind",
+            format!("target kind `{kind}` has no target kind schema"),
+        )
+        .with_target(target_id.as_str())]
+    };
+    let attrs = graph_attrs_from_parts(attrs, typed_attrs);
+    if let Some(schema) = schema {
+        for attr_schema in &schema.attrs {
+            if attr_schema.configurable {
+                continue;
+            }
+            if let Some(value) = attrs.get(&attr_schema.name) {
+                if select_branches(value).is_some() {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            "select_on_non_configurable_attr",
+                            format!(
+                                "attribute `{}` is not configurable but uses `select()`",
+                                attr_schema.name
+                            ),
+                        )
+                        .with_target(target_id.as_str())
+                        .with_attribute(attr_schema.name.as_str()),
+                    );
+                }
+            }
+        }
+    }
+    GraphTarget {
+        label: TargetLabel {
+            package,
+            name,
+            id: target_id,
+        },
+        kind,
+        deps,
+        srcs,
+        attrs,
+        capabilities: schema
+            .as_ref()
+            .map_or_else(Vec::new, |schema| schema.capabilities.clone()),
+        providers: schema.map_or_else(Vec::new, |schema| schema.providers.clone()),
+        diagnostics,
+    }
+}
+
 fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
     if !target.typed_attrs.is_empty() {
         return target.typed_attrs.clone();
@@ -353,6 +425,19 @@ fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
         .attrs
         .iter()
         .map(|(key, value)| (key.clone(), AttrValue::String(value.clone())))
+        .collect()
+}
+
+fn graph_attrs_from_parts(
+    attrs: BTreeMap<String, String>,
+    typed_attrs: BTreeMap<String, AttrValue>,
+) -> BTreeMap<String, AttrValue> {
+    if !typed_attrs.is_empty() {
+        return typed_attrs;
+    }
+    attrs
+        .into_iter()
+        .map(|(key, value)| (key, AttrValue::String(value)))
         .collect()
 }
 

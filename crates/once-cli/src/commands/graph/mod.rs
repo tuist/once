@@ -54,9 +54,9 @@ pub async fn build(
     target_id: &str,
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let target = require_target(&graph, target_id)?;
-    let session = analysis::BuildSession::new(workspace, cache, &graph)?;
-    let record = build_target(workspace, cache, &target, &session).await?;
+    let session = analysis::BuildSession::new(workspace, cache, graph)?;
+    let target = session.target(target_id)?;
+    let record = build_target(workspace, cache, target, &session).await?;
     record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
@@ -69,19 +69,19 @@ pub async fn test(
     target_id: &str,
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let target = require_target(&graph, target_id)?;
-    let test_capability = ensure_capability(&target, "test")?;
-    let session = analysis::BuildSession::new(workspace, cache, &graph)?;
+    let session = analysis::BuildSession::new(workspace, cache, graph)?;
+    let target = session.target(target_id)?;
+    let test_capability = ensure_capability(target, "test")?;
     if !test_capability.requires_outputs.is_empty()
         && target
             .capabilities
             .iter()
             .any(|capability| capability.name == "build")
     {
-        let build_record = build_target(workspace, cache, &target, &session).await?;
+        let build_record = build_target(workspace, cache, target, &session).await?;
         record_capability_run(workspace, &build_record).await;
     }
-    let record = if let Some(outcome) = session.run_with_analysis(&target, "test").await? {
+    let record = if let Some(outcome) = session.run_with_analysis(target, "test").await? {
         let analysis::BuildOutcome {
             action_digest,
             input_digest,
@@ -106,7 +106,7 @@ pub async fn test(
             result,
         }
     } else {
-        run_target_capability(workspace, cache, &target, "test").await?
+        run_target_capability(workspace, cache, target, "test").await?
     };
     record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
@@ -121,26 +121,26 @@ pub async fn run(
     options: GraphRunOptions,
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let target = require_target(&graph, target_id)?;
-    let run_capability = ensure_capability(&target, "run")?;
     let session = analysis::BuildSession::new_with_options(
         workspace,
         cache,
-        &graph,
+        graph,
         AnalysisOptions {
             run_visible: options.visible,
         },
     )?;
+    let target = session.target(target_id)?;
+    let run_capability = ensure_capability(target, "run")?;
     if !run_capability.requires_outputs.is_empty()
         && target
             .capabilities
             .iter()
             .any(|capability| capability.name == "build")
     {
-        let build_record = build_target(workspace, cache, &target, &session).await?;
+        let build_record = build_target(workspace, cache, target, &session).await?;
         record_capability_run(workspace, &build_record).await;
     }
-    let record = if let Some(outcome) = session.run_with_analysis(&target, "run").await? {
+    let record = if let Some(outcome) = session.run_with_analysis(target, "run").await? {
         let analysis::BuildOutcome {
             action_digest,
             input_digest,
@@ -165,19 +165,11 @@ pub async fn run(
             result,
         }
     } else {
-        run_target_capability(workspace, cache, &target, "run").await?
+        run_target_capability(workspace, cache, target, "run").await?
     };
     record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
-}
-
-fn require_target(graph: &[GraphTarget], target_id: &str) -> Result<GraphTarget> {
-    graph
-        .iter()
-        .find(|target| target.label.id == target_id)
-        .cloned()
-        .with_context(|| format!("no target matches `{target_id}`"))
 }
 
 /// Build a target, walking deps first. If the target kind has an `impl`

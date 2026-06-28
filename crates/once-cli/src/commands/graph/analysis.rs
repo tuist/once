@@ -74,7 +74,7 @@ impl BuildSession {
     pub(super) fn new(
         workspace: &Path,
         cache: &CacheProvider,
-        graph: &[GraphTarget],
+        graph: Vec<GraphTarget>,
     ) -> Result<Self> {
         Self::new_with_options(workspace, cache, graph, AnalysisOptions::default())
     }
@@ -82,7 +82,7 @@ impl BuildSession {
     pub(super) fn new_with_options(
         workspace: &Path,
         cache: &CacheProvider,
-        graph: &[GraphTarget],
+        graph: Vec<GraphTarget>,
         options: AnalysisOptions,
     ) -> Result<Self> {
         Ok(Self::new_with_analyzer(
@@ -96,7 +96,7 @@ impl BuildSession {
     fn new_with_analyzer(
         workspace: &Path,
         cache: &CacheProvider,
-        graph: &[GraphTarget],
+        graph: Vec<GraphTarget>,
         analyzer: AnalysisEngine,
     ) -> Self {
         let module_source_digest = Digest::of_bytes(analyzer.module_source().as_bytes());
@@ -104,12 +104,22 @@ impl BuildSession {
             workspace: workspace.to_path_buf(),
             cache: cache.clone(),
             targets: graph
-                .iter()
-                .map(|target| (target.label.id.clone(), Arc::new(target.clone())))
+                .into_iter()
+                .map(|target| {
+                    let id = target.label.id.clone();
+                    (id, Arc::new(target))
+                })
                 .collect(),
             analyzer,
             module_source_digest,
         }
+    }
+
+    pub(super) fn target(&self, target_id: &str) -> Result<&GraphTarget> {
+        self.targets
+            .get(target_id)
+            .map(Arc::as_ref)
+            .with_context(|| format!("no target matches `{target_id}`"))
     }
 
     /// Build a target and the impl-backed portion of its dependency

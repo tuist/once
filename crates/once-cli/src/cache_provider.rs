@@ -32,10 +32,9 @@ pub(crate) fn resolve_auth_provider(
         return resolve_config(workspace, xdg);
     }
 
-    if let Some(config) = maybe_load_user_config(xdg)? {
-        if let Some(provider) = named_user_provider(&config, provider_name) {
+    if let Some(mut config) = maybe_load_user_config(xdg)? {
+        if let Some(provider) = take_named_user_provider(&mut config, provider_name) {
             return Ok(resolve_named_provider(
-                provider_name.to_string(),
                 NamedCacheProviderConfig {
                     name: provider_name.to_string(),
                     account: None,
@@ -101,61 +100,58 @@ fn resolve_provider_config(
             direct_tuist_config(config),
         )),
         CacheProviderConfig::Named(binding) => {
-            let config = load_user_config(xdg)?;
-            let provider = named_user_provider(&config, &binding.name).with_context(|| {
-                format!(
-                    "infrastructure `{}` was not found in {}",
-                    binding.name,
-                    user_config_path(xdg).display()
-                )
-            })?;
-            Ok(resolve_named_provider(
-                binding.name.clone(),
-                binding,
-                provider,
-            ))
+            let mut config = load_user_config(xdg)?;
+            let provider =
+                take_named_user_provider(&mut config, &binding.name).with_context(|| {
+                    format!(
+                        "infrastructure `{}` was not found in {}",
+                        binding.name,
+                        user_config_path(xdg).display()
+                    )
+                })?;
+            Ok(resolve_named_provider(binding, provider))
         }
     }
 }
 
 fn resolve_default_provider(xdg: &Xdg) -> Result<ResolvedCacheProviderConfig> {
-    let Some(config) = maybe_load_user_config(xdg)? else {
+    let Some(mut config) = maybe_load_user_config(xdg)? else {
         return Ok(ResolvedCacheProviderConfig::Local);
     };
     let binding = config
         .infrastructure
-        .as_ref()
-        .and_then(|infrastructure| infrastructure.cache.clone())
-        .or_else(|| config.cache_provider.clone());
+        .take()
+        .and_then(|infrastructure| infrastructure.cache)
+        .or_else(|| config.cache_provider.take());
     let Some(binding) = binding else {
         return Ok(ResolvedCacheProviderConfig::Local);
     };
-    let provider = named_user_provider(&config, &binding.name).with_context(|| {
+    let provider = take_named_user_provider(&mut config, &binding.name).with_context(|| {
         format!(
             "infrastructure `{}` was not found in {}",
             binding.name,
             user_config_path(xdg).display()
         )
     })?;
-    Ok(resolve_named_provider(
-        binding.name.clone(),
-        binding.into_named(),
-        provider,
-    ))
+    Ok(resolve_named_provider(binding.into_named(), provider))
 }
 
-fn named_user_provider<'a>(config: &'a UserConfig, name: &str) -> Option<&'a UserCacheProvider> {
+fn take_named_user_provider(config: &mut UserConfig, name: &str) -> Option<UserCacheProvider> {
     config
         .infrastructures
-        .get(name)
-        .or_else(|| config.cache_providers.get(name))
+        .remove(name)
+        .or_else(|| config.cache_providers.remove(name))
 }
 
 fn resolve_named_provider(
-    provider_name: String,
     binding: NamedCacheProviderConfig,
-    provider: &UserCacheProvider,
+    provider: UserCacheProvider,
 ) -> ResolvedCacheProviderConfig {
+    let NamedCacheProviderConfig {
+        name,
+        account: binding_account,
+        project: binding_project,
+    } = binding;
     match provider {
         UserCacheProvider::Tuist {
             url,
@@ -163,11 +159,11 @@ fn resolve_named_provider(
             account,
             project,
         } => ResolvedCacheProviderConfig::Tuist(default_tuist_config(
-            provider_name,
-            url.clone().unwrap_or_else(|| DEFAULT_TUIST_URL.to_string()),
-            binding.account.or_else(|| account.clone()),
-            binding.project.or_else(|| project.clone()),
-            oauth_client_id.clone(),
+            name,
+            url.unwrap_or_else(|| DEFAULT_TUIST_URL.to_string()),
+            binding_account.or(account),
+            binding_project.or(project),
+            oauth_client_id,
         )),
     }
 }

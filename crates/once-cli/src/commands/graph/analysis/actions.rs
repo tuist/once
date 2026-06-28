@@ -1428,7 +1428,7 @@ mod tests {
         let one = compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
         let declared2 = DeclaredAction {
             toolchain_identity: Some("id-2".to_string()),
-            ..declared.clone()
+            ..declared
         };
         let two = compose_input_digest(workspace.path(), &declared2, module_digest(), &[]).unwrap();
         assert_ne!(one, two);

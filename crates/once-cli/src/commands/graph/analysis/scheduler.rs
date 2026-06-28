@@ -137,19 +137,19 @@ impl BuildState {
             let target = targets
                 .get(target_id)
                 .with_context(|| format!("target `{target_id}` vanished from graph"))?;
-            let deps = target
+            let mut dep_count = 0;
+            for dep_id in target
                 .deps
                 .iter()
                 .filter(|dep_id| reachable.contains(*dep_id))
-                .cloned()
-                .collect::<Vec<_>>();
-            for dep_id in &deps {
+            {
+                dep_count += 1;
                 dependents
                     .entry(dep_id.clone())
                     .or_default()
                     .push(target_id.clone());
             }
-            remaining_deps.insert(target_id.clone(), deps.len());
+            remaining_deps.insert(target_id.clone(), dep_count);
         }
 
         let mut remaining_readers = dependents
