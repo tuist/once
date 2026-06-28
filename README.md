@@ -1,20 +1,79 @@
 <p align="center">
-  <img src="assets/header.png" alt="Once: Run once. Reuse everywhere." width="100%" />
-</p>
-
-<p align="center">
-  <a href="https://github.com/tuist/once/actions/workflows/once.yml"><img src="https://github.com/tuist/once/actions/workflows/once.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/tuist/once/actions/workflows/once.yml"><img src="https://github.com/tuist/once/actions/workflows/once.yml/badge.svg" alt="Continuous integration" /></a>
   <a href="https://github.com/tuist/once/releases/latest"><img src="https://img.shields.io/github/v/release/tuist/once?display_name=tag&sort=semver" alt="Latest release" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/tuist/once" alt="License" /></a>
 </p>
 
 # Once
 
-Once makes repository automation graph-aware, cacheable, observable, and remotely executable. Model work as targets with capabilities that lower into content-addressed actions. Existing scripts can join the same action model immediately through `once exec` or script targets, so teams can start without rewriting the automation they already have.
+Once turns repository automation into typed, cacheable actions that humans and
+coding agents can discover, run, and reuse.
 
-## Quick Start
+## Install
 
-Start by adapting an existing script. Add a small contract that names the files, outputs, environment, and working directory that shape the action:
+Install the current release with [mise](https://mise.jdx.dev/):
+
+```sh
+mise use -g "github:tuist/once@$(mise latest github:tuist/once)"
+mise exec -- once --version
+```
+
+Use `mise use github:tuist/once@...` inside a repository when the project
+should pin Once in its own `mise.toml`.
+
+## Connect A Coding Harness
+
+Once includes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)
+server. Add it to a coding harness that supports servers over standard input
+and output, and start it through mise so global installs and project pins both
+work:
+
+```
+{
+  "mcpServers": {
+    "once": {
+      "command": "mise",
+      "args": [
+        "-C",
+        "/absolute/path/to/your/project",
+        "exec",
+        "--",
+        "once",
+        "mcp",
+        "--workspace",
+        "/absolute/path/to/your/project",
+        "--allow-run"
+      ]
+    }
+  }
+}
+```
+
+Remove `--allow-run` if the harness should not build, test, run, or start
+runtime sessions.
+
+For a brand-new Rust project, also pin Rust in the project:
+
+```sh
+mise use rust@1.96.0
+```
+
+Then ask the harness:
+
+```text
+Use Once to initialize this directory as a Rust binary package. Discover the
+available target kinds, fetch the Rust binary starter, create the files, and
+build the target.
+```
+
+The harness can discover `rust_binary`, fetch the `rust-binary-with-crate`
+starter with `once_query_example`, write the files, and verify the result with
+`once build`.
+
+## Run A Script
+
+Add a small contract to an existing script so Once knows the inputs, outputs,
+environment, and working directory that shape the action:
 
 ```sh
 #!/usr/bin/env bash
@@ -38,25 +97,10 @@ Scripts can also run directly with a Once shebang:
 #!/usr/bin/env -S once exec -- bash
 ```
 
-When the workflow needs dependencies, multiple capabilities, typed validation, or agent-editable structure, move it into the build graph and let the target kind lower the target into the same action substrate.
-
 ## Documentation
 
 Read the documentation at [once.tuist.dev](https://once.tuist.dev).
 
-## Integrations
-
-Use the `once` crate when embedding Once in Rust applications:
-
-```toml
-[dependencies]
-once = { git = "https://github.com/tuist/once" }
-```
-
-Release builds also publish `Once.xcframework.zip` for Apple platforms.
-The framework exposes a small C ABI that Swift and Objective-C can call,
-with JSON requests and responses for cache access.
-
 ## License
 
-[MIT](LICENSE).
+[MIT License](LICENSE).
