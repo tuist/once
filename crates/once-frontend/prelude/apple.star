@@ -1668,7 +1668,7 @@ def shell_quote_for_action(path):
     escaped = path.replace("'", "'\"'\"'")
     return "'" + escaped + "'"
 
-def _apple_application_run_script(label_id, platform, sdk_variant, xcrun, app_path, bundle_id, run_dir, run_record, run_log):
+def _apple_application_run_script(label_id, platform, sdk_variant, xcrun, app_path, bundle_id, run_dir, run_record, run_log, visible):
     target_json = _json_literal(label_id)
     platform_json = _json_literal(platform)
     bundle_json = _json_literal(bundle_id)
@@ -1686,15 +1686,18 @@ printf '%s\\n' {record_json} > {record}
     elif platform == "ios" and sdk_variant == "simulator":
         record_prefix = '{"schema":"once.run.v1","target":' + target_json + ',"kind":"apple_application","status":"launched","platform":' + platform_json + ',"sdk_variant":"simulator","bundle_id":' + bundle_json + ',"app_path":' + app_json + ',"simulator_id":"'
         record_suffix = '"}'
+        visible_command = """/usr/bin/open -a Simulator --args -CurrentDeviceUDID "$simulator_id" >> {log} 2>&1 || true
+""".format(log = _shell_literal(run_log)) if visible else ""
         command = _ios_simulator_selection_script(xcrun) + """
 {xcrun} simctl boot "$simulator_id" >> {log} 2>&1 || true
-{xcrun} simctl bootstatus "$simulator_id" -b >> {log} 2>&1
+{visible_command}{xcrun} simctl bootstatus "$simulator_id" -b >> {log} 2>&1
 {xcrun} simctl install "$simulator_id" {app} >> {log} 2>&1
 {xcrun} simctl launch "$simulator_id" {bundle_id} >> {log} 2>&1
 printf '%s%s%s\\n' {record_prefix} "$simulator_id" {record_suffix} > {record}
 """.format(
             xcrun = _shell_literal(xcrun),
             log = _shell_literal(run_log),
+            visible_command = visible_command,
             app = _shell_literal(app_path),
             bundle_id = _shell_literal(bundle_id),
             record_prefix = _shell_literal(record_prefix),
@@ -1750,8 +1753,9 @@ def _apple_application_impl(ctx):
         # simctl-based runners need `xcrun` on PATH at execution time;
         # resolve it here so the build path stays xcrun-free.
         runner_xcrun = host_which("xcrun") if platform == "ios" and sdk_variant == "simulator" else ""
+        run_visible = (ctx.get("run") or {}).get("visible") or False
         run_action(
-            argv = ["/bin/sh", "-c", _apple_application_run_script(ctx["label"]["id"], platform, sdk_variant, runner_xcrun, app_path, bundle_id, run_dir, run_record, run_log)],
+            argv = ["/bin/sh", "-c", _apple_application_run_script(ctx["label"]["id"], platform, sdk_variant, runner_xcrun, app_path, bundle_id, run_dir, run_record, run_log, run_visible)],
             outputs = [run_dir, run_record, run_log],
             env = swiftc["env"],
             cacheable = False,

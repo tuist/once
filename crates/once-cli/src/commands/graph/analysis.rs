@@ -27,7 +27,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::EvidenceCacheState;
-use once_frontend::analysis::AnalysisEngine;
+use once_frontend::analysis::{AnalysisEngine, AnalysisOptions};
 use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
 
@@ -76,11 +76,20 @@ impl BuildSession {
         cache: &CacheProvider,
         graph: &[GraphTarget],
     ) -> Result<Self> {
+        Self::new_with_options(workspace, cache, graph, AnalysisOptions::default())
+    }
+
+    pub(super) fn new_with_options(
+        workspace: &Path,
+        cache: &CacheProvider,
+        graph: &[GraphTarget],
+        options: AnalysisOptions,
+    ) -> Result<Self> {
         Ok(Self::new_with_analyzer(
             workspace,
             cache,
             graph,
-            AnalysisEngine::for_workspace(workspace)?,
+            AnalysisEngine::for_workspace_with_options(workspace, options)?,
         ))
     }
 

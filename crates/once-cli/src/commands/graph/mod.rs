@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use anyhow::{anyhow, Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{EvidenceCacheState, EvidenceSubject, RunOpts};
+use once_frontend::analysis::AnalysisOptions;
 use once_frontend::GraphTarget;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -39,6 +40,11 @@ struct CapabilityRunRecord {
     cache_state: EvidenceCacheState,
     #[serde(skip)]
     result: ActionResult,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GraphRunOptions {
+    pub visible: bool,
 }
 
 pub async fn build(
@@ -112,11 +118,19 @@ pub async fn run(
     cache: &CacheProvider,
     output: Output,
     target_id: &str,
+    options: GraphRunOptions,
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let target = require_target(&graph, target_id)?;
     let run_capability = ensure_capability(&target, "run")?;
-    let session = analysis::BuildSession::new(workspace, cache, &graph)?;
+    let session = analysis::BuildSession::new_with_options(
+        workspace,
+        cache,
+        &graph,
+        AnalysisOptions {
+            run_visible: options.visible,
+        },
+    )?;
     if !run_capability.requires_outputs.is_empty()
         && target
             .capabilities

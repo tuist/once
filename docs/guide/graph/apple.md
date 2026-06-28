@@ -82,9 +82,12 @@ the host app launcher. iOS simulator apps use `simctl` to pick or boot a
 simulator, install the bundle, and launch the bundle identifier. Device
 launch support is not implemented yet.
 
+Pass `--visible` to open Simulator for the selected simulator before the
+install and launch steps:
+
 ```sh
 once build apps/ios/App
-once run apps/ios/App
+once run --visible apps/ios/App
 ```
 
 ## Configurable attributes

@@ -96,6 +96,8 @@ fn android_binary_exposes_build_and_run() {
         .collect::<Vec<_>>();
     assert!(attr_names.contains(&"adb"));
     assert!(attr_names.contains(&"adb_serial"));
+    assert!(attr_names.contains(&"emulator"));
+    assert!(attr_names.contains(&"emulator_device"));
     assert!(attr_names.contains(&"launch_activity"));
     assert!(attr_names.contains(&"kotlinc"));
     assert!(attr_names.contains(&"kotlin_home"));
@@ -184,6 +186,80 @@ fn prelude_android_kotlin_toolchain_helpers_resolve_stdlib() {
     )
     .unwrap();
     assert_eq!(configured_stdlib, "/third_party/kotlin-stdlib.jar");
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_android_visible_run_starts_configured_emulator_first() {
+    let prelude = android_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "apps/hello",
+        "name": "Hello",
+        "id": "apps/hello/Hello",
+    }},
+    "attr": {{}},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/apps/hello/Hello",
+    "run": {{"visible": True}},
+}}
+tools = {{
+    "sdk_root": "/sdk",
+    "adb": "/sdk/platform-tools/adb",
+    "emulator": "/sdk/emulator/emulator",
+    "identity": "android-adb",
+}}
+_android_run_app(
+    ctx,
+    {{"application_id": "dev.once.hello", "emulator_device": "Pixel_9"}},
+    tools,
+)
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "apps/hello/Hello");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    assert_eq!(store.actions.len(), 4);
+    assert_eq!(
+        store.actions[0].identifier.as_deref(),
+        Some("android_visible_emulator:apps/hello/Hello")
+    );
+    assert!(store.actions[0].argv[2].contains("screen"));
+    assert!(store.actions[0].argv[2].contains("osascript"));
+    assert!(!store.actions[0].argv[2].contains("launchctl submit"));
+    assert!(store.actions[0].argv[2].contains("nohup '/sdk/emulator/emulator' -avd 'Pixel_9'"));
+    assert!(store.actions[1].argv[2].contains("'/sdk/platform-tools/adb' 'wait-for-device'"));
+    assert!(store.actions[1].argv[2].contains("sys.boot_completed"));
+    assert_eq!(
+        store.actions[1].outputs,
+        vec![".once/out/apps/hello/Hello/run/device-ready"]
+    );
+    assert_eq!(
+        store.actions[2].inputs,
+        vec![
+            ".once/out/apps/hello/Hello/Hello.apk",
+            ".once/out/apps/hello/Hello/run/device-ready"
+        ]
+    );
+    assert_eq!(
+        store.actions[2].outputs,
+        vec![".once/out/apps/hello/Hello/run/installed"]
+    );
+    assert_eq!(
+        store.actions[3].inputs,
+        vec![".once/out/apps/hello/Hello/run/installed"]
+    );
+    assert_eq!(
+        store.actions[3].outputs,
+        vec![".once/out/apps/hello/Hello/run/launched"]
+    );
 }
 
 #[cfg(unix)]
@@ -338,6 +414,24 @@ result = repr("ok")
                 .is_some_and(|id| id == "android_resource_link:apps/hello/Hello")
         })
         .expect("resource link action");
+    let link_tool_digest = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .identifier
+                .as_deref()
+                .is_some_and(|id| id == "android_resource_link_tool_digest:apps/hello/Hello")
+        })
+        .expect("link tool digest action");
+    assert_eq!(
+        link_tool_digest.operation,
+        Some(DeclaredActionOperation::WriteTreeDigest {
+            root: ".once/out/apps/hello/Hello/aapt2_link_tool/classes".to_string(),
+            output: ".once/out/apps/hello/Hello/aapt2_link_tool/classes.sha256".to_string(),
+            include_suffixes: vec![],
+        })
+    );
     assert_eq!(
         link.identifier.as_deref(),
         Some("android_resource_link:apps/hello/Hello")
@@ -351,7 +445,7 @@ result = repr("ok")
     assert!(link
         .inputs
         .iter()
-        .any(|input| input == ".once/out/apps/hello/Hello/aapt2_link_tool/classes"));
+        .any(|input| input == ".once/out/apps/hello/Hello/aapt2_link_tool/classes.sha256"));
 }
 
 #[test]
@@ -3558,6 +3652,47 @@ exit 1
     assert!(String::from_utf8(output.stderr)
         .unwrap()
         .contains("no booted or available iOS simulator found"));
+}
+
+#[test]
+fn prelude_apple_application_visible_run_opens_simulator() {
+    let call = r#"(
+        "apps/ios/App",
+        "ios",
+        "simulator",
+        "/usr/bin/xcrun",
+        ".once/out/apps/ios/App/App.app",
+        "dev.once.App",
+        ".once/out/apps/ios/App/run",
+        ".once/out/apps/ios/App/run/run.json",
+        ".once/out/apps/ios/App/run/run.log",
+        True,
+    )"#;
+    let script = eval_prelude_string_function("_apple_application_run_script", call).unwrap();
+
+    assert!(
+        script.contains("/usr/bin/open -a Simulator --args -CurrentDeviceUDID \"$simulator_id\""),
+        "{script}"
+    );
+}
+
+#[test]
+fn prelude_apple_application_default_run_does_not_open_simulator() {
+    let call = r#"(
+        "apps/ios/App",
+        "ios",
+        "simulator",
+        "/usr/bin/xcrun",
+        ".once/out/apps/ios/App/App.app",
+        "dev.once.App",
+        ".once/out/apps/ios/App/run",
+        ".once/out/apps/ios/App/run/run.json",
+        ".once/out/apps/ios/App/run/run.log",
+        False,
+    )"#;
+    let script = eval_prelude_string_function("_apple_application_run_script", call).unwrap();
+
+    assert!(!script.contains("/usr/bin/open -a Simulator"), "{script}");
 }
 
 #[test]

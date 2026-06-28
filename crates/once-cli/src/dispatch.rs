@@ -64,6 +64,7 @@ async fn run_command(
         }
         Cmd::Run {
             target,
+            visible,
             runtime_rpc,
             runtime_rpc_socket,
             remote,
@@ -74,6 +75,7 @@ async fn run_command(
                 xdg,
                 output,
                 target,
+                visible,
                 runtime_rpc,
                 runtime_rpc_socket,
                 remote.then_some(compute),
@@ -364,6 +366,7 @@ async fn dispatch_run(
     xdg: &Xdg,
     output: Output,
     target: Option<String>,
+    visible: bool,
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
     remote: Option<String>,
@@ -383,8 +386,12 @@ async fn dispatch_run(
             &cache,
             output,
             &resolved_target,
+            commands::graph::GraphRunOptions { visible },
         ))
         .await;
+    }
+    if visible {
+        anyhow::bail!("--visible is only supported for graph run targets");
     }
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     run_target_command(

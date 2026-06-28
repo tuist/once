@@ -17,6 +17,14 @@ use super::store::{with_active_store, AnalysisStore, DeclaredAction, HostCache};
 use super::values::{attr_value_to_starlark, json_to_value, value_to_json};
 use crate::graph::GraphTarget;
 
+/// Extra execution context supplied by command surfaces.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AnalysisOptions {
+    /// Request a visible runtime surface for run capabilities when the target
+    /// kind supports one.
+    pub run_visible: bool,
+}
+
 /// Result of analyzing one target.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AnalysisResult {
@@ -40,6 +48,7 @@ pub struct AnalysisEngine {
     source: Arc<str>,
     target_kind_impls: TargetKindImpls,
     host_cache: HostCache,
+    options: AnalysisOptions,
 }
 
 impl fmt::Debug for AnalysisEngine {
@@ -49,6 +58,7 @@ impl fmt::Debug for AnalysisEngine {
             .field("source_len", &self.source.len())
             .field("target_kind_impls", &self.target_kind_impls)
             .field("host_cache", &self.host_cache)
+            .field("options", &self.options)
             .finish()
     }
 }
@@ -58,21 +68,38 @@ impl AnalysisEngine {
         Self::from_source_with_path(
             crate::modules::BUILT_IN_MODULE_PATH,
             crate::modules::built_in_module_source(),
+            AnalysisOptions::default(),
         )
     }
 
     pub fn for_workspace(root: &Path) -> Result<Self> {
+        Self::for_workspace_with_options(root, AnalysisOptions::default())
+    }
+
+    pub fn for_workspace_with_options(root: &Path, options: AnalysisOptions) -> Result<Self> {
         let source = crate::modules::combined_module_source_for_workspace(root)?;
-        Self::from_source_with_path(crate::modules::COMBINED_MODULE_PATH, source)
+        Self::from_source_with_path(crate::modules::COMBINED_MODULE_PATH, source, options)
     }
 
     pub fn from_source(source: impl Into<Arc<str>>) -> Result<Self> {
-        Self::from_source_with_path(crate::modules::BUILT_IN_MODULE_PATH, source)
+        Self::from_source_with_path(
+            crate::modules::BUILT_IN_MODULE_PATH,
+            source,
+            AnalysisOptions::default(),
+        )
+    }
+
+    pub fn from_source_with_options(
+        source: impl Into<Arc<str>>,
+        options: AnalysisOptions,
+    ) -> Result<Self> {
+        Self::from_source_with_path(crate::modules::BUILT_IN_MODULE_PATH, source, options)
     }
 
     fn from_source_with_path(
         source_path: impl Into<Arc<str>>,
         source: impl Into<Arc<str>>,
+        options: AnalysisOptions,
     ) -> Result<Self> {
         let source_path = source_path.into();
         let source = source.into();
@@ -82,6 +109,7 @@ impl AnalysisEngine {
             source,
             target_kind_impls,
             host_cache: HostCache::default(),
+            options,
         })
     }
 
@@ -126,6 +154,7 @@ impl AnalysisEngine {
             workspace_root,
             dep_providers,
             capability,
+            self.options,
         )
     }
 }
@@ -165,6 +194,7 @@ fn analyze_target_with_host_cache(
     workspace_root: &Path,
     dep_providers: &[JsonValue],
     capability: &str,
+    options: AnalysisOptions,
 ) -> Result<AnalysisResult> {
     let build_dir = format!(".once/out/{}", target.label.id);
     let scratch_dir = format!(".once/tmp/analysis/{}", target.label.id);
@@ -184,6 +214,7 @@ fn analyze_target_with_host_cache(
             &build_dir,
             &scratch_dir,
             capability,
+            options,
         )
     });
     let provider = result?;
@@ -240,6 +271,7 @@ fn analyze_in_starlark(
     build_dir: &str,
     scratch_dir: &str,
     capability: &str,
+    options: AnalysisOptions,
 ) -> Result<JsonValue> {
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
@@ -260,6 +292,7 @@ fn analyze_in_starlark(
             build_dir,
             scratch_dir,
             capability,
+            options,
         );
         let provider = eval
             .eval_function(impl_value, &[ctx], &[])
@@ -297,6 +330,7 @@ fn build_ctx<'v>(
     build_dir: &str,
     scratch_dir: &str,
     capability: &str,
+    options: AnalysisOptions,
 ) -> Value<'v> {
     let heap = eval.heap();
     let label = heap.alloc(AllocDict([
@@ -316,6 +350,10 @@ fn build_ctx<'v>(
         .map(|provider| json_to_value(eval, provider))
         .collect();
     let deps = heap.alloc(dep_values);
+    let run = heap.alloc(AllocDict([(
+        "visible",
+        Value::new_bool(options.run_visible),
+    )]));
     heap.alloc(AllocDict([
         ("label", label),
         ("attr", attr),
@@ -324,5 +362,6 @@ fn build_ctx<'v>(
         ("build_dir", heap.alloc(build_dir.to_string())),
         ("scratch_dir", heap.alloc(scratch_dir.to_string())),
         ("capability", heap.alloc(capability.to_string())),
+        ("run", run),
     ]))
 }

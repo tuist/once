@@ -138,6 +138,10 @@ pub enum Cmd {
     /// to ask a compute provider to execute the command.
     #[command(arg_required_else_help = true)]
     Run {
+        /// Ask graph target kinds to open a visible runtime interface when supported.
+        #[arg(long)]
+        visible: bool,
+
         /// Serve a local JSON-RPC runtime control socket for this run.
         #[arg(long)]
         runtime_rpc: bool,

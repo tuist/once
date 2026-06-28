@@ -50,10 +50,13 @@ The target emits `apple_application` and `apple_bundle`.
 ## Running
 
 `once run` launches macOS apps with the host app launcher and iOS
-simulator apps with `simctl` boot, install, and launch. The launch
-action writes a run record under the target's output directory and is
-marked uncacheable by the target kind, so repeated runs execute the launch
-again instead of replaying an action-cache hit. Device launch support
+simulator apps with `simctl` boot, install, and launch. Pass
+`once run --visible` to also open Simulator for the selected simulator
+before installing and launching the app.
+
+The launch action writes a run record under the target's output directory
+and is marked uncacheable by the target kind, so repeated runs execute the
+launch again instead of replaying an action-cache hit. Device launch support
 is not implemented yet.
 
 ## Limitations
