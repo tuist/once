@@ -115,7 +115,14 @@ impl Runner {
         if let Some(hit) = lookup_cached(&self.cache, &self.workspace_root, &key).await? {
             return Ok(hit);
         }
-        produce(action, &self.workspace_root, &self.cache, self.opts, key).await
+        Box::pin(produce(
+            action,
+            &self.workspace_root,
+            &self.cache,
+            self.opts,
+            key,
+        ))
+        .await
     }
 }
 
@@ -128,12 +135,12 @@ pub async fn run(
     cas: &Cas,
     opts: RunOpts,
 ) -> Result<Outcome> {
-    run_with_cache(
+    Box::pin(run_with_cache(
         action,
         workspace_root,
         &CacheProvider::Local(cas.clone()),
         opts,
-    )
+    ))
     .await
 }
 
@@ -147,7 +154,7 @@ pub async fn run_with_cache(
     if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
         return Ok(hit);
     }
-    produce(action, workspace_root, cache, opts, key).await
+    Box::pin(produce(action, workspace_root, cache, opts, key)).await
 }
 
 pub async fn run_with_cache_streaming(
@@ -160,7 +167,7 @@ pub async fn run_with_cache_streaming(
     if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
         return Ok(hit);
     }
-    let result = execute::run(action, workspace_root, cache, true).await?;
+    let result = Box::pin(execute::run(action, workspace_root, cache, true)).await?;
     let cacheable = result.exit_code == 0 || opts.cache_failures;
     if cacheable {
         cache.put_action_result(&key, &result).await?;
@@ -186,7 +193,13 @@ pub async fn run_uncached(
     cache: &CacheProvider,
     stream_to_parent: bool,
 ) -> Result<ActionResult> {
-    execute::run(action, workspace_root, cache, stream_to_parent).await
+    Box::pin(execute::run(
+        action,
+        workspace_root,
+        cache,
+        stream_to_parent,
+    ))
+    .await
 }
 
 #[instrument(skip(cache), fields(action_digest = %key))]
@@ -215,7 +228,7 @@ async fn produce(
     opts: RunOpts,
     key: Digest,
 ) -> Result<Outcome> {
-    let result = execute::run(action, workspace_root, cache, false).await?;
+    let result = Box::pin(execute::run(action, workspace_root, cache, false)).await?;
     let cacheable = result.exit_code == 0 || opts.cache_failures;
     if cacheable {
         cache.put_action_result(&key, &result).await?;

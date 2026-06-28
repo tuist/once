@@ -347,13 +347,17 @@ async fn hash_spec(spec: &InputSpec) -> Result<(Digest, Option<u64>)> {
         }
         InputSpec::EnvVar(name) => {
             let value = std::env::var(name).unwrap_or_default();
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(name.as_bytes());
-            hasher.update(b"\0");
-            hasher.update(value.as_bytes());
-            Ok((Digest::from_bytes(*hasher.finalize().as_bytes()), None))
+            Ok((hash_env_input(name, &value), None))
         }
     }
+}
+
+fn hash_env_input(name: &str, value: &str) -> Digest {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(name.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(value.as_bytes());
+    Digest::from_bytes(*hasher.finalize().as_bytes())
 }
 
 /// Hash a directory tree deterministically. Walks every file under
@@ -495,14 +499,8 @@ mod tests {
 
     #[tokio::test]
     async fn env_input_includes_name_in_digest() {
-        std::env::set_var("ONCE_TEST_ENV_INPUT_A", "shared-value");
-        std::env::set_var("ONCE_TEST_ENV_INPUT_B", "shared-value");
-        let (a, _) = hash_spec(&InputSpec::EnvVar("ONCE_TEST_ENV_INPUT_A".into()))
-            .await
-            .unwrap();
-        let (b, _) = hash_spec(&InputSpec::EnvVar("ONCE_TEST_ENV_INPUT_B".into()))
-            .await
-            .unwrap();
+        let a = hash_env_input("ONCE_TEST_ENV_INPUT_A", "shared-value");
+        let b = hash_env_input("ONCE_TEST_ENV_INPUT_B", "shared-value");
         assert_ne!(
             a, b,
             "different env var names with the same value must hash differently"
@@ -511,21 +509,8 @@ mod tests {
 
     #[tokio::test]
     async fn env_input_with_unset_variable_hashes_empty_value() {
-        // The variable must not exist; pick a name that's vanishingly
-        // unlikely to leak in from the parent environment.
-        std::env::remove_var("ONCE_TEST_ENV_INPUT_DEFINITELY_UNSET");
-        let (unset, _) = hash_spec(&InputSpec::EnvVar(
-            "ONCE_TEST_ENV_INPUT_DEFINITELY_UNSET".into(),
-        ))
-        .await
-        .unwrap();
-        std::env::set_var("ONCE_TEST_ENV_INPUT_DEFINITELY_UNSET", "");
-        let (empty, _) = hash_spec(&InputSpec::EnvVar(
-            "ONCE_TEST_ENV_INPUT_DEFINITELY_UNSET".into(),
-        ))
-        .await
-        .unwrap();
-        std::env::remove_var("ONCE_TEST_ENV_INPUT_DEFINITELY_UNSET");
+        let unset = hash_env_input("ONCE_TEST_ENV_INPUT_DEFINITELY_UNSET", "");
+        let empty = hash_env_input("ONCE_TEST_ENV_INPUT_DEFINITELY_UNSET", "");
         assert_eq!(unset, empty, "unset and empty must hash identically");
     }
 

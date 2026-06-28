@@ -68,8 +68,7 @@ fn declare_output_outside_analysis_returns_bare_name() {
 
 #[test]
 fn host_env_reads_active_analysis_environment_only() {
-    let name = format!("ONCE_HOST_ENV_TEST_{}", std::process::id());
-    std::env::set_var(&name, "present");
+    let name = "ONCE_HOST_ENV_TEST";
     let source = format!(
         "value = host_env({})",
         serde_json::to_string(&name).unwrap()
@@ -78,11 +77,15 @@ fn host_env_reads_active_analysis_environment_only() {
     assert_eq!(eval_string(&source).unwrap(), "");
 
     let tmp = TempDir::new().unwrap();
-    let store = store_for(tmp.path(), "apps/android/App");
+    let host_cache = HostCache::with_env(BTreeMap::from([(name.to_string(), "present".into())]));
+    let store = AnalysisStore::with_host_cache(
+        tmp.path().to_path_buf(),
+        "apps/android/App".to_string(),
+        ".once/out/apps/android/App".to_string(),
+        host_cache,
+    );
     let (_, value) = with_active_store(store, || eval_string(&source).unwrap());
     assert_eq!(value, "present");
-
-    std::env::remove_var(name);
 }
 
 #[test]
