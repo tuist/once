@@ -169,6 +169,8 @@ An implementation receives `ctx` with generic graph data:
   action-private helper files that are materialized before an action
   runs but are not durable target outputs.
 - `ctx["capability"]`: active capability being analyzed.
+- `ctx["run"]`: run request options. `ctx["run"]["visible"]` is true when
+  the caller requested a visible runtime interface.
 
 The implementation returns a JSON-shaped provider record. Downstream
 target kinds should read provider fields from `ctx["deps"]` instead of

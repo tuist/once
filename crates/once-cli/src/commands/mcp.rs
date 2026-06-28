@@ -290,12 +290,12 @@ impl Server {
 
     fn tool_build_target(&self, args: &Value) -> Result<Value> {
         let args: TargetExecutionArgs = serde_json::from_value(tool_args(args))?;
-        run_graph_target(&self.workspace, "build", &args.target)
+        run_graph_target(&self.workspace, "build", &args.target, false)
     }
 
     fn tool_run_target(&self, args: &Value) -> Result<Value> {
-        let args: TargetExecutionArgs = serde_json::from_value(tool_args(args))?;
-        run_graph_target(&self.workspace, "run", &args.target)
+        let args: RunTargetArgs = serde_json::from_value(tool_args(args))?;
+        run_graph_target(&self.workspace, "run", &args.target, args.visible)
     }
 
     fn tool_start_target(&self, args: &Value) -> Result<Value> {
@@ -428,9 +428,14 @@ fn run_test_target(workspace: &std::path::Path, target: &str) -> Result<Value> {
     }))
 }
 
-fn run_graph_target(workspace: &std::path::Path, capability: &str, target: &str) -> Result<Value> {
+fn run_graph_target(
+    workspace: &std::path::Path,
+    capability: &str,
+    target: &str,
+    visible: bool,
+) -> Result<Value> {
     let exe = std::env::current_exe().context("resolving current once executable")?;
-    run_graph_target_with_exe(&exe, workspace, capability, target)
+    run_graph_target_with_exe(&exe, workspace, capability, target, visible)
 }
 
 fn run_graph_target_with_exe(
@@ -438,13 +443,19 @@ fn run_graph_target_with_exe(
     workspace: &std::path::Path,
     capability: &str,
     target: &str,
+    visible: bool,
 ) -> Result<Value> {
-    let output = std::process::Command::new(exe)
+    let mut command = std::process::Command::new(exe);
+    command
         .arg("-C")
         .arg(workspace)
         .arg("--format")
         .arg("json")
-        .arg(capability)
+        .arg(capability);
+    if visible {
+        command.arg("--visible");
+    }
+    let output = command
         .arg(target)
         .output()
         .with_context(|| format!("running `{}` {capability} `{target}`", exe.display()))?;
@@ -484,6 +495,14 @@ fn tool_args(args: &Value) -> Value {
 #[serde(deny_unknown_fields)]
 struct TargetExecutionArgs {
     target: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunTargetArgs {
+    target: String,
+    #[serde(default)]
+    visible: bool,
 }
 
 #[derive(Deserialize)]
@@ -1060,27 +1079,28 @@ srcs = ["other_spec.sh"]
         let args_path = tmp.path().join("args.txt");
         let args_file = shell_literal(args_path.to_str().unwrap());
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {args_file}\nprintf '{{\"target\":\"%s\",\"capability\":\"%s\",\"status\":\"completed\"}}\\n' \"$6\" \"$5\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {args_file}\ncapability=''\ntarget=''\nfor arg do\n  case \"$arg\" in build|run|test) capability=\"$arg\" ;;\n  *) target=\"$arg\" ;;\n  esac\ndone\nprintf '{{\"target\":\"%s\",\"capability\":\"%s\",\"status\":\"completed\"}}\\n' \"$target\" \"$capability\"\n",
         );
         std::fs::write(&exe, script).unwrap();
         let mut permissions = std::fs::metadata(&exe).unwrap().permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&exe, permissions).unwrap();
 
-        let build = run_graph_target_with_exe(&exe, tmp.path(), "build", "apps/App").unwrap();
+        let build =
+            run_graph_target_with_exe(&exe, tmp.path(), "build", "apps/App", false).unwrap();
         assert_eq!(build["capability"], "build");
         assert_eq!(build["success"], true);
         assert_eq!(build["record"]["target"], "apps/App");
         assert_eq!(build["record"]["capability"], "build");
 
-        let run = run_graph_target_with_exe(&exe, tmp.path(), "run", "apps/App").unwrap();
+        let run = run_graph_target_with_exe(&exe, tmp.path(), "run", "apps/App", true).unwrap();
         assert_eq!(run["capability"], "run");
         assert_eq!(run["success"], true);
         assert_eq!(run["record"]["target"], "apps/App");
         assert_eq!(run["record"]["capability"], "run");
 
         let args = std::fs::read_to_string(args_path).unwrap();
-        assert!(args.contains("--format\njson\nrun\napps/App\n"));
+        assert!(args.contains("--format\njson\nrun\n--visible\napps/App\n"));
     }
 
     #[test]

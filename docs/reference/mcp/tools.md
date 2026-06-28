@@ -460,7 +460,7 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 
 Run a target by executing its generic `run` capability.
 
-Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once run <target> --format json`, including any prerequisite build outputs declared by the target's `run` capability. Execution policy declared by the target kind is preserved, so uncacheable actions are executed instead of replayed from the action cache. The tool returns stdout parsed as JSON when possible, plus exit status and stderr.
+Opt-in tool exposed only when the Model Context Protocol server starts with `once mcp --allow-run`. Executes the same path as `once run <target> --format json`, including any prerequisite build outputs declared by the target's `run` capability. Set `visible` to request a visible runtime interface when the target kind supports one. Execution policy declared by the target kind is preserved, so uncacheable actions are executed instead of replayed from the action cache. The tool returns stdout parsed as JSON when possible, plus exit status and stderr.
 
 **Input schema**
 
@@ -470,6 +470,10 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
     "target": {
       "description": "Target id to run, such as `apps/service/Service` or `./Service`.",
       "type": "string"
+    },
+    "visible": {
+      "description": "Request a visible runtime interface when the target kind supports one.",
+      "type": "boolean"
     }
   },
   "required": [

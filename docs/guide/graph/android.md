@@ -133,9 +133,14 @@ resolves the launcher activity on the device, and starts that component with
 `am start`. Set `launch_activity` when the app needs an explicit activity
 component. Set `adb_serial` when more than one device is connected.
 
+Pass `--visible` to request a visible runtime interface. If the target sets
+`emulator_device`, Once starts that Android Virtual Device with the Android
+emulator before waiting for a device, installing the app, and launching the
+activity.
+
 ```sh
 once build apps/hello/Hello
-once run apps/hello/Hello
+once run --visible apps/hello/Hello
 ```
 
 ## Toolchain

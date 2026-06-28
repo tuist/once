@@ -612,6 +612,27 @@ custom_library = {"_once_target_kind": True, "impl": lambda ctx: None}
 }
 
 #[test]
+fn analysis_context_exposes_visible_run_option() {
+    let engine = AnalysisEngine::from_source_with_options(
+        r#"
+def _demo_impl(ctx):
+    return {"visible": ctx["run"]["visible"]}
+
+demo_kind = {"_once_target_kind": True, "impl": _demo_impl}
+"#,
+        AnalysisOptions { run_visible: true },
+    )
+    .unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    let result = engine
+        .analyze_target_capability(&target("demo_kind"), tmp.path(), &[], "run")
+        .unwrap();
+
+    assert_eq!(result.provider["visible"], true);
+}
+
+#[test]
 fn analysis_engine_debug_omits_module_source() {
     let engine = AnalysisEngine::from_source("# SECRET_MODULE_SOURCE").unwrap();
 

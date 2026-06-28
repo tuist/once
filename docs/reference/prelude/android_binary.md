@@ -35,6 +35,8 @@ and signs it with a debug key by default.
 | `debug_key_alias` | string | no | `androiddebugkey` | Key alias for debug signing only |
 | `adb` | string | no | SDK platform-tools | Override adb path for `run` |
 | `adb_serial` | string | no |  | Device serial passed to `adb -s` |
+| `emulator` | string | no | Android software development kit emulator | Override Android emulator path used by visible runs |
+| `emulator_device` | string | no |  | Android Virtual Device name started by `once run --visible` |
 | `launch_activity` | string | no | launcher intent | Activity component launched by `once run` |
 | `build_tools_version` | string | no | highest installed | Android SDK build-tools version |
 | `android_sdk` | string | no | env | Android SDK root, otherwise `ANDROID_HOME` or `ANDROID_SDK_ROOT` |
@@ -99,6 +101,11 @@ zipalign. Production signing is not implemented yet.
 `apk` output group. The run action then executes direct `adb` commands:
 wait for a device, install the APK with `adb install -r -d`, and launch the
 app.
+
+Pass `once run --visible` to request a visible runtime interface. When
+`emulator_device` is set, Once starts that Android Virtual Device with the
+Android emulator before waiting for a device. If `emulator_device` is empty,
+visible runs use the already-connected physical device or emulator.
 
 When `launch_activity` is empty, Once resolves the launcher activity on the
 device with `cmd package resolve-activity --brief`, then starts the resolved

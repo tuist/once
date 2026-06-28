@@ -324,6 +324,7 @@ def _android_adb_tools(ctx, attrs):
     return {
         "sdk_root": sdk_root,
         "adb": adb,
+        "emulator": _android_attr(attrs, "emulator", "") or sdk_root + "/emulator/emulator",
         "identity": "\x00".join(["once.android.adb.v1", "sdk", sdk_root, "adb", adb, _android_adb_version(adb)]),
     }
 
@@ -372,6 +373,97 @@ esac
 """.format(
         application_id = _shell_quote(application_id),
         error_message = _shell_quote("unable to resolve launcher activity for " + application_id),
+    )
+
+def _android_visible_emulator_script(emulator, device):
+    command = "nohup {emulator} -avd {device} >/dev/null 2>&1 &".format(
+        emulator = _shell_quote(emulator),
+        device = _shell_quote(device),
+    )
+    apple_script = "do shell script " + _android_applescript_string(command)
+    return """set -eu
+screen_bin=""
+if [ -x /usr/bin/screen ]; then
+  screen_bin=/usr/bin/screen
+elif command -v screen >/dev/null 2>&1; then
+  screen_bin="$(command -v screen)"
+fi
+if [ -n "$screen_bin" ]; then
+  session="once-android-visible-$(date +%s)-$$"
+  if "$screen_bin" -dmS "$session" {emulator} -avd {device} >/dev/null 2>&1; then
+    exit 0
+  fi
+fi
+osascript_bin=""
+if [ -x /usr/bin/osascript ]; then
+  osascript_bin=/usr/bin/osascript
+elif command -v osascript >/dev/null 2>&1; then
+  osascript_bin="$(command -v osascript)"
+fi
+if [ -n "$osascript_bin" ]; then
+  if "$osascript_bin" -e {apple_script} >/dev/null 2>&1; then
+    exit 0
+  fi
+fi
+{command}
+""".format(
+        emulator = _shell_quote(emulator),
+        device = _shell_quote(device),
+        apple_script = _shell_quote(apple_script),
+        command = command,
+    )
+
+def _android_applescript_string(value):
+    return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+def _android_device_ready_script():
+    return """set -eu
+remaining=180
+while [ "$(getprop sys.boot_completed 2>/dev/null)" != "1" ]; do
+  if [ "$remaining" -le 0 ]; then
+    echo "timed out waiting for Android boot completion" >&2
+    exit 1
+  fi
+  remaining=$((remaining - 1))
+  sleep 1
+done
+remaining=60
+while true; do
+  service_state="$(service check package 2>/dev/null || true)"
+  case "$service_state" in
+    *found*) exit 0 ;;
+  esac
+  if [ "$remaining" -le 0 ]; then
+    echo "timed out waiting for Android package service" >&2
+    exit 1
+  fi
+  remaining=$((remaining - 1))
+  sleep 1
+done
+"""
+
+def _android_touch_marker_script(argv, marker):
+    return """set -eu
+{command}
+mkdir -p {parent}
+: > {marker}
+""".format(
+        command = _android_shell_words(argv),
+        parent = _shell_quote(_parent_dir(marker)),
+        marker = _shell_quote(marker),
+    )
+
+def _android_wait_for_ready_script(adb, marker):
+    return """set -eu
+{wait_command}
+{ready_command}
+mkdir -p {parent}
+: > {marker}
+""".format(
+        wait_command = _android_shell_words(adb + ["wait-for-device"]),
+        ready_command = _android_shell_words(adb + ["shell", _android_device_ready_script()]),
+        parent = _shell_quote(_parent_dir(marker)),
+        marker = _shell_quote(marker),
     )
 
 def _android_compile_jars(deps):
@@ -507,6 +599,7 @@ def _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_comp
         argv.extend(["-A", dir])
     link_tool_source = declare_output("aapt2_link_tool/OnceAndroidAapt2Link.java")
     link_tool_classes = declare_output("aapt2_link_tool/classes")
+    link_tool_hash = declare_output("aapt2_link_tool/classes.sha256")
     prepare_path(r_src_dir, kind = "remove", identifier = "android_resource_link_clean:" + label_id)
     prepare_path(r_src_dir, kind = "directory", identifier = "android_resource_link_prepare:" + label_id)
     prepare_path(link_tool_classes, kind = "remove", identifier = "android_resource_link_tool_clean:" + label_id)
@@ -520,9 +613,14 @@ def _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_comp
         toolchain_identity = tools["identity"] + "\x00aapt2_link_tool_javac.v1",
         identifier = "android_resource_link_tool_compile:" + label_id,
     )
+    write_tree_digest(
+        link_tool_classes,
+        link_tool_hash,
+        identifier = "android_resource_link_tool_digest:" + label_id,
+    )
     run_action(
         argv = [tools["java"], "-cp", link_tool_classes, "OnceAndroidAapt2Link", r_txt] + argv,
-        inputs = _unique([manifest, link_tool_classes] + compiled_zips + dep_compiled_zips + asset_files),
+        inputs = _unique([manifest, link_tool_hash] + compiled_zips + dep_compiled_zips + asset_files),
         outputs = [resource_apk, r_src_dir, r_txt],
         env = _android_env(tools),
         toolchain_identity = tools["identity"] + "\x00aapt2_link\x00static\x00" + str(static_lib),
@@ -617,6 +715,7 @@ def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash
     base_source_list = declare_output("java_sources.base.list")
     source_list_tool = declare_output("java_source_list_tool/OnceAndroidJavaSourceList.java")
     source_list_tool_classes = declare_output("java_source_list_tool/classes")
+    source_list_tool_hash = declare_output("java_source_list_tool/classes.sha256")
     classpath_entries = _unique([tools["android_jar"]] + dep_jars)
     classpath = _android_classpath_sep().join(classpath_entries)
     source_level = str(_android_attr(attrs, "java_language_level", "17"))
@@ -647,9 +746,14 @@ def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash
         toolchain_identity = tools["identity"] + "\x00java_source_list_tool_javac.v1",
         identifier = "android_java_source_list_tool_compile:" + ctx["label"]["id"],
     )
+    write_tree_digest(
+        source_list_tool_classes,
+        source_list_tool_hash,
+        identifier = "android_java_source_list_tool_digest:" + ctx["label"]["id"],
+    )
     run_action(
         argv = [tools["java"], "-cp", source_list_tool_classes, "OnceAndroidJavaSourceList", base_source_list, r_src_dir, source_list],
-        inputs = [source_list_tool_classes, base_source_list, r_src_hash],
+        inputs = [source_list_tool_hash, base_source_list, r_src_hash],
         outputs = [source_list],
         env = _android_env(tools),
         toolchain_identity = tools["identity"] + "\x00java_source_list.v1",
@@ -898,24 +1002,47 @@ def _android_run_app(ctx, attrs, tools):
     label_id = ctx["label"]["id"]
     application_id = _android_attr(attrs, "application_id", "")
     launch_activity = _android_attr(attrs, "launch_activity", "")
+    emulator_device = _android_attr(attrs, "emulator_device", "")
+    run_visible = (ctx.get("run") or {}).get("visible") or False
     component = _android_launch_component(application_id, launch_activity)
     apk = _android_built_apk(ctx)
     adb = _android_adb_argv(tools, attrs)
+    host_shell = _android_host_shell(label_id)
+    device_ready_marker = declare_output("run/device-ready")
+    installed_marker = declare_output("run/installed")
+    launched_marker = declare_output("run/launched")
+    if run_visible and emulator_device:
+        run_action(
+            argv = [host_shell, "-c", _android_visible_emulator_script(tools["emulator"], emulator_device)],
+            outputs = [],
+            env = _android_env(tools),
+            cacheable = False,
+            toolchain_identity = tools["identity"] + "\x00visible_emulator\x00" + tools["emulator"] + "\x00device\x00" + emulator_device,
+            identifier = "android_visible_emulator:" + label_id,
+        )
     run_actions = [
-        (adb + ["wait-for-device"], []),
-        (adb + ["install", "-r", "-d", apk], [apk]),
+        ([host_shell, "-c", _android_wait_for_ready_script(adb, device_ready_marker)], [], [device_ready_marker]),
+        ([host_shell, "-c", _android_touch_marker_script(adb + ["install", "-r", "-d", apk], installed_marker)], [apk, device_ready_marker], [installed_marker]),
     ]
     if component:
-        run_actions.append((adb + ["shell", "am", "start", "-n", component], []))
+        run_actions.append((
+            [host_shell, "-c", _android_touch_marker_script(adb + ["shell", "am", "start", "-n", component], launched_marker)],
+            [installed_marker],
+            [launched_marker],
+        ))
     else:
-        run_actions.append((adb + ["shell", _android_launcher_script(application_id)], []))
+        run_actions.append((
+            [host_shell, "-c", _android_touch_marker_script(adb + ["shell", _android_launcher_script(application_id)], launched_marker)],
+            [installed_marker],
+            [launched_marker],
+        ))
     index = 0
     for action in run_actions:
         index = index + 1
         run_action(
             argv = action[0],
             inputs = action[1],
-            outputs = [],
+            outputs = action[2],
             env = _android_env(tools),
             cacheable = False,
             toolchain_identity = tools["identity"] + "\x00run\x00" + str(index),
@@ -1017,7 +1144,7 @@ def _android_library_impl(ctx):
     }
 
 def _android_binary_impl(ctx):
-    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "application_id", "custom_package", "namespace", "javac", "jar", "java", "java_home", "kotlinc", "kotlin_home", "kotlin_stdlib", "aapt2", "d8", "apksigner", "zipalign", "debug_keystore", "adb", "adb_serial", "launch_activity"])
+    attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "application_id", "custom_package", "namespace", "javac", "jar", "java", "java_home", "kotlinc", "kotlin_home", "kotlin_stdlib", "aapt2", "d8", "apksigner", "zipalign", "debug_keystore", "adb", "adb_serial", "emulator", "emulator_device", "launch_activity"])
     _android_reject_unsupported_attrs(attrs, ctx["label"]["id"], ["enable_data_binding", "instruments", "manifest_values", "proguard_specs", "resource_configuration_filters", "densities", "nocompress_extensions", "startup_profiles", "native_target"])
     if ctx["capability"] == "run":
         tools = _android_adb_tools(ctx, attrs)
@@ -1170,6 +1297,8 @@ android_binary = target_kind(
         attr("debug_key_alias", "string", default = "\"androiddebugkey\"", docs = "Key alias for debug signing only.", configurable = False),
         attr("adb", "string", docs = "Override adb path for the run capability.", configurable = False),
         attr("adb_serial", "string", docs = "Optional adb device serial for the run capability.", configurable = False),
+        attr("emulator", "string", docs = "Override Android emulator path used by visible runs.", configurable = False),
+        attr("emulator_device", "string", docs = "Android Virtual Device name started by `once run --visible` before installing the app.", configurable = False),
         attr("launch_activity", "string", docs = "Optional Android activity component launched by once run. Defaults to the launcher intent for application_id.", configurable = False),
         attr("enable_data_binding", "bool", default = "false", docs = "Reserved for Android data binding support.", configurable = False),
         attr("instruments", "target", docs = "Reserved for instrumentation test support.", configurable = False),

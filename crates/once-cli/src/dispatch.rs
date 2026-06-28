@@ -64,6 +64,7 @@ async fn run_command(
         }
         Cmd::Run {
             target,
+            visible,
             runtime_rpc,
             runtime_rpc_socket,
             remote,
@@ -72,11 +73,14 @@ async fn run_command(
             Box::pin(dispatch_run(
                 workspace,
                 xdg,
-                output,
-                target,
-                runtime_rpc,
-                runtime_rpc_socket,
-                remote.then_some(compute),
+                RunDispatchArgs {
+                    output,
+                    target,
+                    visible,
+                    runtime_rpc,
+                    runtime_rpc_socket,
+                    remote: remote.then_some(compute),
+                },
             ))
             .await
         }
@@ -359,15 +363,24 @@ async fn run_cache_command(
     }
 }
 
-async fn dispatch_run(
-    workspace: &Path,
-    xdg: &Xdg,
+struct RunDispatchArgs {
     output: Output,
     target: Option<String>,
+    visible: bool,
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
     remote: Option<String>,
-) -> Result<ExitCode> {
+}
+
+async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Result<ExitCode> {
+    let RunDispatchArgs {
+        output,
+        target,
+        visible,
+        runtime_rpc,
+        runtime_rpc_socket,
+        remote,
+    } = args;
     let resolved_target = resolve_required_target(workspace, target.clone())?;
     if commands::graph::supports(workspace, &resolved_target, "run")? {
         if runtime_rpc || runtime_rpc_socket.is_some() {
@@ -383,8 +396,12 @@ async fn dispatch_run(
             &cache,
             output,
             &resolved_target,
+            commands::graph::GraphRunOptions { visible },
         ))
         .await;
+    }
+    if visible {
+        anyhow::bail!("--visible is only supported for graph run targets");
     }
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     run_target_command(

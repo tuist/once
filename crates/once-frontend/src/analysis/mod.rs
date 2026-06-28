@@ -19,7 +19,9 @@ use std::collections::BTreeMap;
 
 use crate::target::AttrValue;
 
-pub use engine::{analyze_target, target_kind_has_impl, AnalysisEngine, AnalysisResult};
+pub use engine::{
+    analyze_target, target_kind_has_impl, AnalysisEngine, AnalysisOptions, AnalysisResult,
+};
 pub use globals::globals_for_prelude;
 pub use store::{
     with_active_store, AnalysisStore, DeclaredAction, DeclaredActionOperation, DeclaredArgFile,

@@ -22,6 +22,7 @@ Resolves the target id against the workspace graph and executes its `run` capabi
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
+| `--visible` | (flag) | `false` | Ask graph target kinds to open a visible runtime interface when supported |
 | `--runtime-rpc` | (flag) | `false` | Serve a local JSON-RPC runtime control socket for this run |
 | `--runtime-rpc-socket` | `<RUNTIME_RPC_SOCKET>` |  | Runtime RPC socket path. Defaults to `.once/runtime/<session>/control.sock` |
 | `--remote` | (flag) | `false` | Run the target's action on a compute provider |
