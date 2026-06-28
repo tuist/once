@@ -146,15 +146,18 @@ impl AnalysisEngine {
         dep_providers: &[JsonValue],
         capability: &str,
     ) -> Result<AnalysisResult> {
-        analyze_target_with_host_cache(
-            &self.source_path,
-            &self.source,
-            self.host_cache.clone(),
+        let analysis = TargetAnalysis {
             target,
             workspace_root,
             dep_providers,
             capability,
-            self.options,
+            options: self.options,
+        };
+        analyze_target_with_host_cache(
+            &self.source_path,
+            &self.source,
+            self.host_cache.clone(),
+            &analysis,
         )
     }
 }
@@ -186,36 +189,31 @@ pub fn analyze_target(
     AnalysisEngine::new()?.analyze_target(target, workspace_root, dep_providers)
 }
 
+struct TargetAnalysis<'a> {
+    target: &'a GraphTarget,
+    workspace_root: &'a Path,
+    dep_providers: &'a [JsonValue],
+    capability: &'a str,
+    options: AnalysisOptions,
+}
+
 fn analyze_target_with_host_cache(
     source_path: &str,
     source: &str,
     host_cache: HostCache,
-    target: &GraphTarget,
-    workspace_root: &Path,
-    dep_providers: &[JsonValue],
-    capability: &str,
-    options: AnalysisOptions,
+    analysis: &TargetAnalysis<'_>,
 ) -> Result<AnalysisResult> {
-    let build_dir = format!(".once/out/{}", target.label.id);
-    let scratch_dir = format!(".once/tmp/analysis/{}", target.label.id);
+    let build_dir = format!(".once/out/{}", analysis.target.label.id);
+    let scratch_dir = format!(".once/tmp/analysis/{}", analysis.target.label.id);
     let store = AnalysisStore::with_host_cache(
-        workspace_root.to_path_buf(),
-        target.label.package.clone(),
+        analysis.workspace_root.to_path_buf(),
+        analysis.target.label.package.clone(),
         build_dir.clone(),
         host_cache,
     );
 
     let (store, result) = with_active_store(store, || {
-        analyze_in_starlark(
-            source_path,
-            source,
-            target,
-            dep_providers,
-            &build_dir,
-            &scratch_dir,
-            capability,
-            options,
-        )
+        analyze_in_starlark(source_path, source, analysis, &build_dir, &scratch_dir)
     });
     let provider = result?;
     Ok(AnalysisResult {
@@ -266,12 +264,9 @@ fn parse_target_kind_impls(path: &str, source: &str) -> Result<TargetKindImpls> 
 fn analyze_in_starlark(
     path: &str,
     source: &str,
-    target: &GraphTarget,
-    dep_providers: &[JsonValue],
+    analysis: &TargetAnalysis<'_>,
     build_dir: &str,
     scratch_dir: &str,
-    capability: &str,
-    options: AnalysisOptions,
 ) -> Result<JsonValue> {
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
@@ -281,22 +276,19 @@ fn analyze_in_starlark(
         eval.eval_module(ast, &globals)
             .map_err(|error| anyhow!("prelude eval failed: {error:?}"))?;
         let target_kinds = crate::modules::exported_target_kind_values(&module);
-        let impl_value = find_impl_for_kind(&target_kinds, &target.kind)?;
+        let impl_value = find_impl_for_kind(&target_kinds, &analysis.target.kind)?;
         let Some(impl_value) = impl_value else {
             return Ok(JsonValue::Null);
         };
-        let ctx = build_ctx(
-            &eval,
-            target,
-            dep_providers,
-            build_dir,
-            scratch_dir,
-            capability,
-            options,
-        );
+        let ctx = build_ctx(&eval, analysis, build_dir, scratch_dir);
         let provider = eval
             .eval_function(impl_value, &[ctx], &[])
-            .map_err(|error| anyhow!("impl eval failed for {}: {error:?}", target.label.id))?;
+            .map_err(|error| {
+                anyhow!(
+                    "impl eval failed for {}: {error:?}",
+                    analysis.target.label.id
+                )
+            })?;
         Ok(value_to_json(provider))
     })
 }
@@ -325,34 +317,33 @@ fn find_impl_for_kind<'v>(
 
 fn build_ctx<'v>(
     eval: &Evaluator<'v, '_, '_>,
-    target: &GraphTarget,
-    dep_providers: &[JsonValue],
+    analysis: &TargetAnalysis<'_>,
     build_dir: &str,
     scratch_dir: &str,
-    capability: &str,
-    options: AnalysisOptions,
 ) -> Value<'v> {
     let heap = eval.heap();
     let label = heap.alloc(AllocDict([
-        ("package", heap.alloc(target.label.package.clone())),
-        ("name", heap.alloc(target.label.name.clone())),
-        ("id", heap.alloc(target.label.id.clone())),
+        ("package", heap.alloc(analysis.target.label.package.clone())),
+        ("name", heap.alloc(analysis.target.label.name.clone())),
+        ("id", heap.alloc(analysis.target.label.id.clone())),
     ]));
-    let attr_pairs: Vec<(String, Value<'v>)> = target
+    let attr_pairs: Vec<(String, Value<'v>)> = analysis
+        .target
         .attrs
         .iter()
         .map(|(key, value)| (key.clone(), attr_value_to_starlark(eval, value)))
         .collect();
     let attr = heap.alloc(AllocDict(attr_pairs));
-    let srcs_value = heap.alloc(target.srcs.clone());
-    let dep_values: Vec<Value<'v>> = dep_providers
+    let srcs_value = heap.alloc(analysis.target.srcs.clone());
+    let dep_values: Vec<Value<'v>> = analysis
+        .dep_providers
         .iter()
         .map(|provider| json_to_value(eval, provider))
         .collect();
     let deps = heap.alloc(dep_values);
     let run = heap.alloc(AllocDict([(
         "visible",
-        Value::new_bool(options.run_visible),
+        Value::new_bool(analysis.options.run_visible),
     )]));
     heap.alloc(AllocDict([
         ("label", label),
@@ -361,7 +352,7 @@ fn build_ctx<'v>(
         ("deps", deps),
         ("build_dir", heap.alloc(build_dir.to_string())),
         ("scratch_dir", heap.alloc(scratch_dir.to_string())),
-        ("capability", heap.alloc(capability.to_string())),
+        ("capability", heap.alloc(analysis.capability.to_string())),
         ("run", run),
     ]))
 }

@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use once_frontend::analysis::{
-    globals_for_prelude, target_kind_has_impl, with_active_store, AnalysisStore,
+    globals_for_prelude, target_kind_has_impl, with_active_store, AnalysisStore, DeclaredAction,
     DeclaredActionOperation, DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
 use once_frontend::{built_in_target_kind_schema, graph_from_targets, Target};
@@ -19,6 +19,14 @@ fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
         package.to_string(),
         format!(".once/out/{package}"),
     )
+}
+
+fn action_by_identifier<'a>(store: &'a AnalysisStore, identifier: &str) -> &'a DeclaredAction {
+    store
+        .actions
+        .iter()
+        .find(|action| action.identifier.as_deref() == Some(identifier))
+        .unwrap_or_else(|| panic!("missing action `{identifier}`"))
 }
 
 fn apple_prelude_source() -> String {
@@ -393,37 +401,14 @@ result = repr("ok")
             )
         })
     }));
-    let compile_tool = store
-        .actions
-        .iter()
-        .find(|action| {
-            action
-                .identifier
-                .as_deref()
-                .is_some_and(|id| id == "android_resource_link_tool_compile:apps/hello/Hello")
-        })
-        .expect("link tool compile action");
+    let compile_tool = action_by_identifier(
+        &store,
+        "android_resource_link_tool_compile:apps/hello/Hello",
+    );
     assert_eq!(compile_tool.argv[0], "/jdk/bin/javac");
-    let link = store
-        .actions
-        .iter()
-        .find(|action| {
-            action
-                .identifier
-                .as_deref()
-                .is_some_and(|id| id == "android_resource_link:apps/hello/Hello")
-        })
-        .expect("resource link action");
-    let link_tool_digest = store
-        .actions
-        .iter()
-        .find(|action| {
-            action
-                .identifier
-                .as_deref()
-                .is_some_and(|id| id == "android_resource_link_tool_digest:apps/hello/Hello")
-        })
-        .expect("link tool digest action");
+    let link = action_by_identifier(&store, "android_resource_link:apps/hello/Hello");
+    let link_tool_digest =
+        action_by_identifier(&store, "android_resource_link_tool_digest:apps/hello/Hello");
     assert_eq!(
         link_tool_digest.operation,
         Some(DeclaredActionOperation::WriteTreeDigest {
