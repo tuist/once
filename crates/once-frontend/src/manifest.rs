@@ -130,22 +130,14 @@ impl TargetToml {
             message: source.to_string(),
         })?;
         let deps = deps_from_toml(display_name, &self.name, package, self.deps.as_ref())?;
-        let typed_attrs = self
-            .attrs
-            .into_iter()
-            .map(|(key, value)| {
-                let string_value = toml_value_to_attr_string(&value);
-                (key, string_value, toml_value_to_attr_value(value))
-            })
-            .collect::<Vec<_>>();
-        let attrs = typed_attrs
-            .iter()
-            .map(|(key, value, _)| (key.clone(), value.clone()))
-            .collect();
-        let typed_attrs = typed_attrs
-            .into_iter()
-            .map(|(key, _, value)| (key, value))
-            .collect();
+        let mut attrs = BTreeMap::new();
+        let mut typed_attrs = BTreeMap::new();
+        for (key, value) in self.attrs {
+            let string_value = toml_value_to_attr_string(&value);
+            let attr_value = toml_value_to_attr_value(value);
+            attrs.insert(key.clone(), string_value);
+            typed_attrs.insert(key, attr_value);
+        }
         Ok(Target {
             package: package.to_string(),
             kind: self.kind,

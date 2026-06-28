@@ -176,7 +176,14 @@ impl Runner {
         // Seed: every node with no deps is immediately runnable.
         for (i, node) in plan.nodes.iter().enumerate() {
             if indeg[i] == 0 {
-                spawn(&mut tasks, self.clone(), tx.clone(), i, node.clone());
+                spawn(
+                    &mut tasks,
+                    self.clone(),
+                    tx.clone(),
+                    i,
+                    node.label.clone(),
+                    node.action.clone(),
+                );
                 in_flight += 1;
             }
         }
@@ -219,7 +226,8 @@ impl Runner {
                                         self.clone(),
                                         tx.clone(),
                                         d,
-                                        plan.nodes[d].clone(),
+                                        plan.nodes[d].label.clone(),
+                                        plan.nodes[d].action.clone(),
                                     );
                                     in_flight += 1;
                                 }
@@ -264,11 +272,11 @@ fn spawn(
     runner: Runner,
     tx: mpsc::UnboundedSender<Done>,
     index: usize,
-    node: PlanNode,
+    label: String,
+    action: Action,
 ) {
     tasks.spawn(async move {
-        let label = node.label.clone();
-        let result = runner.run(&node.action).await;
+        let result = runner.run(&action).await;
         // Send first; dropping the sender after closes the channel
         // when this is the last live task.
         let _ = tx.send(Done {

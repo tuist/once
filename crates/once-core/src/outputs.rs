@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -23,12 +23,10 @@ pub(crate) async fn restore(
     let prefetched = prefetch_output_blobs(result, cache, staging.path()).await?;
     for output in prefetched {
         let PrefetchedOutput { rel, blob_path, .. } = output;
-        let bytes = tokio::fs::read(&blob_path)
-            .await
-            .map_err(|source| Error::RestoreOutput {
-                path: rel.clone(),
-                source,
-            })?;
+        let bytes = match tokio::fs::read(&blob_path).await {
+            Ok(bytes) => bytes,
+            Err(source) => return Err(Error::RestoreOutput { path: rel, source }),
+        };
         let abs = workspace_root.join(&rel);
         if is_directory_blob(&bytes) {
             restore_directory_blob(&rel, &abs, &bytes)?;
@@ -50,22 +48,23 @@ async fn prefetch_output_blobs(
     cache: &CacheProvider,
     staging_dir: &Path,
 ) -> Result<Vec<PrefetchedOutput>> {
-    let outputs = result
+    let mut outputs = result
         .outputs
         .iter()
         .enumerate()
         .map(|(index, (rel, digest))| (index, rel.clone(), *digest))
-        .collect::<Vec<_>>();
+        .collect::<VecDeque<_>>();
+    let output_count = outputs.len();
 
     let mut tasks = JoinSet::new();
-    let mut next = 0;
-    while next < outputs.len() && next < RESTORE_PREFETCH_CONCURRENCY {
-        let (index, rel, digest) = outputs[next].clone();
+    while tasks.len() < RESTORE_PREFETCH_CONCURRENCY {
+        let Some((index, rel, digest)) = outputs.pop_front() else {
+            break;
+        };
         spawn_prefetch(&mut tasks, cache.clone(), staging_dir, index, rel, digest);
-        next += 1;
     }
 
-    let mut blobs: Vec<Option<PrefetchedOutput>> = (0..outputs.len()).map(|_| None).collect();
+    let mut blobs: Vec<Option<PrefetchedOutput>> = (0..output_count).map(|_| None).collect();
     while let Some(joined) = tasks.join_next().await {
         let output = joined.map_err(|source| Error::RestoreOutput {
             path: "cached output prefetch".to_string(),
@@ -73,10 +72,8 @@ async fn prefetch_output_blobs(
         })??;
         let index = output.index;
         blobs[index] = Some(output);
-        if next < outputs.len() {
-            let (index, rel, digest) = outputs[next].clone();
+        if let Some((index, rel, digest)) = outputs.pop_front() {
             spawn_prefetch(&mut tasks, cache.clone(), staging_dir, index, rel, digest);
-            next += 1;
         }
     }
     blobs
@@ -102,12 +99,9 @@ fn spawn_prefetch(
     let blob_path = staging_dir.join(format!("{index}.blob"));
     tasks.spawn(async move {
         let bytes = cache.get_blob(&digest).await?;
-        tokio::fs::write(&blob_path, bytes)
-            .await
-            .map_err(|source| Error::RestoreOutput {
-                path: rel.clone(),
-                source,
-            })?;
+        if let Err(source) = tokio::fs::write(&blob_path, bytes).await {
+            return Err(Error::RestoreOutput { path: rel, source });
+        }
         Ok(PrefetchedOutput {
             index,
             rel,
@@ -235,38 +229,40 @@ pub(crate) async fn capture(
                 });
             }
         };
-        let path = rel.as_str().to_string();
         let bytes = if metadata.is_dir() {
-            read_output_blocking(path.clone(), {
+            read_output_blocking(rel.as_str(), {
                 let abs = abs.clone();
                 move || capture_directory_blob(&abs, symlink_mode)
             })
             .await?
         } else {
-            read_output_blocking(path.clone(), {
+            read_output_blocking(rel.as_str(), {
                 let abs = abs.clone();
                 move || capture_file_blob(&abs)
             })
             .await?
         };
         let digest = cache.put_blob(&bytes).await?;
-        captured.insert(path, digest);
+        captured.insert(rel.as_str().to_string(), digest);
     }
     Ok(captured)
 }
 
 async fn read_output_blocking(
-    path: String,
+    path: &str,
     read: impl FnOnce() -> std::io::Result<Vec<u8>> + Send + 'static,
 ) -> Result<Vec<u8>> {
-    let path_for_join = path.clone();
-    tokio::task::spawn_blocking(read)
-        .await
-        .map_err(|source| Error::ReadOutput {
-            path: path_for_join,
+    match tokio::task::spawn_blocking(read).await {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(source)) => Err(Error::ReadOutput {
+            path: path.to_string(),
+            source,
+        }),
+        Err(source) => Err(Error::ReadOutput {
+            path: path.to_string(),
             source: std::io::Error::other(source.to_string()),
-        })?
-        .map_err(|source| Error::ReadOutput { path, source })
+        }),
+    }
 }
 
 #[cfg(test)]
