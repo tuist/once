@@ -930,7 +930,6 @@ demo_kind = target_kind(
         .unwrap();
         run_async_result({
             let store = EvidenceStore::open_workspace(tmp.path());
-            let record = record.clone();
             async move { store.append(&record).await }
         })
         .unwrap();

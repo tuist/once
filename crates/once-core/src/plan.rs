@@ -197,7 +197,7 @@ impl Runner {
         // Seed: every node with no deps is immediately runnable.
         for (i, node) in plan.nodes.iter().enumerate() {
             if indeg[i] == 0 {
-                spawn(&mut tasks, self.clone(), tx.clone(), i, node.clone());
+                spawn_node(&mut tasks, self.clone(), tx.clone(), i, node);
                 in_flight += 1;
             }
         }
@@ -236,12 +236,12 @@ impl Runner {
                             for &d in &dependents[done.index] {
                                 indeg[d] -= 1;
                                 if indeg[d] == 0 {
-                                    spawn(
+                                    spawn_node(
                                         &mut tasks,
                                         self.clone(),
                                         tx.clone(),
                                         d,
-                                        plan.nodes[d].clone(),
+                                        &plan.nodes[d],
                                     );
                                     in_flight += 1;
                                 }
@@ -284,24 +284,43 @@ impl Runner {
     }
 }
 
+fn spawn_node(
+    tasks: &mut JoinSet<()>,
+    runner: Runner,
+    tx: mpsc::UnboundedSender<Done>,
+    index: usize,
+    node: &PlanNode,
+) {
+    spawn(
+        tasks,
+        runner,
+        tx,
+        index,
+        node.label.clone(),
+        node.action.clone(),
+        node.deps.len(),
+    );
+}
+
 fn spawn(
     tasks: &mut JoinSet<()>,
     runner: Runner,
     tx: mpsc::UnboundedSender<Done>,
     index: usize,
-    node: PlanNode,
+    label: String,
+    action: Action,
+    dependency_count: usize,
 ) {
-    let action_digest = node.action.digest();
+    let action_digest = action.digest();
     debug!(
         node_index = index,
-        node_label = %node.label,
+        node_label = %label,
         action_digest = %action_digest,
-        dependency_count = node.deps.len(),
+        dependency_count,
         "spawning plan node"
     );
     tasks.spawn(async move {
-        let label = node.label.clone();
-        let result = Box::pin(runner.run(&node.action)).await;
+        let result = Box::pin(runner.run(&action)).await;
         // Send first; dropping the sender after closes the channel
         // when this is the last live task.
         let _ = tx.send(Done {
