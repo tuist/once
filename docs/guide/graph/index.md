@@ -75,7 +75,7 @@ Today the built-in ecosystems cover these target kind sets:
 The shared-code target kinds also expose the
 `native-mobile-shared-code-e2e` schema example. It wires an Android app to
 Swift and Rust native libraries, and an Apple app to a Kotlin/Native
-framework plus a Rust static library.
+framework plus the same Rust mobile library target.
 
 See [Ecosystems](/guide/graph/ecosystems) for the adoption model and
 the tradeoffs that come with letting Once own part of an ecosystem's

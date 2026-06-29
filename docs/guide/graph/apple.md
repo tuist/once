@@ -40,9 +40,9 @@ references resolve from the package that owns the manifest.
 Apple targets can also depend on native providers from other ecosystems.
 [`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework)
 emits an Apple framework provider that application and test targets can
-link and embed. [`rust_library`](/reference/prelude/rust_library) with
-`crate_type = "staticlib"` emits archive fields that Apple link targets
-consume through the same `deps` edge.
+link and embed. [`rust_mobile_library`](/reference/prelude/rust_mobile_library)
+emits archive fields that Apple link targets consume through the same
+`deps` edge.
 
 ## Commands
 

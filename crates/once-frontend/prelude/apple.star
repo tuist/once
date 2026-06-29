@@ -442,6 +442,12 @@ def _validate_apple_native_deps(deps, consumer_label):
         label = dep.get("label_id") or "dependency"
         fail(consumer_label + ": Rust library dep `" + label + "` has crate_type `" + crate_type + "` and does not provide an Apple static library; set crate_type = \"staticlib\" for Apple consumers")
 
+def _apple_native_deps(ctx):
+    out = []
+    for dep in ctx["deps"]:
+        out.append(_apple_materialize_native_dep(ctx, dep))
+    return out
+
 # A select-shape attribute value is a dict with exactly one `select`
 # key whose value is itself a dict from configuration tokens to
 # branches:
@@ -863,7 +869,7 @@ def _apple_library_impl(ctx):
     swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
     archive = declare_output(module_name + ".a")
 
-    deps = ctx["deps"]
+    deps = _apple_native_deps(ctx)
     _validate_apple_native_deps(deps, ctx["label"]["id"])
     # Split deps into compile-visible (exported) and link-only.
     # exported_deps entries come straight from `[target.attrs]` and may
@@ -1292,7 +1298,7 @@ def _swift_macro_impl(ctx):
     plugin_dylib = declare_output("lib" + module_name + ".dylib")
     plugin_swiftmodule = declare_output(module_name + ".swiftmodule")
 
-    deps = ctx["deps"]
+    deps = _apple_native_deps(ctx)
     _validate_apple_native_deps(deps, ctx["label"]["id"])
 
     # Aggregate dep archives, swiftmodule search paths, frameworks, and
@@ -1512,7 +1518,7 @@ def _apple_framework_impl(ctx):
     modulemap = declare_output(framework_dir + "/Modules/module.modulemap")
     info_plist = declare_output(framework_dir + "/Info.plist")
 
-    deps = ctx["deps"]
+    deps = _apple_native_deps(ctx)
     _validate_apple_native_deps(deps, ctx["label"]["id"])
     (
         compile_swiftmodule_dirs,
@@ -1771,7 +1777,7 @@ def _apple_application_impl(ctx):
     executable = declare_output(app_dir + "/" + product_name)
     info_plist = declare_output(app_dir + "/Info.plist")
 
-    deps = ctx["deps"]
+    deps = _apple_native_deps(ctx)
     _validate_apple_native_deps(deps, ctx["label"]["id"])
     (
         compile_swiftmodule_dirs,
@@ -2025,7 +2031,7 @@ def _apple_test_bundle_impl(ctx):
         "test_info": _apple_test_info(ctx, runner_type, command_argv, action_env, labels, results, log, native_results),
     }
 
-    deps = ctx["deps"]
+    deps = _apple_native_deps(ctx)
     _validate_apple_native_deps(deps, ctx["label"]["id"])
     (
         compile_swiftmodule_dirs,

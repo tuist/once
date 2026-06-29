@@ -20,32 +20,22 @@ product_name = "SharedKotlin"
 module_name = "SharedKotlin"
 
 [[target]]
-name = "SharedRustAndroid"
-kind = "rust_library"
+name = "SharedRust"
+kind = "rust_mobile_library"
 srcs = ["shared/rust/src/**/*.rs"]
 
 [target.attrs]
 crate_name = "shared_rust"
 crate_root = "shared/rust/src/lib.rs"
-crate_type = "cdylib"
-target = "aarch64-linux-android"
-
-[[target]]
-name = "SharedRustApple"
-kind = "rust_library"
-srcs = ["shared/rust/src/**/*.rs"]
-
-[target.attrs]
-crate_name = "shared_rust"
-crate_root = "shared/rust/src/lib.rs"
-crate_type = "staticlib"
-target = "aarch64-apple-ios-sim"
+apple_target = "aarch64-apple-ios-sim"
+android_target = "aarch64-linux-android"
+android_abi = "arm64-v8a"
 
 [[target]]
 name = "AndroidApp"
 kind = "android_binary"
 srcs = ["android/src/**/*.kt"]
-deps = ["./SharedSwiftAndroid", "./SharedRustAndroid"]
+deps = ["./SharedSwiftAndroid", "./SharedRust"]
 
 [target.attrs]
 application_id = "dev.once.shared"
@@ -60,7 +50,7 @@ version_name = "1.0"
 name = "AppleApp"
 kind = "apple_application"
 srcs = ["apple/Sources/**/*.swift"]
-deps = ["./SharedKotlinApple", "./SharedRustApple"]
+deps = ["./SharedKotlinApple", "./SharedRust"]
 
 [target.attrs]
 platform = "ios"

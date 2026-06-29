@@ -48,6 +48,9 @@ metadata at the keyboard.
 - [`rust_library`](/reference/prelude/rust_library): Rust rlib consumed
   by downstream Rust targets, or native static/shared libraries consumed
   by Apple and Android targets
+- [`rust_mobile_library`](/reference/prelude/rust_mobile_library): Rust
+  native library materialized by Apple and Android consumers under one
+  target label
 - [`rust_binary`](/reference/prelude/rust_binary): Rust executable built
   from a main crate and Rust deps
 - [`rust_crate`](/reference/prelude/rust_crate): resolved third-party

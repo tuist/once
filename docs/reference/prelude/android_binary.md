@@ -79,8 +79,8 @@ The target emits `android_application` and `android_apk`.
 Native library deps are copied into the unsigned APK under
 `lib/<abi>/<library>`. Providers such as
 [`swift_android_library`](/reference/prelude/swift_android_library) and
-`rust_library` with `crate_type = "cdylib"` emit the required
-`android_native_libraries` records.
+[`rust_mobile_library`](/reference/prelude/rust_mobile_library) emit the
+required `android_native_libraries` records.
 
 ## Signing
 

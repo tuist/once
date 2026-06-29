@@ -29,6 +29,19 @@ fn action_by_identifier<'a>(store: &'a AnalysisStore, identifier: &str) -> &'a D
         .unwrap_or_else(|| panic!("missing action `{identifier}`"))
 }
 
+#[cfg(unix)]
+fn android_ndk_prebuilt_tag() -> &'static str {
+    if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        "darwin-arm64"
+    } else if cfg!(target_os = "macos") && cfg!(target_arch = "x86_64") {
+        "darwin-x86_64"
+    } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
+        "linux-arm64"
+    } else {
+        "linux-x86_64"
+    }
+}
+
 fn apple_prelude_source() -> String {
     format!(
         "{}\n{}",
@@ -165,6 +178,25 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
     assert!(rust.providers.iter().any(|p| p == "android_native_library"));
     assert!(rust.attrs.iter().any(|attr| attr.name == "android_abi"));
     assert!(rust.attrs.iter().any(|attr| attr.name == "native_linkopts"));
+
+    let rust_mobile =
+        built_in_target_kind_schema("rust_mobile_library").expect("rust_mobile_library schema");
+    assert!(target_kind_has_impl("rust_mobile_library").unwrap());
+    assert!(rust_mobile.providers.iter().any(|p| p == "apple_linkable"));
+    assert!(rust_mobile
+        .providers
+        .iter()
+        .any(|p| p == "android_native_library"));
+    assert!(rust_mobile.providers.iter().any(|p| p == "native_linkable"));
+    assert!(!rust_mobile.providers.iter().any(|p| p == "rust_crate"));
+    assert!(rust_mobile
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "apple_target" && attr.required));
+    assert!(rust_mobile
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "android_target" && attr.required));
 }
 
 #[test]
@@ -696,14 +728,16 @@ fn prelude_android_rejects_rust_rlib_native_dep() {
     let err = eval_prelude_function_in(
         prelude,
         "_android_native_libraries",
-        r#"([
+        r#"({
+            "label": {"id": "AndroidApp"}
+        }, [
             {
                 "target_kind": "rust_library",
                 "label_id": "SharedRust",
                 "crate_type": "rlib",
                 "rlib": ".once/out/libshared.rlib",
             },
-        ], "AndroidApp")"#,
+        ])"#,
     )
     .unwrap_err();
 
@@ -758,8 +792,10 @@ fn prelude_rust_native_outputs_emit_mobile_provider_fields() {
         std::fs::create_dir_all(&bin_dir).unwrap();
         std::fs::write(bin_dir.join("clang"), "").unwrap();
     }
-    let fake_linker =
-        fake_ndk.join("toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android23-clang");
+    let fake_linker = fake_ndk
+        .join("toolchains/llvm/prebuilt")
+        .join(android_ndk_prebuilt_tag())
+        .join("bin/aarch64-linux-android23-clang");
     let fake_linker_arg = format!("linker={}", fake_linker.to_string_lossy());
     let fake_ndk = fake_ndk.to_string_lossy();
     let fake_linker = fake_linker.to_string_lossy();
@@ -838,6 +874,225 @@ result = repr([
         .iter()
         .any(|arg| arg == &fake_linker_arg));
     assert!(store.actions[1].argv.iter().any(|arg| arg == "--target"));
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_rust_mobile_library_android_consumer_declares_only_android_variant() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("shared/rust/src");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("lib.rs"), "pub fn greeting() {}\n").unwrap();
+    let fake_ndk = workspace.path().join("android-ndk");
+    for tag in [
+        "darwin-arm64",
+        "darwin-x86_64",
+        "linux-arm64",
+        "linux-x86_64",
+    ] {
+        let bin_dir = fake_ndk
+            .join("toolchains/llvm/prebuilt")
+            .join(tag)
+            .join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join("clang"), "").unwrap();
+    }
+    let fake_linker = fake_ndk
+        .join("toolchains/llvm/prebuilt")
+        .join(android_ndk_prebuilt_tag())
+        .join("bin/aarch64-linux-android24-clang");
+    let fake_linker_arg = format!("linker={}", fake_linker.to_string_lossy());
+    let fake_ndk = fake_ndk.to_string_lossy();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "rustc":
+        return "/toolchains/rust/bin/rustc"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
+        return "/toolchains/rust\n"
+    if len(argv) >= 2 and argv[1] == "--version":
+        return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    fail("unexpected host_command: " + str(argv))
+
+mobile_ctx = {{
+    "label": {{
+        "package": "",
+        "name": "SharedRust",
+        "id": "SharedRust",
+    }},
+    "attr": {{
+        "crate_name": "shared_rust",
+        "crate_root": "shared/rust/src/lib.rs",
+        "apple_target": "aarch64-apple-ios-sim",
+        "android_target": "aarch64-linux-android",
+        "android_abi": "arm64-v8a",
+        "android_api": 24,
+        "android_ndk": "{fake_ndk}",
+        "native_linkopts": ["-lc++"],
+    }},
+    "deps": [],
+    "srcs": ["shared/rust/src/**/*.rs"],
+    "build_dir": ".once/out/SharedRust",
+}}
+provider = _rust_mobile_library_impl(mobile_ctx)
+android_ctx = {{
+    "label": {{
+        "package": "",
+        "name": "AndroidApp",
+        "id": "AndroidApp",
+    }},
+    "attr": {{}},
+    "deps": [provider],
+    "srcs": [],
+    "build_dir": ".once/out/AndroidApp",
+    "scratch_dir": ".once/tmp/analysis/AndroidApp",
+}}
+android_libraries = _android_native_libraries(android_ctx, android_ctx["deps"])
+result = repr([
+    provider["label_id"],
+    provider["target_kind"],
+    provider["transitive_sources"],
+    android_libraries,
+])
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        String::new(),
+        ".once/out/AndroidApp".to_string(),
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("SharedRust"), "{out}");
+    assert!(out.contains("rust_mobile_library"), "{out}");
+    assert!(
+        out.contains("rust-mobile/SharedRust/android/libshared_rust.so"),
+        "{out}"
+    );
+    assert!(out.contains("arm64-v8a"), "{out}");
+    let android = action_by_identifier(&store, "SharedRust:rustc:android");
+    assert_eq!(store.actions.len(), 1);
+    assert!(android
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("rust-mobile/SharedRust/android/libshared_rust.so")));
+    assert!(android.argv.iter().any(|arg| arg == &fake_linker_arg));
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_rust_mobile_library_apple_consumer_declares_only_apple_variant() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("shared/rust/src");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("lib.rs"), "pub fn greeting() {}\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "rustc":
+        return "/toolchains/rust/bin/rustc"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
+        return "/toolchains/rust\n"
+    if len(argv) >= 2 and argv[1] == "--version":
+        return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    fail("unexpected host_command: " + str(argv))
+
+mobile_ctx = {{
+    "label": {{
+        "package": "",
+        "name": "SharedRust",
+        "id": "SharedRust",
+    }},
+    "attr": {{
+        "crate_name": "shared_rust",
+        "crate_root": "shared/rust/src/lib.rs",
+        "apple_target": "aarch64-apple-ios-sim",
+        "android_target": "aarch64-linux-android",
+    }},
+    "deps": [],
+    "srcs": ["shared/rust/src/**/*.rs"],
+    "build_dir": ".once/out/SharedRust",
+}}
+provider = _rust_mobile_library_impl(mobile_ctx)
+apple_ctx = {{
+    "label": {{
+        "package": "",
+        "name": "AppleApp",
+        "id": "AppleApp",
+    }},
+    "attr": {{}},
+    "deps": [provider],
+    "srcs": [],
+    "build_dir": ".once/out/AppleApp",
+    "scratch_dir": ".once/tmp/analysis/AppleApp",
+}}
+apple_provider = _apple_native_deps(apple_ctx)[0]
+result = repr([
+    apple_provider["archive"],
+    apple_provider["transitive_archives"],
+])
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        String::new(),
+        ".once/out/AppleApp".to_string(),
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(
+        out.contains("rust-mobile/SharedRust/apple/libshared_rust.a"),
+        "{out}"
+    );
+    let apple = action_by_identifier(&store, "SharedRust:rustc:apple");
+    assert_eq!(store.actions.len(), 1);
+    assert!(apple
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("rust-mobile/SharedRust/apple/libshared_rust.a")));
+}
+
+#[test]
+fn prelude_rust_mobile_library_rejects_rust_deps() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "shared/rust",
+        "name": "SharedRust",
+        "id": "shared/rust/SharedRust",
+    }},
+    "attr": {{
+        "apple_target": "aarch64-apple-ios-sim",
+        "android_target": "aarch64-linux-android",
+    }},
+    "deps": [{{
+        "target_kind": "rust_crate",
+        "label_id": "third_party/dep",
+    }}],
+    "srcs": ["src/**/*.rs"],
+    "build_dir": ".once/out/shared/rust/SharedRust",
+}}
+result = repr(_rust_mobile_library_impl(ctx))
+"#
+    );
+
+    let err = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(err.contains("does not support Rust deps yet"), "{err}");
 }
 
 #[cfg(unix)]
