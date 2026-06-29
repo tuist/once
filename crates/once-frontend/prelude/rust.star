@@ -20,6 +20,12 @@ def _rust_build_dir(ctx):
 def _rust_scratch_dir(ctx):
     return ctx.get("scratch_dir") or (".once/tmp/analysis/" + ctx["label"]["id"])
 
+def _rust_action_identifier(ctx, name):
+    suffix = ctx.get("_action_suffix") or ""
+    if suffix:
+        return ctx["label"]["id"] + ":" + name + ":" + suffix
+    return ctx["label"]["id"] + ":" + name
+
 def _crate_name_from_label(ctx):
     return ctx["label"]["name"].replace("-", "_").replace(".", "_")
 
@@ -173,15 +179,15 @@ def _rust_android_ndk_tool_dir(ctx):
         directory = ndk + "/toolchains/llvm/prebuilt/" + tag + "/bin"
         if host_file_exists(directory + "/" + _host_exe("clang")):
             return directory
-    fail(ctx["label"]["id"] + ": Android NDK under `" + ndk + "` has no usable LLVM prebuilt for this host")
+    fail(ctx["label"]["id"] + ": Android Native Development Kit under `" + ndk + "` has no usable LLVM prebuilt for this host")
 
 def _rust_android_linker(ctx, target):
     prefix = _rust_android_tool_prefix(target)
     if not prefix:
-        fail(ctx["label"]["id"] + ": set `linker`; Once could not infer an Android NDK linker for target `" + target + "`")
+        fail(ctx["label"]["id"] + ": set `linker`; Once could not infer an Android Native Development Kit linker for target `" + target + "`")
     tool_dir = _rust_android_ndk_tool_dir(ctx)
     if not tool_dir:
-        fail(ctx["label"]["id"] + ": set `android_ndk`, ANDROID_NDK_HOME, or `linker` so Once can find the Android NDK linker")
+        fail(ctx["label"]["id"] + ": set `android_ndk`, ANDROID_NDK_HOME, or `linker` so Once can find the Android Native Development Kit linker")
     api = str(_rust_attr(ctx, "android_api", 23))
     return tool_dir + "/" + prefix + api + "-clang"
 
@@ -698,8 +704,8 @@ def _rust_stage_rlibs_for_search(ctx, deps, tag):
     if not artifacts:
         return ([], [])
     search_dir = declare_output(_rust_declared_output(ctx, tag + "-rlib-search"))
-    prepare_path(search_dir, kind = "remove", identifier = ctx["label"]["id"] + ":" + tag + "-rlib-search-clean")
-    prepare_path(search_dir, kind = "directory", identifier = ctx["label"]["id"] + ":" + tag + "-rlib-search-prepare")
+    prepare_path(search_dir, kind = "remove", identifier = _rust_action_identifier(ctx, tag + "-rlib-search-clean"))
+    prepare_path(search_dir, kind = "directory", identifier = _rust_action_identifier(ctx, tag + "-rlib-search-prepare"))
     staged = []
     seen = {}
     for artifact in artifacts:
@@ -712,7 +718,7 @@ def _rust_stage_rlibs_for_search(ctx, deps, tag):
             artifact,
             output,
             inputs = [artifact],
-            identifier = ctx["label"]["id"] + ":" + tag + "-rlib-search:" + name,
+            identifier = _rust_action_identifier(ctx, tag + "-rlib-search:" + name),
         )
         staged.append(output)
     return (["-L", "dependency=" + search_dir], staged)
@@ -761,14 +767,14 @@ def _rust_search_path_args(ctx, deps, tag):
 
 def _rust_stage_proc_macro_for_search(ctx, output):
     search_dir = declare_output(_rust_declared_output(ctx, "proc-macro-search"))
-    prepare_path(search_dir, kind = "remove", identifier = ctx["label"]["id"] + ":proc-macro-search-clean")
-    prepare_path(search_dir, kind = "directory", identifier = ctx["label"]["id"] + ":proc-macro-search-prepare")
+    prepare_path(search_dir, kind = "remove", identifier = _rust_action_identifier(ctx, "proc-macro-search-clean"))
+    prepare_path(search_dir, kind = "directory", identifier = _rust_action_identifier(ctx, "proc-macro-search-prepare"))
     staged = search_dir + "/" + _basename(output)
     copy_path(
         output,
         staged,
         inputs = [output],
-        identifier = ctx["label"]["id"] + ":proc-macro-search:" + _basename(output),
+        identifier = _rust_action_identifier(ctx, "proc-macro-search:" + _basename(output)),
     )
     return staged
 
@@ -974,12 +980,12 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
         outputs = [runner],
         env = build_script_compile_env,
         toolchain_identity = identity + linker_identity + "\x00build-script",
-        identifier = ctx["label"]["id"] + ":build-script-rustc",
+        identifier = _rust_action_identifier(ctx, "build-script-rustc"),
     )
     run_env = _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path)
     metadata_exports, metadata_inputs = _rust_dep_metadata_exports(metadata_deps)
-    prepare_path(out_dir, kind = "directory", identifier = ctx["label"]["id"] + ":build-script-out-dir")
-    prepare_path(out_dir + "/.once-build-script-status", kind = "remove", identifier = ctx["label"]["id"] + ":build-script-status-clean")
+    prepare_path(out_dir, kind = "directory", identifier = _rust_action_identifier(ctx, "build-script-out-dir"))
+    prepare_path(out_dir + "/.once-build-script-status", kind = "remove", identifier = _rust_action_identifier(ctx, "build-script-status-clean"))
     run_script = _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports)
     run_action(
         argv = [host_which("sh"), "-c", run_script],
@@ -987,7 +993,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
         outputs = [out_dir, stdout],
         env = run_env,
         toolchain_identity = identity + "\x00build-script-run",
-        identifier = ctx["label"]["id"] + ":build-script",
+        identifier = _rust_action_identifier(ctx, "build-script"),
     )
     compile_env = _rust_compile_action_env(ctx, target, host_triple)
     compile_env["OUT_DIR"] = _workspace_absolute(out_dir)
@@ -1255,7 +1261,7 @@ def _rust_android_abi(ctx, target, crate_type):
         return ""
     abi = _rust_android_abi_for_target(target)
     if "android" in target and not abi:
-        fail(ctx["label"]["id"] + ": set `android_abi`; Once could not infer an Android ABI from target `" + target + "`")
+        fail(ctx["label"]["id"] + ": set `android_abi`; Once could not infer an Android Application Binary Interface from target `" + target + "`")
     return abi
 
 def _rust_native_library_key(library):
@@ -1402,7 +1408,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         outputs = [output],
         env = compile_env,
         toolchain_identity = identity + linker_identity,
-        identifier = ctx["label"]["id"] + ":rustc",
+        identifier = _rust_action_identifier(ctx, "rustc"),
     )
     own_proc_macro_search = []
     own_proc_macro_extern = []
@@ -1451,6 +1457,53 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
 def _rust_library_impl(ctx):
     crate_type = _rust_attr(ctx, "crate_type", "rlib")
     return _rust_compile(ctx, crate_type, "src/lib.rs", _rust_output_name(ctx, crate_type))
+
+def _rust_mobile_variant_ctx(ctx, target_attr, variant):
+    target = _rust_attr(ctx, target_attr, "")
+    if not target:
+        fail(ctx["label"]["id"] + ": `" + target_attr + "` is required")
+    attrs = {}
+    for key, value in ctx["attr"].items():
+        attrs[key] = value
+    attrs["target"] = target
+    attrs["_output_prefix"] = variant + "/"
+    variant_ctx = {
+        "label": ctx["label"],
+        "attr": attrs,
+        "srcs": ctx["srcs"],
+        "deps": ctx["deps"],
+        "build_dir": ctx.get("build_dir") or _rust_build_dir(ctx),
+        "scratch_dir": ctx.get("scratch_dir") or _rust_scratch_dir(ctx),
+        "_action_suffix": variant,
+    }
+    for key in ["build_deps", "capability", "run"]:
+        value = ctx.get(key)
+        if value != None:
+            variant_ctx[key] = value
+    return variant_ctx
+
+def _rust_mobile_library_impl(ctx):
+    apple_ctx = _rust_mobile_variant_ctx(ctx, "apple_target", "apple")
+    android_ctx = _rust_mobile_variant_ctx(ctx, "android_target", "android")
+    apple = _rust_compile(apple_ctx, "staticlib", "src/lib.rs", _rust_output_name(apple_ctx, "staticlib"))
+    android = _rust_compile(android_ctx, "cdylib", "src/lib.rs", _rust_output_name(android_ctx, "cdylib"))
+    return {
+        "label_id": ctx["label"]["id"],
+        "target_kind": "rust_mobile_library",
+        "crate_name": _rust_crate_name(ctx),
+        "root": _rust_crate_root(ctx, "src/lib.rs"),
+        "apple_target": _rust_target(apple_ctx),
+        "android_target": _rust_target(android_ctx),
+        "archive": apple.get("archive") or "",
+        "staticlib": apple.get("staticlib"),
+        "transitive_archives": apple.get("transitive_archives") or [],
+        "transitive_linkopts": apple.get("transitive_linkopts") or [],
+        "android_abi": android.get("android_abi") or "",
+        "dylib": android.get("dylib"),
+        "android_native_libraries": android.get("android_native_libraries") or [],
+        "transitive_android_native_libraries": android.get("transitive_android_native_libraries") or [],
+        "transitive_sources": _unique((apple.get("transitive_sources") or []) + (android.get("transitive_sources") or [])),
+    }
 
 def _rust_binary_impl(ctx):
     return _rust_compile(ctx, "bin", "src/main.rs", _rust_output_name(ctx, "bin"))
@@ -2226,12 +2279,34 @@ _RUST_COMMON_ATTRS = [
     attr("rustc_env", "map<string, string>", default = "{}", docs = "Bazel-compatible rustc environment variables.", configurable = False),
     attr("rustc_flags", "list<string>", default = "[]", docs = "Additional rustc flags appended after Once-managed flags.", configurable = False),
     attr("cap_lints", "string", docs = "Optional rustc lint cap passed as `--cap-lints`; generated Cargo dependencies use `allow` to match Cargo dependency builds.", configurable = False),
-    attr("linker", "string", docs = "Optional linker path passed as `-C linker=...`. Defaults to `cc` for host Unix binary-like targets and to the Android NDK clang wrapper for Android targets when ANDROID_NDK_HOME or android_ndk is set.", configurable = False),
+    attr("linker", "string", docs = "Optional linker path passed as `-C linker=...`. Defaults to `cc` for host Unix binary-like targets and to the Android Native Development Kit clang wrapper for Android targets when ANDROID_NDK_HOME or android_ndk is set.", configurable = False),
     attr("linker_flags", "list<string>", default = "[]", docs = "Additional linker flags lowered to `-C link-arg=...`.", configurable = False),
     attr("native_linkopts", "list<string>", default = "[]", docs = "Linker flags propagated to native consumers such as Apple app or framework targets.", configurable = False),
-    attr("android_abi", "string", docs = "Android ABI directory for cdylib or dylib outputs, such as `arm64-v8a`; inferred from common Android target triples when omitted.", configurable = False),
-    attr("android_api", "int", default = "23", docs = "Android API level used to select the NDK clang wrapper for Android targets.", configurable = False),
-    attr("android_ndk", "string", docs = "Android NDK root used to find clang wrapper linkers. Defaults to ANDROID_NDK_HOME.", configurable = False),
+    attr("android_abi", "string", docs = "Android Application Binary Interface directory (https://developer.android.com/ndk/guides/abis) for cdylib or dylib outputs, such as `arm64-v8a`; inferred from common Android target triples when omitted.", configurable = False),
+    attr("android_api", "int", default = "23", docs = "Android platform level used to select the Android Native Development Kit clang wrapper for Android targets.", configurable = False),
+    attr("android_ndk", "string", docs = "Android Native Development Kit root used to find clang wrapper linkers. Defaults to ANDROID_NDK_HOME.", configurable = False),
+    attr("crate_aliases", "map<string, string>", default = "{}", docs = "Map dependency label, package name, or crate name to the local extern crate name.", configurable = False),
+    attr("cargo_package", "string", docs = "Cargo package name used to select direct external deps from a cargo_dependencies dependency set. Defaults to CARGO_PKG_NAME when present.", configurable = False),
+    attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
+]
+
+_RUST_MOBILE_ATTRS = [
+    attr("crate_name", "string", docs = "Rust crate name passed to rustc. Defaults to the target name with `-` and `.` rewritten as `_`.", configurable = False),
+    attr("crate_root", "string", docs = "Package-relative path to lib.rs. Defaults to src/lib.rs.", configurable = False),
+    attr("edition", "string", default = "2021", docs = "Rust edition passed to rustc.", configurable = False),
+    attr("features", "list<string>", default = "[]", docs = "Cargo feature names lowered to rustc `--cfg=feature=...` flags."),
+    attr("crate_features", "list<string>", default = "[]", docs = "Bazel-compatible alias for `features`."),
+    attr("apple_target", "string", required = True, docs = "Rust target triple passed to the Apple static library compile.", configurable = False),
+    attr("android_target", "string", required = True, docs = "Rust target triple passed to the Android shared library compile.", configurable = False),
+    attr("env", "map<string, string>", default = "{}", docs = "Environment variables for rustc, matching Buck2's `env` attribute.", configurable = False),
+    attr("rustc_env", "map<string, string>", default = "{}", docs = "Bazel-compatible rustc environment variables.", configurable = False),
+    attr("rustc_flags", "list<string>", default = "[]", docs = "Additional rustc flags appended after Once-managed flags.", configurable = False),
+    attr("cap_lints", "string", docs = "Optional rustc lint cap passed as `--cap-lints`; generated Cargo dependencies use `allow` to match Cargo dependency builds.", configurable = False),
+    attr("linker_flags", "list<string>", default = "[]", docs = "Additional linker flags lowered to `-C link-arg=...`.", configurable = False),
+    attr("native_linkopts", "list<string>", default = "[]", docs = "Linker flags propagated to native consumers such as Apple app or framework targets.", configurable = False),
+    attr("android_abi", "string", docs = "Android Application Binary Interface directory (https://developer.android.com/ndk/guides/abis) for the Android shared library output, such as `arm64-v8a`; inferred from common Android target triples when omitted.", configurable = False),
+    attr("android_api", "int", default = "23", docs = "Android platform level used to select the Android Native Development Kit clang wrapper for Android targets.", configurable = False),
+    attr("android_ndk", "string", docs = "Android Native Development Kit root used to find clang wrapper linkers. Defaults to ANDROID_NDK_HOME.", configurable = False),
     attr("crate_aliases", "map<string, string>", default = "{}", docs = "Map dependency label, package name, or crate name to the local extern crate name.", configurable = False),
     attr("cargo_package", "string", docs = "Cargo package name used to select direct external deps from a cargo_dependencies dependency set. Defaults to CARGO_PKG_NAME when present.", configurable = False),
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
@@ -2276,10 +2351,21 @@ rust_library = target_kind(
             name = "Minimal Rust library",
             use_when = "Start here for a first-party Rust rlib target with no external dependencies.",
         ),
+    ],
+    impl = _rust_library_impl,
+)
+
+rust_mobile_library = target_kind(
+    docs = "Rust library compiled twice for mobile consumers: an Apple static library and an Android shared library.",
+    attrs = _RUST_MOBILE_ATTRS,
+    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
+    providers = ["native_linkable", "apple_linkable", "android_native_library"],
+    capabilities = [capability("build", ["library"])],
+    examples = [
         example(
             "rust-native-mobile-library",
             name = "Rust native mobile library",
-            use_when = "Use this when Rust shared code should build as a static library for Apple and a shared library for Android.",
+            use_when = "Use this when Rust shared code should build as one target that emits native libraries for Apple and Android.",
         ),
         example(
             "native-mobile-shared-code-e2e",
@@ -2287,7 +2373,7 @@ rust_library = target_kind(
             use_when = "Use this when one Rust codebase should be packaged into Android and linked into Apple apps alongside Swift and Kotlin shared code.",
         ),
     ],
-    impl = _rust_library_impl,
+    impl = _rust_mobile_library_impl,
 )
 
 rust_binary = target_kind(

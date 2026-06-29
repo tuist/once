@@ -145,7 +145,7 @@ fn native_mobile_shared_code_example_wires_cross_platform_apps() {
     for kind in [
         "swift_android_library",
         "kotlin_apple_framework",
-        "rust_library",
+        "rust_mobile_library",
         "android_binary",
         "apple_application",
     ] {
@@ -180,30 +180,26 @@ fn native_mobile_shared_code_example_wires_cross_platform_apps() {
     assert_eq!(android_app.kind, "android_binary");
     assert_eq!(
         android_app.deps,
-        vec![
-            "SharedSwiftAndroid".to_string(),
-            "SharedRustAndroid".to_string()
-        ]
+        vec!["SharedSwiftAndroid".to_string(), "SharedRust".to_string()]
     );
 
     let apple_app = by_id.get("AppleApp").expect("AppleApp target");
     assert_eq!(apple_app.kind, "apple_application");
     assert_eq!(
         apple_app.deps,
-        vec![
-            "SharedKotlinApple".to_string(),
-            "SharedRustApple".to_string()
-        ]
+        vec!["SharedKotlinApple".to_string(), "SharedRust".to_string()]
     );
 
+    assert_eq!(
+        by_id
+            .keys()
+            .filter(|id| id.starts_with("SharedRust"))
+            .count(),
+        1
+    );
     assert!(by_id
         .get("SharedSwiftAndroid")
         .expect("SharedSwiftAndroid target")
-        .providers
-        .contains(&"android_native_library".to_string()));
-    assert!(by_id
-        .get("SharedRustAndroid")
-        .expect("SharedRustAndroid target")
         .providers
         .contains(&"android_native_library".to_string()));
     assert!(by_id
@@ -211,9 +207,12 @@ fn native_mobile_shared_code_example_wires_cross_platform_apps() {
         .expect("SharedKotlinApple target")
         .providers
         .contains(&"apple_framework".to_string()));
-    assert!(by_id
-        .get("SharedRustApple")
-        .expect("SharedRustApple target")
+    let shared_rust = by_id.get("SharedRust").expect("SharedRust target");
+    assert_eq!(shared_rust.kind, "rust_mobile_library");
+    assert!(shared_rust
+        .providers
+        .contains(&"android_native_library".to_string()));
+    assert!(shared_rust
         .providers
         .contains(&"apple_linkable".to_string()));
 }
@@ -345,14 +344,13 @@ fn native_mobile_android_dep_providers() -> [serde_json::Value; 2] {
             ],
         }),
         json!({
-            "label_id": "SharedRustAndroid",
-            "target_kind": "rust_library",
-            "crate_type": "cdylib",
+            "label_id": "SharedRust",
+            "target_kind": "rust_mobile_library",
             "android_native_libraries": [
-                {"abi": "arm64-v8a", "path": ".once/out/SharedRustAndroid/libshared_rust.so"}
+                {"abi": "arm64-v8a", "path": ".once/out/SharedRust/android/libshared_rust.so"}
             ],
             "transitive_android_native_libraries": [
-                {"abi": "arm64-v8a", "path": ".once/out/SharedRustAndroid/libshared_rust.so"}
+                {"abi": "arm64-v8a", "path": ".once/out/SharedRust/android/libshared_rust.so"}
             ],
         }),
     ]

@@ -1,20 +1,10 @@
 [[target]]
-name = "SharedRustApple"
-kind = "rust_library"
+name = "SharedRust"
+kind = "rust_mobile_library"
 srcs = ["src/**/*.rs"]
 
 [target.attrs]
 crate_name = "shared_rust"
-crate_type = "staticlib"
-target = "aarch64-apple-ios"
-
-[[target]]
-name = "SharedRustAndroid"
-kind = "rust_library"
-srcs = ["src/**/*.rs"]
-
-[target.attrs]
-crate_name = "shared_rust"
-crate_type = "cdylib"
-target = "aarch64-linux-android"
+apple_target = "aarch64-apple-ios"
+android_target = "aarch64-linux-android"
 android_abi = "arm64-v8a"

@@ -75,8 +75,8 @@ manifest = "AndroidManifest.xml"
 Android binaries can also depend on targets that emit
 `android_native_library`, such as
 [`swift_android_library`](/reference/prelude/swift_android_library) or
-[`rust_library`](/reference/prelude/rust_library) with
-`crate_type = "cdylib"`. The APK packages each native provider under
+[`rust_mobile_library`](/reference/prelude/rust_mobile_library). The
+Android application package stages each native provider under
 `lib/<abi>/`.
 
 ## Resources
