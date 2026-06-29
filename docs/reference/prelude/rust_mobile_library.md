@@ -1,18 +1,22 @@
 # `rust_mobile_library`
 
-Rust library compiled for Apple and Android native consumers.
+Rust library materialized by Apple and Android native consumers.
 
 ## Description
 
-Compiles one first-party Rust library target twice. The Apple compile emits a
-`staticlib`; the Android compile emits a `cdylib`. Both compiles share the same
-sources, crate metadata, features, Rust flags, and Rust dependencies, but they
-use separate target triples, output directories, scratch files, and action
-identifiers.
+Describes one first-party Rust library target that Apple and Android consumers
+can materialize for their platform. Apple consumers declare a `staticlib`
+compile, and Android consumers declare a `cdylib` compile. Each consumer only
+declares the variant it needs, so Android-only builds do not require the Apple
+Rust target and Apple-only builds do not require the Android linker.
 
 The target emits native provider fields for Apple and Android app targets. It
 does not emit `rust_crate`, because there is no single rlib output for
 downstream Rust compilation.
+
+Rust dependencies are not supported on this target kind yet. Use explicit
+platform-specific [`rust_library`](/reference/prelude/rust_library) targets
+when the shared Rust code depends on other Rust crates.
 
 ## Attributes
 
@@ -34,15 +38,11 @@ downstream Rust compilation.
 | `android_abi` | string | no | inferred | Android [Application Binary Interface](https://developer.android.com/ndk/guides/abis) directory for the Android shared library output, such as `arm64-v8a` |
 | `android_api` | int | no | `23` | Android platform level used to select the Android Native Development Kit clang wrapper |
 | `android_ndk` | string | no | `ANDROID_NDK_HOME` | Android Native Development Kit root used to find clang wrapper linkers |
-| `crate_aliases` | map&lt;string, string&gt; | no | `{}` | Map dependency label, package name, or crate name to the local extern crate name |
-| `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set. Defaults to `CARGO_PKG_NAME` when present |
-| `build_script` | string | no | empty | Package-relative Cargo build script path run before each compile; common `cargo:rustc-*` stdout directives are consumed, dependency `cargo:rustc-link-search` outputs are replayed downstream, and direct dependency `links` metadata is consumed |
+| `build_script` | string | no | empty | Package-relative Cargo build script path run before each platform compile |
 
 ## Dep Edges
 
-| Edge | Accepts | Description |
-| --- | --- | --- |
-| `deps` | `rust_crate`, `rust_proc_macro`, `rust_dependency_set` | Rust crate dependencies consumed through `--extern` |
+This target kind currently declares no dependency edges.
 
 ## Providers
 
@@ -54,28 +54,25 @@ The target emits `native_linkable`, `apple_linkable`, and
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `label_id` | string | Original target label id |
-| `archive` | string | Apple-linkable static library path |
-| `staticlib` | string | Apple static library output |
-| `transitive_archives` | list&lt;string&gt; | Archives consumed by Apple link targets |
-| `transitive_linkopts` | list&lt;string&gt; | Native linker flags propagated to Apple link targets |
-| `android_abi` | string | Android [Application Binary Interface](https://developer.android.com/ndk/guides/abis) for the shared library output |
-| `dylib` | string | Android shared library output |
-| `android_native_libraries` | list&lt;record&gt; | Direct Android native libraries with `abi` and `path` fields |
-| `transitive_android_native_libraries` | list&lt;record&gt; | Direct and dependency Android native libraries packaged into Android applications |
-| `transitive_sources` | list&lt;string&gt; | Rust sources from this target and Rust deps |
+| `transitive_sources` | list&lt;string&gt; | Rust sources from this target |
+
+Apple consumers materialize `archive`, `staticlib`, `transitive_archives`,
+and `transitive_linkopts` while collecting their link inputs. Android consumers
+materialize `android_abi`, `dylib`, `android_native_libraries`, and
+`transitive_android_native_libraries` while collecting native libraries.
 
 ## Capabilities
 
 | Capability | Output groups |
 | --- | --- |
-| `build` | `library` |
+| `build` | none |
 
 ## Outputs
 
 | Output | Location |
 | --- | --- |
-| Apple static library | `.once/out/<target>/apple/lib<crate_name>.a` or `.lib` |
-| Android shared library | `.once/out/<target>/android/lib<crate_name>.so` |
+| Apple static library | `.once/out/<consumer>/rust-mobile/<target>/apple/lib<crate_name>.a` or `.lib` |
+| Android shared library | `.once/out/<consumer>/rust-mobile/<target>/android/lib<crate_name>.so` |
 
 ## Example
 

@@ -71,6 +71,12 @@ def _package_relative(ctx, path):
         return package + "/" + path
     return path
 
+def _apple_materialize_native_dep(ctx, dep):
+    return dep
+
+def _android_materialize_native_dep(ctx, dep):
+    return dep
+
 def _parent_dir(path):
     idx = -1
     for i in range(len(path)):

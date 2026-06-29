@@ -99,18 +99,25 @@ def _rust_crate_root(ctx, default_root):
     return _package_relative(ctx, _rust_attr(ctx, "crate_root", default_root))
 
 def _rust_sources(ctx, crate_root):
-    srcs = _filter_by_extensions(glob(ctx["srcs"]), [".rs"])
+    resolved = ctx["attr"].get("_resolved_sources")
+    srcs = _filter_by_extensions(resolved if resolved != None else glob(ctx["srcs"]), [".rs"])
     if crate_root not in srcs:
         srcs.append(crate_root)
     return _unique(srcs)
 
 def _rust_source_inputs(ctx):
+    resolved = ctx["attr"].get("_resolved_source_inputs")
+    if resolved != None:
+        return resolved
     return glob(ctx["srcs"])
 
 def _rust_extra_inputs(ctx):
     return _rust_attr(ctx, "_extra_inputs", [])
 
 def _rust_build_script_inputs(ctx):
+    resolved = ctx["attr"].get("_resolved_build_script_inputs")
+    if resolved != None:
+        return resolved
     return glob(_rust_attr(ctx, "_build_script_inputs", []))
 
 def _rust_target(ctx):
@@ -1458,20 +1465,26 @@ def _rust_library_impl(ctx):
     crate_type = _rust_attr(ctx, "crate_type", "rlib")
     return _rust_compile(ctx, crate_type, "src/lib.rs", _rust_output_name(ctx, crate_type))
 
-def _rust_mobile_variant_ctx(ctx, target_attr, variant):
-    target = _rust_attr(ctx, target_attr, "")
+def _rust_mobile_output_prefix(provider, variant):
+    return "rust-mobile/" + (provider.get("label_id") or "dependency") + "/" + variant + "/"
+
+def _rust_mobile_variant_ctx(ctx, provider, target_attr, variant):
+    target = provider.get(target_attr) or ""
     if not target:
-        fail(ctx["label"]["id"] + ": `" + target_attr + "` is required")
+        fail((provider.get("label_id") or "rust_mobile_library") + ": `" + target_attr + "` is required")
     attrs = {}
-    for key, value in ctx["attr"].items():
+    for key, value in (provider.get("attrs") or {}).items():
         attrs[key] = value
     attrs["target"] = target
-    attrs["_output_prefix"] = variant + "/"
+    attrs["_output_prefix"] = _rust_mobile_output_prefix(provider, variant)
+    attrs["_resolved_sources"] = provider.get("resolved_sources") or []
+    attrs["_resolved_source_inputs"] = provider.get("source_inputs") or []
+    attrs["_resolved_build_script_inputs"] = provider.get("build_script_inputs") or []
     variant_ctx = {
-        "label": ctx["label"],
+        "label": provider["label"],
         "attr": attrs,
-        "srcs": ctx["srcs"],
-        "deps": ctx["deps"],
+        "srcs": provider.get("srcs") or [],
+        "deps": [],
         "build_dir": ctx.get("build_dir") or _rust_build_dir(ctx),
         "scratch_dir": ctx.get("scratch_dir") or _rust_scratch_dir(ctx),
         "_action_suffix": variant,
@@ -1483,27 +1496,67 @@ def _rust_mobile_variant_ctx(ctx, target_attr, variant):
     return variant_ctx
 
 def _rust_mobile_library_impl(ctx):
-    apple_ctx = _rust_mobile_variant_ctx(ctx, "apple_target", "apple")
-    android_ctx = _rust_mobile_variant_ctx(ctx, "android_target", "android")
-    apple = _rust_compile(apple_ctx, "staticlib", "src/lib.rs", _rust_output_name(apple_ctx, "staticlib"))
-    android = _rust_compile(android_ctx, "cdylib", "src/lib.rs", _rust_output_name(android_ctx, "cdylib"))
+    if len(ctx["deps"]) > 0:
+        fail(ctx["label"]["id"] + ": rust_mobile_library does not support Rust deps yet; use platform-specific rust_library targets when the mobile library has Rust dependencies")
+    crate_root = _rust_crate_root(ctx, "src/lib.rs")
+    resolved_sources = _rust_sources(ctx, crate_root)
     return {
+        "label": ctx["label"],
         "label_id": ctx["label"]["id"],
         "target_kind": "rust_mobile_library",
+        "attrs": ctx["attr"],
+        "srcs": ctx["srcs"],
         "crate_name": _rust_crate_name(ctx),
-        "root": _rust_crate_root(ctx, "src/lib.rs"),
-        "apple_target": _rust_target(apple_ctx),
-        "android_target": _rust_target(android_ctx),
+        "root": crate_root,
+        "apple_target": _rust_attr(ctx, "apple_target", ""),
+        "android_target": _rust_attr(ctx, "android_target", ""),
+        "resolved_sources": resolved_sources,
+        "source_inputs": _rust_source_inputs(ctx),
+        "build_script_inputs": _rust_build_script_inputs(ctx),
+        "transitive_sources": resolved_sources,
+    }
+
+def _rust_mobile_apple_provider(ctx, provider):
+    if provider.get("target_kind") != "rust_mobile_library":
+        return provider
+    apple_ctx = _rust_mobile_variant_ctx(ctx, provider, "apple_target", "apple")
+    apple = _rust_compile(apple_ctx, "staticlib", "src/lib.rs", _rust_output_name(apple_ctx, "staticlib"))
+    return {
+        "label_id": provider.get("label_id") or "",
+        "target_kind": "rust_mobile_library",
+        "crate_name": provider.get("crate_name") or "",
+        "root": provider.get("root") or "",
+        "apple_target": provider.get("apple_target") or "",
         "archive": apple.get("archive") or "",
         "staticlib": apple.get("staticlib"),
         "transitive_archives": apple.get("transitive_archives") or [],
         "transitive_linkopts": apple.get("transitive_linkopts") or [],
+        "transitive_sources": apple.get("transitive_sources") or [],
+    }
+
+def _rust_mobile_android_provider(ctx, provider):
+    if provider.get("target_kind") != "rust_mobile_library":
+        return provider
+    android_ctx = _rust_mobile_variant_ctx(ctx, provider, "android_target", "android")
+    android = _rust_compile(android_ctx, "cdylib", "src/lib.rs", _rust_output_name(android_ctx, "cdylib"))
+    return {
+        "label_id": provider.get("label_id") or "",
+        "target_kind": "rust_mobile_library",
+        "crate_name": provider.get("crate_name") or "",
+        "root": provider.get("root") or "",
+        "android_target": provider.get("android_target") or "",
         "android_abi": android.get("android_abi") or "",
         "dylib": android.get("dylib"),
         "android_native_libraries": android.get("android_native_libraries") or [],
         "transitive_android_native_libraries": android.get("transitive_android_native_libraries") or [],
-        "transitive_sources": _unique((apple.get("transitive_sources") or []) + (android.get("transitive_sources") or [])),
+        "transitive_sources": android.get("transitive_sources") or [],
     }
+
+def _apple_materialize_native_dep(ctx, dep):
+    return _rust_mobile_apple_provider(ctx, dep)
+
+def _android_materialize_native_dep(ctx, dep):
+    return _rust_mobile_android_provider(ctx, dep)
 
 def _rust_binary_impl(ctx):
     return _rust_compile(ctx, "bin", "src/main.rs", _rust_output_name(ctx, "bin"))
@@ -2307,9 +2360,7 @@ _RUST_MOBILE_ATTRS = [
     attr("android_abi", "string", docs = "Android Application Binary Interface directory (https://developer.android.com/ndk/guides/abis) for the Android shared library output, such as `arm64-v8a`; inferred from common Android target triples when omitted.", configurable = False),
     attr("android_api", "int", default = "23", docs = "Android platform level used to select the Android Native Development Kit clang wrapper for Android targets.", configurable = False),
     attr("android_ndk", "string", docs = "Android Native Development Kit root used to find clang wrapper linkers. Defaults to ANDROID_NDK_HOME.", configurable = False),
-    attr("crate_aliases", "map<string, string>", default = "{}", docs = "Map dependency label, package name, or crate name to the local extern crate name.", configurable = False),
-    attr("cargo_package", "string", docs = "Cargo package name used to select direct external deps from a cargo_dependencies dependency set. Defaults to CARGO_PKG_NAME when present.", configurable = False),
-    attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
+    attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before each platform rustc invocation and consumes common cargo:rustc-* stdout directives.", configurable = False),
 ]
 
 cargo_dependencies = target_kind(
@@ -2356,16 +2407,15 @@ rust_library = target_kind(
 )
 
 rust_mobile_library = target_kind(
-    docs = "Rust library compiled twice for mobile consumers: an Apple static library and an Android shared library.",
+    docs = "Rust library materialized by Apple and Android consumers as native mobile libraries.",
     attrs = _RUST_MOBILE_ATTRS,
-    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
     providers = ["native_linkable", "apple_linkable", "android_native_library"],
-    capabilities = [capability("build", ["library"])],
+    capabilities = [capability("build", [])],
     examples = [
         example(
             "rust-native-mobile-library",
             name = "Rust native mobile library",
-            use_when = "Use this when Rust shared code should build as one target that emits native libraries for Apple and Android.",
+            use_when = "Use this when Rust shared code should be one target that Apple and Android consumers materialize as native libraries.",
         ),
         example(
             "native-mobile-shared-code-e2e",

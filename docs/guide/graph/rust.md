@@ -3,8 +3,8 @@
 Once builds Rust libraries and binaries from declarative `once.toml`
 manifests. [`rust_library`](/reference/prelude/rust_library) emits an
 rlib provider that downstream Rust targets consume through `--extern`.
-[`rust_mobile_library`](/reference/prelude/rust_mobile_library) emits
-native Apple and Android libraries from one Rust target.
+[`rust_mobile_library`](/reference/prelude/rust_mobile_library) lets Apple
+and Android consumers materialize native libraries from one Rust target.
 [`rust_binary`](/reference/prelude/rust_binary) compiles an executable
 from a main crate and its Rust deps. [`rust_crate`](/reference/prelude/rust_crate)
 is the lowered target shape for resolved third-party Cargo packages.
@@ -49,8 +49,8 @@ Rust targets accept Bazel and Buck2 style controls such as
 `rustc_flags`, `linker`, `linker_flags`, `crate_aliases`, `cargo_package`,
 and `target` for `rustc --target`. Final artifact libraries can set
 `crate_type` on `rust_library` to produce `staticlib`, `cdylib`, or
-`dylib` outputs. Use `rust_mobile_library` when one target should emit
-both the Apple static library and Android shared library variants.
+`dylib` outputs. Use `rust_mobile_library` when one target should expose
+consumer-owned Apple static library and Android shared library variants.
 `features` and `crate_features` may also use `select` with the same
 host or target tokens.
 Targets may also set `build_script` to compile and run a Cargo-style
@@ -72,9 +72,10 @@ crates follow Cargo's lint-capping behavior.
 Rust shared code can feed Apple and Android targets through native provider
 fields. Use `rust_mobile_library` when the same Rust sources should feed
 both Apple consumers such as `apple_application` and Android consumers such
-as `android_binary`. The rule builds an Apple `staticlib` and an Android
-`cdylib` with separate target triples, outputs, scratch files, and action
-identifiers.
+as `android_binary`. Each consumer declares only the variant it needs: Apple
+consumers materialize a `staticlib`, and Android consumers materialize a
+`cdylib`. The platform compiles use separate target triples, outputs, scratch
+files, and action identifiers.
 
 Android dynamic libraries also need an Android
 [Application Binary Interface](https://developer.android.com/ndk/guides/abis)
@@ -83,6 +84,10 @@ from `android_abi`. When `ANDROID_NDK_HOME` or `android_ndk` is available,
 Once uses the Android Native Development Kit clang wrapper as the default
 linker for Android targets. Set `android_api` to choose the Android platform
 level.
+
+`rust_mobile_library` does not support Rust dependencies yet. Use explicit
+platform-specific `rust_library` targets when the shared Rust code depends on
+other Rust crates.
 
 ```toml
 [[target]]

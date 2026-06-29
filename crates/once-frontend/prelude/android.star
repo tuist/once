@@ -528,12 +528,13 @@ def _android_validate_native_library_dep(dep, consumer_label):
     label = dep.get("label_id") or "dependency"
     fail(consumer_label + ": Rust library dep `" + label + "` has crate_type `" + crate_type + "` and does not provide an Android shared library; set crate_type = \"cdylib\" or \"dylib\" for Android consumers")
 
-def _android_native_libraries(deps, consumer_label):
+def _android_native_libraries(ctx, deps):
     libraries = []
     for dep in deps:
-        _android_validate_native_library_dep(dep, consumer_label)
-        libraries.extend(dep.get("transitive_android_native_libraries") or [])
-        libraries.extend(dep.get("android_native_libraries") or [])
+        native_dep = _android_materialize_native_dep(ctx, dep)
+        _android_validate_native_library_dep(native_dep, ctx["label"]["id"])
+        libraries.extend(native_dep.get("transitive_android_native_libraries") or [])
+        libraries.extend(native_dep.get("android_native_libraries") or [])
     return _android_unique_native_libraries(libraries)
 
 def _android_native_library_paths(libraries):
@@ -1114,7 +1115,7 @@ def _android_library_impl(ctx):
     dep_resource_apks = _android_resource_apks(ctx["deps"])
     dep_asset_roots = _android_asset_roots_from_deps(ctx["deps"])
     dep_asset_files = _android_asset_files_from_deps(ctx["deps"])
-    dep_native_libraries = _android_native_libraries(ctx["deps"], ctx["label"]["id"])
+    dep_native_libraries = _android_native_libraries(ctx, ctx["deps"])
     compiled_zips = _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
     resource_apk, r_src_dir, r_src_hash, r_txt = _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, True, [], [])
     classes_dir, classes_hash = _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars)
@@ -1166,7 +1167,7 @@ def _android_binary_impl(ctx):
     runtime_jars = _android_runtime_jars(ctx["deps"])
     dep_asset_roots = _android_asset_roots_from_deps(ctx["deps"])
     dep_asset_files = _android_asset_files_from_deps(ctx["deps"])
-    native_libraries = _android_native_libraries(ctx["deps"], ctx["label"]["id"])
+    native_libraries = _android_native_libraries(ctx, ctx["deps"])
     compiled_zips = _android_compile_resources(ctx, attrs, tools, resource_files, resource_dirs)
     resource_apk, r_src_dir, r_src_hash, _ = _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_compiled_zips, False, _unique(asset_roots + dep_asset_roots), _unique(asset_files + dep_asset_files))
     classes_dir, classes_hash = _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash, dep_jars)

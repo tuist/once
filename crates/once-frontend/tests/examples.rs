@@ -237,6 +237,14 @@ fn native_mobile_shared_code_example_declares_android_native_packaging_actions()
             .any(|source| source.ends_with("libshared_rust.so")),
         "{staged_sources:?}"
     );
+    assert!(result
+        .actions
+        .iter()
+        .any(|action| action.identifier.as_deref() == Some("SharedRust:rustc:android")));
+    assert!(!result
+        .actions
+        .iter()
+        .any(|action| action.identifier.as_deref() == Some("SharedRust:rustc:apple")));
     assert!(declares_android_native_apk_action(&result));
 }
 
@@ -326,12 +334,31 @@ fn configure_fake_android_tools(root: &Path, android_app: &mut GraphTarget) {
 fn analyze_native_mobile_android_app(root: &Path, android_app: &GraphTarget) -> AnalysisResult {
     let engine = AnalysisEngine::for_workspace(root).expect("analysis engine");
     engine
-        .analyze_target(android_app, root, &native_mobile_android_dep_providers())
+        .analyze_target(
+            android_app,
+            root,
+            &native_mobile_android_dep_providers(root),
+        )
         .expect("AndroidApp analysis")
 }
 
 #[cfg(unix)]
-fn native_mobile_android_dep_providers() -> [serde_json::Value; 2] {
+fn native_mobile_android_dep_providers(root: &Path) -> [serde_json::Value; 2] {
+    let fake_ndk = root.join("android-ndk");
+    for tag in [
+        "darwin-arm64",
+        "darwin-x86_64",
+        "linux-arm64",
+        "linux-x86_64",
+    ] {
+        let bin_dir = fake_ndk
+            .join("toolchains/llvm/prebuilt")
+            .join(tag)
+            .join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::write(bin_dir.join("clang"), "").unwrap();
+    }
+    let fake_ndk = fake_ndk.to_string_lossy().into_owned();
     [
         json!({
             "label_id": "SharedSwiftAndroid",
@@ -344,14 +371,26 @@ fn native_mobile_android_dep_providers() -> [serde_json::Value; 2] {
             ],
         }),
         json!({
+            "label": {"package": "", "name": "SharedRust", "id": "SharedRust"},
             "label_id": "SharedRust",
             "target_kind": "rust_mobile_library",
-            "android_native_libraries": [
-                {"abi": "arm64-v8a", "path": ".once/out/SharedRust/android/libshared_rust.so"}
-            ],
-            "transitive_android_native_libraries": [
-                {"abi": "arm64-v8a", "path": ".once/out/SharedRust/android/libshared_rust.so"}
-            ],
+            "attrs": {
+                "crate_name": "shared_rust",
+                "crate_root": "shared/rust/src/lib.rs",
+                "apple_target": "aarch64-apple-ios-sim",
+                "android_target": "aarch64-linux-android",
+                "android_abi": "arm64-v8a",
+                "android_ndk": fake_ndk,
+            },
+            "srcs": ["shared/rust/src/**/*.rs"],
+            "crate_name": "shared_rust",
+            "root": "shared/rust/src/lib.rs",
+            "apple_target": "aarch64-apple-ios-sim",
+            "android_target": "aarch64-linux-android",
+            "resolved_sources": ["shared/rust/src/lib.rs"],
+            "source_inputs": ["shared/rust/src/lib.rs"],
+            "build_script_inputs": [],
+            "transitive_sources": ["shared/rust/src/lib.rs"],
         }),
     ]
 }
