@@ -1,0 +1,20 @@
+[[target]]
+name = "hello"
+kind = "rust_library"
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "hello"
+edition = "2021"
+
+[[target]]
+name = "hello_tests"
+kind = "rust_test"
+srcs = ["tests/**/*.rs"]
+deps = ["./hello"]
+
+[target.attrs]
+crate_name = "hello_tests"
+crate_root = "tests/greeting_test.rs"
+edition = "2021"
+labels = ["unit"]

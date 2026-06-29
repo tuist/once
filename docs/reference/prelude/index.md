@@ -25,6 +25,10 @@ metadata at the keyboard.
   resources and assets compiled into a static resource package
 - [`android_library`](/reference/prelude/android_library): Android
   Java library packaged as a jar, static resources, and AAR
+- [`android_local_test`](/reference/prelude/android_local_test): Android
+  Java and Kotlin local tests run on the host Java virtual machine
+- [`android_instrumentation_test`](/reference/prelude/android_instrumentation_test):
+  Android instrumentation tests run on a device or emulator
 - [`android_binary`](/reference/prelude/android_binary): Android APK
   built from Java sources, resources, native libraries, Android resource
   deps, and Android library deps
@@ -53,6 +57,8 @@ metadata at the keyboard.
   target label
 - [`rust_binary`](/reference/prelude/rust_binary): Rust executable built
   from a main crate and Rust deps
+- [`rust_test`](/reference/prelude/rust_test): Rust test crate compiled
+  with `rustc --test` and run through Once's test capability
 - [`rust_crate`](/reference/prelude/rust_crate): resolved third-party
   Cargo package lowered into a Rust library target
 - [`rust_proc_macro`](/reference/prelude/rust_proc_macro): Rust

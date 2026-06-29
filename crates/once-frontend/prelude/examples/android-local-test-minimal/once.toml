@@ -1,0 +1,18 @@
+[[target]]
+name = "Greeting"
+kind = "android_library"
+srcs = ["src/main/**/*.kt"]
+
+[target.attrs]
+namespace = "dev.once.greeting"
+manifest = "AndroidManifest.xml"
+resource_files = []
+
+[[target]]
+name = "GreetingTests"
+kind = "android_local_test"
+srcs = ["src/test/**/*.kt"]
+deps = ["./Greeting"]
+
+[target.attrs]
+labels = ["unit"]

@@ -1,0 +1,33 @@
+[[target]]
+name = "GreetingApp"
+kind = "android_binary"
+srcs = ["src/main/**/*.kt"]
+
+[target.attrs]
+application_id = "dev.once.greeting"
+namespace = "dev.once.greeting"
+manifest = "AndroidManifest.xml"
+resource_files = []
+signing = "none"
+
+[[target]]
+name = "GreetingInstrumentationApk"
+kind = "android_binary"
+srcs = ["src/androidTest/**/*.kt"]
+
+[target.attrs]
+application_id = "dev.once.greeting.test"
+namespace = "dev.once.greeting.test"
+manifest = "AndroidTestManifest.xml"
+resource_files = []
+signing = "none"
+instruments = "./GreetingApp"
+
+[[target]]
+name = "GreetingInstrumentationTests"
+kind = "android_instrumentation_test"
+deps = ["./GreetingApp", "./GreetingInstrumentationApk"]
+
+[target.attrs]
+test_app = "./GreetingInstrumentationApk"
+labels = ["device"]

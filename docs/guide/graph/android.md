@@ -8,6 +8,11 @@ generates R classes, emits a classes jar, and packages an AAR. [`android_binary`
 links resources, compiles Java and Kotlin sources, dexes runtime jars with `d8`,
 packages native shared library providers, assembles an APK, zipaligns it, and
 signs it with a debug key by default.
+[`android_local_test`](/reference/prelude/android_local_test) compiles Java
+and Kotlin test sources and runs them on the host Java virtual machine.
+[`android_instrumentation_test`](/reference/prelude/android_instrumentation_test)
+installs an app package and an instrumentation package on a device or
+emulator, then runs `am instrument`.
 
 For the per-target-kind attribute, dep, provider, and capability tables see
 the [target kind reference](/reference/prelude/).
@@ -79,6 +84,45 @@ Android binaries can also depend on targets that emit
 Android application package stages each native provider under
 `lib/<abi>/`.
 
+Use `android_local_test` for host-side Java and Kotlin unit tests:
+
+```toml
+[[target]]
+name = "GreetingTests"
+kind = "android_local_test"
+srcs = ["src/test/**/*.kt"]
+deps = ["./Greeting"]
+
+[target.attrs]
+labels = ["unit"]
+```
+
+Use `android_instrumentation_test` for tests that need a device or emulator.
+The test package is another `android_binary` whose `instruments` attribute
+points at the app under test:
+
+```toml
+[[target]]
+name = "GreetingInstrumentationApk"
+kind = "android_binary"
+srcs = ["src/androidTest/**/*.kt"]
+
+[target.attrs]
+application_id = "dev.once.greeting.test"
+manifest = "AndroidTestManifest.xml"
+resource_files = []
+instruments = "./GreetingApp"
+
+[[target]]
+name = "GreetingDeviceTests"
+kind = "android_instrumentation_test"
+deps = ["./GreetingApp", "./GreetingInstrumentationApk"]
+
+[target.attrs]
+test_app = "./GreetingInstrumentationApk"
+labels = ["device"]
+```
+
 ## Resources
 
 `android_resource` is the guide-level default for shared Android
@@ -143,6 +187,21 @@ once build apps/hello/Hello
 once run --visible apps/hello/Hello
 ```
 
+## Running Tests
+
+`android_local_test` runs on the host Java virtual machine and is cacheable.
+`android_instrumentation_test` runs on a connected Android device or emulator
+and is not cacheable because the action depends on external device state.
+
+Instrumentation tests wait for a device, install the app package, install the
+test package, optionally clear package data, optionally disable animations,
+and run `am instrument -w -r`. Use `instrumentation_args` for `-e` arguments
+and `test_class` for the standard class or class#method filter.
+
+```sh
+once test apps/hello/GreetingDeviceTests
+```
+
 ## Toolchain
 
 Android targets require a JDK with `java`, `javac`, and `jar`.
@@ -186,10 +245,11 @@ The local debug keystore is expected to use the public Android debug password,
 
 The current implementation supports Java sources, Kotlin sources, Android
 resources, assets, static resource packages, AAR packaging, native shared
-library packaging, dexing, APK packaging, zipalign, and debug signing. AIDL,
-data binding, annotation processors, native splits, instrumentation tests,
-manifest placeholder expansion, shrinking, density filtering, no-compress
-packaging, startup profiles, and production signing are not implemented yet.
+library packaging, dexing, APK packaging, zipalign, debug signing, and
+host-side Java and Kotlin local tests, and device or emulator instrumentation
+tests. AIDL, data binding, annotation processors, native splits, manifest
+placeholder expansion, shrinking, density filtering, no-compress packaging,
+startup profiles, and production signing are not implemented yet.
 Non-empty unsupported attributes fail analysis instead of being ignored.
 
 ## Configurable Attributes
@@ -232,7 +292,8 @@ reference points:
 - Buck2's Android rules provide the cleaner shape for Once: Android
   resources are first-class packageable nodes, Java libraries focus on
   compilation and providers, and binaries own final resource linking,
-  dexing, APK assembly, and signing.
+  dexing, APK assembly, signing, and device test execution through a
+  separate instrumentation test rule.
 - Buck2's Kotlin rules keep Kotlin compiler and standard library details in
   the Kotlin toolchain, then feed Android libraries and binaries through the
   same provider graph.

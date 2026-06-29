@@ -128,7 +128,13 @@ fn android_binary_exposes_build_and_run() {
 
 #[test]
 fn android_target_kind_schemas_expose_all_target_kinds() {
-    for kind in ["android_resource", "android_library", "android_binary"] {
+    for kind in [
+        "android_resource",
+        "android_library",
+        "android_local_test",
+        "android_instrumentation_test",
+        "android_binary",
+    ] {
         let schema = built_in_target_kind_schema(kind).expect("android target kind schema");
         assert_eq!(schema.kind, kind);
         assert!(
@@ -150,6 +156,28 @@ fn android_target_kind_schemas_expose_all_target_kinds() {
     assert!(attr_names.contains(&"kotlinc_opts"));
     assert!(attr_names.contains(&"kotlinc"));
     assert!(attr_names.contains(&"kotlin_stdlib"));
+
+    let local_test = built_in_target_kind_schema("android_local_test").unwrap();
+    assert!(local_test.providers.iter().any(|p| p == "once_test_info"));
+    assert!(local_test
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "test"));
+    assert!(local_test.attrs.iter().any(|attr| attr.name == "classpath"));
+
+    let instrumentation_test = built_in_target_kind_schema("android_instrumentation_test").unwrap();
+    assert!(instrumentation_test
+        .providers
+        .iter()
+        .any(|p| p == "once_test_info"));
+    assert!(instrumentation_test
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "test"));
+    assert!(instrumentation_test
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "test_app"));
 }
 
 #[test]
@@ -178,6 +206,14 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
     assert!(rust.providers.iter().any(|p| p == "android_native_library"));
     assert!(rust.attrs.iter().any(|attr| attr.name == "android_abi"));
     assert!(rust.attrs.iter().any(|attr| attr.name == "native_linkopts"));
+
+    let rust_test = built_in_target_kind_schema("rust_test").expect("rust_test schema");
+    assert!(target_kind_has_impl("rust_test").unwrap());
+    assert!(rust_test.providers.iter().any(|p| p == "once_test_info"));
+    assert!(rust_test
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "test"));
 
     let rust_mobile =
         built_in_target_kind_schema("rust_mobile_library").expect("rust_mobile_library schema");
@@ -551,7 +587,7 @@ result = repr("ok")
     assert!(javac
         .argv
         .iter()
-        .any(|arg| arg == "@.once/out/apps/hello/Hello/java_sources.list"));
+        .any(|arg| arg.contains("@.once/out/apps/hello/Hello/java_sources.list")));
 }
 
 #[cfg(unix)]
@@ -1097,6 +1133,86 @@ result = repr(_rust_mobile_library_impl(ctx))
 
 #[cfg(unix)]
 #[test]
+fn prelude_rust_test_declares_libtest_binary_and_runner() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("crates/app/tests");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("greeting_test.rs"),
+        "#[test]\nfn test_greeting() {}\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "rustc":
+        return "/toolchains/rust/bin/rustc"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
+        return "/toolchains/rust\n"
+    if len(argv) >= 2 and argv[1] == "--version":
+        return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    fail("unexpected host_command: " + str(argv))
+
+def _rust_c_tool_env(target, host_triple):
+    return {{}}
+
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app_tests",
+        "id": "crates/app/app_tests",
+    }},
+    "attr": {{
+        "crate_name": "app_tests",
+        "crate_root": "tests/greeting_test.rs",
+        "edition": "2021",
+        "linker": "/usr/bin/cc",
+        "labels": ["unit"],
+    }},
+    "deps": [],
+    "srcs": ["tests/**/*.rs"],
+    "build_dir": ".once/out/crates/app/app_tests",
+    "capability": "test",
+}}
+provider = _rust_test_impl(ctx)
+result = repr(provider["test_info"])
+"#
+    );
+    let store = store_for(workspace.path(), "crates/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("rust_libtest"), "{out}");
+    assert!(out.contains("unit"), "{out}");
+    let rustc = action_by_identifier(&store, "crates/app/app_tests:rustc");
+    assert!(rustc.argv.iter().any(|arg| arg == "--test"));
+    assert!(rustc
+        .inputs
+        .iter()
+        .any(|input| input == "crates/app/tests/greeting_test.rs"));
+    let runner_compile = action_by_identifier(&store, "crates/app/app_tests:test-runner-rustc");
+    assert!(runner_compile
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("OnceRustTestRunner.rs")));
+    let run = action_by_identifier(&store, "crates/app/app_tests:test");
+    assert!(run
+        .argv
+        .iter()
+        .any(|arg| arg.ends_with("test/test_results.json")));
+    assert!(run
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("test/rust-libtest.log")));
+}
+
+#[cfg(unix)]
+#[test]
 fn prelude_apple_application_embeds_framework_self_path_output() {
     let prelude = all_prelude_source();
     let workspace = TempDir::new().unwrap();
@@ -1269,6 +1385,230 @@ result = repr([classes_dir, classes_hash])
             include_suffixes: vec![],
         })
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_android_local_test_declares_test_runner_action() {
+    let prelude = android_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let test_dir = workspace
+        .path()
+        .join("apps/hello/src/test/kotlin/dev/once/hello");
+    std::fs::create_dir_all(&test_dir).unwrap();
+    std::fs::write(
+        test_dir.join("GreetingTest.kt"),
+        "package dev.once.hello\nclass GreetingTest { fun testGreeting() {} }\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "sh":
+        return "/bin/sh"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 2 and argv[0] == "/bin/sh":
+        return "tool version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "apps/hello",
+        "name": "GreetingTests",
+        "id": "apps/hello/GreetingTests",
+    }},
+    "attr": {{
+        "android_sdk": "/sdk",
+        "compile_sdk": 35,
+        "build_tools_version": "35.0.0",
+        "aapt2": "/sdk/build-tools/35.0.0/aapt2",
+        "javac": "/jdk/bin/javac",
+        "java": "/jdk/bin/java",
+        "kotlinc": "/kotlin/bin/kotlinc",
+        "kotlin_stdlib": "/kotlin/lib/kotlin-stdlib.jar",
+        "classpath": ["third_party/junit.jar"],
+        "runtime_classpath": ["third_party/hamcrest.jar"],
+        "labels": ["unit"],
+    }},
+    "deps": [{{
+        "transitive_compile_jars": [".once/out/apps/hello/Greeting/Greeting.jar"],
+        "transitive_runtime_jars": [".once/out/apps/hello/Greeting/Greeting.jar"],
+    }}],
+    "srcs": ["src/test/**/*.kt"],
+    "build_dir": ".once/out/apps/hello/GreetingTests",
+    "capability": "test",
+}}
+provider = _android_local_test_impl(ctx)
+result = repr(provider["test_info"])
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "apps/hello".to_string(),
+        ".once/out/apps/hello/GreetingTests".to_string(),
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("android_local"), "{out}");
+    assert!(out.contains("unit"), "{out}");
+    let kotlin = action_by_identifier(&store, "android_kotlin_compile:apps/hello/GreetingTests");
+    assert!(kotlin
+        .argv
+        .iter()
+        .any(|arg| arg.contains("/kotlin/lib/kotlin-stdlib.jar")));
+    let runner_compile = action_by_identifier(
+        &store,
+        "android_local_test_runner_compile:apps/hello/GreetingTests",
+    );
+    assert_eq!(runner_compile.argv[0], "/jdk/bin/javac");
+    assert!(runner_compile
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("OnceAndroidLocalTestRunner.java")));
+    let run = action_by_identifier(&store, "android_local_test:apps/hello/GreetingTests");
+    assert_eq!(run.argv[0], "/jdk/bin/java");
+    assert!(run
+        .argv
+        .iter()
+        .any(|arg| arg == "OnceAndroidLocalTestRunner"));
+    assert!(run
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/apps/hello/GreetingTests/classes.kotlin.sha256"));
+    assert!(run
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/apps/hello/GreetingTests/test_runner/classes.sha256"));
+    assert!(run
+        .inputs
+        .iter()
+        .any(|input| input == "third_party/junit.jar"));
+    assert!(run
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("test/test_results.json")));
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_android_instrumentation_test_declares_device_runner_action() {
+    let prelude = android_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "sh":
+        return "/bin/sh"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if len(argv) >= 1 and argv[0] == "/sdk/platform-tools/adb":
+        return "Android Debug Bridge version test\n"
+    if len(argv) >= 2 and argv[0] == "/bin/sh":
+        return "javac test\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "apps/hello",
+        "name": "GreetingInstrumentationTests",
+        "id": "apps/hello/GreetingInstrumentationTests",
+    }},
+    "attr": {{
+        "android_sdk": "/sdk",
+        "adb": "/sdk/platform-tools/adb",
+        "adb_serial": "device-1",
+        "javac": "/jdk/bin/javac",
+        "java": "/jdk/bin/java",
+        "test_app": "./GreetingInstrumentationApk",
+        "instrumentation_runner": "androidx.test.runner.AndroidJUnitRunner",
+        "instrumentation_args": {{"package": "dev.once.greeting.test"}},
+        "test_class": "dev.once.greeting.GreetingInstrumentedTest",
+        "labels": ["device"],
+    }},
+    "deps": [
+        {{
+            "label_id": "apps/hello/GreetingApp",
+            "target_kind": "android_binary",
+            "application_id": "dev.once.greeting",
+            "apk": ".once/out/apps/hello/GreetingApp/GreetingApp.apk",
+        }},
+        {{
+            "label_id": "apps/hello/GreetingInstrumentationApk",
+            "target_kind": "android_binary",
+            "application_id": "dev.once.greeting.test",
+            "apk": ".once/out/apps/hello/GreetingInstrumentationApk/GreetingInstrumentationApk.apk",
+            "instrumentation_target_id": "apps/hello/GreetingApp",
+        }},
+    ],
+    "srcs": [],
+    "build_dir": ".once/out/apps/hello/GreetingInstrumentationTests",
+    "capability": "test",
+}}
+provider = _android_instrumentation_test_impl(ctx)
+result = repr(provider["test_info"])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "apps/hello".to_string(),
+        ".once/out/apps/hello/GreetingInstrumentationTests".to_string(),
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("android_instrumentation"), "{out}");
+    assert!(out.contains("GreetingInstrumentationApk"), "{out}");
+    let runner_compile = action_by_identifier(
+        &store,
+        "android_instrumentation_runner_compile:apps/hello/GreetingInstrumentationTests",
+    );
+    assert_eq!(runner_compile.argv[0], "/jdk/bin/javac");
+    assert!(runner_compile
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("OnceAndroidInstrumentationRunner.java")));
+    let run = action_by_identifier(
+        &store,
+        "android_instrumentation_test:apps/hello/GreetingInstrumentationTests",
+    );
+    assert!(!run.cacheable);
+    assert_eq!(run.argv[0], "/jdk/bin/java");
+    assert!(run
+        .argv
+        .iter()
+        .any(|arg| arg == "OnceAndroidInstrumentationRunner"));
+    assert!(run.argv.iter().any(|arg| arg == "/sdk/platform-tools/adb"));
+    assert!(run.argv.iter().any(|arg| arg == "device-1"));
+    assert!(run
+        .argv
+        .iter()
+        .any(|arg| arg == "dev.once.greeting.test/androidx.test.runner.AndroidJUnitRunner"));
+    assert!(run
+        .argv
+        .iter()
+        .any(|arg| arg == "dev.once.greeting.GreetingInstrumentedTest"));
+    assert!(run
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("instrumentation_runner/classes.sha256")));
+    assert!(run
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("GreetingApp.apk")));
+    assert!(run
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("GreetingInstrumentationApk.apk")));
+    assert!(run
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("test/test_results.json")));
 }
 
 #[cfg(unix)]
@@ -4178,7 +4518,7 @@ result = repr([codesign["codesign_path"], codesign["env"]])
 
 /// The xcrun fallback path is what every macOS user hits today
 /// (no `xcode_developer_dir` configured). The resolver should
-/// still produce a direct tool invocation — the action argv must
+/// still produce a direct tool invocation, and the action argv must
 /// not contain xcrun even when discovery went through it. This
 /// keeps cache keys identical whether or not the user pins a
 /// developer dir.
