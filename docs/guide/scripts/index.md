@@ -87,6 +87,9 @@ Actions, CircleCI, or Bitrise. In those runners, Once requests the provider's
 OpenID Connect identity token, exchanges it with Tuist, and saves the resulting
 Tuist session for the rest of the job.
 
+Set `ONCE_CACHE_PROVIDER=local` on a command when a runner should keep the
+repository configuration but use only the local cache for that process.
+
 ```yaml
 permissions:
   id-token: write

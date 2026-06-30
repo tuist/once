@@ -18,6 +18,7 @@ pub(crate) enum ResolvedCacheProviderConfig {
 }
 
 const DEFAULT_EXECUTION_PROVIDER: &str = "microsandbox";
+const ONCE_CACHE_PROVIDER_ENV: &str = "ONCE_CACHE_PROVIDER";
 
 pub fn resolve(workspace: &Path, xdg: &Xdg) -> Result<CacheProvider> {
     build_provider(xdg, resolve_config(workspace, xdg)?)
@@ -111,8 +112,19 @@ pub(crate) fn credentials_root(xdg: &Xdg) -> PathBuf {
 }
 
 fn resolve_config(workspace: &Path, xdg: &Xdg) -> Result<ResolvedCacheProviderConfig> {
+    resolve_config_with_env(workspace, xdg, std::env::var(ONCE_CACHE_PROVIDER_ENV).ok())
+}
+
+fn resolve_config_with_env(
+    workspace: &Path,
+    xdg: &Xdg,
+    cache_provider_override: Option<String>,
+) -> Result<ResolvedCacheProviderConfig> {
     let workspace_config =
         once_frontend::load_infrastructure_config(workspace).context("loading infrastructure")?;
+    if let Some(config) = cache_provider_config_from_env(cache_provider_override) {
+        return resolve_provider_config(xdg, &workspace_config.providers, config);
+    }
     if let Some(config) = workspace_config.cache {
         return resolve_provider_config(xdg, &workspace_config.providers, config);
     }
@@ -121,6 +133,19 @@ fn resolve_config(workspace: &Path, xdg: &Xdg) -> Result<ResolvedCacheProviderCo
         Ok(ResolvedCacheProviderConfig::Tuist(config?))
     } else {
         resolve_default_provider(xdg)
+    }
+}
+
+fn cache_provider_config_from_env(value: Option<String>) -> Option<CacheProviderConfig> {
+    let name = non_empty(value)?;
+    if name == "local" {
+        Some(CacheProviderConfig::Local)
+    } else {
+        Some(CacheProviderConfig::Named(NamedCacheProviderConfig {
+            name,
+            account: None,
+            project: None,
+        }))
     }
 }
 
@@ -838,6 +863,57 @@ account = "acme"
 
         let provider = resolve_config(tmp.path(), &xdg).unwrap();
         assert_eq!(provider, ResolvedCacheProviderConfig::Local);
+    }
+
+    #[test]
+    fn env_cache_provider_override_beats_workspace_config() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_workspace(
+            tmp.path(),
+            r#"
+[infrastructure.cache]
+provider = "tuist"
+
+[infrastructures.tuist]
+kind = "tuist"
+account = "acme"
+project = "repo-app"
+"#,
+        );
+
+        let provider =
+            resolve_config_with_env(tmp.path(), &xdg, Some("local".to_string())).unwrap();
+
+        assert_eq!(provider, ResolvedCacheProviderConfig::Local);
+    }
+
+    #[test]
+    fn env_cache_provider_override_resolves_named_workspace_provider() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_workspace(
+            tmp.path(),
+            r#"
+[infrastructure.cache]
+provider = "local"
+
+[infrastructures.tuist]
+kind = "tuist"
+url = "https://cache.tuist.dev"
+account = "acme"
+project = "repo-app"
+"#,
+        );
+
+        let config = expect_tuist(
+            resolve_config_with_env(tmp.path(), &xdg, Some("tuist".to_string())).unwrap(),
+        );
+
+        assert_eq!(config.url, "https://cache.tuist.dev");
+        assert_eq!(config.account.as_deref(), Some("acme"));
+        assert_eq!(config.project.as_deref(), Some("repo-app"));
+        assert_eq!(config.provider_name, "tuist");
     }
 
     #[test]

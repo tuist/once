@@ -69,6 +69,10 @@ impl TuistAuth {
         open_browser_after_prompt: bool,
         handler: &mut dyn FnMut(TuistAuthPrompt),
     ) -> Result<()> {
+        if env_token(TUIST_TOKEN_ENV).is_some() {
+            return Ok(());
+        }
+
         if is_ci_environment() {
             return self.login_with_ci_oidc();
         }
@@ -797,6 +801,24 @@ mod tests {
         );
 
         assert_eq!(token, "account-token");
+    }
+
+    #[test]
+    fn login_succeeds_with_account_token_in_environment() {
+        let temp = TempDir::new().unwrap();
+        let auth = TuistAuth::new(temp.path(), &static_config("https://tuist.dev".to_string()));
+
+        with_ci_env(
+            &[
+                ("CI", "true".to_string()),
+                ("TUIST_TOKEN", "account-token".to_string()),
+            ],
+            || {
+                let mut handler =
+                    |_| panic!("browser prompt should not be used with account token");
+                auth.login_with_handler(false, &mut handler).unwrap();
+            },
+        );
     }
 
     #[test]
