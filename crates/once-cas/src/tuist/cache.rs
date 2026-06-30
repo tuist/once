@@ -6,7 +6,6 @@ use std::time::Duration;
 use bazel_remote_apis::{
     build::bazel::remote::execution::v2::{
         self as reapi, action_cache_client::ActionCacheClient,
-        capabilities_client::CapabilitiesClient,
         content_addressable_storage_client::ContentAddressableStorageClient,
     },
     google::rpc::Status as RpcStatus,
@@ -587,29 +586,16 @@ impl TuistCache {
     }
 
     async fn pick_fastest_endpoint(&self, endpoints: &[String]) -> Result<String> {
-        let token = self.auth_token().await?;
-        let instance_name = String::new();
         let mut set = tokio::task::JoinSet::new();
         for endpoint in endpoints {
             let endpoint = endpoint.clone();
-            let token = token.clone();
-            let instance_name = instance_name.clone();
             set.spawn(async move {
                 let start = Instant::now();
-                let outcome = async {
-                    let channel = connect_grpc_endpoint(&endpoint).await?;
-                    let mut client = CapabilitiesClient::new(channel);
-                    let request = reapi::GetCapabilitiesRequest { instance_name };
-                    let request = authorized_grpc_request_with_token(request, &token)?;
-                    timeout_result(
-                        tokio::time::timeout(
-                            ENDPOINT_PROBE_TIMEOUT,
-                            client.get_capabilities(request),
-                        )
-                        .await,
-                    )
-                }
-                .await;
+                let outcome =
+                    tokio::time::timeout(ENDPOINT_PROBE_TIMEOUT, connect_grpc_endpoint(&endpoint))
+                        .await
+                        .map_err(|_| "endpoint probe timed out".to_string())
+                        .and_then(|result| result.map(|_| ()));
                 match outcome {
                     Ok(()) => Ok((start.elapsed(), endpoint)),
                     Err(error) => Err(format!("{endpoint}: {error}")),
@@ -696,11 +682,13 @@ impl TuistCache {
         operation: &'static str,
     ) -> Result<Request<T>> {
         let token = self.auth_token().await?;
-        authorized_grpc_request_with_token(message, &token).map_err(|message| Error::Remote {
-            provider: PROVIDER_NAME,
-            operation,
-            message,
-        })
+        authorized_grpc_request_with_token(message, &token, Some(self.account())).map_err(
+            |message| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation,
+                message,
+            },
+        )
     }
 
     fn account(&self) -> &str {
@@ -712,9 +700,9 @@ impl TuistCache {
 
     fn instance_name(&self) -> String {
         let Some(project) = self.config.project.as_deref() else {
-            return self.account().to_string();
+            return "default".to_string();
         };
-        format!("{}/{}", self.account(), project)
+        project.to_string()
     }
 
     fn endpoints_url(&self) -> Result<Url> {
@@ -798,22 +786,19 @@ async fn connect_grpc_endpoint(endpoint: &str) -> std::result::Result<Channel, S
 fn authorized_grpc_request_with_token<T>(
     message: T,
     token: &str,
+    account: Option<&str>,
 ) -> std::result::Result<Request<T>, String> {
     let header = format!("Bearer {token}");
     let metadata = MetadataValue::try_from(header.as_str()).map_err(|source| source.to_string())?;
     let mut request = Request::new(message);
     request.metadata_mut().insert("authorization", metadata);
-    Ok(request)
-}
-
-fn timeout_result<T>(
-    result: std::result::Result<std::result::Result<T, Status>, tokio::time::error::Elapsed>,
-) -> std::result::Result<(), String> {
-    match result {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(status)) => Err(status.to_string()),
-        Err(source) => Err(source.to_string()),
+    if let Some(account) = account.and_then(non_empty_str) {
+        let metadata = MetadataValue::try_from(account).map_err(|source| source.to_string())?;
+        request
+            .metadata_mut()
+            .insert("x-tuist-account-handle", metadata);
     }
+    Ok(request)
 }
 
 fn grpc_error(operation: &'static str, status: &Status) -> Error {
@@ -906,9 +891,34 @@ fn grpc_endpoint_url(endpoint: &str) -> String {
     }
 }
 
+fn non_empty_str(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    fn tuist_cache(temp: &TempDir, project: Option<&str>) -> TuistCache {
+        TuistCache::new(
+            Cas::open(temp.path().join("cas")),
+            temp.path().join("auth"),
+            TuistCacheConfig {
+                url: "https://tuist.dev".to_string(),
+                account: Some("tuist".to_string()),
+                project: project.map(str::to_string),
+                oauth_client_id: None,
+                provider_name: "tuist".to_string(),
+            },
+        )
+        .unwrap()
+    }
 
     #[test]
     fn grpc_endpoint_url_normalizes_grpc_schemes() {
@@ -923,6 +933,43 @@ mod tests {
         assert_eq!(
             grpc_endpoint_url("https://cache.example.com"),
             "https://cache.example.com"
+        );
+    }
+
+    #[test]
+    fn instance_name_uses_project_namespace_without_account_prefix() {
+        let temp = TempDir::new().unwrap();
+        let cache = tuist_cache(&temp, Some("gradle-plugin"));
+
+        assert_eq!(cache.instance_name(), "gradle-plugin");
+    }
+
+    #[test]
+    fn instance_name_defaults_to_default_namespace() {
+        let temp = TempDir::new().unwrap();
+        let cache = tuist_cache(&temp, None);
+
+        assert_eq!(cache.instance_name(), "default");
+    }
+
+    #[test]
+    fn authorized_grpc_request_includes_tuist_account_header() {
+        let request =
+            authorized_grpc_request_with_token((), "token", Some("acme")).expect("valid metadata");
+
+        assert_eq!(
+            request
+                .metadata()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer token")
+        );
+        assert_eq!(
+            request
+                .metadata()
+                .get("x-tuist-account-handle")
+                .and_then(|value| value.to_str().ok()),
+            Some("acme")
         );
     }
 
