@@ -79,6 +79,25 @@ same account. Cache uses the provider's default project, while execution sends
 `preview-execution`. Pass `--compute <provider>` with `--remote` when a single
 run should bypass the configured execution provider.
 
+For Continuous Integration
+([CI](https://en.wikipedia.org/wiki/Continuous_integration)), Tuist accepts two
+authentication shapes. Set `TUIST_TOKEN` to an account token with cache scopes,
+or run `once auth login --provider tuist` before cacheable commands on GitHub
+Actions, CircleCI, or Bitrise. In those runners, Once requests the provider's
+OpenID Connect identity token, exchanges it with Tuist, and saves the resulting
+Tuist session for the rest of the job.
+
+```yaml
+permissions:
+  id-token: write
+  contents: read
+
+steps:
+  - uses: actions/checkout@v5
+  - run: once auth login --provider tuist
+  - run: once exec -- ./scripts/build.sh
+```
+
 ## Next
 
 Read [Caching](/guide/scripts/caching) for annotation examples across

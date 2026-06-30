@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use reqwest::{blocking::Client, StatusCode, Url};
 use schlussel::callback::{build_authorization_url, open_browser};
 use schlussel::{
     build_storage_key, CallbackServer, ClientMetadata, DynamicRegistrationClient, FileStorage,
@@ -19,6 +21,10 @@ const TUIST_TOKEN_ENV: &str = "TUIST_TOKEN";
 const REGISTRATION_PATH: &str = "oauth2/register";
 const TOKEN_PATH: &str = "oauth2/token";
 const AUTHORIZATION_PATH: &str = "oauth2/authorize";
+const OIDC_EXCHANGE_PATH: &str = "api/auth/oidc/token";
+const OIDC_AUDIENCE: &str = "tuist";
+const OIDC_REQUEST_TIMEOUT_SECONDS: u64 = 30;
+const CI_ENVIRONMENT_VARIABLES: &[&str] = &["GITHUB_RUN_ID", "CI", "BUILD_NUMBER"];
 
 #[derive(Debug, Clone)]
 pub struct TuistAuth {
@@ -63,6 +69,10 @@ impl TuistAuth {
         open_browser_after_prompt: bool,
         handler: &mut dyn FnMut(TuistAuthPrompt),
     ) -> Result<()> {
+        if is_ci_environment() {
+            return self.login_with_ci_oidc();
+        }
+
         if let Some(client_id) = self.config.oauth_client_id.as_deref() {
             return self.login_with_client_id(client_id, open_browser_after_prompt, handler);
         }
@@ -196,6 +206,159 @@ impl TuistAuth {
         Ok(())
     }
 
+    fn login_with_ci_oidc(&self) -> Result<()> {
+        let oidc_token = Self::fetch_ci_oidc_token()?;
+        let access_token = self.exchange_oidc_token(&oidc_token)?;
+        self.store_access_token(&access_token)
+    }
+
+    fn fetch_ci_oidc_token() -> Result<String> {
+        if env_is_truthy("GITHUB_ACTIONS") {
+            let request_url = env_token("ACTIONS_ID_TOKEN_REQUEST_URL").ok_or_else(|| {
+                Error::InvalidConfig {
+                    provider: PROVIDER_NAME,
+                    message: "GitHub Actions OpenID Connect token request variables are not set. Set `permissions: id-token: write` in the workflow.".to_string(),
+                }
+            })?;
+            let request_token =
+                env_token("ACTIONS_ID_TOKEN_REQUEST_TOKEN").ok_or_else(|| Error::InvalidConfig {
+                    provider: PROVIDER_NAME,
+                    message: "GitHub Actions OpenID Connect token request variables are not set. Set `permissions: id-token: write` in the workflow.".to_string(),
+                })?;
+            return Self::fetch_github_actions_oidc_token(&request_url, &request_token);
+        }
+
+        if env_is_truthy("CIRCLECI") {
+            return env_token("CIRCLE_OIDC_TOKEN_V2")
+                .or_else(|| env_token("CIRCLE_OIDC_TOKEN"))
+                .ok_or_else(|| Error::InvalidConfig {
+                    provider: PROVIDER_NAME,
+                    message: "CircleCI OpenID Connect token was not found. Enable OpenID Connect for the CircleCI project.".to_string(),
+                });
+        }
+
+        if env_is_truthy("BITRISE_IO") {
+            return env_token("BITRISE_OIDC_ID_TOKEN")
+                .or_else(|| env_token("BITRISE_IDENTITY_TOKEN"))
+                .ok_or_else(|| Error::InvalidConfig {
+                    provider: PROVIDER_NAME,
+                    message: "Bitrise OpenID Connect token was not found. Add the Bitrise identity token step before this step.".to_string(),
+                });
+        }
+
+        Err(Error::InvalidConfig {
+            provider: PROVIDER_NAME,
+            message: "OpenID Connect authentication is not supported in this environment. Supported Continuous Integration providers: GitHub Actions, CircleCI, Bitrise.".to_string(),
+        })
+    }
+
+    fn fetch_github_actions_oidc_token(request_url: &str, request_token: &str) -> Result<String> {
+        let mut url = Url::parse(request_url).map_err(|source| Error::InvalidConfig {
+            provider: PROVIDER_NAME,
+            message: format!(
+                "invalid GitHub Actions OpenID Connect token request URL `{request_url}`: {source}"
+            ),
+        })?;
+        url.query_pairs_mut().append_pair("audience", OIDC_AUDIENCE);
+        let response = Self::oidc_http_client()?
+            .get(url)
+            .bearer_auth(request_token)
+            .send()
+            .map_err(|source| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "fetch GitHub Actions OpenID Connect token",
+                message: source.to_string(),
+            })?;
+        let status = response.status();
+        let body = response.text().map_err(|source| Error::Remote {
+            provider: PROVIDER_NAME,
+            operation: "fetch GitHub Actions OpenID Connect token",
+            message: source.to_string(),
+        })?;
+        if !status.is_success() {
+            return Err(Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "fetch GitHub Actions OpenID Connect token",
+                message: status_body_message(status, &body),
+            });
+        }
+
+        let token_response: OidcTokenResponse =
+            serde_json::from_str(&body).map_err(|source| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "decode GitHub Actions OpenID Connect token",
+                message: source.to_string(),
+            })?;
+        let token = token_response.value.trim();
+        if token.is_empty() {
+            return Err(Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "decode GitHub Actions OpenID Connect token",
+                message: "response did not include a token".to_string(),
+            });
+        }
+        Ok(token.to_string())
+    }
+
+    fn exchange_oidc_token(&self, oidc_token: &str) -> Result<Token> {
+        let response = Self::oidc_http_client()?
+            .post(self.oidc_exchange_endpoint()?)
+            .json(&OidcExchangeRequest { token: oidc_token })
+            .send()
+            .map_err(|source| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "exchange OpenID Connect token",
+                message: source.to_string(),
+            })?;
+        let status = response.status();
+        let body = response.text().map_err(|source| Error::Remote {
+            provider: PROVIDER_NAME,
+            operation: "exchange OpenID Connect token",
+            message: source.to_string(),
+        })?;
+        if !status.is_success() {
+            return Err(Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "exchange OpenID Connect token",
+                message: status_body_message(status, &body),
+            });
+        }
+
+        let response: OidcExchangeResponse =
+            serde_json::from_str(&body).map_err(|source| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "decode OpenID Connect token exchange",
+                message: source.to_string(),
+            })?;
+        let access_token = response.access_token.trim();
+        if access_token.is_empty() {
+            return Err(Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "decode OpenID Connect token exchange",
+                message: "response did not include an access token".to_string(),
+            });
+        }
+
+        Ok(Token::new(access_token, "Bearer").with_expiration(response.expires_in))
+    }
+
+    fn store_access_token(&self, token: &Token) -> Result<()> {
+        self.storage()?
+            .save(&self.storage_key(), token)
+            .map_err(|source| Self::remote_auth_error("store auth token", &source))
+    }
+
+    fn oidc_http_client() -> Result<Client> {
+        Client::builder()
+            .timeout(Duration::from_secs(OIDC_REQUEST_TIMEOUT_SECONDS))
+            .build()
+            .map_err(|source| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "configure OpenID Connect client",
+                message: source.to_string(),
+            })
+    }
+
     fn register_client(&self, redirect_uri: &str) -> Result<RegisteredClient> {
         let client =
             DynamicRegistrationClient::new(self.registration_endpoint()?).map_err(|source| {
@@ -295,6 +458,10 @@ impl TuistAuth {
 
     fn token_endpoint(&self) -> Result<String> {
         Ok(join_url(&self.config.url, TOKEN_PATH)?.to_string())
+    }
+
+    fn oidc_exchange_endpoint(&self) -> Result<Url> {
+        join_url(&self.config.url, OIDC_EXCHANGE_PATH)
     }
 
     fn load_registered_client(&self) -> Result<Option<RegisteredClient>> {
@@ -405,8 +572,47 @@ struct RegisteredClient {
     client_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct OidcTokenResponse {
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+struct OidcExchangeRequest<'a> {
+    token: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct OidcExchangeResponse {
+    access_token: String,
+    #[serde(default)]
+    expires_in: Option<u64>,
+}
+
 fn random_state() -> String {
     PkcePair::generate().verifier()[..22].to_string()
+}
+
+fn is_ci_environment() -> bool {
+    CI_ENVIRONMENT_VARIABLES
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+}
+
+fn env_is_truthy(name: &str) -> bool {
+    matches!(
+        std::env::var(name).ok().as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES")
+    )
+}
+
+fn status_body_message(status: StatusCode, body: &str) -> String {
+    let body = body.trim();
+    if body.is_empty() {
+        format!("HTTP {}", status.as_u16())
+    } else {
+        format!("HTTP {}: {body}", status.as_u16())
+    }
 }
 
 fn print_prompt(prompt: &TuistAuthPrompt) {
@@ -426,9 +632,27 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::Mutex;
     use std::thread;
 
     use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    const TEST_ENV_KEYS: &[&str] = &[
+        "GITHUB_RUN_ID",
+        "CI",
+        "BUILD_NUMBER",
+        "GITHUB_ACTIONS",
+        "ACTIONS_ID_TOKEN_REQUEST_URL",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "CIRCLECI",
+        "CIRCLE_OIDC_TOKEN_V2",
+        "CIRCLE_OIDC_TOKEN",
+        "BITRISE_IO",
+        "BITRISE_OIDC_ID_TOKEN",
+        "BITRISE_IDENTITY_TOKEN",
+        "TUIST_TOKEN",
+    ];
 
     fn static_config(url: String) -> TuistCacheConfig {
         TuistCacheConfig {
@@ -559,6 +783,161 @@ mod tests {
         assert_eq!(token, "env-token");
     }
 
+    #[test]
+    fn token_reads_account_token_from_environment() {
+        let temp = TempDir::new().unwrap();
+        let auth = TuistAuth::new(temp.path(), &static_config("https://tuist.dev".to_string()));
+
+        let token = with_ci_env(
+            &[
+                ("CI", "true".to_string()),
+                ("TUIST_TOKEN", "account-token".to_string()),
+            ],
+            || auth.token().unwrap(),
+        );
+
+        assert_eq!(token, "account-token");
+    }
+
+    #[test]
+    fn github_actions_openid_connect_login_fetches_and_exchanges_token() {
+        let github_server = OneShotHttpServer::new(200, r#"{"value":"github-identity-token"}"#);
+        let exchange_server = OneShotHttpServer::new(
+            200,
+            r#"{"access_token":"tuist-access-token","expires_in":3600}"#,
+        );
+        let temp = TempDir::new().unwrap();
+        let auth = TuistAuth::new(temp.path(), &static_config(exchange_server.base_url()));
+
+        with_ci_env(
+            &[
+                ("CI", "true".to_string()),
+                ("GITHUB_ACTIONS", "true".to_string()),
+                (
+                    "ACTIONS_ID_TOKEN_REQUEST_URL",
+                    github_server.endpoint("/identity-token?existing=1"),
+                ),
+                (
+                    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+                    "github-request-token".to_string(),
+                ),
+            ],
+            || {
+                let mut handler = |_| panic!("browser prompt should not be used in runner auth");
+                auth.login_with_handler(false, &mut handler).unwrap();
+            },
+        );
+
+        let github_request = github_server.request();
+        let exchange_request = exchange_server.request();
+        let stored = auth
+            .storage()
+            .unwrap()
+            .load(&auth.storage_key())
+            .unwrap()
+            .unwrap();
+
+        assert!(github_request.starts_with("GET /identity-token?existing=1&audience=tuist "));
+        assert!(github_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer github-request-token"));
+        assert!(exchange_request.starts_with("POST /api/auth/oidc/token "));
+        assert!(exchange_request.contains(r#""token":"github-identity-token""#));
+        assert_eq!(stored.access_token, "tuist-access-token");
+        assert_eq!(stored.expires_in, Some(3600));
+        assert!(stored.expires_at.is_some());
+    }
+
+    #[test]
+    fn circle_ci_openid_connect_login_exchanges_environment_token() {
+        let exchange_server = OneShotHttpServer::new(
+            200,
+            r#"{"access_token":"tuist-access-token","expires_in":3600}"#,
+        );
+        let temp = TempDir::new().unwrap();
+        let auth = TuistAuth::new(temp.path(), &static_config(exchange_server.base_url()));
+
+        with_ci_env(
+            &[
+                ("CI", "true".to_string()),
+                ("CIRCLECI", "true".to_string()),
+                ("CIRCLE_OIDC_TOKEN_V2", "circle-identity-token".to_string()),
+            ],
+            || {
+                let mut handler = |_| panic!("browser prompt should not be used in runner auth");
+                auth.login_with_handler(false, &mut handler).unwrap();
+            },
+        );
+
+        let exchange_request = exchange_server.request();
+        let stored = auth
+            .storage()
+            .unwrap()
+            .load(&auth.storage_key())
+            .unwrap()
+            .unwrap();
+
+        assert!(exchange_request.starts_with("POST /api/auth/oidc/token "));
+        assert!(exchange_request.contains(r#""token":"circle-identity-token""#));
+        assert_eq!(stored.access_token, "tuist-access-token");
+    }
+
+    #[test]
+    fn github_actions_openid_connect_login_reports_missing_permissions() {
+        let temp = TempDir::new().unwrap();
+        let auth = TuistAuth::new(temp.path(), &static_config("https://tuist.dev".to_string()));
+
+        let error = with_ci_env(
+            &[
+                ("CI", "true".to_string()),
+                ("GITHUB_ACTIONS", "true".to_string()),
+            ],
+            || {
+                let mut handler = |_| panic!("browser prompt should not be used in runner auth");
+                auth.login_with_handler(false, &mut handler).unwrap_err()
+            },
+        );
+
+        assert!(error.to_string().contains("permissions: id-token: write"));
+    }
+
+    fn with_ci_env<T>(vars: &[(&'static str, String)], test: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _env = EnvGuard::new(TEST_ENV_KEYS);
+        for (name, value) in vars {
+            std::env::set_var(name, value);
+        }
+        test()
+    }
+
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn new(names: &'static [&'static str]) -> Self {
+            let saved = names
+                .iter()
+                .map(|name| (*name, std::env::var(name).ok()))
+                .collect();
+            for name in names {
+                std::env::remove_var(name);
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, value) in &self.saved {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
     struct OneShotHttpServer {
         _temp: TempDir,
         base_url: String,
@@ -594,6 +973,10 @@ mod tests {
 
         fn base_url(&self) -> String {
             self.base_url.clone()
+        }
+
+        fn endpoint(&self, path: &str) -> String {
+            format!("{}{}", self.base_url, path)
         }
 
         fn request(mut self) -> String {
