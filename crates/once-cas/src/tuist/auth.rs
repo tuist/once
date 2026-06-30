@@ -56,7 +56,13 @@ impl TuistAuth {
             return Ok(token);
         }
 
-        Ok(self.load_valid_token()?.access_token)
+        match self.load_valid_token() {
+            Ok(token) => Ok(token.access_token),
+            Err(_) if is_ci_environment() => {
+                Ok(self.exchange_and_store_ci_oidc_token()?.access_token)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn login(&self, open_browser_after_prompt: bool) -> Result<()> {
@@ -211,9 +217,14 @@ impl TuistAuth {
     }
 
     fn login_with_ci_oidc(&self) -> Result<()> {
+        self.exchange_and_store_ci_oidc_token().map(|_| ())
+    }
+
+    fn exchange_and_store_ci_oidc_token(&self) -> Result<Token> {
         let oidc_token = Self::fetch_ci_oidc_token()?;
         let access_token = self.exchange_oidc_token(&oidc_token)?;
-        self.store_access_token(&access_token)
+        self.store_access_token(&access_token)?;
+        Ok(access_token)
     }
 
     fn fetch_ci_oidc_token() -> Result<String> {
@@ -698,7 +709,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let auth = TuistAuth::new(temp.path(), &static_config("https://tuist.dev".to_string()));
 
-        let error = auth.token().unwrap_err();
+        let error = with_ci_env(&[], || auth.token().unwrap_err());
 
         assert!(error
             .to_string()
@@ -868,6 +879,47 @@ mod tests {
         assert_eq!(stored.access_token, "tuist-access-token");
         assert_eq!(stored.expires_in, Some(3600));
         assert!(stored.expires_at.is_some());
+    }
+
+    #[test]
+    fn token_fetches_and_exchanges_github_actions_openid_connect_when_storage_is_missing() {
+        let github_server = OneShotHttpServer::new(200, r#"{"value":"github-identity-token"}"#);
+        let exchange_server = OneShotHttpServer::new(
+            200,
+            r#"{"access_token":"tuist-access-token","expires_in":3600}"#,
+        );
+        let temp = TempDir::new().unwrap();
+        let auth = TuistAuth::new(temp.path(), &static_config(exchange_server.base_url()));
+
+        let token = with_ci_env(
+            &[
+                ("CI", "true".to_string()),
+                ("GITHUB_ACTIONS", "true".to_string()),
+                (
+                    "ACTIONS_ID_TOKEN_REQUEST_URL",
+                    github_server.endpoint("/identity-token?existing=1"),
+                ),
+                (
+                    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+                    "github-request-token".to_string(),
+                ),
+            ],
+            || auth.token().unwrap(),
+        );
+
+        let github_request = github_server.request();
+        let exchange_request = exchange_server.request();
+        let stored = auth
+            .storage()
+            .unwrap()
+            .load(&auth.storage_key())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(token, "tuist-access-token");
+        assert!(github_request.starts_with("GET /identity-token?existing=1&audience=tuist "));
+        assert!(exchange_request.starts_with("POST /api/auth/oidc/token "));
+        assert_eq!(stored.access_token, "tuist-access-token");
     }
 
     #[test]
