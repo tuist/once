@@ -118,9 +118,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-      id-token: write
+    env:
+      ONCE_CACHE_PROVIDER: local
     strategy:
       fail-fast: false
       matrix:
@@ -142,30 +141,70 @@ jobs:
         run: |
           set -euo pipefail
           once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
-          if ! "${once_bin}" auth login --provider tuist --no-browser; then
-            echo "Tuist authentication unavailable; using local cache for this release build."
-            export ONCE_CACHE_PROVIDER=local
-          fi
           host_target="$(rustc -vV | sed -n 's/^host: //p')"
           suffix="$(printf '%s' "${host_target}" | tr '.-' '__')"
           target_id="crates/once-cli/once_cli_${suffix}"
           trap './mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true' EXIT
           ./mise/tasks/release/prepare-rust-graph-deps.sh --target "${host_target}"
           ./mise/tasks/release/write-rust-release-manifests.sh --target "${host_target}" --version 0.0.0
-          if ! "${once_bin}" build "${target_id}" --format json --quiet; then
-            echo "Release graph build failed with the configured cache provider; retrying with local cache."
-            ONCE_CACHE_PROVIDER=local "${once_bin}" build "${target_id}" --format json --quiet
-          fi
+          "${once_bin}" build "${target_id}" --format json --quiet
           mkdir -p target/release
           cp ".once/out/${target_id}/once" target/release/once
         env:
           GH_TOKEN: ${{ github.token }}
           ONCE_BOOTSTRAP_SOURCE: source
-          TUIST_TOKEN: ${{ secrets.TUIST_TOKEN }}
       - uses: actions/upload-artifact@v7
         with:
           name: once-${{ matrix.os }}
           path: target/release/once
+
+  tuist-cache-smoke:
+    name: tuist cache smoke
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jdx/mise-action@v4
+        with:
+          experimental: true
+          cache: true
+      - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tuist-cache-smoke
+          cache-on-failure: true
+          cache-bin: false
+      - name: Verify Tuist cache provider
+        run: |
+          set -euo pipefail
+          once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
+          smoke_root="$(mktemp -d)"
+          export XDG_STATE_HOME="${smoke_root}/state"
+          export XDG_DATA_HOME="${smoke_root}/data"
+          export XDG_CONFIG_HOME="${smoke_root}/config"
+
+          "${once_bin}" auth login --provider tuist --no-browser
+
+          XDG_CACHE_HOME="${smoke_root}/cache-first" \
+            "${once_bin}" exec --format json -- /bin/sh -c 'exit 0' \
+            2>"${smoke_root}/first.json"
+
+          XDG_CACHE_HOME="${smoke_root}/cache-second" \
+            "${once_bin}" exec --format json -- /bin/sh -c 'exit 0' \
+            2>"${smoke_root}/second.json"
+
+          if ! grep -Eq '"cache"[[:space:]]*:[[:space:]]*"hit"' "${smoke_root}/second.json"; then
+            echo "Expected the second Tuist-backed Once execution to hit the remote cache."
+            cat "${smoke_root}/first.json"
+            cat "${smoke_root}/second.json"
+            exit 1
+          fi
+        env:
+          ONCE_BOOTSTRAP_SOURCE: source
 
   dogfood:
     name: dogfood (${{ matrix.os }})
@@ -246,9 +285,6 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: windows-latest
-    permissions:
-      contents: read
-      id-token: write
     defaults:
       run:
         shell: bash
@@ -260,6 +296,7 @@ jobs:
       MISE_NOT_FOUND_AUTO_INSTALL: "false"
       MISE_EXEC_AUTO_INSTALL: "false"
       ONCE_BOOTSTRAP_SOURCE: source
+      ONCE_CACHE_PROVIDER: local
     steps:
       - uses: actions/checkout@v6
       - name: Set HOME for mise templates
@@ -283,23 +320,14 @@ jobs:
           set -euo pipefail
 
           once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
-          if ! "${once_bin}" auth login --provider tuist --no-browser; then
-            echo "Tuist authentication unavailable; using local cache for this release build."
-            export ONCE_CACHE_PROVIDER=local
-          fi
           target="x86_64-pc-windows-msvc"
           suffix="$(printf '%s' "${target}" | tr '.-' '__')"
           target_id="crates/once-cli/once_cli_${suffix}"
           trap './mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true' EXIT
           ./mise/tasks/release/prepare-rust-graph-deps.sh --target "${target}"
           ./mise/tasks/release/write-rust-release-manifests.sh --target "${target}" --version 0.0.0
-          if ! "${once_bin}" build "${target_id}" --format json --quiet; then
-            echo "Release graph build failed with the configured cache provider; retrying with local cache."
-            ONCE_CACHE_PROVIDER=local "${once_bin}" build "${target_id}" --format json --quiet
-          fi
+          "${once_bin}" build "${target_id}" --format json --quiet
           test -f ".once/out/${target_id}/once.exe"
-        env:
-          TUIST_TOKEN: ${{ secrets.TUIST_TOKEN }}
 
   windows-cas-test:
     name: windows cas test
