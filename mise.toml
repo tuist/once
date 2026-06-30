@@ -1,7 +1,7 @@
 [tools]
 erlang = "29.0.2"
 elixir = "1.20.1"
-java = "17.0.2"
+java = "25.0.3+9.0.LTS"
 android-sdk = "21.0"
 kotlin = "2.4.0"
 rust = "1.96.0"
