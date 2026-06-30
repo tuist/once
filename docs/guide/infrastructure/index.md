@@ -1,7 +1,7 @@
 # Infrastructure
 
-Infrastructure providers connect Once to shared services for cache storage and
-remote execution. The repository root `once.toml` owns this configuration so
+Infrastructure providers connect Once to shared services for remote cache and
+execution. The repository root `once.toml` owns this configuration so
 every script, graph target, and command-line invocation resolves the same
 defaults.
 
@@ -10,18 +10,18 @@ defaults.
 Name each provider once under `infrastructures`, then bind capabilities to that
 name:
 
-```text
+```toml
+[infrastructures.tuist]
+kind = "tuist"
+account = "acme"
+project = "app"
+
 [infrastructure.cache]
 provider = "tuist"
 
 [infrastructure.execution]
 provider = "tuist"
 project = "preview-execution"
-
-[infrastructures.tuist]
-kind = "tuist"
-account = "acme"
-project = "app"
 ```
 
 In this example, cache and execution both use the `tuist` provider and the same
@@ -36,7 +36,7 @@ capability can still override the fields that should differ.
 
 Capability tables accept the provider name plus provider-specific fields:
 
-```text
+```toml
 [infrastructure.cache]
 provider = "tuist"
 project = "app-cache"
@@ -52,5 +52,5 @@ that should keep the repository configuration but use only the local cache.
 
 ## Available Providers
 
-- [Tuist](/guide/infrastructure/tuist): shared cache storage and execution
+- [Tuist](/guide/infrastructure/tuist): remote cache and execution
   sessions backed by Tuist.
