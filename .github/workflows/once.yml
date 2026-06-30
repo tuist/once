@@ -118,6 +118,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -139,6 +142,7 @@ jobs:
         run: |
           set -euo pipefail
           once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
+          "${once_bin}" auth login --provider tuist --no-browser
           host_target="$(rustc -vV | sed -n 's/^host: //p')"
           suffix="$(printf '%s' "${host_target}" | tr '.-' '__')"
           target_id="crates/once-cli/once_cli_${suffix}"
@@ -231,6 +235,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         shell: bash
@@ -265,6 +272,7 @@ jobs:
           set -euo pipefail
 
           once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
+          "${once_bin}" auth login --provider tuist --no-browser
           target="x86_64-pc-windows-msvc"
           suffix="$(printf '%s' "${target}" | tr '.-' '__')"
           target_id="crates/once-cli/once_cli_${suffix}"
