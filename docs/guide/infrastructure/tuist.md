@@ -80,10 +80,3 @@ steps:
 ```
 
 Once saves the resulting Tuist session for the rest of the job.
-
-Set `ONCE_CACHE_PROVIDER=local` on any step that should keep the repository
-configuration but avoid remote cache traffic for that process:
-
-```sh
-ONCE_CACHE_PROVIDER=local once exec -- ./scripts/build.sh
-```
