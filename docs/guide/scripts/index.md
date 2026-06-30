@@ -57,6 +57,9 @@ and declared outputs. Root `once.toml` files configure shared settings such as
 cache providers, while package `once.toml` files may grow build graph
 declarations as Once expands beyond scripts.
 
+See [Infrastructure](/guide/infrastructure/) for remote cache and execution
+provider configuration.
+
 ## Next
 
 Read [Caching](/guide/scripts/caching) for annotation examples across

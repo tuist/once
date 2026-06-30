@@ -736,9 +736,7 @@ mod tests {
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
-            remote: Some(RemoteExecution {
-                provider: "unknown-remote".to_string(),
-            }),
+            remote: Some(RemoteExecution::provider("unknown-remote")),
         };
 
         let error = run(&action, tmp.path(), &cas, RunOpts::default())
