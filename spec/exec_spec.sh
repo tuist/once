@@ -115,6 +115,113 @@ EOF
     The stderr should include 'cache miss'
   End
 
+  It 'runs needed scripts before an annotated script'
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/scripts/generate.sh" <<'EOF'
+#!/usr/bin/env bash
+# once input "../source.txt"
+# once output "../build/generated.txt"
+# once cwd ".."
+set -e
+mkdir -p build
+printf 'generated:%s' "$(cat source.txt)" > build/generated.txt
+EOF
+    cat > "$WORKSPACE/scripts/package.sh" <<'EOF'
+#!/usr/bin/env bash
+# once needs "./generate.sh"
+# once input "../main.txt"
+# once output "../dist/app.txt"
+# once cwd ".."
+set -e
+mkdir -p dist
+cat build/generated.txt main.txt > dist/app.txt
+cat dist/app.txt
+EOF
+    cat > "$WORKSPACE/source.txt" <<'EOF'
+dependency
+EOF
+    cat > "$WORKSPACE/main.txt" <<'EOF'
+root
+EOF
+    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh
+    The status should be success
+    The stdout should equal 'generated:dependencyroot'
+    The stderr should include 'cache miss'
+    The contents of file "$WORKSPACE/dist/app.txt" should equal 'generated:dependencyroot'
+  End
+
+  It 'uses needed script outputs in the dependent script cache key'
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/scripts/generate.sh" <<'EOF'
+#!/usr/bin/env bash
+# once input "../source.txt"
+# once output "../build/generated.txt"
+# once cwd ".."
+set -e
+mkdir -p build
+printf 'generated:%s' "$(cat source.txt)" > build/generated.txt
+EOF
+    cat > "$WORKSPACE/scripts/package.sh" <<'EOF'
+#!/usr/bin/env bash
+# once needs "./generate.sh"
+# once input "../main.txt"
+# once output "../dist/app.txt"
+# once cwd ".."
+set -e
+mkdir -p dist
+cat build/generated.txt main.txt > dist/app.txt
+cat dist/app.txt
+EOF
+    printf one > "$WORKSPACE/source.txt"
+    printf root > "$WORKSPACE/main.txt"
+    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh >/dev/null 2>&1
+    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh >/dev/null 2>"$WORKSPACE/second.stderr"
+    printf two > "$WORKSPACE/source.txt"
+
+    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh
+    The status should be success
+    The stdout should equal 'generated:tworoot'
+    The stderr should include 'cache miss'
+    The contents of file "$WORKSPACE/second.stderr" should include 'cache hit'
+  End
+
+  It 'uses fingerprint command output in the script cache key'
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/scripts/build.sh" <<'EOF'
+#!/usr/bin/env bash
+# once input "../input.txt"
+# once fingerprint "cat tool-version"
+# once cwd ".."
+cat input.txt
+EOF
+    printf hello > "$WORKSPACE/input.txt"
+    printf v1 > "$WORKSPACE/tool-version"
+    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh >/dev/null 2>&1
+    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh >/dev/null 2>"$WORKSPACE/second.stderr"
+    printf v2 > "$WORKSPACE/tool-version"
+
+    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    The status should be success
+    The stdout should equal 'hello'
+    The stderr should include 'cache miss'
+    The contents of file "$WORKSPACE/second.stderr" should include 'cache hit'
+  End
+
+  It 'fails before running a script when a fingerprint command fails'
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/scripts/build.sh" <<'EOF'
+#!/usr/bin/env bash
+# once fingerprint "printf probe-error >&2; exit 7"
+# once cwd ".."
+touch should-not-exist
+EOF
+    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    The status should not equal 0
+    The stderr should include 'fingerprint command'
+    The stderr should include 'probe-error'
+    The path "$WORKSPACE/should-not-exist" should not be exist
+  End
+
   It 'runs a command through the microsandbox compute provider'
     Skip if 'microsandbox specs are opt-in' microsandbox_specs_disabled
     When call "$ONCE_BIN" -C "$WORKSPACE" exec --remote --compute microsandbox -- /bin/sh -c 'printf remote-output'

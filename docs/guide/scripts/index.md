@@ -19,8 +19,8 @@ way to enter the same graph and action model that typed target kinds use.
 
 ::: tip Scripts are adapters
 Use scripts when the workflow is still one opaque executable action. Move
-the work into a typed graph target kind when it needs dependencies, multiple
-capabilities, structured diagnostics, or agent-editable shape.
+the work into a typed graph target kind when it needs multiple capabilities,
+structured diagnostics, or an agent-editable shape.
 :::
 
 ## How It Works
@@ -33,6 +33,7 @@ implementation, and add a few `# once` comments at the top:
 # once input "../src/**/*"
 # once output "../dist/"
 # once env "NODE_ENV"
+# once fingerprint "node --version"
 # once cwd ".."
 
 npm run build
@@ -43,6 +44,7 @@ Those comments are the script contract:
 - **Inputs**: The files, directories, and globs that decide whether the work changed.
 - **Outputs**: The files or directories Once should restore on a cache hit.
 - **Environment variables**: Declared host values that are forwarded to the script and included in the cache key.
+- **Fingerprints**: Read-only commands whose output should affect the cache key.
 - **Working directory**: The directory where the script should run.
 
 Then run the script directly:
