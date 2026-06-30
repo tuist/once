@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::thread;
 use std::time::Duration;
 
 use reqwest::{blocking::Client, StatusCode, Url};
@@ -24,12 +26,17 @@ const AUTHORIZATION_PATH: &str = "oauth2/authorize";
 const OIDC_EXCHANGE_PATH: &str = "api/auth/oidc/token";
 const OIDC_AUDIENCE: &str = "tuist";
 const OIDC_REQUEST_TIMEOUT_SECONDS: u64 = 30;
+const OIDC_EXCHANGE_MAX_RETRIES: usize = 3;
+const OIDC_EXCHANGE_RETRY_BASE_DELAY_MS: u64 = 100;
+const OIDC_TOKEN_REFRESH_WINDOW_SECONDS: u64 = 60;
 const CI_ENVIRONMENT_VARIABLES: &[&str] = &["GITHUB_RUN_ID", "CI", "BUILD_NUMBER"];
 
 #[derive(Debug, Clone)]
 pub struct TuistAuth {
     credentials_root: PathBuf,
     config: TuistCacheConfig,
+    cached_ci_token: Arc<StdMutex<Option<Token>>>,
+    ci_exchange_lock: Arc<StdMutex<()>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +51,8 @@ impl TuistAuth {
         Self {
             credentials_root: credentials_root.as_ref().to_path_buf(),
             config: config.clone(),
+            cached_ci_token: Arc::new(StdMutex::new(None)),
+            ci_exchange_lock: Arc::new(StdMutex::new(())),
         }
     }
 
@@ -53,6 +62,10 @@ impl TuistAuth {
 
     fn token_with_env(&self, env_token: Option<String>) -> Result<String> {
         if let Some(token) = env_token {
+            return Ok(token);
+        }
+
+        if let Some(token) = self.cached_ci_access_token()? {
             return Ok(token);
         }
 
@@ -221,9 +234,25 @@ impl TuistAuth {
     }
 
     fn exchange_and_store_ci_oidc_token(&self) -> Result<Token> {
+        let _guard = self
+            .ci_exchange_lock
+            .lock()
+            .map_err(|source| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "lock Continuous Integration auth token exchange",
+                message: source.to_string(),
+            })?;
+        if let Some(token) = self.cached_ci_token()? {
+            return Ok(token);
+        }
+        if let Ok(token) = self.load_valid_token() {
+            self.remember_ci_token(&token)?;
+            return Ok(token);
+        }
         let oidc_token = Self::fetch_ci_oidc_token()?;
         let access_token = self.exchange_oidc_token(&oidc_token)?;
         self.store_access_token(&access_token)?;
+        self.remember_ci_token(&access_token)?;
         Ok(access_token)
     }
 
@@ -316,45 +345,97 @@ impl TuistAuth {
     }
 
     fn exchange_oidc_token(&self, oidc_token: &str) -> Result<Token> {
-        let response = Self::oidc_http_client()?
-            .post(self.oidc_exchange_endpoint()?)
+        let client = Self::oidc_http_client()?;
+        let endpoint = self.oidc_exchange_endpoint()?;
+
+        for retry in 0..=OIDC_EXCHANGE_MAX_RETRIES {
+            match Self::exchange_oidc_token_once(&client, endpoint.clone(), oidc_token) {
+                Ok(token) => return Ok(token),
+                Err(error) if retry < OIDC_EXCHANGE_MAX_RETRIES && error.retryable => {
+                    thread::sleep(oidc_exchange_retry_delay(retry));
+                }
+                Err(error) => return Err(error.into_remote_error()),
+            }
+        }
+
+        unreachable!("OpenID Connect exchange retry loop must return")
+    }
+
+    fn exchange_oidc_token_once(
+        client: &Client,
+        endpoint: Url,
+        oidc_token: &str,
+    ) -> std::result::Result<Token, OidcExchangeAttemptError> {
+        let response = client
+            .post(endpoint)
             .json(&OidcExchangeRequest { token: oidc_token })
             .send()
-            .map_err(|source| Error::Remote {
-                provider: PROVIDER_NAME,
-                operation: "exchange OpenID Connect token",
+            .map_err(|source| OidcExchangeAttemptError {
                 message: source.to_string(),
+                retryable: true,
             })?;
         let status = response.status();
-        let body = response.text().map_err(|source| Error::Remote {
-            provider: PROVIDER_NAME,
-            operation: "exchange OpenID Connect token",
+        let body = response.text().map_err(|source| OidcExchangeAttemptError {
             message: source.to_string(),
+            retryable: oidc_status_is_retryable(status),
         })?;
         if !status.is_success() {
-            return Err(Error::Remote {
-                provider: PROVIDER_NAME,
-                operation: "exchange OpenID Connect token",
+            return Err(OidcExchangeAttemptError {
                 message: status_body_message(status, &body),
+                retryable: oidc_status_is_retryable(status),
             });
         }
 
         let response: OidcExchangeResponse =
-            serde_json::from_str(&body).map_err(|source| Error::Remote {
-                provider: PROVIDER_NAME,
-                operation: "decode OpenID Connect token exchange",
+            serde_json::from_str(&body).map_err(|source| OidcExchangeAttemptError {
                 message: source.to_string(),
+                retryable: false,
             })?;
         let access_token = response.access_token.trim();
         if access_token.is_empty() {
-            return Err(Error::Remote {
-                provider: PROVIDER_NAME,
-                operation: "decode OpenID Connect token exchange",
+            return Err(OidcExchangeAttemptError {
                 message: "response did not include an access token".to_string(),
+                retryable: false,
             });
         }
 
         Ok(Token::new(access_token, "Bearer").with_expiration(response.expires_in))
+    }
+
+    fn cached_ci_access_token(&self) -> Result<Option<String>> {
+        Ok(self.cached_ci_token()?.map(|token| token.access_token))
+    }
+
+    fn cached_ci_token(&self) -> Result<Option<Token>> {
+        let mut cached = self
+            .cached_ci_token
+            .lock()
+            .map_err(|source| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "load cached Continuous Integration auth token",
+                message: source.to_string(),
+            })?;
+        let Some(token) = cached.as_ref() else {
+            return Ok(None);
+        };
+        if !token.expires_within(OIDC_TOKEN_REFRESH_WINDOW_SECONDS) {
+            return Ok(Some(token.clone()));
+        }
+        *cached = None;
+        Ok(None)
+    }
+
+    fn remember_ci_token(&self, token: &Token) -> Result<()> {
+        let mut cached = self
+            .cached_ci_token
+            .lock()
+            .map_err(|source| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "store cached Continuous Integration auth token",
+                message: source.to_string(),
+            })?;
+        *cached = Some(token.clone());
+        Ok(())
     }
 
     fn store_access_token(&self, token: &Token) -> Result<()> {
@@ -604,6 +685,22 @@ struct OidcExchangeResponse {
     expires_in: Option<u64>,
 }
 
+#[derive(Debug)]
+struct OidcExchangeAttemptError {
+    message: String,
+    retryable: bool,
+}
+
+impl OidcExchangeAttemptError {
+    fn into_remote_error(self) -> Error {
+        Error::Remote {
+            provider: PROVIDER_NAME,
+            operation: "exchange OpenID Connect token",
+            message: self.message,
+        }
+    }
+}
+
 fn random_state() -> String {
     PkcePair::generate().verifier()[..22].to_string()
 }
@@ -628,6 +725,17 @@ fn status_body_message(status: StatusCode, body: &str) -> String {
     } else {
         format!("HTTP {}: {body}", status.as_u16())
     }
+}
+
+fn oidc_status_is_retryable(status: StatusCode) -> bool {
+    status == StatusCode::REQUEST_TIMEOUT
+        || status == StatusCode::TOO_MANY_REQUESTS
+        || status.is_server_error()
+}
+
+fn oidc_exchange_retry_delay(retry: usize) -> Duration {
+    let multiplier = (0..retry).fold(1_u64, |multiplier, _| multiplier.saturating_mul(2));
+    Duration::from_millis(OIDC_EXCHANGE_RETRY_BASE_DELAY_MS.saturating_mul(multiplier))
 }
 
 fn print_prompt(prompt: &TuistAuthPrompt) {
@@ -923,6 +1031,85 @@ mod tests {
     }
 
     #[test]
+    fn openid_connect_exchange_retries_retryable_tuist_failures() {
+        let github_server = OneShotHttpServer::new(200, r#"{"value":"github-identity-token"}"#);
+        let exchange_server = MultiShotHttpServer::new(vec![
+            (502, "error code: 502"),
+            (
+                200,
+                r#"{"access_token":"tuist-access-token","expires_in":3600}"#,
+            ),
+        ]);
+        let temp = TempDir::new().unwrap();
+        let auth = TuistAuth::new(temp.path(), &static_config(exchange_server.base_url()));
+
+        let token = with_ci_env(
+            &[
+                ("CI", "true".to_string()),
+                ("GITHUB_ACTIONS", "true".to_string()),
+                (
+                    "ACTIONS_ID_TOKEN_REQUEST_URL",
+                    github_server.endpoint("/identity-token"),
+                ),
+                (
+                    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+                    "github-request-token".to_string(),
+                ),
+            ],
+            || auth.token().unwrap(),
+        );
+
+        let github_request = github_server.request();
+        let exchange_requests = exchange_server.requests();
+        assert_eq!(token, "tuist-access-token");
+        assert!(github_request.starts_with("GET /identity-token?audience=tuist "));
+        assert_eq!(exchange_requests.len(), 2);
+        assert!(exchange_requests[0].starts_with("POST /api/auth/oidc/token "));
+        assert!(exchange_requests[1].starts_with("POST /api/auth/oidc/token "));
+    }
+
+    #[test]
+    fn token_reuses_cached_openid_connect_token_when_storage_is_missing() {
+        let github_server = OneShotHttpServer::new(200, r#"{"value":"github-identity-token"}"#);
+        let exchange_server = OneShotHttpServer::new(
+            200,
+            r#"{"access_token":"tuist-access-token","expires_in":3600}"#,
+        );
+        let temp = TempDir::new().unwrap();
+        let auth = TuistAuth::new(temp.path(), &static_config(exchange_server.base_url()));
+
+        let (first, second) = with_ci_env(
+            &[
+                ("CI", "true".to_string()),
+                ("GITHUB_ACTIONS", "true".to_string()),
+                (
+                    "ACTIONS_ID_TOKEN_REQUEST_URL",
+                    github_server.endpoint("/identity-token"),
+                ),
+                (
+                    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+                    "github-request-token".to_string(),
+                ),
+            ],
+            || {
+                let first = auth.token().unwrap();
+                auth.storage().unwrap().delete(&auth.storage_key()).unwrap();
+                let second = auth.token().unwrap();
+                (first, second)
+            },
+        );
+
+        assert_eq!(first, "tuist-access-token");
+        assert_eq!(second, "tuist-access-token");
+        assert!(github_server
+            .request()
+            .starts_with("GET /identity-token?audience=tuist "));
+        assert!(exchange_server
+            .request()
+            .starts_with("POST /api/auth/oidc/token "));
+    }
+
+    #[test]
     fn circle_ci_openid_connect_login_exchanges_environment_token() {
         let exchange_server = OneShotHttpServer::new(
             200,
@@ -1058,6 +1245,66 @@ mod tests {
                 join_handle.join().unwrap();
             }
             std::fs::read_to_string(&self.request_file).unwrap()
+        }
+    }
+
+    struct MultiShotHttpServer {
+        _temp: TempDir,
+        base_url: String,
+        request_dir: PathBuf,
+        request_count: usize,
+        join_handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl MultiShotHttpServer {
+        fn new(responses: Vec<(u16, &'static str)>) -> Self {
+            let temp = TempDir::new().unwrap();
+            let request_dir = temp.path().join("requests");
+            std::fs::create_dir_all(&request_dir).unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let request_dir_for_thread = request_dir.clone();
+            let request_count = responses.len();
+            let join_handle = thread::spawn(move || {
+                for (index, (status, body)) in responses.into_iter().enumerate() {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let request = read_http_request(&mut stream);
+                    std::fs::write(
+                        request_dir_for_thread.join(format!("request-{index}.txt")),
+                        request,
+                    )
+                    .unwrap();
+                    let response = format!(
+                        "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+                }
+            });
+
+            Self {
+                _temp: temp,
+                base_url: format!("http://{addr}"),
+                request_dir,
+                request_count,
+                join_handle: Some(join_handle),
+            }
+        }
+
+        fn base_url(&self) -> String {
+            self.base_url.clone()
+        }
+
+        fn requests(mut self) -> Vec<String> {
+            if let Some(join_handle) = self.join_handle.take() {
+                join_handle.join().unwrap();
+            }
+            (0..self.request_count)
+                .map(|index| {
+                    std::fs::read_to_string(self.request_dir.join(format!("request-{index}.txt")))
+                        .unwrap()
+                })
+                .collect()
         }
     }
 

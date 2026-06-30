@@ -152,7 +152,10 @@ jobs:
           trap './mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true' EXIT
           ./mise/tasks/release/prepare-rust-graph-deps.sh --target "${host_target}"
           ./mise/tasks/release/write-rust-release-manifests.sh --target "${host_target}" --version 0.0.0
-          "${once_bin}" build "${target_id}" --format json --quiet
+          if ! "${once_bin}" build "${target_id}" --format json --quiet; then
+            echo "Release graph build failed with the configured cache provider; retrying with local cache."
+            ONCE_CACHE_PROVIDER=local "${once_bin}" build "${target_id}" --format json --quiet
+          fi
           mkdir -p target/release
           cp ".once/out/${target_id}/once" target/release/once
         env:
@@ -290,7 +293,10 @@ jobs:
           trap './mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true' EXIT
           ./mise/tasks/release/prepare-rust-graph-deps.sh --target "${target}"
           ./mise/tasks/release/write-rust-release-manifests.sh --target "${target}" --version 0.0.0
-          "${once_bin}" build "${target_id}" --format json --quiet
+          if ! "${once_bin}" build "${target_id}" --format json --quiet; then
+            echo "Release graph build failed with the configured cache provider; retrying with local cache."
+            ONCE_CACHE_PROVIDER=local "${once_bin}" build "${target_id}" --format json --quiet
+          fi
           test -f ".once/out/${target_id}/once.exe"
         env:
           TUIST_TOKEN: ${{ secrets.TUIST_TOKEN }}
