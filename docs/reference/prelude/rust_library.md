@@ -13,6 +13,8 @@ Android dynamic libraries expose Android application package
 native-library provider fields. Use
 [`rust_mobile_library`](/reference/prelude/rust_mobile_library) when one
 Rust target should emit both the Apple and Android native outputs.
+Use [`rust_test`](/reference/prelude/rust_test) when a Rust crate should run
+tests through Once.
 
 ## Attributes
 

@@ -6,10 +6,12 @@ rlib provider that downstream Rust targets consume through `--extern`.
 [`rust_mobile_library`](/reference/prelude/rust_mobile_library) lets Apple
 and Android consumers materialize native libraries from one Rust target.
 [`rust_binary`](/reference/prelude/rust_binary) compiles an executable
-from a main crate and its Rust deps. [`rust_crate`](/reference/prelude/rust_crate)
-is the lowered target shape for resolved third-party Cargo packages.
-[`rust_proc_macro`](/reference/prelude/rust_proc_macro) compiles a
-procedural macro for downstream Rust targets. [`cargo_dependencies`](/reference/prelude/cargo_dependencies)
+from a main crate and its Rust deps. [`rust_test`](/reference/prelude/rust_test)
+compiles a Rust test crate with `rustc --test` and exposes Once's generic
+test capability. [`rust_crate`](/reference/prelude/rust_crate) is the lowered
+target shape for resolved third-party Cargo packages.
+[`rust_proc_macro`](/reference/prelude/rust_proc_macro) compiles a procedural
+macro for downstream Rust targets. [`cargo_dependencies`](/reference/prelude/cargo_dependencies)
 groups resolved Cargo packages behind one cacheable graph target.
 
 For the per-target-kind attribute, dep, provider, and capability tables see
@@ -66,6 +68,23 @@ direct dependency build scripts is exposed to downstream build scripts
 as `DEP_<LINKS>_<KEY>` environment variables.
 Generated Cargo dependencies set `cap_lints = "allow"` so dependency
 crates follow Cargo's lint-capping behavior.
+
+Declare Rust tests as separate `rust_test` targets. Unit tests can use the
+library root as their `crate_root`; integration tests usually point
+`crate_root` at a file under `tests/` and depend on the library under test:
+
+```toml
+[[target]]
+name = "hello_tests"
+kind = "rust_test"
+srcs = ["tests/**/*.rs"]
+deps = ["./hello"]
+
+[target.attrs]
+crate_name = "hello_tests"
+crate_root = "tests/greeting_test.rs"
+labels = ["unit"]
+```
 
 ## Native Mobile Outputs
 

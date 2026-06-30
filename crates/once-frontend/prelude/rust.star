@@ -1355,7 +1355,7 @@ def _rust_output_args(crate_type, output):
         return ["--out-dir", output_dir]
     return ["-o", output]
 
-def _rust_compile(ctx, crate_type, default_root, output_name):
+def _rust_compile(ctx, crate_type, default_root, output_name, test = False, provider_kind = "rust_library"):
     target = _rust_effective_target(ctx, crate_type)
     rustc, identity, host_triple = _rustc_toolchain(target)
     crate_name = _rust_crate_name(ctx)
@@ -1387,6 +1387,8 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "--edition", edition,
         "-C", "metadata=" + _rust_metadata_suffix(ctx),
     ]
+    if test:
+        rustc_args.append("--test")
     rustc_args.extend(_rust_extra_filename_args(ctx, crate_type))
     rustc_args.extend(_rust_output_args(crate_type, output))
     rustc_args.extend(_rust_compile_target_args(target, host_triple))
@@ -1432,7 +1434,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
     own_build_script_inputs = _rust_build_script_inputs(ctx) if build_stdout else []
     provider = {
         "label_id": ctx["label"]["id"],
-        "target_kind": "rust_library",
+        "target_kind": provider_kind,
         "crate_name": crate_name,
         "crate_type": crate_type,
         "target": target,
@@ -1459,6 +1461,8 @@ def _rust_compile(ctx, crate_type, default_root, output_name):
         "android_native_libraries": own_android_native_libraries,
         "transitive_android_native_libraries": _rust_collect_android_native_libraries(deps, own_android_native_libraries),
     }
+    if test:
+        provider["test_binary"] = output
     return provider
 
 def _rust_library_impl(ctx):
@@ -1560,6 +1564,261 @@ def _android_materialize_native_dep(ctx, dep):
 
 def _rust_binary_impl(ctx):
     return _rust_compile(ctx, "bin", "src/main.rs", _rust_output_name(ctx, "bin"))
+
+def _rust_test_env(ctx, test_dir):
+    env = {"HOME": test_dir + "/home"}
+    for key, value in _rust_attr(ctx, "test_env", {}).items():
+        env[key] = value
+    return env
+
+def _rust_test_info(ctx, test_binary, results, log, native_results, test_dir):
+    args = _rust_attr(ctx, "args", [])
+    labels = _rust_attr(ctx, "labels", [])
+    timeout_ms = _rust_attr(ctx, "timeout_ms", None)
+    return {
+        "schema": "once.test_info.v1",
+        "target": ctx["label"]["id"],
+        "runner": {
+            "type": "rust_libtest",
+            "display_name": "Rust libtest",
+            "metadata": {},
+        },
+        "command": {
+            "argv": [test_binary] + args,
+            "env": _rust_test_env(ctx, test_dir),
+            "cwd": ".",
+        },
+        "outputs": {
+            "results": results,
+            "logs": [log],
+            "native_results": [native_results],
+            "coverage": [],
+        },
+        "listing": {
+            "supported": True,
+            "strategy": "libtest_list",
+        },
+        "filtering": {
+            "case_filtering": "runner_args",
+        },
+        "sharding": {
+            "supported": False,
+        },
+        "retries": {
+            "supported": False,
+            "default_attempts": 1,
+        },
+        "execution": {
+            "cacheable": True,
+            "timeout_ms": timeout_ms,
+            "run_from_workspace_root": True,
+        },
+        "labels": labels,
+        "metadata": {},
+    }
+
+def _rust_test_runner_source():
+    return """use std::collections::BTreeMap;
+use std::env;
+use std::fs;
+use std::path::Path;
+use std::process::{self, Command, Output};
+
+fn main() {
+    let args = env::args().collect::<Vec<_>>();
+    if args.len() < 6 {
+        eprintln!("usage: once-rust-test-runner <binary> <results> <log> <native-results> <target> [args...]");
+        process::exit(2);
+    }
+    let binary = &args[1];
+    let results = &args[2];
+    let log = &args[3];
+    let native_results = &args[4];
+    let target = &args[5];
+    let runner_args = &args[6..];
+
+    create_parent(results);
+    create_parent(log);
+    create_parent(native_results);
+
+    let list_output = Command::new(binary).arg("--list").output();
+    let list_text = match &list_output {
+        Ok(output) => output_text(output),
+        Err(error) => format!("failed to list tests: {error}\\n"),
+    };
+    let cases = parse_list(&list_text);
+
+    let run_output = Command::new(binary).args(runner_args).output();
+    let (run_text, exit_code, passed) = match run_output {
+        Ok(output) => {
+            let code = output.status.code().unwrap_or(1);
+            (output_text(&output), code, output.status.success())
+        }
+        Err(error) => (format!("failed to run tests: {error}\\n"), 1, false),
+    };
+
+    let statuses = parse_statuses(&run_text);
+    let report = report_json(target, &cases, &statuses, passed, log, native_results);
+    fs::write(log, &run_text).expect("write log");
+    fs::write(native_results, format!("$ {binary} --list\\n{list_text}\\n$ {binary}\\n{run_text}")).expect("write native results");
+    fs::write(results, report).expect("write results");
+    process::exit(exit_code);
+}
+
+fn create_parent(path: &str) {
+    if let Some(parent) = Path::new(path).parent() {
+        fs::create_dir_all(parent).expect("create output directory");
+    }
+}
+
+fn output_text(output: &Output) -> String {
+    let mut text = String::new();
+    text.push_str(&String::from_utf8_lossy(&output.stdout));
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    text
+}
+
+fn parse_list(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if let Some(name) = line.strip_suffix(": test") {
+            out.push(name.to_string());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn parse_statuses(text: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for line in text.lines() {
+        if !line.starts_with("test ") {
+            continue;
+        }
+        let rest = &line[5..];
+        for (suffix, status) in [
+            (" ... ok", "passed"),
+            (" ... FAILED", "failed"),
+            (" ... ignored", "skipped"),
+        ] {
+            if let Some(name) = rest.strip_suffix(suffix) {
+                out.insert(name.to_string(), status.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn json_string(value: &str) -> String {
+    let mut out = String::from("\\"");
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\\\\""),
+            '\\\\' => out.push_str("\\\\\\\\"),
+            '\\n' => out.push_str("\\\\n"),
+            '\\r' => out.push_str("\\\\r"),
+            '\\t' => out.push_str("\\\\t"),
+            c if c < ' ' => out.push_str(&format!("\\\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn report_json(
+    target: &str,
+    cases: &[String],
+    statuses: &BTreeMap<String, String>,
+    passed_run: bool,
+    log: &str,
+    native_results: &str,
+) -> String {
+    let mut case_records = Vec::new();
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    let mut skipped = 0usize;
+    for case in cases {
+        let status = statuses
+            .get(case)
+            .cloned()
+            .unwrap_or_else(|| if passed_run { "passed".to_string() } else { "unknown".to_string() });
+        match status.as_str() {
+            "passed" => passed += 1,
+            "failed" => failed += 1,
+            "skipped" => skipped += 1,
+            _ => {}
+        }
+        case_records.push(format!(
+            "{{\\"id\\":{},\\"name\\":{},\\"suite\\":{},\\"status\\":{},\\"attempts\\":[{{\\"status\\":{}}}],\\"runner_metadata\\":{{}}}}",
+            json_string(&format!("{target}::{case}")),
+            json_string(case),
+            json_string(target),
+            json_string(&status),
+            json_string(&status),
+        ));
+    }
+    let mut total = cases.len();
+    if !passed_run && total == 0 {
+        total = 1;
+        failed = 1;
+    }
+    let run_status = if passed_run { "passed" } else { "failed" };
+    format!(
+        "{{\\"schema\\":\\"once.test_results.v1\\",\\"target\\":{},\\"runner\\":{{\\"type\\":\\"rust_libtest\\",\\"metadata\\":{{}}}},\\"status\\":{},\\"summary\\":{{\\"total\\":{},\\"passed\\":{},\\"failed\\":{},\\"skipped\\":{},\\"flaky\\":0}},\\"cases\\":[{}],\\"artifacts\\":{{\\"logs\\":[{}],\\"native_results\\":[{}]}}}}\\n",
+        json_string(target),
+        json_string(run_status),
+        total,
+        passed,
+        failed,
+        skipped,
+        case_records.join(","),
+        json_string(log),
+        json_string(native_results),
+    )
+}
+"""
+
+def _rust_test_impl(ctx):
+    provider = _rust_compile(ctx, "bin", "src/lib.rs", _rust_output_name(ctx, "bin"), test = True, provider_kind = "rust_test")
+    test_dir = ctx["build_dir"] + "/test"
+    results = test_dir + "/test_results.json"
+    log = test_dir + "/rust-libtest.log"
+    native_results = test_dir + "/native_results.txt"
+    provider["test_info"] = _rust_test_info(ctx, provider["test_binary"], results, log, native_results, test_dir)
+
+    if ctx["capability"] != "test":
+        return provider
+
+    target = _rust_target(ctx)
+    _, _, host_triple = _rustc_toolchain(target)
+    if target and target != host_triple:
+        fail(ctx["label"]["id"] + ": rust_test execution supports the host target only; remove `target` or run the cross-compiled test binary with a platform runner")
+
+    runner_source = declare_output("test/OnceRustTestRunner.rs")
+    runner = declare_output("test/once-rust-test-runner" + _rust_output_extension("bin", ""))
+    runner_rustc, runner_identity, runner_host_triple = _rustc_toolchain("")
+    write_path(runner_source, _rust_test_runner_source())
+    runner_env = _rust_compile_action_env(ctx, runner_host_triple, runner_host_triple)
+    _rust_add_windows_rustc_runtime_path(runner_env, runner_rustc, runner_host_triple)
+    run_action(
+        argv = [runner_rustc, "--edition", "2021", runner_source, "-o", runner],
+        inputs = [runner_source],
+        outputs = [runner],
+        env = runner_env,
+        toolchain_identity = runner_identity + "\x00once.rust_test.runner.v1",
+        identifier = _rust_action_identifier(ctx, "test-runner-rustc"),
+    )
+    run_action(
+        argv = [runner, provider["test_binary"], results, log, native_results, ctx["label"]["id"]] + _rust_attr(ctx, "args", []),
+        inputs = [runner, provider["test_binary"]],
+        outputs = [test_dir, results, log, native_results],
+        env = _rust_test_env(ctx, test_dir),
+        toolchain_identity = runner_identity + "\x00once.rust_test.run.v1",
+        identifier = _rust_action_identifier(ctx, "test"),
+    )
+    return provider
 
 def _rust_crate_impl(ctx):
     provider = _rust_compile(ctx, "rlib", "src/lib.rs", _rust_output_name(ctx, "rlib"))
@@ -2440,6 +2699,30 @@ rust_binary = target_kind(
         ),
     ],
     impl = _rust_binary_impl,
+)
+
+rust_test = target_kind(
+    docs = "Rust test crate compiled with rustc --test and run through the generic Once test capability.",
+    attrs = _RUST_COMMON_ATTRS + [
+        attr("args", "list<string>", default = "[]", docs = "Arguments passed to the compiled libtest binary when running the test capability.", configurable = False),
+        attr("test_env", "map<string, string>", default = "{}", docs = "Environment variables passed to the test runner.", configurable = False),
+        attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
+        attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
+    ],
+    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
+    providers = ["rust_test", "once_test_info"],
+    capabilities = [
+        capability("build", ["binary"]),
+        capability("test", ["default", "test_results", "logs"]),
+    ],
+    examples = [
+        example(
+            "rust-test-minimal",
+            name = "Minimal Rust test",
+            use_when = "Use this when a Rust crate should run unit or integration tests through Once's generic test capability.",
+        ),
+    ],
+    impl = _rust_test_impl,
 )
 
 rust_crate = target_kind(

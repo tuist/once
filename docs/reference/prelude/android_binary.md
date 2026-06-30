@@ -38,6 +38,7 @@ and signs it with a debug key by default.
 | `emulator` | string | no | Android software development kit emulator | Override Android emulator path used by visible runs |
 | `emulator_device` | string | no |  | Android Virtual Device name started by `once run --visible` |
 | `launch_activity` | string | no | launcher intent | Activity component launched by `once run` |
+| `instruments` | target | no |  | Application target this package instruments when used by `android_instrumentation_test` |
 | `build_tools_version` | string | no | highest installed | Android SDK build-tools version |
 | `android_sdk` | string | no | env | Android SDK root, otherwise `ANDROID_HOME` or `ANDROID_SDK_ROOT` |
 | `java_language_level` | string | no | `17` | Java source and target level passed to `javac` |
@@ -116,15 +117,26 @@ name, which Once pairs with `application_id`.
 
 Set `adb_serial` when more than one Android device or emulator is connected.
 
+## Instrumentation
+
+Set `instruments` on an `android_binary` test package to identify the app
+under test. Then declare an
+[`android_instrumentation_test`](/reference/prelude/android_instrumentation_test)
+target that depends on both the app and the test package. The test target
+installs both packages on a device or emulator and runs `am instrument`.
+
 ## Limitations
 
 The first Android implementation supports Java sources, Kotlin sources,
 resources, native shared library packaging, debug signing, Android resource
 deps, Android library deps, APK install, and app launch. Data binding,
-instrumentation tests, manifest placeholder expansion, native splits,
+manifest placeholder expansion, native splits,
 shrinking, resource filtering, density filtering, no-compress packaging, and
 startup profile packaging are not implemented yet. Non-empty values for
 unsupported attrs fail analysis instead of being ignored.
+
+Use [`android_local_test`](/reference/prelude/android_local_test) for
+host-side Java and Kotlin tests.
 
 ## Example
 
