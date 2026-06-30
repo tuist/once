@@ -1568,15 +1568,25 @@ result = repr(provider["test_info"])
         &store,
         "android_instrumentation_runner_compile:apps/hello/GreetingInstrumentationTests",
     );
+    assert_android_instrumentation_runner_compile_action(runner_compile);
+    let run = action_by_identifier(
+        &store,
+        "android_instrumentation_test:apps/hello/GreetingInstrumentationTests",
+    );
+    assert_android_instrumentation_run_action(run);
+}
+
+#[cfg(unix)]
+fn assert_android_instrumentation_runner_compile_action(runner_compile: &DeclaredAction) {
     assert_eq!(runner_compile.argv[0], "/jdk/bin/javac");
     assert!(runner_compile
         .inputs
         .iter()
         .any(|input| input.ends_with("OnceAndroidInstrumentationRunner.java")));
-    let run = action_by_identifier(
-        &store,
-        "android_instrumentation_test:apps/hello/GreetingInstrumentationTests",
-    );
+}
+
+#[cfg(unix)]
+fn assert_android_instrumentation_run_action(run: &DeclaredAction) {
     assert!(!run.cacheable);
     assert_eq!(run.argv[0], "/jdk/bin/java");
     assert!(run

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use once_cas::Digest;
@@ -8,6 +9,11 @@ use sea_orm::{ActiveValue::Set, EntityTrait, QueryOrder};
 use super::entity;
 use super::{EvidenceCacheState, EvidenceRecord, EvidenceStatus, EvidenceSubject};
 use crate::WorkspaceStore;
+
+type EvidenceDatabaseLock = Arc<tokio::sync::Mutex<()>>;
+
+static EVIDENCE_DATABASE_LOCKS: LazyLock<Mutex<BTreeMap<PathBuf, EvidenceDatabaseLock>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 #[derive(Debug, Clone)]
 pub struct EvidenceStore {
@@ -26,6 +32,8 @@ impl EvidenceStore {
     }
 
     pub async fn append(&self, record: &EvidenceRecord) -> Result<()> {
+        let lock = evidence_database_lock(self.path());
+        let _guard = lock.lock().await;
         let db = self.store.connect().await?;
         let model = record_to_active_model(record)?;
         entity::Entity::insert(model)
@@ -39,6 +47,8 @@ impl EvidenceStore {
         if !self.path().exists() {
             return Ok(Vec::new());
         }
+        let lock = evidence_database_lock(self.path());
+        let _guard = lock.lock().await;
         let db = self.store.connect().await?;
         entity::Entity::find()
             .order_by_asc(entity::Column::CreatedAtUnixMs)
@@ -49,6 +59,17 @@ impl EvidenceStore {
             .map(record_from_model)
             .collect()
     }
+}
+
+fn evidence_database_lock(path: &Path) -> EvidenceDatabaseLock {
+    let mut locks = EVIDENCE_DATABASE_LOCKS
+        .lock()
+        .expect("evidence database lock poisoned");
+    Arc::clone(
+        locks
+            .entry(path.to_path_buf())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+    )
 }
 
 fn record_to_active_model(record: &EvidenceRecord) -> Result<entity::ActiveModel> {
