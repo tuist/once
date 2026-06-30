@@ -169,6 +169,8 @@ jobs:
     needs: [changes, release-build]
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
+    env:
+      ONCE_CACHE_PROVIDER: local
     strategy:
       fail-fast: false
       matrix:
@@ -193,6 +195,8 @@ jobs:
     needs: [changes, release-build]
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
+    env:
+      ONCE_CACHE_PROVIDER: local
     strategy:
       fail-fast: false
       matrix:
