@@ -222,6 +222,20 @@ EOF
     The path "$WORKSPACE/should-not-exist" should not be exist
   End
 
+  It 'applies script timeouts to fingerprint commands'
+    mkdir -p "$WORKSPACE/scripts"
+    cat > "$WORKSPACE/scripts/build.sh" <<'EOF'
+#!/usr/bin/env bash
+# once fingerprint "sleep 5"
+# once cwd ".."
+touch should-not-exist
+EOF
+    When call once exec --script --timeout-ms 50 -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    The status should not equal 0
+    The stderr should include 'timed out after 50ms'
+    The path "$WORKSPACE/should-not-exist" should not be exist
+  End
+
   It 'runs a command through the microsandbox compute provider'
     Skip if 'microsandbox specs are opt-in' microsandbox_specs_disabled
     When call "$ONCE_BIN" -C "$WORKSPACE" exec --remote --compute microsandbox -- /bin/sh -c 'printf remote-output'

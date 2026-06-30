@@ -14,7 +14,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{ExitCode, Output as ProcessOutput};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
@@ -78,15 +79,28 @@ struct ScriptGraphOptions {
     remote_override: Option<String>,
 }
 
+struct ScriptExecutionOptions {
+    explicit_env: Vec<(String, String)>,
+    cwd_override: Option<WorkspacePath>,
+    timeout_ms_override: Option<u64>,
+    remote_override: Option<String>,
+}
+
 #[derive(Clone)]
 struct DependencyFingerprint {
     script_path: String,
     digest: Digest,
 }
 
+#[derive(Debug)]
 struct FingerprintResult {
     command: String,
     digest: Digest,
+}
+
+struct FingerprintShell {
+    program: String,
+    command_arg: &'static str,
 }
 
 pub async fn exec(
@@ -95,69 +109,12 @@ pub async fn exec(
     args: ExecArgs,
     output: Output,
 ) -> Result<ExitCode> {
-    let ExecArgs {
-        script,
-        env,
-        cwd,
-        timeout_ms,
-        cache_failures,
-        remote,
-        argv,
-    } = args;
-
-    let opts = RunOpts { cache_failures };
-    let (workspace, action) = if script {
-        script_action_with_dependencies(
-            workspace,
-            cache,
-            opts,
-            env,
-            cwd,
-            timeout_ms,
-            remote.as_deref(),
-            &argv,
-        )
-        .await?
-    } else if let Some(plan) = autodetected_script_action(
-        cache,
-        opts,
-        workspace,
-        env.clone(),
-        cwd.clone(),
-        timeout_ms,
-        remote.as_deref(),
-        &argv,
-    )
-    .await?
-    {
-        plan
-    } else {
-        (
-            workspace.to_path_buf(),
-            Action::RunCommand {
-                argv,
-                env: env.into_iter().collect::<BTreeMap<_, _>>(),
-                cwd,
-                input_digest: None,
-                outputs: vec![],
-                output_symlink_mode: OutputSymlinkMode::default(),
-                resources: ResourceRequest::default(),
-                timeout_ms,
-                remote: remote_execution(remote.as_deref()),
-            },
-        )
+    let opts = RunOpts {
+        cache_failures: args.cache_failures,
     };
-
+    let (workspace, action) = plan_exec_action(workspace, cache, opts, args).await?;
     let streams_live = action_remote(&action).is_some() && output.format == Format::Human;
-    let outcome = if streams_live {
-        once_core::run_with_cache_streaming(&action, &workspace, cache, opts)
-            .await
-            .context("executing action")?
-    } else {
-        once_core::run_with_cache(&action, &workspace, cache, opts)
-            .await
-            .context("executing action")?
-    };
+    let outcome = run_exec_action(cache, &workspace, opts, &action, streams_live).await?;
     crate::commands::evidence::record_outcome(
         &workspace,
         EvidenceSubject::command(outcome.action),
@@ -165,7 +122,82 @@ pub async fn exec(
         &outcome,
     )
     .await;
+    write_exec_output(cache, output, streams_live, &outcome).await?;
 
+    Ok(exit_from(outcome.result.exit_code))
+}
+
+async fn plan_exec_action(
+    workspace: &Path,
+    cache: &CacheProvider,
+    opts: RunOpts,
+    args: ExecArgs,
+) -> Result<(PathBuf, Action)> {
+    let ExecArgs {
+        script,
+        env,
+        cwd,
+        timeout_ms,
+        cache_failures: _,
+        remote,
+        argv,
+    } = args;
+    let options = ScriptExecutionOptions {
+        explicit_env: env,
+        cwd_override: cwd,
+        timeout_ms_override: timeout_ms,
+        remote_override: remote,
+    };
+
+    if script {
+        script_action_with_dependencies(workspace, cache, opts, &options, &argv).await
+    } else if let Some(plan) =
+        autodetected_script_action(cache, opts, workspace, &options, &argv).await?
+    {
+        Ok(plan)
+    } else {
+        Ok((
+            workspace.to_path_buf(),
+            Action::RunCommand {
+                argv,
+                env: options.explicit_env.into_iter().collect::<BTreeMap<_, _>>(),
+                cwd: options.cwd_override,
+                input_digest: None,
+                outputs: vec![],
+                output_symlink_mode: OutputSymlinkMode::default(),
+                resources: ResourceRequest::default(),
+                timeout_ms: options.timeout_ms_override,
+                remote: remote_execution(options.remote_override.as_deref()),
+            },
+        ))
+    }
+}
+
+async fn run_exec_action(
+    cache: &CacheProvider,
+    workspace: &Path,
+    opts: RunOpts,
+    action: &Action,
+    streams_live: bool,
+) -> Result<once_core::Outcome> {
+    let outcome = if streams_live {
+        once_core::run_with_cache_streaming(action, workspace, cache, opts)
+            .await
+            .context("executing action")?
+    } else {
+        once_core::run_with_cache(action, workspace, cache, opts)
+            .await
+            .context("executing action")?
+    };
+    Ok(outcome)
+}
+
+async fn write_exec_output(
+    cache: &CacheProvider,
+    output: Output,
+    streams_live: bool,
+    outcome: &once_core::Outcome,
+) -> Result<()> {
     let stdout = match outcome.result.stdout {
         Some(digest) => cache.get_blob(&digest).await?,
         None => Vec::new(),
@@ -214,8 +246,7 @@ pub async fn exec(
         err.write_all(trailer.as_bytes()).await?;
     }
     err.flush().await?;
-
-    Ok(exit_from(outcome.result.exit_code))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -245,26 +276,22 @@ fn script_action(
     Ok((invocation.workspace.clone(), action))
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn script_action_with_dependencies(
     workspace: &Path,
     cache: &CacheProvider,
     opts: RunOpts,
-    explicit_env: Vec<(String, String)>,
-    cwd_override: Option<WorkspacePath>,
-    timeout_ms_override: Option<u64>,
-    remote_override: Option<&str>,
+    options: &ScriptExecutionOptions,
     argv: &[String],
 ) -> Result<(PathBuf, Action)> {
     let graph_options = ScriptGraphOptions {
-        explicit_env: explicit_env.into_iter().collect(),
-        timeout_ms_override,
-        remote_override: remote_override.map(str::to_string),
+        explicit_env: options.explicit_env.iter().cloned().collect(),
+        timeout_ms_override: options.timeout_ms_override,
+        remote_override: options.remote_override.clone(),
     };
     let invocation = script_invocation(
         workspace,
         graph_options.explicit_env.clone(),
-        cwd_override,
+        options.cwd_override.clone(),
         graph_options.timeout_ms_override,
         graph_options.remote_override.as_deref(),
         argv,
@@ -315,10 +342,7 @@ async fn autodetected_script_action(
     cache: &CacheProvider,
     opts: RunOpts,
     workspace: &Path,
-    explicit_env: Vec<(String, String)>,
-    cwd_override: Option<WorkspacePath>,
-    timeout_ms_override: Option<u64>,
-    remote_override: Option<&str>,
+    options: &ScriptExecutionOptions,
     argv: &[String],
 ) -> Result<Option<(PathBuf, Action)>> {
     let Ok((_, _, script_arg, _)) = parse_script_exec_argv(workspace, argv) else {
@@ -333,18 +357,9 @@ async fn autodetected_script_action(
     if !has_once_annotations(&annotations) {
         return Ok(None);
     }
-    script_action_with_dependencies(
-        workspace,
-        cache,
-        opts,
-        explicit_env,
-        cwd_override,
-        timeout_ms_override,
-        remote_override,
-        argv,
-    )
-    .await
-    .map(Some)
+    script_action_with_dependencies(workspace, cache, opts, options, argv)
+        .await
+        .map(Some)
 }
 
 async fn script_action_with_dependency_graph(
@@ -438,19 +453,23 @@ async fn run_script_graph_dependencies(
     let target_count = graph.len().saturating_sub(1);
     let mut completed = BTreeSet::new();
     let mut fingerprints: BTreeMap<String, DependencyFingerprint> = BTreeMap::new();
+    let root = graph
+        .get(root_id)
+        .with_context(|| format!("script graph root `{root_id}` vanished from the graph"))?;
+    let runner = once_core::Runner::with_cache(cache.clone(), root.workspace.clone(), opts);
 
     while completed.len() < target_count {
         let ready = graph
             .iter()
-            .filter_map(|(id, invocation)| {
-                (id.as_str() != root_id
+            .filter(|(id, invocation)| {
+                id.as_str() != root_id
                     && !completed.contains(id.as_str())
                     && invocation
                         .needs
                         .iter()
-                        .all(|need| completed.contains(need.as_str())))
-                .then(|| id.clone())
+                        .all(|need| completed.contains(need.as_str()))
             })
+            .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
         if ready.is_empty() {
             anyhow::bail!("cycle detected while running script graph rooted at `{root_id}`");
@@ -463,9 +482,9 @@ async fn run_script_graph_dependencies(
                 .with_context(|| format!("script dependency `{id}` vanished from the graph"))?
                 .clone();
             let dependency_fingerprints = dependency_fingerprints_for(&invocation, &fingerprints)?;
-            let cache = cache.clone();
+            let runner = runner.clone();
             tasks.spawn(async move {
-                run_dependency_script(&cache, opts, invocation, dependency_fingerprints)
+                run_dependency_script(runner, invocation, dependency_fingerprints)
                     .await
                     .map(|fingerprint| (id, fingerprint))
             });
@@ -478,9 +497,6 @@ async fn run_script_graph_dependencies(
         }
     }
 
-    let root = graph
-        .get(root_id)
-        .with_context(|| format!("script graph root `{root_id}` vanished from the graph"))?;
     dependency_fingerprints_for(root, &fingerprints)
 }
 
@@ -501,8 +517,7 @@ fn dependency_fingerprints_for(
 }
 
 async fn run_dependency_script(
-    cache: &CacheProvider,
-    opts: RunOpts,
+    runner: once_core::Runner,
     invocation: ScriptInvocation,
     dependency_fingerprints: Vec<DependencyFingerprint>,
 ) -> Result<DependencyFingerprint> {
@@ -513,11 +528,13 @@ async fn run_dependency_script(
         &run_fingerprint_commands(&invocation).await?,
     )?);
     let action = action_from_script_invocation(&invocation, input_digest)?;
-    let outcome = once_core::run_with_cache(&action, &invocation.workspace, cache, opts)
+    let outcome = runner
+        .run(&action)
         .await
         .with_context(|| format!("executing dependency script `{}`", invocation.script_path))?;
     if outcome.result.exit_code != 0 {
-        let message = dependency_failure_message(cache, &invocation, &outcome.result).await?;
+        let message =
+            dependency_failure_message(runner.cache(), &invocation, &outcome.result).await?;
         anyhow::bail!("{message}");
     }
 
@@ -582,24 +599,25 @@ async fn run_fingerprint_command(
     invocation: &ScriptInvocation,
     command: &str,
 ) -> Result<FingerprintResult> {
-    let shell = resolve_runtime(&invocation.workspace, "sh")
-        .context("resolving shell for fingerprint command")?;
+    let shell = fingerprint_shell();
     let cwd = invocation.cwd.resolve(&invocation.workspace);
-    let mut child = tokio::process::Command::new(shell);
-    child.arg("-c").arg(command).env_clear().current_dir(&cwd);
+    let mut child = tokio::process::Command::new(shell.program);
+    child
+        .arg(shell.command_arg)
+        .arg(command)
+        .env_clear()
+        .current_dir(&cwd)
+        .kill_on_drop(true);
     for (key, value) in &invocation.env {
         child.env(key, value);
     }
 
-    let output = child
-        .output()
-        .await
-        .with_context(|| format!("running fingerprint command `{command}`"))?;
+    let output = fingerprint_command_output(child, invocation.timeout_ms, command).await?;
     let digest = fingerprint_digest(command, &output);
     if !output.status.success() {
         let mut message = format!(
             "fingerprint command `{command}` failed with {}",
-            exit_status_text(&output.status)
+            exit_status_text(output.status)
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -620,14 +638,49 @@ async fn run_fingerprint_command(
     })
 }
 
-fn fingerprint_digest(command: &str, output: &std::process::Output) -> Digest {
+async fn fingerprint_command_output(
+    mut child: tokio::process::Command,
+    timeout_ms: Option<u64>,
+    command: &str,
+) -> Result<ProcessOutput> {
+    match timeout_ms {
+        Some(ms) => tokio::time::timeout(Duration::from_millis(ms), child.output())
+            .await
+            .with_context(|| format!("fingerprint command `{command}` timed out after {ms}ms"))?
+            .with_context(|| format!("running fingerprint command `{command}`")),
+        None => child
+            .output()
+            .await
+            .with_context(|| format!("running fingerprint command `{command}`")),
+    }
+}
+
+fn fingerprint_shell() -> FingerprintShell {
+    #[cfg(windows)]
+    {
+        FingerprintShell {
+            program: env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string()),
+            command_arg: "/C",
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        FingerprintShell {
+            program: "/bin/sh".to_string(),
+            command_arg: "-c",
+        }
+    }
+}
+
+fn fingerprint_digest(command: &str, output: &ProcessOutput) -> Digest {
     let mut buf = Vec::new();
     buf.extend_from_slice(b"once.exec.script.fingerprint.v1\0");
     buf.extend_from_slice(b"command\0");
     buf.extend_from_slice(command.as_bytes());
     buf.push(0);
     buf.extend_from_slice(b"status\0");
-    buf.extend_from_slice(exit_status_text(&output.status).as_bytes());
+    buf.extend_from_slice(exit_status_text(output.status).as_bytes());
     buf.push(0);
     buf.extend_from_slice(b"stdout\0");
     buf.extend_from_slice(&output.stdout);
@@ -638,7 +691,7 @@ fn fingerprint_digest(command: &str, output: &std::process::Output) -> Digest {
     Digest::of_bytes(&buf)
 }
 
-fn exit_status_text(status: &std::process::ExitStatus) -> String {
+fn exit_status_text(status: std::process::ExitStatus) -> String {
     status
         .code()
         .map_or_else(|| "signal".to_string(), |code| format!("exit code {code}"))
@@ -1209,10 +1262,12 @@ mod tests {
             &cache,
             RunOpts::default(),
             tmp.path(),
-            Vec::new(),
-            None,
-            None,
-            None,
+            &ScriptExecutionOptions {
+                explicit_env: Vec::new(),
+                cwd_override: None,
+                timeout_ms_override: None,
+                remote_override: None,
+            },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
         .await
@@ -1320,6 +1375,49 @@ mod tests {
         assert!(err.to_string().contains("matched more than 1 files"));
     }
 
+    #[test]
+    fn fingerprint_shell_uses_stable_system_shell() {
+        let shell = fingerprint_shell();
+
+        #[cfg(windows)]
+        {
+            assert_eq!(shell.command_arg, "/C");
+            assert!(!shell.program.is_empty());
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert_eq!(shell.program, "/bin/sh");
+            assert_eq!(shell.command_arg, "-c");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn fingerprint_commands_respect_script_timeout() {
+        let tmp = TempDir::new().unwrap();
+        let invocation = ScriptInvocation {
+            workspace: tmp.path().to_path_buf(),
+            runtime: "/bin/sh".to_string(),
+            runtime_args: Vec::new(),
+            script_path: WorkspacePath::try_from("build.sh").unwrap(),
+            script_args: Vec::new(),
+            needs: Vec::new(),
+            fingerprints: vec!["sleep 5".to_string()],
+            inputs: Vec::new(),
+            cwd: WorkspacePath::root(),
+            env: BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]),
+            outputs: Vec::new(),
+            output_symlink_mode: OutputSymlinkMode::default(),
+            timeout_ms: Some(10),
+            remote: None,
+        };
+
+        let err = run_fingerprint_commands(&invocation).await.unwrap_err();
+
+        assert!(err.to_string().contains("timed out after 10ms"));
+    }
+
     #[tokio::test]
     async fn does_not_autodetect_unannotated_scripts() {
         let tmp = TempDir::new().unwrap();
@@ -1332,10 +1430,12 @@ mod tests {
             &cache,
             RunOpts::default(),
             tmp.path(),
-            Vec::new(),
-            None,
-            None,
-            None,
+            &ScriptExecutionOptions {
+                explicit_env: Vec::new(),
+                cwd_override: None,
+                timeout_ms_override: None,
+                remote_override: None,
+            },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
         .await
