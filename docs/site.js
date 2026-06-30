@@ -114,6 +114,14 @@ export const site = {
         ],
       },
       {
+        text: "Infrastructure",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/guide/infrastructure/" },
+          { text: "Tuist", link: "/guide/infrastructure/tuist" },
+        ],
+      },
+      {
         text: "Memory",
         collapsed: false,
         items: [

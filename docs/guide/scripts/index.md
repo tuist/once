@@ -57,49 +57,8 @@ and declared outputs. Root `once.toml` files configure shared settings such as
 cache providers, while package `once.toml` files may grow build graph
 declarations as Once expands beyond scripts.
 
-The root configuration can name a provider once and use it for more than one
-capability. Per-capability fields override the provider defaults:
-
-```text
-[infrastructure.cache]
-provider = "tuist"
-
-[infrastructure.execution]
-provider = "tuist"
-project = "preview-execution"
-
-[infrastructures.tuist]
-kind = "tuist"
-account = "acme"
-project = "app"
-```
-
-In this example, cache and execution both use the `tuist` provider and the
-same account. Cache uses the provider's default project, while execution sends
-`preview-execution`. Pass `--compute <provider>` with `--remote` when a single
-run should bypass the configured execution provider.
-
-For Continuous Integration
-([CI](https://en.wikipedia.org/wiki/Continuous_integration)), Tuist accepts two
-authentication shapes. Set `TUIST_TOKEN` to an account token with cache scopes,
-or run `once auth login --provider tuist` before cacheable commands on GitHub
-Actions, CircleCI, or Bitrise. In those runners, Once requests the provider's
-OpenID Connect identity token, exchanges it with Tuist, and saves the resulting
-Tuist session for the rest of the job.
-
-Set `ONCE_CACHE_PROVIDER=local` on a command when a runner should keep the
-repository configuration but use only the local cache for that process.
-
-```yaml
-permissions:
-  id-token: write
-  contents: read
-
-steps:
-  - uses: actions/checkout@v5
-  - run: once auth login --provider tuist
-  - run: once exec -- ./scripts/build.sh
-```
+See [Infrastructure](/guide/infrastructure/) for remote cache and execution
+provider configuration.
 
 ## Next
 
