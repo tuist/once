@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use once_cas::{CacheProvider, TuistCacheConfig, TUIST_OAUTH_CLIENT_ID_ENV};
+use once_core::RemoteExecution;
 use once_core::Xdg;
 use once_frontend::{
-    CacheProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig, DEFAULT_TUIST_URL,
+    CacheProviderConfig, InfrastructureConfig, InfrastructureProviderConfig,
+    NamedCacheProviderConfig, TuistCacheProviderConfig, DEFAULT_TUIST_URL,
 };
 use serde::Deserialize;
 
@@ -15,8 +17,38 @@ pub(crate) enum ResolvedCacheProviderConfig {
     Tuist(TuistCacheConfig),
 }
 
+const DEFAULT_EXECUTION_PROVIDER: &str = "microsandbox";
+
 pub fn resolve(workspace: &Path, xdg: &Xdg) -> Result<CacheProvider> {
     build_provider(xdg, resolve_config(workspace, xdg)?)
+}
+
+pub(crate) fn resolve_execution(
+    workspace: &Path,
+    xdg: &Xdg,
+    explicit_provider: Option<&str>,
+) -> Result<RemoteExecution> {
+    if let Some(provider) = explicit_provider.and_then(non_empty_str) {
+        return Ok(RemoteExecution::provider(provider));
+    }
+
+    let workspace_config =
+        once_frontend::load_infrastructure_config(workspace).context("loading infrastructure")?;
+    if let Some(binding) = workspace_config.execution.clone() {
+        return resolve_execution_binding(xdg, &workspace_config, binding);
+    }
+
+    if let Some(mut config) = maybe_load_user_config(xdg)? {
+        if let Some(binding) = config
+            .infrastructure
+            .take()
+            .and_then(|infrastructure| infrastructure.execution)
+        {
+            return resolve_execution_user_binding(xdg, binding.into_named(), config);
+        }
+    }
+
+    Ok(RemoteExecution::provider(DEFAULT_EXECUTION_PROVIDER))
 }
 
 pub(crate) fn resolve_auth_provider(
@@ -30,6 +62,19 @@ pub(crate) fn resolve_auth_provider(
     }
     if provider_name == "workspace" {
         return resolve_config(workspace, xdg);
+    }
+
+    let workspace_config =
+        once_frontend::load_infrastructure_config(workspace).context("loading infrastructure")?;
+    if let Some(provider) = workspace_config.providers.get(provider_name) {
+        return Ok(resolve_named_workspace_provider(
+            NamedCacheProviderConfig {
+                name: provider_name.to_string(),
+                account: None,
+                project: None,
+            },
+            provider.clone(),
+        ));
     }
 
     if let Some(mut config) = maybe_load_user_config(xdg)? {
@@ -66,17 +111,16 @@ pub(crate) fn credentials_root(xdg: &Xdg) -> PathBuf {
 }
 
 fn resolve_config(workspace: &Path, xdg: &Xdg) -> Result<ResolvedCacheProviderConfig> {
-    match once_frontend::load_cache_provider_override(workspace)
-        .context("loading cache provider")?
-    {
-        Some(config) => resolve_provider_config(xdg, config),
-        None => {
-            if let Some(config) = resolve_tuist_workspace_config(workspace) {
-                Ok(ResolvedCacheProviderConfig::Tuist(config?))
-            } else {
-                resolve_default_provider(xdg)
-            }
-        }
+    let workspace_config =
+        once_frontend::load_infrastructure_config(workspace).context("loading infrastructure")?;
+    if let Some(config) = workspace_config.cache {
+        return resolve_provider_config(xdg, &workspace_config.providers, config);
+    }
+
+    if let Some(config) = resolve_tuist_workspace_config(workspace) {
+        Ok(ResolvedCacheProviderConfig::Tuist(config?))
+    } else {
+        resolve_default_provider(xdg)
     }
 }
 
@@ -92,6 +136,7 @@ fn build_provider(xdg: &Xdg, config: ResolvedCacheProviderConfig) -> Result<Cach
 
 fn resolve_provider_config(
     xdg: &Xdg,
+    workspace_providers: &BTreeMap<String, InfrastructureProviderConfig>,
     config: CacheProviderConfig,
 ) -> Result<ResolvedCacheProviderConfig> {
     match config {
@@ -100,6 +145,9 @@ fn resolve_provider_config(
             direct_tuist_config(config),
         )),
         CacheProviderConfig::Named(binding) => {
+            if let Some(provider) = workspace_providers.get(&binding.name) {
+                return Ok(resolve_named_workspace_provider(binding, provider.clone()));
+            }
             let mut config = load_user_config(xdg)?;
             let provider =
                 take_named_user_provider(&mut config, &binding.name).with_context(|| {
@@ -166,6 +214,126 @@ fn resolve_named_provider(
             oauth_client_id,
         )),
     }
+}
+
+fn resolve_named_workspace_provider(
+    binding: NamedCacheProviderConfig,
+    provider: InfrastructureProviderConfig,
+) -> ResolvedCacheProviderConfig {
+    let NamedCacheProviderConfig {
+        name,
+        account: binding_account,
+        project: binding_project,
+    } = binding;
+    match provider {
+        InfrastructureProviderConfig::Local => ResolvedCacheProviderConfig::Local,
+        InfrastructureProviderConfig::Tuist(config) => {
+            ResolvedCacheProviderConfig::Tuist(default_tuist_config(
+                name,
+                config.url,
+                binding_account.or(config.account),
+                binding_project.or(config.project),
+                config.oauth_client_id,
+            ))
+        }
+    }
+}
+
+fn resolve_execution_binding(
+    xdg: &Xdg,
+    workspace_config: &InfrastructureConfig,
+    binding: NamedCacheProviderConfig,
+) -> Result<RemoteExecution> {
+    if let Some(provider) = workspace_config.providers.get(&binding.name) {
+        return Ok(remote_from_workspace_provider(binding, provider.clone()));
+    }
+
+    if let Some(config) = maybe_load_user_config(xdg)? {
+        return resolve_execution_user_binding(xdg, binding, config);
+    }
+
+    if is_builtin_execution_provider(&binding.name) {
+        return Ok(remote_from_binding(binding));
+    }
+
+    bail!(
+        "infrastructure `{}` was not found in {}",
+        binding.name,
+        user_config_path(xdg).display()
+    )
+}
+
+fn resolve_execution_user_binding(
+    xdg: &Xdg,
+    binding: NamedCacheProviderConfig,
+    mut config: UserConfig,
+) -> Result<RemoteExecution> {
+    if let Some(provider) = take_named_user_provider(&mut config, &binding.name) {
+        return Ok(remote_from_user_provider(binding, provider));
+    }
+    if is_builtin_execution_provider(&binding.name) {
+        return Ok(remote_from_binding(binding));
+    }
+    bail!(
+        "infrastructure `{}` was not found in {}",
+        binding.name,
+        user_config_path(xdg).display()
+    )
+}
+
+fn remote_from_workspace_provider(
+    binding: NamedCacheProviderConfig,
+    provider: InfrastructureProviderConfig,
+) -> RemoteExecution {
+    let NamedCacheProviderConfig {
+        name,
+        account: binding_account,
+        project: binding_project,
+    } = binding;
+    match provider {
+        InfrastructureProviderConfig::Local => RemoteExecution {
+            provider: name,
+            account: binding_account,
+            project: binding_project,
+        },
+        InfrastructureProviderConfig::Tuist(config) => RemoteExecution {
+            provider: name,
+            account: binding_account.or(config.account),
+            project: binding_project.or(config.project),
+        },
+    }
+}
+
+fn remote_from_user_provider(
+    binding: NamedCacheProviderConfig,
+    provider: UserCacheProvider,
+) -> RemoteExecution {
+    let NamedCacheProviderConfig {
+        name,
+        account: binding_account,
+        project: binding_project,
+    } = binding;
+    match provider {
+        UserCacheProvider::Tuist {
+            account, project, ..
+        } => RemoteExecution {
+            provider: name,
+            account: binding_account.or(account),
+            project: binding_project.or(project),
+        },
+    }
+}
+
+fn remote_from_binding(binding: NamedCacheProviderConfig) -> RemoteExecution {
+    RemoteExecution {
+        provider: binding.name,
+        account: binding.account,
+        project: binding.project,
+    }
+}
+
+fn is_builtin_execution_provider(name: &str) -> bool {
+    matches!(name, "microsandbox" | "daytona")
 }
 
 fn direct_tuist_config(config: TuistCacheProviderConfig) -> TuistCacheConfig {
@@ -456,11 +624,13 @@ struct UserConfig {
 #[serde(default, deny_unknown_fields)]
 struct UserInfrastructureConfig {
     cache: Option<UserCacheProviderBinding>,
+    execution: Option<UserCacheProviderBinding>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UserCacheProviderBinding {
+    #[serde(alias = "provider")]
     name: String,
     account: Option<String>,
     project: Option<String>,
@@ -520,6 +690,13 @@ fn maybe_load_user_config(xdg: &Xdg) -> Result<Option<UserConfig>> {
     {
         normalize_binding(binding, &path)?;
     }
+    if let Some(binding) = config
+        .infrastructure
+        .as_mut()
+        .and_then(|infrastructure| infrastructure.execution.as_mut())
+    {
+        normalize_binding(binding, &path)?;
+    }
     Ok(Some(config))
 }
 
@@ -549,6 +726,15 @@ fn non_empty(value: Option<String>) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+fn non_empty_str(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 #[cfg(test)]
@@ -856,6 +1042,95 @@ account = "acme"
         let config = expect_tuist(resolve_config(tmp.path(), &xdg).unwrap());
         assert_eq!(config.account.as_deref(), Some("acme"));
         assert_eq!(config.project.as_deref(), Some("repo-app"));
+    }
+
+    #[test]
+    fn workspace_cache_binding_uses_root_provider_defaults() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_workspace(
+            tmp.path(),
+            r#"
+[infrastructure.cache]
+provider = "tuist"
+project = "cache-app"
+
+[infrastructures.tuist]
+kind = "tuist"
+url = "https://cache.tuist.dev"
+account = "acme"
+project = "default-app"
+"#,
+        );
+
+        let config = expect_tuist(resolve_config(tmp.path(), &xdg).unwrap());
+
+        assert_eq!(config.url, "https://cache.tuist.dev");
+        assert_eq!(config.account.as_deref(), Some("acme"));
+        assert_eq!(config.project.as_deref(), Some("cache-app"));
+        assert_eq!(config.provider_name, "tuist");
+    }
+
+    #[test]
+    fn resolve_execution_uses_root_provider_with_capability_overrides() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_workspace(
+            tmp.path(),
+            r#"
+[infrastructure.execution]
+provider = "tuist"
+project = "remote-builds"
+
+[infrastructures.tuist]
+kind = "tuist"
+url = "https://cache.tuist.dev"
+account = "acme"
+project = "default-app"
+"#,
+        );
+
+        let remote = resolve_execution(tmp.path(), &xdg, None).unwrap();
+
+        assert_eq!(
+            remote,
+            RemoteExecution {
+                provider: "tuist".to_string(),
+                account: Some("acme".to_string()),
+                project: Some("remote-builds".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_execution_defaults_to_microsandbox_without_config() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+
+        let remote = resolve_execution(tmp.path(), &xdg, None).unwrap();
+
+        assert_eq!(remote, RemoteExecution::provider("microsandbox"));
+    }
+
+    #[test]
+    fn resolve_execution_explicit_provider_beats_workspace_config() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_workspace(
+            tmp.path(),
+            r#"
+[infrastructure.execution]
+provider = "tuist"
+
+[infrastructures.tuist]
+kind = "tuist"
+account = "acme"
+"#,
+        );
+
+        let remote = resolve_execution(tmp.path(), &xdg, Some("daytona")).unwrap();
+
+        assert_eq!(remote, RemoteExecution::provider("daytona"));
     }
 
     #[test]

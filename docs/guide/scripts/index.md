@@ -57,6 +57,28 @@ and declared outputs. Root `once.toml` files configure shared settings such as
 cache providers, while package `once.toml` files may grow build graph
 declarations as Once expands beyond scripts.
 
+The root configuration can name a provider once and use it for more than one
+capability. Per-capability fields override the provider defaults:
+
+```text
+[infrastructure.cache]
+provider = "tuist"
+
+[infrastructure.execution]
+provider = "tuist"
+project = "preview-execution"
+
+[infrastructures.tuist]
+kind = "tuist"
+account = "acme"
+project = "app"
+```
+
+In this example, cache and execution both use the `tuist` provider and the
+same account. Cache uses the provider's default project, while execution sends
+`preview-execution`. Pass `--compute <provider>` with `--remote` when a single
+run should bypass the configured execution provider.
+
 ## Next
 
 Read [Caching](/guide/scripts/caching) for annotation examples across

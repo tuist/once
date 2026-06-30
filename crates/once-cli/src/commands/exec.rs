@@ -49,7 +49,7 @@ pub struct ExecArgs {
     pub cwd: Option<WorkspacePath>,
     pub timeout_ms: Option<u64>,
     pub cache_failures: bool,
-    pub remote: Option<String>,
+    pub remote: Option<RemoteExecution>,
     pub argv: Vec<String>,
 }
 
@@ -85,13 +85,13 @@ pub async fn exec(
     } = args;
 
     let (workspace, action) = if script {
-        script_action(workspace, env, cwd, timeout_ms, remote.as_deref(), &argv)?
+        script_action(workspace, env, cwd, timeout_ms, remote.clone(), &argv)?
     } else if let Some(plan) = autodetected_script_action(
         workspace,
         env.clone(),
         cwd.clone(),
         timeout_ms,
-        remote.as_deref(),
+        remote.clone(),
         &argv,
     )? {
         plan
@@ -107,7 +107,7 @@ pub async fn exec(
                 output_symlink_mode: OutputSymlinkMode::default(),
                 resources: ResourceRequest::default(),
                 timeout_ms,
-                remote: remote_execution(remote.as_deref()),
+                remote,
             },
         )
     };
@@ -188,7 +188,7 @@ fn script_action(
     explicit_env: Vec<(String, String)>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    remote_override: Option<&str>,
+    remote_override: Option<RemoteExecution>,
     argv: &[String],
 ) -> Result<(PathBuf, Action)> {
     let invocation = script_invocation(
@@ -225,9 +225,7 @@ fn script_action(
 }
 
 fn remote_execution(provider: Option<&str>) -> Option<RemoteExecution> {
-    provider.map(|provider| RemoteExecution {
-        provider: provider.to_string(),
-    })
+    provider.map(RemoteExecution::provider)
 }
 
 fn action_remote(action: &Action) -> Option<&RemoteExecution> {
@@ -242,7 +240,7 @@ fn autodetected_script_action(
     explicit_env: Vec<(String, String)>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    remote_override: Option<&str>,
+    remote_override: Option<RemoteExecution>,
     argv: &[String],
 ) -> Result<Option<(PathBuf, Action)>> {
     let Ok((_, _, script_arg, _)) = parse_script_exec_argv(workspace, argv) else {
@@ -273,7 +271,7 @@ fn script_invocation(
     explicit_env: BTreeMap<String, String>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    remote_override: Option<&str>,
+    remote_override: Option<RemoteExecution>,
     argv: &[String],
 ) -> Result<ScriptInvocation> {
     let (runtime, runtime_args, script_arg, script_args) = parse_script_exec_argv(workspace, argv)?;
@@ -310,7 +308,7 @@ fn script_invocation(
     let input_digest = Some(script_input_digest(&workspace, &inputs)?);
     let timeout_ms = timeout_ms_override;
     let env = script_env(&workspace, &runtime, &annotations.env_vars, explicit_env)?;
-    let remote = remote_execution(remote_override.or(annotations.remote.as_deref()));
+    let remote = remote_override.or_else(|| remote_execution(annotations.remote.as_deref()));
     let output_symlink_mode = output_symlink_mode(annotations.output_symlinks.as_deref())?;
 
     Ok(ScriptInvocation {
