@@ -31,7 +31,7 @@ fn push_unique(dirs: &mut Vec<PathBuf>, dir: PathBuf) {
     }
 }
 
-fn stable_system_path() -> Vec<PathBuf> {
+pub(super) fn stable_system_path() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
         let mut dirs = Vec::new();
