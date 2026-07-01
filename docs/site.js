@@ -110,7 +110,7 @@ export const site = {
             items: [
               { text: "Overview", link: "/guide/scripted/" },
               { text: "Caching", link: "/guide/scripted/caching" },
-              { text: "Runtime contract", link: "/guide/scripted/runtime" },
+              { text: "Runtime", link: "/guide/scripted/runtime" },
             ],
           },
         ],

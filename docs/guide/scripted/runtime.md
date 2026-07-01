@@ -1,4 +1,4 @@
-# Runtime contract
+# Runtime
 
 Once exposes cache primitives at script runtime through `once cache`.
 That gives ordinary scripts direct access to the same content-addressed

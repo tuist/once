@@ -65,5 +65,5 @@ provider configuration.
 ## Next
 
 Read [Caching](/guide/scripted/caching) for annotation examples across
-languages and [Runtime contract](/guide/scripted/runtime) for the
-`once cache` primitives that scripts can call directly.
+languages and [Runtime](/guide/scripted/runtime) for the `once cache`
+primitives that scripts can call directly.
