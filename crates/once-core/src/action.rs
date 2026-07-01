@@ -163,6 +163,20 @@ impl Action {
 #[serde(rename_all = "snake_case")]
 pub struct RemoteExecution {
     pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+impl RemoteExecution {
+    pub fn provider(provider: impl Into<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            account: None,
+            project: None,
+        }
+    }
 }
 
 #[cfg(test)]

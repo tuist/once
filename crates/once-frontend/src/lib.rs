@@ -24,7 +24,9 @@ pub const TOML_BUILD_FILE_NAME: &str = "once.toml";
 pub const BUILD_FILE_NAME: &str = TOML_BUILD_FILE_NAME;
 
 pub use cache_provider::{
-    CacheProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig, DEFAULT_TUIST_URL,
+    CacheProviderConfig, ExecutionProviderConfig, InfrastructureConfig,
+    InfrastructureProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig,
+    DEFAULT_TUIST_URL,
 };
 pub use error::{Error, Result};
 pub use examples::{load_example_bundle, load_target_kind_example};
@@ -35,7 +37,7 @@ pub use graph::{
     TargetKindExample, TargetKindExampleBundle, TargetKindExampleFile, TargetKindExampleRoot,
     TargetKindExampleSource, TargetKindSchema, TargetLabel,
 };
-pub use manifest::{load_cache_provider_toml_str, load_toml_str};
+pub use manifest::{load_cache_provider_toml_str, load_infrastructure_toml_str, load_toml_str};
 pub use manifest_editor::{
     apply_operations, apply_operations_with_schemas, EditOperation, TargetSpec, TargetUpdate,
 };
@@ -46,4 +48,7 @@ pub use target_ref::{
     target_id, validate_target_name, TargetIdError,
 };
 pub use target_validator::validate_target;
-pub use workspace::{load_cache_provider, load_cache_provider_override, load_file, load_workspace};
+pub use workspace::{
+    load_cache_provider, load_cache_provider_override, load_file, load_infrastructure_config,
+    load_workspace,
+};

@@ -110,10 +110,17 @@ export const site = {
             items: [
               { text: "Overview", link: "/guide/scripted/" },
               { text: "Caching", link: "/guide/scripted/caching" },
-              { text: "Cache CLI", link: "/guide/scripted/cache-cli" },
-              { text: "Runtime", link: "/guide/scripted/runtime" },
+              { text: "Runtime contract", link: "/guide/scripted/runtime" },
             ],
           },
+        ],
+      },
+      {
+        text: "Infrastructure",
+        collapsed: false,
+        items: [
+          { text: "Overview", link: "/guide/infrastructure/" },
+          { text: "Tuist", link: "/guide/infrastructure/tuist" },
         ],
       },
       {

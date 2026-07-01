@@ -50,7 +50,7 @@ pub struct ExecArgs {
     pub cwd: Option<WorkspacePath>,
     pub timeout_ms: Option<u64>,
     pub cache_failures: bool,
-    pub remote: Option<String>,
+    pub remote: Option<RemoteExecution>,
     pub argv: Vec<String>,
 }
 
@@ -76,14 +76,14 @@ struct ScriptInvocation {
 struct ScriptGraphOptions {
     explicit_env: BTreeMap<String, String>,
     timeout_ms_override: Option<u64>,
-    remote_override: Option<String>,
+    remote_override: Option<RemoteExecution>,
 }
 
 struct ScriptExecutionOptions {
     explicit_env: Vec<(String, String)>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    remote_override: Option<String>,
+    remote_override: Option<RemoteExecution>,
 }
 
 #[derive(Clone)]
@@ -167,7 +167,7 @@ async fn plan_exec_action(
                 output_symlink_mode: OutputSymlinkMode::default(),
                 resources: ResourceRequest::default(),
                 timeout_ms: options.timeout_ms_override,
-                remote: remote_execution(options.remote_override.as_deref()),
+                remote: options.remote_override,
             },
         ))
     }
@@ -255,7 +255,7 @@ fn script_action(
     explicit_env: Vec<(String, String)>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    remote_override: Option<&str>,
+    remote_override: Option<RemoteExecution>,
     argv: &[String],
 ) -> Result<(PathBuf, Action)> {
     let invocation = script_invocation(
@@ -293,7 +293,7 @@ async fn script_action_with_dependencies(
         graph_options.explicit_env.clone(),
         options.cwd_override.clone(),
         graph_options.timeout_ms_override,
-        graph_options.remote_override.as_deref(),
+        graph_options.remote_override.clone(),
         argv,
     )?;
     script_action_with_dependency_graph(cache, opts, invocation, graph_options).await
@@ -326,9 +326,7 @@ fn action_from_script_invocation(
 }
 
 fn remote_execution(provider: Option<&str>) -> Option<RemoteExecution> {
-    provider.map(|provider| RemoteExecution {
-        provider: provider.to_string(),
-    })
+    provider.map(RemoteExecution::provider)
 }
 
 fn action_remote(action: &Action) -> Option<&RemoteExecution> {
@@ -440,7 +438,7 @@ fn dependency_script_invocation(
         graph_options.explicit_env.clone(),
         None,
         graph_options.timeout_ms_override,
-        graph_options.remote_override.as_deref(),
+        graph_options.remote_override.clone(),
     )
 }
 
@@ -702,7 +700,7 @@ fn script_invocation(
     explicit_env: BTreeMap<String, String>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    remote_override: Option<&str>,
+    remote_override: Option<RemoteExecution>,
     argv: &[String],
 ) -> Result<ScriptInvocation> {
     let (runtime, runtime_args, script_arg, script_args) = parse_script_exec_argv(workspace, argv)?;
@@ -732,7 +730,7 @@ fn script_invocation_from_annotations(
     explicit_env: BTreeMap<String, String>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    remote_override: Option<&str>,
+    remote_override: Option<RemoteExecution>,
 ) -> Result<ScriptInvocation> {
     let workspace =
         resolve_script_workspace(workspace, script_abs, &annotations, cwd_override.as_ref())?;
@@ -774,7 +772,7 @@ fn script_invocation_from_annotations(
     };
     let timeout_ms = timeout_ms_override;
     let env = script_env(&workspace, &runtime, &annotations.env_vars, explicit_env)?;
-    let remote = remote_execution(remote_override.or(annotations.remote.as_deref()));
+    let remote = remote_override.or_else(|| remote_execution(annotations.remote.as_deref()));
     let output_symlink_mode = output_symlink_mode(annotations.output_symlinks.as_deref())?;
 
     Ok(ScriptInvocation {

@@ -155,9 +155,9 @@ pub enum Cmd {
         #[arg(long)]
         remote: bool,
 
-        /// Compute provider used with --remote.
-        #[arg(long, value_name = "PROVIDER", default_value = "microsandbox")]
-        compute: String,
+        /// Compute provider used with --remote. Defaults to the configured execution provider.
+        #[arg(long, value_name = "PROVIDER")]
+        compute: Option<String>,
 
         /// Target id, e.g. `examples/hello/hello` or `./hello`.
         #[arg(required_unless_present = "list")]
@@ -219,9 +219,9 @@ pub enum Cmd {
         #[arg(long)]
         remote: bool,
 
-        /// Compute provider used with --remote.
-        #[arg(long, value_name = "PROVIDER", default_value = "microsandbox")]
-        compute: String,
+        /// Compute provider used with --remote. Defaults to the configured execution provider.
+        #[arg(long, value_name = "PROVIDER")]
+        compute: Option<String>,
 
         /// Command and arguments. Use `--` to separate from once flags.
         #[arg(trailing_var_arg = true, required_unless_present = "list")]

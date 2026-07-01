@@ -56,7 +56,7 @@ EOF
     cat > "$WORKSPACE/input.txt" <<'EOF'
 hello direct script
 EOF
-    When call env PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
+    When call env ONCE_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
     The status should be success
     The stdout should equal 'hello direct script'
     The stderr should include 'cache miss'
@@ -74,8 +74,8 @@ EOF
     cat > "$WORKSPACE/input.txt" <<'EOF'
 cached direct script
 EOF
-    env PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh" >/dev/null 2>&1
-    When call env PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
+    env ONCE_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh" >/dev/null 2>&1
+    When call env ONCE_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
     The status should be success
     The stdout should equal 'cached direct script'
     The stderr should include 'cache hit'
