@@ -15,7 +15,9 @@ image:
   pullPolicy: IfNotPresent
   pullSecretName: ghcr-pull
 
-replicaCount: 2
+# Single replica: the site is static and runs on a single-node cluster, so
+# horizontal scaling and HA are not achievable or needed right now.
+replicaCount: 1
 
 resources:
   requests:
@@ -24,14 +26,18 @@ resources:
   limits:
     memory: 512Mi
 
+# Disabled: an HPA can't scale past a single-node cluster, and there is no
+# load to autoscale for a static site.
 autoscaling:
-  enabled: true
+  enabled: false
   minReplicas: 2
   maxReplicas: 4
   targetCPUUtilizationPercentage: 75
 
+# Disabled: with one replica, a minAvailable of 1 would block node drains
+# during CAPI rollouts instead of protecting availability.
 pdb:
-  enabled: true
+  enabled: false
   minAvailable: 1
 
 service:
@@ -76,8 +82,12 @@ externalSecrets:
     field: "notesPlain"
 
 postgres:
+  # Kept running but unused by the app today; a single instance frees a
+  # replica pod and its 20Gi volume. Dropping Postgres entirely needs app
+  # changes (Repo is started unconditionally and runtime.exs requires
+  # DATABASE_URL), so that is left for the larger restructure.
   enabled: true
-  instances: 2
+  instances: 1
   storageSize: 20Gi
   storageClass: hcloud-volumes
   imageName: ghcr.io/cloudnative-pg/postgresql:18.0
