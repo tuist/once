@@ -69,6 +69,10 @@ impl TuistAuth {
             return Ok(token);
         }
 
+        if let Some(token) = self.load_stored_access_token()? {
+            return Ok(token);
+        }
+
         match self.load_valid_token() {
             Ok(token) => Ok(token.access_token),
             Err(_) if is_ci_environment() => {
@@ -142,6 +146,21 @@ impl TuistAuth {
         refresher
             .get_valid_token(&key)
             .map_err(|source| self.cached_auth_error(source))
+    }
+
+    fn load_stored_access_token(&self) -> Result<Option<String>> {
+        let key = self.storage_key();
+        let Some(token) = self
+            .storage()?
+            .load(&key)
+            .map_err(|source| Self::remote_auth_error("load auth token", &source))?
+        else {
+            return Ok(None);
+        };
+        if token.expires_within(OIDC_TOKEN_REFRESH_WINDOW_SECONDS) {
+            return Ok(None);
+        }
+        Ok(Some(token.access_token))
     }
 
     fn login_with_client_id(
@@ -808,6 +827,27 @@ mod tests {
             .unwrap();
 
         let token = auth.token().unwrap();
+
+        assert_eq!(token, "access-1");
+    }
+
+    #[test]
+    fn reads_stored_token_without_registered_client() {
+        let temp = TempDir::new().unwrap();
+        let auth = TuistAuth::new(
+            temp.path(),
+            &dynamic_config("https://tuist.dev".to_string()),
+        );
+        let storage = auth.storage().unwrap();
+        let key = auth.storage_key();
+        storage
+            .save(
+                &key,
+                &Token::new("access-1", "Bearer").with_expiration(Some(3600)),
+            )
+            .unwrap();
+
+        let token = with_ci_env(&[], || auth.token().unwrap());
 
         assert_eq!(token, "access-1");
     }
