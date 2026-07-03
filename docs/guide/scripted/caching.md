@@ -20,6 +20,7 @@ example:
 ```sh [Bash]
 #!/usr/bin/env bash
 # once input "../src/**/*.ts"
+# once fingerprint "node --version"
 # once output "../dist/"
 # once env "NODE_ENV"
 
@@ -80,6 +81,7 @@ shebang and name the runtime there:
 ```sh [Bash]
 #!/usr/bin/env -S once exec -- bash
 # once input "../src/**/*.ts"
+# once fingerprint "node --version"
 # once output "../dist/"
 # once env "NODE_ENV"
 
@@ -119,8 +121,9 @@ apply the annotated cache contract.
 
 The `once` directives at the top of the file describe the parts
 Once must reason about: tracked inputs, declared outputs, forwarded
-environment variables, and a working directory. That keeps the
-implementation and the cache contract in one place.
+environment variables, dependency scripts, fingerprint commands, and a
+working directory. That keeps the implementation and the cache contract
+in one place.
 
 ## Mise File Tasks
 
@@ -151,6 +154,8 @@ mise run build
 | Annotation | Purpose |
 | --- | --- |
 | `input` | Declares tracked files, directories, or globs. |
+| `needs` | Declares another annotated script that must run first. Its declared output fingerprints are included in this script's cache key. |
+| `fingerprint` | Runs a read-only shell command before the script and includes the command text, exit status, standard output, and standard error in the cache key. |
 | `output` | Declares output files or directories that Once should restore on cache hits. |
 | `output-symlinks` | Controls output symlink capture. Use `materialize-external` to copy targets outside the output directory, or `preserve` to store links as links. |
 | `env` | Forwards selected environment variables from the host and includes them in the cache key. |
@@ -162,6 +167,18 @@ cache without depending on the original global store path.
 
 The script file itself is always part of the cache key, even when no
 `input` directives are present.
+
+Dependency scripts declared with `needs` run through the same script
+adapter. Once runs independent dependencies concurrently, restores their
+declared outputs on cache hits, and uses their output fingerprints to
+decide whether dependent scripts need to run again. If a dependency
+reruns but produces the same declared outputs, dependent scripts keep
+their cache key.
+
+Fingerprint commands are for toolchain or host facts that are not files.
+For example, a script can record a compiler version or a platform lookup
+without turning that probe into a build step. A failing fingerprint
+command stops the script before the main action runs.
 
 ::: tip Path Resolution
 `once` paths are resolved relative to the script file's directory,
