@@ -193,13 +193,13 @@ run_action(
 #[test]
 fn run_action_can_skip_prior_action_dependencies() {
     let tmp = TempDir::new().unwrap();
-    let store = store_for(tmp.path(), "apps/elixir/Greeting");
+    let store = store_for(tmp.path(), "tools/split");
     let (store, ()) = with_active_store(store, || {
         run(r#"
 run_action(
-    argv = ["elixirc", "-o", ".once/out/apps/elixir/Greeting/modules/0", "lib/greeting.ex"],
-    inputs = ["apps/elixir/Greeting/lib/greeting.ex"],
-    outputs = [".once/out/apps/elixir/Greeting/modules/0"],
+    argv = ["tool", "--emit", ".once/out/tools/split/second.txt"],
+    inputs = ["tools/split/input.txt"],
+    outputs = [".once/out/tools/split/second.txt"],
     depends_on_prior_actions = False,
 )
 "#)

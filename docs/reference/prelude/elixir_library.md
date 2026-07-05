@@ -1,13 +1,13 @@
 # `elixir_library`
 
-Elixir application compiled into cacheable bytecode and application metadata.
+Elixir code compiled into cacheable bytecode and OTP application metadata.
 
 ## Description
 
 `elixir_library` runs one `elixirc` action for the full target, then stages the
-compiled bytecode and generated application metadata as Once build outputs.
-Downstream Elixir targets receive the compiled application on the code path, so
-tests and dependent applications do not compile the same project again.
+compiled bytecode and generated OTP application metadata as Once build outputs.
+Downstream Elixir targets receive the compiled OTP application on the code path,
+so tests and dependent libraries do not compile the same project again.
 
 The compile action passes all target sources to Elixir together, so Elixir can
 resolve same-target compile-time relationships such as macros, structs, and

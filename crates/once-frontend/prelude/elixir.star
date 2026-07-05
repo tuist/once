@@ -1134,7 +1134,7 @@ _ELIXIR_TEST_ATTRS = [
 ]
 
 elixir_library = target_kind(
-    docs = "Elixir application compiled with one target-level `elixirc` action and staged into cacheable bytecode plus application metadata.",
+    docs = "Elixir code compiled with one target-level `elixirc` action and staged into cacheable bytecode plus OTP application metadata.",
     attrs = _ELIXIR_LIBRARY_ATTRS,
     deps = [dep("deps", ["elixir_app"], "Elixir applications available on the compile path.")],
     providers = ["elixir_app"],

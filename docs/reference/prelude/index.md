@@ -48,7 +48,7 @@ metadata at the keyboard.
 ## Elixir target kinds
 
 - [`elixir_library`](/reference/prelude/elixir_library): Elixir
-  application compiled into cacheable bytecode with a target-level compiler
+  code compiled into cacheable bytecode with a target-level compiler
   action
 - [`elixir_test`](/reference/prelude/elixir_test): ExUnit tests run against
   an already compiled Elixir application
