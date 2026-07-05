@@ -61,6 +61,11 @@ pub struct DeclaredAction {
     pub env: BTreeMap<String, String>,
     #[serde(default = "default_cacheable", skip_serializing_if = "is_true")]
     pub cacheable: bool,
+    #[serde(
+        default = "default_depends_on_prior_actions",
+        skip_serializing_if = "is_true"
+    )]
+    pub depends_on_prior_actions: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain_identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,6 +86,10 @@ pub enum DeclaredArgFileFormat {
 }
 
 fn default_cacheable() -> bool {
+    true
+}
+
+fn default_depends_on_prior_actions() -> bool {
     true
 }
 

@@ -236,6 +236,9 @@ compiler flags, provider conventions, and action layout.
 - `env`: string environment variables.
 - `cacheable`: `True` by default. Set `False` for interactive or local
   side-effect actions.
+- `depends_on_prior_actions`: `True` by default. When true, each action key
+  includes prior actions declared by the same target. Set `False` only for
+  independent actions that do not read earlier same-target outputs.
 - `toolchain_identity`: optional string folded into the action digest.
 - `identifier`: stable diagnostic label.
 

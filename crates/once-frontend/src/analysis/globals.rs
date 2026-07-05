@@ -204,6 +204,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             outputs: vec![path.to_string()],
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(format!("write_path:{path}")),
         };
@@ -248,6 +249,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             outputs: vec![destination.to_string()],
             env: BTreeMap::new(),
             cacheable: cacheable.unwrap_or(true),
+            depends_on_prior_actions: true,
             toolchain_identity,
             identifier: Some(identifier.unwrap_or_else(|| format!("copy_path:{destination}"))),
         };
@@ -285,6 +287,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             outputs,
             env: BTreeMap::new(),
             cacheable: false,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("prepare_path:{kind}:{path}"))),
         };
@@ -330,6 +333,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             outputs: vec![output.to_string()],
             env: BTreeMap::new(),
             cacheable: cacheable.unwrap_or(true),
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("write_tree_digest:{output}"))),
         };
@@ -385,6 +389,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// optional bool, default true;
     /// `toolchain_identity`: optional string folded into the input
     /// digest; `identifier`: optional label for diagnostics.
+    #[allow(clippy::too_many_arguments)]
     fn run_action<'v>(
         argv: Value<'v>,
         inputs: Option<Value<'v>>,
@@ -393,6 +398,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         toolchain_identity: Option<String>,
         identifier: Option<String>,
         cacheable: Option<bool>,
+        depends_on_prior_actions: Option<bool>,
     ) -> anyhow::Result<NoneType> {
         let argv = unpack_action_argv(argv, "argv")?;
         let inputs = inputs
@@ -415,6 +421,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             outputs,
             env,
             cacheable: cacheable.unwrap_or(true),
+            depends_on_prior_actions: depends_on_prior_actions.unwrap_or(true),
             toolchain_identity,
             identifier,
         };

@@ -191,6 +191,25 @@ run_action(
 }
 
 #[test]
+fn run_action_can_skip_prior_action_dependencies() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "apps/elixir/Greeting");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+run_action(
+    argv = ["elixirc", "-o", ".once/out/apps/elixir/Greeting/modules/0", "lib/greeting.ex"],
+    inputs = ["apps/elixir/Greeting/lib/greeting.ex"],
+    outputs = [".once/out/apps/elixir/Greeting/modules/0"],
+    depends_on_prior_actions = False,
+)
+"#)
+        .unwrap();
+    });
+    assert_eq!(store.actions.len(), 1);
+    assert!(!store.actions[0].depends_on_prior_actions);
+}
+
+#[test]
 fn declared_action_defaults_cacheable_when_omitted() {
     let action: DeclaredAction = serde_json::from_value(serde_json::json!({
         "argv": ["tool", "input.src"],
@@ -199,6 +218,7 @@ fn declared_action_defaults_cacheable_when_omitted() {
     .unwrap();
 
     assert!(action.cacheable);
+    assert!(action.depends_on_prior_actions);
     assert_eq!(
         serde_json::to_value(&action).unwrap(),
         serde_json::json!({

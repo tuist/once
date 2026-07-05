@@ -38,7 +38,6 @@ struct DeclaredActionRun<'a> {
 struct DeclaredActionOutcome {
     digest: Digest,
     input_digest: Option<Digest>,
-    cache_tag: &'static str,
     cache_state: EvidenceCacheState,
     result: ActionResult,
 }
@@ -94,8 +93,7 @@ pub(super) fn run_declared_actions<'a>(
         );
         let mut action_digests = Vec::new();
         let mut input_digests = Vec::new();
-        let mut last_cache_tag = "miss";
-        let mut last_cache_state = EvidenceCacheState::Miss;
+        let mut aggregate_cache_state = None;
         let mut all_outputs = Vec::new();
         let mut aggregate_result = ActionResult {
             exit_code: 0,
@@ -111,12 +109,16 @@ pub(super) fn run_declared_actions<'a>(
         for (index, declared) in actions.into_iter().enumerate() {
             all_outputs.extend(declared.outputs.iter().cloned());
             let mut input_action_digests = dep_action_digests.to_vec();
-            input_action_digests.extend(
-                action_digests
-                    .iter()
-                    .enumerate()
-                    .map(|(prior_index, digest)| (format!("same-target:{prior_index}"), *digest)),
-            );
+            if declared.depends_on_prior_actions {
+                input_action_digests.extend(
+                    action_digests
+                        .iter()
+                        .enumerate()
+                        .map(|(prior_index, digest)| {
+                            (format!("same-target:{prior_index}"), *digest)
+                        }),
+                );
+            }
 
             let outcome = Box::pin(run_declared_action(DeclaredActionRun {
                 workspace,
@@ -134,8 +136,12 @@ pub(super) fn run_declared_actions<'a>(
             if let Some(input_digest) = outcome.input_digest {
                 input_digests.push(input_digest);
             }
-            last_cache_tag = outcome.cache_tag;
-            last_cache_state = outcome.cache_state;
+            aggregate_cache_state = Some(match aggregate_cache_state {
+                Some(current) => {
+                    aggregate_declared_action_cache_state(current, outcome.cache_state)
+                }
+                None => outcome.cache_state,
+            });
             if !record_success_evidence {
                 aggregate_result.stdout = outcome.result.stdout;
                 aggregate_result.stderr = outcome.result.stderr;
@@ -143,16 +149,38 @@ pub(super) fn run_declared_actions<'a>(
             aggregate_result.outputs.extend(outcome.result.outputs);
         }
 
+        let cache_state = aggregate_cache_state.unwrap_or(EvidenceCacheState::Miss);
         Ok(BuildOutcome {
             provider,
             action_digest: compose_target_action_digest(&target.label.id, &action_digests),
             input_digest: compose_target_input_digest(&input_digests),
             outputs: all_outputs,
-            cache_tag: last_cache_tag,
-            cache_state: last_cache_state,
+            cache_tag: evidence_cache_tag(cache_state),
+            cache_state,
             result: aggregate_result,
         })
     })
+}
+
+fn aggregate_declared_action_cache_state(
+    current: EvidenceCacheState,
+    next: EvidenceCacheState,
+) -> EvidenceCacheState {
+    match (current, next) {
+        (EvidenceCacheState::Bypass, _) | (_, EvidenceCacheState::Bypass) => {
+            EvidenceCacheState::Bypass
+        }
+        (EvidenceCacheState::Miss, _) | (_, EvidenceCacheState::Miss) => EvidenceCacheState::Miss,
+        (EvidenceCacheState::Hit, EvidenceCacheState::Hit) => EvidenceCacheState::Hit,
+    }
+}
+
+fn evidence_cache_tag(cache: EvidenceCacheState) -> &'static str {
+    match cache {
+        EvidenceCacheState::Hit => "hit",
+        EvidenceCacheState::Miss => "miss",
+        EvidenceCacheState::Bypass => "bypass",
+    }
 }
 
 async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActionOutcome> {
@@ -279,7 +307,6 @@ async fn run_cacheable_declared_action(
     Ok(DeclaredActionOutcome {
         digest: outcome.action,
         input_digest: action.input_digest(),
-        cache_tag,
         cache_state,
         result: outcome.result,
     })
@@ -347,7 +374,6 @@ async fn run_uncacheable_declared_action(
     Ok(DeclaredActionOutcome {
         digest: action_digest,
         input_digest: action.input_digest(),
-        cache_tag: "bypass",
         cache_state: EvidenceCacheState::Bypass,
         result,
     })
@@ -913,6 +939,7 @@ mod tests {
             ],
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
         };
@@ -1272,6 +1299,7 @@ mod tests {
                 outputs: vec![".once/out/one.txt".to_string()],
                 env: BTreeMap::new(),
                 cacheable: true,
+                depends_on_prior_actions: true,
                 toolchain_identity: None,
                 identifier: Some("one".to_string()),
             }],
@@ -1340,6 +1368,7 @@ mod tests {
             outputs: vec![format!(".once/out/{name}.txt")],
             env: BTreeMap::new(),
             cacheable: false,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(name.to_string()),
         };
@@ -1378,6 +1407,106 @@ mod tests {
         assert!(records
             .iter()
             .any(|record| record.outputs.contains_key(".once/out/two.txt")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn declared_action_can_skip_prior_same_target_digests() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let target = GraphTarget {
+            label: once_frontend::TargetLabel {
+                package: "tools".to_string(),
+                name: "split".to_string(),
+                id: "tools/split".to_string(),
+            },
+            kind: "demo_kind".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            capabilities: Vec::new(),
+            providers: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+
+        let analysis = |first_value: &str| AnalysisResult {
+            actions: vec![
+                DeclaredAction {
+                    operation: None,
+                    argv: vec![
+                        "/bin/sh".to_string(),
+                        "-c".to_string(),
+                        format!("printf {first_value} > .once/out/first.txt"),
+                    ],
+                    arg_files: Vec::new(),
+                    inputs: Vec::new(),
+                    outputs: vec![".once/out/first.txt".to_string()],
+                    env: BTreeMap::new(),
+                    cacheable: true,
+                    depends_on_prior_actions: true,
+                    toolchain_identity: None,
+                    identifier: Some("first".to_string()),
+                },
+                DeclaredAction {
+                    operation: None,
+                    argv: vec![
+                        "/bin/sh".to_string(),
+                        "-c".to_string(),
+                        "printf second > .once/out/second.txt; printf run >> second_runs"
+                            .to_string(),
+                    ],
+                    arg_files: Vec::new(),
+                    inputs: Vec::new(),
+                    outputs: vec![".once/out/second.txt".to_string()],
+                    env: BTreeMap::new(),
+                    cacheable: true,
+                    depends_on_prior_actions: false,
+                    toolchain_identity: None,
+                    identifier: Some("second".to_string()),
+                },
+            ],
+            provider: serde_json::json!({}),
+            declared_outputs: Vec::new(),
+        };
+
+        let first = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis("one"),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.cache_state, EvidenceCacheState::Miss);
+
+        let second = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis("changed"),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(second.cache_state, EvidenceCacheState::Miss);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/first.txt")).unwrap(),
+            "changed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/second.txt")).unwrap(),
+            "second"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("second_runs")).unwrap(),
+            "run"
+        );
     }
 
     #[cfg(unix)]
@@ -1422,6 +1551,7 @@ mod tests {
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: Some("id-1".to_string()),
             identifier: None,
         };
@@ -1450,6 +1580,7 @@ mod tests {
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
         };
@@ -1479,6 +1610,7 @@ mod tests {
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
         };
@@ -1512,6 +1644,7 @@ mod tests {
             outputs: vec![".once/out/A.a".to_string()],
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
         };
