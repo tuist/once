@@ -1,0 +1,10 @@
+[[target]]
+name = "math_tests"
+kind = "zig_configure_test"
+srcs = ["src/**/*.zig"]
+
+[target.attrs]
+main = "src/math_test.zig"
+mode = "debug"
+threaded = "multi"
+labels = ["unit"]

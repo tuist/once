@@ -60,11 +60,13 @@ fn android_prelude_source() -> String {
 
 fn all_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/android.star"),
         include_str!("../prelude/rust.star"),
+        include_str!("../prelude/c.star"),
+        include_str!("../prelude/zig.star"),
         include_str!("../prelude/swift.star"),
         include_str!("../prelude/kotlin.star")
     )
@@ -233,6 +235,1494 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
         .attrs
         .iter()
         .any(|attr| attr.name == "android_target" && attr.required));
+}
+
+#[test]
+fn c_and_zig_target_kind_schemas_are_discoverable() {
+    let zig_library = built_in_target_kind_schema("zig_library").expect("zig_library schema");
+    assert!(target_kind_has_impl("zig_library").unwrap());
+    assert!(zig_library.providers.iter().any(|p| p == "zig_module"));
+    assert!(zig_library
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "main" && attr.required));
+
+    let c_library = built_in_target_kind_schema("c_library").expect("c_library schema");
+    assert!(target_kind_has_impl("c_library").unwrap());
+    assert!(c_library.providers.iter().any(|p| p == "c_provider"));
+    assert!(c_library
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "archiver_identity"));
+
+    let zig_binary = built_in_target_kind_schema("zig_binary").expect("zig_binary schema");
+    assert!(target_kind_has_impl("zig_binary").unwrap());
+    assert!(zig_binary.providers.iter().any(|p| p == "zig_binary"));
+    assert!(zig_binary.attrs.iter().any(|attr| attr.name == "mode"));
+    assert!(zig_binary.attrs.iter().any(|attr| attr.name == "threaded"));
+    assert!(zig_binary.attrs.iter().any(|attr| attr.name == "zigopt"));
+    assert!(zig_binary
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "zig_version"));
+    assert!(zig_binary
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "use_cc_common_link"));
+    assert!(zig_binary
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "use_standalone_translate_c"));
+    assert!(zig_binary
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "translate_c_identity"));
+    assert!(zig_binary
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "build"));
+    let zig_run = zig_binary
+        .capabilities
+        .iter()
+        .find(|capability| capability.name == "run")
+        .expect("zig_binary run capability");
+    assert_eq!(zig_run.requires_outputs, vec!["binary"]);
+
+    let zig_c_library = built_in_target_kind_schema("zig_c_library").expect("zig_c_library schema");
+    assert!(target_kind_has_impl("zig_c_library").unwrap());
+    assert!(zig_c_library.providers.iter().any(|p| p == "zig_module"));
+
+    let zig_static =
+        built_in_target_kind_schema("zig_static_library").expect("zig_static_library schema");
+    assert!(target_kind_has_impl("zig_static_library").unwrap());
+    assert!(zig_static.providers.iter().any(|p| p == "c_provider"));
+    assert!(zig_static.providers.iter().any(|p| p == "apple_linkable"));
+
+    let zig_shared =
+        built_in_target_kind_schema("zig_shared_library").expect("zig_shared_library schema");
+    assert!(target_kind_has_impl("zig_shared_library").unwrap());
+    assert!(zig_shared.providers.iter().any(|p| p == "c_provider"));
+    assert!(zig_shared
+        .providers
+        .iter()
+        .any(|p| p == "android_native_library"));
+
+    let zig_test = built_in_target_kind_schema("zig_test").expect("zig_test schema");
+    assert!(target_kind_has_impl("zig_test").unwrap());
+    assert!(zig_test.providers.iter().any(|p| p == "once_test_info"));
+    assert!(zig_test
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "test"));
+}
+
+#[test]
+fn zig_configure_target_kind_schemas_are_discoverable() {
+    for kind in [
+        "zig_configure",
+        "zig_configure_binary",
+        "zig_configure_test",
+    ] {
+        let schema = built_in_target_kind_schema(kind).expect("zig configure schema");
+        assert_eq!(schema.kind, kind);
+        assert!(target_kind_has_impl(kind).unwrap());
+        assert!(schema.attrs.iter().any(|attr| attr.name == "mode"));
+        assert!(schema.attrs.iter().any(|attr| attr.name == "threaded"));
+        assert!(schema.attrs.iter().any(|attr| attr.name == "zigopt"));
+        assert!(schema.attrs.iter().any(|attr| attr.name == "zig_version"));
+        assert!(
+            !schema.examples.is_empty(),
+            "{kind} should expose a starter example"
+        );
+    }
+}
+
+#[test]
+fn prelude_zig_binary_declares_build_exe_action_with_module_deps() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(
+        source_dir.join("main.zig"),
+        "const math = @import(\"calc\");",
+    )
+    .unwrap();
+    std::fs::write(source_dir.join("math.zig"), "pub const answer = 42;").unwrap();
+
+    let store = AnalysisStore::new(
+        tmp.path().to_path_buf(),
+        "pkg".to_string(),
+        ".once/out/pkg/hello".to_string(),
+    );
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_command(argv, env = None):
+    if argv == ["/tools/zig", "version"]:
+        return "0.15.1\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "hello",
+        "id": "pkg/hello",
+    }},
+    "attr": {{
+        "zig": "/tools/zig",
+        "main": "src/main.zig",
+        "import_names": {{"math": "calc"}},
+        "optimize": "ReleaseSafe",
+    }},
+    "deps": [{{
+        "zig_module": True,
+        "label_id": "pkg/math",
+        "import_name": "math",
+        "canonical_name": "once_pkg_x47_math",
+        "module_context": {{
+            "import_name": "math",
+            "canonical_name": "once_pkg_x47_math",
+            "main": "pkg/src/math.zig",
+            "deps": [],
+            "zigopts": [],
+        }},
+        "transitive_module_contexts": [],
+        "transitive_sources": ["pkg/src/math.zig"],
+        "transitive_data": [],
+    }}],
+    "srcs": ["src/**/*.zig"],
+    "build_dir": ".once/out/pkg/hello",
+    "scratch_dir": ".once/tmp/analysis/pkg/hello",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_binary_impl(ctx))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    assert!(out.unwrap().contains("\"target_kind\": \"zig_binary\""));
+
+    let action = action_by_identifier(&store, "pkg/hello:zig-build-exe");
+    assert_eq!(action.argv[0], "/tools/zig");
+    assert_eq!(action.argv[1], "build-exe");
+    assert!(action.argv.contains(&"--dep".to_string()));
+    assert!(action.argv.contains(&"calc=once_pkg_x47_math".to_string()));
+    assert!(action.argv.contains(&"-O".to_string()));
+    assert!(action.argv.contains(&"ReleaseSafe".to_string()));
+    assert!(action
+        .argv
+        .contains(&"-Monce_pkg_x47_hello=pkg/src/main.zig".to_string()));
+    assert!(action
+        .argv
+        .contains(&"-Monce_pkg_x47_math=pkg/src/math.zig".to_string()));
+    assert_eq!(
+        action.outputs,
+        vec![".once/out/pkg/hello/hello".to_string()]
+    );
+    assert!(action.inputs.contains(&"pkg/src/main.zig".to_string()));
+    assert!(action.inputs.contains(&"pkg/src/math.zig".to_string()));
+}
+
+#[test]
+fn prelude_zig_canonical_names_are_collision_safe() {
+    let prelude = all_prelude_source();
+    let out = eval_prelude_function_in(
+        prelude,
+        "_zig_safe_name",
+        r#"("pkg/foo-bar") == _zig_safe_name("pkg/foo_bar")"#,
+    )
+    .unwrap();
+
+    assert_eq!(out, "False");
+}
+
+#[test]
+fn prelude_zig_import_names_reject_unknown_keys() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "app",
+        "id": "pkg/app",
+    }},
+    "attr": {{
+        "main": "src/main.zig",
+        "import_names": {{"typo": "math"}},
+    }},
+    "deps": [{{
+        "zig_module": True,
+        "label_id": "pkg/math",
+        "import_name": "math",
+        "canonical_name": "once_pkg_x47_math",
+        "module_context": {{
+            "import_name": "math",
+            "canonical_name": "once_pkg_x47_math",
+            "main": "pkg/src/math.zig",
+            "deps": [],
+            "zigopts": [],
+        }},
+        "transitive_module_contexts": [],
+        "transitive_sources": ["pkg/src/math.zig"],
+        "transitive_data": [],
+    }}],
+    "srcs": [],
+    "build_dir": ".once/out/pkg/app",
+    "scratch_dir": ".once/tmp/analysis/pkg/app",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_library_impl(ctx))
+"#
+    );
+    let err = eval_prelude_source_to_repr(source).unwrap_err();
+    assert!(
+        err.contains("import_names key `typo` does not match any Zig module dependency"),
+        "{err}"
+    );
+}
+
+#[test]
+fn prelude_zig_import_names_reject_ambiguous_short_keys() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "app",
+        "id": "pkg/app",
+    }},
+    "attr": {{
+        "main": "src/main.zig",
+        "import_names": {{"math": "renamed_math"}},
+    }},
+    "deps": [
+        {{
+            "zig_module": True,
+            "label_id": "pkg/a/math",
+            "import_name": "a_math",
+            "canonical_name": "once_pkg_x47_a_x47_math",
+            "module_context": {{"import_name": "a_math", "canonical_name": "once_pkg_x47_a_x47_math", "main": "pkg/a/math.zig", "deps": [], "zigopts": []}},
+            "transitive_module_contexts": [],
+            "transitive_sources": ["pkg/a/math.zig"],
+            "transitive_data": [],
+        }},
+        {{
+            "zig_module": True,
+            "label_id": "pkg/b/math",
+            "import_name": "b_math",
+            "canonical_name": "once_pkg_x47_b_x47_math",
+            "module_context": {{"import_name": "b_math", "canonical_name": "once_pkg_x47_b_x47_math", "main": "pkg/b/math.zig", "deps": [], "zigopts": []}},
+            "transitive_module_contexts": [],
+            "transitive_sources": ["pkg/b/math.zig"],
+            "transitive_data": [],
+        }},
+    ],
+    "srcs": [],
+    "build_dir": ".once/out/pkg/app",
+    "scratch_dir": ".once/tmp/analysis/pkg/app",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_library_impl(ctx))
+"#
+    );
+    let err = eval_prelude_source_to_repr(source).unwrap_err();
+    assert!(
+        err.contains("import_names key `math` is ambiguous across Zig module dependencies"),
+        "{err}"
+    );
+}
+
+#[test]
+fn prelude_zig_rejects_duplicate_import_aliases() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "app",
+        "id": "pkg/app",
+    }},
+    "attr": {{
+        "main": "src/main.zig",
+    }},
+    "deps": [
+        {{
+            "zig_module": True,
+            "label_id": "pkg/a",
+            "import_name": "math",
+            "canonical_name": "once_pkg_x47_a",
+            "module_context": {{"import_name": "math", "canonical_name": "once_pkg_x47_a", "main": "pkg/a.zig", "deps": [], "zigopts": []}},
+            "transitive_module_contexts": [],
+            "transitive_sources": ["pkg/a.zig"],
+            "transitive_data": [],
+        }},
+        {{
+            "zig_module": True,
+            "label_id": "pkg/b",
+            "import_name": "math",
+            "canonical_name": "once_pkg_x47_b",
+            "module_context": {{"import_name": "math", "canonical_name": "once_pkg_x47_b", "main": "pkg/b.zig", "deps": [], "zigopts": []}},
+            "transitive_module_contexts": [],
+            "transitive_sources": ["pkg/b.zig"],
+            "transitive_data": [],
+        }},
+    ],
+    "srcs": [],
+    "build_dir": ".once/out/pkg/app",
+    "scratch_dir": ".once/tmp/analysis/pkg/app",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_library_impl(ctx))
+"#
+    );
+    let err = eval_prelude_source_to_repr(source).unwrap_err();
+    assert!(err.contains("duplicate Zig import name `math`"), "{err}");
+}
+
+#[test]
+fn prelude_zig_rejects_c_import_alias_when_c_module_is_generated() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "app",
+        "id": "pkg/app",
+    }},
+    "attr": {{
+        "main": "src/main.zig",
+    }},
+    "deps": [
+        {{
+            "zig_module": True,
+            "label_id": "pkg/native_zig",
+            "import_name": "c",
+            "canonical_name": "once_pkg_x47_native_uzig",
+            "module_context": {{"import_name": "c", "canonical_name": "once_pkg_x47_native_uzig", "main": "pkg/native.zig", "deps": [], "zigopts": []}},
+            "transitive_module_contexts": [],
+            "transitive_sources": ["pkg/native.zig"],
+            "transitive_data": [],
+        }},
+        {{
+            "c_provider": True,
+            "label_id": "pkg/native",
+            "transitive_headers": ["pkg/include/native.h"],
+            "transitive_include_dirs": ["pkg/include"],
+            "transitive_defines": [],
+            "transitive_static_libraries": [],
+            "transitive_dynamic_libraries": [],
+            "transitive_linkopts": [],
+            "transitive_data": [],
+        }},
+    ],
+    "srcs": [],
+    "build_dir": ".once/out/pkg/app",
+    "scratch_dir": ".once/tmp/analysis/pkg/app",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_library_impl(ctx))
+"#
+    );
+    let err = eval_prelude_source_to_repr(source).unwrap_err();
+    assert!(
+        err.contains("Zig import name `c` conflicts with the generated C module"),
+        "{err}"
+    );
+}
+
+#[test]
+fn prelude_zig_headerless_c_provider_links_without_c_module_dep() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("main.zig"), "pub fn main() void {}\n").unwrap();
+
+    let store = AnalysisStore::new(
+        tmp.path().to_path_buf(),
+        "pkg".to_string(),
+        ".once/out/pkg/app".to_string(),
+    );
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_command(argv, env = None):
+    if argv == ["/tools/zig", "version"]:
+        return "0.15.1\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "app",
+        "id": "pkg/app",
+    }},
+    "attr": {{
+        "zig": "/tools/zig",
+        "main": "src/main.zig",
+    }},
+    "deps": [{{
+        "c_provider": True,
+        "label_id": "pkg/prebuilt",
+        "transitive_headers": [],
+        "transitive_include_dirs": [],
+        "transitive_defines": [],
+        "transitive_static_libraries": ["pkg/vendor/libprebuilt.a"],
+        "transitive_dynamic_libraries": [],
+        "transitive_linkopts": ["-pthread"],
+        "transitive_data": [],
+    }}],
+    "srcs": ["src/**/*.zig"],
+    "build_dir": ".once/out/pkg/app",
+    "scratch_dir": ".once/tmp/analysis/pkg/app",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_binary_impl(ctx))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    assert!(out.unwrap().contains("\"target_kind\": \"zig_binary\""));
+
+    let build = action_by_identifier(&store, "pkg/app:zig-build-exe");
+    assert!(!build.argv.contains(&"c=c".to_string()));
+    assert!(!build.argv.iter().any(|arg| arg.starts_with("-Mc=")));
+    assert!(build.argv.contains(&"pkg/vendor/libprebuilt.a".to_string()));
+    assert!(build.argv.contains(&"-pthread".to_string()));
+}
+
+#[test]
+fn prelude_zig_configuration_attrs_map_to_compile_args() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("main.zig"), "pub fn main() void {}\n").unwrap();
+
+    let store = AnalysisStore::new(
+        tmp.path().to_path_buf(),
+        "pkg".to_string(),
+        ".once/out/pkg/release".to_string(),
+    );
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_command(argv, env = None):
+    if argv == ["/tools/zig", "version"]:
+        return "0.15.1\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "release",
+        "id": "pkg/release",
+    }},
+    "attr": {{
+        "zig": "/tools/zig",
+        "zig_version": "0.15.1",
+        "main": "src/main.zig",
+        "mode": "release_small",
+        "threaded": "single",
+        "zigopt": ["-fllvm", "-flto"],
+        "use_cc_common_link": 1,
+        "bootstrapped": 0,
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.zig"],
+    "build_dir": ".once/out/pkg/release",
+    "scratch_dir": ".once/tmp/analysis/pkg/release",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_configure_binary_impl(ctx))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    assert!(out.unwrap().contains("\"target_kind\": \"zig_binary\""));
+
+    let action = action_by_identifier(&store, "pkg/release:zig-build-exe");
+    assert!(action.argv.contains(&"-O".to_string()));
+    assert!(action.argv.contains(&"ReleaseSmall".to_string()));
+    assert!(action.argv.contains(&"-fsingle-threaded".to_string()));
+    assert!(action.argv.contains(&"-fllvm".to_string()));
+    assert!(action.argv.contains(&"-flto".to_string()));
+    assert!(action
+        .toolchain_identity
+        .as_deref()
+        .unwrap()
+        .contains("\0bootstrapped\0"));
+}
+
+#[test]
+fn prelude_zig_configuration_rejects_version_mismatch() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_command(argv, env = None):
+    if argv == ["/tools/zig", "version"]:
+        return "0.15.1\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "bad",
+        "id": "pkg/bad",
+    }},
+    "attr": {{
+        "zig": "/tools/zig",
+        "zig_version": "0.14.0",
+        "main": "src/main.zig",
+    }},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/pkg/bad",
+    "scratch_dir": ".once/tmp/analysis/pkg/bad",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_binary_impl(ctx))
+"#
+    );
+    let err = eval_prelude_source_to_repr(source).unwrap_err();
+    assert!(
+        err.contains("Zig compiler version is `0.15.1`, expected `0.14.0`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn prelude_zig_c_library_can_use_standalone_translate_c() {
+    let tmp = TempDir::new().expect("tempdir");
+    let include_dir = tmp.path().join("pkg/include");
+    std::fs::create_dir_all(&include_dir).unwrap();
+    std::fs::write(include_dir.join("native.h"), "int native(void);\n").unwrap();
+
+    let store = AnalysisStore::new(
+        tmp.path().to_path_buf(),
+        "pkg".to_string(),
+        ".once/out/pkg/native_zig".to_string(),
+    );
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called for standalone translate-c")
+
+def host_command(argv, env = None):
+    fail("host_command must not be called for standalone translate-c")
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "native_zig",
+        "id": "pkg/native_zig",
+    }},
+    "attr": {{
+        "translate_c": "/tools/translate-c",
+        "translate_c_identity": "translate-c test identity",
+        "use_standalone_translate_c": 1,
+        "mode": "debug",
+        "threaded": "multi",
+        "zigopt": ["-fno-llvm"],
+    }},
+    "deps": [{{
+        "c_provider": True,
+        "label_id": "pkg/native",
+        "transitive_headers": ["pkg/include/native.h"],
+        "transitive_include_dirs": ["pkg/include"],
+        "transitive_defines": ["NATIVE=1"],
+        "transitive_static_libraries": [],
+        "transitive_dynamic_libraries": [],
+        "transitive_linkopts": [],
+        "transitive_data": [],
+    }}],
+    "srcs": [],
+    "build_dir": ".once/out/pkg/native_zig",
+    "scratch_dir": ".once/tmp/analysis/pkg/native_zig",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_c_library_impl(ctx))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    assert!(out.unwrap().contains("\"target_kind\": \"zig_c_library\""));
+
+    let translate = action_by_identifier(&store, "pkg/native_zig:zig-translate-c:native_zig");
+    assert_eq!(translate.argv[0], "/tools/translate-c");
+    assert!(translate
+        .argv
+        .windows(2)
+        .any(|args| args[0] == "-I" && args[1] == "."));
+    assert!(translate.argv.contains(&"-o".to_string()));
+    assert!(translate
+        .argv
+        .contains(&".once/out/pkg/native_zig/native_zig_c.zig".to_string()));
+    assert!(translate.argv.contains(&"--emulate=clang".to_string()));
+    assert!(translate.argv.contains(&"-O".to_string()));
+    assert!(translate.argv.contains(&"Debug".to_string()));
+    assert!(translate.argv.contains(&"-fno-single-threaded".to_string()));
+    assert!(translate.argv.contains(&"-fno-llvm".to_string()));
+    assert!(translate.argv.contains(&"-DNATIVE=1".to_string()));
+    assert!(translate
+        .toolchain_identity
+        .as_deref()
+        .unwrap()
+        .contains("translate-c test identity"));
+}
+
+#[test]
+fn prelude_zig_test_metadata_does_not_probe_compiler() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("math_test.zig"), "test \"ok\" {}").unwrap();
+
+    let store = AnalysisStore::new(
+        tmp.path().to_path_buf(),
+        "pkg".to_string(),
+        ".once/out/pkg/math_tests".to_string(),
+    );
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_command(argv, env = None):
+    fail("host_command must not be called for Zig metadata")
+
+def host_which(name):
+    fail("host_which must not be called for Zig metadata")
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "math_tests",
+        "id": "pkg/math_tests",
+    }},
+    "attr": {{
+        "main": "src/math_test.zig",
+        "labels": ["unit"],
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.zig"],
+    "build_dir": ".once/out/pkg/math_tests",
+    "scratch_dir": ".once/tmp/analysis/pkg/math_tests",
+    "capability": "metadata",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_test_impl(ctx))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let out = out.unwrap();
+    assert!(out.contains("\"target_kind\": \"zig_test\""));
+    assert!(out.contains("\"type\": \"zig_test\""));
+    assert!(out.contains("\"unit\""));
+    assert!(store.actions.is_empty());
+}
+
+#[test]
+fn prelude_zig_test_metadata_does_not_require_root_dependency_providers() {
+    let tmp = TempDir::new().expect("tempdir");
+    let store = AnalysisStore::new(
+        tmp.path().to_path_buf(),
+        "pkg".to_string(),
+        ".once/out/pkg/module_tests".to_string(),
+    );
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_command(argv, env = None):
+    fail("host_command must not be called for Zig metadata")
+
+def host_which(name):
+    fail("host_which must not be called for Zig metadata")
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "module_tests",
+        "id": "pkg/module_tests",
+    }},
+    "attr": {{
+        "labels": ["module"],
+    }},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/pkg/module_tests",
+    "scratch_dir": ".once/tmp/analysis/pkg/module_tests",
+    "capability": "metadata",
+    "run": {{"visible": False}},
+}}
+result = repr([_zig_test_impl(ctx), _zig_configure_test_impl(ctx)])
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let out = out.unwrap();
+
+    assert!(out.contains("\"target_kind\": \"zig_test\""));
+    assert!(out.contains("\"type\": \"zig_test\""));
+    assert!(out.contains("\"module\""));
+    assert!(out.contains(".once/out/pkg/module_tests/module_tests"));
+    assert!(store.actions.is_empty());
+}
+
+#[test]
+fn prelude_c_library_declares_archive_and_provider_fields() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    let include_dir = tmp.path().join("pkg/include");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::create_dir_all(&include_dir).unwrap();
+    std::fs::write(source_dir.join("native.c"), "#include \"native.h\"\n").unwrap();
+    std::fs::write(include_dir.join("native.h"), "int native(void);\n").unwrap();
+
+    let store = AnalysisStore::new(
+        tmp.path().to_path_buf(),
+        "pkg".to_string(),
+        ".once/out/pkg/native".to_string(),
+    );
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_which(name):
+    if name == "cc":
+        return "/tools/cc"
+    if name == "ar":
+        return "/tools/ar"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if argv == ["/tools/cc", "--version"]:
+        return "cc test\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "native",
+        "id": "pkg/native",
+    }},
+    "attr": {{
+        "hdrs": ["include/native.h"],
+        "includes": ["include"],
+        "defines": ["NATIVE=1"],
+        "copts": ["-Wall"],
+        "archiver_identity": "ar test identity",
+    }},
+    "deps": [],
+    "srcs": ["src/*.c"],
+    "build_dir": ".once/out/pkg/native",
+    "scratch_dir": ".once/tmp/analysis/pkg/native",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_c_library_impl(ctx))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let out = out.unwrap();
+    assert!(out.contains("\"c_provider\": True"));
+    assert!(out.contains("\"archive\": \".once/out/pkg/native/libnative.a\""));
+
+    let compile = action_by_identifier(&store, "pkg/native:c-compile:pkg/src/native.c");
+    assert_eq!(compile.argv[0], "/tools/cc");
+    assert!(compile.argv.contains(&"-DNATIVE=1".to_string()));
+    assert!(compile.argv.contains(&"pkg/include".to_string()));
+    assert!(compile.argv.contains(&"-Wall".to_string()));
+    assert!(compile.inputs.contains(&"pkg/src/native.c".to_string()));
+    assert!(compile.inputs.contains(&"pkg/include/native.h".to_string()));
+    assert!(compile
+        .outputs
+        .contains(&".once/out/pkg/native/objects/pkg/src/native.c.o".to_string()));
+    assert!(!compile
+        .toolchain_identity
+        .as_deref()
+        .unwrap()
+        .contains("\0cxx\0"));
+    assert!(compile
+        .toolchain_identity
+        .as_deref()
+        .unwrap()
+        .contains("ar test identity"));
+
+    let archive = action_by_identifier(&store, "pkg/native:c-archive");
+    assert_eq!(archive.argv[0], "/tools/ar");
+    assert_eq!(archive.argv[1], "crs");
+    assert!(archive
+        .outputs
+        .contains(&".once/out/pkg/native/libnative.a".to_string()));
+}
+
+#[test]
+fn prelude_c_library_preserves_source_paths_for_object_outputs() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(
+        source_dir.join("foo-bar.c"),
+        "int dash(void) { return 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source_dir.join("foo_bar.c"),
+        "int underscore(void) { return 2; }\n",
+    )
+    .unwrap();
+
+    let store = AnalysisStore::new(
+        tmp.path().to_path_buf(),
+        "pkg".to_string(),
+        ".once/out/pkg/native".to_string(),
+    );
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_which(name):
+    if name == "cc":
+        return "/tools/cc"
+    if name == "ar":
+        return "/tools/ar"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if argv == ["/tools/cc", "--version"]:
+        return "cc test\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "native",
+        "id": "pkg/native",
+    }},
+    "attr": {{}},
+    "deps": [],
+    "srcs": ["src/*.c"],
+    "build_dir": ".once/out/pkg/native",
+    "scratch_dir": ".once/tmp/analysis/pkg/native",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_c_library_impl(ctx))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    out.unwrap();
+
+    let outputs = store
+        .actions
+        .iter()
+        .flat_map(|action| action.outputs.iter().map(String::as_str))
+        .collect::<Vec<_>>();
+    assert!(outputs.contains(&".once/out/pkg/native/objects/pkg/src/foo-bar.c.o"));
+    assert!(outputs.contains(&".once/out/pkg/native/objects/pkg/src/foo_bar.c.o"));
+}
+
+#[test]
+fn prelude_c_library_provider_only_targets_do_not_probe_toolchain() {
+    let tmp = TempDir::new().expect("tempdir");
+    let include_dir = tmp.path().join("pkg/include");
+    let vendor_dir = tmp.path().join("pkg/vendor");
+    std::fs::create_dir_all(&include_dir).unwrap();
+    std::fs::create_dir_all(&vendor_dir).unwrap();
+    std::fs::write(include_dir.join("native.h"), "int native(void);\n").unwrap();
+    std::fs::write(vendor_dir.join("mylib.so"), "dynamic\n").unwrap();
+
+    let store = store_for(tmp.path(), "pkg/native");
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called for provider-only C targets")
+
+def host_command(argv, env = None):
+    fail("host_command must not be called for provider-only C targets")
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "native",
+        "id": "pkg/native",
+    }},
+    "attr": {{
+        "hdrs": ["include/native.h"],
+        "dynamic_libraries": ["vendor/mylib.so"],
+        "compiler": "/missing/cc",
+        "cxx_compiler": "/missing/cxx",
+        "archiver": "/missing/ar",
+    }},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/pkg/native",
+    "scratch_dir": ".once/tmp/analysis/pkg/native",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+provider = _c_library_impl(ctx)
+result = repr((provider["archive"], provider["dynamic_libraries"], provider["transitive_dynamic_libraries"]))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let out = out.unwrap();
+
+    assert!(out.contains("\"\""));
+    assert!(out.contains("pkg/vendor/mylib.so"));
+    assert!(store.actions.is_empty());
+}
+
+#[test]
+fn prelude_c_library_propagates_android_native_libraries() {
+    let tmp = TempDir::new().expect("tempdir");
+    let store = store_for(tmp.path(), "pkg/native");
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_which(name):
+    if name == "cc":
+        return "/tools/cc"
+    if name == "c++":
+        return "/tools/cxx"
+    if name == "ar":
+        return "/tools/ar"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if argv == ["/tools/cc", "--version"]:
+        return "cc test\n"
+    if argv == ["/tools/cxx", "--version"]:
+        return "cxx test\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "native",
+        "id": "pkg/native",
+    }},
+    "attr": {{
+        "dynamic_libraries": ["jni/libnative.so"],
+        "android_abi": "arm64-v8a",
+    }},
+    "deps": [{{
+        "c_provider": True,
+        "android_native_libraries": [{{"abi": "arm64-v8a", "path": "pkg/jni/libdep.so"}}],
+        "transitive_android_native_libraries": [{{"abi": "arm64-v8a", "path": "pkg/jni/libdep.so"}}],
+    }}],
+    "srcs": [],
+    "build_dir": ".once/out/pkg/native",
+    "scratch_dir": ".once/tmp/analysis/pkg/native",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+provider = _c_library_impl(ctx)
+result = repr((provider["android_native_libraries"], provider["transitive_android_native_libraries"]))
+"#
+    );
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let out = out.unwrap();
+
+    assert!(out.contains("[{\"abi\": \"arm64-v8a\", \"path\": \"pkg/jni/libnative.so\"}]"));
+    assert!(out.contains("{\"abi\": \"arm64-v8a\", \"path\": \"pkg/jni/libdep.so\"}"));
+}
+
+#[test]
+fn prelude_zig_static_library_consumes_c_provider_fields() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("math.zig"), "const c = @import(\"c\");").unwrap();
+
+    let store = AnalysisStore::new(
+        tmp.path().to_path_buf(),
+        "pkg".to_string(),
+        ".once/out/pkg/math".to_string(),
+    );
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_which(name):
+    if name == "sh":
+        return "/bin/sh"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if argv == ["/tools/zig", "version"]:
+        return "0.15.1\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "math",
+        "id": "pkg/math",
+    }},
+    "attr": {{
+        "zig": "/tools/zig",
+        "main": "src/math.zig",
+        "compiler_runtime": "include",
+        "strip_debug_symbols": True,
+        "linker_script": "linker.ld",
+    }},
+    "deps": [{{
+        "c_provider": True,
+        "label_id": "pkg/native",
+        "transitive_headers": ["pkg/include/native.h"],
+        "transitive_include_dirs": ["pkg/include"],
+        "transitive_defines": ["NATIVE=1"],
+        "transitive_static_libraries": ["pkg/native/libnative.a"],
+        "transitive_linkopts": ["-pthread"],
+        "transitive_data": [],
+    }}],
+    "srcs": ["src/**/*.zig"],
+    "build_dir": ".once/out/pkg/math",
+    "scratch_dir": ".once/tmp/analysis/pkg/math",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_static_library_impl(ctx))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let out = out.unwrap();
+    assert!(out.contains("\"target_kind\": \"zig_static_library\""));
+    assert!(out.contains("\"c_provider\": True"));
+    assert!(out.contains("\"archive\": \".once/out/pkg/math/libmath.a\""));
+
+    let translate = action_by_identifier(&store, "pkg/math:zig-translate-c:c");
+    assert_eq!(translate.argv[0], "/bin/sh");
+    assert!(translate
+        .inputs
+        .contains(&"pkg/include/native.h".to_string()));
+
+    let build = action_by_identifier(&store, "pkg/math:zig-build-lib");
+    assert_eq!(build.argv[0], "/tools/zig");
+    assert_eq!(build.argv[1], "build-lib");
+    assert!(build.argv.contains(&"-fcompiler-rt".to_string()));
+    assert!(build.argv.contains(&"-fstrip".to_string()));
+    assert!(build.argv.contains(&"--dep".to_string()));
+    assert!(build.argv.contains(&"c=c".to_string()));
+    assert!(build.argv.contains(&"-DNATIVE=1".to_string()));
+    assert!(build.argv.contains(&"pkg/include".to_string()));
+    assert!(build.argv.contains(&"-T".to_string()));
+    assert!(build.argv.contains(&"pkg/linker.ld".to_string()));
+    assert!(build.argv.contains(&"pkg/native/libnative.a".to_string()));
+    assert!(build.argv.contains(&"-pthread".to_string()));
+    assert!(build
+        .outputs
+        .contains(&".once/out/pkg/math/libmath.a".to_string()));
+
+    let docs = action_by_identifier(&store, "pkg/math:zig-docs");
+    assert!(docs
+        .outputs
+        .contains(&".once/out/pkg/math/math.docs".to_string()));
+}
+
+#[test]
+fn prelude_zig_c_link_args_preserve_dynamic_library_paths() {
+    let prelude = all_prelude_source();
+    let out = eval_prelude_function_in(
+        prelude,
+        "_zig_c_link_args",
+        r#"({
+            "linkopts": ["-pthread"],
+            "static_libraries": ["pkg/libnative.a"],
+            "dynamic_libraries": ["pkg/vendor/mylib.so", "pkg/vendor/libfoo.so.1"],
+        })"#,
+    )
+    .unwrap();
+
+    assert!(out.contains("\"pkg/vendor/mylib.so\""), "{out}");
+    assert!(out.contains("\"pkg/vendor/libfoo.so.1\""), "{out}");
+    assert!(!out.contains("-Lpkg/vendor"), "{out}");
+    assert!(!out.contains("-lmylib"), "{out}");
+    assert!(!out.contains("-lfoo.so.1"), "{out}");
+}
+
+#[test]
+fn prelude_c_library_consumes_zig_c_provider_static_and_shared_libraries() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(
+        source_dir.join("static.zig"),
+        "export fn add() i32 { return 1; }",
+    )
+    .unwrap();
+    std::fs::write(
+        source_dir.join("shared.zig"),
+        "export fn sub() i32 { return 1; }",
+    )
+    .unwrap();
+
+    let store = store_for(tmp.path(), "pkg/consumer");
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_command(argv, env = None):
+    if argv == ["/tools/zig", "version"]:
+        return "0.15.1\n"
+    fail("unexpected host_command: " + repr(argv))
+
+static_ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "zstatic",
+        "id": "pkg/zstatic",
+    }},
+    "attr": {{
+        "zig": "/tools/zig",
+        "main": "src/static.zig",
+        "linkopts": ["-Wl,--static-zig"],
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.zig"],
+    "build_dir": ".once/out/pkg/zstatic",
+    "scratch_dir": ".once/tmp/analysis/pkg/zstatic",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+
+shared_ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "zshared",
+        "id": "pkg/zshared",
+    }},
+    "attr": {{
+        "zig": "/tools/zig",
+        "main": "src/shared.zig",
+        "linkopts": ["-Wl,--shared-zig"],
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.zig"],
+    "build_dir": ".once/out/pkg/zshared",
+    "scratch_dir": ".once/tmp/analysis/pkg/zshared",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+
+consumer_ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "consumer",
+        "id": "pkg/consumer",
+    }},
+    "attr": {{}},
+    "deps": [_zig_static_library_impl(static_ctx), _zig_shared_library_impl(shared_ctx)],
+    "srcs": [],
+    "build_dir": ".once/out/pkg/consumer",
+    "scratch_dir": ".once/tmp/analysis/pkg/consumer",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+
+provider = _c_library_impl(consumer_ctx)
+result = repr((provider["transitive_static_libraries"], provider["transitive_dynamic_libraries"], provider["transitive_linkopts"]))
+"#
+    );
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let out = out.unwrap();
+
+    assert!(out.contains(".once/out/pkg/consumer/libzstatic.a"), "{out}");
+    assert!(
+        out.contains(".once/out/pkg/consumer/libzshared.so"),
+        "{out}"
+    );
+    assert!(out.contains("-Wl,--static-zig"), "{out}");
+    assert!(out.contains("-Wl,--shared-zig"), "{out}");
+}
+
+#[test]
+fn prelude_zig_translate_c_uses_powershell_on_windows() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("math.zig"), "const c = @import(\"c\");").unwrap();
+
+    let store = store_for(tmp.path(), "pkg/math");
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_which(name):
+    if name == "powershell":
+        return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if argv == ["/tools/zig", "version"]:
+        return "0.15.1\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "math",
+        "id": "pkg/math",
+    }},
+    "attr": {{
+        "zig": "/tools/zig",
+        "main": "src/math.zig",
+    }},
+    "deps": [{{
+        "c_provider": True,
+        "label_id": "pkg/native",
+        "transitive_headers": ["pkg/include/native.h"],
+        "transitive_include_dirs": ["pkg/include"],
+        "transitive_data": [],
+    }}],
+    "srcs": ["src/**/*.zig"],
+    "build_dir": ".once/out/pkg/math",
+    "scratch_dir": ".once/tmp/analysis/pkg/math",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_static_library_impl(ctx))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    out.unwrap();
+
+    let translate = action_by_identifier(&store, "pkg/math:zig-translate-c:c");
+    assert_eq!(
+        translate.argv[0],
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    );
+    assert!(translate.argv.iter().any(|arg| arg == "-Command"));
+    assert!(translate.argv.last().unwrap().contains("translate-c"));
+    assert!(translate
+        .argv
+        .last()
+        .unwrap()
+        .contains("> '.once/out/pkg/math/c_c.zig'"));
+}
+
+#[test]
+fn prelude_zig_binary_run_uses_powershell_on_windows() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("main.zig"), "pub fn main() void {}").unwrap();
+
+    let store = store_for(tmp.path(), "pkg/app");
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_which(name):
+    if name == "powershell":
+        return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    fail("unexpected host_which: " + name)
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "app",
+        "id": "pkg/app",
+    }},
+    "attr": {{
+        "main": "src/main.zig",
+        "args": ["--smoke"],
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.zig"],
+    "build_dir": ".once/out/pkg/app",
+    "scratch_dir": ".once/tmp/analysis/pkg/app",
+    "capability": "run",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_binary_impl(ctx))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    out.unwrap();
+
+    let run = action_by_identifier(&store, "pkg/app:zig-run");
+    assert_eq!(
+        run.argv[0],
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    );
+    assert!(run.argv.iter().any(|arg| arg == "-Command"));
+    assert!(run
+        .argv
+        .last()
+        .unwrap()
+        .contains("CreateDirectory('.once/out/pkg/app/run')"));
+    assert!(run.argv.last().unwrap().contains("'--smoke'"));
+}
+
+#[test]
+fn prelude_zig_test_run_uses_powershell_on_windows() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("test.zig"), "test \"ok\" {}").unwrap();
+
+    let store = store_for(tmp.path(), "pkg/suite");
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "windows"
+
+def host_which(name):
+    if name == "powershell":
+        return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if argv == ["/tools/zig", "version"]:
+        return "0.15.1\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "suite",
+        "id": "pkg/suite",
+    }},
+    "attr": {{
+        "zig": "/tools/zig",
+        "main": "src/test.zig",
+        "args": ["--summary", "all"],
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.zig"],
+    "build_dir": ".once/out/pkg/suite",
+    "scratch_dir": ".once/tmp/analysis/pkg/suite",
+    "capability": "test",
+    "run": {{"visible": False}},
+}}
+result = repr(_zig_test_impl(ctx))
+"#
+    );
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    out.unwrap();
+
+    let run = action_by_identifier(&store, "pkg/suite:zig-test-run");
+    assert_eq!(
+        run.argv[0],
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    );
+    assert!(run.argv.iter().any(|arg| arg == "-Command"));
+    assert!(run
+        .argv
+        .last()
+        .unwrap()
+        .contains("ConvertTo-Json -Depth 10 -Compress"));
+    assert!(run.argv.last().unwrap().contains("'--summary' 'all'"));
+}
+
+#[test]
+fn prelude_zig_shared_library_propagates_android_native_libraries() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source_dir = tmp.path().join("pkg/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(
+        source_dir.join("math.zig"),
+        "export fn add() i32 { return 1; }",
+    )
+    .unwrap();
+
+    let store = AnalysisStore::new(
+        tmp.path().to_path_buf(),
+        "pkg".to_string(),
+        ".once/out/pkg/math".to_string(),
+    );
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_which(name):
+    if name == "sh":
+        return "/bin/sh"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None):
+    if argv == ["/tools/zig", "version"]:
+        return "0.15.1\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "math",
+        "id": "pkg/math",
+    }},
+    "attr": {{
+        "zig": "/tools/zig",
+        "main": "src/math.zig",
+        "android_abi": "arm64-v8a",
+    }},
+    "deps": [{{
+        "c_provider": True,
+        "label_id": "pkg/native",
+        "transitive_headers": [],
+        "transitive_include_dirs": [],
+        "transitive_defines": [],
+        "transitive_static_libraries": [],
+        "transitive_dynamic_libraries": ["pkg/jni/libnative.so"],
+        "transitive_linkopts": [],
+        "transitive_data": [],
+        "android_native_libraries": [{{"abi": "arm64-v8a", "path": "pkg/jni/libnative.so"}}],
+        "transitive_android_native_libraries": [{{"abi": "arm64-v8a", "path": "pkg/jni/libnative.so"}}],
+    }}],
+    "srcs": ["src/**/*.zig"],
+    "build_dir": ".once/out/pkg/math",
+    "scratch_dir": ".once/tmp/analysis/pkg/math",
+    "capability": "build",
+    "run": {{"visible": False}},
+}}
+provider = _zig_shared_library_impl(ctx)
+result = repr((provider["android_native_libraries"], provider["transitive_android_native_libraries"]))
+"#
+    );
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let out = out.unwrap();
+
+    assert!(out.contains(".once/out/pkg/math/libmath.so"));
+    assert!(out.contains("{\"abi\": \"arm64-v8a\", \"path\": \"pkg/jni/libnative.so\"}"));
 }
 
 #[test]
