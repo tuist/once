@@ -60,13 +60,14 @@ fn android_prelude_source() -> String {
 
 fn all_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/android.star"),
         include_str!("../prelude/rust.star"),
         include_str!("../prelude/swift.star"),
-        include_str!("../prelude/kotlin.star")
+        include_str!("../prelude/kotlin.star"),
+        include_str!("../prelude/elixir.star")
     )
 }
 
@@ -233,6 +234,80 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
         .attrs
         .iter()
         .any(|attr| attr.name == "android_target" && attr.required));
+}
+
+#[test]
+fn elixir_target_kind_schemas_are_discoverable() {
+    let library = built_in_target_kind_schema("elixir_library").expect("elixir_library schema");
+    assert!(target_kind_has_impl("elixir_library").unwrap());
+    assert!(library.providers.iter().any(|p| p == "elixir_app"));
+    assert!(library
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "build"));
+    assert!(library.attrs.iter().any(|attr| attr.name == "mix_env"));
+    assert!(library
+        .examples
+        .iter()
+        .any(|example| example.slug == "elixir-library-minimal"));
+
+    let test = built_in_target_kind_schema("elixir_test").expect("elixir_test schema");
+    assert!(target_kind_has_impl("elixir_test").unwrap());
+    assert!(test.providers.iter().any(|p| p == "once_test_info"));
+    assert!(test
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "test"));
+    assert!(test.attrs.iter().any(|attr| attr.name == "test_args"));
+    assert!(test
+        .examples
+        .iter()
+        .any(|example| example.slug == "elixir-test-minimal"));
+}
+
+#[test]
+fn elixir_library_compile_is_split_into_target_compile_and_stage_actions() {
+    let source = include_str!("../prelude/elixir.star");
+
+    assert!(source.contains(":elixir-compile"));
+    assert!(source.contains("elixir-compile.target.v2"));
+    assert!(source.contains(":elixir-stage"));
+    assert!(source.contains("elixir_exunit"));
+    assert!(!source.contains("mix compile"));
+}
+
+#[test]
+fn prelude_elixir_test_metadata_does_not_require_library_dependency() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "apps/hello",
+        "name": "GreetingTests",
+        "id": "apps/hello/GreetingTests",
+    }},
+    "attr": {{
+        "labels": ["unit"],
+    }},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/apps/hello/GreetingTests",
+    "capability": "metadata",
+}}
+provider = _elixir_test_impl(ctx)
+result = repr(provider["test_info"])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "apps/hello");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(store.actions.is_empty());
+    assert!(out.contains("elixir_exunit"), "{out}");
+    assert!(out.contains("unit"), "{out}");
 }
 
 #[test]

@@ -1,0 +1,17 @@
+[[target]]
+name = "greeting"
+kind = "elixir_library"
+srcs = ["lib/**/*.ex"]
+
+[target.attrs]
+app_name = "greeting"
+mix_env = "test"
+
+[[target]]
+name = "greeting_test"
+kind = "elixir_test"
+srcs = ["test/**/*.exs"]
+deps = ["./greeting"]
+
+[target.attrs]
+labels = ["unit"]

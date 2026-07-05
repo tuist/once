@@ -5,4 +5,5 @@ PRELUDE_SOURCES = [
     "rust.star",
     "swift.star",
     "kotlin.star",
+    "elixir.star",
 ]
