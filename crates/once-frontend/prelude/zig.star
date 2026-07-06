@@ -872,17 +872,14 @@ def _zig_library_impl(ctx):
     cinfo = _zig_collect_c_provider(ctx, ctx["deps"])
     return _zig_provider(ctx, "zig_library", root, "", cinfo, "module")
 
-def _zig_binary_run_script(ctx, binary, marker, log, mkdir):
+def _zig_binary_run_script(ctx, binary, marker, log):
     args = [_shell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
     return """set +e
-{mkdir} -p {run_dir}
 {binary} {args} > {log} 2>&1
 code=$?
 printf '{{"schema":"once.run_result.v1","target":{target},"exit_code":%s}}\\n' "$code" > {marker}
 exit "$code"
 """.format(
-        mkdir = _shell_quote(mkdir),
-        run_dir = _shell_quote(_parent_dir(marker)),
         binary = _shell_quote("./" + binary),
         args = " ".join(args),
         log = _shell_quote(log),
@@ -894,7 +891,6 @@ def _zig_binary_run_windows_script(ctx, binary, marker, log):
     args = [_powershell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
     return """$ErrorActionPreference = 'Continue'
 $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
-[System.IO.Directory]::CreateDirectory({run_dir}) | Out-Null
 & {binary} {args} > {log} 2>&1
 $code = $global:LASTEXITCODE
 if ($null -eq $code) {{
@@ -913,7 +909,6 @@ $json = $result | ConvertTo-Json -Compress
 [System.IO.File]::WriteAllText({marker}, $json + [System.Environment]::NewLine, $encoding)
 exit $code
 """.format(
-        run_dir = _powershell_quote(_parent_dir(marker)),
         binary = _powershell_quote("./" + binary),
         args = " ".join(args),
         log = _powershell_quote(log),
@@ -930,7 +925,8 @@ def _zig_binary_impl(ctx):
         if host_os() == "windows":
             argv = _zig_powershell_argv(_zig_binary_run_windows_script(ctx, binary, marker, log))
         else:
-            argv = [host_which("sh"), "-c", _zig_binary_run_script(ctx, binary, marker, log, host_which("mkdir"))]
+            argv = [host_which("sh"), "-c", _zig_binary_run_script(ctx, binary, marker, log)]
+        prepare_path(run_dir, kind = "directory", identifier = ctx["label"]["id"] + ":zig-run-prepare")
         run_action(
             argv = argv,
             inputs = _unique([binary] + _zig_data_inputs(ctx) + _zig_collect_dep_data(ctx["deps"])),
@@ -1027,7 +1023,7 @@ def _zig_test_info(ctx, test_binary, results, log, native_results, test_dir):
         "metadata": {},
     }
 
-def _zig_test_script(ctx, test_binary, results, log, native_results, mkdir):
+def _zig_test_script(ctx, test_binary, results, log, native_results):
     args = [_shell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
     target = _zig_json_string(ctx["label"]["id"])
     case_id = _zig_json_string(ctx["label"]["id"] + "::suite")
@@ -1036,7 +1032,6 @@ def _zig_test_script(ctx, test_binary, results, log, native_results, mkdir):
     log_json = _zig_json_string(log)
     native_json = _zig_json_string(native_results)
     return """set +e
-{mkdir} -p {test_dir}
 {binary} {args} > {log} 2>&1
 code=$?
 printf '$ %s\\nlog: %s\\nexit: %s\\n' {binary} {log} "$code" > {native_results}
@@ -1052,8 +1047,6 @@ fi
 printf '{{"schema":"once.test_results.v1","target":{target},"runner":{{"type":"zig_test","metadata":{{}}}},"status":"%s","summary":{{"total":1,"passed":%s,"failed":%s,"skipped":0,"flaky":0}},"cases":[{{"id":{case_id},"name":{case_name},"suite":{suite},"status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{}}}}],"artifacts":{{"logs":[{log_json}],"native_results":[{native_json}]}}}}\\n' "$status" "$passed" "$failed" "$status" "$status" > {results}
 exit "$code"
 """.format(
-        mkdir = _shell_quote(mkdir),
-        test_dir = _shell_quote(_parent_dir(results)),
         binary = _shell_quote("./" + test_binary),
         args = " ".join(args),
         log = _shell_quote(log),
@@ -1071,7 +1064,6 @@ def _zig_test_windows_script(ctx, test_binary, results, log, native_results):
     args = [_powershell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
     return """$ErrorActionPreference = 'Continue'
 $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
-[System.IO.Directory]::CreateDirectory({test_dir}) | Out-Null
 & {binary} {args} > {log} 2>&1
 $code = $global:LASTEXITCODE
 if ($null -eq $code) {{
@@ -1126,7 +1118,6 @@ $json = $result | ConvertTo-Json -Depth 10 -Compress
 [System.IO.File]::WriteAllText({results}, $json + [System.Environment]::NewLine, $encoding)
 exit $code
 """.format(
-        test_dir = _powershell_quote(_parent_dir(results)),
         binary = _powershell_quote("./" + test_binary),
         args = " ".join(args),
         log = _powershell_quote(log),
@@ -1170,7 +1161,8 @@ def _zig_test_impl(ctx):
     if host_os() == "windows":
         argv = _zig_powershell_argv(_zig_test_windows_script(ctx, provider["test_binary"], results, log, native_results))
     else:
-        argv = [host_which("sh"), "-c", _zig_test_script(ctx, provider["test_binary"], results, log, native_results, host_which("mkdir"))]
+        argv = [host_which("sh"), "-c", _zig_test_script(ctx, provider["test_binary"], results, log, native_results)]
+    prepare_path(test_dir, kind = "directory", identifier = ctx["label"]["id"] + ":zig-test-prepare")
     run_action(
         argv = argv,
         inputs = _unique([provider["test_binary"]] + _zig_data_inputs(ctx) + _zig_collect_dep_data(ctx["deps"])),

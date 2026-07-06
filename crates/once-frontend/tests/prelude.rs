@@ -1582,12 +1582,17 @@ result = repr(_zig_binary_impl(ctx))
         "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
     );
     assert!(run.argv.iter().any(|arg| arg == "-Command"));
-    assert!(run
-        .argv
-        .last()
-        .unwrap()
-        .contains("CreateDirectory('.once/out/pkg/app/run')"));
+    assert!(!run.argv.last().unwrap().contains("CreateDirectory"));
     assert!(run.argv.last().unwrap().contains("'--smoke'"));
+
+    let prepare = action_by_identifier(&store, "pkg/app:zig-run-prepare");
+    assert_eq!(
+        prepare.operation,
+        Some(DeclaredActionOperation::PreparePath {
+            path: ".once/out/pkg/app/run".to_string(),
+            mode: DeclaredPreparePathMode::Directory,
+        })
+    );
 }
 
 #[test]
@@ -1649,7 +1654,17 @@ result = repr(_zig_test_impl(ctx))
         .last()
         .unwrap()
         .contains("ConvertTo-Json -Depth 10 -Compress"));
+    assert!(!run.argv.last().unwrap().contains("CreateDirectory"));
     assert!(run.argv.last().unwrap().contains("'--summary' 'all'"));
+
+    let prepare = action_by_identifier(&store, "pkg/suite:zig-test-prepare");
+    assert_eq!(
+        prepare.operation,
+        Some(DeclaredActionOperation::PreparePath {
+            path: ".once/out/pkg/suite/test".to_string(),
+            mode: DeclaredPreparePathMode::Directory,
+        })
+    );
 }
 
 #[test]
