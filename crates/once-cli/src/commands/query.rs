@@ -383,11 +383,7 @@ fn evidence_status(record: &EvidenceRecord) -> &'static str {
 }
 
 fn evidence_cache(record: &EvidenceRecord) -> &'static str {
-    match record.cache {
-        once_core::EvidenceCacheState::Hit => "hit",
-        once_core::EvidenceCacheState::Miss => "miss",
-        once_core::EvidenceCacheState::Bypass => "bypass",
-    }
+    record.cache.as_str()
 }
 
 fn test_records(workspace: &Path, graph: &[once_frontend::GraphTarget]) -> Vec<TestTargetRecord> {
