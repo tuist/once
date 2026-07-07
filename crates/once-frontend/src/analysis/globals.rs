@@ -94,6 +94,21 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         resolved.ok_or_else(|| anyhow!("`{name}` not found on PATH"))
     }
 
+    /// Like `host_which` but returns `""` when `name` is not on PATH
+    /// instead of failing. Lets rules probe for an optional tool without
+    /// a host shell. Schema parsing returns `""`.
+    fn host_which_optional(name: &str) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        let resolved = with_store(|store| -> Result<Option<String>> {
+            let store =
+                store.ok_or_else(|| anyhow!("host_which_optional called outside analysis"))?;
+            store.host_cache.which(name)
+        })?;
+        Ok(resolved.unwrap_or_default())
+    }
+
     /// Run `argv[0]` with `argv[1..]` as arguments and return its
     /// stdout as a string. Fails if the process exits non-zero;
     /// includes stderr in the error message. Optional `env` is a
@@ -101,7 +116,11 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// host process env. Both `argv` and `env` participate in the
     /// cache key, so a different `DEVELOPER_DIR` resolves to a
     /// different cached result. Schema parsing returns `""`.
-    fn host_command<'v>(argv: Value<'v>, env: Option<Value<'v>>) -> anyhow::Result<String> {
+    fn host_command<'v>(
+        argv: Value<'v>,
+        env: Option<Value<'v>>,
+        merge_stderr: Option<bool>,
+    ) -> anyhow::Result<String> {
         if !analysis_active() {
             return Ok(String::new());
         }
@@ -110,9 +129,10 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .map(|value| unpack_string_dict(value, "env"))
             .transpose()?
             .unwrap_or_default();
+        let merge_stderr = merge_stderr.unwrap_or(false);
         with_store(|store| -> Result<String> {
             let store = store.ok_or_else(|| anyhow!("host_command called outside analysis"))?;
-            store.host_cache.command(&argv, &env)
+            store.host_cache.command(&argv, &env, merge_stderr)
         })
     }
 
@@ -150,6 +170,33 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(content
             .windows(needle.len())
             .any(|window| window == needle.as_bytes()))
+    }
+
+    /// Return the sorted entry names of host directory `path`. Missing or
+    /// non-directory paths (and schema parsing) return an empty list.
+    /// Names are bare file names, letting rules enumerate host toolchains
+    /// (for example SDK version directories) without a host shell.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "starlark_module native functions use Result-returning signatures"
+    )]
+    fn host_read_dir<'v>(
+        path: &str,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let heap = eval.heap();
+        if !analysis_active() {
+            return Ok(heap.alloc(Vec::<String>::new()));
+        }
+        let mut names = match std::fs::read_dir(path) {
+            Ok(entries) => entries
+                .filter_map(std::result::Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            Err(_) => Vec::new(),
+        };
+        names.sort();
+        Ok(heap.alloc(names))
     }
 
     /// Expand a list of glob patterns against the active target's
@@ -202,6 +249,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             arg_files: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![path.to_string()],
+            stdout: None,
+            stderr: None,
             env: BTreeMap::new(),
             cacheable: true,
             toolchain_identity: None,
@@ -246,6 +295,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             arg_files: Vec::new(),
             inputs,
             outputs: vec![destination.to_string()],
+            stdout: None,
+            stderr: None,
             env: BTreeMap::new(),
             cacheable: cacheable.unwrap_or(true),
             toolchain_identity,
@@ -283,6 +334,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             arg_files: Vec::new(),
             inputs: Vec::new(),
             outputs,
+            stdout: None,
+            stderr: None,
             env: BTreeMap::new(),
             cacheable: false,
             toolchain_identity: None,
@@ -328,6 +381,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             arg_files: Vec::new(),
             inputs,
             outputs: vec![output.to_string()],
+            stdout: None,
+            stderr: None,
             env: BTreeMap::new(),
             cacheable: cacheable.unwrap_or(true),
             toolchain_identity: None,
@@ -385,6 +440,10 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// optional bool, default true;
     /// `toolchain_identity`: optional string folded into the input
     /// digest; `identifier`: optional label for diagnostics.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "run_action mirrors the declared-action fields, including optional stream redirection"
+    )]
     fn run_action<'v>(
         argv: Value<'v>,
         inputs: Option<Value<'v>>,
@@ -393,6 +452,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         toolchain_identity: Option<String>,
         identifier: Option<String>,
         cacheable: Option<bool>,
+        stdout: Option<String>,
+        stderr: Option<String>,
     ) -> anyhow::Result<NoneType> {
         let argv = unpack_action_argv(argv, "argv")?;
         let inputs = inputs
@@ -413,6 +474,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             arg_files: argv.arg_files,
             inputs,
             outputs,
+            stdout,
+            stderr,
             env,
             cacheable: cacheable.unwrap_or(true),
             toolchain_identity,

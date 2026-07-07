@@ -495,6 +495,8 @@ async fn run_uncached_action(
             cwd,
             timeout_ms,
             outputs,
+            stdout_path,
+            stderr_path,
             ..
         } => {
             let (program, rest) = argv
@@ -507,25 +509,41 @@ async fn run_uncached_action(
                 command.env(key, value);
             }
             command.stdin(Stdio::null());
-            command.stdout(Stdio::null());
-            command.stderr(Stdio::piped());
             command.current_dir(
                 cwd.as_ref()
                     .map_or_else(|| workspace.to_path_buf(), |path| path.resolve(workspace)),
             );
             command.kill_on_drop(true);
 
-            let output = match timeout_ms {
-                Some(ms) => tokio::time::timeout(Duration::from_millis(*ms), command.output())
-                    .await
-                    .with_context(|| format!("declared action timed out after {ms}ms"))??,
-                None => command.output().await?,
-            };
-            let mut result = ActionResult {
-                exit_code: output.status.code().unwrap_or(-1),
-                stdout: None,
-                stderr: Some(cache.put_blob(&output.stderr).await?),
-                outputs: BTreeMap::new(),
+            let mut result = if stdout_path.is_some() || stderr_path.is_some() {
+                run_uncached_redirected(
+                    command,
+                    stdout_path.as_deref(),
+                    stderr_path.as_deref(),
+                    *timeout_ms,
+                    workspace,
+                    cache,
+                )
+                .await?
+            } else {
+                // Uncacheable commands discard stdout rather than buffering
+                // it; only stderr is retained for failure diagnostics.
+                command.stdout(Stdio::null());
+                command.stderr(Stdio::piped());
+                let output = match timeout_ms {
+                    Some(ms) => {
+                        tokio::time::timeout(Duration::from_millis(*ms), command.output())
+                            .await
+                            .with_context(|| format!("declared action timed out after {ms}ms"))??
+                    }
+                    None => command.output().await?,
+                };
+                ActionResult {
+                    exit_code: output.status.code().unwrap_or(-1),
+                    stdout: None,
+                    stderr: Some(cache.put_blob(&output.stderr).await?),
+                    outputs: BTreeMap::new(),
+                }
             };
             if result.exit_code == 0 {
                 result.outputs = capture_uncached_outputs(outputs, workspace, cache).await?;
@@ -541,6 +559,79 @@ async fn run_uncached_action(
                 .map_err(Into::into)
         }
     }
+}
+
+/// Run an uncacheable command whose stdout and/or stderr are redirected
+/// into declared output files. Redirected streams go straight to disk and
+/// are captured later as ordinary outputs; a non-redirected stderr is
+/// still piped and retained for failure diagnostics.
+async fn run_uncached_redirected(
+    mut command: Command,
+    stdout_path: Option<&WorkspacePath>,
+    stderr_path: Option<&WorkspacePath>,
+    timeout_ms: Option<u64>,
+    workspace: &Path,
+    cache: &CacheProvider,
+) -> Result<ActionResult> {
+    let stdout_file = match stdout_path {
+        Some(path) => Some(open_redirect_file(path, workspace)?),
+        None => None,
+    };
+    let stderr_file = match stderr_path {
+        Some(path) => Some(if stdout_path == Some(path) {
+            stdout_file
+                .as_ref()
+                .expect("stdout redirect open when stderr merges into it")
+                .try_clone()
+                .with_context(|| format!("cloning redirect handle for `{}`", path.as_str()))?
+        } else {
+            open_redirect_file(path, workspace)?
+        }),
+        None => None,
+    };
+    // A redirected stdout goes to its file; otherwise it is discarded.
+    command.stdout(stdout_file.map_or_else(Stdio::null, Stdio::from));
+    let capture_stderr = stderr_file.is_none();
+    command.stderr(stderr_file.map_or_else(Stdio::piped, Stdio::from));
+
+    let mut child = command.spawn().context("spawning redirected declared action")?;
+    let stderr_pipe = child.stderr.take();
+    let wait = async {
+        let stderr_blob = match stderr_pipe {
+            Some(mut pipe) => {
+                use tokio::io::AsyncReadExt as _;
+                let mut buf = Vec::new();
+                pipe.read_to_end(&mut buf).await?;
+                Some(cache.put_blob(&buf).await?)
+            }
+            None => None,
+        };
+        let status = child.wait().await?;
+        Ok::<_, anyhow::Error>((status, stderr_blob))
+    };
+    let (status, stderr_blob) = match timeout_ms {
+        Some(ms) => tokio::time::timeout(Duration::from_millis(ms), wait)
+            .await
+            .with_context(|| format!("declared action timed out after {ms}ms"))??,
+        None => wait.await?,
+    };
+    debug_assert!(capture_stderr == stderr_blob.is_some());
+    Ok(ActionResult {
+        exit_code: status.code().unwrap_or(-1),
+        stdout: None,
+        stderr: stderr_blob,
+        outputs: BTreeMap::new(),
+    })
+}
+
+fn open_redirect_file(path: &WorkspacePath, workspace: &Path) -> Result<std::fs::File> {
+    let absolute = path.resolve(workspace);
+    if let Some(parent) = absolute.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent directory for redirect `{}`", path.as_str()))?;
+    }
+    std::fs::File::create(&absolute)
+        .with_context(|| format!("creating redirect output `{}`", path.as_str()))
 }
 
 async fn capture_uncached_outputs(
@@ -703,6 +794,18 @@ fn declared_to_action(
         })
         .collect::<Result<Vec<_>>>()?;
     ensure_output_parent_dirs(workspace, &outputs)?;
+    let stdout_path = declared
+        .stdout
+        .as_deref()
+        .map(|path| workspace_path(path, "run_action stdout path"))
+        .transpose()?
+        .map(Box::new);
+    let stderr_path = declared
+        .stderr
+        .as_deref()
+        .map(|path| workspace_path(path, "run_action stderr path"))
+        .transpose()?
+        .map(Box::new);
     match &declared.operation {
         None => Ok(Action::RunCommand {
             argv: declared.argv.clone(),
@@ -710,6 +813,8 @@ fn declared_to_action(
             cwd: None,
             input_digest: Some(input_digest),
             outputs,
+            stdout_path,
+            stderr_path,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -858,6 +963,12 @@ fn compose_input_digest(
     for arg in &declared.argv {
         builder.push_bytes(arg.as_bytes());
     }
+    if let Some(stdout) = &declared.stdout {
+        builder.push_keyed(b"stdout", &Digest::of_bytes(stdout.as_bytes()));
+    }
+    if let Some(stderr) = &declared.stderr {
+        builder.push_keyed(b"stderr", &Digest::of_bytes(stderr.as_bytes()));
+    }
     let encoded_arg_files =
         serde_json::to_vec(&declared.arg_files).context("serializing declared action arg files")?;
     builder.push_bytes(&encoded_arg_files);
@@ -911,6 +1022,8 @@ mod tests {
                 ".once/out/x/A.out".to_string(),
                 ".once/out/x/sub/B.meta".to_string(),
             ],
+            stdout: None,
+            stderr: None,
             env: BTreeMap::new(),
             cacheable: true,
             toolchain_identity: None,
@@ -1105,6 +1218,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: Vec::new(),
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -1139,6 +1254,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![WorkspacePath::try_from(".once/out/result.txt").unwrap()],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -1173,6 +1290,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: Vec::new(),
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -1185,6 +1304,45 @@ mod tests {
 
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.stdout, None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uncached_action_redirects_merged_streams_to_declared_file() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let log = WorkspacePath::try_from(".once/out/run/log.txt").unwrap();
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf out; printf err >&2".to_string(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            outputs: vec![log.clone()],
+            stdout_path: Some(Box::new(log.clone())),
+            stderr_path: Some(Box::new(log)),
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: None,
+        };
+
+        let result = run_uncached_action(&action, workspace.path(), &cache)
+            .await
+            .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        // Both streams landed in the declared file, not in the result.
+        assert_eq!(result.stdout, None);
+        assert_eq!(result.stderr, None);
+        assert!(result.outputs.contains_key(".once/out/run/log.txt"));
+        let on_disk =
+            std::fs::read_to_string(workspace.path().join(".once/out/run/log.txt")).unwrap();
+        assert!(on_disk.contains("out"), "log missing stdout: {on_disk:?}");
+        assert!(on_disk.contains("err"), "log missing stderr: {on_disk:?}");
     }
 
     #[tokio::test]
@@ -1270,6 +1428,8 @@ mod tests {
                 arg_files: Vec::new(),
                 inputs: Vec::new(),
                 outputs: vec![".once/out/one.txt".to_string()],
+                stdout: None,
+                stderr: None,
                 env: BTreeMap::new(),
                 cacheable: true,
                 toolchain_identity: None,
@@ -1338,6 +1498,8 @@ mod tests {
             arg_files: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![format!(".once/out/{name}.txt")],
+            stdout: None,
+            stderr: None,
             env: BTreeMap::new(),
             cacheable: false,
             toolchain_identity: None,
@@ -1391,6 +1553,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![WorkspacePath::try_from(".once/out/missing.txt").unwrap()],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -1420,6 +1584,8 @@ mod tests {
             arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            stdout: None,
+            stderr: None,
             env: BTreeMap::new(),
             cacheable: true,
             toolchain_identity: Some("id-1".to_string()),
@@ -1448,6 +1614,8 @@ mod tests {
             }],
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            stdout: None,
+            stderr: None,
             env: BTreeMap::new(),
             cacheable: true,
             toolchain_identity: None,
@@ -1477,6 +1645,8 @@ mod tests {
             arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            stdout: None,
+            stderr: None,
             env: BTreeMap::new(),
             cacheable: true,
             toolchain_identity: None,
@@ -1510,6 +1680,8 @@ mod tests {
             arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            stdout: None,
+            stderr: None,
             env: BTreeMap::new(),
             cacheable: true,
             toolchain_identity: None,

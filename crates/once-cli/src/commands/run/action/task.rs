@@ -27,6 +27,8 @@ pub(super) fn task_action(workspace: &Path, target: &once_frontend::Target) -> R
             cwd: task_cwd(target)?,
             input_digest,
             outputs: task_outputs(target)?,
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: task_resources(target)?,
             timeout_ms: parse_attr::<u64>(target, "timeout_ms")?,

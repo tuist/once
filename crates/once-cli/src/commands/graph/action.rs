@@ -38,6 +38,8 @@ pub(super) fn action_for(
         cwd: None,
         input_digest: None,
         outputs: outputs.to_vec(),
+        stdout_path: None,
+        stderr_path: None,
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
         timeout_ms: None,
