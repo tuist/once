@@ -190,6 +190,7 @@ The Starlark executor exposes generic primitives only:
   cache key.
 - `host_file_exists(path)` checks whether a host path is currently a
   file.
+- `host_file_read(path)` reads a host file as UTF-8 text.
 - `host_file_sha256(path)` returns a host file's SHA-256 digest as
   lowercase hex.
 - `host_file_contains(path, needle)` checks host file text content.
@@ -233,6 +234,13 @@ compiler flags, provider conventions, and action layout.
 - `inputs`: workspace-relative files and directories hashed into the
   action digest.
 - `outputs`: workspace-relative outputs the action must produce.
+- `clean_paths`: workspace-relative paths to remove before a fresh
+  command execution. Cache hits restore outputs without running the
+  command.
+- `create_dirs`: workspace-relative directories to create before a fresh
+  command execution.
+- `cwd`: workspace-relative directory to run the command in. Defaults to
+  the workspace root when omitted or `None`.
 - `env`: string environment variables.
 - `cacheable`: `True` by default. Set `False` for interactive or local
   side-effect actions.

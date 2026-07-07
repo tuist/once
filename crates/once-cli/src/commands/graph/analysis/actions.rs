@@ -232,16 +232,83 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     };
 
     if cacheable {
-        run_cacheable_declared_action(context, action).await
+        run_cacheable_declared_action(context, action, &declared).await
     } else {
+        // An uncacheable action always runs its command, so its command
+        // setup always applies.
+        prepare_declared_command_paths(workspace, &declared)
+            .await
+            .with_context(|| {
+                format!("preparing action {index} for {target_id} ({identifier_for_error})")
+            })?;
         run_uncacheable_declared_action(context, action).await
     }
+}
+
+async fn prepare_declared_command_paths(workspace: &Path, declared: &DeclaredAction) -> Result<()> {
+    if declared.operation.is_some() {
+        return Ok(());
+    }
+    for path in &declared.clean_paths {
+        let path = workspace_path(path, "clean_paths entry")?;
+        remove_declared_path_if_exists(&path.resolve(workspace), path.as_str()).await?;
+    }
+    for path in &declared.create_dirs {
+        let path = workspace_path(path, "create_dirs entry")?;
+        tokio::fs::create_dir_all(path.resolve(workspace))
+            .await
+            .with_context(|| format!("creating declared command directory `{}`", path.as_str()))?;
+    }
+    Ok(())
+}
+
+async fn remove_declared_path_if_exists(abs: &Path, label: &str) -> Result<()> {
+    let metadata = match tokio::fs::symlink_metadata(abs).await {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(source).with_context(|| format!("reading declared command path `{label}`"));
+        }
+    };
+    let result = if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        tokio::fs::remove_dir_all(abs).await
+    } else {
+        tokio::fs::remove_file(abs).await
+    };
+    result.with_context(|| format!("removing declared command path `{label}`"))
 }
 
 async fn run_cacheable_declared_action(
     context: DeclaredActionContext<'_>,
     action: Action,
+    declared: &DeclaredAction,
 ) -> Result<DeclaredActionOutcome> {
+    // clean_paths and create_dirs model the command's own filesystem
+    // setup, so they must only run when the command actually executes.
+    // On a cache hit the outputs are restored without running the
+    // command; removing a clean_paths entry that is not among the
+    // restored outputs would delete it with nothing left to regenerate
+    // it. Probe the cache first and prepare only on a miss.
+    let cached = context
+        .cache
+        .get_action_result(&action.digest())
+        .await
+        .with_context(|| {
+            format!(
+                "probing cache for action {} for {} ({})",
+                context.index, context.target_id, context.identifier
+            )
+        })?;
+    if cached.is_none() {
+        prepare_declared_command_paths(context.workspace, declared)
+            .await
+            .with_context(|| {
+                format!(
+                    "preparing action {} for {} ({})",
+                    context.index, context.target_id, context.identifier
+                )
+            })?;
+    }
     let outcome = once_core::run_with_cache(
         &action,
         context.workspace,
@@ -733,7 +800,11 @@ fn declared_to_action(
         None => Ok(Action::RunCommand {
             argv: declared.argv.clone(),
             env: declared.env.clone(),
-            cwd: None,
+            cwd: declared
+                .cwd
+                .as_deref()
+                .map(|cwd| workspace_path(cwd, "run_action cwd"))
+                .transpose()?,
             input_digest: Some(input_digest),
             outputs,
             output_symlink_mode: OutputSymlinkMode::default(),
@@ -891,6 +962,18 @@ fn compose_input_digest(
         builder.push_bytes(key.as_bytes());
         builder.push_bytes(value.as_bytes());
     }
+    for path in &declared.clean_paths {
+        builder.push_bytes(b"clean_path");
+        builder.push_bytes(path.as_bytes());
+    }
+    for path in &declared.create_dirs {
+        builder.push_bytes(b"create_dir");
+        builder.push_bytes(path.as_bytes());
+    }
+    if let Some(cwd) = &declared.cwd {
+        builder.push_bytes(b"cwd");
+        builder.push_bytes(cwd.as_bytes());
+    }
 
     let mut sorted_inputs = declared
         .inputs
@@ -937,6 +1020,9 @@ mod tests {
                 ".once/out/x/A.out".to_string(),
                 ".once/out/x/sub/B.meta".to_string(),
             ],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: true,
             depends_on_prior_actions: true,
@@ -952,6 +1038,45 @@ mod tests {
             panic!("command declaration should lower to RunCommand");
         };
         assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn declared_command_setup_cleans_paths_and_creates_dirs() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(workspace.path().join(".once/out/tree/sub")).unwrap();
+        std::fs::write(
+            workspace.path().join(".once/out/tree/sub/stale.txt"),
+            b"stale",
+        )
+        .unwrap();
+        std::fs::write(workspace.path().join(".once/out/stale-file.txt"), b"stale").unwrap();
+        let declared = DeclaredAction {
+            operation: None,
+            argv: vec!["tool".to_string()],
+            arg_files: Vec::new(),
+            inputs: Vec::new(),
+            outputs: vec![".once/out/tree".to_string()],
+            clean_paths: vec![
+                ".once/out/tree".to_string(),
+                ".once/out/stale-file.txt".to_string(),
+            ],
+            create_dirs: vec![".once/out/tree".to_string(), ".once/tmp/home".to_string()],
+            cwd: None,
+            env: BTreeMap::new(),
+            cacheable: true,
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: None,
+        };
+
+        prepare_declared_command_paths(workspace.path(), &declared)
+            .await
+            .unwrap();
+
+        assert!(workspace.path().join(".once/out/tree").is_dir());
+        assert!(!workspace.path().join(".once/out/tree/sub").exists());
+        assert!(!workspace.path().join(".once/out/stale-file.txt").exists());
+        assert!(workspace.path().join(".once/tmp/home").is_dir());
     }
 
     #[test]
@@ -1297,6 +1422,9 @@ mod tests {
                 arg_files: Vec::new(),
                 inputs: Vec::new(),
                 outputs: vec![".once/out/one.txt".to_string()],
+                clean_paths: Vec::new(),
+                create_dirs: Vec::new(),
+                cwd: None,
                 env: BTreeMap::new(),
                 cacheable: true,
                 depends_on_prior_actions: true,
@@ -1339,6 +1467,87 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn cache_hit_skips_command_setup_paths() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let target = GraphTarget {
+            label: once_frontend::TargetLabel {
+                package: "tools".to_string(),
+                name: "cached".to_string(),
+                id: "tools/cached".to_string(),
+            },
+            kind: "demo_kind".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            capabilities: Vec::new(),
+            providers: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let analysis = || AnalysisResult {
+            actions: vec![DeclaredAction {
+                operation: None,
+                argv: vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "printf ok > .once/out/out.txt".to_string(),
+                ],
+                arg_files: Vec::new(),
+                inputs: Vec::new(),
+                outputs: vec![".once/out/out.txt".to_string()],
+                // A clean path that is not one of the action's outputs.
+                clean_paths: vec![".once/out/side.txt".to_string()],
+                create_dirs: vec![".once/out".to_string()],
+                cwd: None,
+                env: BTreeMap::new(),
+                cacheable: true,
+                depends_on_prior_actions: true,
+                toolchain_identity: None,
+                identifier: Some("cached".to_string()),
+            }],
+            provider: serde_json::json!({}),
+            declared_outputs: Vec::new(),
+        };
+
+        // First run misses the cache and executes the command.
+        let first = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.cache_tag, "miss");
+
+        // Stand in for content a prior uncached run left behind: it lives
+        // under a clean path but is not one of the action's outputs, so a
+        // cache hit would not restore it.
+        let side = workspace.path().join(".once/out/side.txt");
+        std::fs::write(&side, b"precious").unwrap();
+
+        // Second run hits the cache. The command never executes, so its
+        // clean_paths must not delete the untracked file.
+        let second = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.cache_tag, "hit");
+        assert_eq!(std::fs::read(&side).unwrap(), b"precious");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn declared_actions_record_success_evidence_per_action() {
         let workspace = tempfile::tempdir().unwrap();
         let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
@@ -1366,6 +1575,9 @@ mod tests {
             arg_files: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![format!(".once/out/{name}.txt")],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: false,
             depends_on_prior_actions: true,
@@ -1441,6 +1653,9 @@ mod tests {
                     arg_files: Vec::new(),
                     inputs: Vec::new(),
                     outputs: vec![".once/out/first.txt".to_string()],
+                    clean_paths: Vec::new(),
+                    create_dirs: Vec::new(),
+                    cwd: None,
                     env: BTreeMap::new(),
                     cacheable: true,
                     depends_on_prior_actions: true,
@@ -1458,6 +1673,9 @@ mod tests {
                     arg_files: Vec::new(),
                     inputs: Vec::new(),
                     outputs: vec![".once/out/second.txt".to_string()],
+                    clean_paths: Vec::new(),
+                    create_dirs: Vec::new(),
+                    cwd: None,
                     env: BTreeMap::new(),
                     cacheable: true,
                     depends_on_prior_actions: false,
@@ -1549,6 +1767,9 @@ mod tests {
             arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: true,
             depends_on_prior_actions: true,
@@ -1561,6 +1782,34 @@ mod tests {
             ..declared
         };
         let two = compose_input_digest(workspace.path(), &declared2, module_digest(), &[]).unwrap();
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn input_digest_changes_with_command_setup_paths() {
+        let workspace = tempfile::tempdir().unwrap();
+        let declared = DeclaredAction {
+            operation: None,
+            argv: vec!["tool".to_string()],
+            arg_files: Vec::new(),
+            inputs: Vec::new(),
+            outputs: vec![".once/out/A.a".to_string()],
+            clean_paths: vec![".once/out/A.a".to_string()],
+            create_dirs: vec![".once/tmp/home".to_string()],
+            cwd: None,
+            env: BTreeMap::new(),
+            cacheable: true,
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: None,
+        };
+        let one = compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
+        let declared2 = DeclaredAction {
+            clean_paths: vec![".once/out/B.a".to_string()],
+            ..declared
+        };
+        let two = compose_input_digest(workspace.path(), &declared2, module_digest(), &[]).unwrap();
+
         assert_ne!(one, two);
     }
 
@@ -1578,6 +1827,9 @@ mod tests {
             }],
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: true,
             depends_on_prior_actions: true,
@@ -1608,6 +1860,9 @@ mod tests {
             arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: true,
             depends_on_prior_actions: true,
@@ -1642,6 +1897,9 @@ mod tests {
             arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: true,
             depends_on_prior_actions: true,

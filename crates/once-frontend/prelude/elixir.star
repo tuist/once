@@ -70,11 +70,28 @@ def _elixir_host_read_workspace_file(path):
     abs_path = _elixir_abs_workspace_path(path)
     if not host_file_exists(abs_path):
         return ""
-    digest = host_file_sha256(abs_path)
-    return host_command(["/bin/sh", "-c", "cat \"$ONCE_FILE\""], env = {
-        "ONCE_FILE": abs_path,
-        "ONCE_FILE_SHA256": digest,
-    })
+    return host_file_read(abs_path)
+
+def _elixir_workspace_root_rel(ctx):
+    package = ctx["label"]["package"]
+    if not package:
+        return "."
+    parts = []
+    for part in package.split("/"):
+        if part:
+            parts.append("..")
+    if not parts:
+        return "."
+    return "/".join(parts)
+
+def _elixir_from_package(ctx, path):
+    rel = _elixir_workspace_root_rel(ctx)
+    if rel == ".":
+        return path
+    return rel + "/" + path
+
+def _elixir_package_cwd(ctx):
+    return ctx["label"]["package"] or None
 
 def _elixir_is_workspace_input(path):
     if not path:
@@ -199,6 +216,14 @@ def _elixir_user_env(ctx):
         out[key] = value
     return out
 
+def _elixir_action_env_with(ctx, toolchain, extra):
+    env = _elixir_action_env(toolchain)
+    for key, value in _elixir_user_env(ctx).items():
+        env[key] = value
+    for key, value in extra.items():
+        env[key] = value
+    return env
+
 def _elixir_export_env(env):
     lines = []
     for key, value in env.items():
@@ -306,32 +331,16 @@ def _elixir_write_app_script(ctx, app_name, ebin_dir):
     ]
     return "\n".join(lines)
 
-def _elixir_stale_fingerprint_script(ctx, metadata_path, config, ebin_dir, fingerprint):
-    mix_env = _elixir_mix_env(ctx)
-    home = ctx["scratch_dir"] + "/stale_home"
-    script_dir = ctx["scratch_dir"] + "/stale_probe"
-    package = ctx["label"]["package"] or "."
-    user_env = _elixir_user_env(ctx)
-    template = """set -eu
-WORKSPACE_ROOT="$PWD"
-HOME_DIR={home}
-SCRIPT_DIR={script_dir}
-METADATA={metadata_path}
-FINGERPRINT={fingerprint}
-EBIN_DIR={ebin_dir}
-rm -rf "$HOME_DIR" "$SCRIPT_DIR" "$FINGERPRINT"
-mkdir -p "$HOME_DIR" "$SCRIPT_DIR" "$(dirname "$FINGERPRINT")"
-cat > "$SCRIPT_DIR/configs.list" <<'ONCE_CONFIGS'
-{config_paths}ONCE_CONFIGS
-cat > "$SCRIPT_DIR/probe.exs" <<'ONCE_PROBE'
+def _elixir_stale_fingerprint_source():
+    return """
 defmodule Once.ElixirStaleProbe do
   def main do
-    workspace_root = System.fetch_env!("ONCE_WORKSPACE_ROOT")
-    metadata_path = System.fetch_env!("ONCE_METADATA_PATH")
-    fingerprint_path = System.fetch_env!("ONCE_FINGERPRINT_PATH")
-    ebin_dir = System.fetch_env!("ONCE_EBIN_DIR")
+    workspace_root = Path.expand(System.fetch_env!("ONCE_WORKSPACE_ROOT"), File.cwd!())
+    metadata_path = Path.join(workspace_root, System.fetch_env!("ONCE_METADATA_PATH"))
+    fingerprint_path = Path.join(workspace_root, System.fetch_env!("ONCE_FINGERPRINT_PATH"))
+    ebin_dir = Path.join(workspace_root, System.fetch_env!("ONCE_EBIN_DIR"))
     mix_env = System.fetch_env!("MIX_ENV") |> String.to_atom()
-    config_paths = read_lines(System.fetch_env!("ONCE_CONFIGS_FILE")) |> Enum.map(&Path.join(workspace_root, &1))
+    config_paths = read_lines(Path.join(workspace_root, System.fetch_env!("ONCE_CONFIGS_FILE"))) |> Enum.map(&Path.join(workspace_root, &1))
 
     load_config(config_paths, mix_env)
     metadata = read_metadata(metadata_path)
@@ -436,80 +445,24 @@ defmodule Once.ElixirStaleProbe do
 end
 
 Once.ElixirStaleProbe.main()
-ONCE_PROBE
-cd {package}
-{user_env}
-export HOME="$WORKSPACE_ROOT/$HOME_DIR"
-export MIX_ENV={mix_env}
-export HEX_OFFLINE=true
-export ONCE_WORKSPACE_ROOT="$WORKSPACE_ROOT"
-export ONCE_METADATA_PATH="$WORKSPACE_ROOT/$METADATA"
-export ONCE_FINGERPRINT_PATH="$WORKSPACE_ROOT/$FINGERPRINT"
-export ONCE_EBIN_DIR="$WORKSPACE_ROOT/$EBIN_DIR"
-export ONCE_CONFIGS_FILE="$WORKSPACE_ROOT/$SCRIPT_DIR/configs.list"
-{elixir} "$WORKSPACE_ROOT/$SCRIPT_DIR/probe.exs"
 """
-    template = template.replace("{", "{{").replace("}", "}}")
-    for placeholder in ["home", "script_dir", "metadata_path", "fingerprint", "ebin_dir", "config_paths", "package", "user_env", "mix_env", "elixir"]:
-        template = template.replace("{{" + placeholder + "}}", "{" + placeholder + "}")
-    return template.format(
-        home = _shell_quote(home),
-        script_dir = _shell_quote(script_dir),
-        metadata_path = _shell_quote(metadata_path),
-        fingerprint = _shell_quote(fingerprint),
-        ebin_dir = _shell_quote(ebin_dir),
-        config_paths = _elixir_lines(config),
-        package = _shell_quote(package),
-        user_env = _elixir_export_env(user_env),
-        mix_env = _shell_quote(mix_env),
-        elixir = _shell_quote(host_which("elixir")),
-    )
 
-def _elixir_compile_script(ctx, toolchain, apps, srcs, static_inputs, config, compile_args, module_dir, metadata_path, warnings_path, consolidated_dir):
-    mix_env = _elixir_mix_env(ctx)
-    home = ctx["scratch_dir"] + "/compile_home"
-    deps_root = ctx["scratch_dir"] + "/compile_deps"
-    script_dir = ctx["scratch_dir"] + "/compile_script"
-    user_env = _elixir_user_env(ctx)
-    dep_code_paths = _elixir_app_code_paths(apps)
-    consolidate_protocols = "true" if _elixir_attr(ctx, "consolidate_protocols", True) else "false"
-    template = """set -eu
-WORKSPACE_ROOT="$PWD"
-OUT={module_dir}
-METADATA={metadata_path}
-WARNINGS={warnings_path}
-CONSOLIDATED={consolidated_dir}
-HOME_DIR={home}
-DEPS_ROOT={deps_root}
-SCRIPT_DIR={script_dir}
-rm -rf "$OUT" "$METADATA" "$WARNINGS" "$CONSOLIDATED" "$HOME_DIR" "$DEPS_ROOT" "$SCRIPT_DIR"
-mkdir -p "$OUT" "$(dirname "$METADATA")" "$(dirname "$WARNINGS")" "$CONSOLIDATED" "$HOME_DIR" "$DEPS_ROOT" "$SCRIPT_DIR"
-{dep_symlinks}
-cat > "$SCRIPT_DIR/sources.list" <<'ONCE_SOURCES'
-{srcs}ONCE_SOURCES
-cat > "$SCRIPT_DIR/static_inputs.list" <<'ONCE_INPUTS'
-{static_inputs}ONCE_INPUTS
-cat > "$SCRIPT_DIR/configs.list" <<'ONCE_CONFIGS'
-{config_paths}ONCE_CONFIGS
-cat > "$SCRIPT_DIR/compile_args.list" <<'ONCE_COMPILE_ARGS'
-{compile_args}ONCE_COMPILE_ARGS
-cat > "$SCRIPT_DIR/dep_code_paths.list" <<'ONCE_DEP_CODE_PATHS'
-{dep_code_paths}ONCE_DEP_CODE_PATHS
-cat > "$SCRIPT_DIR/compile.exs" <<'ONCE_COMPILE'
+def _elixir_compile_source():
+    return """
 defmodule Once.ElixirCompiler do
   def main do
-    workspace_root = System.fetch_env!("ONCE_WORKSPACE_ROOT")
-    out_dir = System.fetch_env!("ONCE_OUT_DIR")
-    metadata_path = System.fetch_env!("ONCE_METADATA_PATH")
-    warnings_path = System.fetch_env!("ONCE_WARNINGS_PATH")
-    consolidated_dir = System.fetch_env!("ONCE_CONSOLIDATED_DIR")
+    workspace_root = Path.expand(System.fetch_env!("ONCE_WORKSPACE_ROOT"), File.cwd!())
+    out_dir = Path.join(workspace_root, System.fetch_env!("ONCE_OUT_DIR"))
+    metadata_path = Path.join(workspace_root, System.fetch_env!("ONCE_METADATA_PATH"))
+    warnings_path = Path.join(workspace_root, System.fetch_env!("ONCE_WARNINGS_PATH"))
+    consolidated_dir = Path.join(workspace_root, System.fetch_env!("ONCE_CONSOLIDATED_DIR"))
     mix_env = System.fetch_env!("MIX_ENV") |> String.to_atom()
     consolidate_protocols? = System.fetch_env!("ONCE_CONSOLIDATE_PROTOCOLS") == "true"
-    sources = read_lines(System.fetch_env!("ONCE_SOURCES_FILE")) |> Enum.map(&Path.join(workspace_root, &1))
-    static_inputs = read_lines(System.fetch_env!("ONCE_STATIC_INPUTS_FILE"))
-    config_paths = read_lines(System.fetch_env!("ONCE_CONFIGS_FILE")) |> Enum.map(&Path.join(workspace_root, &1))
-    compile_args = read_lines(System.fetch_env!("ONCE_COMPILE_ARGS_FILE"))
-    dep_code_paths = read_lines(System.fetch_env!("ONCE_DEP_CODE_PATHS_FILE")) |> Enum.map(&Path.join(workspace_root, &1))
+    sources = read_lines(Path.join(workspace_root, System.fetch_env!("ONCE_SOURCES_FILE"))) |> Enum.map(&Path.join(workspace_root, &1))
+    static_inputs = read_lines(Path.join(workspace_root, System.fetch_env!("ONCE_STATIC_INPUTS_FILE")))
+    config_paths = read_lines(Path.join(workspace_root, System.fetch_env!("ONCE_CONFIGS_FILE"))) |> Enum.map(&Path.join(workspace_root, &1))
+    compile_args = read_lines(Path.join(workspace_root, System.fetch_env!("ONCE_COMPILE_ARGS_FILE")))
+    dep_code_paths = read_lines(Path.join(workspace_root, System.fetch_env!("ONCE_DEP_CODE_PATHS_FILE"))) |> Enum.map(&Path.join(workspace_root, &1))
 
     Enum.each(Enum.reverse(dep_code_paths), &Code.prepend_path/1)
     load_config(config_paths, mix_env)
@@ -726,49 +679,7 @@ defmodule Once.ElixirCompiler do
 end
 
 Once.ElixirCompiler.main()
-ONCE_COMPILE
-cd {package}
-{user_env}
-export HOME="$WORKSPACE_ROOT/$HOME_DIR"
-export MIX_ENV={mix_env}
-export HEX_OFFLINE=true
-export ERL_LIBS="$WORKSPACE_ROOT/$DEPS_ROOT"
-export ONCE_WORKSPACE_ROOT="$WORKSPACE_ROOT"
-export ONCE_OUT_DIR="$WORKSPACE_ROOT/$OUT"
-export ONCE_METADATA_PATH="$WORKSPACE_ROOT/$METADATA"
-export ONCE_WARNINGS_PATH="$WORKSPACE_ROOT/$WARNINGS"
-export ONCE_CONSOLIDATED_DIR="$WORKSPACE_ROOT/$CONSOLIDATED"
-export ONCE_CONSOLIDATE_PROTOCOLS={consolidate_protocols}
-export ONCE_SOURCES_FILE="$WORKSPACE_ROOT/$SCRIPT_DIR/sources.list"
-export ONCE_STATIC_INPUTS_FILE="$WORKSPACE_ROOT/$SCRIPT_DIR/static_inputs.list"
-export ONCE_CONFIGS_FILE="$WORKSPACE_ROOT/$SCRIPT_DIR/configs.list"
-export ONCE_COMPILE_ARGS_FILE="$WORKSPACE_ROOT/$SCRIPT_DIR/compile_args.list"
-export ONCE_DEP_CODE_PATHS_FILE="$WORKSPACE_ROOT/$SCRIPT_DIR/dep_code_paths.list"
-{elixir} "$WORKSPACE_ROOT/$SCRIPT_DIR/compile.exs"
 """
-    template = template.replace("{", "{{").replace("}", "}}")
-    for placeholder in ["module_dir", "metadata_path", "warnings_path", "consolidated_dir", "home", "deps_root", "script_dir", "dep_symlinks", "srcs", "static_inputs", "config_paths", "compile_args", "dep_code_paths", "package", "user_env", "mix_env", "consolidate_protocols", "elixir"]:
-        template = template.replace("{{" + placeholder + "}}", "{" + placeholder + "}")
-    return template.format(
-        module_dir = _shell_quote(module_dir),
-        metadata_path = _shell_quote(metadata_path),
-        warnings_path = _shell_quote(warnings_path),
-        consolidated_dir = _shell_quote(consolidated_dir),
-        home = _shell_quote(home),
-        deps_root = _shell_quote(deps_root),
-        script_dir = _shell_quote(script_dir),
-        dep_symlinks = _elixir_dep_symlink_script(apps, "WORKSPACE_ROOT", "DEPS_ROOT"),
-        srcs = _elixir_lines(srcs),
-        static_inputs = _elixir_lines(static_inputs),
-        config_paths = _elixir_lines(config),
-        compile_args = _elixir_lines(["--ignore-module-conflict"] + compile_args),
-        dep_code_paths = _elixir_lines(dep_code_paths),
-        package = _shell_quote(ctx["label"]["package"] or "."),
-        user_env = _elixir_export_env(user_env),
-        mix_env = _shell_quote(mix_env),
-        consolidate_protocols = _shell_quote(consolidate_protocols),
-        elixir = _shell_quote(toolchain["elixir"]),
-    )
 
 def _elixir_stage_script(ctx, apps, module_dirs, priv_srcs, ebin_dir, priv_dir):
     app_name = _elixir_app_name(ctx)
@@ -810,6 +721,89 @@ export ERL_LIBS="$WORKSPACE_ROOT/$DEPS_ROOT"
         copy_priv = _elixir_copy_priv_script(ctx, priv_srcs, priv_dir),
     )
 
+def _elixir_stale_fingerprint_action(ctx, toolchain, metadata_path, config, ebin_dir, fingerprint):
+    mix_env = _elixir_mix_env(ctx)
+    scratch = ctx["scratch_dir"]
+    home_dir = scratch + "/stale_home"
+    script_dir = scratch + "/stale_probe"
+    configs_list = script_dir + "/configs.list"
+    probe_exs = script_dir + "/probe.exs"
+    write_path(configs_list, _elixir_lines(config))
+    write_path(probe_exs, _elixir_stale_fingerprint_source())
+    env = _elixir_action_env_with(ctx, toolchain, {
+        "HOME": _elixir_from_package(ctx, home_dir),
+        "MIX_ENV": mix_env,
+        "HEX_OFFLINE": "true",
+        "ONCE_WORKSPACE_ROOT": _elixir_workspace_root_rel(ctx),
+        "ONCE_METADATA_PATH": metadata_path,
+        "ONCE_FINGERPRINT_PATH": fingerprint,
+        "ONCE_EBIN_DIR": ebin_dir,
+        "ONCE_CONFIGS_FILE": configs_list,
+    })
+    run_action(
+        argv = [toolchain["elixir"], _elixir_from_package(ctx, probe_exs)],
+        inputs = [],
+        outputs = [fingerprint],
+        # script_dir holds the write_path outputs (probe.exs, configs.list),
+        # so it must not be cleaned here or the probe would delete its own
+        # program before running.
+        clean_paths = [home_dir, fingerprint],
+        create_dirs = [home_dir],
+        cwd = _elixir_package_cwd(ctx),
+        env = env,
+        cacheable = False,
+        toolchain_identity = toolchain["identity"] + "\x00elixir-stale-fingerprint.v1\x00mix_env\x00" + mix_env,
+        identifier = ctx["label"]["id"] + ":elixir-stale-fingerprint",
+    )
+
+def _elixir_compile_action(ctx, toolchain, apps, srcs, static_inputs, config, compile_args, compile_inputs, module_dir, metadata_path, warnings_path, consolidated_dir, cacheable):
+    mix_env = _elixir_mix_env(ctx)
+    scratch = ctx["scratch_dir"]
+    home_dir = scratch + "/compile_home"
+    script_dir = scratch + "/compile_script"
+    dep_code_paths = _elixir_app_code_paths(apps)
+    consolidate_protocols = "true" if _elixir_attr(ctx, "consolidate_protocols", True) else "false"
+    sources_list = script_dir + "/sources.list"
+    static_inputs_list = script_dir + "/static_inputs.list"
+    configs_list = script_dir + "/configs.list"
+    compile_args_list = script_dir + "/compile_args.list"
+    dep_code_paths_list = script_dir + "/dep_code_paths.list"
+    compile_exs = script_dir + "/compile.exs"
+    write_path(sources_list, _elixir_lines(srcs))
+    write_path(static_inputs_list, _elixir_lines(static_inputs))
+    write_path(configs_list, _elixir_lines(config))
+    write_path(compile_args_list, _elixir_lines(["--ignore-module-conflict"] + compile_args))
+    write_path(dep_code_paths_list, _elixir_lines(dep_code_paths))
+    write_path(compile_exs, _elixir_compile_source())
+    env = _elixir_action_env_with(ctx, toolchain, {
+        "HOME": _elixir_from_package(ctx, home_dir),
+        "MIX_ENV": mix_env,
+        "HEX_OFFLINE": "true",
+        "ONCE_WORKSPACE_ROOT": _elixir_workspace_root_rel(ctx),
+        "ONCE_OUT_DIR": module_dir,
+        "ONCE_METADATA_PATH": metadata_path,
+        "ONCE_WARNINGS_PATH": warnings_path,
+        "ONCE_CONSOLIDATED_DIR": consolidated_dir,
+        "ONCE_CONSOLIDATE_PROTOCOLS": consolidate_protocols,
+        "ONCE_SOURCES_FILE": sources_list,
+        "ONCE_STATIC_INPUTS_FILE": static_inputs_list,
+        "ONCE_CONFIGS_FILE": configs_list,
+        "ONCE_COMPILE_ARGS_FILE": compile_args_list,
+        "ONCE_DEP_CODE_PATHS_FILE": dep_code_paths_list,
+    })
+    run_action(
+        argv = [toolchain["elixir"], _elixir_from_package(ctx, compile_exs)],
+        inputs = compile_inputs,
+        outputs = [module_dir, metadata_path, warnings_path, consolidated_dir],
+        clean_paths = [module_dir, metadata_path, warnings_path, consolidated_dir, home_dir],
+        create_dirs = [module_dir, consolidated_dir, home_dir],
+        cwd = _elixir_package_cwd(ctx),
+        env = env,
+        cacheable = cacheable,
+        toolchain_identity = toolchain["identity"] + "\x00elixir-compile.target.v2\x00mix_env\x00" + mix_env,
+        identifier = ctx["label"]["id"] + ":elixir-compile",
+    )
+
 def _elixir_library_impl(ctx):
     toolchain = _elixir_compiler_toolchain()
     app_name = _elixir_app_name(ctx)
@@ -839,25 +833,9 @@ def _elixir_library_impl(ctx):
     compile_cacheable = (previous_metadata["exists"] and previous_metadata["static_inputs_match"]) or not has_dynamic_markers
     compile_action_inputs = _unique(static_compile_inputs + dynamic_inputs)
     if needs_stale_probe:
-        run_action(
-            argv = ["/bin/sh", "-c", _elixir_stale_fingerprint_script(ctx, metadata_path, config, ebin_dir, stale_fingerprint)],
-            inputs = [],
-            outputs = [stale_fingerprint],
-            env = _elixir_action_env(toolchain),
-            cacheable = False,
-            toolchain_identity = toolchain["identity"] + "\x00elixir-stale-fingerprint.v1\x00mix_env\x00" + mix_env,
-            identifier = ctx["label"]["id"] + ":elixir-stale-fingerprint",
-        )
+        _elixir_stale_fingerprint_action(ctx, toolchain, metadata_path, config, ebin_dir, stale_fingerprint)
         compile_action_inputs = _unique(compile_action_inputs + [stale_fingerprint])
-    run_action(
-        argv = ["/bin/sh", "-c", _elixir_compile_script(ctx, toolchain, apps, srcs, static_compile_inputs, config, compile_args, module_dir, metadata_path, warnings_path, consolidated_dir)],
-        inputs = compile_action_inputs,
-        outputs = [module_dir, metadata_path, warnings_path, consolidated_dir],
-        env = _elixir_action_env(toolchain),
-        cacheable = compile_cacheable,
-        toolchain_identity = toolchain["identity"] + "\x00elixir-compile.target.v2\x00mix_env\x00" + mix_env,
-        identifier = ctx["label"]["id"] + ":elixir-compile",
-    )
+    _elixir_compile_action(ctx, toolchain, apps, srcs, static_compile_inputs, config, compile_args, compile_action_inputs, module_dir, metadata_path, warnings_path, consolidated_dir, compile_cacheable)
     run_action(
         argv = ["/bin/sh", "-c", _elixir_stage_script(ctx, apps, module_dirs, priv_srcs, ebin_dir, priv_dir)],
         inputs = _unique(_elixir_optional_inputs(priv_srcs + [mix_config])),
