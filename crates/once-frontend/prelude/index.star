@@ -7,4 +7,5 @@ PRELUDE_SOURCES = [
     "zig.star",
     "swift.star",
     "kotlin.star",
+    "elixir.star",
 ]

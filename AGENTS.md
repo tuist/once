@@ -71,6 +71,23 @@ Build system behavior belongs in target kinds. The Rust side should provide
 generic primitives, typed graph plumbing, validation surfaces, and
 execution policy that target kinds can compose to express their needs.
 
+Target kind actions should not shell out to `/bin/sh -c` to do
+filesystem or environment setup. A hand-built shell script bakes in
+assumptions about the host that do not hold everywhere Once runs: a
+POSIX shell on `PATH`, the flags and semantics of `rm`, `mkdir`, `ln`,
+and `cd`, shell quoting rules, and how environment variables expand. It
+also hides that work from the action model, so inputs, outputs, and
+cleanup stop being visible to caching and scheduling. Prefer the
+Rust-exposed action primitives instead: declare inputs and outputs
+explicitly, use `clean_paths` and `create_dirs` on `run_action` for
+removals and directory creation, `write_path` to materialize files,
+`host_file_read` and its siblings for analysis-time reads, and invoke
+tools directly with an `argv` list rather than a shell command string.
+When a primitive is missing, add it to the Rust side rather than
+reaching back for a shell. Use a shell only when a target kind genuinely
+needs shell semantics, and resolve the interpreter through the toolchain
+rather than hardcoding `/bin/sh`.
+
 Starlark target kind contract changes must update the public Starlark modules
 reference in the same change. This includes new globals, changed `ctx`
 fields, action declaration semantics, provider expectations, schema

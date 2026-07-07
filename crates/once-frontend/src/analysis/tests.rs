@@ -104,6 +104,21 @@ fn host_file_contains_matches_binary_host_files() {
 }
 
 #[test]
+fn host_file_read_returns_host_file_text() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("metadata.tsv");
+    std::fs::write(&path, "version\t1\n").unwrap();
+    let source = format!(
+        "value = host_file_read({})",
+        serde_json::to_string(path.to_str().unwrap()).unwrap()
+    );
+
+    let store = store_for(tmp.path(), "pkg");
+    let (_, content) = with_active_store(store, || eval_string(&source).unwrap());
+    assert_eq!(content, "version\t1\n");
+}
+
+#[test]
 fn windows_host_which_candidates_skip_extensionless_names() {
     assert_eq!(
         which_candidate_names_for("tool", true, Some(".COM;.EXE;.CMD")),
@@ -191,6 +206,25 @@ run_action(
 }
 
 #[test]
+fn run_action_can_skip_prior_action_dependencies() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "tools/split");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+run_action(
+    argv = ["tool", "--emit", ".once/out/tools/split/second.txt"],
+    inputs = ["tools/split/input.txt"],
+    outputs = [".once/out/tools/split/second.txt"],
+    depends_on_prior_actions = False,
+)
+"#)
+        .unwrap();
+    });
+    assert_eq!(store.actions.len(), 1);
+    assert!(!store.actions[0].depends_on_prior_actions);
+}
+
+#[test]
 fn declared_action_defaults_cacheable_when_omitted() {
     let action: DeclaredAction = serde_json::from_value(serde_json::json!({
         "argv": ["tool", "input.src"],
@@ -199,6 +233,7 @@ fn declared_action_defaults_cacheable_when_omitted() {
     .unwrap();
 
     assert!(action.cacheable);
+    assert!(action.depends_on_prior_actions);
     assert_eq!(
         serde_json::to_value(&action).unwrap(),
         serde_json::json!({
@@ -508,6 +543,71 @@ write_tree_digest(".once/out/p/staged", ".once/out/p/staged.sha256", include_suf
             include_suffixes: vec![".txt".to_string()],
         })
     );
+}
+
+#[test]
+fn run_action_records_command_setup_paths() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "p");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+run_action(
+    argv = ["tool"],
+    outputs = [".once/out/p/generated"],
+    clean_paths = [".once/out/p/generated", ".once/tmp/p/home"],
+    create_dirs = [".once/out/p/generated", ".once/tmp/p/home"],
+)
+"#)
+        .unwrap();
+    });
+
+    assert_eq!(store.actions.len(), 1);
+    let action = &store.actions[0];
+    assert_eq!(
+        action.clean_paths,
+        vec![
+            ".once/out/p/generated".to_string(),
+            ".once/tmp/p/home".to_string(),
+        ]
+    );
+    assert_eq!(
+        action.create_dirs,
+        vec![
+            ".once/out/p/generated".to_string(),
+            ".once/tmp/p/home".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn run_action_records_cwd() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "p");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+run_action(
+    argv = ["tool"],
+    outputs = [".once/out/p/generated"],
+    cwd = "p",
+)
+"#)
+        .unwrap();
+    });
+
+    assert_eq!(store.actions.len(), 1);
+    assert_eq!(store.actions[0].cwd, Some("p".to_string()));
+}
+
+#[test]
+fn run_action_defaults_cwd_to_none() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "p");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"run_action(argv = ["tool"], outputs = [".once/out/p/generated"])"#).unwrap();
+    });
+
+    assert_eq!(store.actions.len(), 1);
+    assert_eq!(store.actions[0].cwd, None);
 }
 
 #[test]

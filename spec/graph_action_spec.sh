@@ -46,6 +46,49 @@ message = "hello"
 EOF
   }
 
+  create_split_action_workspace() {
+    mkdir -p "$WORKSPACE/modules" "$WORKSPACE/tools/split"
+    cat > "$WORKSPACE/once.toml" <<'EOF'
+[modules]
+paths = ["modules/*.star"]
+EOF
+    cat > "$WORKSPACE/modules/split.star" <<'EOF'
+def _split_impl(ctx):
+    first = declare_output("first.txt")
+    second = declare_output("second.txt")
+    run_action(
+        argv = [host_which("sh"), "-c", "printf \"%s\" \"$1\" > \"$2\"", "sh", ctx["attr"]["message"], first],
+        outputs = [first],
+        identifier = ctx["label"]["id"] + ":first",
+    )
+    run_action(
+        argv = [host_which("sh"), "-c", "printf second > \"$1\"", "sh", second],
+        outputs = [second],
+        identifier = ctx["label"]["id"] + ":second",
+        depends_on_prior_actions = False,
+    )
+    return {"first": first, "second": second}
+
+split_action = target_kind(
+    docs = "Split action kind",
+    attrs = [
+        attr("message", "string", required = True, docs = "Message to emit"),
+    ],
+    providers = ["split_output"],
+    capabilities = [capability("build", ["default"])],
+    impl = _split_impl,
+)
+EOF
+    cat > "$WORKSPACE/tools/split/once.toml" <<'EOF'
+[[target]]
+name = "Task"
+kind = "split_action"
+
+[target.attrs]
+message = "one"
+EOF
+  }
+
   It 'builds custom target kind declared actions through the graph command'
     create_declared_action_workspace
 
@@ -98,5 +141,20 @@ EOF
     The stdout should include '.once/out/tools/demo/Task/test.txt'
     The path "$WORKSPACE/.once/out/tools/demo/Task/test.txt" should be file
     The contents of file "$WORKSPACE/.once/out/tools/demo/Task/test.txt" should equal 'hello:test'
+  End
+
+  It 'keeps later graph actions cached when they skip prior action digests'
+    create_split_action_workspace
+    once --format json build tools/split/Task >/dev/null
+    sed -i.bak 's/message = "one"/message = "two"/' "$WORKSPACE/tools/split/once.toml"
+
+    When call once --format json build tools/split/Task
+    The status should be success
+    The stdout should include '"target":"tools/split/Task"'
+    The stdout should include '"cache":"miss"'
+    The contents of file "$WORKSPACE/.once/out/tools/split/Task/first.txt" should equal 'two'
+    The contents of file "$WORKSPACE/.once/out/tools/split/Task/second.txt" should equal 'second'
+    evidence=$("$ONCE_BIN" -C "$WORKSPACE" --format json query evidence tools/split/Task:build)
+    The variable evidence should include '"cache":"hit"'
   End
 End

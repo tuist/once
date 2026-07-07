@@ -1,0 +1,7 @@
+[[target]]
+name = "greeting"
+kind = "elixir_library"
+srcs = ["lib/**/*.ex"]
+
+[target.attrs]
+app_name = "greeting"

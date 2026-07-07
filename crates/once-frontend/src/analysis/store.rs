@@ -65,10 +65,21 @@ pub struct DeclaredAction {
     /// Equal to `stdout` merges both streams into one file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stderr: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clean_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub create_dirs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(default = "default_cacheable", skip_serializing_if = "is_true")]
     pub cacheable: bool,
+    #[serde(
+        default = "default_depends_on_prior_actions",
+        skip_serializing_if = "is_true"
+    )]
+    pub depends_on_prior_actions: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain_identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,6 +100,10 @@ pub enum DeclaredArgFileFormat {
 }
 
 fn default_cacheable() -> bool {
+    true
+}
+
+fn default_depends_on_prior_actions() -> bool {
     true
 }
 
