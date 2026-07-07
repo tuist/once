@@ -19,12 +19,10 @@ hero:
       text: Graph
       link: /guide/graph/
 features:
-  - title: Graph-aware automation
-    details: Model work as targets with build, run, and test capabilities that agents and humans can query before executing anything.
-  - title: Flexible action adapters
-    details: Keep existing scripts and tools in place while they lower into the same content-addressed action model as typed target kinds.
-  - title: Deterministic cache keys
-    details: Inputs, outputs, environment variables, working directories, and timeouts become part of the action contract.
-  - title: Providers
-    details: Provider implementation is decoupled from actions, so teams can choose local cache storage, Tuist, and future remote compute providers.
+  - title: Cache remotely
+    details: Reuse content-addressed action results through a shared cache without changing the scripts that produce them.
+  - title: Run remotely
+    details: Execute declared actions on remote compute while keeping inputs, outputs, environment, and runtime metadata explicit.
+  - title: Do it anywhere
+    details: Configure infrastructure providers at the repository root so teams can swap vendors without changing action definitions.
 ---

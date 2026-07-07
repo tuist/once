@@ -1,4 +1,8 @@
-# Cache CLI
+# Runtime
+
+Once exposes cache primitives at script runtime through `once cache`.
+That gives ordinary scripts direct access to the same content-addressed
+store and action cache that every Once action uses.
 
 Most repositories have a long tail of scripts that exist next to the
 build: test runners, codegen, dependency installs, environment
@@ -13,17 +17,17 @@ operating across ten parallel worktrees redoes the same codegen step
 ten times because none of the workers know the others already paid
 for it.
 
-The `once cache` CLI exposes Once's content-addressed store directly to
-those scripts so they can stop. Declare the inputs that determine a
+The `once cache` command exposes Once's content-addressed store directly
+to those scripts so they can stop. Declare the inputs that determine a
 result, ask the cache whether you have already produced that result, and
 either skip the work or restore the artifact. The script stays a script.
 The speedup comes from the same store used by script adapters and typed
 graph target kinds.
 
-The surface is small. Two caches, mirroring the shape that Bazel and
-the [Remote Execution API](https://github.com/bazelbuild/remote-apis)
-settled on: a content-addressed store of bytes, plus a map from an
-action's input digest to the result that input produced.
+The surface is small. Two caches, mirroring the shape that Bazel and the
+[Remote Execution application programming interface](https://github.com/bazelbuild/remote-apis)
+settled on: a content-addressed store of bytes, plus a map from an action's
+input digest to the result that input produced.
 
 ## Inputs
 
@@ -55,9 +59,9 @@ cached action result safe.
 | `once cache blob exists <digest>` | Exit 0 on hit, 1 on miss. With `--format json`/`toon`, always exit 0 and emit `{"digest":"...","present":true|false}`. |
 
 This namespace travels through whatever remote infrastructure your
-`once.toml` configures (for example, [Tuist](https://tuist.dev)).
-`get` falls back to the remote on local miss; `exists` consults the
-remote too, so the two are symmetric.
+`once.toml` configures, for example [Tuist](https://tuist.dev). `get`
+falls back to the remote on local miss. `exists` consults the remote too,
+so the two are symmetric.
 
 ## Action cache
 

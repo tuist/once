@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use once_cas::CacheProvider;
-use once_core::Xdg;
+use once_core::{RemoteExecution, Xdg};
 
 use crate::cli::{self, Cli, Cmd, Output};
 use crate::commands;
@@ -79,7 +79,7 @@ async fn run_command(
                     visible,
                     runtime_rpc,
                     runtime_rpc_socket,
-                    remote: remote.then_some(compute),
+                    remote: resolve_remote_execution(workspace, xdg, remote, compute.as_deref())?,
                 },
             ))
             .await
@@ -104,7 +104,7 @@ async fn run_command(
                     cwd,
                     timeout_ms,
                     cache_failures,
-                    remote: remote.then_some(compute),
+                    remote: resolve_remote_execution(workspace, xdg, remote, compute.as_deref())?,
                     argv,
                 },
             )
@@ -369,7 +369,7 @@ struct RunDispatchArgs {
     visible: bool,
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
-    remote: Option<String>,
+    remote: Option<RemoteExecution>,
 }
 
 async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Result<ExitCode> {
@@ -433,7 +433,7 @@ async fn run_target_command(
     target: Option<String>,
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
-    remote: Option<String>,
+    remote: Option<RemoteExecution>,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
     commands::run::run(
@@ -448,6 +448,19 @@ async fn run_target_command(
         },
     )
     .await
+}
+
+fn resolve_remote_execution(
+    workspace: &Path,
+    xdg: &Xdg,
+    remote: bool,
+    compute: Option<&str>,
+) -> Result<Option<RemoteExecution>> {
+    if remote {
+        crate::cache_provider::resolve_execution(workspace, xdg, compute).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 fn resolve_required_target(workspace: &Path, target: Option<String>) -> Result<String> {

@@ -8,6 +8,14 @@ exclude = [
   "fixtures/**",
 ]
 
+[infrastructure.cache]
+provider = "tuist"
+
+[infrastructures.tuist]
+kind = "tuist"
+account = "tuist"
+project = "once"
+
 [[target]]
 name = "cargo_dependencies"
 kind = "cargo_dependencies"

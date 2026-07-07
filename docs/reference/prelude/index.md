@@ -71,3 +71,29 @@ metadata at the keyboard.
   Cargo package lowered into a Rust library target
 - [`rust_proc_macro`](/reference/prelude/rust_proc_macro): Rust
   procedural macro compiled for Rust targets
+
+## C target kinds
+
+- [`c_library`](/reference/prelude/c_library): C and C++ static
+  library provider consumed by native target kinds
+
+## Zig target kinds
+
+- [`zig_library`](/reference/prelude/zig_library): Zig module provider
+  compiled at the use site by downstream Zig targets
+- [`zig_c_library`](/reference/prelude/zig_c_library): Zig module
+  generated from C provider headers
+- [`zig_binary`](/reference/prelude/zig_binary): Zig executable built
+  from a root module, Zig module deps, and C provider deps
+- [`zig_static_library`](/reference/prelude/zig_static_library): Zig
+  static library exposed to native linkers
+- [`zig_shared_library`](/reference/prelude/zig_shared_library): Zig
+  shared library exposed to native linkers and Android packaging
+- [`zig_test`](/reference/prelude/zig_test): Zig test target compiled
+  and run through Once's test capability
+- [`zig_configure`](/reference/prelude/zig_configure): configured Zig
+  library target using Once-native target attributes
+- [`zig_configure_binary`](/reference/prelude/zig_configure_binary):
+  configured Zig executable target using Once-native target attributes
+- [`zig_configure_test`](/reference/prelude/zig_configure_test):
+  configured Zig test target using Once-native target attributes

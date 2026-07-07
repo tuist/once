@@ -7,6 +7,8 @@ use crate::error::{Error, Result};
 pub struct ScriptAnnotations {
     pub runtime: String,
     pub runtime_args: Vec<String>,
+    pub needs: Vec<String>,
+    pub fingerprints: Vec<String>,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
     pub env_vars: Vec<String>,
@@ -151,6 +153,18 @@ fn parse_annotation_line(
             .push(parse_quoted(raw, "input", display_name)?);
         return Ok(());
     }
+    if let Some(raw) = line.strip_prefix("needs ") {
+        annotations
+            .needs
+            .push(parse_quoted(raw, "needs", display_name)?);
+        return Ok(());
+    }
+    if let Some(raw) = line.strip_prefix("fingerprint ") {
+        annotations
+            .fingerprints
+            .push(parse_quoted(raw, "fingerprint", display_name)?);
+        return Ok(());
+    }
     if let Some(raw) = line.strip_prefix("output ") {
         annotations
             .outputs
@@ -217,6 +231,8 @@ mod tests {
             &path,
             r#"#!/usr/bin/env bash
 # once input "src/**/*.ts"
+# once needs "../tools/codegen.sh"
+# once fingerprint "node --version"
 # once output "dist/"
 # once env "NODE_ENV"
 # once cwd "."
@@ -230,6 +246,8 @@ echo hi
         let annotations = parse_script_annotations(&path, "build.sh").unwrap();
         assert_eq!(annotations.runtime, "bash");
         assert_eq!(annotations.inputs, vec!["src/**/*.ts".to_string()]);
+        assert_eq!(annotations.needs, vec!["../tools/codegen.sh".to_string()]);
+        assert_eq!(annotations.fingerprints, vec!["node --version".to_string()]);
         assert_eq!(annotations.outputs, vec!["dist/".to_string()]);
         assert_eq!(annotations.env_vars, vec!["NODE_ENV".to_string()]);
         assert_eq!(annotations.cwd.as_deref(), Some("."));

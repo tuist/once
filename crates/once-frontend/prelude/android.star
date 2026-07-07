@@ -117,15 +117,6 @@ def _android_abs_path(path):
         return root + "/" + path
     return path
 
-def _android_basename(path):
-    idx = -1
-    for i in range(len(path)):
-        if path[i] == "/":
-            idx = i
-    if idx < 0:
-        return path
-    return path[idx + 1:]
-
 def _android_normalize_label_path(path):
     parts = []
     for part in path.split("/"):
@@ -563,23 +554,6 @@ def _android_asset_files_from_deps(deps):
         files.extend(dep.get("transitive_asset_files") or [])
     return _unique(files)
 
-def _android_native_library_key(library):
-    return (library.get("abi") or "") + "\x00" + (library.get("path") or "")
-
-def _android_unique_native_libraries(libraries):
-    seen = {}
-    out = []
-    for library in libraries:
-        abi = library.get("abi") or ""
-        path = library.get("path") or ""
-        if not abi or not path:
-            continue
-        key = _android_native_library_key(library)
-        if key not in seen:
-            seen[key] = True
-            out.append({"abi": abi, "path": path})
-    return out
-
 def _android_validate_native_library_dep(dep, consumer_label):
     if dep.get("target_kind") != "rust_library":
         return
@@ -596,7 +570,7 @@ def _android_native_libraries(ctx, deps):
         _android_validate_native_library_dep(native_dep, ctx["label"]["id"])
         libraries.extend(native_dep.get("transitive_android_native_libraries") or [])
         libraries.extend(native_dep.get("android_native_libraries") or [])
-    return _android_unique_native_libraries(libraries)
+    return _unique_native_libraries(libraries)
 
 def _android_native_library_paths(libraries):
     out = []
@@ -1859,9 +1833,9 @@ def _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash, n
         destination_dir = native_staging + "/lib/" + abi
         copy_path(
             path,
-            destination_dir + "/" + _android_basename(path),
+            destination_dir + "/" + _basename(path),
             inputs = [path],
-            identifier = "android_native_library_stage:" + ctx["label"]["id"] + ":" + abi + ":" + _android_basename(path),
+            identifier = "android_native_library_stage:" + ctx["label"]["id"] + ":" + abi + ":" + _basename(path),
         )
     if len(native_libraries) > 0:
         run_action(

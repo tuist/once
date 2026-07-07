@@ -11,13 +11,14 @@
 //! shape is human-readable by default and structured under `json` or
 //! `toon`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{ExitCode, Output as ProcessOutput};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use once_cas::{CacheProvider, Digest};
+use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     tool_env, workspace_tool, workspace_tool_env, Action, CacheState, EvidenceSubject,
     InputDigestBuilder, OutputSymlinkMode, RemoteExecution, ResourceRequest, RunOpts,
@@ -49,23 +50,57 @@ pub struct ExecArgs {
     pub cwd: Option<WorkspacePath>,
     pub timeout_ms: Option<u64>,
     pub cache_failures: bool,
-    pub remote: Option<String>,
+    pub remote: Option<RemoteExecution>,
     pub argv: Vec<String>,
 }
 
+#[derive(Clone)]
 struct ScriptInvocation {
     workspace: PathBuf,
     runtime: String,
     runtime_args: Vec<String>,
     script_path: WorkspacePath,
     script_args: Vec<String>,
+    needs: Vec<WorkspacePath>,
+    fingerprints: Vec<String>,
+    inputs: Vec<WorkspacePath>,
     cwd: WorkspacePath,
     env: BTreeMap<String, String>,
     outputs: Vec<WorkspacePath>,
     output_symlink_mode: OutputSymlinkMode,
-    input_digest: Option<Digest>,
     timeout_ms: Option<u64>,
     remote: Option<RemoteExecution>,
+}
+
+#[derive(Clone)]
+struct ScriptGraphOptions {
+    explicit_env: BTreeMap<String, String>,
+    timeout_ms_override: Option<u64>,
+    remote_override: Option<RemoteExecution>,
+}
+
+struct ScriptExecutionOptions {
+    explicit_env: Vec<(String, String)>,
+    cwd_override: Option<WorkspacePath>,
+    timeout_ms_override: Option<u64>,
+    remote_override: Option<RemoteExecution>,
+}
+
+#[derive(Clone)]
+struct DependencyFingerprint {
+    script_path: String,
+    digest: Digest,
+}
+
+#[derive(Debug)]
+struct FingerprintResult {
+    command: String,
+    digest: Digest,
+}
+
+struct FingerprintShell {
+    program: String,
+    command_arg: &'static str,
 }
 
 pub async fn exec(
@@ -74,55 +109,12 @@ pub async fn exec(
     args: ExecArgs,
     output: Output,
 ) -> Result<ExitCode> {
-    let ExecArgs {
-        script,
-        env,
-        cwd,
-        timeout_ms,
-        cache_failures,
-        remote,
-        argv,
-    } = args;
-
-    let (workspace, action) = if script {
-        script_action(workspace, env, cwd, timeout_ms, remote.as_deref(), &argv)?
-    } else if let Some(plan) = autodetected_script_action(
-        workspace,
-        env.clone(),
-        cwd.clone(),
-        timeout_ms,
-        remote.as_deref(),
-        &argv,
-    )? {
-        plan
-    } else {
-        (
-            workspace.to_path_buf(),
-            Action::RunCommand {
-                argv,
-                env: env.into_iter().collect::<BTreeMap<_, _>>(),
-                cwd,
-                input_digest: None,
-                outputs: vec![],
-                output_symlink_mode: OutputSymlinkMode::default(),
-                resources: ResourceRequest::default(),
-                timeout_ms,
-                remote: remote_execution(remote.as_deref()),
-            },
-        )
+    let opts = RunOpts {
+        cache_failures: args.cache_failures,
     };
-
-    let opts = RunOpts { cache_failures };
+    let (workspace, action) = plan_exec_action(workspace, cache, opts, args).await?;
     let streams_live = action_remote(&action).is_some() && output.format == Format::Human;
-    let outcome = if streams_live {
-        once_core::run_with_cache_streaming(&action, &workspace, cache, opts)
-            .await
-            .context("executing action")?
-    } else {
-        once_core::run_with_cache(&action, &workspace, cache, opts)
-            .await
-            .context("executing action")?
-    };
+    let outcome = run_exec_action(cache, &workspace, opts, &action, streams_live).await?;
     crate::commands::evidence::record_outcome(
         &workspace,
         EvidenceSubject::command(outcome.action),
@@ -130,7 +122,82 @@ pub async fn exec(
         &outcome,
     )
     .await;
+    write_exec_output(cache, output, streams_live, &outcome).await?;
 
+    Ok(exit_from(outcome.result.exit_code))
+}
+
+async fn plan_exec_action(
+    workspace: &Path,
+    cache: &CacheProvider,
+    opts: RunOpts,
+    args: ExecArgs,
+) -> Result<(PathBuf, Action)> {
+    let ExecArgs {
+        script,
+        env,
+        cwd,
+        timeout_ms,
+        cache_failures: _,
+        remote,
+        argv,
+    } = args;
+    let options = ScriptExecutionOptions {
+        explicit_env: env,
+        cwd_override: cwd,
+        timeout_ms_override: timeout_ms,
+        remote_override: remote,
+    };
+
+    if script {
+        script_action_with_dependencies(workspace, cache, opts, &options, &argv).await
+    } else if let Some(plan) =
+        autodetected_script_action(cache, opts, workspace, &options, &argv).await?
+    {
+        Ok(plan)
+    } else {
+        Ok((
+            workspace.to_path_buf(),
+            Action::RunCommand {
+                argv,
+                env: options.explicit_env.into_iter().collect::<BTreeMap<_, _>>(),
+                cwd: options.cwd_override,
+                input_digest: None,
+                outputs: vec![],
+                output_symlink_mode: OutputSymlinkMode::default(),
+                resources: ResourceRequest::default(),
+                timeout_ms: options.timeout_ms_override,
+                remote: options.remote_override,
+            },
+        ))
+    }
+}
+
+async fn run_exec_action(
+    cache: &CacheProvider,
+    workspace: &Path,
+    opts: RunOpts,
+    action: &Action,
+    streams_live: bool,
+) -> Result<once_core::Outcome> {
+    let outcome = if streams_live {
+        once_core::run_with_cache_streaming(action, workspace, cache, opts)
+            .await
+            .context("executing action")?
+    } else {
+        once_core::run_with_cache(action, workspace, cache, opts)
+            .await
+            .context("executing action")?
+    };
+    Ok(outcome)
+}
+
+async fn write_exec_output(
+    cache: &CacheProvider,
+    output: Output,
+    streams_live: bool,
+    outcome: &once_core::Outcome,
+) -> Result<()> {
     let stdout = match outcome.result.stdout {
         Some(digest) => cache.get_blob(&digest).await?,
         None => Vec::new(),
@@ -179,16 +246,16 @@ pub async fn exec(
         err.write_all(trailer.as_bytes()).await?;
     }
     err.flush().await?;
-
-    Ok(exit_from(outcome.result.exit_code))
+    Ok(())
 }
 
+#[cfg(test)]
 fn script_action(
     workspace: &Path,
     explicit_env: Vec<(String, String)>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    remote_override: Option<&str>,
+    remote_override: Option<RemoteExecution>,
     argv: &[String],
 ) -> Result<(PathBuf, Action)> {
     let invocation = script_invocation(
@@ -199,35 +266,67 @@ fn script_action(
         remote_override,
         argv,
     )?;
+    let input_digest = Some(script_input_digest(
+        &invocation.workspace,
+        &invocation.inputs,
+        &[],
+        &[],
+    )?);
+    let action = action_from_script_invocation(&invocation, input_digest)?;
+    Ok((invocation.workspace.clone(), action))
+}
+
+async fn script_action_with_dependencies(
+    workspace: &Path,
+    cache: &CacheProvider,
+    opts: RunOpts,
+    options: &ScriptExecutionOptions,
+    argv: &[String],
+) -> Result<(PathBuf, Action)> {
+    let graph_options = ScriptGraphOptions {
+        explicit_env: options.explicit_env.iter().cloned().collect(),
+        timeout_ms_override: options.timeout_ms_override,
+        remote_override: options.remote_override.clone(),
+    };
+    let invocation = script_invocation(
+        workspace,
+        graph_options.explicit_env.clone(),
+        options.cwd_override.clone(),
+        graph_options.timeout_ms_override,
+        graph_options.remote_override.clone(),
+        argv,
+    )?;
+    script_action_with_dependency_graph(cache, opts, invocation, graph_options).await
+}
+
+fn action_from_script_invocation(
+    invocation: &ScriptInvocation,
+    input_digest: Option<Digest>,
+) -> Result<Action> {
     let program = resolve_runtime(&invocation.workspace, &invocation.runtime)?;
     let mut argv = vec![program];
-    argv.extend(invocation.runtime_args);
+    argv.extend(invocation.runtime_args.clone());
     argv.push(host_script_path(
         invocation.script_path.as_str(),
         Some(&invocation.cwd),
     )?);
-    argv.extend(invocation.script_args);
+    argv.extend(invocation.script_args.clone());
 
-    Ok((
-        invocation.workspace,
-        Action::RunCommand {
-            argv,
-            env: invocation.env,
-            cwd: Some(invocation.cwd),
-            input_digest: invocation.input_digest,
-            outputs: invocation.outputs,
-            output_symlink_mode: invocation.output_symlink_mode,
-            resources: ResourceRequest::default(),
-            timeout_ms: invocation.timeout_ms,
-            remote: invocation.remote,
-        },
-    ))
+    Ok(Action::RunCommand {
+        argv,
+        env: invocation.env.clone(),
+        cwd: Some(invocation.cwd.clone()),
+        input_digest,
+        outputs: invocation.outputs.clone(),
+        output_symlink_mode: invocation.output_symlink_mode,
+        resources: ResourceRequest::default(),
+        timeout_ms: invocation.timeout_ms,
+        remote: invocation.remote.clone(),
+    })
 }
 
 fn remote_execution(provider: Option<&str>) -> Option<RemoteExecution> {
-    provider.map(|provider| RemoteExecution {
-        provider: provider.to_string(),
-    })
+    provider.map(RemoteExecution::provider)
 }
 
 fn action_remote(action: &Action) -> Option<&RemoteExecution> {
@@ -237,12 +336,11 @@ fn action_remote(action: &Action) -> Option<&RemoteExecution> {
     }
 }
 
-fn autodetected_script_action(
+async fn autodetected_script_action(
+    cache: &CacheProvider,
+    opts: RunOpts,
     workspace: &Path,
-    explicit_env: Vec<(String, String)>,
-    cwd_override: Option<WorkspacePath>,
-    timeout_ms_override: Option<u64>,
-    remote_override: Option<&str>,
+    options: &ScriptExecutionOptions,
     argv: &[String],
 ) -> Result<Option<(PathBuf, Action)>> {
     let Ok((_, _, script_arg, _)) = parse_script_exec_argv(workspace, argv) else {
@@ -257,15 +355,344 @@ fn autodetected_script_action(
     if !has_once_annotations(&annotations) {
         return Ok(None);
     }
-    script_action(
+    script_action_with_dependencies(workspace, cache, opts, options, argv)
+        .await
+        .map(Some)
+}
+
+async fn script_action_with_dependency_graph(
+    cache: &CacheProvider,
+    opts: RunOpts,
+    invocation: ScriptInvocation,
+    graph_options: ScriptGraphOptions,
+) -> Result<(PathBuf, Action)> {
+    let root_id = invocation.script_path.as_str().to_string();
+    let graph = collect_script_graph(invocation, &graph_options)?;
+    let root = graph
+        .get(&root_id)
+        .with_context(|| format!("script graph root `{root_id}` was not collected"))?;
+    let dependency_fingerprints =
+        run_script_graph_dependencies(cache, opts, &graph, root_id.as_str()).await?;
+    let fingerprints = run_fingerprint_commands(root).await?;
+    let input_digest = Some(script_input_digest(
+        &root.workspace,
+        &root.inputs,
+        &dependency_fingerprints,
+        &fingerprints,
+    )?);
+    let action = action_from_script_invocation(root, input_digest)?;
+    Ok((root.workspace.clone(), action))
+}
+
+fn collect_script_graph(
+    root: ScriptInvocation,
+    graph_options: &ScriptGraphOptions,
+) -> Result<BTreeMap<String, ScriptInvocation>> {
+    let mut graph = BTreeMap::new();
+    let mut stack = Vec::new();
+    collect_script_node(root, graph_options, &mut graph, &mut stack)?;
+    Ok(graph)
+}
+
+fn collect_script_node(
+    invocation: ScriptInvocation,
+    graph_options: &ScriptGraphOptions,
+    graph: &mut BTreeMap<String, ScriptInvocation>,
+    stack: &mut Vec<String>,
+) -> Result<()> {
+    let id = invocation.script_path.as_str().to_string();
+    if let Some(position) = stack.iter().position(|candidate| candidate == &id) {
+        let mut cycle = stack[position..].to_vec();
+        cycle.push(id);
+        anyhow::bail!("script dependency cycle: {}", cycle.join(" -> "));
+    }
+    if graph.contains_key(&id) {
+        return Ok(());
+    }
+
+    stack.push(id.clone());
+    for need in invocation.needs.clone() {
+        let dependency = dependency_script_invocation(&invocation.workspace, graph_options, &need)?;
+        collect_script_node(dependency, graph_options, graph, stack)?;
+    }
+    stack.pop();
+    graph.insert(id, invocation);
+    Ok(())
+}
+
+fn dependency_script_invocation(
+    workspace: &Path,
+    graph_options: &ScriptGraphOptions,
+    script_path: &WorkspacePath,
+) -> Result<ScriptInvocation> {
+    let script_arg = script_path.as_str();
+    let script_abs = resolve_script_abs(workspace, script_arg)?;
+    let annotations = parse_script_annotations(&script_abs, script_arg)
+        .with_context(|| format!("parsing once headers for dependency `{script_arg}`"))?;
+    script_invocation_from_annotations(
         workspace,
-        explicit_env,
-        cwd_override,
-        timeout_ms_override,
-        remote_override,
-        argv,
+        &script_abs,
+        annotations,
+        None,
+        Vec::new(),
+        graph_options.explicit_env.clone(),
+        None,
+        graph_options.timeout_ms_override,
+        graph_options.remote_override.clone(),
     )
-    .map(Some)
+}
+
+async fn run_script_graph_dependencies(
+    cache: &CacheProvider,
+    opts: RunOpts,
+    graph: &BTreeMap<String, ScriptInvocation>,
+    root_id: &str,
+) -> Result<Vec<DependencyFingerprint>> {
+    let target_count = graph.len().saturating_sub(1);
+    let mut completed = BTreeSet::new();
+    let mut fingerprints: BTreeMap<String, DependencyFingerprint> = BTreeMap::new();
+    let root = graph
+        .get(root_id)
+        .with_context(|| format!("script graph root `{root_id}` vanished from the graph"))?;
+    let runner = once_core::Runner::with_cache(cache.clone(), root.workspace.clone(), opts);
+
+    while completed.len() < target_count {
+        let ready = graph
+            .iter()
+            .filter(|(id, invocation)| {
+                id.as_str() != root_id
+                    && !completed.contains(id.as_str())
+                    && invocation
+                        .needs
+                        .iter()
+                        .all(|need| completed.contains(need.as_str()))
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            anyhow::bail!("cycle detected while running script graph rooted at `{root_id}`");
+        }
+
+        let mut tasks = tokio::task::JoinSet::new();
+        for id in ready {
+            let invocation = graph
+                .get(&id)
+                .with_context(|| format!("script dependency `{id}` vanished from the graph"))?
+                .clone();
+            let dependency_fingerprints = dependency_fingerprints_for(&invocation, &fingerprints)?;
+            let runner = runner.clone();
+            tasks.spawn(async move {
+                run_dependency_script(runner, invocation, dependency_fingerprints)
+                    .await
+                    .map(|fingerprint| (id, fingerprint))
+            });
+        }
+
+        while let Some(joined) = tasks.join_next().await {
+            let (id, fingerprint) = joined.context("joining script dependency task")??;
+            completed.insert(id.clone());
+            fingerprints.insert(id, fingerprint);
+        }
+    }
+
+    dependency_fingerprints_for(root, &fingerprints)
+}
+
+fn dependency_fingerprints_for(
+    invocation: &ScriptInvocation,
+    fingerprints: &BTreeMap<String, DependencyFingerprint>,
+) -> Result<Vec<DependencyFingerprint>> {
+    invocation
+        .needs
+        .iter()
+        .map(|need| {
+            fingerprints
+                .get(need.as_str())
+                .cloned()
+                .with_context(|| format!("missing output fingerprint for dependency `{need}`"))
+        })
+        .collect()
+}
+
+async fn run_dependency_script(
+    runner: once_core::Runner,
+    invocation: ScriptInvocation,
+    dependency_fingerprints: Vec<DependencyFingerprint>,
+) -> Result<DependencyFingerprint> {
+    let input_digest = Some(script_input_digest(
+        &invocation.workspace,
+        &invocation.inputs,
+        &dependency_fingerprints,
+        &run_fingerprint_commands(&invocation).await?,
+    )?);
+    let action = action_from_script_invocation(&invocation, input_digest)?;
+    let outcome = runner
+        .run(&action)
+        .await
+        .with_context(|| format!("executing dependency script `{}`", invocation.script_path))?;
+    if outcome.result.exit_code != 0 {
+        let message =
+            dependency_failure_message(runner.cache(), &invocation, &outcome.result).await?;
+        anyhow::bail!("{message}");
+    }
+
+    Ok(DependencyFingerprint {
+        script_path: invocation.script_path.as_str().to_string(),
+        digest: dependency_output_digest(&outcome),
+    })
+}
+
+fn dependency_output_digest(outcome: &once_core::Outcome) -> Digest {
+    let mut builder = InputDigestBuilder::new(b"once.exec.script.dependency-output.v1\0");
+    if outcome.result.outputs.is_empty() {
+        builder.push_keyed(b"action", &outcome.action);
+    } else {
+        for (path, digest) in &outcome.result.outputs {
+            let label = format!("output:{path}");
+            builder.push_keyed(label.as_bytes(), digest);
+        }
+    }
+    builder.finish()
+}
+
+async fn dependency_failure_message(
+    cache: &CacheProvider,
+    invocation: &ScriptInvocation,
+    result: &ActionResult,
+) -> Result<String> {
+    let stdout = cached_blob_text(cache, result.stdout).await?;
+    let stderr = cached_blob_text(cache, result.stderr).await?;
+    let mut message = format!(
+        "dependency script `{}` failed with exit code {}",
+        invocation.script_path, result.exit_code
+    );
+    if !stdout.trim().is_empty() {
+        message.push_str("\nstdout:\n");
+        message.push_str(stdout.trim_end());
+    }
+    if !stderr.trim().is_empty() {
+        message.push_str("\nstderr:\n");
+        message.push_str(stderr.trim_end());
+    }
+    Ok(message)
+}
+
+async fn cached_blob_text(cache: &CacheProvider, digest: Option<Digest>) -> Result<String> {
+    let Some(digest) = digest else {
+        return Ok(String::new());
+    };
+    let bytes = cache.get_blob(&digest).await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+async fn run_fingerprint_commands(invocation: &ScriptInvocation) -> Result<Vec<FingerprintResult>> {
+    let mut out = Vec::with_capacity(invocation.fingerprints.len());
+    for command in &invocation.fingerprints {
+        out.push(run_fingerprint_command(invocation, command).await?);
+    }
+    Ok(out)
+}
+
+async fn run_fingerprint_command(
+    invocation: &ScriptInvocation,
+    command: &str,
+) -> Result<FingerprintResult> {
+    let shell = fingerprint_shell();
+    let cwd = invocation.cwd.resolve(&invocation.workspace);
+    let mut child = tokio::process::Command::new(shell.program);
+    child
+        .arg(shell.command_arg)
+        .arg(command)
+        .env_clear()
+        .current_dir(&cwd)
+        .kill_on_drop(true);
+    for (key, value) in &invocation.env {
+        child.env(key, value);
+    }
+
+    let output = fingerprint_command_output(child, invocation.timeout_ms, command).await?;
+    let digest = fingerprint_digest(command, &output);
+    if !output.status.success() {
+        let mut message = format!(
+            "fingerprint command `{command}` failed with {}",
+            exit_status_text(output.status)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stdout.trim().is_empty() {
+            message.push_str("\nstdout:\n");
+            message.push_str(stdout.trim_end());
+        }
+        if !stderr.trim().is_empty() {
+            message.push_str("\nstderr:\n");
+            message.push_str(stderr.trim_end());
+        }
+        anyhow::bail!("{message}");
+    }
+
+    Ok(FingerprintResult {
+        command: command.to_string(),
+        digest,
+    })
+}
+
+async fn fingerprint_command_output(
+    mut child: tokio::process::Command,
+    timeout_ms: Option<u64>,
+    command: &str,
+) -> Result<ProcessOutput> {
+    match timeout_ms {
+        Some(ms) => tokio::time::timeout(Duration::from_millis(ms), child.output())
+            .await
+            .with_context(|| format!("fingerprint command `{command}` timed out after {ms}ms"))?
+            .with_context(|| format!("running fingerprint command `{command}`")),
+        None => child
+            .output()
+            .await
+            .with_context(|| format!("running fingerprint command `{command}`")),
+    }
+}
+
+fn fingerprint_shell() -> FingerprintShell {
+    #[cfg(windows)]
+    {
+        FingerprintShell {
+            program: env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string()),
+            command_arg: "/C",
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        FingerprintShell {
+            program: "/bin/sh".to_string(),
+            command_arg: "-c",
+        }
+    }
+}
+
+fn fingerprint_digest(command: &str, output: &ProcessOutput) -> Digest {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"once.exec.script.fingerprint.v1\0");
+    buf.extend_from_slice(b"command\0");
+    buf.extend_from_slice(command.as_bytes());
+    buf.push(0);
+    buf.extend_from_slice(b"status\0");
+    buf.extend_from_slice(exit_status_text(output.status).as_bytes());
+    buf.push(0);
+    buf.extend_from_slice(b"stdout\0");
+    buf.extend_from_slice(&output.stdout);
+    buf.push(0);
+    buf.extend_from_slice(b"stderr\0");
+    buf.extend_from_slice(&output.stderr);
+    buf.push(0);
+    Digest::of_bytes(&buf)
+}
+
+fn exit_status_text(status: std::process::ExitStatus) -> String {
+    status
+        .code()
+        .map_or_else(|| "signal".to_string(), |code| format!("exit code {code}"))
 }
 
 fn script_invocation(
@@ -273,27 +700,62 @@ fn script_invocation(
     explicit_env: BTreeMap<String, String>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
-    remote_override: Option<&str>,
+    remote_override: Option<RemoteExecution>,
     argv: &[String],
 ) -> Result<ScriptInvocation> {
     let (runtime, runtime_args, script_arg, script_args) = parse_script_exec_argv(workspace, argv)?;
     let script_abs = resolve_script_abs(workspace, script_arg)?;
     let annotations = parse_script_annotations(&script_abs, script_arg)
         .with_context(|| format!("parsing once headers for `{script_arg}`"))?;
+    script_invocation_from_annotations(
+        workspace,
+        &script_abs,
+        annotations,
+        Some((runtime.as_str(), runtime_args)),
+        script_args,
+        explicit_env,
+        cwd_override,
+        timeout_ms_override,
+        remote_override,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn script_invocation_from_annotations(
+    workspace: &Path,
+    script_abs: &Path,
+    annotations: ScriptAnnotations,
+    command_runtime: Option<(&str, &[String])>,
+    script_args: Vec<String>,
+    explicit_env: BTreeMap<String, String>,
+    cwd_override: Option<WorkspacePath>,
+    timeout_ms_override: Option<u64>,
+    remote_override: Option<RemoteExecution>,
+) -> Result<ScriptInvocation> {
     let workspace =
-        resolve_script_workspace(workspace, &script_abs, &annotations, cwd_override.as_ref())?;
-    let script_path = workspace_path_for_file(&workspace, &script_abs)?;
-    if annotations.runtime != runtime {
-        anyhow::bail!(
-            "script `{}` declares runtime `{}` in its shebang, but the command used `{}`; invoke it with the shebang runtime, for example `once exec -- {} {}`, or update the shebang",
-            script_path,
-            annotations.runtime,
-            runtime,
-            annotations.runtime,
-            script_path
-        );
-    }
-    let merged_runtime_args = merge_runtime_args(&annotations.runtime_args, runtime_args);
+        resolve_script_workspace(workspace, script_abs, &annotations, cwd_override.as_ref())?;
+    let script_path = workspace_path_for_file(&workspace, script_abs)?;
+    let (runtime, merged_runtime_args) = if let Some((runtime, runtime_args)) = command_runtime {
+        if annotations.runtime != runtime {
+            anyhow::bail!(
+                "script `{}` declares runtime `{}` in its shebang, but the command used `{}`; invoke it with the shebang runtime, for example `once exec -- {} {}`, or update the shebang",
+                script_path,
+                annotations.runtime,
+                runtime,
+                annotations.runtime,
+                script_path
+            );
+        }
+        (
+            runtime.to_string(),
+            merge_runtime_args(&annotations.runtime_args, runtime_args),
+        )
+    } else {
+        (
+            annotations.runtime.clone(),
+            annotations.runtime_args.clone(),
+        )
+    };
     let script_dir = parent_workspace_path(&script_path)?;
     let mut inputs = resolve_script_inputs(&workspace, &script_dir, &annotations.inputs)?;
     if !inputs.iter().any(|input| input == &script_path) {
@@ -302,15 +764,15 @@ fn script_invocation(
     inputs.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     inputs.dedup();
 
+    let needs = resolve_script_needs(&script_dir, &annotations.needs)?;
     let outputs = resolve_script_outputs(&script_dir, &annotations.outputs)?;
     let cwd = match cwd_override {
         Some(cwd) => cwd,
         None => resolve_script_cwd(&script_dir, annotations.cwd.as_deref())?,
     };
-    let input_digest = Some(script_input_digest(&workspace, &inputs)?);
     let timeout_ms = timeout_ms_override;
     let env = script_env(&workspace, &runtime, &annotations.env_vars, explicit_env)?;
-    let remote = remote_execution(remote_override.or(annotations.remote.as_deref()));
+    let remote = remote_override.or_else(|| remote_execution(annotations.remote.as_deref()));
     let output_symlink_mode = output_symlink_mode(annotations.output_symlinks.as_deref())?;
 
     Ok(ScriptInvocation {
@@ -319,11 +781,13 @@ fn script_invocation(
         runtime_args: merged_runtime_args,
         script_path,
         script_args,
+        needs,
+        fingerprints: annotations.fingerprints,
+        inputs,
         cwd,
         env,
         outputs,
         output_symlink_mode,
-        input_digest,
         timeout_ms,
         remote,
     })
@@ -411,6 +875,9 @@ fn infer_script_workspace(script_abs: &Path, annotations: &ScriptAnnotations) ->
     })?;
     let mut ancestor = lexical_normalize(script_dir);
     for raw in &annotations.inputs {
+        ancestor = shared_ancestor(ancestor, &annotation_anchor(script_dir, raw))?;
+    }
+    for raw in &annotations.needs {
         ancestor = shared_ancestor(ancestor, &annotation_anchor(script_dir, raw))?;
     }
     for raw in &annotations.outputs {
@@ -560,6 +1027,19 @@ fn resolve_script_outputs(
         .collect()
 }
 
+fn resolve_script_needs(
+    script_dir: &WorkspacePath,
+    needs: &[String],
+) -> Result<Vec<WorkspacePath>> {
+    let mut out = needs
+        .iter()
+        .map(|need| normalize_from_script_dir(script_dir, need))
+        .collect::<Result<Vec<_>>>()?;
+    out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    out.dedup();
+    Ok(out)
+}
+
 fn resolve_script_cwd(script_dir: &WorkspacePath, raw: Option<&str>) -> Result<WorkspacePath> {
     raw.map_or_else(
         || Ok(script_dir.clone()),
@@ -613,7 +1093,9 @@ fn has_glob(value: &str) -> bool {
 }
 
 fn has_once_annotations(annotations: &ScriptAnnotations) -> bool {
-    !annotations.inputs.is_empty()
+    !annotations.needs.is_empty()
+        || !annotations.fingerprints.is_empty()
+        || !annotations.inputs.is_empty()
         || !annotations.outputs.is_empty()
         || !annotations.env_vars.is_empty()
         || annotations.cwd.is_some()
@@ -628,12 +1110,30 @@ fn output_symlink_mode(raw: Option<&str>) -> Result<OutputSymlinkMode> {
         .context("parsing output-symlinks")
 }
 
-fn script_input_digest(workspace: &Path, inputs: &[WorkspacePath]) -> Result<Digest> {
-    let mut builder = InputDigestBuilder::new(b"once.exec.script.input.v1\0");
+fn script_input_digest(
+    workspace: &Path,
+    inputs: &[WorkspacePath],
+    dependencies: &[DependencyFingerprint],
+    fingerprints: &[FingerprintResult],
+) -> Result<Digest> {
+    let domain = if dependencies.is_empty() && fingerprints.is_empty() {
+        b"once.exec.script.input.v1\0".as_slice()
+    } else {
+        b"once.exec.script.input.v2\0".as_slice()
+    };
+    let mut builder = InputDigestBuilder::new(domain);
     for input in inputs {
         builder
             .push_source(workspace, input.as_str())
             .with_context(|| format!("hashing script input `{input}`"))?;
+    }
+    for dependency in dependencies {
+        let label = format!("dep:{}", dependency.script_path);
+        builder.push_keyed(label.as_bytes(), &dependency.digest);
+    }
+    for fingerprint in fingerprints {
+        let label = format!("fingerprint:{}", fingerprint.command);
+        builder.push_keyed(label.as_bytes(), &fingerprint.digest);
     }
     Ok(builder.finish())
 }
@@ -743,9 +1243,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn autodetects_annotated_scripts_without_script_flag() {
+    #[tokio::test]
+    async fn autodetects_annotated_scripts_without_script_flag() {
         let tmp = TempDir::new().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(tmp.path().join(".cache")));
         let script = tmp.path().join("scripts").join("build.sh");
         fs::create_dir_all(script.parent().unwrap()).unwrap();
         fs::write(
@@ -756,13 +1257,18 @@ mod tests {
         fs::write(tmp.path().join("input.txt"), "hello\n").unwrap();
 
         let plan = autodetected_script_action(
+            &cache,
+            RunOpts::default(),
             tmp.path(),
-            Vec::new(),
-            None,
-            None,
-            None,
+            &ScriptExecutionOptions {
+                explicit_env: Vec::new(),
+                cwd_override: None,
+                timeout_ms_override: None,
+                remote_override: None,
+            },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
+        .await
         .unwrap()
         .expect("annotated script should be autodetected");
 
@@ -868,20 +1374,69 @@ mod tests {
     }
 
     #[test]
-    fn does_not_autodetect_unannotated_scripts() {
+    fn fingerprint_shell_uses_stable_system_shell() {
+        let shell = fingerprint_shell();
+
+        #[cfg(windows)]
+        {
+            assert_eq!(shell.command_arg, "/C");
+            assert!(!shell.program.is_empty());
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert_eq!(shell.program, "/bin/sh");
+            assert_eq!(shell.command_arg, "-c");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn fingerprint_commands_respect_script_timeout() {
         let tmp = TempDir::new().unwrap();
+        let invocation = ScriptInvocation {
+            workspace: tmp.path().to_path_buf(),
+            runtime: "/bin/sh".to_string(),
+            runtime_args: Vec::new(),
+            script_path: WorkspacePath::try_from("build.sh").unwrap(),
+            script_args: Vec::new(),
+            needs: Vec::new(),
+            fingerprints: vec!["sleep 5".to_string()],
+            inputs: Vec::new(),
+            cwd: WorkspacePath::root(),
+            env: BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]),
+            outputs: Vec::new(),
+            output_symlink_mode: OutputSymlinkMode::default(),
+            timeout_ms: Some(10),
+            remote: None,
+        };
+
+        let err = run_fingerprint_commands(&invocation).await.unwrap_err();
+
+        assert!(err.to_string().contains("timed out after 10ms"));
+    }
+
+    #[tokio::test]
+    async fn does_not_autodetect_unannotated_scripts() {
+        let tmp = TempDir::new().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(tmp.path().join(".cache")));
         let script = tmp.path().join("scripts").join("build.sh");
         fs::create_dir_all(script.parent().unwrap()).unwrap();
         fs::write(&script, "#!/bin/bash\ncat ../input.txt\n").unwrap();
 
         let detected = autodetected_script_action(
+            &cache,
+            RunOpts::default(),
             tmp.path(),
-            Vec::new(),
-            None,
-            None,
-            None,
+            &ScriptExecutionOptions {
+                explicit_env: Vec::new(),
+                cwd_override: None,
+                timeout_ms_override: None,
+                remote_override: None,
+            },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
+        .await
         .unwrap();
 
         assert!(detected.is_none());

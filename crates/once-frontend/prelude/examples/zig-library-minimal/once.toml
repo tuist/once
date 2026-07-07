@@ -1,0 +1,8 @@
+[[target]]
+name = "math"
+kind = "zig_library"
+srcs = ["src/**/*.zig"]
+
+[target.attrs]
+main = "src/math.zig"
+import_name = "math"

@@ -21,7 +21,7 @@ pub struct RunArgs {
     pub output: Output,
     pub runtime_rpc: bool,
     pub runtime_rpc_socket: Option<PathBuf>,
-    pub remote: Option<String>,
+    pub remote: Option<RemoteExecution>,
 }
 
 pub async fn run(
@@ -34,8 +34,8 @@ pub async fn run(
     let target = &targets[idx];
 
     let mut plan = action_for(workspace, target)?;
-    if let Some(provider) = args.remote.as_deref() {
-        set_remote(&mut plan.action, provider);
+    if let Some(remote) = args.remote.clone() {
+        set_remote(&mut plan.action, remote);
     }
     if let Some(out_dir) = &plan.output_dir {
         tokio::fs::create_dir_all(out_dir)
@@ -135,11 +135,9 @@ async fn finish_run(
     Ok(())
 }
 
-fn set_remote(action: &mut Action, provider: &str) {
+fn set_remote(action: &mut Action, remote_execution: RemoteExecution) {
     if let Action::RunCommand { remote, .. } = action {
-        *remote = Some(RemoteExecution {
-            provider: provider.to_string(),
-        });
+        *remote = Some(remote_execution);
     }
 }
 

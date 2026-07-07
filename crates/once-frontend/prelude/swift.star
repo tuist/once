@@ -128,30 +128,13 @@ def _swift_android_managed_flags(ctx, attrs, target):
         "-Xlinker", "max-page-size=16384",
     ]
 
-def _swift_android_native_key(record):
-    return (record.get("abi") or "") + "\x00" + (record.get("path") or "")
-
-def _swift_android_unique_native_libraries(libraries):
-    seen = {}
-    out = []
-    for library in libraries:
-        abi = library.get("abi") or ""
-        path = library.get("path") or ""
-        if not abi or not path:
-            continue
-        key = _swift_android_native_key(library)
-        if key not in seen:
-            seen[key] = True
-            out.append({"abi": abi, "path": path})
-    return out
-
 def _swift_android_collect_native_libraries(deps, own):
     out = []
     out.extend(own)
     for dep in deps:
         out.extend(dep.get("transitive_android_native_libraries") or [])
         out.extend(dep.get("android_native_libraries") or [])
-    return _swift_android_unique_native_libraries(out)
+    return _unique_native_libraries(out)
 
 def _swift_android_collect_swiftmodule_dirs(deps, own_values):
     out = []
@@ -196,7 +179,7 @@ def _swift_android_library_impl(ctx):
                 dep_swiftmodule_dirs.append(d)
         dep_native_libraries.extend(dep.get("transitive_android_native_libraries") or [])
         dep_native_libraries.extend(dep.get("android_native_libraries") or [])
-    dep_native_libraries = _swift_android_unique_native_libraries(dep_native_libraries)
+    dep_native_libraries = _unique_native_libraries(dep_native_libraries)
 
     argv = [
         swiftc,

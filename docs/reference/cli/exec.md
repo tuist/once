@@ -28,7 +28,7 @@ Low-level action surface for direct commands and script adapters. The cache key 
 | `--timeout-ms` | `<MS>` |  | Per-action timeout in milliseconds. The child is killed if it exceeds the deadline |
 | `--cache-failures` | (flag) | `false` | Cache non-zero exits the same way zero exits are cached. Off by default; transient failures shouldn't poison the cache |
 | `--remote` | (flag) | `false` | Run the command on a compute provider |
-| `--compute` | `<PROVIDER>` | `microsandbox` | Compute provider used with --remote |
+| `--compute` | `<PROVIDER>` |  | Compute provider used with --remote. Defaults to the configured execution provider |
 | `-C, --directory` | `<DIR>` |  | Project root. Defaults to the current directory; the cache lives under `<project>/.once/`. Mirrors `make -C` |
 | `--format` | `<FORMAT>` | `human` | Output format for Once's structured data (`cache stats`, `run`/`exec` trailers). Defaults to a human-readable rendering; pass `json` or `toon` to get machine-parseable output for scripting and for agent consumers |
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |

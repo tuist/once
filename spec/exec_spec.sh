@@ -5,6 +5,19 @@ Describe 'once exec'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
+  copy_exec_fixture() {
+    cp -R "$REPO_ROOT/fixtures/exec/$1/." "$WORKSPACE/"
+  }
+
+  install_once_shebangs() {
+    for path in "$@"; do
+      tmp="$path.tmp"
+      sed "s|__ONCE_BIN__|$ONCE_BIN|g" "$path" > "$tmp"
+      mv "$tmp" "$path"
+      chmod +x "$path"
+    done
+  }
+
   It 'executes the command and reports a cache miss on first run'
     When call once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
     The status should be success
@@ -45,53 +58,32 @@ Describe 'once exec'
   End
 
   It 'executes an annotated script file directly through a Once shebang'
-    mkdir -p "$WORKSPACE/scripts"
-    cat > "$WORKSPACE/scripts/build.sh" <<EOF
-#!/usr/bin/env -S $ONCE_BIN exec -- bash
-# once input "../input.txt"
-# once cwd ".."
-cat input.txt
-EOF
-    chmod +x "$WORKSPACE/scripts/build.sh"
-    cat > "$WORKSPACE/input.txt" <<'EOF'
-hello direct script
-EOF
-    When call env PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
+    copy_exec_fixture direct_script
+    install_once_shebangs "$WORKSPACE/scripts/build.sh"
+    printf 'hello direct script\n' > "$WORKSPACE/input.txt"
+
+    When call env ONCE_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
     The status should be success
     The stdout should equal 'hello direct script'
     The stderr should include 'cache miss'
   End
 
   It 'returns a cache hit when an annotated script file is re-executed directly'
-    mkdir -p "$WORKSPACE/scripts"
-    cat > "$WORKSPACE/scripts/build.sh" <<EOF
-#!/usr/bin/env -S $ONCE_BIN exec -- bash
-# once input "../input.txt"
-# once cwd ".."
-cat input.txt
-EOF
-    chmod +x "$WORKSPACE/scripts/build.sh"
-    cat > "$WORKSPACE/input.txt" <<'EOF'
-cached direct script
-EOF
-    env PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh" >/dev/null 2>&1
-    When call env PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
+    copy_exec_fixture direct_script
+    install_once_shebangs "$WORKSPACE/scripts/build.sh"
+    printf 'cached direct script\n' > "$WORKSPACE/input.txt"
+
+    env ONCE_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh" >/dev/null 2>&1
+    When call env ONCE_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
     The status should be success
     The stdout should equal 'cached direct script'
     The stderr should include 'cache hit'
   End
 
   It 'executes an annotated script file through once exec without --script'
-    mkdir -p "$WORKSPACE/scripts"
-    cat > "$WORKSPACE/scripts/build.sh" <<'EOF'
-#!/usr/bin/env bash
-# once input "../input.txt"
-# once cwd ".."
-cat input.txt
-EOF
-    cat > "$WORKSPACE/input.txt" <<'EOF'
-hello through once exec
-EOF
+    copy_exec_fixture annotated_script
+    printf 'hello through once exec\n' > "$WORKSPACE/input.txt"
+
     When call once exec -e PATH=/usr/bin:/bin -- bash scripts/build.sh
     The status should be success
     The stdout should equal 'hello through once exec'
@@ -99,20 +91,72 @@ EOF
   End
 
   It 'executes an annotated script file through once exec with --script'
-    mkdir -p "$WORKSPACE/scripts"
-    cat > "$WORKSPACE/scripts/build.sh" <<'EOF'
-#!/usr/bin/env bash
-# once input "../input.txt"
-# once cwd ".."
-cat input.txt
-EOF
-    cat > "$WORKSPACE/input.txt" <<'EOF'
-hello through once exec --script
-EOF
+    copy_exec_fixture annotated_script
+    printf 'hello through once exec --script\n' > "$WORKSPACE/input.txt"
+
     When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
     The status should be success
     The stdout should equal 'hello through once exec --script'
     The stderr should include 'cache miss'
+  End
+
+  It 'runs needed scripts before an annotated script'
+    copy_exec_fixture script_graph
+
+    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh
+    The status should be success
+    The stdout should equal 'generated:dependencyroot'
+    The stderr should include 'cache miss'
+    The contents of file "$WORKSPACE/dist/app.txt" should equal 'generated:dependencyroot'
+  End
+
+  It 'uses needed script outputs in the dependent script cache key'
+    copy_exec_fixture script_graph
+    printf one > "$WORKSPACE/source.txt"
+    printf root > "$WORKSPACE/main.txt"
+    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh >/dev/null 2>&1
+    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh >/dev/null 2>"$WORKSPACE/second.stderr"
+    printf two > "$WORKSPACE/source.txt"
+
+    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh
+    The status should be success
+    The stdout should equal 'generated:tworoot'
+    The stderr should include 'cache miss'
+    The contents of file "$WORKSPACE/second.stderr" should include 'cache hit'
+  End
+
+  It 'uses fingerprint command output in the script cache key'
+    copy_exec_fixture fingerprint
+    printf hello > "$WORKSPACE/input.txt"
+    printf v1 > "$WORKSPACE/tool-version"
+    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh >/dev/null 2>&1
+    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh >/dev/null 2>"$WORKSPACE/second.stderr"
+    printf v2 > "$WORKSPACE/tool-version"
+
+    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    The status should be success
+    The stdout should equal 'hello'
+    The stderr should include 'cache miss'
+    The contents of file "$WORKSPACE/second.stderr" should include 'cache hit'
+  End
+
+  It 'fails before running a script when a fingerprint command fails'
+    copy_exec_fixture fingerprint_failure
+
+    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    The status should not equal 0
+    The stderr should include 'fingerprint command'
+    The stderr should include 'probe-error'
+    The path "$WORKSPACE/should-not-exist" should not be exist
+  End
+
+  It 'applies script timeouts to fingerprint commands'
+    copy_exec_fixture fingerprint_timeout
+
+    When call once exec --script --timeout-ms 50 -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    The status should not equal 0
+    The stderr should include 'timed out after 50ms'
+    The path "$WORKSPACE/should-not-exist" should not be exist
   End
 
   It 'runs a command through the microsandbox compute provider'
@@ -124,48 +168,7 @@ EOF
   End
 
   It 'runs a command through the daytona compute provider'
-    cat > "$WORKSPACE/daytona_api.py" <<'PY'
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import json
-import subprocess
-
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *args):
-        pass
-
-    def do_POST(self):
-        if self.path != "/toolbox/sandbox-1/process/execute":
-            self.send_error(404)
-            return
-        if self.headers.get("Authorization") != "Bearer token-1":
-            self.send_error(401)
-            return
-        length = int(self.headers.get("Content-Length", "0"))
-        request = json.loads(self.rfile.read(length))
-        proc = subprocess.run(
-            request["command"],
-            shell=True,
-            cwd=request["cwd"],
-            capture_output=True,
-            text=True,
-        )
-        body = json.dumps({
-            "exitCode": proc.returncode,
-            "artifacts": {
-                "stdout": proc.stdout,
-                "stderr": "daytona stderr\n" + proc.stderr,
-            },
-        }).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-server = HTTPServer(("127.0.0.1", 0), Handler)
-print(server.server_port, flush=True)
-server.handle_request()
-PY
+    copy_exec_fixture daytona
     python3 "$WORKSPACE/daytona_api.py" > "$WORKSPACE/daytona_port" &
     while [ ! -s "$WORKSPACE/daytona_port" ]; do sleep 0.05; done
     port="$(cat "$WORKSPACE/daytona_port")"

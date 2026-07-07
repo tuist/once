@@ -116,9 +116,7 @@ fn remote(target: &once_frontend::Target) -> Option<RemoteExecution> {
     target
         .attrs
         .get("remote_provider")
-        .map(|provider| RemoteExecution {
-            provider: provider.clone(),
-        })
+        .map(RemoteExecution::provider)
 }
 
 fn runtime_args(target: &once_frontend::Target) -> Result<Vec<String>> {

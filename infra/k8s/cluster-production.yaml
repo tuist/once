@@ -1,8 +1,11 @@
 # Once production workload Cluster, topology mode against `tuist-hcloud`.
 #
 # Reconciled by the self-hosted CAPI + caph management cluster maintained
-# in tuist/tuist. The cluster shape mirrors Atlas with a smaller general
-# worker pool because Once currently runs only the Phoenix web workload.
+# in tuist/tuist. Once currently serves only the static Phoenix marketing
+# site, so the cluster is collapsed to the minimum that stays operational:
+# a single control-plane node and a single worker. HA is intentionally
+# given up here to keep the Hetzner bill down until the registry backend
+# lands and warrants a larger shape again.
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:
@@ -22,7 +25,7 @@ spec:
       name: tuist-hcloud
     version: v1.34.6
     controlPlane:
-      replicas: 3
+      replicas: 1
     variables:
       - name: region
         value: fsn1
@@ -37,7 +40,7 @@ spec:
       machineDeployments:
         - class: hcloud-worker
           name: md-0
-          replicas: 2
+          replicas: 1
           failureDomain: fsn1
           metadata:
             labels:

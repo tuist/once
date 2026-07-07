@@ -5,9 +5,12 @@ use std::path::{Path, PathBuf};
 use glob::Pattern;
 use walkdir::WalkDir;
 
-use crate::cache_provider::CacheProviderConfig;
+use crate::cache_provider::{CacheProviderConfig, InfrastructureConfig};
 use crate::error::{Error, Result};
-use crate::manifest::{load_cache_provider_toml_str, load_toml_with, load_workspace_toml_str};
+use crate::manifest::{
+    load_cache_provider_toml_str, load_infrastructure_toml_str, load_toml_with,
+    load_workspace_toml_str,
+};
 use crate::target::Target;
 use crate::TOML_BUILD_FILE_NAME;
 
@@ -150,6 +153,25 @@ pub fn load_cache_provider_override(root: &Path) -> Result<Option<CacheProviderC
         }
     };
     load_cache_provider_toml_str(TOML_BUILD_FILE_NAME, &src)
+}
+
+/// Load the workspace-level infrastructure config from the root
+/// `once.toml`.
+pub fn load_infrastructure_config(root: &Path) -> Result<InfrastructureConfig> {
+    let path = root.join(TOML_BUILD_FILE_NAME);
+    let src = match std::fs::read_to_string(&path) {
+        Ok(src) => src,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(InfrastructureConfig::default());
+        }
+        Err(source) => {
+            return Err(Error::Read {
+                path: path.display().to_string(),
+                source,
+            });
+        }
+    };
+    load_infrastructure_toml_str(TOML_BUILD_FILE_NAME, &src)
 }
 
 /// Load the workspace-level cache provider config from the root

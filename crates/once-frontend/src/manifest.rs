@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::cache_provider::{CacheProviderToml, InfrastructureToml};
+use crate::cache_provider::{CacheProviderToml, InfrastructureProviderToml, InfrastructureToml};
 use crate::error::{Error, Result};
 use crate::target::{AttrValue, Target};
 use crate::target_ref::{normalize_manifest_target, validate_target_name};
@@ -15,6 +15,7 @@ use crate::target_ref::{normalize_manifest_target, validate_target_name};
 struct Manifest {
     workspace: WorkspaceToml,
     infrastructure: InfrastructureToml,
+    infrastructures: BTreeMap<String, InfrastructureProviderToml>,
     cache_provider: Option<CacheProviderToml>,
     modules: Option<ModulesToml>,
     rules: Option<ModulesToml>,
@@ -75,17 +76,40 @@ pub fn load_cache_provider_toml_str(
     path: &str,
     src: &str,
 ) -> Result<Option<crate::cache_provider::CacheProviderConfig>> {
+    Ok(load_infrastructure_toml_str(path, src)?.cache)
+}
+
+pub fn load_infrastructure_toml_str(
+    path: &str,
+    src: &str,
+) -> Result<crate::cache_provider::InfrastructureConfig> {
     let manifest: Manifest = toml::from_str(src).map_err(|source| Error::Parse {
         path: path.to_string(),
         message: source.to_string(),
     })?;
-    if let Some(raw) = manifest.infrastructure.cache {
-        return raw.into_config(path).map(Some);
-    }
-    manifest
-        .cache_provider
-        .map(|raw| raw.into_config(path))
-        .transpose()
+    let cache = if let Some(raw) = manifest.infrastructure.cache {
+        Some(raw.into_config(path)?)
+    } else {
+        manifest
+            .cache_provider
+            .map(|raw| raw.into_config(path))
+            .transpose()?
+    };
+    let execution = manifest
+        .infrastructure
+        .execution
+        .map(|raw| raw.into_config(path, "infrastructure.execution"))
+        .transpose()?;
+    let providers = manifest
+        .infrastructures
+        .into_iter()
+        .map(|(name, provider)| (name, provider.into_config()))
+        .collect();
+    Ok(crate::cache_provider::InfrastructureConfig {
+        cache,
+        execution,
+        providers,
+    })
 }
 
 pub(crate) fn load_module_paths_toml_str(path: &str, src: &str) -> Result<Vec<String>> {
