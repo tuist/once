@@ -95,6 +95,28 @@ def _unique(values):
             out.append(value)
     return out
 
+def _basename(path):
+    normalized = path.replace("\\", "/")
+    parts = normalized.split("/")
+    return parts[len(parts) - 1]
+
+def _native_library_key(library):
+    return (library.get("abi") or "") + "\x00" + (library.get("path") or "")
+
+def _unique_native_libraries(libraries):
+    seen = {}
+    out = []
+    for library in libraries:
+        abi = library.get("abi") or ""
+        path = library.get("path") or ""
+        if not abi or not path:
+            continue
+        key = _native_library_key(library)
+        if key not in seen:
+            seen[key] = True
+            out.append({"abi": abi, "path": path})
+    return out
+
 def _shell_quote(value):
     if not value:
         return "''"

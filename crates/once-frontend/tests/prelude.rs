@@ -2181,7 +2181,7 @@ fn prelude_swift_android_native_libraries_skip_empty_records() {
     let prelude = all_prelude_source();
     let out = eval_prelude_function_in(
         prelude,
-        "_swift_android_unique_native_libraries",
+        "_unique_native_libraries",
         r#"([
             {"abi": "", "path": ""},
             {"abi": "arm64-v8a", "path": ".once/out/libshared.so"},
@@ -2194,6 +2194,42 @@ fn prelude_swift_android_native_libraries_skip_empty_records() {
     assert_eq!(
         out,
         "[{\"abi\": \"arm64-v8a\", \"path\": \".once/out/libshared.so\"}]"
+    );
+}
+
+#[test]
+fn prelude_c_collect_linkopts_preserves_paired_flags() {
+    let prelude = all_prelude_source();
+    let out = eval_prelude_function_in(
+        prelude,
+        "_c_collect_linkopts",
+        r#"([
+            {"transitive_linkopts": ["-framework", "Foundation", "-framework", "CoreData"]},
+        ], [])"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        out,
+        "[\"-framework\", \"Foundation\", \"-framework\", \"CoreData\"]"
+    );
+}
+
+#[test]
+fn prelude_zig_collect_linkopts_preserves_paired_flags() {
+    let prelude = all_prelude_source();
+    let out = eval_prelude_function_in(
+        prelude,
+        "_zig_collect_linkopts",
+        r#"([
+            {"c_provider": True, "transitive_linkopts": ["-framework", "Foundation", "-framework", "CoreData"]},
+        ], [])"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        out,
+        "[\"-framework\", \"Foundation\", \"-framework\", \"CoreData\"]"
     );
 }
 

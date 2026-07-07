@@ -4,12 +4,6 @@ def _c_attr(ctx, key, default):
         return default
     return value
 
-def _c_basename(path):
-    out = path
-    for part in path.split("/"):
-        out = part
-    return out
-
 def _c_parent_dirs(paths):
     out = []
     for path in paths:
@@ -39,6 +33,13 @@ def _c_collect_transitive(deps, key, own):
         out.extend(dep.get(key) or [])
     return _unique(out)
 
+def _c_collect_linkopts(deps, own):
+    out = []
+    out.extend(own)
+    for dep in deps:
+        out.extend(dep.get("transitive_linkopts") or [])
+    return out
+
 def _c_dynamic_library_records(paths, abi):
     records = []
     if not abi:
@@ -48,30 +49,13 @@ def _c_dynamic_library_records(paths, abi):
             records.append({"abi": abi, "path": path})
     return records
 
-def _c_android_native_library_key(record):
-    return (record.get("abi") or "") + "\x00" + (record.get("path") or "")
-
-def _c_unique_android_native_libraries(libraries):
-    seen = {}
-    out = []
-    for library in libraries:
-        abi = library.get("abi") or ""
-        path = library.get("path") or ""
-        if not abi or not path:
-            continue
-        key = _c_android_native_library_key(library)
-        if key not in seen:
-            seen[key] = True
-            out.append({"abi": abi, "path": path})
-    return out
-
 def _c_collect_android_native_libraries(deps, own):
     out = []
     out.extend(own)
     for dep in deps:
         out.extend(dep.get("transitive_android_native_libraries") or [])
         out.extend(dep.get("android_native_libraries") or [])
-    return _c_unique_android_native_libraries(out)
+    return _unique_native_libraries(out)
 
 def _c_output_extension(kind):
     os = host_os()
@@ -135,7 +119,7 @@ def _c_link_context(ctx, archive):
     own_linkopts = _c_attr(ctx, "linkopts", [])
     static_libraries = _c_collect_transitive(deps, "transitive_static_libraries", own_static)
     dynamic_libraries = _c_collect_transitive(deps, "transitive_dynamic_libraries", own_dynamic)
-    linkopts = _c_collect_transitive(deps, "transitive_linkopts", own_linkopts)
+    linkopts = _c_collect_linkopts(deps, own_linkopts)
     return {
         "static_libraries": static_libraries,
         "dynamic_libraries": dynamic_libraries,

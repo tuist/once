@@ -19,12 +19,6 @@ def _zig_safe_name(value):
             out.append("_x" + str(code) + "_")
     return "".join(out)
 
-def _zig_basename(path):
-    out = path
-    for part in path.split("/"):
-        out = part
-    return out
-
 def _zig_main(ctx, default):
     configured = _zig_attr(ctx, "main", "")
     if configured:
@@ -84,30 +78,13 @@ def _zig_zig_module_deps(deps):
 def _zig_direct_c_deps(deps):
     return [dep for dep in deps if dep.get("c_provider")]
 
-def _zig_android_native_library_key(record):
-    return (record.get("abi") or "") + "\x00" + (record.get("path") or "")
-
-def _zig_unique_android_native_libraries(libraries):
-    seen = {}
-    out = []
-    for library in libraries:
-        abi = library.get("abi") or ""
-        path = library.get("path") or ""
-        if not abi or not path:
-            continue
-        key = _zig_android_native_library_key(library)
-        if key not in seen:
-            seen[key] = True
-            out.append({"abi": abi, "path": path})
-    return out
-
 def _zig_collect_android_native_libraries(deps, own):
     out = []
     out.extend(own)
     for dep in deps:
         out.extend(dep.get("transitive_android_native_libraries") or [])
         out.extend(dep.get("android_native_libraries") or [])
-    return _zig_unique_android_native_libraries(out)
+    return _unique_native_libraries(out)
 
 def _zig_dep_import_name(ctx, dep):
     names = _zig_attr(ctx, "import_names", {})
@@ -360,7 +337,7 @@ def _zig_validate_link_configuration(ctx):
     _zig_tristate_attr(ctx, "host_use_cc_common_link")
     _zig_tristate_attr(ctx, "use_standalone_translate_c")
 
-def _zig_common_args(ctx):
+def _zig_target_common_args(ctx):
     args = []
     _zig_validate_link_configuration(ctx)
     target = _zig_attr(ctx, "target", "")
@@ -371,32 +348,34 @@ def _zig_common_args(ctx):
         args.append("-mcpu=" + cpu)
     args.extend(_zig_mode_args(ctx))
     args.extend(_zig_threaded_args(ctx))
-    compiler_runtime = _zig_attr(ctx, "compiler_runtime", "default")
-    if compiler_runtime == "include":
-        args.append("-fcompiler-rt")
-    elif compiler_runtime == "exclude":
-        args.append("-fno-compiler-rt")
-    elif compiler_runtime != "default":
-        fail(ctx["label"]["id"] + ": compiler_runtime must be `default`, `include`, or `exclude`")
+    return args
+
+def _zig_strip_and_zigopts_args(ctx):
+    args = []
     if _zig_attr(ctx, "strip", False) or _zig_attr(ctx, "strip_debug_symbols", False):
         args.append("-fstrip")
     args.extend(_zig_global_zigopts(ctx))
     return args
 
+def _zig_compiler_runtime_args(ctx):
+    compiler_runtime = _zig_attr(ctx, "compiler_runtime", "default")
+    if compiler_runtime == "include":
+        return ["-fcompiler-rt"]
+    if compiler_runtime == "exclude":
+        return ["-fno-compiler-rt"]
+    if compiler_runtime != "default":
+        fail(ctx["label"]["id"] + ": compiler_runtime must be `default`, `include`, or `exclude`")
+    return []
+
+def _zig_common_args(ctx):
+    args = _zig_target_common_args(ctx)
+    args.extend(_zig_compiler_runtime_args(ctx))
+    args.extend(_zig_strip_and_zigopts_args(ctx))
+    return args
+
 def _zig_translate_c_common_args(ctx):
-    args = []
-    _zig_validate_link_configuration(ctx)
-    target = _zig_attr(ctx, "target", "")
-    if target:
-        args.extend(["-target", target])
-    cpu = _zig_attr(ctx, "cpu", "")
-    if cpu:
-        args.append("-mcpu=" + cpu)
-    args.extend(_zig_mode_args(ctx))
-    args.extend(_zig_threaded_args(ctx))
-    if _zig_attr(ctx, "strip", False) or _zig_attr(ctx, "strip_debug_symbols", False):
-        args.append("-fstrip")
-    args.extend(_zig_global_zigopts(ctx))
+    args = _zig_target_common_args(ctx)
+    args.extend(_zig_strip_and_zigopts_args(ctx))
     return args
 
 def _zig_build_env(ctx):
@@ -434,6 +413,15 @@ def _zig_collect_list(deps, prefixed_key, c_key, own):
             out.extend(dep.get(c_key) or [])
     return _unique(out)
 
+def _zig_collect_linkopts(deps, own):
+    out = []
+    out.extend(own)
+    for dep in deps:
+        out.extend(dep.get("transitive_c_linkopts") or [])
+        if dep.get("c_provider"):
+            out.extend(dep.get("transitive_linkopts") or [])
+    return out
+
 def _zig_collect_c_provider(ctx, deps, own_static = [], own_dynamic = [], own_linkopts = []):
     return {
         "headers": _zig_collect_list(deps, "transitive_c_headers", "transitive_headers", []),
@@ -444,7 +432,7 @@ def _zig_collect_c_provider(ctx, deps, own_static = [], own_dynamic = [], own_li
         "defines": _zig_collect_list(deps, "transitive_c_defines", "transitive_defines", []),
         "static_libraries": _zig_collect_list(deps, "transitive_c_static_libraries", "transitive_static_libraries", own_static),
         "dynamic_libraries": _zig_collect_list(deps, "transitive_c_dynamic_libraries", "transitive_dynamic_libraries", own_dynamic),
-        "linkopts": _zig_collect_list(deps, "transitive_c_linkopts", "transitive_linkopts", own_linkopts),
+        "linkopts": _zig_collect_linkopts(deps, own_linkopts),
         "data": _zig_collect_list(deps, "transitive_c_data", "transitive_data", []),
     }
 
@@ -761,7 +749,7 @@ def _zig_compile(ctx, kind, default_main, command, provider_kind):
         command_prefix = ["-dynamic"]
     argv = [zig] + [compile_command] + command_prefix + _zig_compile_args(ctx, compile_command, primary_output, root, c_module_context, cinfo, emit_bin, aux_args)
     if kind == "shared" and primary_output:
-        argv.append("-fsoname=" + _zig_basename(primary_output))
+        argv.append("-fsoname=" + _basename(primary_output))
     run_action(
         argv = argv,
         inputs = inputs,
@@ -770,9 +758,9 @@ def _zig_compile(ctx, kind, default_main, command, provider_kind):
         toolchain_identity = identity,
         identifier = ctx["label"]["id"] + ":zig-" + command,
     )
-    docs_output = _zig_docs_action(ctx, command, root, c_module_context, cinfo, inputs, zig, identity)
     provider = _zig_provider(ctx, provider_kind, root, primary_output, cinfo, kind)
-    provider["zig_docs"] = docs_output
+    if command != "test":
+        provider["zig_docs"] = _zig_docs_action(ctx, command, root, c_module_context, cinfo, inputs, zig, identity)
     if kind == "binary":
         provider["binary"] = primary_output
     if kind == "test":
@@ -1412,7 +1400,7 @@ zig_test = target_kind(
     deps = _ZIG_DEP_EDGE,
     providers = ["zig_test", "once_test_info"],
     capabilities = [
-        capability("build", ["binary", "asm", "llvm_ir", "llvm_bc", "zig_docs"]),
+        capability("build", ["binary", "asm", "llvm_ir", "llvm_bc"]),
         capability("test", ["default", "test_results", "logs"], ["binary"]),
     ],
     examples = [
@@ -1439,7 +1427,7 @@ zig_configure_test = target_kind(
     deps = _ZIG_DEP_EDGE,
     providers = ["zig_test", "once_test_info"],
     capabilities = [
-        capability("build", ["binary", "asm", "llvm_ir", "llvm_bc", "zig_docs"]),
+        capability("build", ["binary", "asm", "llvm_ir", "llvm_bc"]),
         capability("test", ["default", "test_results", "logs"], ["binary"]),
     ],
     examples = [
