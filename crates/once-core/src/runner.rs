@@ -380,12 +380,10 @@ mod tests {
         assert_eq!(outcome.result.exit_code, 0);
         // stdout went to the file; stderr stays a captured stream blob.
         assert_eq!(outcome.result.stdout, None);
-        let stderr = cas
-            .get_blob(&outcome.result.stderr.unwrap())
-            .await
-            .unwrap();
+        let stderr = cas.get_blob(&outcome.result.stderr.unwrap()).await.unwrap();
         assert_eq!(stderr, b"streamed-stderr");
-        let on_disk = std::fs::read_to_string(tmp.path().join(".once/out/only-stdout.txt")).unwrap();
+        let on_disk =
+            std::fs::read_to_string(tmp.path().join(".once/out/only-stdout.txt")).unwrap();
         assert_eq!(on_disk, "captured-stdout");
     }
 

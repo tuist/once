@@ -1593,8 +1593,14 @@ result = repr(_zig_binary_impl(ctx))
         .iter()
         .any(|arg| arg == "-Command" || arg.contains("powershell")));
     assert_eq!(run.argv.last().unwrap(), "--smoke");
-    assert_eq!(run.stdout.as_deref(), Some(".once/out/pkg/app/run/stdout.log"));
-    assert_eq!(run.stderr.as_deref(), Some(".once/out/pkg/app/run/stdout.log"));
+    assert_eq!(
+        run.stdout.as_deref(),
+        Some(".once/out/pkg/app/run/stdout.log")
+    );
+    assert_eq!(
+        run.stderr.as_deref(),
+        Some(".once/out/pkg/app/run/stdout.log")
+    );
 
     let prepare = action_by_identifier(&store, "pkg/app:zig-run-prepare");
     assert_eq!(
@@ -1695,8 +1701,10 @@ result = repr(_zig_test_impl(ctx))
     );
 
     // The test-results marker is produced by a portable write_path action.
-    let results =
-        action_by_identifier(&store, "write_path:.once/out/pkg/suite/test/test_results.json");
+    let results = action_by_identifier(
+        &store,
+        "write_path:.once/out/pkg/suite/test/test_results.json",
+    );
     match &results.operation {
         Some(DeclaredActionOperation::WriteFile { path, bytes }) => {
             assert_eq!(path, ".once/out/pkg/suite/test/test_results.json");

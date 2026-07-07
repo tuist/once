@@ -619,11 +619,9 @@ async fn run_uncached_action(
                 command.stdout(Stdio::null());
                 command.stderr(Stdio::piped());
                 let output = match timeout_ms {
-                    Some(ms) => {
-                        tokio::time::timeout(Duration::from_millis(*ms), command.output())
-                            .await
-                            .with_context(|| format!("declared action timed out after {ms}ms"))??
-                    }
+                    Some(ms) => tokio::time::timeout(Duration::from_millis(*ms), command.output())
+                        .await
+                        .with_context(|| format!("declared action timed out after {ms}ms"))??,
                     None => command.output().await?,
                 };
                 ActionResult {
@@ -682,7 +680,9 @@ async fn run_uncached_redirected(
     let capture_stderr = stderr_file.is_none();
     command.stderr(stderr_file.map_or_else(Stdio::piped, Stdio::from));
 
-    let mut child = command.spawn().context("spawning redirected declared action")?;
+    let mut child = command
+        .spawn()
+        .context("spawning redirected declared action")?;
     let stderr_pipe = child.stderr.take();
     let wait = async {
         let stderr_blob = match stderr_pipe {
@@ -715,8 +715,9 @@ async fn run_uncached_redirected(
 fn open_redirect_file(path: &WorkspacePath, workspace: &Path) -> Result<std::fs::File> {
     let absolute = path.resolve(workspace);
     if let Some(parent) = absolute.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating parent directory for redirect `{}`", path.as_str()))?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("creating parent directory for redirect `{}`", path.as_str())
+        })?;
     }
     std::fs::File::create(&absolute)
         .with_context(|| format!("creating redirect output `{}`", path.as_str()))
@@ -1802,6 +1803,10 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "inline DeclaredAction literals carry many required fields"
+    )]
     async fn declared_action_can_skip_prior_same_target_digests() {
         let workspace = tempfile::tempdir().unwrap();
         let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
