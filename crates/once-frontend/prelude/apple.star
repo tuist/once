@@ -687,7 +687,6 @@ def _shellspec_test_impl(ctx):
     runner_args = [shellspec_exec] + args + spec_srcs
 
     script = """set -eu
-mkdir -p {test_dir}
 mkdir -p "$HOME"
 log={log}
 results={results}
@@ -735,8 +734,9 @@ exit "$status"
         specs = _shell_words(spec_srcs),
         target = ctx["label"]["id"],
     )
+    prepare_path(test_dir, kind = "directory", identifier = "apple_shellspec_test_dir:" + ctx["label"]["id"])
     run_action(
-        argv = ["/bin/sh", "-c", script],
+        argv = [host_which("sh"), "-c", script],
         inputs = inputs,
         outputs = [test_dir, results, log, native_results],
         env = action_env,
@@ -1704,11 +1704,9 @@ printf '%s%s%s\\n' {record_prefix} "$simulator_id" {record_suffix} > {record}
     else:
         fail(label_id + ": apple_application run supports macos and ios simulator targets")
     return """set -eu
-mkdir -p {run_dir}
 : > {log}
 {command}
 """.format(
-        run_dir = _shell_literal(run_dir),
         log = _shell_literal(run_log),
         command = command,
     )
@@ -1751,8 +1749,9 @@ def _apple_application_impl(ctx):
         # resolve it here so the build path stays xcrun-free.
         runner_xcrun = host_which("xcrun") if platform == "ios" and sdk_variant == "simulator" else ""
         run_visible = (ctx.get("run") or {}).get("visible") or False
+        prepare_path(run_dir, kind = "directory", identifier = "apple_application_run_dir:" + ctx["label"]["id"])
         run_action(
-            argv = ["/bin/sh", "-c", _apple_application_run_script(ctx["label"]["id"], platform, sdk_variant, runner_xcrun, app_path, bundle_id, run_dir, run_record, run_log, run_visible)],
+            argv = [host_which("sh"), "-c", _apple_application_run_script(ctx["label"]["id"], platform, sdk_variant, runner_xcrun, app_path, bundle_id, run_dir, run_record, run_log, run_visible)],
             outputs = [run_dir, run_record, run_log],
             env = swiftc["env"],
             cacheable = False,
@@ -2184,7 +2183,6 @@ SIMCTL_CHILD_DYLD_LIBRARY_PATH={usr_lib} SIMCTL_CHILD_DYLD_FALLBACK_FRAMEWORK_PA
         else:
             fail(ctx["label"]["id"] + ": apple_test_bundle execution supports macos and simulator targets; device runners need xctestrun support")
         script = """set -eu
-mkdir -p {test_dir}
 mkdir -p "$HOME"
 log={log}
 results={results}
@@ -2219,8 +2217,9 @@ exit "$status"
         for src in swift_srcs:
             if src not in test_inputs:
                 test_inputs.append(src)
+        prepare_path(test_dir, kind = "directory", identifier = "apple_" + runner_type + "_test_dir:" + ctx["label"]["id"])
         run_action(
-            argv = ["/bin/sh", "-c", script],
+            argv = [host_which("sh"), "-c", script],
             inputs = test_inputs,
             outputs = [test_dir, results, log, native_results],
             env = action_env,

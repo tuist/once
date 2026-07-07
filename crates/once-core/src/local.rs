@@ -4,12 +4,97 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
-use once_cas::{ActionResult, CacheProvider};
+use once_cas::{ActionResult, CacheProvider, Digest};
+use tokio::io::AsyncRead;
 use tokio::process::Command;
 use tracing::debug;
 
 use crate::stream::{self, Destination};
 use crate::{Error, Result, WorkspacePath};
+
+/// Optional per-stream file redirection for a command. When a stream is
+/// redirected, the child writes directly to the workspace-relative file
+/// (an ordinary declared output) instead of the stream being captured
+/// into the CAS. When both point at the same path the two streams share
+/// one file handle, reproducing shell `2>&1`.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Redirect<'a> {
+    pub stdout: Option<&'a WorkspacePath>,
+    pub stderr: Option<&'a WorkspacePath>,
+}
+
+fn open_redirect_file(path: &WorkspacePath, workspace_root: &Path) -> Result<std::fs::File> {
+    let absolute = path.resolve(workspace_root);
+    if let Some(parent) = absolute.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| Error::FileAction {
+            action: "create_parent_dir",
+            path: path.as_str().to_string(),
+            source,
+        })?;
+    }
+    std::fs::File::create(&absolute).map_err(|source| Error::FileAction {
+        action: "redirect_output",
+        path: path.as_str().to_string(),
+        source,
+    })
+}
+
+/// Point the command's stdout/stderr at redirect files where requested,
+/// leaving unredirected streams piped so they can be captured into the
+/// CAS. Streams sharing a destination path share a single file handle.
+fn apply_redirect(command: &mut Command, redirect: Redirect, workspace_root: &Path) -> Result<()> {
+    let stdout_file = match redirect.stdout {
+        Some(path) => Some(open_redirect_file(path, workspace_root)?),
+        None => None,
+    };
+    let stderr_file = match redirect.stderr {
+        Some(path) => Some(if redirect.stdout == Some(path) {
+            stdout_file
+                .as_ref()
+                .expect("stdout redirect open when stderr merges into it")
+                .try_clone()
+                .map_err(|source| Error::FileAction {
+                    action: "redirect_output",
+                    path: path.as_str().to_string(),
+                    source,
+                })?
+        } else {
+            open_redirect_file(path, workspace_root)?
+        }),
+        None => None,
+    };
+    command.stdout(stdout_file.map_or_else(Stdio::piped, Stdio::from));
+    command.stderr(stderr_file.map_or_else(Stdio::piped, Stdio::from));
+    Ok(())
+}
+
+/// Capture a piped stream into the CAS, or resolve to `None` when the
+/// stream was redirected to a file (and therefore not piped).
+async fn capture_stream<R: AsyncRead + Unpin>(
+    cache: &CacheProvider,
+    pipe: Option<R>,
+) -> Result<Option<Digest>> {
+    match pipe {
+        Some(pipe) => Ok(Some(cache.put_stream(pipe).await?)),
+        None => Ok(None),
+    }
+}
+
+/// Streaming counterpart of [`capture_stream`]: tee a piped stream to the
+/// parent while capturing it, or resolve to `None` when redirected.
+async fn capture_stream_streaming<R: AsyncRead + Unpin>(
+    pipe: Option<R>,
+    destination: Destination,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<Option<Digest>> {
+    match pipe {
+        Some(pipe) => Ok(Some(
+            stream::to_cache(pipe, destination, cache, stream_to_parent).await?,
+        )),
+        None => Ok(None),
+    }
+}
 
 pub(crate) async fn execute_command(
     argv: &[String],
@@ -18,6 +103,7 @@ pub(crate) async fn execute_command(
     timeout_ms: Option<u64>,
     workspace_root: &Path,
     cache: &CacheProvider,
+    redirect: Redirect<'_>,
 ) -> Result<ActionResult> {
     let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
     tracing::Span::current().record("program", tracing::field::display(program));
@@ -29,8 +115,7 @@ pub(crate) async fn execute_command(
         command.env(k, v);
     }
     command.stdin(Stdio::null());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
+    apply_redirect(&mut command, redirect, workspace_root)?;
     let command_cwd = cwd.map_or_else(
         || workspace_root.to_path_buf(),
         |c| c.resolve(workspace_root),
@@ -50,12 +135,14 @@ pub(crate) async fn execute_command(
         program: program.clone(),
         source,
     })?;
-    let stdout_pipe = child.stdout.take().expect("stdout was piped");
-    let stderr_pipe = child.stderr.take().expect("stderr was piped");
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
 
     let work = async {
-        let (stdout, stderr) =
-            tokio::try_join!(cache.put_stream(stdout_pipe), cache.put_stream(stderr_pipe))?;
+        let (stdout, stderr) = tokio::try_join!(
+            capture_stream(cache, stdout_pipe),
+            capture_stream(cache, stderr_pipe)
+        )?;
         let status = child.wait().await.map_err(|source| Error::Wait {
             program: program.clone(),
             source,
@@ -68,8 +155,8 @@ pub(crate) async fn execute_command(
         );
         Ok::<_, Error>(ActionResult {
             exit_code,
-            stdout: Some(stdout),
-            stderr: Some(stderr),
+            stdout,
+            stderr,
             outputs: BTreeMap::new(),
         })
     };
@@ -84,6 +171,7 @@ pub(crate) async fn execute_command_streaming(
     timeout_ms: Option<u64>,
     workspace_root: &Path,
     cache: &CacheProvider,
+    redirect: Redirect<'_>,
 ) -> Result<ActionResult> {
     Box::pin(execute_child_streaming(
         argv,
@@ -92,6 +180,7 @@ pub(crate) async fn execute_command_streaming(
         timeout_ms,
         workspace_root,
         cache,
+        redirect,
         true,
         false,
     ))
@@ -106,6 +195,7 @@ async fn execute_child_streaming(
     timeout_ms: Option<u64>,
     workspace_root: &Path,
     cache: &CacheProvider,
+    redirect: Redirect<'_>,
     stream_to_parent: bool,
     inherit_parent_env: bool,
 ) -> Result<ActionResult> {
@@ -121,8 +211,7 @@ async fn execute_child_streaming(
         command.env(k, v);
     }
     command.stdin(Stdio::null());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
+    apply_redirect(&mut command, redirect, workspace_root)?;
     let command_cwd = cwd.map_or_else(
         || workspace_root.to_path_buf(),
         |c| c.resolve(workspace_root),
@@ -144,13 +233,13 @@ async fn execute_child_streaming(
         program: program.clone(),
         source,
     })?;
-    let stdout_pipe = child.stdout.take().expect("stdout was piped");
-    let stderr_pipe = child.stderr.take().expect("stderr was piped");
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
 
     let work = Box::pin(async {
         let (stdout, stderr) = tokio::try_join!(
-            stream::to_cache(stdout_pipe, Destination::Stdout, cache, stream_to_parent),
-            stream::to_cache(stderr_pipe, Destination::Stderr, cache, stream_to_parent)
+            capture_stream_streaming(stdout_pipe, Destination::Stdout, cache, stream_to_parent),
+            capture_stream_streaming(stderr_pipe, Destination::Stderr, cache, stream_to_parent)
         )?;
         let status = child.wait().await.map_err(|source| Error::Wait {
             program: program.clone(),
@@ -164,8 +253,8 @@ async fn execute_child_streaming(
         );
         Ok::<_, Error>(ActionResult {
             exit_code,
-            stdout: Some(stdout),
-            stderr: Some(stderr),
+            stdout,
+            stderr,
             outputs: BTreeMap::new(),
         })
     });

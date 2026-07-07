@@ -361,7 +361,7 @@ fn prelude_zig_binary_declares_build_exe_action_with_module_deps() {
 def host_os():
     return "linux"
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/zig", "version"]:
         return "0.15.1\n"
     fail("unexpected host_command: " + repr(argv))
@@ -660,7 +660,7 @@ fn prelude_zig_headerless_c_provider_links_without_c_module_dep() {
 def host_os():
     return "linux"
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/zig", "version"]:
         return "0.15.1\n"
     fail("unexpected host_command: " + repr(argv))
@@ -723,7 +723,7 @@ fn prelude_zig_configuration_attrs_map_to_compile_args() {
 def host_os():
     return "linux"
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/zig", "version"]:
         return "0.15.1\n"
     fail("unexpected host_command: " + repr(argv))
@@ -778,7 +778,7 @@ fn prelude_zig_configuration_rejects_version_mismatch() {
 def host_os():
     return "linux"
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/zig", "version"]:
         return "0.15.1\n"
     fail("unexpected host_command: " + repr(argv))
@@ -829,7 +829,7 @@ fn prelude_zig_c_library_can_use_standalone_translate_c() {
 def host_which(name):
     fail("host_which must not be called for standalone translate-c")
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("host_command must not be called for standalone translate-c")
 
 ctx = {{
@@ -907,7 +907,7 @@ fn prelude_zig_test_metadata_does_not_probe_compiler() {
     let prelude = all_prelude_source();
     let source = format!(
         r#"{prelude}
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("host_command must not be called for Zig metadata")
 
 def host_which(name):
@@ -952,7 +952,7 @@ fn prelude_zig_test_metadata_does_not_require_root_dependency_providers() {
     let prelude = all_prelude_source();
     let source = format!(
         r#"{prelude}
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("host_command must not be called for Zig metadata")
 
 def host_which(name):
@@ -1015,7 +1015,7 @@ def host_which(name):
         return "/tools/ar"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/cc", "--version"]:
         return "cc test\n"
     fail("unexpected host_command: " + repr(argv))
@@ -1111,7 +1111,7 @@ def host_which(name):
         return "/tools/ar"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/cc", "--version"]:
         return "cc test\n"
     fail("unexpected host_command: " + repr(argv))
@@ -1162,7 +1162,7 @@ fn prelude_c_library_provider_only_targets_do_not_probe_toolchain() {
 def host_which(name):
     fail("host_which must not be called for provider-only C targets")
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("host_command must not be called for provider-only C targets")
 
 ctx = {{
@@ -1216,7 +1216,7 @@ def host_which(name):
         return "/tools/ar"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/cc", "--version"]:
         return "cc test\n"
     if argv == ["/tools/cxx", "--version"]:
@@ -1278,7 +1278,7 @@ def host_which(name):
         return "/bin/sh"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/zig", "version"]:
         return "0.15.1\n"
     fail("unexpected host_command: " + repr(argv))
@@ -1322,7 +1322,12 @@ result = repr(_zig_static_library_impl(ctx))
     assert!(out.contains("\"archive\": \".once/out/pkg/math/libmath.a\""));
 
     let translate = action_by_identifier(&store, "pkg/math:zig-translate-c:c");
-    assert_eq!(translate.argv[0], "/bin/sh");
+    assert_eq!(translate.argv[0], "/tools/zig");
+    assert_eq!(translate.argv[1], "translate-c");
+    assert_eq!(
+        translate.stdout.as_deref(),
+        Some(".once/out/pkg/math/c_c.zig")
+    );
     assert!(translate
         .inputs
         .contains(&"pkg/include/native.h".to_string()));
@@ -1394,7 +1399,7 @@ fn prelude_c_library_consumes_zig_c_provider_static_and_shared_libraries() {
 def host_os():
     return "linux"
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/zig", "version"]:
         return "0.15.1\n"
     fail("unexpected host_command: " + repr(argv))
@@ -1469,7 +1474,7 @@ result = repr((provider["transitive_static_libraries"], provider["transitive_dyn
 }
 
 #[test]
-fn prelude_zig_translate_c_uses_powershell_on_windows() {
+fn prelude_zig_translate_c_redirects_stdout_without_shell() {
     let tmp = TempDir::new().expect("tempdir");
     let source_dir = tmp.path().join("pkg/src");
     std::fs::create_dir_all(&source_dir).unwrap();
@@ -1487,7 +1492,7 @@ def host_which(name):
         return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/zig", "version"]:
         return "0.15.1\n"
     fail("unexpected host_command: " + repr(argv))
@@ -1522,21 +1527,22 @@ result = repr(_zig_static_library_impl(ctx))
     out.unwrap();
 
     let translate = action_by_identifier(&store, "pkg/math:zig-translate-c:c");
-    assert_eq!(
-        translate.argv[0],
-        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-    );
-    assert!(translate.argv.iter().any(|arg| arg == "-Command"));
-    assert!(translate.argv.last().unwrap().contains("translate-c"));
-    assert!(translate
+    // The tool is invoked directly (no host shell) and stdout is captured
+    // into the declared output through the redirection primitive.
+    assert_eq!(translate.argv[0], "/tools/zig");
+    assert_eq!(translate.argv[1], "translate-c");
+    assert!(!translate
         .argv
-        .last()
-        .unwrap()
-        .contains("> '.once/out/pkg/math/c_c.zig'"));
+        .iter()
+        .any(|arg| arg == "-Command" || arg.contains("powershell") || arg.contains("> '")));
+    assert_eq!(
+        translate.stdout.as_deref(),
+        Some(".once/out/pkg/math/c_c.zig")
+    );
 }
 
 #[test]
-fn prelude_zig_binary_run_uses_powershell_on_windows() {
+fn prelude_zig_binary_run_redirects_output_without_shell() {
     let tmp = TempDir::new().expect("tempdir");
     let source_dir = tmp.path().join("pkg/src");
     std::fs::create_dir_all(&source_dir).unwrap();
@@ -1578,13 +1584,23 @@ result = repr(_zig_binary_impl(ctx))
     out.unwrap();
 
     let run = action_by_identifier(&store, "pkg/app:zig-run");
+    // The binary is executed directly with its user args; no host shell
+    // wrapper. stdout and stderr are merged into the run log via the
+    // redirection primitive.
+    assert!(run.argv[0].starts_with(".once/out/pkg/app/"));
+    assert!(!run
+        .argv
+        .iter()
+        .any(|arg| arg == "-Command" || arg.contains("powershell")));
+    assert_eq!(run.argv.last().unwrap(), "--smoke");
     assert_eq!(
-        run.argv[0],
-        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+        run.stdout.as_deref(),
+        Some(".once/out/pkg/app/run/stdout.log")
     );
-    assert!(run.argv.iter().any(|arg| arg == "-Command"));
-    assert!(!run.argv.last().unwrap().contains("CreateDirectory"));
-    assert!(run.argv.last().unwrap().contains("'--smoke'"));
+    assert_eq!(
+        run.stderr.as_deref(),
+        Some(".once/out/pkg/app/run/stdout.log")
+    );
 
     let prepare = action_by_identifier(&store, "pkg/app:zig-run-prepare");
     assert_eq!(
@@ -1594,6 +1610,19 @@ result = repr(_zig_binary_impl(ctx))
             mode: DeclaredPreparePathMode::Directory,
         })
     );
+
+    // The run-result marker is now materialized by a portable write_path
+    // action rather than a shell here-doc.
+    let marker = action_by_identifier(&store, "write_path:.once/out/pkg/app/run/run.json");
+    match &marker.operation {
+        Some(DeclaredActionOperation::WriteFile { path, bytes }) => {
+            assert_eq!(path, ".once/out/pkg/app/run/run.json");
+            let text = String::from_utf8(bytes.clone()).unwrap();
+            assert!(text.contains("\"schema\":\"once.run_result.v1\""));
+            assert!(text.contains("\"exit_code\":0"));
+        }
+        other => panic!("expected write_path marker, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1615,7 +1644,7 @@ def host_which(name):
         return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/zig", "version"]:
         return "0.15.1\n"
     fail("unexpected host_command: " + repr(argv))
@@ -1695,7 +1724,7 @@ def host_which(name):
         return "/bin/sh"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/tools/zig", "version"]:
         return "0.15.1\n"
     fail("unexpected host_command: " + repr(argv))
@@ -1808,7 +1837,10 @@ result = repr("ok")
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(out.unwrap(), "\"ok\"");
-    assert_eq!(store.actions.len(), 4);
+    assert_eq!(store.actions.len(), 8);
+
+    // The visible emulator launches first (still a macOS-only host-shell
+    // convenience, deliberately left as a shell script).
     assert_eq!(
         store.actions[0].identifier.as_deref(),
         Some("android_visible_emulator:apps/hello/Hello")
@@ -1817,30 +1849,55 @@ result = repr("ok")
     assert!(store.actions[0].argv[2].contains("osascript"));
     assert!(!store.actions[0].argv[2].contains("launchctl submit"));
     assert!(store.actions[0].argv[2].contains("nohup '/sdk/emulator/emulator' -avd 'Pixel_9'"));
-    assert!(store.actions[1].argv[2].contains("'/sdk/platform-tools/adb' 'wait-for-device'"));
-    assert!(store.actions[1].argv[2].contains("sys.boot_completed"));
+
+    // Device steps invoke adb directly, with no host-shell wrapper. The
+    // on-device readiness probe stays an `adb shell` argument.
     assert_eq!(
-        store.actions[1].outputs,
-        vec![".once/out/apps/hello/Hello/run/device-ready"]
+        store.actions[1].argv,
+        vec!["/sdk/platform-tools/adb", "wait-for-device"]
     );
+    assert_eq!(store.actions[2].argv[0], "/sdk/platform-tools/adb");
+    assert_eq!(store.actions[2].argv[1], "shell");
+    assert!(store.actions[2].argv[2].contains("sys.boot_completed"));
+
+    // Completion markers are materialized by portable write_path actions.
     assert_eq!(
-        store.actions[2].inputs,
+        store.actions[3].operation,
+        Some(DeclaredActionOperation::WriteFile {
+            path: ".once/out/apps/hello/Hello/run/device-ready".to_string(),
+            bytes: Vec::new(),
+        })
+    );
+
+    assert_eq!(store.actions[4].argv[0], "/sdk/platform-tools/adb");
+    assert_eq!(store.actions[4].argv[1], "install");
+    assert_eq!(
+        store.actions[4].inputs,
         vec![
             ".once/out/apps/hello/Hello/Hello.apk",
             ".once/out/apps/hello/Hello/run/device-ready"
         ]
     );
     assert_eq!(
-        store.actions[2].outputs,
+        store.actions[5].operation,
+        Some(DeclaredActionOperation::WriteFile {
+            path: ".once/out/apps/hello/Hello/run/installed".to_string(),
+            bytes: Vec::new(),
+        })
+    );
+
+    assert_eq!(store.actions[6].argv[0], "/sdk/platform-tools/adb");
+    assert_eq!(store.actions[6].argv[1], "shell");
+    assert_eq!(
+        store.actions[6].inputs,
         vec![".once/out/apps/hello/Hello/run/installed"]
     );
     assert_eq!(
-        store.actions[3].inputs,
-        vec![".once/out/apps/hello/Hello/run/installed"]
-    );
-    assert_eq!(
-        store.actions[3].outputs,
-        vec![".once/out/apps/hello/Hello/run/launched"]
+        store.actions[7].operation,
+        Some(DeclaredActionOperation::WriteFile {
+            path: ".once/out/apps/hello/Hello/run/launched".to_string(),
+            bytes: Vec::new(),
+        })
     );
 }
 
@@ -2115,7 +2172,7 @@ def host_which(name):
         return "/toolchains/swift/bin/swiftc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 2 and argv[1] == "--version":
         return "Swift version test\n"
     fail("unexpected host_command: " + str(argv))
@@ -2262,7 +2319,7 @@ def host_which(name):
         return "/kotlin/bin/kotlinc-native"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 2 and argv[1] == "-version":
         return "kotlinc-native test\n"
     fail("unexpected host_command: " + str(argv))
@@ -2384,7 +2441,7 @@ def host_which(name):
         return "/toolchains/rust/bin/rustc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
         return "/toolchains/rust\n"
     if len(argv) >= 2 and argv[1] == "--version":
@@ -2489,7 +2546,7 @@ def host_which(name):
         return "/toolchains/rust/bin/rustc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
         return "/toolchains/rust\n"
     if len(argv) >= 2 and argv[1] == "--version":
@@ -2578,7 +2635,7 @@ def host_which(name):
         return "/toolchains/rust/bin/rustc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
         return "/toolchains/rust\n"
     if len(argv) >= 2 and argv[1] == "--version":
@@ -2692,7 +2749,7 @@ def host_which(name):
         return "/toolchains/rust/bin/rustc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
         return "/toolchains/rust\n"
     if len(argv) >= 2 and argv[1] == "--version":
@@ -2770,7 +2827,7 @@ def host_which(name):
         return "/usr/bin/codesign"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if "--find" in argv:
         return "/toolchain/" + argv[len(argv) - 1] + "\n"
     if "--show-sdk-path" in argv:
@@ -2950,8 +3007,8 @@ def host_which(name):
         return "/bin/sh"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
-    if len(argv) >= 2 and argv[0] == "/bin/sh":
+def host_command(argv, env = None, merge_stderr = None):
+    if len(argv) >= 2 and argv[len(argv) - 1] in ["version", "-version", "--version"]:
         return "tool version test\n"
     fail("unexpected host_command: " + str(argv))
 
@@ -3046,10 +3103,10 @@ def host_which(name):
         return "/bin/sh"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 1 and argv[0] == "/sdk/platform-tools/adb":
         return "Android Debug Bridge version test\n"
-    if len(argv) >= 2 and argv[0] == "/bin/sh":
+    if len(argv) >= 2 and argv[len(argv) - 1] in ["version", "-version", "--version"]:
         return "javac test\n"
     fail("unexpected host_command: " + str(argv))
 
@@ -3537,7 +3594,7 @@ def host_env(name):
 def host_which(name):
     fail("unexpected host_which call: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
         return "target_arch=\"x86_64\"\nwindows\n"
     fail("unexpected host_command call")
@@ -3641,7 +3698,7 @@ def host_env(name):
 def host_which(name):
     fail("unexpected host_which call: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
         return "target_arch=\"x86_64\"\nwindows\n"
     fail("unexpected host_command call")
@@ -3751,7 +3808,7 @@ def host_env(name):
 def host_which(name):
     fail("unexpected host_which call: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
         return "target_arch=\"x86_64\"\nwindows\n"
     fail("unexpected host_command call")
@@ -4483,7 +4540,7 @@ def host_which(name):
         return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
     fail("unexpected host_which call: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
         return "target_arch=\"x86_64\"\nwindows\n"
     fail("unexpected host_command call")
@@ -4588,7 +4645,7 @@ def host_which(name):
         return "C:/Tools/" + name + ".exe"
     fail("unexpected host_which call: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
         return "target_arch=\"x86_64\"\nwindows\n"
     fail("unexpected host_command call")
@@ -4660,7 +4717,7 @@ def host_env(name):
 def host_which(name):
     fail("unexpected host_which call: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("unexpected host_command call")
 
 def _rustc_toolchain(target):
@@ -4754,7 +4811,7 @@ def host_env(name):
 def host_which(name):
     fail("unexpected host_which call: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("unexpected host_command call")
 
 def _rustc_toolchain(target):
@@ -4855,7 +4912,7 @@ def host_env(name):
 def host_which(name):
     fail("unexpected host_which call: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("unexpected host_command call")
 
 def _rustc_toolchain(target):
@@ -4921,7 +4978,7 @@ def host_env(name):
 def host_which(name):
     fail("unexpected host_which call: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("unexpected host_command call")
 
 def _rustc_toolchain(target):
@@ -5030,7 +5087,7 @@ def host_env(name):
 def host_which(name):
     fail("unexpected host_which call: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("unexpected host_command call")
 
 def _rustc_toolchain(target):
@@ -5508,7 +5565,7 @@ def host_os():
 def host_env(name):
     return ""
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("unexpected host_command call")
 
 def host_which(name):
@@ -5626,7 +5683,7 @@ def host_env(name):
 def host_which(name):
     fail("unexpected host_which call: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("unexpected host_command call")
 
 ctx = {{
@@ -5963,7 +6020,7 @@ fn prelude_resolve_swiftc_direct_mode_skips_xcrun() {
 def host_which(name):
     fail("host_which must not be called in direct mode (asked for " + name + ")")
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if "--version" in argv:
         return "Swift version 6.0\n"
     fail("unexpected host_command: " + str(argv))
@@ -6006,7 +6063,7 @@ fn prelude_resolve_clang_direct_mode_finds_both_drivers() {
 def host_which(name):
     fail("host_which must not be called in direct mode (asked for " + name + ")")
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if "--version" in argv:
         return "Apple clang version test\n"
     fail("unexpected host_command: " + str(argv))
@@ -6051,7 +6108,7 @@ def host_which(name):
         return "/usr/bin/xcrun"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if argv == ["/usr/bin/xcrun", "--find", "codesign"] and env == {{"DEVELOPER_DIR": "/opt/Xcode/Developer"}}:
         return "/usr/bin/codesign\n"
     fail("unexpected host_command: " + str(argv) + " env=" + str(env))
@@ -6084,7 +6141,7 @@ def host_which(name):
         return "/usr/bin/xcrun"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if "--find" in argv and argv[len(argv) - 1] == "swiftc":
         return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc\n"
     if "--show-sdk-path" in argv:
@@ -6190,7 +6247,7 @@ fn prelude_resolve_libtool_direct_mode_uses_toolchain_layout() {
 def host_which(name):
     fail("host_which must not be called in direct mode (asked for " + name + ")")
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("host_command must not be called in direct mode")
 
 libtool = _resolve_libtool("ios", "simulator", "/opt/Xcode/Developer")
@@ -6228,7 +6285,7 @@ def host_which(name):
         return "/usr/bin/xcrun"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if "--find" in argv and argv[len(argv) - 1] == "libtool":
         return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/libtool\n"
     fail("unexpected host_command: " + str(argv))
@@ -6267,7 +6324,7 @@ fn prelude_resolve_lipo_direct_mode_uses_toolchain_layout() {
 def host_which(name):
     fail("host_which must not be called in direct mode (asked for " + name + ")")
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     fail("host_command must not be called in direct mode")
 
 lipo = _resolve_lipo("ios", "simulator", "/opt/Xcode/Developer")
@@ -6305,7 +6362,7 @@ def host_which(name):
         return "/usr/bin/xcrun"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if "--find" in argv and argv[len(argv) - 1] == "lipo":
         return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo\n"
     fail("unexpected host_command: " + str(argv))
@@ -6350,7 +6407,7 @@ fn prelude_apple_library_direct_mode_emits_xcrun_free_actions() {
 def host_which(name):
     fail("host_which must not be called in direct mode (asked for " + name + ")")
 
-def host_command(argv, env = None):
+def host_command(argv, env = None, merge_stderr = None):
     if "--version" in argv:
         return "Swift version 6.0\n"
     fail("unexpected host_command: " + str(argv))

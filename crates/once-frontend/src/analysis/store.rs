@@ -57,6 +57,14 @@ pub struct DeclaredAction {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
+    /// Workspace-relative file the command's stdout is redirected into,
+    /// captured as an ordinary output. `None` keeps stream capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    /// Workspace-relative file the command's stderr is redirected into.
+    /// Equal to `stdout` merges both streams into one file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -150,6 +158,7 @@ impl AnalysisStore {
 struct CommandKey {
     argv: Vec<String>,
     env: BTreeMap<String, String>,
+    merge_stderr: bool,
 }
 
 type HostEnvLookup = dyn Fn(&str) -> Option<String> + Send + Sync;
@@ -229,10 +238,12 @@ impl HostCache {
         &self,
         argv: &[String],
         env: &BTreeMap<String, String>,
+        merge_stderr: bool,
     ) -> Result<String> {
         let key = CommandKey {
             argv: argv.to_vec(),
             env: env.clone(),
+            merge_stderr,
         };
         if let Some(cached) = self.lock_commands()?.get(&key).cloned() {
             return Ok(cached);
@@ -263,10 +274,18 @@ impl HostCache {
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
-        let stdout = String::from_utf8(output.stdout)
+        // Some tools (kotlinc, older javac) print their version banner to
+        // stderr. `merge_stderr` folds it in so version probes need no
+        // host shell `2>&1`.
+        let mut combined = String::from_utf8(output.stdout)
             .map_err(|error| anyhow!("non-utf8 stdout: {error}"))?;
-        self.lock_commands()?.insert(key, stdout.clone());
-        Ok(stdout)
+        if merge_stderr {
+            let stderr = String::from_utf8(output.stderr)
+                .map_err(|error| anyhow!("non-utf8 stderr: {error}"))?;
+            combined.push_str(&stderr);
+        }
+        self.lock_commands()?.insert(key, combined.clone());
+        Ok(combined)
     }
 
     fn lock_which(&self) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, Option<String>>>> {

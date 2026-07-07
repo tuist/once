@@ -327,8 +327,7 @@ def _rust_encoded_rustflags(ctx):
     return "\x1f".join(_rust_user_flags(ctx))
 
 def _host_which_optional(name):
-    path = host_command([host_which("sh"), "-c", "command -v " + _shell_quote(name) + " 2>/dev/null || true"]).strip()
-    return path
+    return host_which_optional(name)
 
 def _rust_host_env(keys):
     env = {}

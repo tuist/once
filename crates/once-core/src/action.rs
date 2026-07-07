@@ -68,6 +68,18 @@ pub enum Action {
         /// are cached); cache hits then provide nothing on disk.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         outputs: Vec<WorkspacePath>,
+        /// Redirect the child's stdout into this workspace-relative file
+        /// instead of capturing it into the CAS as a stream. The file is
+        /// an ordinary declared output (list it in `outputs` to cache and
+        /// restore it). None keeps the default stream capture. Boxed to
+        /// keep the common (unset) case from enlarging the enum.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stdout_path: Option<Box<WorkspacePath>>,
+        /// Redirect the child's stderr into this workspace-relative file.
+        /// When it equals `stdout_path` the two streams share one file
+        /// handle, reproducing shell `2>&1`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stderr_path: Option<Box<WorkspacePath>>,
         #[serde(default, skip_serializing_if = "OutputSymlinkMode::is_default")]
         output_symlink_mode: OutputSymlinkMode,
         #[serde(default, skip_serializing_if = "ResourceRequest::is_default")]
@@ -190,6 +202,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![WorkspacePath::try_from("out").unwrap()],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode,
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -203,5 +217,21 @@ mod tests {
             action(OutputSymlinkMode::MaterializeExternal).digest(),
             action(OutputSymlinkMode::Preserve).digest()
         );
+    }
+
+    #[test]
+    fn stream_redirection_changes_action_digest() {
+        let base = action(OutputSymlinkMode::default());
+        let mut with_stdout = base.clone();
+        if let Action::RunCommand { stdout_path, .. } = &mut with_stdout {
+            *stdout_path = Some(Box::new(WorkspacePath::try_from("out.log").unwrap()));
+        }
+        let mut with_stderr = base.clone();
+        if let Action::RunCommand { stderr_path, .. } = &mut with_stderr {
+            *stderr_path = Some(Box::new(WorkspacePath::try_from("out.log").unwrap()));
+        }
+        assert_ne!(base.digest(), with_stdout.digest());
+        assert_ne!(base.digest(), with_stderr.digest());
+        assert_ne!(with_stdout.digest(), with_stderr.digest());
     }
 }

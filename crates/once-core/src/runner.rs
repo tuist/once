@@ -272,6 +272,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -298,6 +300,91 @@ mod tests {
             .unwrap();
         assert_eq!(second.cache, CacheState::Hit);
         assert_eq!(second.result, first.result);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stdout_stderr_redirect_to_a_shared_file_is_captured_and_restored() {
+        let (tmp, cas) = fresh_cas();
+        let log = WorkspacePath::try_from(".once/out/run/log.txt").unwrap();
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf out; printf err >&2".into(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            outputs: vec![log.clone()],
+            // Both streams share the log path, reproducing `> log 2>&1`.
+            stdout_path: Some(Box::new(log.clone())),
+            stderr_path: Some(Box::new(log.clone())),
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: None,
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        assert_eq!(first.result.exit_code, 0);
+        // Redirected streams are not captured as stream blobs; they live
+        // in the declared output file instead.
+        assert_eq!(first.result.stdout, None);
+        assert_eq!(first.result.stderr, None);
+        assert!(first.result.outputs.contains_key(".once/out/run/log.txt"));
+        let on_disk = std::fs::read_to_string(tmp.path().join(".once/out/run/log.txt")).unwrap();
+        assert!(on_disk.contains("out"), "log missing stdout: {on_disk:?}");
+        assert!(on_disk.contains("err"), "log missing stderr: {on_disk:?}");
+
+        // A cache hit restores the redirected file from the CAS.
+        std::fs::remove_file(tmp.path().join(".once/out/run/log.txt")).unwrap();
+        let second = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.cache, CacheState::Hit);
+        let restored = std::fs::read_to_string(tmp.path().join(".once/out/run/log.txt")).unwrap();
+        assert!(restored.contains("out"));
+        assert!(restored.contains("err"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stdout_redirect_leaves_stderr_stream_captured() {
+        let (tmp, cas) = fresh_cas();
+        let out = WorkspacePath::try_from(".once/out/only-stdout.txt").unwrap();
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf captured-stdout; printf streamed-stderr >&2".into(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            outputs: vec![out.clone()],
+            stdout_path: Some(Box::new(out.clone())),
+            stderr_path: None,
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            timeout_ms: None,
+            remote: None,
+        };
+
+        let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(outcome.result.exit_code, 0);
+        // stdout went to the file; stderr stays a captured stream blob.
+        assert_eq!(outcome.result.stdout, None);
+        let stderr = cas.get_blob(&outcome.result.stderr.unwrap()).await.unwrap();
+        assert_eq!(stderr, b"streamed-stderr");
+        let on_disk =
+            std::fs::read_to_string(tmp.path().join(".once/out/only-stdout.txt")).unwrap();
+        assert_eq!(on_disk, "captured-stdout");
     }
 
     #[tokio::test]
@@ -530,6 +617,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -541,6 +630,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -558,6 +649,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -583,6 +676,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -607,6 +702,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(100),
@@ -630,6 +727,8 @@ mod tests {
             cwd: Some(WorkspacePath::try_from("sub").unwrap()),
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -654,6 +753,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
@@ -680,6 +781,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(10_000),
@@ -703,6 +806,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -733,6 +838,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -764,6 +871,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
@@ -797,6 +906,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::new(2, 0),
             timeout_ms: Some(5_000),
@@ -824,6 +935,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -847,6 +960,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: t,
@@ -864,6 +979,8 @@ mod tests {
             cwd: c,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -884,6 +1001,8 @@ mod tests {
             cwd: None,
             input_digest,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -932,6 +1051,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -952,6 +1073,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: None,
@@ -972,6 +1095,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(2_000),
@@ -1000,6 +1125,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
@@ -1011,6 +1138,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
@@ -1040,6 +1169,8 @@ mod tests {
             cwd: Some(WorkspacePath::try_from("sub").unwrap()),
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
@@ -1097,6 +1228,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![WorkspacePath::try_from("Demo.app").unwrap()],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(5_000),
@@ -1132,6 +1265,8 @@ mod tests {
             cwd: None,
             input_digest: None,
             outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             timeout_ms: Some(50),

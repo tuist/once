@@ -583,29 +583,6 @@ def _zig_translate_header_source(headers):
     lines.append("")
     return "\n".join(lines)
 
-def _zig_translate_c_script(zig, args, output):
-    quoted = [_shell_quote(zig)]
-    for arg in args:
-        quoted.append(_shell_quote(arg))
-    return " ".join(quoted) + " > " + _shell_quote(output)
-
-def _zig_powershell_argv(script):
-    return [host_which("powershell"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]
-
-def _zig_translate_c_windows_script(zig, args, output):
-    quoted = [_powershell_quote(zig)]
-    for arg in args:
-        quoted.append(_powershell_quote(arg))
-    return """$ErrorActionPreference = 'Stop'
-& {command} > {output}
-if ($global:LASTEXITCODE -ne $null) {{
-  exit $global:LASTEXITCODE
-}}
-if (-not $?) {{
-  exit 1
-}}
-""".format(command = " ".join(quoted), output = _powershell_quote(output))
-
 def _zig_translate_c_action(ctx, cinfo, name_prefix):
     headers = cinfo.get("headers") or []
     if len(headers) == 0:
@@ -636,14 +613,11 @@ def _zig_translate_c_action(ctx, cinfo, name_prefix):
         args.extend(_zig_translate_c_compile_args(cinfo))
         args.append("-lc")
         args.append(header)
-        if host_os() == "windows":
-            argv = _zig_powershell_argv(_zig_translate_c_windows_script(zig, args, output))
-        else:
-            argv = [host_which("sh"), "-c", _zig_translate_c_script(zig, args, output)]
         run_action(
-            argv = argv,
+            argv = [zig] + args,
             inputs = _unique([header] + _zig_c_inputs(cinfo)),
             outputs = [output],
+            stdout = output,
             env = _zig_build_env(ctx),
             toolchain_identity = identity + "\x00translate-c",
             identifier = ctx["label"]["id"] + ":zig-translate-c:" + name_prefix,
@@ -860,70 +834,25 @@ def _zig_library_impl(ctx):
     cinfo = _zig_collect_c_provider(ctx, ctx["deps"])
     return _zig_provider(ctx, "zig_library", root, "", cinfo, "module")
 
-def _zig_binary_run_script(ctx, binary, marker, log):
-    args = [_shell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
-    return """set +e
-{binary} {args} > {log} 2>&1
-code=$?
-printf '{{"schema":"once.run_result.v1","target":{target},"exit_code":%s}}\\n' "$code" > {marker}
-exit "$code"
-""".format(
-        binary = _shell_quote("./" + binary),
-        args = " ".join(args),
-        log = _shell_quote(log),
-        target = _zig_json_string(ctx["label"]["id"]),
-        marker = _shell_quote(marker),
-    )
-
-def _zig_binary_run_windows_script(ctx, binary, marker, log):
-    args = [_powershell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
-    return """$ErrorActionPreference = 'Continue'
-$encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
-& {binary} {args} > {log} 2>&1
-$code = $global:LASTEXITCODE
-if ($null -eq $code) {{
-  if ($?) {{
-    $code = 0
-  }} else {{
-    $code = 1
-  }}
-}}
-$result = [ordered]@{{
-  schema = 'once.run_result.v1'
-  target = {target}
-  exit_code = $code
-}}
-$json = $result | ConvertTo-Json -Compress
-[System.IO.File]::WriteAllText({marker}, $json + [System.Environment]::NewLine, $encoding)
-exit $code
-""".format(
-        binary = _powershell_quote("./" + binary),
-        args = " ".join(args),
-        log = _powershell_quote(log),
-        target = _powershell_quote(ctx["label"]["id"]),
-        marker = _powershell_quote(marker),
-    )
-
 def _zig_binary_impl(ctx):
     if ctx["capability"] == "run":
         binary = ctx["build_dir"] + "/" + _zig_output_name(ctx, "binary")
         run_dir = ctx["build_dir"] + "/run"
         marker = run_dir + "/run.json"
         log = run_dir + "/stdout.log"
-        if host_os() == "windows":
-            argv = _zig_powershell_argv(_zig_binary_run_windows_script(ctx, binary, marker, log))
-        else:
-            argv = [host_which("sh"), "-c", _zig_binary_run_script(ctx, binary, marker, log)]
         prepare_path(run_dir, kind = "directory", identifier = ctx["label"]["id"] + ":zig-run-prepare")
         run_action(
-            argv = argv,
+            argv = [binary] + _zig_attr(ctx, "args", []),
             inputs = _unique([binary] + _zig_data_inputs(ctx) + _zig_collect_dep_data(ctx["deps"])),
-            outputs = [run_dir, marker, log],
+            outputs = [run_dir, log],
+            stdout = log,
+            stderr = log,
             env = _zig_run_env(ctx),
             toolchain_identity = "once.zig.run.v1\x00" + binary,
             identifier = ctx["label"]["id"] + ":zig-run",
             cacheable = False,
         )
+        write_path(marker, _zig_run_result_json(ctx["label"]["id"]))
         root = _zig_build_root(ctx, "")
         return _zig_provider(ctx, "zig_binary", root, binary, _zig_collect_c_provider(ctx, ctx["deps"]), "binary")
     return _zig_compile(ctx, "binary", "", "build-exe", "zig_binary")
@@ -965,6 +894,9 @@ def _zig_json_string(value):
             out.append(ch)
     out.append("\"")
     return "".join(out)
+
+def _zig_run_result_json(target_id):
+    return "{\"schema\":\"once.run_result.v1\",\"target\":" + _zig_json_string(target_id) + ",\"exit_code\":0}\n"
 
 def _zig_test_info(ctx, test_binary, results, log, native_results, test_dir):
     labels = _zig_attr(ctx, "labels", [])
@@ -1010,6 +942,9 @@ def _zig_test_info(ctx, test_binary, results, log, native_results, test_dir):
         "labels": labels,
         "metadata": {},
     }
+
+def _zig_powershell_argv(script):
+    return [host_which("powershell"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]
 
 def _zig_test_script(ctx, test_binary, results, log, native_results):
     args = [_shell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
@@ -1146,6 +1081,11 @@ def _zig_test_impl(ctx):
     if ctx["capability"] != "test":
         return provider
 
+    # The test runner writes result artifacts (with pass/fail derived from
+    # the exit code) even when the test binary fails, then propagates that
+    # exit code. Redirection primitives cannot express "write a failure
+    # marker and still fail", so this stays a shell runner, dual-pathed for
+    # Windows.
     if host_os() == "windows":
         argv = _zig_powershell_argv(_zig_test_windows_script(ctx, provider["test_binary"], results, log, native_results))
     else:

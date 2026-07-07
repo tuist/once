@@ -102,6 +102,8 @@ fn file_script_action(
             cwd,
             input_digest,
             outputs,
+            stdout_path: None,
+            stderr_path: None,
             output_symlink_mode,
             resources,
             timeout_ms,

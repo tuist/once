@@ -94,10 +94,17 @@ async fn execute_command(
         cwd,
         timeout_ms,
         remote,
+        stdout_path,
+        stderr_path,
         ..
     } = action
     else {
         unreachable!("execute_command only accepts command actions")
+    };
+
+    let redirect = local::Redirect {
+        stdout: stdout_path.as_deref(),
+        stderr: stderr_path.as_deref(),
     };
 
     match (remote, stream_to_parent) {
@@ -122,6 +129,7 @@ async fn execute_command(
                 *timeout_ms,
                 workspace_root,
                 cache,
+                redirect,
             )
             .await
         }
@@ -133,6 +141,7 @@ async fn execute_command(
                 *timeout_ms,
                 workspace_root,
                 cache,
+                redirect,
             ))
             .await
         }

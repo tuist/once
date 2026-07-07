@@ -1,9 +1,6 @@
 def _android_shell_words(values):
     return " ".join([_shell_quote(value) for value in values])
 
-def _android_shell_env(root):
-    return "ANDROID_HOME=" + _shell_quote(root) + " ANDROID_SDK_ROOT=" + _shell_quote(root)
-
 def _android_host_shell(label_id):
     if host_os() == "windows":
         fail(label_id + ": Android build actions currently require a POSIX-compatible host shell")
@@ -240,26 +237,57 @@ def _android_sdk_root(attrs, label_id):
         fail(label_id + ": set `android_sdk` or ANDROID_HOME/ANDROID_SDK_ROOT so Once can find Android SDK tools")
     return root
 
-def _android_highest_platform(sdk_root, label_id):
-    sh = _android_host_shell(label_id)
-    script = "set -eu\nfor p in " + _shell_quote(sdk_root + "/platforms") + "/android-*; do\n  [ -d \"$p\" ] || continue\n  v=${p##*/android-}\n  case \"$v\" in *[!0-9]*|'') continue ;; esac\n  printf '%s\\n' \"$v\"\ndone | sort -n | tail -n 1\n"
-    value = host_command([sh, "-c", script]).strip()
+def _android_all_digits(value):
     if not value:
+        return False
+    for ch in value.elems():
+        if ch < "0" or ch > "9":
+            return False
+    return True
+
+def _android_sdk_subdirs(root):
+    dirs = []
+    for name in host_read_dir(root):
+        if name.startswith("."):
+            continue
+        if host_file_exists(root + "/" + name):
+            continue
+        dirs.append(name)
+    return dirs
+
+def _android_highest_platform(sdk_root, label_id):
+    best = -1
+    best_name = ""
+    for name in _android_sdk_subdirs(sdk_root + "/platforms"):
+        if not name.startswith("android-"):
+            continue
+        version = name[len("android-"):]
+        if not _android_all_digits(version):
+            continue
+        value = int(version)
+        if value > best:
+            best = value
+            best_name = version
+    if best_name == "":
         fail(label_id + ": no Android SDK platform was found under `" + sdk_root + "`; install one or set `compile_sdk`")
-    return value
+    return best_name
 
 def _android_highest_build_tools(sdk_root, label_id):
-    sh = _android_host_shell(label_id)
-    script = "set -eu\nfor p in " + _shell_quote(sdk_root + "/build-tools") + "/*; do\n  [ -d \"$p\" ] || continue\n  printf '%s\\n' \"${p##*/}\"\ndone | sort | tail -n 1\n"
-    value = host_command([sh, "-c", script]).strip()
-    if not value:
+    best = ""
+    for name in _android_sdk_subdirs(sdk_root + "/build-tools"):
+        if best == "" or name > best:
+            best = name
+    if best == "":
         fail(label_id + ": no Android SDK build-tools version was found under `" + sdk_root + "`; install build-tools or set `build_tools_version`")
-    return value
+    return best
 
 def _android_tool_first_line(label_id, argv):
-    sh = _android_host_shell(label_id)
-    script = "set -eu\nout=$(" + _android_shell_words(argv) + " 2>&1)\nif [ -z \"$out\" ]; then echo 'tool version command produced no output' >&2; exit 1; fi\nprintf '%s\\n' \"$out\" | sed -n '1p'\n"
-    return host_command([sh, "-c", script]).strip()
+    out = host_command(argv, merge_stderr = True)
+    for line in out.split("\n"):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    fail(label_id + ": `" + argv[0] + "` produced no version output")
 
 def _android_tool_version(tool, label_id):
     return _android_tool_first_line(label_id, [tool, "--version"])
@@ -493,30 +521,6 @@ while true; do
   sleep 1
 done
 """
-
-def _android_touch_marker_script(argv, marker):
-    return """set -eu
-{command}
-mkdir -p {parent}
-: > {marker}
-""".format(
-        command = _android_shell_words(argv),
-        parent = _shell_quote(_parent_dir(marker)),
-        marker = _shell_quote(marker),
-    )
-
-def _android_wait_for_ready_script(adb, marker):
-    return """set -eu
-{wait_command}
-{ready_command}
-mkdir -p {parent}
-: > {marker}
-""".format(
-        wait_command = _android_shell_words(adb + ["wait-for-device"]),
-        ready_command = _android_shell_words(adb + ["shell", _android_device_ready_script()]),
-        parent = _shell_quote(_parent_dir(marker)),
-        marker = _shell_quote(marker),
-    )
 
 def _android_compile_jars(deps):
     jars = []
@@ -1918,6 +1922,17 @@ def _android_sign_or_copy(ctx, attrs, tools, aligned_apk):
     )
     return (apk, returned_keystore)
 
+def _android_run_step(label_id, name, argv, inputs, env, tools):
+    run_action(
+        argv = argv,
+        inputs = inputs,
+        outputs = [],
+        env = env,
+        cacheable = False,
+        toolchain_identity = tools["identity"] + "\x00run\x00" + name,
+        identifier = "android_run:" + label_id + ":" + name,
+    )
+
 def _android_run_app(ctx, attrs, tools):
     label_id = ctx["label"]["id"]
     application_id = _android_attr(attrs, "application_id", "")
@@ -1927,47 +1942,37 @@ def _android_run_app(ctx, attrs, tools):
     component = _android_launch_component(application_id, launch_activity)
     apk = _android_built_apk(ctx)
     adb = _android_adb_argv(tools, attrs)
-    host_shell = _android_host_shell(label_id)
+    env = _android_env(tools)
     device_ready_marker = declare_output("run/device-ready")
     installed_marker = declare_output("run/installed")
     launched_marker = declare_output("run/launched")
     if run_visible and emulator_device:
         run_action(
-            argv = [host_shell, "-c", _android_visible_emulator_script(tools["emulator"], emulator_device)],
+            argv = [_android_host_shell(label_id), "-c", _android_visible_emulator_script(tools["emulator"], emulator_device)],
             outputs = [],
-            env = _android_env(tools),
+            env = env,
             cacheable = False,
             toolchain_identity = tools["identity"] + "\x00visible_emulator\x00" + tools["emulator"] + "\x00device\x00" + emulator_device,
             identifier = "android_visible_emulator:" + label_id,
         )
-    run_actions = [
-        ([host_shell, "-c", _android_wait_for_ready_script(adb, device_ready_marker)], [], [device_ready_marker]),
-        ([host_shell, "-c", _android_touch_marker_script(adb + ["install", "-r", "-d", apk], installed_marker)], [apk, device_ready_marker], [installed_marker]),
-    ]
+
+    # Each device step runs adb directly, then a portable write_path
+    # materializes its completion marker. Declared actions run in order and
+    # a failing adb command aborts before the marker is written, matching
+    # the old `command && touch marker` shell sequencing.
+    _android_run_step(label_id, "wait", adb + ["wait-for-device"], [], env, tools)
+    _android_run_step(label_id, "ready", adb + ["shell", _android_device_ready_script()], [], env, tools)
+    write_path(device_ready_marker, "")
+
+    _android_run_step(label_id, "install", adb + ["install", "-r", "-d", apk], [apk, device_ready_marker], env, tools)
+    write_path(installed_marker, "")
+
     if component:
-        run_actions.append((
-            [host_shell, "-c", _android_touch_marker_script(adb + ["shell", "am", "start", "-n", component], launched_marker)],
-            [installed_marker],
-            [launched_marker],
-        ))
+        launch_argv = adb + ["shell", "am", "start", "-n", component]
     else:
-        run_actions.append((
-            [host_shell, "-c", _android_touch_marker_script(adb + ["shell", _android_launcher_script(application_id)], launched_marker)],
-            [installed_marker],
-            [launched_marker],
-        ))
-    index = 0
-    for action in run_actions:
-        index = index + 1
-        run_action(
-            argv = action[0],
-            inputs = action[1],
-            outputs = action[2],
-            env = _android_env(tools),
-            cacheable = False,
-            toolchain_identity = tools["identity"] + "\x00run\x00" + str(index),
-            identifier = "android_run:" + label_id + ":" + str(index),
-        )
+        launch_argv = adb + ["shell", _android_launcher_script(application_id)]
+    _android_run_step(label_id, "launch", launch_argv, [installed_marker], env, tools)
+    write_path(launched_marker, "")
     return {
         "label_id": label_id,
         "target_kind": "android_binary",

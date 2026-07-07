@@ -377,10 +377,33 @@ fn host_command_cache_reuses_identical_argv_results() {
     ];
 
     let env = BTreeMap::new();
-    assert_eq!(cache.command(&argv, &env).unwrap(), "done");
-    assert_eq!(cache.command(&argv, &env).unwrap(), "done");
+    assert_eq!(cache.command(&argv, &env, false).unwrap(), "done");
+    assert_eq!(cache.command(&argv, &env, false).unwrap(), "done");
 
     assert_eq!(std::fs::read_to_string(counter).unwrap(), "x");
+}
+
+/// `merge_stderr` folds stderr into the returned output so version probes
+/// for tools that print to stderr (kotlinc, older javac) need no host
+/// shell `2>&1`. The merged and unmerged results occupy distinct cache
+/// slots.
+#[cfg(unix)]
+#[test]
+fn host_command_can_merge_stderr() {
+    let cache = HostCache::default();
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "printf on-stdout; printf on-stderr >&2".to_string(),
+    ];
+    let env = BTreeMap::new();
+
+    let stdout_only = cache.command(&argv, &env, false).unwrap();
+    assert_eq!(stdout_only, "on-stdout");
+
+    let merged = cache.command(&argv, &env, true).unwrap();
+    assert!(merged.contains("on-stdout"), "{merged:?}");
+    assert!(merged.contains("on-stderr"), "{merged:?}");
 }
 
 /// Two calls with the same argv but different `env` must spawn the
@@ -407,11 +430,11 @@ fn host_command_cache_keys_on_env() {
     // Distinct env values land in distinct cache slots and the
     // process is re-spawned for each, so the script's stdout
     // reflects each env's pin value.
-    assert_eq!(cache.command(&argv, &env_a).unwrap(), "a");
-    assert_eq!(cache.command(&argv, &env_b).unwrap(), "b");
+    assert_eq!(cache.command(&argv, &env_a, false).unwrap(), "a");
+    assert_eq!(cache.command(&argv, &env_b, false).unwrap(), "b");
     // Repeat the first call: the env_a slot is now warm and
     // reuses the cached stdout without spawning the process.
-    assert_eq!(cache.command(&argv, &env_a).unwrap(), "a");
+    assert_eq!(cache.command(&argv, &env_a, false).unwrap(), "a");
 
     // Counter increments once per spawn: env_a (cold), env_b
     // (cold), env_a (warm, no spawn) -> two ticks total.
