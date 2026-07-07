@@ -167,11 +167,12 @@ fn aggregate_declared_action_cache_state(
     next: EvidenceCacheState,
 ) -> EvidenceCacheState {
     match (current, next) {
-        // Bypass marks an uncacheable helper action (a filesystem probe or
-        // setup step). It must not mask the cache state of the target's
-        // cacheable work, so it acts as a neutral element: a target reports
-        // Bypass only when every one of its actions bypasses the cache.
-        (EvidenceCacheState::Bypass, other) | (other, EvidenceCacheState::Bypass) => other,
+        // An uncacheable action (Bypass) makes the whole target uncacheable:
+        // a target that must re-run any action cannot be reported as a
+        // reused cache hit, so Bypass dominates the aggregate.
+        (EvidenceCacheState::Bypass, _) | (_, EvidenceCacheState::Bypass) => {
+            EvidenceCacheState::Bypass
+        }
         (EvidenceCacheState::Miss, _) | (_, EvidenceCacheState::Miss) => EvidenceCacheState::Miss,
         (EvidenceCacheState::Hit, EvidenceCacheState::Hit) => EvidenceCacheState::Hit,
     }
@@ -1460,23 +1461,20 @@ mod tests {
     }
 
     #[test]
-    fn bypass_actions_do_not_mask_cacheable_cache_state() {
+    fn uncacheable_action_makes_whole_target_bypass() {
         use EvidenceCacheState::{Bypass, Hit, Miss};
 
-        // An uncacheable helper action (Bypass) alongside cacheable work
-        // reports the cacheable state, not Bypass.
-        assert_eq!(aggregate_declared_action_cache_state(Bypass, Hit), Hit);
-        assert_eq!(aggregate_declared_action_cache_state(Hit, Bypass), Hit);
-        assert_eq!(aggregate_declared_action_cache_state(Bypass, Miss), Miss);
-        assert_eq!(aggregate_declared_action_cache_state(Miss, Bypass), Miss);
-        // Only an all-bypass target reports Bypass.
+        // A single uncacheable action forces the target to Bypass so a
+        // target that must re-run work is never reported as a cache hit.
+        assert_eq!(aggregate_declared_action_cache_state(Bypass, Hit), Bypass);
+        assert_eq!(aggregate_declared_action_cache_state(Hit, Bypass), Bypass);
+        assert_eq!(aggregate_declared_action_cache_state(Bypass, Miss), Bypass);
         assert_eq!(
             aggregate_declared_action_cache_state(Bypass, Bypass),
             Bypass
         );
-        // Miss still dominates Hit among cacheable actions.
+        // Without a Bypass action, Miss dominates Hit.
         assert_eq!(aggregate_declared_action_cache_state(Hit, Miss), Miss);
-        assert_eq!(aggregate_declared_action_cache_state(Miss, Hit), Miss);
         assert_eq!(aggregate_declared_action_cache_state(Hit, Hit), Hit);
     }
 
