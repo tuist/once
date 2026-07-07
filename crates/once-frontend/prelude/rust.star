@@ -680,11 +680,6 @@ def _rust_dep_search_artifacts(deps):
             artifacts.append(transitive)
     return _unique(artifacts)
 
-def _basename(path):
-    normalized = path.replace("\\", "/")
-    parts = normalized.split("/")
-    return parts[len(parts) - 1]
-
 def _rust_raw_search_path_args(deps):
     dirs = []
     for artifact in _rust_dep_search_artifacts(deps):
@@ -1271,30 +1266,13 @@ def _rust_android_abi(ctx, target, crate_type):
         fail(ctx["label"]["id"] + ": set `android_abi`; Once could not infer an Android Application Binary Interface from target `" + target + "`")
     return abi
 
-def _rust_native_library_key(library):
-    return (library.get("abi") or "") + "\x00" + (library.get("path") or "")
-
-def _rust_unique_native_libraries(libraries):
-    seen = {}
-    out = []
-    for library in libraries:
-        abi = library.get("abi") or ""
-        path = library.get("path") or ""
-        if not abi or not path:
-            continue
-        key = _rust_native_library_key(library)
-        if key not in seen:
-            seen[key] = True
-            out.append({"abi": abi, "path": path})
-    return out
-
 def _rust_collect_android_native_libraries(deps, own):
     out = []
     out.extend(own)
     for dep in deps:
         out.extend(dep.get("transitive_android_native_libraries") or [])
         out.extend(dep.get("android_native_libraries") or [])
-    return _rust_unique_native_libraries(out)
+    return _unique_native_libraries(out)
 
 def _rust_output_extension(crate_type, target):
     os_key = target or host_os()

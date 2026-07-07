@@ -1,0 +1,8 @@
+[[target]]
+name = "native_math"
+kind = "c_library"
+srcs = ["src/*.c"]
+
+[target.attrs]
+hdrs = ["include/native_math.h"]
+includes = ["include"]

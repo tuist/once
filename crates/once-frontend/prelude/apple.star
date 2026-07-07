@@ -260,15 +260,6 @@ def _unique_dirs(paths):
             out.append(directory)
     return out
 
-def _basename(path):
-    idx = -1
-    for i in range(len(path)):
-        if path[i] == "/":
-            idx = i
-    if idx < 0:
-        return path
-    return path[idx + 1:]
-
 # --- Apple header map (.hmap) byte construction ---------------------
 #
 # Clang reads `.hmap` files via `-I <foo.hmap>`. The format is defined

@@ -1,0 +1,16 @@
+[[target]]
+name = "native_math"
+kind = "c_library"
+srcs = ["src/*.c"]
+
+[target.attrs]
+hdrs = ["include/native_math.h"]
+includes = ["include"]
+
+[[target]]
+name = "native_math_zig"
+kind = "zig_c_library"
+deps = ["./native_math"]
+
+[target.attrs]
+import_name = "native_math"
