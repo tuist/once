@@ -138,6 +138,14 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(Path::new(path).is_file())
     }
 
+    /// Read one host file as UTF-8 text.
+    fn host_file_read(path: &str) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        std::fs::read_to_string(path).with_context(|| format!("reading host file `{path}`"))
+    }
+
     /// Return whether one host file contains `needle` as text.
     fn host_file_contains(path: &str, needle: &str) -> anyhow::Result<bool> {
         if !analysis_active() {
@@ -202,8 +210,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             arg_files: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![path.to_string()],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(format!("write_path:{path}")),
         };
@@ -246,8 +258,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             arg_files: Vec::new(),
             inputs,
             outputs: vec![destination.to_string()],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: cacheable.unwrap_or(true),
+            depends_on_prior_actions: true,
             toolchain_identity,
             identifier: Some(identifier.unwrap_or_else(|| format!("copy_path:{destination}"))),
         };
@@ -283,8 +299,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             arg_files: Vec::new(),
             inputs: Vec::new(),
             outputs,
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: false,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("prepare_path:{kind}:{path}"))),
         };
@@ -328,8 +348,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             arg_files: Vec::new(),
             inputs,
             outputs: vec![output.to_string()],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: cacheable.unwrap_or(true),
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("write_tree_digest:{output}"))),
         };
@@ -381,18 +405,28 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// `argv`: list of strings and `cmd_args` values; `inputs`: list
     /// of workspace-relative source paths to hash into the input
     /// digest; `outputs`: list of workspace-relative paths the action
-    /// produces; `env`: optional string->string dict; `cacheable`:
+    /// produces; `clean_paths`: optional list of workspace paths to
+    /// remove before a fresh command execution; `create_dirs`: optional
+    /// list of workspace directories to create before a fresh command
+    /// execution; `cwd`: optional workspace-relative directory to run
+    /// the command in, defaulting to the workspace root; `env`: optional
+    /// string->string dict; `cacheable`:
     /// optional bool, default true;
     /// `toolchain_identity`: optional string folded into the input
     /// digest; `identifier`: optional label for diagnostics.
+    #[allow(clippy::too_many_arguments)]
     fn run_action<'v>(
         argv: Value<'v>,
         inputs: Option<Value<'v>>,
         outputs: Option<Value<'v>>,
+        clean_paths: Option<Value<'v>>,
+        create_dirs: Option<Value<'v>>,
+        cwd: Option<Value<'v>>,
         env: Option<Value<'v>>,
         toolchain_identity: Option<String>,
         identifier: Option<String>,
         cacheable: Option<bool>,
+        depends_on_prior_actions: Option<bool>,
     ) -> anyhow::Result<NoneType> {
         let argv = unpack_action_argv(argv, "argv")?;
         let inputs = inputs
@@ -403,6 +437,24 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .map(|value| unpack_string_list(value, "outputs"))
             .transpose()?
             .unwrap_or_default();
+        let clean_paths = clean_paths
+            .map(|value| unpack_string_list(value, "clean_paths"))
+            .transpose()?
+            .unwrap_or_default();
+        let create_dirs = create_dirs
+            .map(|value| unpack_string_list(value, "create_dirs"))
+            .transpose()?
+            .unwrap_or_default();
+        let cwd = match cwd {
+            None => None,
+            Some(value) if value.is_none() => None,
+            Some(value) => Some(
+                value
+                    .unpack_str()
+                    .ok_or_else(|| anyhow::anyhow!("cwd must be a string or None"))?
+                    .to_string(),
+            ),
+        };
         let env = env
             .map(|value| unpack_string_dict(value, "env"))
             .transpose()?
@@ -413,8 +465,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             arg_files: argv.arg_files,
             inputs,
             outputs,
+            clean_paths,
+            create_dirs,
+            cwd,
             env,
             cacheable: cacheable.unwrap_or(true),
+            depends_on_prior_actions: depends_on_prior_actions.unwrap_or(true),
             toolchain_identity,
             identifier,
         };

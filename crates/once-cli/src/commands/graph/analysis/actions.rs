@@ -38,7 +38,6 @@ struct DeclaredActionRun<'a> {
 struct DeclaredActionOutcome {
     digest: Digest,
     input_digest: Option<Digest>,
-    cache_tag: &'static str,
     cache_state: EvidenceCacheState,
     result: ActionResult,
 }
@@ -94,8 +93,7 @@ pub(super) fn run_declared_actions<'a>(
         );
         let mut action_digests = Vec::new();
         let mut input_digests = Vec::new();
-        let mut last_cache_tag = "miss";
-        let mut last_cache_state = EvidenceCacheState::Miss;
+        let mut aggregate_cache_state = None;
         let mut all_outputs = Vec::new();
         let mut aggregate_result = ActionResult {
             exit_code: 0,
@@ -111,12 +109,16 @@ pub(super) fn run_declared_actions<'a>(
         for (index, declared) in actions.into_iter().enumerate() {
             all_outputs.extend(declared.outputs.iter().cloned());
             let mut input_action_digests = dep_action_digests.to_vec();
-            input_action_digests.extend(
-                action_digests
-                    .iter()
-                    .enumerate()
-                    .map(|(prior_index, digest)| (format!("same-target:{prior_index}"), *digest)),
-            );
+            if declared.depends_on_prior_actions {
+                input_action_digests.extend(
+                    action_digests
+                        .iter()
+                        .enumerate()
+                        .map(|(prior_index, digest)| {
+                            (format!("same-target:{prior_index}"), *digest)
+                        }),
+                );
+            }
 
             let outcome = Box::pin(run_declared_action(DeclaredActionRun {
                 workspace,
@@ -134,8 +136,12 @@ pub(super) fn run_declared_actions<'a>(
             if let Some(input_digest) = outcome.input_digest {
                 input_digests.push(input_digest);
             }
-            last_cache_tag = outcome.cache_tag;
-            last_cache_state = outcome.cache_state;
+            aggregate_cache_state = Some(match aggregate_cache_state {
+                Some(current) => {
+                    aggregate_declared_action_cache_state(current, outcome.cache_state)
+                }
+                None => outcome.cache_state,
+            });
             if !record_success_evidence {
                 aggregate_result.stdout = outcome.result.stdout;
                 aggregate_result.stderr = outcome.result.stderr;
@@ -143,16 +149,33 @@ pub(super) fn run_declared_actions<'a>(
             aggregate_result.outputs.extend(outcome.result.outputs);
         }
 
+        let cache_state = aggregate_cache_state.unwrap_or(EvidenceCacheState::Miss);
         Ok(BuildOutcome {
             provider,
             action_digest: compose_target_action_digest(&target.label.id, &action_digests),
             input_digest: compose_target_input_digest(&input_digests),
             outputs: all_outputs,
-            cache_tag: last_cache_tag,
-            cache_state: last_cache_state,
+            cache_tag: cache_state.as_str(),
+            cache_state,
             result: aggregate_result,
         })
     })
+}
+
+fn aggregate_declared_action_cache_state(
+    current: EvidenceCacheState,
+    next: EvidenceCacheState,
+) -> EvidenceCacheState {
+    match (current, next) {
+        // An uncacheable action (Bypass) makes the whole target uncacheable:
+        // a target that must re-run any action cannot be reported as a
+        // reused cache hit, so Bypass dominates the aggregate.
+        (EvidenceCacheState::Bypass, _) | (_, EvidenceCacheState::Bypass) => {
+            EvidenceCacheState::Bypass
+        }
+        (EvidenceCacheState::Miss, _) | (_, EvidenceCacheState::Miss) => EvidenceCacheState::Miss,
+        (EvidenceCacheState::Hit, EvidenceCacheState::Hit) => EvidenceCacheState::Hit,
+    }
 }
 
 async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActionOutcome> {
@@ -204,16 +227,83 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     };
 
     if cacheable {
-        run_cacheable_declared_action(context, action).await
+        run_cacheable_declared_action(context, action, &declared).await
     } else {
+        // An uncacheable action always runs its command, so its command
+        // setup always applies.
+        prepare_declared_command_paths(workspace, &declared)
+            .await
+            .with_context(|| {
+                format!("preparing action {index} for {target_id} ({identifier_for_error})")
+            })?;
         run_uncacheable_declared_action(context, action).await
     }
+}
+
+async fn prepare_declared_command_paths(workspace: &Path, declared: &DeclaredAction) -> Result<()> {
+    if declared.operation.is_some() {
+        return Ok(());
+    }
+    for path in &declared.clean_paths {
+        let path = workspace_path(path, "clean_paths entry")?;
+        remove_declared_path_if_exists(&path.resolve(workspace), path.as_str()).await?;
+    }
+    for path in &declared.create_dirs {
+        let path = workspace_path(path, "create_dirs entry")?;
+        tokio::fs::create_dir_all(path.resolve(workspace))
+            .await
+            .with_context(|| format!("creating declared command directory `{}`", path.as_str()))?;
+    }
+    Ok(())
+}
+
+async fn remove_declared_path_if_exists(abs: &Path, label: &str) -> Result<()> {
+    let metadata = match tokio::fs::symlink_metadata(abs).await {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(source).with_context(|| format!("reading declared command path `{label}`"));
+        }
+    };
+    let result = if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        tokio::fs::remove_dir_all(abs).await
+    } else {
+        tokio::fs::remove_file(abs).await
+    };
+    result.with_context(|| format!("removing declared command path `{label}`"))
 }
 
 async fn run_cacheable_declared_action(
     context: DeclaredActionContext<'_>,
     action: Action,
+    declared: &DeclaredAction,
 ) -> Result<DeclaredActionOutcome> {
+    // clean_paths and create_dirs model the command's own filesystem
+    // setup, so they must only run when the command actually executes.
+    // On a cache hit the outputs are restored without running the
+    // command; removing a clean_paths entry that is not among the
+    // restored outputs would delete it with nothing left to regenerate
+    // it. Probe the cache first and prepare only on a miss.
+    let cached = context
+        .cache
+        .get_action_result(&action.digest())
+        .await
+        .with_context(|| {
+            format!(
+                "probing cache for action {} for {} ({})",
+                context.index, context.target_id, context.identifier
+            )
+        })?;
+    if cached.is_none() {
+        prepare_declared_command_paths(context.workspace, declared)
+            .await
+            .with_context(|| {
+                format!(
+                    "preparing action {} for {} ({})",
+                    context.index, context.target_id, context.identifier
+                )
+            })?;
+    }
     let outcome = once_core::run_with_cache(
         &action,
         context.workspace,
@@ -279,7 +369,6 @@ async fn run_cacheable_declared_action(
     Ok(DeclaredActionOutcome {
         digest: outcome.action,
         input_digest: action.input_digest(),
-        cache_tag,
         cache_state,
         result: outcome.result,
     })
@@ -347,7 +436,6 @@ async fn run_uncacheable_declared_action(
     Ok(DeclaredActionOutcome {
         digest: action_digest,
         input_digest: action.input_digest(),
-        cache_tag: "bypass",
         cache_state: EvidenceCacheState::Bypass,
         result,
     })
@@ -707,7 +795,11 @@ fn declared_to_action(
         None => Ok(Action::RunCommand {
             argv: declared.argv.clone(),
             env: declared.env.clone(),
-            cwd: None,
+            cwd: declared
+                .cwd
+                .as_deref()
+                .map(|cwd| workspace_path(cwd, "run_action cwd"))
+                .transpose()?,
             input_digest: Some(input_digest),
             outputs,
             output_symlink_mode: OutputSymlinkMode::default(),
@@ -865,6 +957,18 @@ fn compose_input_digest(
         builder.push_bytes(key.as_bytes());
         builder.push_bytes(value.as_bytes());
     }
+    for path in &declared.clean_paths {
+        builder.push_bytes(b"clean_path");
+        builder.push_bytes(path.as_bytes());
+    }
+    for path in &declared.create_dirs {
+        builder.push_bytes(b"create_dir");
+        builder.push_bytes(path.as_bytes());
+    }
+    if let Some(cwd) = &declared.cwd {
+        builder.push_bytes(b"cwd");
+        builder.push_bytes(cwd.as_bytes());
+    }
 
     let mut sorted_inputs = declared
         .inputs
@@ -911,8 +1015,12 @@ mod tests {
                 ".once/out/x/A.out".to_string(),
                 ".once/out/x/sub/B.meta".to_string(),
             ],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
         };
@@ -925,6 +1033,45 @@ mod tests {
             panic!("command declaration should lower to RunCommand");
         };
         assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn declared_command_setup_cleans_paths_and_creates_dirs() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(workspace.path().join(".once/out/tree/sub")).unwrap();
+        std::fs::write(
+            workspace.path().join(".once/out/tree/sub/stale.txt"),
+            b"stale",
+        )
+        .unwrap();
+        std::fs::write(workspace.path().join(".once/out/stale-file.txt"), b"stale").unwrap();
+        let declared = DeclaredAction {
+            operation: None,
+            argv: vec!["tool".to_string()],
+            arg_files: Vec::new(),
+            inputs: Vec::new(),
+            outputs: vec![".once/out/tree".to_string()],
+            clean_paths: vec![
+                ".once/out/tree".to_string(),
+                ".once/out/stale-file.txt".to_string(),
+            ],
+            create_dirs: vec![".once/out/tree".to_string(), ".once/tmp/home".to_string()],
+            cwd: None,
+            env: BTreeMap::new(),
+            cacheable: true,
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: None,
+        };
+
+        prepare_declared_command_paths(workspace.path(), &declared)
+            .await
+            .unwrap();
+
+        assert!(workspace.path().join(".once/out/tree").is_dir());
+        assert!(!workspace.path().join(".once/out/tree/sub").exists());
+        assert!(!workspace.path().join(".once/out/stale-file.txt").exists());
+        assert!(workspace.path().join(".once/tmp/home").is_dir());
     }
 
     #[test]
@@ -1270,8 +1417,12 @@ mod tests {
                 arg_files: Vec::new(),
                 inputs: Vec::new(),
                 outputs: vec![".once/out/one.txt".to_string()],
+                clean_paths: Vec::new(),
+                create_dirs: Vec::new(),
+                cwd: None,
                 env: BTreeMap::new(),
                 cacheable: true,
+                depends_on_prior_actions: true,
                 toolchain_identity: None,
                 identifier: Some("one".to_string()),
             }],
@@ -1309,6 +1460,105 @@ mod tests {
         assert_eq!(records.len(), 0);
     }
 
+    #[test]
+    fn uncacheable_action_makes_whole_target_bypass() {
+        use EvidenceCacheState::{Bypass, Hit, Miss};
+
+        // A single uncacheable action forces the target to Bypass so a
+        // target that must re-run work is never reported as a cache hit.
+        assert_eq!(aggregate_declared_action_cache_state(Bypass, Hit), Bypass);
+        assert_eq!(aggregate_declared_action_cache_state(Hit, Bypass), Bypass);
+        assert_eq!(aggregate_declared_action_cache_state(Bypass, Miss), Bypass);
+        assert_eq!(
+            aggregate_declared_action_cache_state(Bypass, Bypass),
+            Bypass
+        );
+        // Without a Bypass action, Miss dominates Hit.
+        assert_eq!(aggregate_declared_action_cache_state(Hit, Miss), Miss);
+        assert_eq!(aggregate_declared_action_cache_state(Hit, Hit), Hit);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cache_hit_skips_command_setup_paths() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let target = GraphTarget {
+            label: once_frontend::TargetLabel {
+                package: "tools".to_string(),
+                name: "cached".to_string(),
+                id: "tools/cached".to_string(),
+            },
+            kind: "demo_kind".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            capabilities: Vec::new(),
+            providers: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let analysis = || AnalysisResult {
+            actions: vec![DeclaredAction {
+                operation: None,
+                argv: vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "printf ok > .once/out/out.txt".to_string(),
+                ],
+                arg_files: Vec::new(),
+                inputs: Vec::new(),
+                outputs: vec![".once/out/out.txt".to_string()],
+                // A clean path that is not one of the action's outputs.
+                clean_paths: vec![".once/out/side.txt".to_string()],
+                create_dirs: vec![".once/out".to_string()],
+                cwd: None,
+                env: BTreeMap::new(),
+                cacheable: true,
+                depends_on_prior_actions: true,
+                toolchain_identity: None,
+                identifier: Some("cached".to_string()),
+            }],
+            provider: serde_json::json!({}),
+            declared_outputs: Vec::new(),
+        };
+
+        // First run misses the cache and executes the command.
+        let first = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.cache_tag, "miss");
+
+        // Stand in for content a prior uncached run left behind: it lives
+        // under a clean path but is not one of the action's outputs, so a
+        // cache hit would not restore it.
+        let side = workspace.path().join(".once/out/side.txt");
+        std::fs::write(&side, b"precious").unwrap();
+
+        // Second run hits the cache. The command never executes, so its
+        // clean_paths must not delete the untracked file.
+        let second = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.cache_tag, "hit");
+        assert_eq!(std::fs::read(&side).unwrap(), b"precious");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn declared_actions_record_success_evidence_per_action() {
@@ -1338,8 +1588,12 @@ mod tests {
             arg_files: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![format!(".once/out/{name}.txt")],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: false,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(name.to_string()),
         };
@@ -1382,6 +1636,112 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn declared_action_can_skip_prior_same_target_digests() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let target = GraphTarget {
+            label: once_frontend::TargetLabel {
+                package: "tools".to_string(),
+                name: "split".to_string(),
+                id: "tools/split".to_string(),
+            },
+            kind: "demo_kind".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            capabilities: Vec::new(),
+            providers: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+
+        let analysis = |first_value: &str| AnalysisResult {
+            actions: vec![
+                DeclaredAction {
+                    operation: None,
+                    argv: vec![
+                        "/bin/sh".to_string(),
+                        "-c".to_string(),
+                        format!("printf {first_value} > .once/out/first.txt"),
+                    ],
+                    arg_files: Vec::new(),
+                    inputs: Vec::new(),
+                    outputs: vec![".once/out/first.txt".to_string()],
+                    clean_paths: Vec::new(),
+                    create_dirs: Vec::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    cacheable: true,
+                    depends_on_prior_actions: true,
+                    toolchain_identity: None,
+                    identifier: Some("first".to_string()),
+                },
+                DeclaredAction {
+                    operation: None,
+                    argv: vec![
+                        "/bin/sh".to_string(),
+                        "-c".to_string(),
+                        "printf second > .once/out/second.txt; printf run >> second_runs"
+                            .to_string(),
+                    ],
+                    arg_files: Vec::new(),
+                    inputs: Vec::new(),
+                    outputs: vec![".once/out/second.txt".to_string()],
+                    clean_paths: Vec::new(),
+                    create_dirs: Vec::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    cacheable: true,
+                    depends_on_prior_actions: false,
+                    toolchain_identity: None,
+                    identifier: Some("second".to_string()),
+                },
+            ],
+            provider: serde_json::json!({}),
+            declared_outputs: Vec::new(),
+        };
+
+        let first = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis("one"),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.cache_state, EvidenceCacheState::Miss);
+
+        let second = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis("changed"),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(second.cache_state, EvidenceCacheState::Miss);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/first.txt")).unwrap(),
+            "changed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/second.txt")).unwrap(),
+            "second"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("second_runs")).unwrap(),
+            "run"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn uncached_action_errors_when_declared_output_is_missing() {
         let workspace = tempfile::tempdir().unwrap();
         let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
@@ -1420,8 +1780,12 @@ mod tests {
             arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: Some("id-1".to_string()),
             identifier: None,
         };
@@ -1431,6 +1795,34 @@ mod tests {
             ..declared
         };
         let two = compose_input_digest(workspace.path(), &declared2, module_digest(), &[]).unwrap();
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn input_digest_changes_with_command_setup_paths() {
+        let workspace = tempfile::tempdir().unwrap();
+        let declared = DeclaredAction {
+            operation: None,
+            argv: vec!["tool".to_string()],
+            arg_files: Vec::new(),
+            inputs: Vec::new(),
+            outputs: vec![".once/out/A.a".to_string()],
+            clean_paths: vec![".once/out/A.a".to_string()],
+            create_dirs: vec![".once/tmp/home".to_string()],
+            cwd: None,
+            env: BTreeMap::new(),
+            cacheable: true,
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: None,
+        };
+        let one = compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
+        let declared2 = DeclaredAction {
+            clean_paths: vec![".once/out/B.a".to_string()],
+            ..declared
+        };
+        let two = compose_input_digest(workspace.path(), &declared2, module_digest(), &[]).unwrap();
+
         assert_ne!(one, two);
     }
 
@@ -1448,8 +1840,12 @@ mod tests {
             }],
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
         };
@@ -1477,8 +1873,12 @@ mod tests {
             arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
         };
@@ -1510,8 +1910,12 @@ mod tests {
             arg_files: Vec::new(),
             inputs: vec!["input.txt".to_string()],
             outputs: vec![".once/out/A.a".to_string()],
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
             env: BTreeMap::new(),
             cacheable: true,
+            depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
         };

@@ -45,6 +45,14 @@ metadata at the keyboard.
   Kotlin/Native framework bundle consumed by Apple application and test
   targets
 
+## Elixir target kinds
+
+- [`elixir_library`](/reference/prelude/elixir_library): Elixir
+  code compiled into cacheable bytecode with a target-level compiler
+  action
+- [`elixir_test`](/reference/prelude/elixir_test): ExUnit tests run against
+  an already compiled Elixir application
+
 ## Rust target kinds
 
 - [`cargo_dependencies`](/reference/prelude/cargo_dependencies): cacheable

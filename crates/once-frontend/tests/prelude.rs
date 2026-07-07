@@ -60,7 +60,7 @@ fn android_prelude_source() -> String {
 
 fn all_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/android.star"),
@@ -68,7 +68,8 @@ fn all_prelude_source() -> String {
         include_str!("../prelude/c.star"),
         include_str!("../prelude/zig.star"),
         include_str!("../prelude/swift.star"),
-        include_str!("../prelude/kotlin.star")
+        include_str!("../prelude/kotlin.star"),
+        include_str!("../prelude/elixir.star")
     )
 }
 

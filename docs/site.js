@@ -69,6 +69,8 @@ export const site = {
           { text: "android_binary", link: "/reference/prelude/android_binary" },
           { text: "swift_android_library", link: "/reference/prelude/swift_android_library" },
           { text: "kotlin_apple_framework", link: "/reference/prelude/kotlin_apple_framework" },
+          { text: "elixir_library", link: "/reference/prelude/elixir_library" },
+          { text: "elixir_test", link: "/reference/prelude/elixir_test" },
           { text: "cargo_dependencies", link: "/reference/prelude/cargo_dependencies" },
           { text: "rust_library", link: "/reference/prelude/rust_library" },
           { text: "rust_binary", link: "/reference/prelude/rust_binary" },

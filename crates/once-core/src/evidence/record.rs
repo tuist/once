@@ -92,7 +92,7 @@ pub enum EvidenceCacheState {
 }
 
 impl EvidenceCacheState {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Hit => "hit",
             Self::Miss => "miss",
