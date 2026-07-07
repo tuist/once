@@ -1626,7 +1626,7 @@ result = repr(_zig_binary_impl(ctx))
 }
 
 #[test]
-fn prelude_zig_test_run_redirects_output_without_shell() {
+fn prelude_zig_test_run_uses_powershell_on_windows() {
     let tmp = TempDir::new().expect("tempdir");
     let source_dir = tmp.path().join("pkg/src");
     std::fs::create_dir_all(&source_dir).unwrap();
@@ -1674,22 +1674,18 @@ result = repr(_zig_test_impl(ctx))
     out.unwrap();
 
     let run = action_by_identifier(&store, "pkg/suite:zig-test-run");
-    // The test binary is executed directly with its args; output is
-    // redirected into the log without any host shell.
-    assert!(run.argv[0].starts_with(".once/out/pkg/suite/"));
-    assert!(!run
+    assert_eq!(
+        run.argv[0],
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    );
+    assert!(run.argv.iter().any(|arg| arg == "-Command"));
+    assert!(run
         .argv
-        .iter()
-        .any(|arg| arg == "-Command" || arg.contains("powershell")));
-    assert_eq!(&run.argv[run.argv.len() - 2..], ["--summary", "all"]);
-    assert_eq!(
-        run.stdout.as_deref(),
-        Some(".once/out/pkg/suite/test/zig-test.log")
-    );
-    assert_eq!(
-        run.stderr.as_deref(),
-        Some(".once/out/pkg/suite/test/zig-test.log")
-    );
+        .last()
+        .unwrap()
+        .contains("ConvertTo-Json -Depth 10 -Compress"));
+    assert!(!run.argv.last().unwrap().contains("CreateDirectory"));
+    assert!(run.argv.last().unwrap().contains("'--summary' 'all'"));
 
     let prepare = action_by_identifier(&store, "pkg/suite:zig-test-prepare");
     assert_eq!(
@@ -1699,21 +1695,6 @@ result = repr(_zig_test_impl(ctx))
             mode: DeclaredPreparePathMode::Directory,
         })
     );
-
-    // The test-results marker is produced by a portable write_path action.
-    let results = action_by_identifier(
-        &store,
-        "write_path:.once/out/pkg/suite/test/test_results.json",
-    );
-    match &results.operation {
-        Some(DeclaredActionOperation::WriteFile { path, bytes }) => {
-            assert_eq!(path, ".once/out/pkg/suite/test/test_results.json");
-            let text = String::from_utf8(bytes.clone()).unwrap();
-            assert!(text.contains("\"schema\":\"once.test_results.v1\""));
-            assert!(text.contains("\"status\":\"passed\""));
-        }
-        other => panic!("expected write_path results, got {other:?}"),
-    }
 }
 
 #[test]

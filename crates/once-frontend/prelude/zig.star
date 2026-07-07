@@ -898,25 +898,6 @@ def _zig_json_string(value):
 def _zig_run_result_json(target_id):
     return "{\"schema\":\"once.run_result.v1\",\"target\":" + _zig_json_string(target_id) + ",\"exit_code\":0}\n"
 
-def _zig_test_native_results(test_binary, log):
-    return "$ ./" + test_binary + "\nlog: " + log + "\nexit: 0\n"
-
-def _zig_test_results_json(ctx, log, native_results):
-    target = _zig_json_string(ctx["label"]["id"])
-    case_id = _zig_json_string(ctx["label"]["id"] + "::suite")
-    case_name = _zig_json_string(ctx["label"]["name"])
-    suite = _zig_json_string(ctx["label"]["id"])
-    log_json = _zig_json_string(log)
-    native_json = _zig_json_string(native_results)
-    return (
-        "{\"schema\":\"once.test_results.v1\",\"target\":" + target +
-        ",\"runner\":{\"type\":\"zig_test\",\"metadata\":{}}" +
-        ",\"status\":\"passed\",\"summary\":{\"total\":1,\"passed\":1,\"failed\":0,\"skipped\":0,\"flaky\":0}" +
-        ",\"cases\":[{\"id\":" + case_id + ",\"name\":" + case_name + ",\"suite\":" + suite +
-        ",\"status\":\"passed\",\"attempts\":[{\"status\":\"passed\"}],\"runner_metadata\":{}}]" +
-        ",\"artifacts\":{\"logs\":[" + log_json + "],\"native_results\":[" + native_json + "]}}\n"
-    )
-
 def _zig_test_info(ctx, test_binary, results, log, native_results, test_dir):
     labels = _zig_attr(ctx, "labels", [])
     timeout_ms = _zig_attr(ctx, "timeout_ms", None)
@@ -962,6 +943,119 @@ def _zig_test_info(ctx, test_binary, results, log, native_results, test_dir):
         "metadata": {},
     }
 
+def _zig_powershell_argv(script):
+    return [host_which("powershell"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]
+
+def _zig_test_script(ctx, test_binary, results, log, native_results):
+    args = [_shell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
+    target = _zig_json_string(ctx["label"]["id"])
+    case_id = _zig_json_string(ctx["label"]["id"] + "::suite")
+    case_name = _zig_json_string(ctx["label"]["name"])
+    suite = _zig_json_string(ctx["label"]["id"])
+    log_json = _zig_json_string(log)
+    native_json = _zig_json_string(native_results)
+    return """set +e
+{binary} {args} > {log} 2>&1
+code=$?
+printf '$ %s\\nlog: %s\\nexit: %s\\n' {binary} {log} "$code" > {native_results}
+if [ "$code" -eq 0 ]; then
+  status=passed
+  passed=1
+  failed=0
+else
+  status=failed
+  passed=0
+  failed=1
+fi
+printf '{{"schema":"once.test_results.v1","target":{target},"runner":{{"type":"zig_test","metadata":{{}}}},"status":"%s","summary":{{"total":1,"passed":%s,"failed":%s,"skipped":0,"flaky":0}},"cases":[{{"id":{case_id},"name":{case_name},"suite":{suite},"status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{}}}}],"artifacts":{{"logs":[{log_json}],"native_results":[{native_json}]}}}}\\n' "$status" "$passed" "$failed" "$status" "$status" > {results}
+exit "$code"
+""".format(
+        binary = _shell_quote("./" + test_binary),
+        args = " ".join(args),
+        log = _shell_quote(log),
+        native_results = _shell_quote(native_results),
+        target = target,
+        case_id = case_id,
+        case_name = case_name,
+        suite = suite,
+        log_json = log_json,
+        native_json = native_json,
+        results = _shell_quote(results),
+    )
+
+def _zig_test_windows_script(ctx, test_binary, results, log, native_results):
+    args = [_powershell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
+    return """$ErrorActionPreference = 'Continue'
+$encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+& {binary} {args} > {log} 2>&1
+$code = $global:LASTEXITCODE
+if ($null -eq $code) {{
+  if ($?) {{
+    $code = 0
+  }} else {{
+    $code = 1
+  }}
+}}
+if ($code -eq 0) {{
+  $status = 'passed'
+  $passed = 1
+  $failed = 0
+}} else {{
+  $status = 'failed'
+  $passed = 0
+  $failed = 1
+}}
+$native = '$ ' + {binary_display} + [System.Environment]::NewLine + 'log: ' + {log_display} + [System.Environment]::NewLine + 'exit: ' + [string]$code + [System.Environment]::NewLine
+[System.IO.File]::WriteAllText({native_results}, $native, $encoding)
+$result = [ordered]@{{
+  schema = 'once.test_results.v1'
+  target = {target}
+  runner = [ordered]@{{
+    type = 'zig_test'
+    metadata = [ordered]@{{}}
+  }}
+  status = $status
+  summary = [ordered]@{{
+    total = 1
+    passed = $passed
+    failed = $failed
+    skipped = 0
+    flaky = 0
+  }}
+  cases = @([ordered]@{{
+    id = {case_id}
+    name = {case_name}
+    suite = {suite}
+    status = $status
+    attempts = @([ordered]@{{
+      status = $status
+    }})
+    runner_metadata = [ordered]@{{}}
+  }})
+  artifacts = [ordered]@{{
+    logs = @({log_json})
+    native_results = @({native_json})
+  }}
+}}
+$json = $result | ConvertTo-Json -Depth 10 -Compress
+[System.IO.File]::WriteAllText({results}, $json + [System.Environment]::NewLine, $encoding)
+exit $code
+""".format(
+        binary = _powershell_quote("./" + test_binary),
+        args = " ".join(args),
+        log = _powershell_quote(log),
+        binary_display = _powershell_quote("./" + test_binary),
+        log_display = _powershell_quote(log),
+        native_results = _powershell_quote(native_results),
+        target = _powershell_quote(ctx["label"]["id"]),
+        case_id = _powershell_quote(ctx["label"]["id"] + "::suite"),
+        case_name = _powershell_quote(ctx["label"]["name"]),
+        suite = _powershell_quote(ctx["label"]["id"]),
+        log_json = _powershell_quote(log),
+        native_json = _powershell_quote(native_results),
+        results = _powershell_quote(results),
+    )
+
 def _zig_test_impl(ctx):
     test_dir = ctx["build_dir"] + "/test"
     results = test_dir + "/test_results.json"
@@ -987,19 +1081,24 @@ def _zig_test_impl(ctx):
     if ctx["capability"] != "test":
         return provider
 
+    # The test runner writes result artifacts (with pass/fail derived from
+    # the exit code) even when the test binary fails, then propagates that
+    # exit code. Redirection primitives cannot express "write a failure
+    # marker and still fail", so this stays a shell runner, dual-pathed for
+    # Windows.
+    if host_os() == "windows":
+        argv = _zig_powershell_argv(_zig_test_windows_script(ctx, provider["test_binary"], results, log, native_results))
+    else:
+        argv = [host_which("sh"), "-c", _zig_test_script(ctx, provider["test_binary"], results, log, native_results)]
     prepare_path(test_dir, kind = "directory", identifier = ctx["label"]["id"] + ":zig-test-prepare")
     run_action(
-        argv = [provider["test_binary"]] + _zig_attr(ctx, "args", []),
+        argv = argv,
         inputs = _unique([provider["test_binary"]] + _zig_data_inputs(ctx) + _zig_collect_dep_data(ctx["deps"])),
-        outputs = [test_dir, log],
-        stdout = log,
-        stderr = log,
+        outputs = [test_dir, results, log, native_results],
         env = _zig_run_env(ctx, test_dir),
         toolchain_identity = "once.zig_test.run.v1\x00" + provider["test_binary"],
         identifier = ctx["label"]["id"] + ":zig-test-run",
     )
-    write_path(native_results, _zig_test_native_results(provider["test_binary"], log))
-    write_path(results, _zig_test_results_json(ctx, log, native_results))
     return provider
 
 def _zig_c_library_impl(ctx):
