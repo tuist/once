@@ -104,3 +104,79 @@ impl CacheProvider {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use tempfile::TempDir;
+
+    use super::CacheProvider;
+    use crate::{ActionResult, Digest};
+
+    #[tokio::test]
+    async fn open_local_roots_at_the_given_directory() {
+        let tmp = TempDir::new().unwrap();
+        let provider = CacheProvider::open_local(tmp.path());
+        assert_eq!(provider.root(), tmp.path());
+    }
+
+    #[tokio::test]
+    async fn local_blob_roundtrips_through_the_provider() {
+        let tmp = TempDir::new().unwrap();
+        let provider = CacheProvider::open_local(tmp.path());
+        let digest = provider.put_blob(b"payload").await.unwrap();
+        assert!(provider.has_blob(&digest).await.unwrap());
+        assert_eq!(provider.get_blob(&digest).await.unwrap(), b"payload");
+    }
+
+    #[tokio::test]
+    async fn local_has_blob_is_false_for_unknown_digest() {
+        let tmp = TempDir::new().unwrap();
+        let provider = CacheProvider::open_local(tmp.path());
+        assert!(!provider
+            .has_blob(&Digest::of_bytes(b"absent"))
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn local_put_stream_stores_and_addresses_by_content() {
+        let tmp = TempDir::new().unwrap();
+        let provider = CacheProvider::open_local(tmp.path());
+        let digest = provider.put_stream(&b"streamed"[..]).await.unwrap();
+        assert_eq!(digest, Digest::of_bytes(b"streamed"));
+        assert_eq!(provider.get_blob(&digest).await.unwrap(), b"streamed");
+    }
+
+    #[tokio::test]
+    async fn local_action_result_roundtrips_and_forgets() {
+        let tmp = TempDir::new().unwrap();
+        let provider = CacheProvider::open_local(tmp.path());
+        let stdout = provider.put_blob(b"out").await.unwrap();
+        let action = Digest::of_bytes(b"action");
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: Some(stdout),
+            stderr: None,
+            outputs: BTreeMap::new(),
+        };
+        provider.put_action_result(&action, &result).await.unwrap();
+        assert_eq!(
+            provider.get_action_result(&action).await.unwrap(),
+            Some(result)
+        );
+        assert!(provider.forget_action(&action).await.unwrap());
+        assert_eq!(provider.get_action_result(&action).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn local_stats_count_stored_blobs() {
+        let tmp = TempDir::new().unwrap();
+        let provider = CacheProvider::open_local(tmp.path());
+        provider.put_blob(b"a").await.unwrap();
+        provider.put_blob(b"bb").await.unwrap();
+        let stats = provider.stats().await.unwrap();
+        assert_eq!(stats.blob_count, 2);
+    }
+}
