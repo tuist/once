@@ -168,7 +168,19 @@ impl TuistCache {
         digests.extend(result.stdout);
         digests.extend(result.stderr);
         digests.extend(result.outputs.values().copied());
-        try_join_all(digests.iter().map(|digest| self.local.get_blob(digest))).await?;
+        // The blobs were already mirrored into the local store while decoding
+        // the remote action result, so this only confirms they are present
+        // before the result is cached. Check presence rather than reading the
+        // bytes so several large outputs cannot spike memory at once.
+        let present =
+            try_join_all(digests.iter().map(|digest| self.local.has_blob(digest))).await?;
+        if let Some(missing) = digests
+            .iter()
+            .zip(present)
+            .find_map(|(digest, exists)| (!exists).then_some(digest))
+        {
+            return Err(Error::BlobNotFound(*missing));
+        }
         Ok(())
     }
 
