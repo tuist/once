@@ -33,7 +33,7 @@ pub async fn run(
     let (targets, idx) = find_target(workspace, target_id)?;
     let target = &targets[idx];
 
-    let mut plan = action_for(workspace, target)?;
+    let mut plan = action_for(workspace, target).await?;
     if let Some(remote) = args.remote.clone() {
         set_remote(&mut plan.action, remote);
     }
