@@ -13,7 +13,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::{ExitCode, Output as ProcessOutput};
 use std::time::Duration;
 
@@ -252,7 +254,7 @@ async fn write_exec_output(
 }
 
 #[cfg(test)]
-fn script_action(
+async fn script_action(
     workspace: &Path,
     explicit_env: Vec<(String, String)>,
     cwd_override: Option<WorkspacePath>,
@@ -267,14 +269,15 @@ fn script_action(
         timeout_ms_override,
         remote_override,
         argv,
-    )?;
+    )
+    .await?;
     let input_digest = Some(script_input_digest(
         &invocation.workspace,
         &invocation.inputs,
         &[],
         &[],
     )?);
-    let action = action_from_script_invocation(&invocation, input_digest)?;
+    let action = action_from_script_invocation(&invocation, input_digest).await?;
     Ok((invocation.workspace.clone(), action))
 }
 
@@ -297,15 +300,16 @@ async fn script_action_with_dependencies(
         graph_options.timeout_ms_override,
         graph_options.remote_override.clone(),
         argv,
-    )?;
+    )
+    .await?;
     script_action_with_dependency_graph(cache, opts, invocation, graph_options).await
 }
 
-fn action_from_script_invocation(
+async fn action_from_script_invocation(
     invocation: &ScriptInvocation,
     input_digest: Option<Digest>,
 ) -> Result<Action> {
-    let program = resolve_runtime(&invocation.workspace, &invocation.runtime)?;
+    let program = resolve_runtime(&invocation.workspace, &invocation.runtime).await?;
     let mut argv = vec![program];
     argv.extend(invocation.runtime_args.clone());
     argv.push(host_script_path(
@@ -371,7 +375,7 @@ async fn script_action_with_dependency_graph(
     graph_options: ScriptGraphOptions,
 ) -> Result<(PathBuf, Action)> {
     let root_id = invocation.script_path.as_str().to_string();
-    let graph = collect_script_graph(invocation, &graph_options)?;
+    let graph = collect_script_graph(invocation, &graph_options).await?;
     let root = graph
         .get(&root_id)
         .with_context(|| format!("script graph root `{root_id}` was not collected"))?;
@@ -384,47 +388,50 @@ async fn script_action_with_dependency_graph(
         &dependency_fingerprints,
         &fingerprints,
     )?);
-    let action = action_from_script_invocation(root, input_digest)?;
+    let action = action_from_script_invocation(root, input_digest).await?;
     Ok((root.workspace.clone(), action))
 }
 
-fn collect_script_graph(
+async fn collect_script_graph(
     root: ScriptInvocation,
     graph_options: &ScriptGraphOptions,
 ) -> Result<BTreeMap<String, ScriptInvocation>> {
     let mut graph = BTreeMap::new();
     let mut stack = Vec::new();
-    collect_script_node(root, graph_options, &mut graph, &mut stack)?;
+    collect_script_node(root, graph_options, &mut graph, &mut stack).await?;
     Ok(graph)
 }
 
-fn collect_script_node(
+fn collect_script_node<'a>(
     invocation: ScriptInvocation,
-    graph_options: &ScriptGraphOptions,
-    graph: &mut BTreeMap<String, ScriptInvocation>,
-    stack: &mut Vec<String>,
-) -> Result<()> {
-    let id = invocation.script_path.as_str().to_string();
-    if let Some(position) = stack.iter().position(|candidate| candidate == &id) {
-        let mut cycle = stack[position..].to_vec();
-        cycle.push(id);
-        anyhow::bail!("script dependency cycle: {}", cycle.join(" -> "));
-    }
-    if graph.contains_key(&id) {
-        return Ok(());
-    }
+    graph_options: &'a ScriptGraphOptions,
+    graph: &'a mut BTreeMap<String, ScriptInvocation>,
+    stack: &'a mut Vec<String>,
+) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
+    Box::pin(async move {
+        let id = invocation.script_path.as_str().to_string();
+        if let Some(position) = stack.iter().position(|candidate| candidate == &id) {
+            let mut cycle = stack[position..].to_vec();
+            cycle.push(id);
+            anyhow::bail!("script dependency cycle: {}", cycle.join(" -> "));
+        }
+        if graph.contains_key(&id) {
+            return Ok(());
+        }
 
-    stack.push(id.clone());
-    for need in invocation.needs.clone() {
-        let dependency = dependency_script_invocation(&invocation.workspace, graph_options, &need)?;
-        collect_script_node(dependency, graph_options, graph, stack)?;
-    }
-    stack.pop();
-    graph.insert(id, invocation);
-    Ok(())
+        stack.push(id.clone());
+        for need in invocation.needs.clone() {
+            let dependency =
+                dependency_script_invocation(&invocation.workspace, graph_options, &need).await?;
+            collect_script_node(dependency, graph_options, graph, stack).await?;
+        }
+        stack.pop();
+        graph.insert(id, invocation);
+        Ok(())
+    })
 }
 
-fn dependency_script_invocation(
+async fn dependency_script_invocation(
     workspace: &Path,
     graph_options: &ScriptGraphOptions,
     script_path: &WorkspacePath,
@@ -444,6 +451,7 @@ fn dependency_script_invocation(
         graph_options.timeout_ms_override,
         graph_options.remote_override.clone(),
     )
+    .await
 }
 
 async fn run_script_graph_dependencies(
@@ -529,7 +537,7 @@ async fn run_dependency_script(
         &dependency_fingerprints,
         &run_fingerprint_commands(&invocation).await?,
     )?);
-    let action = action_from_script_invocation(&invocation, input_digest)?;
+    let action = action_from_script_invocation(&invocation, input_digest).await?;
     let outcome = runner
         .run(&action)
         .await
@@ -699,7 +707,7 @@ fn exit_status_text(status: std::process::ExitStatus) -> String {
         .map_or_else(|| "signal".to_string(), |code| format!("exit code {code}"))
 }
 
-fn script_invocation(
+async fn script_invocation(
     workspace: &Path,
     explicit_env: BTreeMap<String, String>,
     cwd_override: Option<WorkspacePath>,
@@ -722,10 +730,11 @@ fn script_invocation(
         timeout_ms_override,
         remote_override,
     )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
-fn script_invocation_from_annotations(
+async fn script_invocation_from_annotations(
     workspace: &Path,
     script_abs: &Path,
     annotations: ScriptAnnotations,
@@ -775,7 +784,7 @@ fn script_invocation_from_annotations(
         None => resolve_script_cwd(&script_dir, annotations.cwd.as_deref())?,
     };
     let timeout_ms = timeout_ms_override;
-    let env = script_env(&workspace, &runtime, &annotations.env_vars, explicit_env)?;
+    let env = script_env(&workspace, &runtime, &annotations.env_vars, explicit_env).await?;
     let remote = remote_override.or_else(|| remote_execution(annotations.remote.as_deref()));
     let output_symlink_mode = output_symlink_mode(annotations.output_symlinks.as_deref())?;
 
@@ -1151,7 +1160,7 @@ fn merge_runtime_args(parsed: &[String], explicit: &[String]) -> Vec<String> {
     out
 }
 
-fn script_env(
+async fn script_env(
     workspace: &Path,
     runtime: &str,
     env_vars: &[String],
@@ -1162,6 +1171,7 @@ fn script_env(
         tool_env(&env_keys)
     } else {
         workspace_tool_env(workspace, &[runtime], &env_keys)
+            .await
             .with_context(|| format!("building tool environment for script runtime `{runtime}`"))?
     };
     for name in env_vars {
@@ -1175,11 +1185,12 @@ fn script_env(
     Ok(out)
 }
 
-fn resolve_runtime(workspace: &Path, runtime: &str) -> Result<String> {
+async fn resolve_runtime(workspace: &Path, runtime: &str) -> Result<String> {
     if runtime.contains('/') {
         return Ok(runtime.to_string());
     }
     workspace_tool(workspace, runtime)
+        .await
         .with_context(|| format!("resolving script runtime `{runtime}`"))
 }
 
@@ -1290,8 +1301,8 @@ mod tests {
         assert!(input_digest.is_some());
     }
 
-    #[test]
-    fn script_annotation_sets_output_symlink_mode() {
+    #[tokio::test]
+    async fn script_annotation_sets_output_symlink_mode() {
         let tmp = TempDir::new().unwrap();
         let script = tmp.path().join("scripts").join("build.sh");
         fs::create_dir_all(script.parent().unwrap()).unwrap();
@@ -1309,6 +1320,7 @@ mod tests {
             None,
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
+        .await
         .unwrap();
 
         let Action::RunCommand {
@@ -1321,8 +1333,8 @@ mod tests {
         assert_eq!(output_symlink_mode, OutputSymlinkMode::Preserve);
     }
 
-    #[test]
-    fn rejects_invalid_output_symlink_mode() {
+    #[tokio::test]
+    async fn rejects_invalid_output_symlink_mode() {
         let tmp = TempDir::new().unwrap();
         let script = tmp.path().join("scripts").join("build.sh");
         fs::create_dir_all(script.parent().unwrap()).unwrap();
@@ -1340,6 +1352,7 @@ mod tests {
             None,
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
+        .await
         .unwrap_err();
 
         assert!(err.to_string().contains("parsing output-symlinks"));

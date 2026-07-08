@@ -526,3 +526,121 @@ fn hex_lower(bytes: &[u8]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{copy_tree_contents_blocking, file_sha256_hex, hex_lower, tree_digest_bytes};
+
+    fn tree_digest_string(root: &std::path::Path, suffixes: &[String]) -> String {
+        String::from_utf8(tree_digest_bytes(root, suffixes).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn hex_lower_pads_each_byte_to_two_digits() {
+        assert_eq!(hex_lower(&[0x00, 0x0f, 0xff, 0xa5]), "000fffa5");
+        assert_eq!(hex_lower(&[]), "");
+    }
+
+    #[test]
+    fn file_sha256_hex_matches_known_vector() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("hello.txt");
+        std::fs::write(&path, b"hello").unwrap();
+        assert_eq!(
+            file_sha256_hex(&path).unwrap(),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn tree_digest_is_empty_for_missing_or_non_directory_roots() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(tree_digest_bytes(&tmp.path().join("absent"), &[])
+            .unwrap()
+            .is_empty());
+        let file = tmp.path().join("file");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(tree_digest_bytes(&file, &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn tree_digest_lists_files_sorted_and_relative() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
+        std::fs::write(tmp.path().join("b.txt"), b"b").unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"a").unwrap();
+        std::fs::write(tmp.path().join("sub").join("c.txt"), b"c").unwrap();
+
+        let rendered = tree_digest_string(tmp.path(), &[]);
+        let paths: Vec<&str> = rendered
+            .lines()
+            .map(|line| line.rsplit("  ").next().unwrap())
+            .collect();
+        assert_eq!(paths, ["a.txt", "b.txt", "sub/c.txt"]);
+    }
+
+    #[test]
+    fn tree_digest_honors_suffix_filter() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("keep.txt"), b"1").unwrap();
+        std::fs::write(tmp.path().join("skip.rs"), b"2").unwrap();
+
+        let rendered = tree_digest_string(tmp.path(), &[".txt".to_string()]);
+        assert!(rendered.contains("keep.txt"));
+        assert!(!rendered.contains("skip.rs"));
+    }
+
+    #[test]
+    fn tree_digest_is_independent_of_creation_order() {
+        let first = tempfile::TempDir::new().unwrap();
+        std::fs::write(first.path().join("a"), b"one").unwrap();
+        std::fs::write(first.path().join("b"), b"two").unwrap();
+
+        let second = tempfile::TempDir::new().unwrap();
+        std::fs::write(second.path().join("b"), b"two").unwrap();
+        std::fs::write(second.path().join("a"), b"one").unwrap();
+
+        assert_eq!(
+            tree_digest_bytes(first.path(), &[]).unwrap(),
+            tree_digest_bytes(second.path(), &[]).unwrap()
+        );
+    }
+
+    #[test]
+    fn copy_tree_contents_preserves_nested_files() {
+        let source = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(source.path().join("nested")).unwrap();
+        std::fs::write(source.path().join("top.txt"), b"top").unwrap();
+        std::fs::write(source.path().join("nested").join("deep.txt"), b"deep").unwrap();
+
+        let dest = tempfile::TempDir::new().unwrap();
+        copy_tree_contents_blocking(source.path(), dest.path()).unwrap();
+
+        assert_eq!(std::fs::read(dest.path().join("top.txt")).unwrap(), b"top");
+        assert_eq!(
+            std::fs::read(dest.path().join("nested").join("deep.txt")).unwrap(),
+            b"deep"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_tree_contents_preserves_symlinks() {
+        let source = tempfile::TempDir::new().unwrap();
+        std::fs::write(source.path().join("target.txt"), b"data").unwrap();
+        std::os::unix::fs::symlink("target.txt", source.path().join("link.txt")).unwrap();
+
+        let dest = tempfile::TempDir::new().unwrap();
+        copy_tree_contents_blocking(source.path(), dest.path()).unwrap();
+
+        let copied = dest.path().join("link.txt");
+        assert!(std::fs::symlink_metadata(&copied)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_link(&copied).unwrap(),
+            std::path::Path::new("target.txt")
+        );
+    }
+}

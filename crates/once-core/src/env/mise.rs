@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use futures::future::try_join_all;
+use tokio::process::Command;
 
 use super::{path::build_action_path, select_extra_env, tool_env};
 
@@ -10,7 +12,7 @@ use super::{path::build_action_path, select_extra_env, tool_env};
 /// Workspaces without `mise.toml` keep the historical behavior and
 /// return the tool name so the runner resolves it through the declared
 /// action `PATH`.
-pub fn workspace_tool(workspace: &Path, tool: &str) -> Result<String, ToolEnvError> {
+pub async fn workspace_tool(workspace: &Path, tool: &str) -> Result<String, ToolEnvError> {
     if !has_mise_config(workspace) {
         return Ok(tool.to_string());
     }
@@ -19,6 +21,7 @@ pub fn workspace_tool(workspace: &Path, tool: &str) -> Result<String, ToolEnvErr
         .arg(workspace)
         .arg(tool)
         .output()
+        .await
         .map_err(|source| ToolEnvError::SpawnMise { source })?;
     if !output.status.success() {
         return Err(ToolEnvError::MiseFailed {
@@ -37,7 +40,7 @@ pub fn workspace_tool(workspace: &Path, tool: &str) -> Result<String, ToolEnvErr
 /// only the directories for tools Once explicitly needs plus stable
 /// system directories for linker/shell helpers. Workspaces without
 /// `mise.toml` fall back to the historical allowlist policy.
-pub fn workspace_tool_env(
+pub async fn workspace_tool_env(
     workspace: &Path,
     tools: &[&str],
     extra_keys: &[&str],
@@ -46,9 +49,9 @@ pub fn workspace_tool_env(
         return Ok(tool_env(extra_keys));
     }
 
-    let mise_env = mise_env(workspace)?;
+    let mise_env = mise_env(workspace).await?;
     let mut selected = select_extra_env(&mise_env, extra_keys);
-    let path = workspace_path(workspace, tools, &mise_env)?;
+    let path = workspace_path(workspace, tools, &mise_env).await?;
     selected.insert("PATH".into(), path);
     Ok(selected)
 }
@@ -58,22 +61,26 @@ pub fn workspace_tool_env(
 /// This is used for cache-key material such as `RUSTUP_TOOLCHAIN`, so
 /// invoking Once outside `mise exec` still keys actions on the same
 /// toolchain that execution will use.
-pub fn workspace_tool_var(workspace: &Path, key: &str) -> Result<Option<String>, ToolEnvError> {
+pub async fn workspace_tool_var(
+    workspace: &Path,
+    key: &str,
+) -> Result<Option<String>, ToolEnvError> {
     if !has_mise_config(workspace) {
         return Ok(env::var(key).ok());
     }
-    Ok(mise_env(workspace)?.remove(key))
+    Ok(mise_env(workspace).await?.remove(key))
 }
 
 fn has_mise_config(workspace: &Path) -> bool {
     workspace.join("mise.toml").is_file()
 }
 
-fn mise_env(workspace: &Path) -> Result<BTreeMap<String, String>, ToolEnvError> {
+async fn mise_env(workspace: &Path) -> Result<BTreeMap<String, String>, ToolEnvError> {
     let output = Command::new("mise")
         .args(["env", "--json", "-C"])
         .arg(workspace)
         .output()
+        .await
         .map_err(|source| ToolEnvError::SpawnMise { source })?;
     if !output.status.success() {
         return Err(ToolEnvError::MiseFailed {
@@ -85,15 +92,17 @@ fn mise_env(workspace: &Path) -> Result<BTreeMap<String, String>, ToolEnvError> 
     serde_json::from_slice(&output.stdout).map_err(|source| ToolEnvError::ParseMiseEnv { source })
 }
 
-fn workspace_path(
+async fn workspace_path(
     workspace: &Path,
     tools: &[&str],
     mise_env: &BTreeMap<String, String>,
 ) -> Result<String, ToolEnvError> {
-    let tool_paths = tools
-        .iter()
-        .map(|tool| workspace_tool(workspace, tool).map(PathBuf::from))
-        .collect::<Result<Vec<_>, _>>()?;
+    let tool_paths = try_join_all(
+        tools
+            .iter()
+            .map(|tool| async move { workspace_tool(workspace, tool).await.map(PathBuf::from) }),
+    )
+    .await?;
     build_action_path(&tool_paths, mise_env)
 }
 
@@ -126,11 +135,13 @@ pub enum ToolEnvError {
 mod tests {
     use super::*;
 
-    #[test]
-    fn workspace_without_mise_keeps_legacy_env_policy() {
+    #[tokio::test]
+    async fn workspace_without_mise_keeps_legacy_env_policy() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let env = workspace_tool_env(tmp.path(), &["rustc"], &["RUSTUP_TOOLCHAIN"]).unwrap();
+        let env = workspace_tool_env(tmp.path(), &["rustc"], &["RUSTUP_TOOLCHAIN"])
+            .await
+            .unwrap();
         assert_eq!(env, tool_env(&["RUSTUP_TOOLCHAIN"]));
-        assert_eq!(workspace_tool(tmp.path(), "rustc").unwrap(), "rustc");
+        assert_eq!(workspace_tool(tmp.path(), "rustc").await.unwrap(), "rustc");
     }
 }

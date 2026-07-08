@@ -10,6 +10,7 @@ use bazel_remote_apis::{
     },
     google::rpc::Status as RpcStatus,
 };
+use futures::future::try_join_all;
 use reqwest::{Method, Url};
 use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
@@ -128,18 +129,26 @@ impl TuistCache {
 
     pub async fn get_action_result(&self, action: &Digest) -> Result<Option<ActionResult>> {
         if let Some(result) = self.local.get_action_result(action).await? {
+            tracing::debug!(action_digest = %action, tier = "local", "action cache hit");
             return Ok(Some(result));
         }
 
         match self.get_action_result_remote(action).await {
             Ok(Some(result)) => {
+                tracing::debug!(action_digest = %action, tier = "remote", "action cache hit");
                 if self.prefetch_action_blobs(&result).await.is_ok() {
                     let _ = self.local.put_action_result(action, &result).await;
                 }
                 Ok(Some(result))
             }
-            Ok(None) => Ok(None),
-            Err(error) if error.is_read_miss() => Ok(None),
+            Ok(None) => {
+                tracing::debug!(action_digest = %action, "action cache miss");
+                Ok(None)
+            }
+            Err(error) if error.is_read_miss() => {
+                tracing::debug!(action_digest = %action, "action cache miss");
+                Ok(None)
+            }
             Err(error) => Err(error.into_public_error("get action result")),
         }
     }
@@ -159,8 +168,18 @@ impl TuistCache {
         digests.extend(result.stdout);
         digests.extend(result.stderr);
         digests.extend(result.outputs.values().copied());
-        for digest in digests {
-            let _ = self.local.get_blob(&digest).await?;
+        // The blobs were already mirrored into the local store while decoding
+        // the remote action result, so this only confirms they are present
+        // before the result is cached. Check presence rather than reading the
+        // bytes so several large outputs cannot spike memory at once.
+        let present =
+            try_join_all(digests.iter().map(|digest| self.local.has_blob(digest))).await?;
+        if let Some(missing) = digests
+            .iter()
+            .zip(present)
+            .find_map(|(digest, exists)| (!exists).then_some(digest))
+        {
+            return Err(Error::BlobNotFound(*missing));
         }
         Ok(())
     }
@@ -183,6 +202,7 @@ impl TuistCache {
                 message: format!("remote blob mapping for {digest} points at a missing blob"),
             });
         };
+        tracing::debug!(blob_digest = %digest, bytes = bytes.len(), "fetched blob from remote cache");
         Ok(bytes)
     }
 
@@ -197,6 +217,7 @@ impl TuistCache {
         let sha256 = sha256_digest(bytes)?;
         self.upload_reapi_blob(&sha256, bytes, "put blob").await?;
         self.put_blob_mapping(digest, &sha256).await?;
+        tracing::debug!(blob_digest = %digest, bytes = bytes.len(), "uploaded blob to remote cache");
         Ok(sha256)
     }
 
@@ -220,24 +241,20 @@ impl TuistCache {
     }
 
     async fn put_action_result_remote(&self, action: &Digest, result: &ActionResult) -> Result<()> {
-        let stdout_digest = self
-            .upload_local_blob(result.stdout.as_ref(), "put action result")
-            .await?;
-        let stderr_digest = self
-            .upload_local_blob(result.stderr.as_ref(), "put action result")
-            .await?;
-
-        let mut output_files = Vec::with_capacity(result.outputs.len());
-        for (path, digest) in &result.outputs {
+        let stdout_upload = self.upload_local_blob(result.stdout.as_ref(), "put action result");
+        let stderr_upload = self.upload_local_blob(result.stderr.as_ref(), "put action result");
+        let output_uploads = try_join_all(result.outputs.iter().map(|(path, digest)| async move {
             let reapi_digest = self
                 .upload_local_blob(Some(digest), "put action result")
                 .await?;
-            output_files.push(reapi::OutputFile {
+            Ok::<_, Error>(reapi::OutputFile {
                 path: path.clone(),
                 digest: reapi_digest,
                 ..Default::default()
-            });
-        }
+            })
+        }));
+        let (stdout_digest, stderr_digest, output_files) =
+            tokio::try_join!(stdout_upload, stderr_upload, output_uploads)?;
 
         let reapi_result = reapi::ActionResult {
             output_files,
@@ -247,6 +264,11 @@ impl TuistCache {
             ..Default::default()
         };
         let mapping_digest = action_mapping_digest(action)?;
+        tracing::debug!(
+            action_digest = %action,
+            output_count = result.outputs.len(),
+            "uploading action result to remote cache"
+        );
         self.update_reapi_action_result(&mapping_digest, reapi_result, "put action result")
             .await
     }
@@ -311,35 +333,33 @@ impl TuistCache {
         &self,
         result: reapi::ActionResult,
     ) -> Result<ActionResult> {
-        let stdout = self
-            .mirror_reapi_digest_or_raw(
-                result.stdout_digest.as_ref(),
-                &result.stdout_raw,
-                "get action result",
-            )
-            .await?;
-        let stderr = self
-            .mirror_reapi_digest_or_raw(
-                result.stderr_digest.as_ref(),
-                &result.stderr_raw,
-                "get action result",
-            )
-            .await?;
-
-        let mut outputs = BTreeMap::new();
-        for output_file in result.output_files {
-            let digest = match output_file.digest.as_ref() {
-                Some(reapi_digest) => {
-                    self.mirror_reapi_blob(reapi_digest, "get action result")
-                        .await?
-                }
-                None if !output_file.contents.is_empty() => {
-                    self.local.put_blob(&output_file.contents).await?
-                }
-                None => continue,
-            };
-            outputs.insert(output_file.path, digest);
-        }
+        let stdout_mirror = self.mirror_reapi_digest_or_raw(
+            result.stdout_digest.as_ref(),
+            &result.stdout_raw,
+            "get action result",
+        );
+        let stderr_mirror = self.mirror_reapi_digest_or_raw(
+            result.stderr_digest.as_ref(),
+            &result.stderr_raw,
+            "get action result",
+        );
+        let output_mirrors =
+            try_join_all(result.output_files.iter().map(|output_file| async move {
+                let digest = match output_file.digest.as_ref() {
+                    Some(reapi_digest) => Some(
+                        self.mirror_reapi_blob(reapi_digest, "get action result")
+                            .await?,
+                    ),
+                    None if !output_file.contents.is_empty() => {
+                        Some(self.local.put_blob(&output_file.contents).await?)
+                    }
+                    None => None,
+                };
+                Ok::<_, Error>(digest.map(|digest| (output_file.path.clone(), digest)))
+            }));
+        let (stdout, stderr, output_pairs) =
+            tokio::try_join!(stdout_mirror, stderr_mirror, output_mirrors)?;
+        let outputs: BTreeMap<String, Digest> = output_pairs.into_iter().flatten().collect();
 
         Ok(ActionResult {
             exit_code: result.exit_code,
@@ -623,7 +643,23 @@ impl TuistCache {
             }
         }
 
-        best.map(|(_, endpoint)| endpoint).ok_or_else(|| {
+        if !failures.is_empty() {
+            tracing::warn!(
+                unreachable = failures.len(),
+                candidates = endpoints.len(),
+                "some Tuist cache endpoints were unreachable"
+            );
+        }
+        best.map(|(elapsed, endpoint)| {
+            tracing::debug!(
+                endpoint = %endpoint,
+                probe_ms = elapsed.as_millis(),
+                candidates = endpoints.len(),
+                "selected Tuist cache endpoint"
+            );
+            endpoint
+        })
+        .ok_or_else(|| {
             let message = if failures.is_empty() {
                 "no reachable Tuist Kura cache endpoints".to_string()
             } else {

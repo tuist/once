@@ -17,14 +17,14 @@ use once_core::{
 use super::{input_digest, parse_attr, ActionPlan};
 use crate::commands::util::relative_path;
 
-pub(super) fn script_action(
+pub(super) async fn script_action(
     workspace: &std::path::Path,
     target: &once_frontend::Target,
 ) -> Result<ActionPlan> {
-    script_action_with_env(workspace, target, &|name| env::var(name).ok())
+    script_action_with_env(workspace, target, &|name| env::var(name).ok()).await
 }
 
-fn script_action_with_env(
+async fn script_action_with_env(
     workspace: &std::path::Path,
     target: &once_frontend::Target,
     host_env_value: &dyn Fn(&str) -> Option<String>,
@@ -63,10 +63,11 @@ fn script_action_with_env(
         output_symlink_mode,
         host_env_value,
     )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
-fn file_script_action(
+async fn file_script_action(
     workspace: &std::path::Path,
     target: &once_frontend::Target,
     input_digest: Option<Digest>,
@@ -90,7 +91,7 @@ fn file_script_action(
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("script {} has no script_path", target.id()))?;
 
-    let program = resolve_host_runtime(workspace, &runtime)?;
+    let program = resolve_host_runtime(workspace, &runtime).await?;
     let mut argv = vec![program];
     argv.extend(runtime_args);
     argv.push(host_script_path(&script_path, cwd.as_ref())?);
@@ -98,7 +99,7 @@ fn file_script_action(
     Ok(ActionPlan {
         action: Action::RunCommand {
             argv,
-            env: host_env(workspace, target, &runtime, host_env_value)?,
+            env: host_env(workspace, target, &runtime, host_env_value).await?,
             cwd,
             input_digest,
             outputs,
@@ -150,7 +151,7 @@ fn tracked_env(
     Ok(out)
 }
 
-fn host_env(
+async fn host_env(
     workspace: &std::path::Path,
     target: &once_frontend::Target,
     runtime: &str,
@@ -162,6 +163,7 @@ fn host_env(
         tool_env(&env_keys)
     } else {
         workspace_tool_env(workspace, &[runtime], &env_keys)
+            .await
             .with_context(|| format!("building tool environment for script {}", target.id()))?
     };
     for (key, value) in tracked_env(target, host_env_value)? {
@@ -170,11 +172,12 @@ fn host_env(
     Ok(out)
 }
 
-fn resolve_host_runtime(workspace: &std::path::Path, runtime: &str) -> Result<String> {
+async fn resolve_host_runtime(workspace: &std::path::Path, runtime: &str) -> Result<String> {
     if runtime.contains('/') {
         return Ok(runtime.to_string());
     }
     workspace_tool(workspace, runtime)
+        .await
         .with_context(|| format!("resolving script runtime `{runtime}`"))
 }
 
@@ -270,8 +273,8 @@ mod tests {
         u128::from_le_bytes(bytes)
     }
 
-    #[test]
-    fn host_script_action_uses_cwd_relative_script_path() {
+    #[tokio::test]
+    async fn host_script_action_uses_cwd_relative_script_path() {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("pkg/scripts")).unwrap();
         std::fs::create_dir_all(tmp.path().join("pkg/src")).unwrap();
@@ -296,6 +299,7 @@ mod tests {
         let plan = script_action_with_env(tmp.path(), &target, &|name| {
             (name == "ONCE_TEST_HOST_SCRIPT_ENV").then(|| "present".to_string())
         })
+        .await
         .unwrap();
         let Action::RunCommand {
             argv,

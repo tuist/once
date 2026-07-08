@@ -112,8 +112,8 @@ pub extern "C" fn once_cache_put_blob_json(request_json: *const c_char) -> *mut 
 #[no_mangle]
 pub extern "C" fn once_cache_get_blob_json(request_json: *const c_char) -> *mut c_char {
     run_json::<DigestRequest, _>(request_json, |request| {
-        let cache = Cache::new();
         let digest = digest_from_hex(&request.digest)?;
+        let cache = Cache::new();
         block_on(async {
             cache
                 .get_blob(digest)
@@ -127,8 +127,8 @@ pub extern "C" fn once_cache_get_blob_json(request_json: *const c_char) -> *mut 
 #[no_mangle]
 pub extern "C" fn once_cache_has_blob_json(request_json: *const c_char) -> *mut c_char {
     run_json::<DigestRequest, _>(request_json, |request| {
-        let cache = Cache::new();
         let digest = digest_from_hex(&request.digest)?;
+        let cache = Cache::new();
         block_on(async { cache.has_blob(digest).await })
     })
 }
@@ -137,8 +137,8 @@ pub extern "C" fn once_cache_has_blob_json(request_json: *const c_char) -> *mut 
 #[no_mangle]
 pub extern "C" fn once_cache_put_action_result_json(request_json: *const c_char) -> *mut c_char {
     run_json::<ActionResultPutRequest, _>(request_json, |request| {
-        let cache = Cache::new();
         let action = digest_from_hex(&request.action_digest)?;
+        let cache = Cache::new();
         block_on(async {
             cache
                 .put_action_result(action, &request.result)
@@ -152,8 +152,8 @@ pub extern "C" fn once_cache_put_action_result_json(request_json: *const c_char)
 #[no_mangle]
 pub extern "C" fn once_cache_get_action_result_json(request_json: *const c_char) -> *mut c_char {
     run_json::<ActionDigestRequest, _>(request_json, |request| {
-        let cache = Cache::new();
         let action = digest_from_hex(&request.action_digest)?;
+        let cache = Cache::new();
         block_on(async { cache.get_action_result(action).await })
     })
 }
@@ -162,8 +162,8 @@ pub extern "C" fn once_cache_get_action_result_json(request_json: *const c_char)
 #[no_mangle]
 pub extern "C" fn once_cache_forget_action_json(request_json: *const c_char) -> *mut c_char {
     run_json::<ActionDigestRequest, _>(request_json, |request| {
-        let cache = Cache::new();
         let action = digest_from_hex(&request.action_digest)?;
+        let cache = Cache::new();
         block_on(async { cache.forget_action(action).await })
     })
 }

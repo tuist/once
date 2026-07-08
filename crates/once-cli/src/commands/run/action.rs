@@ -13,9 +13,12 @@ pub(super) struct ActionPlan {
     pub(super) output_dir: Option<PathBuf>,
 }
 
-pub(super) fn action_for(workspace: &Path, target: &once_frontend::Target) -> Result<ActionPlan> {
+pub(super) async fn action_for(
+    workspace: &Path,
+    target: &once_frontend::Target,
+) -> Result<ActionPlan> {
     match target.kind.as_str() {
-        "script" | "runtime_script" => script::script_action(workspace, target),
+        "script" | "runtime_script" => script::script_action(workspace, target).await,
         "task" | "runtime_task" | "runner_task" => task::task_action(workspace, target),
         other => anyhow::bail!("running `{other}` targets is not yet supported"),
     }

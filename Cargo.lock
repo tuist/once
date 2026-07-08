@@ -3381,6 +3381,7 @@ dependencies = [
  "anyhow",
  "bazel-remote-apis",
  "blake3",
+ "futures",
  "hex",
  "reqwest 0.13.4",
  "schlussel",
@@ -3391,6 +3392,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tonic",
+ "tracing",
  "zstd",
 ]
 
@@ -3426,6 +3428,7 @@ name = "once-core"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "futures",
  "jsonwebtoken",
  "microsandbox",
  "once-cas",
