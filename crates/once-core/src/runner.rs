@@ -1065,7 +1065,13 @@ mod tests {
 
         let runner =
             Runner::new(cas, tmp.path().to_path_buf(), RunOpts::default()).with_max_concurrency(1);
-        let started = std::time::Instant::now();
+
+        // Exhaust the single permit and hold it for the whole test. If cache
+        // hits queued on the pool they would block forever here, so the
+        // timeout below fires; correct behavior short-circuits before the
+        // permit is ever requested and completes immediately.
+        let _held = runner.resources.acquire(ResourceRequest::default()).await;
+
         let mut handles = Vec::new();
         for _ in 0..32 {
             let runner = runner.clone();
@@ -1075,13 +1081,12 @@ mod tests {
             ));
         }
         for h in handles {
-            assert_eq!(h.await.unwrap().cache, CacheState::Hit);
+            let outcome = tokio::time::timeout(Duration::from_secs(5), h)
+                .await
+                .expect("cache hit blocked on the permit pool")
+                .unwrap();
+            assert_eq!(outcome.cache, CacheState::Hit);
         }
-        assert!(
-            started.elapsed() < Duration::from_millis(500),
-            "32 cache hits took {:?}; permit must not gate lookups",
-            started.elapsed()
-        );
     }
 
     #[tokio::test]
