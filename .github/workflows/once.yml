@@ -161,7 +161,7 @@ jobs:
   tuist-cache-smoke:
     name: tuist cache smoke
     needs: changes
-    if: needs.changes.outputs.rust_ci == 'true'
+    if: needs.changes.outputs.rust_ci == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
