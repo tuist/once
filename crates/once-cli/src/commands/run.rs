@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use once_cas::CacheProvider;
-use once_core::{Action, CacheState, EvidenceSubject, RemoteExecution, RunOpts};
+use once_core::{Action, CacheState, EvidenceSubject, RemoteExecution, RunOpts, SandboxMode};
 
 use self::action::action_for;
 use self::runtime_descriptor::runtime_descriptor;
@@ -21,6 +21,7 @@ pub struct RunArgs {
     pub output: Output,
     pub runtime_rpc: bool,
     pub runtime_rpc_socket: Option<PathBuf>,
+    pub sandbox: SandboxMode,
     pub remote: Option<RemoteExecution>,
 }
 
@@ -37,6 +38,7 @@ pub async fn run(
     if let Some(remote) = args.remote.clone() {
         set_remote(&mut plan.action, remote);
     }
+    set_sandbox(&mut plan.action, args.sandbox);
     if let Some(out_dir) = &plan.output_dir {
         tokio::fs::create_dir_all(out_dir)
             .await
@@ -91,6 +93,7 @@ async fn finish_run(
         output,
         runtime_rpc,
         runtime_rpc_socket,
+        sandbox: _,
         remote: _,
     } = args;
     let stdout_blob = match outcome.result.stdout {
@@ -138,6 +141,12 @@ async fn finish_run(
 fn set_remote(action: &mut Action, remote_execution: RemoteExecution) {
     if let Action::RunCommand { remote, .. } = action {
         *remote = Some(remote_execution);
+    }
+}
+
+fn set_sandbox(action: &mut Action, sandbox_mode: SandboxMode) {
+    if let Action::RunCommand { sandbox, .. } = action {
+        *sandbox = (*sandbox).stronger(sandbox_mode);
     }
 }
 

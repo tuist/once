@@ -14,7 +14,7 @@ use once_core::{
     ResourceRequest, WorkspacePath,
 };
 
-use super::{input_digest, parse_attr, ActionPlan};
+use super::{input_digest, input_paths, parse_attr, ActionPlan};
 use crate::commands::util::relative_path;
 
 pub(super) async fn script_action(
@@ -42,6 +42,7 @@ async fn script_action_with_env(
 
     let timeout_ms = parse_attr::<u64>(target, "timeout_ms")?;
     let outputs = outputs(target)?;
+    let inputs = input_paths(target)?;
     let cwd = cwd(target)?;
     let resources = resources(target)?;
     let remote = remote(target);
@@ -55,6 +56,7 @@ async fn script_action_with_env(
         workspace,
         target,
         input_digest,
+        inputs,
         outputs,
         cwd,
         resources,
@@ -71,6 +73,7 @@ async fn file_script_action(
     workspace: &std::path::Path,
     target: &once_frontend::Target,
     input_digest: Option<Digest>,
+    inputs: Vec<WorkspacePath>,
     outputs: Vec<WorkspacePath>,
     cwd: Option<WorkspacePath>,
     resources: ResourceRequest,
@@ -102,11 +105,13 @@ async fn file_script_action(
             env: host_env(workspace, target, &runtime, host_env_value).await?,
             cwd,
             input_digest,
+            inputs,
             outputs,
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode,
             resources,
+            sandbox: Default::default(),
             timeout_ms,
             remote,
         },

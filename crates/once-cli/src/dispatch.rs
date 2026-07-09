@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use once_cas::CacheProvider;
-use once_core::{RemoteExecution, Xdg};
+use once_core::{RemoteExecution, SandboxMode, Xdg};
 
 use crate::cli::{self, Cli, Cmd, Output};
 use crate::commands;
@@ -55,15 +55,19 @@ async fn run_command(
 ) -> Result<ExitCode> {
     match command {
         Cmd::Auth { cmd } => run_auth_command(workspace, xdg, output, cmd).await,
-        Cmd::Build { target } => {
+        Cmd::Build { target, sandbox } => {
             let target = resolve_required_target(workspace, target)?;
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
             // Graph command futures carry analysis state; boxing keeps
             // dispatch below clippy's large_futures threshold.
-            Box::pin(commands::graph::build(workspace, &cache, output, &target)).await
+            Box::pin(commands::graph::build(
+                workspace, &cache, output, &target, sandbox,
+            ))
+            .await
         }
         Cmd::Run {
             target,
+            sandbox,
             visible,
             runtime_rpc,
             runtime_rpc_socket,
@@ -79,12 +83,14 @@ async fn run_command(
                     visible,
                     runtime_rpc,
                     runtime_rpc_socket,
+                    sandbox,
                     remote: resolve_remote_execution(workspace, xdg, remote, compute.as_deref())?,
                 },
             ))
             .await
         }
         Cmd::Exec {
+            sandbox,
             script,
             env,
             cwd,
@@ -99,6 +105,7 @@ async fn run_command(
                 xdg,
                 output,
                 commands::exec::ExecArgs {
+                    sandbox,
                     script,
                     env,
                     cwd,
@@ -111,12 +118,15 @@ async fn run_command(
             .await
         }
         Cmd::Cache { cmd } => run_cache_command(workspace, xdg, output, cmd).await,
-        Cmd::Test { target } => {
+        Cmd::Test { target, sandbox } => {
             let target = resolve_required_target(workspace, target)?;
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
             // Graph command futures carry analysis state; boxing keeps
             // dispatch below clippy's large_futures threshold.
-            Box::pin(commands::graph::test(workspace, &cache, output, &target)).await
+            Box::pin(commands::graph::test(
+                workspace, &cache, output, &target, sandbox,
+            ))
+            .await
         }
         Cmd::Toolchain { cmd } => run_toolchain_command(workspace, output, cmd).await,
         Cmd::Query { expression, cmd } => {
@@ -369,6 +379,7 @@ struct RunDispatchArgs {
     visible: bool,
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
+    sandbox: SandboxMode,
     remote: Option<RemoteExecution>,
 }
 
@@ -379,6 +390,7 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
         visible,
         runtime_rpc,
         runtime_rpc_socket,
+        sandbox,
         remote,
     } = args;
     let resolved_target = resolve_required_target(workspace, target.clone())?;
@@ -397,6 +409,7 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
             output,
             &resolved_target,
             commands::graph::GraphRunOptions { visible },
+            sandbox,
         ))
         .await;
     }
@@ -411,6 +424,7 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
         Some(resolved_target),
         runtime_rpc,
         runtime_rpc_socket,
+        sandbox,
         remote,
     )
     .await
@@ -433,6 +447,7 @@ async fn run_target_command(
     target: Option<String>,
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
+    sandbox: SandboxMode,
     remote: Option<RemoteExecution>,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
@@ -444,6 +459,7 @@ async fn run_target_command(
             output,
             runtime_rpc,
             runtime_rpc_socket,
+            sandbox,
             remote,
         },
     )

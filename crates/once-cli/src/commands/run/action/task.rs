@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use once_cas::Digest;
 use once_core::{Action, OutputSymlinkMode, ResourceRequest, WorkspacePath};
 
-use super::{input_digest, parse_attr, ActionPlan};
+use super::{input_digest, input_paths, parse_attr, ActionPlan};
 
 pub(super) fn task_action(workspace: &Path, target: &once_frontend::Target) -> Result<ActionPlan> {
     let cache = target
@@ -26,11 +26,13 @@ pub(super) fn task_action(workspace: &Path, target: &once_frontend::Target) -> R
             env: task_env(target)?,
             cwd: task_cwd(target)?,
             input_digest,
+            inputs: input_paths(target)?,
             outputs: task_outputs(target)?,
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: task_resources(target)?,
+            sandbox: Default::default(),
             timeout_ms: parse_attr::<u64>(target, "timeout_ms")?,
             remote: None,
         },

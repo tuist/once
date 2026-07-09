@@ -242,6 +242,10 @@ compiler flags, provider conventions, and action layout.
 - `cwd`: workspace-relative directory to run the command in. Defaults to
   the workspace root when omitted or `None`.
 - `env`: string environment variables.
+- `sandbox`: local filesystem sandbox policy. `off` uses the current
+  workspace view. `inputs` runs in an action-private workspace view
+  populated from declared inputs and copies declared outputs back after
+  a successful command.
 - `cacheable`: `True` by default. Set `False` for interactive or local
   side-effect actions.
 - `depends_on_prior_actions`: `True` by default. When true, each action key

@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     Action, CopyPathMode, EvidenceCacheState, EvidenceSubject, InputDigestBuilder,
-    OutputSymlinkMode, PreparePathMode, ResourceRequest, RunOpts, WorkspacePath,
+    OutputSymlinkMode, PreparePathMode, ResourceRequest, RunOpts, SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::{
     AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArgFile,
@@ -33,6 +33,7 @@ struct DeclaredActionRun<'a> {
     declared: DeclaredAction,
     input_action_digests: &'a [(String, Digest)],
     record_success_evidence: bool,
+    sandbox: SandboxMode,
 }
 
 struct DeclaredActionOutcome {
@@ -80,6 +81,7 @@ pub(super) fn run_declared_actions<'a>(
     capability: &'a str,
     analysis: AnalysisResult,
     dep_action_digests: &'a [(String, Digest)],
+    sandbox: SandboxMode,
 ) -> Pin<Box<dyn Future<Output = Result<BuildOutcome>> + Send + 'a>> {
     Box::pin(async move {
         let AnalysisResult {
@@ -130,6 +132,7 @@ pub(super) fn run_declared_actions<'a>(
                 declared,
                 input_action_digests: &input_action_digests,
                 record_success_evidence,
+                sandbox,
             }))
             .await?;
             action_digests.push(outcome.digest);
@@ -189,6 +192,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         declared,
         input_action_digests,
         record_success_evidence,
+        sandbox,
     } = run;
     let identifier_for_error = declared
         .identifier
@@ -212,6 +216,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         &declared,
         module_source_digest,
         input_action_digests,
+        sandbox,
     )
     .with_context(|| format!("building action {index} for {target_id} ({identifier_for_error})"))?;
     let context = DeclaredActionContext {
@@ -585,8 +590,14 @@ async fn run_uncached_action(
             outputs,
             stdout_path,
             stderr_path,
+            sandbox,
             ..
         } => {
+            if *sandbox != SandboxMode::Off {
+                return once_core::run_uncached(action, workspace, cache, false)
+                    .await
+                    .map_err(Into::into);
+            }
             let (program, rest) = argv
                 .split_first()
                 .ok_or_else(|| anyhow::anyhow!("declared action has empty argv"))?;
@@ -858,6 +869,7 @@ fn declared_to_action(
     declared: &DeclaredAction,
     module_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
+    sandbox_override: SandboxMode,
 ) -> Result<Action> {
     let env_keys = declared.env.keys().cloned().collect::<Vec<_>>();
     tracing::trace!(
@@ -874,6 +886,7 @@ fn declared_to_action(
         module_source_digest,
         dep_action_digests,
     )?;
+    let inputs = declared_action_inputs(declared)?;
     let outputs = declared
         .outputs
         .iter()
@@ -905,11 +918,13 @@ fn declared_to_action(
                 .map(|cwd| workspace_path(cwd, "run_action cwd"))
                 .transpose()?,
             input_digest: Some(input_digest),
+            inputs,
             outputs,
             stdout_path,
             stderr_path,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: effective_sandbox(declared.sandbox.as_deref(), sandbox_override)?,
             timeout_ms: None,
             remote: None,
         }),
@@ -1018,6 +1033,31 @@ fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest)
 
 fn workspace_path(path: &str, context: &str) -> Result<WorkspacePath> {
     WorkspacePath::try_from(path).with_context(|| format!("invalid {context} `{path}`"))
+}
+
+fn declared_action_inputs(declared: &DeclaredAction) -> Result<Vec<WorkspacePath>> {
+    let mut inputs = declared
+        .inputs
+        .iter()
+        .map(|path| workspace_path(path, "run_action input"))
+        .collect::<Result<Vec<_>>>()?;
+    for arg_file in &declared.arg_files {
+        inputs.push(workspace_path(&arg_file.path, "run_action arg file")?);
+    }
+    inputs.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    inputs.dedup_by(|a, b| a.as_str() == b.as_str());
+    Ok(inputs)
+}
+
+fn effective_sandbox(declared: Option<&str>, sandbox_override: SandboxMode) -> Result<SandboxMode> {
+    let declared = match declared {
+        Some(raw) => raw
+            .parse::<SandboxMode>()
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("parsing sandbox policy `{raw}`"))?,
+        None => SandboxMode::Off,
+    };
+    Ok(declared.stronger(sandbox_override))
 }
 
 fn ensure_output_parent_dirs(workspace: &Path, outputs: &[WorkspacePath]) -> Result<()> {
@@ -1133,13 +1173,21 @@ mod tests {
             create_dirs: Vec::new(),
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
         };
 
-        let action = declared_to_action(workspace.path(), &declared, module_digest(), &[]).unwrap();
+        let action = declared_to_action(
+            workspace.path(),
+            &declared,
+            module_digest(),
+            &[],
+            Default::default(),
+        )
+        .unwrap();
 
         assert!(workspace.path().join(".once/out/x").is_dir());
         assert!(workspace.path().join(".once/out/x/sub").is_dir());
@@ -1174,6 +1222,7 @@ mod tests {
             create_dirs: vec![".once/out/tree".to_string(), ".once/tmp/home".to_string()],
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -1367,11 +1416,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: Vec::new(),
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: Default::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1403,11 +1454,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![WorkspacePath::try_from(".once/out/result.txt").unwrap()],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: Default::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1439,11 +1492,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: Vec::new(),
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: Default::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1471,11 +1526,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![log.clone()],
             stdout_path: Some(Box::new(log.clone())),
             stderr_path: Some(Box::new(log)),
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: Default::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1584,6 +1641,7 @@ mod tests {
                 create_dirs: Vec::new(),
                 cwd: None,
                 env: BTreeMap::new(),
+                sandbox: None,
                 cacheable: true,
                 depends_on_prior_actions: true,
                 toolchain_identity: None,
@@ -1601,6 +1659,7 @@ mod tests {
             "build",
             analysis,
             &[],
+            Default::default(),
         )
         .await
         .unwrap();
@@ -1678,6 +1737,7 @@ mod tests {
                 create_dirs: vec![".once/out".to_string()],
                 cwd: None,
                 env: BTreeMap::new(),
+                sandbox: None,
                 cacheable: true,
                 depends_on_prior_actions: true,
                 toolchain_identity: None,
@@ -1696,6 +1756,7 @@ mod tests {
             "build",
             analysis(),
             &[],
+            Default::default(),
         )
         .await
         .unwrap();
@@ -1717,6 +1778,7 @@ mod tests {
             "build",
             analysis(),
             &[],
+            Default::default(),
         )
         .await
         .unwrap();
@@ -1759,6 +1821,7 @@ mod tests {
             create_dirs: Vec::new(),
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -1778,6 +1841,7 @@ mod tests {
             "build",
             analysis,
             &[],
+            Default::default(),
         )
         .await
         .unwrap();
@@ -1843,6 +1907,7 @@ mod tests {
                     create_dirs: Vec::new(),
                     cwd: None,
                     env: BTreeMap::new(),
+                    sandbox: None,
                     cacheable: true,
                     depends_on_prior_actions: true,
                     toolchain_identity: None,
@@ -1865,6 +1930,7 @@ mod tests {
                     create_dirs: Vec::new(),
                     cwd: None,
                     env: BTreeMap::new(),
+                    sandbox: None,
                     cacheable: true,
                     depends_on_prior_actions: false,
                     toolchain_identity: None,
@@ -1883,6 +1949,7 @@ mod tests {
             "build",
             analysis("one"),
             &[],
+            Default::default(),
         )
         .await
         .unwrap();
@@ -1896,6 +1963,7 @@ mod tests {
             "build",
             analysis("changed"),
             &[],
+            Default::default(),
         )
         .await
         .unwrap();
@@ -1925,11 +1993,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![WorkspacePath::try_from(".once/out/missing.txt").unwrap()],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: Default::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1963,6 +2033,7 @@ mod tests {
             create_dirs: Vec::new(),
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: Some("id-1".to_string()),
@@ -1992,6 +2063,7 @@ mod tests {
             create_dirs: vec![".once/tmp/home".to_string()],
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -2029,6 +2101,7 @@ mod tests {
             create_dirs: Vec::new(),
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -2064,6 +2137,7 @@ mod tests {
             create_dirs: Vec::new(),
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -2103,6 +2177,7 @@ mod tests {
             create_dirs: Vec::new(),
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,

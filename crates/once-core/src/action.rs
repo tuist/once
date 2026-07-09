@@ -12,7 +12,7 @@ use crate::{ResourceRequest, WorkspacePath};
 /// that should invalidate the cache. Older action result JSON still
 /// deserializes through serde defaults; the domain only partitions new
 /// action lookups.
-pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v6\0";
+pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v7\0";
 
 static DEFAULT_RESOURCE_REQUEST: LazyLock<ResourceRequest> =
     LazyLock::new(ResourceRequest::default);
@@ -45,6 +45,36 @@ impl FromStr for OutputSymlinkMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxMode {
+    #[default]
+    Off,
+    Inputs,
+}
+
+impl SandboxMode {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn stronger(self, other: Self) -> Self {
+        std::cmp::max(self, other)
+    }
+}
+
+impl FromStr for SandboxMode {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw {
+            "off" => Ok(Self::Off),
+            "inputs" => Ok(Self::Inputs),
+            _ => Err(format!("expected `off` or `inputs`, got `{raw}`")),
+        }
+    }
+}
+
 /// All actions Once can execute.
 ///
 /// The wire format of this enum is part of the action digest (see
@@ -61,6 +91,8 @@ pub enum Action {
         cwd: Option<WorkspacePath>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input_digest: Option<Digest>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        inputs: Vec<WorkspacePath>,
         /// Workspace-relative paths the action promises to produce. The
         /// runner stores each one in the CAS after a fresh execution
         /// and restores it from the CAS on a cache hit. An empty list
@@ -84,6 +116,8 @@ pub enum Action {
         output_symlink_mode: OutputSymlinkMode,
         #[serde(default, skip_serializing_if = "ResourceRequest::is_default")]
         resources: ResourceRequest,
+        #[serde(default, skip_serializing_if = "SandboxMode::is_default")]
+        sandbox: SandboxMode,
         /// Per-action timeout in milliseconds. None = no timeout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
@@ -201,11 +235,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![WorkspacePath::try_from("out").unwrap()],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode,
             resources: ResourceRequest::default(),
+            sandbox: Default::default(),
             timeout_ms: None,
             remote: None,
         }

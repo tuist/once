@@ -23,7 +23,7 @@ use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     tool_env, workspace_tool, workspace_tool_env, Action, CacheState, EvidenceSubject,
-    InputDigestBuilder, OutputSymlinkMode, RemoteExecution, ResourceRequest, RunOpts,
+    InputDigestBuilder, OutputSymlinkMode, RemoteExecution, ResourceRequest, RunOpts, SandboxMode,
     WorkspacePath,
 };
 use once_frontend::{parse_script_annotations, ScriptAnnotations};
@@ -47,6 +47,7 @@ struct ExecTrailer<'a> {
 /// readable as the verb gains options. Owned types: the call site
 /// builds these from clap and hands them over.
 pub struct ExecArgs {
+    pub sandbox: SandboxMode,
     pub script: bool,
     pub env: Vec<(String, String)>,
     pub cwd: Option<WorkspacePath>,
@@ -72,6 +73,7 @@ struct ScriptInvocation {
     output_symlink_mode: OutputSymlinkMode,
     timeout_ms: Option<u64>,
     remote: Option<RemoteExecution>,
+    sandbox: SandboxMode,
 }
 
 #[derive(Clone)]
@@ -79,6 +81,7 @@ struct ScriptGraphOptions {
     explicit_env: BTreeMap<String, String>,
     timeout_ms_override: Option<u64>,
     remote_override: Option<RemoteExecution>,
+    sandbox: SandboxMode,
 }
 
 struct ScriptExecutionOptions {
@@ -86,6 +89,7 @@ struct ScriptExecutionOptions {
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
     remote_override: Option<RemoteExecution>,
+    sandbox: SandboxMode,
 }
 
 #[derive(Clone)]
@@ -136,6 +140,7 @@ async fn plan_exec_action(
     args: ExecArgs,
 ) -> Result<(PathBuf, Action)> {
     let ExecArgs {
+        sandbox,
         script,
         env,
         cwd,
@@ -149,6 +154,7 @@ async fn plan_exec_action(
         cwd_override: cwd,
         timeout_ms_override: timeout_ms,
         remote_override: remote,
+        sandbox,
     };
 
     if script {
@@ -165,11 +171,13 @@ async fn plan_exec_action(
                 env: options.explicit_env.into_iter().collect::<BTreeMap<_, _>>(),
                 cwd: options.cwd_override,
                 input_digest: None,
+                inputs: vec![],
                 outputs: vec![],
                 stdout_path: None,
                 stderr_path: None,
                 output_symlink_mode: OutputSymlinkMode::default(),
                 resources: ResourceRequest::default(),
+                sandbox,
                 timeout_ms: options.timeout_ms_override,
                 remote: options.remote_override,
             },
@@ -268,6 +276,7 @@ async fn script_action(
         cwd_override,
         timeout_ms_override,
         remote_override,
+        SandboxMode::Off,
         argv,
     )
     .await?;
@@ -292,6 +301,7 @@ async fn script_action_with_dependencies(
         explicit_env: options.explicit_env.iter().cloned().collect(),
         timeout_ms_override: options.timeout_ms_override,
         remote_override: options.remote_override.clone(),
+        sandbox: options.sandbox,
     };
     let invocation = script_invocation(
         workspace,
@@ -299,6 +309,7 @@ async fn script_action_with_dependencies(
         options.cwd_override.clone(),
         graph_options.timeout_ms_override,
         graph_options.remote_override.clone(),
+        graph_options.sandbox,
         argv,
     )
     .await?;
@@ -323,11 +334,13 @@ async fn action_from_script_invocation(
         env: invocation.env.clone(),
         cwd: Some(invocation.cwd.clone()),
         input_digest,
+        inputs: invocation.inputs.clone(),
         outputs: invocation.outputs.clone(),
         stdout_path: None,
         stderr_path: None,
         output_symlink_mode: invocation.output_symlink_mode,
         resources: ResourceRequest::default(),
+        sandbox: invocation.sandbox,
         timeout_ms: invocation.timeout_ms,
         remote: invocation.remote.clone(),
     })
@@ -450,6 +463,7 @@ async fn dependency_script_invocation(
         None,
         graph_options.timeout_ms_override,
         graph_options.remote_override.clone(),
+        graph_options.sandbox,
     )
     .await
 }
@@ -713,6 +727,7 @@ async fn script_invocation(
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
     remote_override: Option<RemoteExecution>,
+    sandbox: SandboxMode,
     argv: &[String],
 ) -> Result<ScriptInvocation> {
     let (runtime, runtime_args, script_arg, script_args) = parse_script_exec_argv(workspace, argv)?;
@@ -729,6 +744,7 @@ async fn script_invocation(
         cwd_override,
         timeout_ms_override,
         remote_override,
+        sandbox,
     )
     .await
 }
@@ -744,6 +760,7 @@ async fn script_invocation_from_annotations(
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
     remote_override: Option<RemoteExecution>,
+    sandbox: SandboxMode,
 ) -> Result<ScriptInvocation> {
     let workspace =
         resolve_script_workspace(workspace, script_abs, &annotations, cwd_override.as_ref())?;
@@ -803,6 +820,7 @@ async fn script_invocation_from_annotations(
         output_symlink_mode,
         timeout_ms,
         remote,
+        sandbox,
     })
 }
 
@@ -1280,6 +1298,7 @@ mod tests {
                 cwd_override: None,
                 timeout_ms_override: None,
                 remote_override: None,
+                sandbox: Default::default(),
             },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
@@ -1426,6 +1445,7 @@ mod tests {
             output_symlink_mode: OutputSymlinkMode::default(),
             timeout_ms: Some(10),
             remote: None,
+            sandbox: Default::default(),
         };
 
         let err = run_fingerprint_commands(&invocation).await.unwrap_err();
@@ -1450,6 +1470,7 @@ mod tests {
                 cwd_override: None,
                 timeout_ms_override: None,
                 remote_override: None,
+                sandbox: Default::default(),
             },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )

@@ -100,6 +100,30 @@ Describe 'once exec'
     The stderr should include 'cache miss'
   End
 
+  It 'runs annotated scripts in an input sandbox with symlinked declared files'
+    mkdir -p "$WORKSPACE/scripts"
+    printf 'declared-input' > "$WORKSPACE/declared.txt"
+    printf 'undeclared-input' > "$WORKSPACE/undeclared.txt"
+    cat > "$WORKSPACE/scripts/build.sh" <<'SH'
+#!/usr/bin/env bash
+# once input "../declared.txt"
+# once output "../out/result.txt"
+set -e
+test -L build.sh
+test -L ../declared.txt
+test ! -e ../undeclared.txt
+mkdir -p ../out
+cat ../declared.txt > ../out/result.txt
+printf 'sandbox-ok'
+SH
+
+    When call once exec --sandbox inputs --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    The status should be success
+    The stdout should equal 'sandbox-ok'
+    The stderr should include 'cache miss'
+    The contents of file "$WORKSPACE/out/result.txt" should equal 'declared-input'
+  End
+
   It 'runs needed scripts before an annotated script'
     copy_exec_fixture script_graph
 
