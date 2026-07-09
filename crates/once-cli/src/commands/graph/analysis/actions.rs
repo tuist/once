@@ -73,6 +73,7 @@ struct DeclaredActionFailure<'a> {
 /// captures declared action state and cache execution state. Boxing at
 /// this boundary keeps parent graph futures small enough for
 /// `clippy::large_futures` and centralizes the allocation.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn run_declared_actions<'a>(
     workspace: &'a Path,
     cache: &'a CacheProvider,
@@ -1185,7 +1186,7 @@ mod tests {
             &declared,
             module_digest(),
             &[],
-            Default::default(),
+            SandboxMode::default(),
         )
         .unwrap();
 
@@ -1422,7 +1423,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1460,7 +1461,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1498,7 +1499,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1532,7 +1533,7 @@ mod tests {
             stderr_path: Some(Box::new(log)),
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1659,7 +1660,7 @@ mod tests {
             "build",
             analysis,
             &[],
-            Default::default(),
+            SandboxMode::default(),
         )
         .await
         .unwrap();
@@ -1756,7 +1757,7 @@ mod tests {
             "build",
             analysis(),
             &[],
-            Default::default(),
+            SandboxMode::default(),
         )
         .await
         .unwrap();
@@ -1778,7 +1779,7 @@ mod tests {
             "build",
             analysis(),
             &[],
-            Default::default(),
+            SandboxMode::default(),
         )
         .await
         .unwrap();
@@ -1841,7 +1842,7 @@ mod tests {
             "build",
             analysis,
             &[],
-            Default::default(),
+            SandboxMode::default(),
         )
         .await
         .unwrap();
@@ -1949,7 +1950,7 @@ mod tests {
             "build",
             analysis("one"),
             &[],
-            Default::default(),
+            SandboxMode::default(),
         )
         .await
         .unwrap();
@@ -1963,7 +1964,7 @@ mod tests {
             "build",
             analysis("changed"),
             &[],
-            Default::default(),
+            SandboxMode::default(),
         )
         .await
         .unwrap();
@@ -1999,7 +2000,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };

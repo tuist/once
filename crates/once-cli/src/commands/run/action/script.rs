@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use once_cas::Digest;
 use once_core::{
     tool_env, workspace_tool, workspace_tool_env, Action, OutputSymlinkMode, RemoteExecution,
-    ResourceRequest, WorkspacePath,
+    ResourceRequest, SandboxMode, WorkspacePath,
 };
 
 use super::{input_digest, input_paths, parse_attr, ActionPlan};
@@ -111,7 +111,7 @@ async fn file_script_action(
             stderr_path: None,
             output_symlink_mode,
             resources,
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms,
             remote,
         },

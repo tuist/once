@@ -440,6 +440,7 @@ async fn dispatch_exec(
     commands::exec::exec(workspace, &cache, args, output).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_target_command(
     workspace: &Path,
     cache: &CacheProvider,

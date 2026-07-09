@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use once_cas::Digest;
-use once_core::{Action, OutputSymlinkMode, ResourceRequest, WorkspacePath};
+use once_core::{Action, OutputSymlinkMode, ResourceRequest, SandboxMode, WorkspacePath};
 
 use super::{input_digest, input_paths, parse_attr, ActionPlan};
 
@@ -32,7 +32,7 @@ pub(super) fn task_action(workspace: &Path, target: &once_frontend::Target) -> R
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: task_resources(target)?,
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: parse_attr::<u64>(target, "timeout_ms")?,
             remote: None,
         },

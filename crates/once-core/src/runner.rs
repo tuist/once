@@ -277,7 +277,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         }
@@ -402,7 +402,7 @@ mod tests {
             stderr_path: Some(Box::new(log.clone())),
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -452,7 +452,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -705,7 +705,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -720,7 +720,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -741,7 +741,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -770,7 +770,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -798,7 +798,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(100),
             remote: None,
         };
@@ -825,7 +825,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -853,7 +853,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -883,7 +883,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(10_000),
             remote: None,
         };
@@ -910,7 +910,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -944,7 +944,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: Some(RemoteExecution::provider("unknown-remote")),
         };
@@ -979,7 +979,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -1016,7 +1016,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::new(2, 0),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -1047,7 +1047,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1074,7 +1074,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: t,
             remote: None,
         };
@@ -1095,7 +1095,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1119,7 +1119,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1171,7 +1171,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1195,7 +1195,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1219,7 +1219,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(2_000),
             remote: None,
         };
@@ -1251,7 +1251,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -1266,7 +1266,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -1299,7 +1299,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -1365,7 +1365,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -1404,7 +1404,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(50),
             remote: None,
         };

@@ -316,6 +316,7 @@ impl BuildSession {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_one(
     workspace: PathBuf,
     cache: CacheProvider,

@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use once_core::{Action, OutputSymlinkMode, ResourceRequest, WorkspacePath};
+use once_core::{Action, OutputSymlinkMode, ResourceRequest, SandboxMode, WorkspacePath};
 use once_frontend::GraphTarget;
 use serde::Serialize;
 
@@ -43,7 +43,7 @@ pub(super) fn action_for(
         stderr_path: None,
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
-        sandbox: Default::default(),
+        sandbox: SandboxMode::default(),
         timeout_ms: None,
         remote: None,
     })
@@ -55,7 +55,7 @@ fn source_inputs(target: &GraphTarget) -> Result<Vec<WorkspacePath>> {
         .iter()
         .map(|src| {
             let path = if target.label.package.is_empty() {
-                src.to_string()
+                src.clone()
             } else {
                 format!("{}/{}", target.label.package, src)
             };

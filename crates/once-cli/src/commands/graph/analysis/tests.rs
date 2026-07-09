@@ -133,7 +133,7 @@ fn reachable_analysis_deps_walks_only_analysis_backed_direct_deps() {
         &cache,
         graph.clone(),
         analyzer,
-        Default::default(),
+        SandboxMode::default(),
     );
 
     let reachable = session.reachable_analysis_deps(&graph[0]);
@@ -158,7 +158,7 @@ async fn run_with_analysis_returns_none_for_target_kinds_without_implementation(
         &cache,
         graph.clone(),
         analyzer,
-        Default::default(),
+        SandboxMode::default(),
     );
 
     let outcome = session.run_with_analysis(&graph[0], "test").await.unwrap();
@@ -199,7 +199,7 @@ async fn independent_dependencies_run_in_parallel() {
         &cache,
         graph.clone(),
         analyzer,
-        Default::default(),
+        SandboxMode::default(),
     );
 
     let outcome = session
@@ -238,7 +238,7 @@ async fn uncacheable_declared_actions_bypass_action_cache() {
         &cache,
         graph.clone(),
         analyzer,
-        Default::default(),
+        SandboxMode::default(),
     );
 
     let first = session
@@ -278,7 +278,7 @@ async fn build_direct_analysis_deps_returns_only_direct_deps_in_declared_order()
         &cache,
         graph.clone(),
         analyzer,
-        Default::default(),
+        SandboxMode::default(),
     );
 
     let outcomes = session.build_direct_analysis_deps(&graph[0]).await.unwrap();
@@ -321,7 +321,7 @@ async fn capability_runs_are_salted_by_dependency_action_digests() {
         &cache,
         graph.clone(),
         analyzer,
-        Default::default(),
+        SandboxMode::default(),
     );
     let first = session
         .run_with_analysis(&graph[1], "test")
@@ -336,7 +336,7 @@ async fn capability_runs_are_salted_by_dependency_action_digests() {
         &cache,
         graph.clone(),
         analyzer,
-        Default::default(),
+        SandboxMode::default(),
     );
     let second = session
         .run_with_analysis(&graph[1], "test")

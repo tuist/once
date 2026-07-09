@@ -58,6 +58,7 @@ impl SandboxMode {
         *self == Self::default()
     }
 
+    #[must_use]
     pub fn stronger(self, other: Self) -> Self {
         std::cmp::max(self, other)
     }
@@ -241,7 +242,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode,
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         }

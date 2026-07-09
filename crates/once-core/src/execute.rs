@@ -286,8 +286,7 @@ async fn prepare_input_sandbox(
 
 fn keep_sandbox() -> bool {
     std::env::var("ONCE_KEEP_SANDBOX")
-        .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false)
+        .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
 }
 
 fn stage_sandbox_input_blocking(

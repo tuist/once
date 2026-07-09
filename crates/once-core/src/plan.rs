@@ -336,7 +336,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::{OutputSymlinkMode, ResourceRequest, RunOpts, WorkspacePath};
+    use crate::{OutputSymlinkMode, ResourceRequest, RunOpts, SandboxMode, WorkspacePath};
     use once_cas::Cas;
     use tempfile::TempDir;
 
@@ -359,7 +359,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(10_000),
             remote: None,
         }
@@ -419,7 +419,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -472,7 +472,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
                 resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
                 timeout_ms: Some(5_000),
                 remote: None,
             }
@@ -539,7 +539,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -554,7 +554,7 @@ mod tests {
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };

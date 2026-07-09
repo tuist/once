@@ -25,6 +25,7 @@ pub(super) struct BuildScheduler<'a> {
 }
 
 impl<'a> BuildScheduler<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         root_id: &'a str,
         workspace: &'a Path,

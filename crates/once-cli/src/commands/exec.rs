@@ -1298,7 +1298,7 @@ mod tests {
                 cwd_override: None,
                 timeout_ms_override: None,
                 remote_override: None,
-                sandbox: Default::default(),
+                sandbox: SandboxMode::default(),
             },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
@@ -1445,7 +1445,7 @@ mod tests {
             output_symlink_mode: OutputSymlinkMode::default(),
             timeout_ms: Some(10),
             remote: None,
-            sandbox: Default::default(),
+            sandbox: SandboxMode::default(),
         };
 
         let err = run_fingerprint_commands(&invocation).await.unwrap_err();
@@ -1470,7 +1470,7 @@ mod tests {
                 cwd_override: None,
                 timeout_ms_override: None,
                 remote_override: None,
-                sandbox: Default::default(),
+                sandbox: SandboxMode::default(),
             },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
