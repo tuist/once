@@ -36,7 +36,7 @@ def _zig_canonical_name(ctx):
 def _zig_globs(patterns):
     if not patterns:
         return []
-    return glob(patterns)
+    return _file_globs(patterns)
 
 def _zig_path_attr(ctx, key):
     return [_package_relative(ctx, path) for path in _zig_attr(ctx, key, [])]
@@ -396,11 +396,11 @@ def _zig_run_env(ctx, test_dir = ""):
     env = {}
     if test_dir:
         env["HOME"] = test_dir + "/home"
+    for key, value in _zig_host_env(_zig_attr(ctx, "env_inherit", [])).items():
+        env[key] = value
     for key, value in _zig_attr(ctx, "env", {}).items():
         env[key] = value
     for key, value in _zig_attr(ctx, "test_env", {}).items():
-        env[key] = value
-    for key, value in _zig_host_env(_zig_attr(ctx, "env_inherit", [])).items():
         env[key] = value
     return env
 
@@ -852,7 +852,7 @@ def _zig_binary_impl(ctx):
             identifier = ctx["label"]["id"] + ":zig-run",
             cacheable = False,
         )
-        write_path(marker, _zig_run_result_json(ctx["label"]["id"]))
+        write_path(marker, _run_result_json(ctx["label"]["id"]))
         root = _zig_build_root(ctx, "")
         return _zig_provider(ctx, "zig_binary", root, binary, _zig_collect_c_provider(ctx, ctx["deps"]), "binary")
     return _zig_compile(ctx, "binary", "", "build-exe", "zig_binary")
@@ -876,27 +876,6 @@ def _zig_configure_binary_impl(ctx):
 
 def _zig_configure_test_impl(ctx):
     return _zig_test_impl(ctx)
-
-def _zig_json_string(value):
-    out = ["\""]
-    for ch in value.elems():
-        if ch == "\"":
-            out.append("\\\"")
-        elif ch == "\\":
-            out.append("\\\\")
-        elif ch == "\n":
-            out.append("\\n")
-        elif ch == "\r":
-            out.append("\\r")
-        elif ch == "\t":
-            out.append("\\t")
-        else:
-            out.append(ch)
-    out.append("\"")
-    return "".join(out)
-
-def _zig_run_result_json(target_id):
-    return "{\"schema\":\"once.run_result.v1\",\"target\":" + _zig_json_string(target_id) + ",\"exit_code\":0}\n"
 
 def _zig_test_info(ctx, test_binary, results, log, native_results, test_dir):
     labels = _zig_attr(ctx, "labels", [])
@@ -948,12 +927,12 @@ def _zig_powershell_argv(script):
 
 def _zig_test_script(ctx, test_binary, results, log, native_results):
     args = [_shell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
-    target = _zig_json_string(ctx["label"]["id"])
-    case_id = _zig_json_string(ctx["label"]["id"] + "::suite")
-    case_name = _zig_json_string(ctx["label"]["name"])
-    suite = _zig_json_string(ctx["label"]["id"])
-    log_json = _zig_json_string(log)
-    native_json = _zig_json_string(native_results)
+    target = _json_string(ctx["label"]["id"])
+    case_id = _json_string(ctx["label"]["id"] + "::suite")
+    case_name = _json_string(ctx["label"]["name"])
+    suite = _json_string(ctx["label"]["id"])
+    log_json = _json_string(log)
+    native_json = _json_string(native_results)
     return """set +e
 {binary} {args} > {log} 2>&1
 code=$?

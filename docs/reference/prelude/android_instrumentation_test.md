@@ -30,9 +30,18 @@ standard instrumentation status output, and writes `once.test_results.v1`.
 | `test_class` | string | no |  | Optional class or class#method filter lowered to `-e class` |
 | `clear_package_data` | bool | no | `false` | Clear target and test package data before running instrumentation |
 | `disable_animations` | bool | no | `false` | Set Android global animation scales to zero before running instrumentation |
+| `env` | map&lt;string,string&gt; | no | `{}` | Bazel-compatible environment variables passed to the host instrumentation runner before `test_env` overrides |
+| `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited by the host instrumentation runner before explicit test environment values |
 | `test_env` | map&lt;string,string&gt; | no | `{}` | Environment variables passed to the host instrumentation runner |
+| `args` | list&lt;string&gt; | no | `[]` | Raw arguments appended to the Android instrumentation command before its component |
+| `support_apks` | list&lt;string&gt; | no | `[]` | Package-relative application package globs installed before the instrumentation application |
+| `target_device` | string | no | empty | Reserved for Bazel-style device target selection |
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
+
+A non-empty `target_device` fails analysis until Once has matching device
+provisioning semantics. Use `adb_serial` to select an already provisioned
+device.
 
 ## Dep Edges
 
@@ -62,8 +71,9 @@ The target emits `android_instrumentation_test` and `once_test_info`.
 
 The action is not cacheable because it depends on external device state.
 Once waits for a device, installs the app under test, installs the test
-package, optionally clears package data, optionally disables animations, and
-then runs:
+package, optionally clears package data, and optionally disables animations.
+Files matched by `support_apks` are installed after the app under test and
+before the test package. Once then runs:
 
 ```sh
 adb shell am instrument -w -r <args> <test-package>/<runner>

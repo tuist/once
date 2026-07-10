@@ -24,12 +24,24 @@ name starts with `test`, or methods annotated with `org.junit.Test` or
 | `android_sdk` | string | no | env | Android Software Development Kit root, otherwise `ANDROID_HOME` or `ANDROID_SDK_ROOT` |
 | `java_language_level` | string | no | `17` | Java source and target level passed to `javac` |
 | `javac_opts` | list&lt;string&gt; | no | `[]` | Additional `javac` flags |
+| `javacopts` | list&lt;string&gt; | no | `[]` | Bazel-compatible alias for additional `javac` flags |
 | `kotlinc_opts` | list&lt;string&gt; | no | `[]` | Additional `kotlinc` flags |
 | `classpath` | list&lt;string&gt; | no | `[]` | Additional Java archive files used while compiling and running tests |
 | `runtime_classpath` | list&lt;string&gt; | no | `[]` | Additional Java archive files used only while running tests |
+| `args` | list&lt;string&gt; | no | `[]` | Additional fully qualified class or `Class#method` filters passed to the local test runner |
+| `jvm_flags` | list&lt;string&gt; | no | `[]` | Additional flags passed to the host Java virtual machine before the test classpath |
+| `test_class` | string | no | empty | Optional fully qualified test class or `Class#method` filter |
+| `env` | map&lt;string,string&gt; | no | `{}` | Bazel-compatible environment variables passed to the local test runner before `test_env` overrides |
+| `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited by the local test runner before explicit test environment values |
 | `test_env` | map&lt;string,string&gt; | no | `{}` | Environment variables passed to the local test runner |
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
+
+Compatibility attributes declared for Bazel parity but not implemented yet:
+`custom_package`, `densities`, `enable_data_binding`, `manifest`,
+`manifest_values`, `nocompress_extensions`, `plugins`,
+`resource_configuration_filters`, `resource_jars`, `resource_strip_prefix`,
+`runtime_deps`, and `stamp`. Non-empty values fail analysis.
 
 Tool override attrs are also available for `javac`, `java`, `java_home`,
 `kotlinc`, `kotlin_home`, `kotlin_stdlib`, and `aapt2`.

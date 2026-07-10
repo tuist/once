@@ -38,6 +38,38 @@ def _swift_android_attr(attrs, key, default):
         return default
     return value
 
+def _swift_android_reject_unsupported_attrs(attrs, label_id, keys):
+    for key in keys:
+        value = attrs.get(key)
+        if value == None:
+            continue
+        if type(value) == type("") and value == "":
+            continue
+        if type(value) == type([]) and len(value) == 0:
+            continue
+        if type(value) == type({}) and len(value) == 0:
+            continue
+        if value == False:
+            continue
+        fail(label_id + ": attribute `" + key + "` is declared for Bazel parity but is not implemented by swift_android_library yet")
+
+def _swift_android_glob_attr(attrs, key):
+    return _file_globs(_swift_android_attr(attrs, key, []))
+
+def _swift_android_data_inputs(attrs):
+    return _swift_android_glob_attr(attrs, "data")
+
+def _swift_android_compile_inputs(attrs):
+    return _swift_android_glob_attr(attrs, "swiftc_inputs")
+
+def _swift_android_swift_flags(attrs):
+    flags = []
+    flags.extend(_swift_android_attr(attrs, "swift_flags", []))
+    flags.extend(_swift_android_attr(attrs, "copts", []))
+    for define in _swift_android_attr(attrs, "defines", []):
+        flags.extend(["-D", define])
+    return flags
+
 def _swift_android_tool(ctx, attrs):
     swiftc = _swift_android_attr(attrs, "swiftc", "") or host_which("swiftc")
     version = host_command([swiftc, "--version"]).strip()
@@ -143,9 +175,35 @@ def _swift_android_collect_swiftmodule_dirs(deps, own_values):
         out.extend(dep.get("transitive_swiftmodule_dirs") or [])
     return _unique(out)
 
+def _swift_android_collect_swiftmodule_inputs(deps, own_values):
+    out = []
+    out.extend(own_values)
+    for dep in deps:
+        out.extend(dep.get("transitive_swiftmodule_inputs") or [])
+        for path in [dep.get("swiftmodule") or "", dep.get("swiftdoc") or "", dep.get("swiftinterface") or ""]:
+            if path:
+                out.append(path)
+    return _unique(out)
+
+def _swift_android_collect_strings(deps, key, own_values):
+    out = []
+    out.extend(own_values)
+    for dep in deps:
+        out.extend(dep.get(key) or [])
+    return _unique(out)
+
+def _swift_android_collect_linkopts(deps, own_values):
+    out = []
+    for dep in deps:
+        out.extend(dep.get("transitive_linkopts") or [])
+    out.extend(own_values)
+    return out
+
 def _swift_android_library_impl(ctx):
     attrs = ctx["attr"]
+    _swift_android_reject_unsupported_attrs(attrs, ctx["label"]["id"], ["always_include_developer_search_paths", "alwayslink", "generated_header_name", "generates_header", "linkstatic", "plugins", "private_deps"])
     module_name = _swift_android_attr(attrs, "module_name", "") or ctx["label"]["name"]
+    package_name = _swift_android_attr(attrs, "package_name", "")
     android_abi = _swift_android_attr(attrs, "android_abi", "")
     android_api = _swift_android_attr(attrs, "android_api", 28)
     target = _swift_android_attr(attrs, "target", "")
@@ -164,14 +222,22 @@ def _swift_android_library_impl(ctx):
 
     swiftc, swiftc_identity = _swift_android_tool(ctx, attrs)
     sdk, resource_dir, swift_sdk = _swift_android_sdk_config(ctx, attrs, swiftc, target)
-    swift_flags = _swift_android_attr(attrs, "swift_flags", [])
-    linkopts = _swift_android_attr(attrs, "linkopts", [])
+    dep_defines = _swift_android_collect_strings(ctx["deps"], "transitive_swift_defines", [])
+    swift_flags = []
+    for define in dep_defines:
+        swift_flags.extend(["-D", define])
+    swift_flags.extend(_swift_android_swift_flags(attrs))
+    linkopts = _swift_android_collect_linkopts(ctx["deps"], _swift_android_attr(attrs, "linkopts", []))
 
     library = declare_output("lib" + module_name + ".so")
     swiftmodule = declare_output(module_name + ".swiftmodule")
     swiftdoc = declare_output(module_name + ".swiftdoc")
+    swiftinterface = ""
+    if _swift_android_attr(attrs, "library_evolution", False):
+        swiftinterface = declare_output(module_name + ".swiftinterface")
 
     dep_swiftmodule_dirs = []
+    dep_swiftmodule_inputs = _swift_android_collect_swiftmodule_inputs(ctx["deps"], [])
     dep_native_libraries = []
     for dep in ctx["deps"]:
         for d in dep.get("transitive_swiftmodule_dirs") or []:
@@ -199,6 +265,10 @@ def _swift_android_library_impl(ctx):
         argv.extend(["-sdk", sdk])
     if resource_dir:
         argv.extend(["-resource-dir", resource_dir])
+    if package_name:
+        argv.extend(["-package-name", package_name])
+    if swiftinterface:
+        argv.extend(["-enable-library-evolution", "-emit-module-interface-path", swiftinterface])
     argv.extend(_swift_android_managed_flags(ctx, attrs, target))
     for d in dep_swiftmodule_dirs:
         argv.extend(["-I", d])
@@ -213,7 +283,7 @@ def _swift_android_library_impl(ctx):
     for opt in linkopts:
         argv.append(opt)
 
-    inputs = list(swift_srcs)
+    inputs = _unique(swift_srcs + _swift_android_compile_inputs(attrs) + dep_swiftmodule_inputs)
     for native in dep_native_libraries:
         path = native.get("path") or ""
         if path and path not in inputs:
@@ -222,8 +292,8 @@ def _swift_android_library_impl(ctx):
     run_action(
         argv = argv,
         inputs = inputs,
-        outputs = [library, swiftmodule, swiftdoc],
-        toolchain_identity = swiftc_identity + "\x00target\x00" + target + "\x00abi\x00" + android_abi + "\x00android_api\x00" + str(android_api) + "\x00swift_sdk\x00" + swift_sdk + "\x00sdk\x00" + sdk + "\x00resource_dir\x00" + resource_dir,
+        outputs = [library, swiftmodule, swiftdoc] + ([swiftinterface] if swiftinterface else []),
+        toolchain_identity = swiftc_identity + "\x00target\x00" + target + "\x00abi\x00" + android_abi + "\x00android_api\x00" + str(android_api) + "\x00swift_sdk\x00" + swift_sdk + "\x00sdk\x00" + sdk + "\x00resource_dir\x00" + resource_dir + "\x00package_name\x00" + package_name,
         identifier = "swift_android_compile:" + ctx["label"]["id"],
     )
 
@@ -235,11 +305,18 @@ def _swift_android_library_impl(ctx):
         "target": target,
         "android_abi": android_abi,
         "swiftmodule_dir": ctx["build_dir"],
+        "swiftmodule": swiftmodule,
+        "swiftdoc": swiftdoc,
+        "swiftinterface": swiftinterface,
         "dylib": library,
         "android_native_libraries": own_native,
         "transitive_android_native_libraries": _swift_android_collect_native_libraries(ctx["deps"], own_native),
         "transitive_swiftmodule_dirs": _swift_android_collect_swiftmodule_dirs(ctx["deps"], [ctx["build_dir"]]),
-        "affected_inputs": swift_srcs,
+        "transitive_swiftmodule_inputs": _swift_android_collect_swiftmodule_inputs(ctx["deps"], [swiftmodule, swiftdoc] + ([swiftinterface] if swiftinterface else [])),
+        "transitive_swift_defines": _swift_android_collect_strings(ctx["deps"], "transitive_swift_defines", _swift_android_attr(attrs, "defines", [])),
+        "transitive_linkopts": linkopts,
+        "transitive_data": _swift_android_collect_strings(ctx["deps"], "transitive_data", _swift_android_data_inputs(attrs)),
+        "affected_inputs": _unique(swift_srcs + _swift_android_compile_inputs(attrs) + _swift_android_data_inputs(attrs)),
     }
 
 swift_android_library = target_kind(
@@ -249,6 +326,7 @@ swift_android_library = target_kind(
         attr("android_api", "int", default = "28", docs = "Android API level appended to API-less Android target triples. Defaults to the minimum API level in the bundled Swift Android SDK.", configurable = False),
         attr("target", "string", docs = "Swift target triple. Defaults from `android_abi` and `android_api`; API-less Android triples receive `android_api`.", configurable = False),
         attr("module_name", "string", docs = "Swift module name. Defaults to the target name.", configurable = False),
+        attr("package_name", "string", docs = "Swift package name passed through `-package-name` when set.", configurable = False),
         attr("sdk", "string", docs = "Optional sysroot passed to swiftc as `-sdk`, typically from an Android NDK or Swift SDK bundle.", configurable = False),
         attr("resource_dir", "string", docs = "Optional Swift resource directory passed to swiftc as `-resource-dir`.", configurable = False),
         attr("swift_sdk", "string", docs = "Installed Swift SDK identifier used to discover default Android sysroot and Swift resource paths. Defaults to the first installed SDK whose identifier contains `android`.", configurable = False),
@@ -256,7 +334,19 @@ swift_android_library = target_kind(
         attr("tools_directory", "string", docs = "Directory containing Android clang and linker tools passed as `-tools-directory`. Defaults from android_ndk or ANDROID_NDK_HOME.", configurable = False),
         attr("swiftc", "string", docs = "Override swiftc path.", configurable = False),
         attr("swift_flags", "list<string>", default = "[]", docs = "Additional Swift compiler flags.", configurable = False),
+        attr("copts", "list<string>", default = "[]", docs = "Bazel-compatible alias for additional Swift compiler flags.", configurable = False),
+        attr("defines", "list<string>", default = "[]", docs = "Bazel-compatible conditional compilation symbols lowered to `-D` flags.", configurable = False),
         attr("linkopts", "list<string>", default = "[]", docs = "Additional linker flags appended after Once-managed flags.", configurable = False),
+        attr("data", "list<string>", default = "[]", docs = "Package-relative runtime data file globs propagated to downstream consumers.", configurable = False),
+        attr("swiftc_inputs", "list<string>", default = "[]", docs = "Bazel-compatible extra Swift compiler input globs.", configurable = False),
+        attr("always_include_developer_search_paths", "bool", default = "false", docs = "Reserved for Bazel-compatible developer search path handling.", configurable = False),
+        attr("alwayslink", "bool", default = "false", docs = "Reserved for Bazel-compatible always-link semantics.", configurable = False),
+        attr("generated_header_name", "string", docs = "Reserved for generated Objective-C header naming.", configurable = False),
+        attr("generates_header", "bool", default = "false", docs = "Reserved for generated Objective-C header emission.", configurable = False),
+        attr("library_evolution", "bool", default = "false", docs = "Enable Swift library evolution and emit a textual module interface.", configurable = False),
+        attr("linkstatic", "bool", default = "false", docs = "Reserved for Bazel-compatible static link selection.", configurable = False),
+        attr("plugins", "list<string>", default = "[]", docs = "Reserved for Swift compiler plugins.", configurable = False),
+        attr("private_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-compatible private dependencies.", configurable = False),
     ],
     deps = [
         dep("deps", ["swift_module", "android_native_library"], "Swift modules and Android native libraries linked or packaged with this library."),

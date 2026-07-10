@@ -7,6 +7,15 @@ def _elixir_attr(ctx, key, default):
 def _elixir_app_name(ctx):
     return _elixir_attr(ctx, "app_name", ctx["label"]["name"].replace("-", "_").replace(".", "_"))
 
+def _elixir_description(ctx):
+    description = _elixir_attr(ctx, "description", "")
+    if description:
+        return description
+    return _elixir_attr(ctx, "app_description", "")
+
+def _elixir_applications(ctx):
+    return _unique(_elixir_attr(ctx, "applications", ["kernel", "stdlib", "elixir"]) + _elixir_attr(ctx, "extra_apps", []))
+
 def _elixir_mix_env(ctx):
     return _elixir_attr(ctx, "mix_env", "prod")
 
@@ -40,19 +49,25 @@ def _elixir_test_input_sources(ctx, srcs):
     return _unique(srcs + glob(["test/support/**/*.ex", "test/support/**/*.exs"]))
 
 def _elixir_glob_attr(ctx, key, default):
-    return glob(_elixir_attr(ctx, key, default))
+    return _file_globs(_elixir_attr(ctx, key, default))
 
 def _elixir_data_inputs(ctx):
     return _elixir_glob_attr(ctx, "data", [])
 
 def _elixir_config_inputs(ctx):
-    return _elixir_glob_attr(ctx, "config", ["config/**/*.exs"])
+    return _unique(_elixir_glob_attr(ctx, "config", ["config/**/*.exs"]) + _elixir_glob_attr(ctx, "config_files", []))
 
 def _elixir_priv_inputs(ctx):
-    return _elixir_glob_attr(ctx, "priv", [])
+    return _unique(_elixir_glob_attr(ctx, "priv", []) + _elixir_glob_attr(ctx, "resources", []))
 
 def _elixir_include_inputs(ctx):
     return _elixir_glob_attr(ctx, "include", ["include/**/*.hrl"])
+
+def _elixir_doc_inputs(ctx):
+    return _elixir_glob_attr(ctx, "docs", [])
+
+def _elixir_tool_inputs(ctx):
+    return _elixir_glob_attr(ctx, "tools", [])
 
 def _elixir_sources(ctx):
     return glob(_elixir_source_patterns(ctx))
@@ -212,6 +227,12 @@ def _elixir_action_env(toolchain):
 
 def _elixir_user_env(ctx):
     out = {}
+    for key, value in _elixir_attr(ctx, "os_env", {}).items():
+        out[key] = value
+    for key in _elixir_attr(ctx, "env_inherit", []):
+        value = host_env(key)
+        if value:
+            out[key] = value
     for key, value in _elixir_attr(ctx, "env", {}).items():
         out[key] = value
     return out
@@ -303,8 +324,8 @@ def _elixir_erlang_atom_list(values):
 
 def _elixir_write_app_script(ctx, app_name, ebin_dir):
     version = _elixir_attr(ctx, "version", "0.1.0")
-    description = _elixir_attr(ctx, "description", "")
-    applications = _elixir_attr(ctx, "applications", ["kernel", "stdlib", "elixir"])
+    description = _elixir_description(ctx)
+    applications = _elixir_applications(ctx)
     included_applications = _elixir_attr(ctx, "included_applications", [])
     registered = _elixir_attr(ctx, "registered", [])
     app_file = app_name + ".app"
@@ -721,6 +742,34 @@ export ERL_LIBS="$WORKSPACE_ROOT/$DEPS_ROOT"
         copy_priv = _elixir_copy_priv_script(ctx, priv_srcs, priv_dir),
     )
 
+def _elixir_compile_args(ctx):
+    return _elixir_attr(ctx, "compile_args", []) + _elixir_attr(ctx, "elixirc_opts", [])
+
+def _elixir_test_args(ctx):
+    return _elixir_attr(ctx, "test_args", [])
+
+def _elixir_interpreter_opts(ctx):
+    return _elixir_attr(ctx, "elixir_opts", [])
+
+def _elixir_validate_test_mode(ctx, mix_config):
+    if mix_config and _elixir_interpreter_opts(ctx):
+        fail(ctx["label"]["id"] + ": `elixir_opts` applies to direct ExUnit mode only; use `test_args` with `mix_config`")
+
+def _elixir_reject_unsupported_attrs(ctx, keys):
+    for key in keys:
+        value = _elixir_attr(ctx, key, None)
+        if value == None:
+            continue
+        if type(value) == type("") and value == "":
+            continue
+        if type(value) == type([]) and len(value) == 0:
+            continue
+        if type(value) == type({}) and len(value) == 0:
+            continue
+        if value == False:
+            continue
+        fail(ctx["label"]["id"] + ": attribute `" + key + "` is declared for Buck or Bazel parity but is not implemented by this target kind yet")
+
 def _elixir_stale_fingerprint_action(ctx, toolchain, metadata_path, config, ebin_dir, fingerprint):
     mix_env = _elixir_mix_env(ctx)
     scratch = ctx["scratch_dir"]
@@ -805,6 +854,7 @@ def _elixir_compile_action(ctx, toolchain, apps, srcs, static_inputs, config, co
     )
 
 def _elixir_library_impl(ctx):
+    _elixir_reject_unsupported_attrs(ctx, ["app_src", "app_src_vsn", "appup_src", "erl_opts", "ez_deps", "extra_includes", "extra_properties", "include_src", "mod", "shell_configs", "shell_libs"])
     toolchain = _elixir_compiler_toolchain()
     app_name = _elixir_app_name(ctx)
     mix_env = _elixir_mix_env(ctx)
@@ -813,6 +863,7 @@ def _elixir_library_impl(ctx):
     data = _elixir_data_inputs(ctx)
     priv_srcs = _elixir_priv_inputs(ctx)
     include = _elixir_include_inputs(ctx)
+    docs = _elixir_doc_inputs(ctx)
     mix_config = _elixir_mix_config(ctx)
     apps = _elixir_collect_apps(ctx["deps"])
     ebin_dir = declare_output("ebin")
@@ -823,8 +874,8 @@ def _elixir_library_impl(ctx):
     consolidated_dir = declare_output("consolidated")
     stale_fingerprint = declare_output("stale-fingerprint.txt")
     module_dirs = [module_dir, consolidated_dir]
-    compile_args = _elixir_attr(ctx, "compile_args", [])
-    compile_inputs = _unique(_elixir_optional_inputs(config + data + include + [mix_config]))
+    compile_args = _elixir_compile_args(ctx)
+    compile_inputs = _unique(_elixir_optional_inputs(config + data + include + docs + [mix_config]))
     static_compile_inputs = _unique(srcs + compile_inputs)
     previous_metadata = _elixir_previous_compile_metadata(ctx, metadata_path, static_compile_inputs)
     dynamic_inputs = previous_metadata["external_inputs"]
@@ -890,7 +941,8 @@ def _elixir_code_path_flags(apps):
 
 def _elixir_test_runner_command(ctx, toolchain, apps, srcs, mix_config):
     test_paths = _elixir_test_paths(ctx, srcs)
-    opts = _elixir_attr(ctx, "test_args", [])
+    _elixir_validate_test_mode(ctx, mix_config)
+    opts = _elixir_test_args(ctx)
     if mix_config:
         no_start = ["--no-start"] if _elixir_attr(ctx, "no_start", False) else []
         return _shell_quote(toolchain["mix"]) + " test --no-compile --no-deps-check " + _elixir_shell_words(no_start + test_paths + opts)
@@ -901,7 +953,7 @@ def _elixir_test_runner_command(ctx, toolchain, apps, srcs, mix_config):
     require_args = []
     for path in test_paths:
         require_args.extend(["-r", path])
-    return _shell_quote(toolchain["elixir"]) + " " + _elixir_code_path_flags(apps) + " " + _elixir_shell_words(start_args + require_args + opts)
+    return _shell_quote(toolchain["elixir"]) + " " + _elixir_code_path_flags(apps) + " " + _elixir_shell_words(_elixir_interpreter_opts(ctx) + start_args + require_args + opts)
 
 def _elixir_test_info(ctx, runner_type, runner_display_name, runner, args, results, log, native_results):
     labels = _elixir_attr(ctx, "labels", [])
@@ -950,15 +1002,16 @@ def _elixir_test_info(ctx, runner_type, runner_display_name, runner, args, resul
 
 def _elixir_test_info_for(ctx, runner, mix_config, srcs, results, log, native_results):
     test_paths = _elixir_test_paths(ctx, srcs)
+    _elixir_validate_test_mode(ctx, mix_config)
     if mix_config:
-        return _elixir_test_info(ctx, "mix_test", "Mix test", runner, ["test", "--no-compile", "--no-deps-check"] + test_paths + _elixir_attr(ctx, "test_args", []), results, log, native_results)
+        return _elixir_test_info(ctx, "mix_test", "Mix test", runner, ["test", "--no-compile", "--no-deps-check"] + test_paths + _elixir_test_args(ctx), results, log, native_results)
     start_args = []
     if "test/test_helper.exs" not in test_paths:
         start_args = ["-e", "ExUnit.start()"]
     require_args = []
     for path in test_paths:
         require_args.extend(["-r", path])
-    return _elixir_test_info(ctx, "elixir_exunit", "Elixir ExUnit", runner, start_args + require_args + _elixir_attr(ctx, "test_args", []), results, log, native_results)
+    return _elixir_test_info(ctx, "elixir_exunit", "Elixir ExUnit", runner, _elixir_interpreter_opts(ctx) + start_args + require_args + _elixir_test_args(ctx), results, log, native_results)
 
 def _elixir_test_script(ctx, toolchain, lib, apps, srcs, config, data, mix_config, results, log, native_results):
     app_name = lib["app_name"]
@@ -966,6 +1019,7 @@ def _elixir_test_script(ctx, toolchain, lib, apps, srcs, config, data, mix_confi
     home = ctx["scratch_dir"] + "/test_home"
     deps_root = ctx["scratch_dir"] + "/test_deps"
     user_env = _elixir_user_env(ctx)
+    setup = _elixir_attr(ctx, "setup", "")
     runner = _elixir_test_runner_command(ctx, toolchain, apps, srcs, mix_config)
     return """set -eu
 WORKSPACE_ROOT="$PWD"
@@ -990,6 +1044,7 @@ export MIX_BUILD_ROOT="$WORKSPACE_ROOT/$BUILD_ROOT"
 export MIX_HOME="$WORKSPACE_ROOT/$HOME_DIR/.mix"
 export HEX_OFFLINE=true
 export ERL_LIBS="$WORKSPACE_ROOT/$DEPS_ROOT"
+{setup}
 set +e
 {runner} > "$WORKSPACE_ROOT/$LOG" 2>&1
 status=$?
@@ -1037,16 +1092,19 @@ exit "$status"
         dep_symlinks = _elixir_dep_symlink_script(apps, "WORKSPACE_ROOT", "DEPS_ROOT"),
         package = _shell_quote(ctx["label"]["package"] or "."),
         user_env = _elixir_export_env(user_env),
+        setup = setup,
         runner = runner,
         target = _shell_quote(ctx["label"]["id"]),
         runner_type = _shell_quote("mix_test" if mix_config else "elixir_exunit"),
     )
 
 def _elixir_test_impl(ctx):
+    _elixir_reject_unsupported_attrs(ctx, ["ez_deps"])
     srcs = _elixir_test_sources(ctx)
     input_srcs = _elixir_test_input_sources(ctx, srcs)
     config = _elixir_config_inputs(ctx)
     data = _elixir_data_inputs(ctx)
+    tools = _elixir_tool_inputs(ctx)
     mix_config = _elixir_mix_config(ctx)
     test_dir = ctx["build_dir"] + "/test"
     results = test_dir + "/test_results.json"
@@ -1055,7 +1113,7 @@ def _elixir_test_impl(ctx):
     provider = {
         "label_id": ctx["label"]["id"],
         "target_kind": "elixir_test",
-        "affected_inputs": _unique(_elixir_optional_inputs(input_srcs + config + data + [mix_config])),
+        "affected_inputs": _unique(_elixir_optional_inputs(input_srcs + config + data + tools + [mix_config])),
         "test_info": _elixir_test_info_for(ctx, "elixir", mix_config, srcs, results, log, native_results),
     }
     if ctx["capability"] != "test":
@@ -1070,7 +1128,7 @@ def _elixir_test_impl(ctx):
     mix_config = lib.get("mix_config") or mix_config
     toolchain = _elixir_mix_toolchain() if mix_config else _elixir_compiler_toolchain()
     apps = _elixir_collect_apps([lib])
-    provider["affected_inputs"] = _unique(_elixir_optional_inputs(input_srcs + config + data + [mix_config]))
+    provider["affected_inputs"] = _unique(_elixir_optional_inputs(input_srcs + config + data + tools + [mix_config]))
     provider["test_info"] = _elixir_test_info_for(ctx, toolchain["mix"] if mix_config else toolchain["elixir"], mix_config, srcs, results, log, native_results)
     run_action(
         argv = ["/bin/sh", "-c", _elixir_test_script(ctx, toolchain, lib, apps, srcs, config, data, mix_config, results, log, native_results)],
@@ -1088,25 +1146,51 @@ _ELIXIR_LIBRARY_ATTRS = [
     attr("mix_config", "string", default = "", docs = "Optional package-relative Mix project file included in the library action key when the project still needs one.", configurable = False),
     attr("version", "string", default = "0.1.0", docs = "Application version written to the generated application metadata.", configurable = False),
     attr("description", "string", default = "", docs = "Application description written to the generated application metadata.", configurable = False),
+    attr("app_description", "string", default = "", docs = "Bazel-compatible alias used when `description` is omitted.", configurable = False),
     attr("applications", "list<string>", default = "[\"kernel\", \"stdlib\", \"elixir\"]", docs = "Runtime applications written to the generated application metadata.", configurable = False),
+    attr("extra_apps", "list<string>", default = "[]", docs = "Bazel-compatible runtime applications appended to `applications`.", configurable = False),
     attr("included_applications", "list<string>", default = "[]", docs = "Included applications written to the generated application metadata.", configurable = False),
     attr("registered", "list<string>", default = "[]", docs = "Registered process names written to the generated application metadata.", configurable = False),
     attr("consolidate_protocols", "bool", default = "true", docs = "Consolidate protocols after compilation and stage consolidated protocol bytecode into the application.", configurable = False),
     attr("config", "list<string>", default = "[\"config/**/*.exs\"]", docs = "Package-relative config file globs included in the compile action key.", configurable = False),
+    attr("config_files", "list<string>", default = "[]", docs = "Buck-compatible alias for additional config file globs.", configurable = False),
     attr("data", "list<string>", default = "[]", docs = "Package-relative data file globs available during compile.", configurable = False),
     attr("priv", "list<string>", default = "[]", docs = "Package-relative priv file globs copied into the application priv output.", configurable = False),
+    attr("resources", "list<string>", default = "[]", docs = "Buck-compatible resource globs copied into the application priv output.", configurable = False),
     attr("include", "list<string>", default = "[\"include/**/*.hrl\"]", docs = "Package-relative Erlang header globs included in the compile action key.", configurable = False),
+    attr("docs", "list<string>", default = "[]", docs = "Buck-compatible documentation file globs included in the compile action key.", configurable = False),
+    attr("os_env", "map<string, string>", default = "{}", docs = "Buck-compatible environment variables exported before Elixir compile and test commands.", configurable = False),
+    attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited before explicit `env` values.", configurable = False),
     attr("env", "map<string, string>", default = "{}", docs = "Environment variables exported before running Elixir compile and test commands.", configurable = False),
     attr("compile_args", "list<string>", default = "[]", docs = "Additional arguments appended to `elixirc`.", configurable = False),
+    attr("elixirc_opts", "list<string>", default = "[]", docs = "Bazel-compatible alias for additional `elixirc` arguments.", configurable = False),
+    attr("app_src", "string", docs = "Reserved for Buck-compatible application source file generation.", configurable = False),
+    attr("app_src_vsn", "string", docs = "Reserved for Buck-compatible application source versions.", configurable = False),
+    attr("appup_src", "string", docs = "Reserved for Buck-compatible upgrade files.", configurable = False),
+    attr("erl_opts", "list<string>", default = "[]", docs = "Reserved for Erlang compiler options.", configurable = False),
+    attr("ez_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-compatible archive dependencies.", configurable = False),
+    attr("extra_includes", "list<string>", default = "[]", docs = "Reserved for Buck-compatible include directories.", configurable = False),
+    attr("extra_properties", "map<string, string>", default = "{}", docs = "Reserved for extra application metadata properties.", configurable = False),
+    attr("include_src", "bool", default = "false", docs = "Reserved for Buck-compatible source inclusion.", configurable = False),
+    attr("mod", "string", docs = "Reserved for application callback module metadata.", configurable = False),
+    attr("shell_configs", "list<string>", default = "[]", docs = "Reserved for Buck-compatible shell configuration files.", configurable = False),
+    attr("shell_libs", "list<string>", default = "[]", docs = "Reserved for Buck-compatible shell libraries.", configurable = False),
 ]
 
 _ELIXIR_TEST_ATTRS = [
     attr("mix_config", "string", default = "", docs = "Optional package-relative Mix project file. When omitted, tests run through direct ExUnit without requiring a Mix project.", configurable = False),
     attr("config", "list<string>", default = "[\"config/**/*.exs\"]", docs = "Package-relative config file globs included in the test action key.", configurable = False),
+    attr("config_files", "list<string>", default = "[]", docs = "Buck-compatible alias for additional config file globs.", configurable = False),
     attr("data", "list<string>", default = "[]", docs = "Package-relative data file globs available during tests.", configurable = False),
+    attr("os_env", "map<string, string>", default = "{}", docs = "Buck-compatible environment variables exported before running tests.", configurable = False),
+    attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited before explicit `env` values.", configurable = False),
     attr("env", "map<string, string>", default = "{}", docs = "Environment variables exported before running tests.", configurable = False),
     attr("test_args", "list<string>", default = "[]", docs = "Additional arguments appended to the test runner.", configurable = False),
+    attr("elixir_opts", "list<string>", default = "[]", docs = "Bazel-compatible options passed to the direct Elixir interpreter before test files. Not supported with `mix_config`.", configurable = False),
+    attr("setup", "string", default = "", docs = "Shell snippet run after the test environment is prepared and before ExUnit starts.", configurable = False),
     attr("no_start", "bool", default = "false", docs = "Pass `--no-start` to `mix test` when `mix_config` enables Mix mode.", configurable = False),
+    attr("ez_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-compatible archive dependencies.", configurable = False),
+    attr("tools", "list<string>", default = "[]", docs = "Package-relative executable or support-file globs available to the test setup command.", configurable = False),
     attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
     attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
 ]

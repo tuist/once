@@ -29,6 +29,22 @@ fn action_by_identifier<'a>(store: &'a AnalysisStore, identifier: &str) -> &'a D
         .unwrap_or_else(|| panic!("missing action `{identifier}`"))
 }
 
+fn assert_target_kind_attrs(kind: &str, expected: &[&str]) {
+    let schema = built_in_target_kind_schema(kind)
+        .unwrap_or_else(|| panic!("missing target kind schema `{kind}`"));
+    let names = schema
+        .attrs
+        .iter()
+        .map(|attr| attr.name.as_str())
+        .collect::<Vec<_>>();
+    for name in expected {
+        assert!(
+            names.contains(name),
+            "target kind `{kind}` is missing parity attribute `{name}`"
+        );
+    }
+}
+
 #[cfg(unix)]
 fn android_ndk_prebuilt_tag() -> &'static str {
     if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
@@ -159,6 +175,7 @@ fn android_target_kind_schemas_expose_all_target_kinds() {
     assert!(attr_names.contains(&"kotlinc_opts"));
     assert!(attr_names.contains(&"kotlinc"));
     assert!(attr_names.contains(&"kotlin_stdlib"));
+    assert!(attr_names.contains(&"javacopts"));
 
     let local_test = built_in_target_kind_schema("android_local_test").unwrap();
     assert!(local_test.providers.iter().any(|p| p == "once_test_info"));
@@ -167,6 +184,16 @@ fn android_target_kind_schemas_expose_all_target_kinds() {
         .iter()
         .any(|capability| capability.name == "test"));
     assert!(local_test.attrs.iter().any(|attr| attr.name == "classpath"));
+    assert!(local_test.attrs.iter().any(|attr| attr.name == "env"));
+    assert!(local_test
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "env_inherit"));
+    assert!(local_test.attrs.iter().any(|attr| attr.name == "javacopts"));
+    assert!(local_test
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "runtime_deps"));
 
     let instrumentation_test = built_in_target_kind_schema("android_instrumentation_test").unwrap();
     assert!(instrumentation_test
@@ -181,6 +208,14 @@ fn android_target_kind_schemas_expose_all_target_kinds() {
         .attrs
         .iter()
         .any(|attr| attr.name == "test_app"));
+    assert!(instrumentation_test
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "env_inherit"));
+    assert!(instrumentation_test
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "support_apks"));
 }
 
 #[test]
@@ -197,6 +232,14 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
         .attrs
         .iter()
         .any(|attr| attr.name == "android_abi" && !attr.required));
+    assert!(swift.attrs.iter().any(|attr| attr.name == "copts"));
+    assert!(swift.attrs.iter().any(|attr| attr.name == "defines"));
+    assert!(swift.attrs.iter().any(|attr| attr.name == "package_name"));
+    assert!(swift.attrs.iter().any(|attr| attr.name == "swiftc_inputs"));
+    assert!(swift
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "library_evolution"));
 
     let kotlin = built_in_target_kind_schema("kotlin_apple_framework")
         .expect("kotlin_apple_framework schema");
@@ -209,6 +252,19 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
     assert!(rust.providers.iter().any(|p| p == "android_native_library"));
     assert!(rust.attrs.iter().any(|attr| attr.name == "android_abi"));
     assert!(rust.attrs.iter().any(|attr| attr.name == "native_linkopts"));
+    assert!(rust.attrs.iter().any(|attr| attr.name == "aliases"));
+    assert!(rust.attrs.iter().any(|attr| attr.name == "named_deps"));
+    assert!(rust.attrs.iter().any(|attr| attr.name == "compile_data"));
+    assert!(rust.attrs.iter().any(|attr| attr.name == "rustc_env_files"));
+    assert!(rust
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "exported_linker_flags"));
+    assert!(rust
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "exported_post_linker_flags"));
+    assert!(rust.attrs.iter().any(|attr| attr.name == "linker_script"));
 
     let rust_test = built_in_target_kind_schema("rust_test").expect("rust_test schema");
     assert!(target_kind_has_impl("rust_test").unwrap());
@@ -217,6 +273,14 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
         .capabilities
         .iter()
         .any(|capability| capability.name == "test"));
+    assert!(rust_test
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "env_inherit"));
+    assert!(rust_test
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "use_libtest_harness"));
 
     let rust_mobile =
         built_in_target_kind_schema("rust_mobile_library").expect("rust_mobile_library schema");
@@ -236,6 +300,192 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
         .attrs
         .iter()
         .any(|attr| attr.name == "android_target" && attr.required));
+    assert!(rust_mobile
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "compile_data"));
+}
+
+#[test]
+fn rust_and_elixir_runtime_schemas_are_discoverable() {
+    let rust_binary = built_in_target_kind_schema("rust_binary").expect("rust_binary schema");
+    assert!(rust_binary.attrs.iter().any(|attr| attr.name == "args"));
+    assert!(rust_binary.attrs.iter().any(|attr| attr.name == "run_env"));
+    let rust_run = rust_binary
+        .capabilities
+        .iter()
+        .find(|capability| capability.name == "run")
+        .expect("rust_binary run capability");
+    assert_eq!(rust_run.requires_outputs, vec!["binary"]);
+
+    let elixir = built_in_target_kind_schema("elixir_library").expect("elixir_library schema");
+    assert!(target_kind_has_impl("elixir_library").unwrap());
+    assert!(elixir.attrs.iter().any(|attr| attr.name == "elixirc_opts"));
+    assert!(elixir.attrs.iter().any(|attr| attr.name == "extra_apps"));
+    assert!(elixir
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "app_description"));
+    assert!(elixir.attrs.iter().any(|attr| attr.name == "resources"));
+
+    let elixir_test = built_in_target_kind_schema("elixir_test").expect("elixir_test schema");
+    assert!(target_kind_has_impl("elixir_test").unwrap());
+    assert!(elixir_test.attrs.iter().any(|attr| attr.name == "setup"));
+    assert!(elixir_test
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "elixir_opts"));
+    assert!(elixir_test
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "env_inherit"));
+    assert!(elixir_test.attrs.iter().any(|attr| attr.name == "tools"));
+}
+
+#[test]
+fn rust_schemas_cover_upstream_parity_fields() {
+    for kind in [
+        "rust_library",
+        "rust_binary",
+        "rust_test",
+        "rust_crate",
+        "rust_proc_macro",
+    ] {
+        assert_target_kind_attrs(
+            kind,
+            &[
+                "crate_root",
+                "edition",
+                "crate_features",
+                "data",
+                "compile_data",
+                "aliases",
+                "named_deps",
+                "rustc_env",
+                "rustc_env_files",
+                "rustc_flags",
+            ],
+        );
+    }
+}
+
+#[test]
+fn zig_schemas_cover_upstream_parity_fields() {
+    assert_target_kind_attrs(
+        "zig_library",
+        &[
+            "main",
+            "import_name",
+            "import_names",
+            "extra_srcs",
+            "data",
+            "zigopts",
+        ],
+    );
+    for kind in [
+        "zig_binary",
+        "zig_static_library",
+        "zig_shared_library",
+        "zig_test",
+    ] {
+        assert_target_kind_attrs(
+            kind,
+            &[
+                "main",
+                "data",
+                "copts",
+                "csrcs",
+                "extra_docs",
+                "extra_srcs",
+                "import_names",
+                "linker_script",
+                "linkopts",
+                "strip_debug_symbols",
+                "zigopts",
+            ],
+        );
+    }
+    assert_target_kind_attrs("zig_c_library", &["data", "import_name"]);
+    for kind in [
+        "zig_configure",
+        "zig_configure_binary",
+        "zig_configure_test",
+    ] {
+        assert_target_kind_attrs(
+            kind,
+            &[
+                "bootstrapped",
+                "host_mode",
+                "host_threaded",
+                "host_use_cc_common_link",
+                "host_zigopt",
+                "mode",
+                "target",
+                "threaded",
+                "use_cc_common_link",
+                "use_standalone_translate_c",
+                "zig_version",
+                "zigopt",
+            ],
+        );
+    }
+}
+
+#[test]
+fn elixir_and_swift_schemas_cover_upstream_parity_fields() {
+    assert_target_kind_attrs(
+        "elixir_library",
+        &[
+            "app_name",
+            "app_description",
+            "extra_apps",
+            "elixirc_opts",
+            "resources",
+            "docs",
+            "os_env",
+        ],
+    );
+    assert_target_kind_attrs(
+        "elixir_test",
+        &["data", "env", "setup", "elixir_opts", "tools"],
+    );
+    assert_target_kind_attrs(
+        "swift_android_library",
+        &[
+            "copts",
+            "defines",
+            "data",
+            "library_evolution",
+            "linkopts",
+            "module_name",
+            "package_name",
+            "swiftc_inputs",
+        ],
+    );
+}
+
+#[test]
+fn android_schemas_cover_upstream_parity_fields() {
+    assert_target_kind_attrs(
+        "android_library",
+        &[
+            "assets",
+            "assets_dir",
+            "custom_package",
+            "javacopts",
+            "manifest",
+            "neverlink",
+            "resource_files",
+        ],
+    );
+    assert_target_kind_attrs(
+        "android_local_test",
+        &["args", "env", "javacopts", "jvm_flags", "test_class"],
+    );
+    assert_target_kind_attrs(
+        "android_instrumentation_test",
+        &["args", "support_apks", "test_app", "test_class"],
+    );
 }
 
 #[test]
@@ -270,6 +520,12 @@ fn c_and_zig_target_kind_schemas_are_discoverable() {
         .attrs
         .iter()
         .any(|attr| attr.name == "use_cc_common_link"));
+    assert!(zig_binary.attrs.iter().any(|attr| attr.name == "copts"));
+    assert!(zig_binary
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "extra_docs"));
+    assert!(zig_binary.attrs.iter().any(|attr| attr.name == "emit_asm"));
     assert!(zig_binary
         .attrs
         .iter()
@@ -315,6 +571,126 @@ fn c_and_zig_target_kind_schemas_are_discoverable() {
         .capabilities
         .iter()
         .any(|capability| capability.name == "test"));
+}
+
+#[test]
+fn prelude_elixir_parity_alias_helpers_merge_values() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_env(name):
+    if name == "ELIXIR_HOST_FLAG":
+        return "host-value"
+    return ""
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "app",
+        "id": "pkg/app",
+    }},
+    "attr": {{
+        "app_description": "fallback description",
+        "applications": ["kernel", "stdlib", "elixir"],
+        "extra_apps": ["logger", "elixir"],
+        "compile_args": ["--warnings-as-errors"],
+        "elixirc_opts": ["--debug-info"],
+        "test_args": ["--trace"],
+        "elixir_opts": ["--no-halt"],
+        "os_env": {{"FROM_OS": "os", "SHARED": "os"}},
+        "env_inherit": ["ELIXIR_HOST_FLAG"],
+        "env": {{"FROM_ENV": "env", "SHARED": "env"}},
+    }},
+}}
+env = _elixir_user_env(ctx)
+result = repr([
+    _elixir_description(ctx),
+    _elixir_applications(ctx),
+    _elixir_compile_args(ctx),
+    _elixir_test_args(ctx),
+    _elixir_interpreter_opts(ctx),
+    env.get("FROM_OS"),
+    env.get("ELIXIR_HOST_FLAG"),
+    env.get("SHARED"),
+    env.get("FROM_ENV"),
+])
+"#
+    );
+
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(
+        out,
+        "[\"fallback description\", [\"kernel\", \"stdlib\", \"elixir\", \"logger\"], [\"--warnings-as-errors\", \"--debug-info\"], [\"--trace\"], [\"--no-halt\"], \"os\", \"host-value\", \"env\", \"env\"]"
+    );
+}
+
+#[test]
+fn prelude_elixir_interpreter_opts_are_rejected_in_mix_mode() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "pkg", "name": "suite", "id": "pkg/suite"}},
+    "attr": {{"elixir_opts": ["--no-halt"]}},
+}}
+result = repr(_elixir_test_info_for(ctx, "mix", "mix.exs", [], "results", "log", "native"))
+"#
+    );
+
+    let err = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(err.contains("applies to direct ExUnit mode only"), "{err}");
+}
+
+#[test]
+fn prelude_elixir_tools_are_declared_test_inputs() {
+    let workspace = TempDir::new().unwrap();
+    let tools_dir = workspace.path().join("pkg/tools");
+    std::fs::create_dir_all(&tools_dir).unwrap();
+    std::fs::write(tools_dir.join("prepare.sh"), "exit 0\n").unwrap();
+    let store = store_for(workspace.path(), "pkg");
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "pkg", "name": "suite", "id": "pkg/suite"}},
+    "attr": {{"tools": ["tools/**"]}},
+}}
+result = repr(_elixir_tool_inputs(ctx))
+"#
+    );
+
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "[\"pkg/tools/prepare.sh\"]");
+}
+
+#[test]
+fn prelude_zig_explicit_test_env_overrides_inherited_values() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_env(name):
+    if name == "SHARED":
+        return "host"
+    return ""
+
+ctx = {{
+    "label": {{"package": "pkg", "name": "suite", "id": "pkg/suite"}},
+    "attr": {{
+        "env_inherit": ["SHARED"],
+        "env": {{"SHARED": "env"}},
+        "test_env": {{"SHARED": "test"}},
+    }},
+}}
+result = repr(_zig_run_env(ctx, ".once/out/pkg/suite/test"))
+"#
+    );
+
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(out.contains("\"SHARED\": \"test\""), "{out}");
 }
 
 #[test]
@@ -2165,6 +2541,12 @@ fn prelude_swift_android_library_declares_native_provider() {
         "public func greeting() {}\n",
     )
     .unwrap();
+    let support_dir = workspace.path().join("shared/swift/Support");
+    let runtime_dir = workspace.path().join("shared/swift/Runtime");
+    std::fs::create_dir_all(&support_dir).unwrap();
+    std::fs::create_dir_all(&runtime_dir).unwrap();
+    std::fs::write(support_dir.join("module.map"), "module support {}\n").unwrap();
+    std::fs::write(runtime_dir.join("message.txt"), "hello\n").unwrap();
     let source = format!(
         r#"{prelude}
 def host_which(name):
@@ -2186,12 +2568,23 @@ ctx = {{
     "attr": {{
         "android_abi": "arm64-v8a",
         "module_name": "SharedSwift",
+        "package_name": "SharedPackage",
         "sdk": "/android/sdk",
         "resource_dir": "/swift/android/resources",
         "tools_directory": "/android/ndk/bin",
+        "copts": ["-warnings-as-errors"],
+        "defines": ["SHARED_SWIFT"],
+        "library_evolution": True,
+        "linkopts": ["-Xlinker", "--own-link-option"],
+        "data": ["Runtime/**"],
+        "swiftc_inputs": ["Support/*.map"],
     }},
     "deps": [{{
         "transitive_swiftmodule_dirs": [".once/out/shared/swift/Dep"],
+        "swiftmodule": ".once/out/shared/swift/Dep/Dep.swiftmodule",
+        "swiftdoc": ".once/out/shared/swift/Dep/Dep.swiftdoc",
+        "transitive_swift_defines": ["DEP_SWIFT"],
+        "transitive_linkopts": ["-Xlinker", "--dep-link-option"],
         "transitive_android_native_libraries": [{{"abi": "arm64-v8a", "path": ".once/out/shared/swift/libdep.so"}}],
     }}],
     "srcs": ["Sources/**/*.swift"],
@@ -2203,6 +2596,8 @@ result = repr([
     provider["android_abi"],
     provider["android_native_libraries"],
     provider["transitive_android_native_libraries"],
+    provider["transitive_swift_defines"],
+    provider["transitive_data"],
 ])
 "#
     );
@@ -2215,8 +2610,13 @@ result = repr([
     assert!(out.contains("arm64-v8a"), "{out}");
     assert!(out.contains("libSharedSwift.so"), "{out}");
     assert!(out.contains("libdep.so"), "{out}");
+    assert!(out.contains("DEP_SWIFT"), "{out}");
+    assert!(out.contains("Runtime/message.txt"), "{out}");
     assert_eq!(store.actions.len(), 1);
-    let action = &store.actions[0];
+    assert_swift_android_compile_action(&store.actions[0]);
+}
+
+fn assert_swift_android_compile_action(action: &DeclaredAction) {
     assert_eq!(
         action.identifier.as_deref(),
         Some("swift_android_compile:shared/swift/SharedSwift")
@@ -2224,6 +2624,25 @@ result = repr([
     assert!(action.argv.iter().any(|arg| arg == "-emit-library"));
     assert!(action.argv.iter().any(|arg| arg == "-target"));
     assert!(action.argv.iter().any(|arg| arg == "-tools-directory"));
+    assert!(action.argv.iter().any(|arg| arg == "-warnings-as-errors"));
+    assert!(action
+        .argv
+        .windows(2)
+        .any(|args| args == ["-D", "SHARED_SWIFT"]));
+    assert!(action
+        .argv
+        .windows(2)
+        .any(|args| args == ["-D", "DEP_SWIFT"]));
+    assert!(action
+        .argv
+        .iter()
+        .any(|arg| arg == "-enable-library-evolution"));
+    assert!(action.argv.iter().any(|arg| arg == "--dep-link-option"));
+    assert!(action.argv.iter().any(|arg| arg == "--own-link-option"));
+    assert!(action
+        .argv
+        .windows(2)
+        .any(|args| args == ["-package-name", "SharedPackage"]));
     assert!(action
         .inputs
         .iter()
@@ -2231,7 +2650,27 @@ result = repr([
     assert!(action
         .inputs
         .iter()
+        .any(|input| input == "shared/swift/Support/module.map"));
+    assert!(action
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/shared/swift/Dep/Dep.swiftmodule"));
+    assert!(action
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/shared/swift/Dep/Dep.swiftdoc"));
+    assert!(!action
+        .inputs
+        .iter()
+        .any(|input| input == "shared/swift/Runtime/message.txt"));
+    assert!(action
+        .inputs
+        .iter()
         .any(|input| input == ".once/out/shared/swift/libdep.so"));
+    assert!(action
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("SharedSwift.swiftinterface")));
 }
 
 #[test]
@@ -2288,6 +2727,24 @@ fn prelude_zig_collect_linkopts_preserves_paired_flags() {
     assert_eq!(
         out,
         "[\"-framework\", \"Foundation\", \"-framework\", \"CoreData\"]"
+    );
+}
+
+#[test]
+fn prelude_swift_android_collect_linkopts_preserves_paired_flags() {
+    let prelude = all_prelude_source();
+    let out = eval_prelude_function_in(
+        prelude,
+        "_swift_android_collect_linkopts",
+        r#"([
+            {"transitive_linkopts": ["-Xlinker", "-rpath", "-Xlinker", "/a"]},
+        ], ["-framework", "Foundation", "-framework", "CoreData"])"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        out,
+        "[\"-Xlinker\", \"-rpath\", \"-Xlinker\", \"/a\", \"-framework\", \"Foundation\", \"-framework\", \"CoreData\"]"
     );
 }
 
@@ -2513,6 +2970,111 @@ result = repr([
 
 #[cfg(unix)]
 #[test]
+fn prelude_rust_compile_accepts_parity_aliases_and_inputs() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let src_dir = workspace.path().join("pkg/src");
+    let compile_data_dir = workspace.path().join("pkg/compile-data");
+    let runtime_data_dir = workspace.path().join("pkg/runtime-data");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    std::fs::create_dir_all(&compile_data_dir).unwrap();
+    std::fs::create_dir_all(&runtime_data_dir).unwrap();
+    std::fs::write(src_dir.join("lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
+    std::fs::write(compile_data_dir.join("schema.txt"), "schema\n").unwrap();
+    std::fs::write(runtime_data_dir.join("fixture.txt"), "fixture\n").unwrap();
+    std::fs::write(workspace.path().join("pkg/layout.ld"), "SECTIONS {}\n").unwrap();
+    std::fs::write(
+        workspace.path().join("pkg/rust.env"),
+        "FROM_FILE=file\nOVERRIDDEN=file\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "rustc":
+        return "/toolchains/rust/bin/rustc"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
+        return "/toolchains/rust\n"
+    if len(argv) >= 2 and argv[1] == "--version":
+        return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "pkg",
+        "name": "lib",
+        "id": "pkg/lib",
+    }},
+    "attr": {{
+        "crate_root": "src/lib.rs",
+        "target": "wasm32-unknown-unknown",
+        "rustc_env_files": ["rust.env"],
+        "rustc_env": {{"OVERRIDDEN": "explicit"}},
+        "data": ["runtime-data/**"],
+        "compile_data": ["compile-data/**"],
+        "linker_script": "layout.ld",
+        "aliases": {{"pkg/dep": "renamed_dep"}},
+        "named_deps": {{"buck_dep": "pkg/buck"}},
+        "exported_linker_flags": ["-Wl,--as-needed"],
+        "exported_post_linker_flags": ["-Wl,--gc-sections"],
+    }},
+    "deps": [
+        {{"label_id": "pkg/dep", "crate_name": "dep", "rlib": ".once/out/pkg/dep/libdep.rlib"}},
+        {{"label_id": "pkg/buck", "crate_name": "buck", "rlib": ".once/out/pkg/buck/libbuck.rlib"}},
+    ],
+    "srcs": ["src/**/*.rs"],
+    "build_dir": ".once/out/pkg/lib",
+}}
+provider = _rust_library_impl(ctx)
+result = repr([provider["transitive_linkopts"], provider["transitive_data"]])
+"#
+    );
+    let store = store_for(workspace.path(), "pkg");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        "[[\"-Wl,--as-needed\", \"-Wl,--gc-sections\"], [\"pkg/runtime-data/fixture.txt\"]]"
+    );
+    let action = action_by_identifier(&store, "pkg/lib:rustc");
+    assert!(action
+        .argv
+        .iter()
+        .any(|arg| arg == "renamed_dep=.once/out/pkg/dep/libdep.rlib"));
+    assert!(action
+        .argv
+        .iter()
+        .any(|arg| arg == "buck_dep=.once/out/pkg/buck/libbuck.rlib"));
+    assert!(action
+        .inputs
+        .iter()
+        .any(|input| input == "pkg/compile-data/schema.txt"));
+    assert!(!action
+        .inputs
+        .iter()
+        .any(|input| input == "pkg/runtime-data/fixture.txt"));
+    assert!(action.inputs.iter().any(|input| input == "pkg/rust.env"));
+    assert!(action.inputs.iter().any(|input| input == "pkg/layout.ld"));
+    assert!(action
+        .argv
+        .iter()
+        .any(|arg| arg == "link-arg=-Tpkg/layout.ld"));
+    assert_eq!(
+        action.env.get("FROM_FILE").map(String::as_str),
+        Some("file")
+    );
+    assert_eq!(
+        action.env.get("OVERRIDDEN").map(String::as_str),
+        Some("explicit")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn prelude_rust_mobile_library_android_consumer_declares_only_android_variant() {
     let prelude = all_prelude_source();
     let workspace = TempDir::new().unwrap();
@@ -2700,6 +3262,61 @@ result = repr([
 }
 
 #[test]
+fn prelude_rust_mobile_library_carries_resolved_auxiliary_inputs() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("shared/rust");
+    std::fs::create_dir_all(package_dir.join("src")).unwrap();
+    std::fs::create_dir_all(package_dir.join("runtime")).unwrap();
+    std::fs::create_dir_all(package_dir.join("compile")).unwrap();
+    std::fs::write(package_dir.join("src/lib.rs"), "pub fn greeting() {}\n").unwrap();
+    std::fs::write(package_dir.join("runtime/message.txt"), "hello\n").unwrap();
+    std::fs::write(package_dir.join("compile/schema.txt"), "schema\n").unwrap();
+    std::fs::write(package_dir.join("rust.env"), "FROM_FILE=value\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+mobile_ctx = {{
+    "label": {{
+        "package": "shared/rust",
+        "name": "SharedRust",
+        "id": "shared/rust/SharedRust",
+    }},
+    "attr": {{
+        "apple_target": "aarch64-apple-ios-sim",
+        "android_target": "aarch64-linux-android",
+        "data": ["runtime/**"],
+        "compile_data": ["compile/**"],
+        "rustc_env_files": ["rust.env"],
+    }},
+    "deps": [],
+    "srcs": ["src/**/*.rs"],
+    "build_dir": ".once/out/shared/rust/SharedRust",
+}}
+provider = _rust_mobile_library_impl(mobile_ctx)
+consumer_ctx = {{
+    "build_dir": ".once/out/apps/android/App",
+    "scratch_dir": ".once/tmp/analysis/apps/android/App",
+}}
+variant = _rust_mobile_variant_ctx(consumer_ctx, provider, "android_target", "android")
+result = repr([
+    variant["attr"]["_resolved_data_inputs"],
+    variant["attr"]["_resolved_compile_data_inputs"],
+    variant["attr"]["_resolved_env_file_inputs"],
+    provider["transitive_data"],
+])
+"#
+    );
+    let store = store_for(workspace.path(), "shared/rust");
+
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        "[[\"shared/rust/runtime/message.txt\"], [\"shared/rust/compile/schema.txt\"], [\"shared/rust/rust.env\"], [\"shared/rust/runtime/message.txt\"]]"
+    );
+}
+
+#[test]
 fn prelude_rust_mobile_library_rejects_rust_deps() {
     let prelude = all_prelude_source();
     let source = format!(
@@ -2736,12 +3353,15 @@ fn prelude_rust_test_declares_libtest_binary_and_runner() {
     let prelude = all_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("crates/app/tests");
+    let fixture_dir = workspace.path().join("crates/app/fixtures");
     std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::create_dir_all(&fixture_dir).unwrap();
     std::fs::write(
         package_dir.join("greeting_test.rs"),
         "#[test]\nfn test_greeting() {}\n",
     )
     .unwrap();
+    std::fs::write(fixture_dir.join("greeting.txt"), "hello\n").unwrap();
     let source = format!(
         r#"{prelude}
 def host_which(name):
@@ -2770,6 +3390,7 @@ ctx = {{
         "crate_root": "tests/greeting_test.rs",
         "edition": "2021",
         "linker": "/usr/bin/cc",
+        "data": ["fixtures/**"],
         "labels": ["unit"],
     }},
     "deps": [],
@@ -2808,6 +3429,83 @@ result = repr(provider["test_info"])
         .outputs
         .iter()
         .any(|output| output.ends_with("test/rust-libtest.log")));
+    assert!(run
+        .inputs
+        .iter()
+        .any(|input| input == "crates/app/fixtures/greeting.txt"));
+}
+
+#[test]
+fn prelude_rust_binary_run_declares_runtime_data_and_environment() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let data_dir = workspace.path().join("crates/app/data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(data_dir.join("message.txt"), "hello\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_env(name):
+    if name == "RUST_RUN_HOST":
+        return "host-value"
+    return ""
+
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "args": ["--message", "data/message.txt"],
+        "data": ["data/**"],
+        "env_inherit": ["RUST_RUN_HOST"],
+        "run_env": {{"RUST_RUN_EXPLICIT": "explicit-value"}},
+    }},
+    "deps": [{{"transitive_data": ["shared/config.json"]}}],
+    "srcs": ["src/**/*.rs"],
+    "build_dir": ".once/out/crates/app/app",
+    "capability": "run",
+}}
+provider = _rust_binary_impl(ctx)
+result = repr(provider["transitive_data"])
+"#
+    );
+    let store = store_for(workspace.path(), "crates/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        "[\"crates/app/data/message.txt\", \"shared/config.json\"]"
+    );
+    let run = action_by_identifier(&store, "crates/app/app:run");
+    assert_eq!(run.argv[0], ".once/out/crates/app/app/app");
+    assert!(run.argv.iter().any(|arg| arg == "--message"));
+    assert!(run
+        .inputs
+        .iter()
+        .any(|input| input == "crates/app/data/message.txt"));
+    assert!(run.inputs.iter().any(|input| input == "shared/config.json"));
+    assert_eq!(
+        run.env.get("RUST_RUN_HOST").map(String::as_str),
+        Some("host-value")
+    );
+    assert_eq!(
+        run.env.get("RUST_RUN_EXPLICIT").map(String::as_str),
+        Some("explicit-value")
+    );
+    assert_eq!(
+        run.stdout.as_deref(),
+        Some(".once/out/crates/app/app/run/stdout.log")
+    );
+    let marker = action_by_identifier(&store, "write_path:.once/out/crates/app/app/run/run.json");
+    assert!(matches!(
+        marker.operation,
+        Some(DeclaredActionOperation::WriteFile { .. })
+    ));
 }
 
 #[cfg(unix)]
@@ -2994,10 +3692,19 @@ fn prelude_android_local_test_declares_test_runner_action() {
     let test_dir = workspace
         .path()
         .join("apps/hello/src/test/kotlin/dev/once/hello");
+    let java_test_dir = workspace
+        .path()
+        .join("apps/hello/src/test/java/dev/once/hello");
     std::fs::create_dir_all(&test_dir).unwrap();
+    std::fs::create_dir_all(&java_test_dir).unwrap();
     std::fs::write(
         test_dir.join("GreetingTest.kt"),
         "package dev.once.hello\nclass GreetingTest { fun testGreeting() {} }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        java_test_dir.join("GreetingJavaTest.java"),
+        "package dev.once.hello; public class GreetingJavaTest { public void testGreeting() {} }\n",
     )
     .unwrap();
     let source = format!(
@@ -3006,6 +3713,11 @@ def host_which(name):
     if name == "sh":
         return "/bin/sh"
     fail("unexpected host_which: " + name)
+
+def host_env(name):
+    if name == "ANDROID_HOST_FLAG":
+        return "host-value"
+    return ""
 
 def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 2 and argv[len(argv) - 1] in ["version", "-version", "--version"]:
@@ -3027,15 +3739,22 @@ ctx = {{
         "java": "/jdk/bin/java",
         "kotlinc": "/kotlin/bin/kotlinc",
         "kotlin_stdlib": "/kotlin/lib/kotlin-stdlib.jar",
+        "javacopts": ["-Xlint:all"],
         "classpath": ["third_party/junit.jar"],
         "runtime_classpath": ["third_party/hamcrest.jar"],
+        "jvm_flags": ["-Duser.language=en"],
+        "test_class": "dev.once.hello.GreetingJavaTest",
+        "args": ["dev.once.hello.GreetingTest#testGreeting"],
+        "env": {{"ANDROID_ENV": "explicit"}},
+        "env_inherit": ["ANDROID_HOST_FLAG"],
+        "test_env": {{"ANDROID_TEST_ENV": "test"}},
         "labels": ["unit"],
     }},
     "deps": [{{
         "transitive_compile_jars": [".once/out/apps/hello/Greeting/Greeting.jar"],
         "transitive_runtime_jars": [".once/out/apps/hello/Greeting/Greeting.jar"],
     }}],
-    "srcs": ["src/test/**/*.kt"],
+    "srcs": ["src/test/**/*.kt", "src/test/**/*.java"],
     "build_dir": ".once/out/apps/hello/GreetingTests",
     "capability": "test",
 }}
@@ -3051,16 +3770,24 @@ result = repr(provider["test_info"])
 
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
-    let out = out.unwrap();
+    assert_android_local_test_actions(&store, &out.unwrap());
+}
+
+fn assert_android_local_test_actions(store: &AnalysisStore, out: &str) {
     assert!(out.contains("android_local"), "{out}");
     assert!(out.contains("unit"), "{out}");
-    let kotlin = action_by_identifier(&store, "android_kotlin_compile:apps/hello/GreetingTests");
+    let kotlin = action_by_identifier(store, "android_kotlin_compile:apps/hello/GreetingTests");
     assert!(kotlin
         .argv
         .iter()
         .any(|arg| arg.contains("/kotlin/lib/kotlin-stdlib.jar")));
+    let javac = action_by_identifier(
+        store,
+        "android_local_test_java_compile:apps/hello/GreetingTests",
+    );
+    assert!(javac.argv.iter().any(|arg| arg == "-Xlint:all"));
     let runner_compile = action_by_identifier(
-        &store,
+        store,
         "android_local_test_runner_compile:apps/hello/GreetingTests",
     );
     assert_eq!(runner_compile.argv[0], "/jdk/bin/javac");
@@ -3068,12 +3795,33 @@ result = repr(provider["test_info"])
         .inputs
         .iter()
         .any(|input| input.ends_with("OnceAndroidLocalTestRunner.java")));
-    let run = action_by_identifier(&store, "android_local_test:apps/hello/GreetingTests");
+    let run = action_by_identifier(store, "android_local_test:apps/hello/GreetingTests");
     assert_eq!(run.argv[0], "/jdk/bin/java");
+    assert_eq!(run.argv[1], "-Duser.language=en");
+    assert_eq!(
+        run.env.get("ANDROID_HOST_FLAG").map(String::as_str),
+        Some("host-value")
+    );
+    assert_eq!(
+        run.env.get("ANDROID_ENV").map(String::as_str),
+        Some("explicit")
+    );
+    assert_eq!(
+        run.env.get("ANDROID_TEST_ENV").map(String::as_str),
+        Some("test")
+    );
     assert!(run
         .argv
         .iter()
         .any(|arg| arg == "OnceAndroidLocalTestRunner"));
+    assert!(run
+        .argv
+        .iter()
+        .any(|arg| arg == "dev.once.hello.GreetingJavaTest"));
+    assert!(run
+        .argv
+        .iter()
+        .any(|arg| arg == "dev.once.hello.GreetingTest#testGreeting"));
     assert!(run
         .inputs
         .iter()
@@ -3096,12 +3844,21 @@ result = repr(provider["test_info"])
 #[test]
 fn prelude_android_instrumentation_test_declares_device_runner_action() {
     let prelude = android_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let support_dir = workspace.path().join("apps/hello/support");
+    std::fs::create_dir_all(&support_dir).unwrap();
+    std::fs::write(support_dir.join("orchestrator.apk"), b"support-apk").unwrap();
     let source = format!(
         r#"{prelude}
 def host_which(name):
     if name == "sh":
         return "/bin/sh"
     fail("unexpected host_which: " + name)
+
+def host_env(name):
+    if name == "ANDROID_DEVICE_HOST_FLAG":
+        return "device-host-value"
+    return ""
 
 def host_command(argv, env = None, merge_stderr = None):
     if len(argv) >= 1 and argv[0] == "/sdk/platform-tools/adb":
@@ -3125,7 +3882,12 @@ ctx = {{
         "test_app": "./GreetingInstrumentationApk",
         "instrumentation_runner": "androidx.test.runner.AndroidJUnitRunner",
         "instrumentation_args": {{"package": "dev.once.greeting.test"}},
+        "args": ["--no-window-animation"],
+        "support_apks": ["support/*.apk"],
         "test_class": "dev.once.greeting.GreetingInstrumentedTest",
+        "env": {{"ANDROID_DEVICE_ENV": "explicit"}},
+        "env_inherit": ["ANDROID_DEVICE_HOST_FLAG"],
+        "test_env": {{"ANDROID_DEVICE_TEST_ENV": "test"}},
         "labels": ["device"],
     }},
     "deps": [
@@ -3151,7 +3913,6 @@ provider = _android_instrumentation_test_impl(ctx)
 result = repr(provider["test_info"])
 "#
     );
-    let workspace = TempDir::new().unwrap();
     let store = AnalysisStore::new(
         workspace.path().to_path_buf(),
         "apps/hello".to_string(),
@@ -3171,6 +3932,18 @@ result = repr(provider["test_info"])
     let run = action_by_identifier(
         &store,
         "android_instrumentation_test:apps/hello/GreetingInstrumentationTests",
+    );
+    assert_eq!(
+        run.env.get("ANDROID_DEVICE_HOST_FLAG").map(String::as_str),
+        Some("device-host-value")
+    );
+    assert_eq!(
+        run.env.get("ANDROID_DEVICE_ENV").map(String::as_str),
+        Some("explicit")
+    );
+    assert_eq!(
+        run.env.get("ANDROID_DEVICE_TEST_ENV").map(String::as_str),
+        Some("test")
     );
     assert_android_instrumentation_run_action(run);
 }
@@ -3202,6 +3975,11 @@ fn assert_android_instrumentation_run_action(run: &DeclaredAction) {
         .argv
         .iter()
         .any(|arg| arg == "dev.once.greeting.GreetingInstrumentedTest"));
+    assert!(run.argv.iter().any(|arg| arg == "--no-window-animation"));
+    assert!(run
+        .argv
+        .iter()
+        .any(|arg| arg == "apps/hello/support/orchestrator.apk"));
     assert!(run
         .inputs
         .iter()
@@ -3215,9 +3993,31 @@ fn assert_android_instrumentation_run_action(run: &DeclaredAction) {
         .iter()
         .any(|input| input.ends_with("GreetingInstrumentationApk.apk")));
     assert!(run
+        .inputs
+        .iter()
+        .any(|input| input == "apps/hello/support/orchestrator.apk"));
+    assert!(run
         .outputs
         .iter()
         .any(|output| output.ends_with("test/test_results.json")));
+}
+
+#[test]
+fn prelude_android_neverlink_omits_runtime_closure() {
+    let prelude = android_prelude_source();
+    let source = format!(
+        r#"{prelude}
+deps = [{{"transitive_runtime_jars": ["dep.jar"]}}]
+result = repr([
+    _android_library_runtime_jars({{"neverlink": False}}, deps, ["local.jar"]),
+    _android_library_runtime_jars({{"neverlink": True}}, deps, ["local.jar"]),
+])
+"#
+    );
+
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(out, "[[\"local.jar\", \"dep.jar\"], []]");
 }
 
 #[cfg(unix)]

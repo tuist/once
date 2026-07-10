@@ -6,6 +6,9 @@ the impl that turns a target into a set of cached actions. The
 [`once query schema`](/reference/cli/query) command exposes the same
 metadata at the keyboard.
 
+See [ecosystem parity](/reference/prelude/ecosystem-parity) for the behavioral
+mapping to the Buck2 and Bazel rules used as references.
+
 ## Apple target kinds
 
 - [`apple_library`](/reference/prelude/apple_library): Swift,
@@ -64,7 +67,7 @@ metadata at the keyboard.
   native library materialized by Apple and Android consumers under one
   target label
 - [`rust_binary`](/reference/prelude/rust_binary): Rust executable built
-  from a main crate and Rust deps
+  from a main crate and Rust deps, with build and run capabilities
 - [`rust_test`](/reference/prelude/rust_test): Rust test crate compiled
   with `rustc --test` and run through Once's test capability
 - [`rust_crate`](/reference/prelude/rust_crate): resolved third-party

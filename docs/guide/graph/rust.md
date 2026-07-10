@@ -6,7 +6,8 @@ rlib provider that downstream Rust targets consume through `--extern`.
 [`rust_mobile_library`](/reference/prelude/rust_mobile_library) lets Apple
 and Android consumers materialize native libraries from one Rust target.
 [`rust_binary`](/reference/prelude/rust_binary) compiles an executable
-from a main crate and its Rust deps. [`rust_test`](/reference/prelude/rust_test)
+from a main crate and its Rust deps, then exposes build and run capabilities.
+[`rust_test`](/reference/prelude/rust_test)
 compiles a Rust test crate with `rustc --test` and exposes Once's generic
 test capability. [`rust_crate`](/reference/prelude/rust_crate) is the lowered
 target shape for resolved third-party Cargo packages.
@@ -48,8 +49,10 @@ default = []
 
 Rust targets accept Bazel and Buck2 style controls such as
 `crate_root`, `features` or `crate_features`, `env` or `rustc_env`,
-`rustc_flags`, `linker`, `linker_flags`, `crate_aliases`, `cargo_package`,
-and `target` for `rustc --target`. Final artifact libraries can set
+`rustc_env_files`, `rustc_flags`, `linker`, `linker_flags`, `linker_script`,
+`crate_aliases`, `aliases`, `named_deps`, `cargo_package`, and `target` for
+`rustc --target`. `compile_data` participates in compiler action keys, while
+`data` is propagated to binary and test execution. Final artifact libraries can set
 `crate_type` on `rust_library` to produce `staticlib`, `cdylib`, or
 `dylib` outputs. Use `rust_mobile_library` when one target should expose
 consumer-owned Apple static library and Android shared library variants.
@@ -68,6 +71,11 @@ direct dependency build scripts is exposed to downstream build scripts
 as `DEP_<LINKS>_<KEY>` environment variables.
 Generated Cargo dependencies set `cap_lints = "allow"` so dependency
 crates follow Cargo's lint-capping behavior.
+
+Rust binaries accept `args`, `run_env`, and `env_inherit` for `once run`.
+Runtime data from their Rust dependency graph is declared as run action inputs,
+so fixtures stay visible to execution and scheduling without becoming compiler
+action inputs.
 
 Declare Rust tests as separate `rust_test` targets. Unit tests can use the
 library root as their `crate_root`; integration tests usually point

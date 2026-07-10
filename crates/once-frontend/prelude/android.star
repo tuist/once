@@ -78,6 +78,10 @@ def _android_reject_unsupported_attrs(attrs, label_id, keys):
             continue
         if type(value) == type({}) and len(value) == 0:
             continue
+        if value == False:
+            continue
+        if value == 0:
+            continue
         fail(label_id + ": attribute `" + key + "` is declared but not implemented by this target kind yet")
 
 def _android_source_inputs(ctx, attrs, include_implicit_resources):
@@ -181,12 +185,7 @@ def _android_built_apk(ctx):
     return ctx["build_dir"] + "/" + _android_apk_filename(ctx)
 
 def _android_file_globs(patterns):
-    expanded = []
-    for pattern in patterns:
-        expanded.append(pattern)
-        if _ends_with(pattern, "/**"):
-            expanded.append(pattern + "/*")
-    return glob(expanded)
+    return _file_globs(patterns)
 
 def _android_resource_dirs(ctx, attrs, resource_files):
     declared = _android_attr(attrs, "resource_dirs", ["res"])
@@ -418,6 +417,25 @@ def _android_env(tools):
         env["PATH"] = _parent_dir(java) + ":/usr/bin:/bin:/usr/sbin:/sbin"
     return env
 
+def _android_host_env_values(keys):
+    env = {}
+    for key in keys:
+        value = host_env(key)
+        if value:
+            env[key] = value
+    return env
+
+def _android_test_env(attrs, tools, test_dir):
+    env = _android_env(tools)
+    env["HOME"] = test_dir + "/home"
+    for key, value in _android_host_env_values(_android_attr(attrs, "env_inherit", [])).items():
+        env[key] = value
+    for key, value in _android_attr(attrs, "env", {}).items():
+        env[key] = value
+    for key, value in _android_attr(attrs, "test_env", {}).items():
+        env[key] = value
+    return env
+
 def _android_classpath_sep():
     if host_os() == "windows":
         return ";"
@@ -533,6 +551,11 @@ def _android_runtime_jars(deps):
     for dep in deps:
         jars.extend(dep.get("transitive_runtime_jars") or [])
     return _unique(jars)
+
+def _android_library_runtime_jars(attrs, deps, local_jars):
+    if _android_attr(attrs, "neverlink", False):
+        return []
+    return _unique(local_jars + _android_runtime_jars(deps))
 
 def _android_resource_apks(deps):
     apks = []
@@ -759,7 +782,7 @@ def _android_compile_java(ctx, attrs, tools, java_sources, r_src_dir, r_src_hash
     classpath_entries = _unique([tools["android_jar"]] + dep_jars)
     classpath = _android_classpath_sep().join(classpath_entries)
     source_level = str(_android_attr(attrs, "java_language_level", "17"))
-    javac_opts = _android_attr(attrs, "javac_opts", [])
+    javac_opts = _android_attr(attrs, "javac_opts", []) + _android_attr(attrs, "javacopts", [])
     base_args = [
         tools["javac"],
         "-encoding", "UTF-8",
@@ -867,7 +890,7 @@ def _android_compile_local_java(ctx, attrs, tools, java_sources, dep_jars):
     classpath_entries = _unique([tools["android_jar"]] + dep_jars)
     classpath = _android_classpath_sep().join(classpath_entries)
     source_level = str(_android_attr(attrs, "java_language_level", "17"))
-    javac_opts = _android_attr(attrs, "javac_opts", [])
+    javac_opts = _android_attr(attrs, "javac_opts", []) + _android_attr(attrs, "javacopts", [])
     prepare_path(classes_dir, kind = "remove", identifier = "android_local_test_java_clean:" + ctx["label"]["id"])
     prepare_path(classes_dir, kind = "directory", identifier = "android_local_test_java_prepare:" + ctx["label"]["id"])
     write_path(source_list, "\n".join(java_sources) + "\n")
@@ -945,7 +968,21 @@ public final class OnceAndroidLocalTestRunner {
     createParent(nativeResults);
 
     StringBuilder logText = new StringBuilder();
-    List<TestCase> cases = runTests(classes, target, logText);
+    List<String> filters = new ArrayList<>();
+    for (int i = 5; i < args.length; i++) {
+      filters.add(args[i]);
+    }
+    List<TestCase> cases = runTests(classes, target, filters, logText);
+    if (cases.isEmpty()) {
+      String reason = filters.isEmpty()
+          ? "no test classes found under " + classes
+          : "no test matched the filters: " + String.join(", ", filters);
+      logText.append(reason).append(System.lineSeparator());
+      TestCase testCase = new TestCase(target + "::no-tests", "no-tests", target);
+      testCase.status = "failed";
+      testCase.failure = reason;
+      cases.add(testCase);
+    }
     int failed = 0;
     int passed = 0;
     for (TestCase testCase : cases) {
@@ -962,7 +999,7 @@ public final class OnceAndroidLocalTestRunner {
     System.exit(failed == 0 ? 0 : 1);
   }
 
-  private static List<TestCase> runTests(Path classes, String target, StringBuilder logText) throws Exception {
+  private static List<TestCase> runTests(Path classes, String target, List<String> filters, StringBuilder logText) throws Exception {
     List<String> classNames = classNames(classes);
     List<TestCase> cases = new ArrayList<>();
     for (String className : classNames) {
@@ -982,7 +1019,7 @@ public final class OnceAndroidLocalTestRunner {
       Collections.addAll(sortedMethods, methods);
       sortedMethods.sort(Comparator.comparing(Method::getName));
       for (Method method : sortedMethods) {
-        if (!isTestMethod(method)) {
+        if (!isTestMethod(method) || !matchesFilter(filters, className, method.getName())) {
           continue;
         }
         TestCase testCase = new TestCase(target + "::" + className + "." + method.getName(), method.getName(), className);
@@ -1000,6 +1037,22 @@ public final class OnceAndroidLocalTestRunner {
       }
     }
     return cases;
+  }
+
+  private static boolean matchesFilter(List<String> filters, String className, String methodName) {
+    if (filters.isEmpty()) {
+      return true;
+    }
+    for (String filter : filters) {
+      int separator = filter.indexOf('#');
+      String filterClass = separator < 0 ? filter : filter.substring(0, separator);
+      String filterMethod = separator < 0 ? "" : filter.substring(separator + 1);
+      if ((filterClass.isEmpty() || filterClass.equals(className)) &&
+          (filterMethod.isEmpty() || filterMethod.equals(methodName))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static List<String> classNames(Path root) throws Exception {
@@ -1203,11 +1256,7 @@ def _android_compile_local_test_runner(ctx, tools):
     return (classes, classes_hash)
 
 def _android_local_test_env(attrs, tools, test_dir):
-    env = _android_env(tools)
-    env["HOME"] = test_dir + "/home"
-    for key, value in _android_attr(attrs, "test_env", {}).items():
-        env[key] = value
-    return env
+    return _android_test_env(attrs, tools, test_dir)
 
 def _android_local_test_info(ctx, attrs, command_argv, command_env, results, log, native_results):
     return {
@@ -1288,8 +1337,8 @@ public final class OnceAndroidInstrumentationRunner {
   }
 
   public static void main(String[] args) throws Exception {
-    if (args.length < 14) {
-      System.err.println("usage: OnceAndroidInstrumentationRunner <results> <log> <native-results> <target> <adb> <serial> <target-package> <test-package> <component> <target-apk> <test-apk> <clear-data> <disable-animations> <ready-script> [instrumentation-args...]");
+    if (args.length < 15) {
+      System.err.println("usage: OnceAndroidInstrumentationRunner <results> <log> <native-results> <target> <adb> <serial> <target-package> <test-package> <component> <target-apk> <test-apk> <clear-data> <disable-animations> <ready-script> <support-apk-count> [support-apks...] [instrumentation-args...]");
       System.exit(2);
     }
     int index = 0;
@@ -1307,6 +1356,11 @@ public final class OnceAndroidInstrumentationRunner {
     boolean clearData = Boolean.parseBoolean(args[index++]);
     boolean disableAnimations = Boolean.parseBoolean(args[index++]);
     String readyScript = args[index++];
+    int supportApkCount = Integer.parseInt(args[index++]);
+    List<String> supportApks = new ArrayList<>();
+    for (int i = 0; i < supportApkCount; i++) {
+      supportApks.add(args[index++]);
+    }
 
     List<String> instrumentationArgs = new ArrayList<>();
     while (index < args.length) {
@@ -1319,7 +1373,7 @@ public final class OnceAndroidInstrumentationRunner {
 
     StringBuilder nativeText = new StringBuilder();
     String setupFailure = "";
-    for (List<String> command : setupCommands(adb, serial, targetApk, testApk, targetPackage, testPackage, clearData, disableAnimations, readyScript)) {
+    for (List<String> command : setupCommands(adb, serial, targetApk, testApk, supportApks, targetPackage, testPackage, clearData, disableAnimations, readyScript)) {
       CommandResult result = run(command);
       appendCommand(nativeText, command, result);
       if (result.exitCode != 0) {
@@ -1361,7 +1415,7 @@ public final class OnceAndroidInstrumentationRunner {
     System.exit(passed ? 0 : 1);
   }
 
-  private static List<List<String>> setupCommands(String adb, String serial, String targetApk, String testApk, String targetPackage, String testPackage, boolean clearData, boolean disableAnimations, String readyScript) {
+  private static List<List<String>> setupCommands(String adb, String serial, String targetApk, String testApk, List<String> supportApks, String targetPackage, String testPackage, boolean clearData, boolean disableAnimations, String readyScript) {
     List<List<String>> commands = new ArrayList<>();
     List<String> wait = adbBase(adb, serial);
     wait.add("wait-for-device");
@@ -1376,6 +1430,14 @@ public final class OnceAndroidInstrumentationRunner {
     installTarget.add("-d");
     installTarget.add(targetApk);
     commands.add(installTarget);
+    for (String supportApk : supportApks) {
+      List<String> installSupport = adbBase(adb, serial);
+      installSupport.add("install");
+      installSupport.add("-r");
+      installSupport.add("-d");
+      installSupport.add(supportApk);
+      commands.add(installSupport);
+    }
     List<String> installTest = adbBase(adb, serial);
     installTest.add("install");
     installTest.add("-r");
@@ -1650,7 +1712,11 @@ def _android_instrumentation_args(attrs):
     test_class = _android_attr(attrs, "test_class", "")
     if test_class:
         out.extend(["-e", "class", test_class])
+    out.extend(_android_attr(attrs, "args", []))
     return out
+
+def _android_support_apks(attrs):
+    return _android_file_globs(_android_attr(attrs, "support_apks", []))
 
 def _android_find_instrumentation_apps(ctx, attrs):
     explicit_test_app = _android_target_id(ctx, _android_attr(attrs, "test_app", ""))
@@ -1681,11 +1747,7 @@ def _android_find_instrumentation_apps(ctx, attrs):
     return (target_app, test_app)
 
 def _android_instrumentation_test_env(attrs, tools, test_dir):
-    env = _android_env(tools)
-    env["HOME"] = test_dir + "/home"
-    for key, value in _android_attr(attrs, "test_env", {}).items():
-        env[key] = value
-    return env
+    return _android_test_env(attrs, tools, test_dir)
 
 def _android_instrumentation_test_info(ctx, attrs, command_argv, command_env, results, log, native_results, target_app, test_app, component):
     return {
@@ -2021,7 +2083,7 @@ def _android_resource_impl(ctx):
 
 def _android_library_impl(ctx):
     attrs = _android_resolve_attrs(ctx, ["manifest", "resource_dirs", "asset_dirs", "assets_dir", "android_sdk", "build_tools_version", "compile_sdk", "custom_package", "namespace", "package", "javac", "jar", "java", "java_home", "kotlinc", "kotlin_home", "kotlin_stdlib", "aapt2"])
-    _android_reject_unsupported_attrs(attrs, ctx["label"]["id"], ["enable_data_binding", "idl_srcs", "idl_import_root", "idl_parcelables", "idl_preprocessed", "plugins", "proguard_specs", "neverlink"])
+    _android_reject_unsupported_attrs(attrs, ctx["label"]["id"], ["enable_data_binding", "idl_srcs", "idl_import_root", "idl_parcelables", "idl_preprocessed", "plugins", "proguard_specs"])
     java_sources = _android_java_sources(ctx)
     kotlin_sources = _android_kotlin_sources(ctx)
     tools = _android_tools(ctx, attrs, True, False, len(kotlin_sources) > 0)
@@ -2058,7 +2120,7 @@ def _android_library_impl(ctx):
         "classes_jar": classes_jar,
         "aar": aar,
         "transitive_compile_jars": _unique(local_compile_jars + dep_jars),
-        "transitive_runtime_jars": _unique(local_compile_jars + _android_runtime_jars(ctx["deps"])),
+        "transitive_runtime_jars": _android_library_runtime_jars(attrs, ctx["deps"], local_compile_jars),
         "transitive_resource_apks": _unique([resource_apk] + dep_resource_apks),
         "compiled_resource_zips": compiled_zips,
         "transitive_compiled_resource_zips": _unique(compiled_zips + dep_compiled_zips),
@@ -2070,6 +2132,7 @@ def _android_library_impl(ctx):
 
 def _android_local_test_impl(ctx):
     attrs = _android_resolve_attrs(ctx, ["android_sdk", "build_tools_version", "compile_sdk", "javac", "java", "java_home", "kotlinc", "kotlin_home", "kotlin_stdlib", "aapt2", "classpath", "runtime_classpath"])
+    _android_reject_unsupported_attrs(attrs, ctx["label"]["id"], ["custom_package", "densities", "enable_data_binding", "manifest", "manifest_values", "nocompress_extensions", "plugins", "resource_configuration_filters", "resource_jars", "resource_strip_prefix", "runtime_deps", "stamp"])
     java_sources = _android_java_sources(ctx)
     kotlin_sources = _android_kotlin_sources(ctx)
     if len(java_sources) == 0 and len(kotlin_sources) == 0:
@@ -2093,8 +2156,7 @@ def _android_local_test_impl(ctx):
     )
     if len(kotlin_sources) > 0:
         runtime_classpath = _unique([tools["kotlin_stdlib"]] + runtime_classpath)
-    command_argv = [
-        tools["java"],
+    command_argv = [tools["java"]] + _android_attr(attrs, "jvm_flags", []) + [
         "-cp", _android_classpath_sep().join(runtime_classpath),
         "OnceAndroidLocalTestRunner",
         classes_dir,
@@ -2103,6 +2165,10 @@ def _android_local_test_impl(ctx):
         native_results,
         ctx["label"]["id"],
     ]
+    test_class = _android_attr(attrs, "test_class", "")
+    if test_class:
+        command_argv.append(test_class)
+    command_argv.extend(_android_attr(attrs, "args", []))
     command_env = _android_local_test_env(attrs, tools, test_dir)
     provider = {
         "label_id": ctx["label"]["id"],
@@ -2130,6 +2196,7 @@ def _android_local_test_impl(ctx):
 
 def _android_instrumentation_test_impl(ctx):
     attrs = _android_resolve_attrs(ctx, ["test_app", "android_sdk", "adb", "adb_serial", "javac", "java", "java_home", "instrumentation_runner", "instrumentation_args", "test_class"])
+    _android_reject_unsupported_attrs(attrs, ctx["label"]["id"], ["target_device"])
     target_app, test_app = _android_find_instrumentation_apps(ctx, attrs)
     target_package = target_app.get("application_id") or ""
     test_package = test_app.get("application_id") or ""
@@ -2146,6 +2213,7 @@ def _android_instrumentation_test_impl(ctx):
     native_results = test_dir + "/native_results.txt"
     runner = _android_attr(attrs, "instrumentation_runner", "androidx.test.runner.AndroidJUnitRunner")
     component = _android_instrumentation_component(test_package, runner)
+    support_apks = _android_support_apks(attrs)
     command_argv = [
         java_tools["java"],
         "-cp", runner_classes,
@@ -2164,21 +2232,22 @@ def _android_instrumentation_test_impl(ctx):
         _android_bool_string(_android_attr(attrs, "clear_package_data", False)),
         _android_bool_string(_android_attr(attrs, "disable_animations", False)),
         _android_device_ready_script(),
-    ] + _android_instrumentation_args(attrs)
+        str(len(support_apks)),
+    ] + support_apks + _android_instrumentation_args(attrs)
     command_env = _android_instrumentation_test_env(attrs, java_tools, test_dir)
     provider = {
         "label_id": ctx["label"]["id"],
         "target_kind": "android_instrumentation_test",
         "target_apk": target_app.get("apk") or "",
         "test_apk": test_app.get("apk") or "",
-        "affected_inputs": [],
+        "affected_inputs": support_apks,
         "test_info": _android_instrumentation_test_info(ctx, attrs, command_argv, command_env, results, log, native_results, target_app, test_app, component),
     }
     if ctx["capability"] != "test":
         return provider
     run_action(
         argv = command_argv,
-        inputs = _unique([runner_hash] + [path for path in [target_app.get("apk") or "", test_app.get("apk") or ""] if path]),
+        inputs = _unique([runner_hash] + [path for path in [target_app.get("apk") or "", test_app.get("apk") or ""] if path] + support_apks),
         outputs = [test_dir, results, log, native_results],
         env = command_env,
         cacheable = False,
@@ -2257,6 +2326,7 @@ _ANDROID_RESOURCE_ATTRS = [
 _ANDROID_JAVA_ATTRS = [
     attr("java_language_level", "string", default = "\"17\"", docs = "Java source and target level passed to javac.", configurable = False),
     attr("javac_opts", "list<string>", default = "[]", docs = "Additional javac flags appended after Once-managed flags.", configurable = False),
+    attr("javacopts", "list<string>", default = "[]", docs = "Bazel-compatible alias for additional javac flags.", configurable = False),
     attr("kotlinc_opts", "list<string>", default = "[]", docs = "Additional kotlinc flags appended after Once-managed flags.", configurable = False),
     attr("javac", "string", docs = "Override javac path.", configurable = False),
     attr("jar", "string", docs = "Override jar path.", configurable = False),
@@ -2281,6 +2351,7 @@ _ANDROID_LOCAL_TEST_ATTRS = [
     attr("aapt2", "string", docs = "Override aapt2 path used for Android Software Development Kit identity.", configurable = False),
     attr("java_language_level", "string", default = "\"17\"", docs = "Java source and target level passed to javac.", configurable = False),
     attr("javac_opts", "list<string>", default = "[]", docs = "Additional javac flags appended after Once-managed flags.", configurable = False),
+    attr("javacopts", "list<string>", default = "[]", docs = "Bazel-compatible alias for additional javac flags.", configurable = False),
     attr("kotlinc_opts", "list<string>", default = "[]", docs = "Additional kotlinc flags appended after Once-managed flags.", configurable = False),
     attr("javac", "string", docs = "Override javac path.", configurable = False),
     attr("java", "string", docs = "Override java runtime path used by Android SDK tools.", configurable = False),
@@ -2290,7 +2361,24 @@ _ANDROID_LOCAL_TEST_ATTRS = [
     attr("kotlin_stdlib", "string", docs = "Override kotlin-stdlib.jar path.", configurable = False),
     attr("classpath", "list<string>", default = "[]", docs = "Additional Java archive files used while compiling and running local tests.", configurable = False),
     attr("runtime_classpath", "list<string>", default = "[]", docs = "Additional Java archive files used only while running local tests.", configurable = False),
+    attr("env", "map<string,string>", default = "{}", docs = "Bazel-compatible environment variables passed to the local test runner before `test_env` overrides.", configurable = False),
+    attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited by the local test runner before explicit test environment values.", configurable = False),
     attr("test_env", "map<string,string>", default = "{}", docs = "Environment variables passed to the local test runner.", configurable = False),
+    attr("args", "list<string>", default = "[]", docs = "Additional fully qualified class or `Class#method` filters passed to the local test runner.", configurable = False),
+    attr("custom_package", "string", docs = "Reserved for generated Android package overrides on local tests.", configurable = False),
+    attr("densities", "list<string>", default = "[]", docs = "Reserved for density filtering.", configurable = False),
+    attr("enable_data_binding", "bool", default = "false", docs = "Reserved for Android data binding support.", configurable = False),
+    attr("jvm_flags", "list<string>", default = "[]", docs = "Additional flags passed to the host Java virtual machine before the test classpath.", configurable = False),
+    attr("manifest", "string", docs = "Reserved for AndroidManifest.xml handling on local tests.", configurable = False),
+    attr("manifest_values", "map<string,string>", default = "{}", docs = "Reserved for manifest placeholder expansion.", configurable = False),
+    attr("nocompress_extensions", "list<string>", default = "[]", docs = "Reserved for no-compress packaging options.", configurable = False),
+    attr("plugins", "list<string>", default = "[]", docs = "Reserved for Java annotation processor support.", configurable = False),
+    attr("resource_configuration_filters", "list<string>", default = "[]", docs = "Reserved for resource filtering.", configurable = False),
+    attr("resource_jars", "list<string>", default = "[]", docs = "Reserved for resource jar inputs.", configurable = False),
+    attr("resource_strip_prefix", "string", docs = "Reserved for resource path prefix stripping.", configurable = False),
+    attr("runtime_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-style runtime-only dependencies.", configurable = False),
+    attr("stamp", "int", default = "0", docs = "Reserved for Bazel-style stamping.", configurable = False),
+    attr("test_class", "string", docs = "Optional fully qualified test class or `Class#method` filter.", configurable = False),
     attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
     attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
 ]
@@ -2308,7 +2396,12 @@ _ANDROID_INSTRUMENTATION_TEST_ATTRS = [
     attr("test_class", "string", docs = "Optional class or class#method filter lowered to `-e class`.", configurable = False),
     attr("clear_package_data", "bool", default = "false", docs = "Clear target and test package data before running instrumentation.", configurable = False),
     attr("disable_animations", "bool", default = "false", docs = "Set Android global animation scales to zero before running instrumentation.", configurable = False),
+    attr("env", "map<string,string>", default = "{}", docs = "Bazel-compatible environment variables passed to the host instrumentation runner before `test_env` overrides.", configurable = False),
+    attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited by the host instrumentation runner before explicit test environment values.", configurable = False),
     attr("test_env", "map<string,string>", default = "{}", docs = "Environment variables passed to the host instrumentation runner.", configurable = False),
+    attr("args", "list<string>", default = "[]", docs = "Raw arguments appended to the Android instrumentation command before its component.", configurable = False),
+    attr("support_apks", "list<string>", default = "[]", docs = "Package-relative application package globs installed before the instrumentation application.", configurable = False),
+    attr("target_device", "string", docs = "Reserved for Bazel-style device target selection.", configurable = False),
     attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
     attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
 ]
@@ -2344,12 +2437,12 @@ android_library = target_kind(
         attr("namespace", "string", docs = "Java package for generated R classes.", configurable = False),
         attr("custom_package", "string", docs = "Alias for the generated R package.", configurable = False),
         attr("package", "string", docs = "Generated R package fallback when namespace and custom_package are omitted.", configurable = False),
-        attr("neverlink", "bool", default = "false", docs = "Reserved for runtime exclusion support.", configurable = False),
+        attr("neverlink", "bool", default = "false", docs = "Keep the library on compile classpaths while omitting its runtime dependency closure from application classpaths.", configurable = False),
         attr("enable_data_binding", "bool", default = "false", docs = "Reserved for Android data binding support.", configurable = False),
-        attr("idl_srcs", "list<string>", default = "[]", docs = "Reserved for AIDL support.", configurable = False),
-        attr("idl_import_root", "string", docs = "Reserved for AIDL support.", configurable = False),
-        attr("idl_parcelables", "list<string>", default = "[]", docs = "Reserved for AIDL support.", configurable = False),
-        attr("idl_preprocessed", "list<string>", default = "[]", docs = "Reserved for AIDL support.", configurable = False),
+        attr("idl_srcs", "list<string>", default = "[]", docs = "Reserved for Android Interface Definition Language support.", configurable = False),
+        attr("idl_import_root", "string", docs = "Reserved for Android Interface Definition Language support.", configurable = False),
+        attr("idl_parcelables", "list<string>", default = "[]", docs = "Reserved for Android Interface Definition Language support.", configurable = False),
+        attr("idl_preprocessed", "list<string>", default = "[]", docs = "Reserved for Android Interface Definition Language support.", configurable = False),
         attr("plugins", "list<string>", default = "[]", docs = "Reserved for Java annotation processor support.", configurable = False),
         attr("proguard_specs", "list<string>", default = "[]", docs = "Reserved for consumer ProGuard specs.", configurable = False),
     ],

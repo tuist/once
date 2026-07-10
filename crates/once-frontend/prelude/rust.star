@@ -111,8 +111,33 @@ def _rust_source_inputs(ctx):
         return resolved
     return glob(ctx["srcs"])
 
+def _rust_glob_attr(ctx, key):
+    return _file_globs(_rust_attr(ctx, key, []))
+
+def _rust_env_file_inputs(ctx):
+    resolved = ctx["attr"].get("_resolved_env_file_inputs")
+    if resolved != None:
+        return resolved
+    return _rust_glob_attr(ctx, "rustc_env_files")
+
+def _rust_data_inputs(ctx):
+    resolved = ctx["attr"].get("_resolved_data_inputs")
+    if resolved != None:
+        return resolved
+    return _rust_glob_attr(ctx, "data")
+
+def _rust_compile_data_inputs(ctx):
+    resolved = ctx["attr"].get("_resolved_compile_data_inputs")
+    if resolved != None:
+        return resolved
+    return _rust_glob_attr(ctx, "compile_data")
+
 def _rust_extra_inputs(ctx):
-    return _rust_attr(ctx, "_extra_inputs", [])
+    return _unique(
+        _rust_attr(ctx, "_extra_inputs", []) +
+        _rust_compile_data_inputs(ctx) +
+        _rust_env_file_inputs(ctx)
+    )
 
 def _rust_build_script_inputs(ctx):
     resolved = ctx["attr"].get("_resolved_build_script_inputs")
@@ -439,8 +464,22 @@ def _rust_cap_lints(ctx):
         return ["--cap-lints", value]
     return []
 
-def _rust_env(ctx):
+def _rust_env_from_files(ctx):
     env = {}
+    for path in _rust_env_file_inputs(ctx):
+        content = host_file_read(_workspace_absolute(path))
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            parts = _split_once(stripped, "=")
+            if len(parts) != 2:
+                fail(ctx["label"]["id"] + ": rustc_env_files entry `" + path + "` contains a non-empty line without `=`")
+            env[parts[0]] = parts[1]
+    return env
+
+def _rust_env(ctx):
+    env = _rust_env_from_files(ctx)
     for key, value in _rust_attr(ctx, "env", {}).items():
         env[key] = value
     for key, value in _rust_attr(ctx, "rustc_env", {}).items():
@@ -552,8 +591,60 @@ def _rust_linker_flags(ctx):
         flags.extend(["-C", "link-arg=" + flag])
     return flags
 
+def _rust_native_linkopts(ctx):
+    return _unique(
+        _rust_attr(ctx, "native_linkopts", []) +
+        _rust_attr(ctx, "exported_linker_flags", []) +
+        _rust_attr(ctx, "exported_post_linker_flags", [])
+    )
+
+def _rust_linker_script(ctx):
+    linker_script = _rust_attr(ctx, "linker_script", "")
+    if not linker_script:
+        return ([], [])
+    path = _package_relative(ctx, linker_script)
+    return (["-C", "link-arg=-T" + path], [path])
+
 def _rust_aliases(ctx):
-    return _rust_attr(ctx, "crate_aliases", {})
+    aliases = {}
+    for key, value in _rust_attr(ctx, "aliases", {}).items():
+        aliases[key] = value
+    for local_name, dep_name in _rust_attr(ctx, "named_deps", {}).items():
+        aliases[dep_name] = local_name
+    for key, value in _rust_attr(ctx, "crate_aliases", {}).items():
+        aliases[key] = value
+    return aliases
+
+def _rust_reject_unsupported_attrs(ctx, keys):
+    for key in keys:
+        value = _rust_attr(ctx, key, None)
+        if value == None:
+            continue
+        if type(value) == type("") and value == "":
+            continue
+        if type(value) == type([]) and len(value) == 0:
+            continue
+        if type(value) == type({}) and len(value) == 0:
+            continue
+        if value == False:
+            continue
+        fail(ctx["label"]["id"] + ": attribute `" + key + "` is declared for Buck or Bazel parity but is not implemented by this target kind yet")
+
+_RUST_UNSUPPORTED_COMMON_ATTRS = [
+    "default_deps",
+    "doc_deps",
+    "doc_env",
+    "doc_link_style",
+    "doc_linker_flags",
+    "doc_named_deps",
+    "link_deps",
+    "link_style",
+    "mapped_srcs",
+    "proc_macro_deps",
+    "rpath",
+    "runtime_dependency_handling",
+    "rustdoc_flags",
+]
 
 def _rust_dep_identity(dep):
     return dep.get("label_id") or dep.get("package_name") or dep.get("crate_name") or ""
@@ -990,7 +1081,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     run_script = _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports)
     run_action(
         argv = [host_which("sh"), "-c", run_script],
-        inputs = _unique([runner] + metadata_inputs + _rust_source_inputs(ctx) + _rust_build_script_inputs(ctx)),
+        inputs = _unique([runner] + metadata_inputs + _rust_source_inputs(ctx) + _rust_build_script_inputs(ctx) + _rust_extra_inputs(ctx)),
         outputs = [out_dir, stdout],
         env = run_env,
         toolchain_identity = identity + "\x00build-script-run",
@@ -1333,6 +1424,7 @@ def _rust_output_args(crate_type, output):
     return ["-o", output]
 
 def _rust_compile(ctx, crate_type, default_root, output_name, test = False, provider_kind = "rust_library"):
+    _rust_reject_unsupported_attrs(ctx, _RUST_UNSUPPORTED_COMMON_ATTRS)
     target = _rust_effective_target(ctx, crate_type)
     rustc, identity, host_triple = _rustc_toolchain(target)
     crate_name = _rust_crate_name(ctx)
@@ -1358,6 +1450,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     _rust_add_windows_rustc_runtime_path(compile_env, rustc, host_triple)
     _rust_add_windows_proc_macro_path(compile_env, deps)
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
+    linker_script_args, linker_script_inputs = _rust_linker_script(ctx)
     rustc_args = [
         "--crate-name", crate_name,
         "--crate-type", crate_type,
@@ -1378,6 +1471,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     rustc_args.extend(dep_search_args)
     rustc_args.extend(linker_args)
     rustc_args.extend(_rust_linker_flags(ctx))
+    rustc_args.extend(linker_script_args)
     rustc_args.append(crate_root)
     argv = (
         [rustc] +
@@ -1390,7 +1484,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     build_inputs.extend(wrapped[1])
     run_action(
         argv = argv,
-        inputs = _unique(srcs + dep_inputs + dep_search_inputs + build_inputs + dependency_build_outputs + dependency_build_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique(srcs + dep_inputs + dep_search_inputs + build_inputs + dependency_build_outputs + dependency_build_inputs + linker_script_inputs + _rust_extra_inputs(ctx)),
         outputs = [output],
         env = compile_env,
         toolchain_identity = identity + linker_identity,
@@ -1431,9 +1525,10 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
         "transitive_proc_macro_search": _collect_transitive(deps, "transitive_proc_macro_search", own_proc_macro_search),
         "transitive_proc_macro_externs": _collect_transitive(deps, "transitive_proc_macro_externs", own_proc_macro_extern),
         "transitive_sources": _collect_transitive(deps, "transitive_sources", srcs),
+        "transitive_data": _collect_transitive(deps, "transitive_data", _rust_data_inputs(ctx)),
         "archive": output if crate_type == "staticlib" else "",
         "transitive_archives": _collect_transitive(deps, "transitive_archives", own_native_archives),
-        "transitive_linkopts": _collect_transitive(deps, "transitive_linkopts", _rust_attr(ctx, "native_linkopts", [])),
+        "transitive_linkopts": _collect_transitive(deps, "transitive_linkopts", _rust_native_linkopts(ctx)),
         "android_abi": android_abi,
         "android_native_libraries": own_android_native_libraries,
         "transitive_android_native_libraries": _rust_collect_android_native_libraries(deps, own_android_native_libraries),
@@ -1461,6 +1556,9 @@ def _rust_mobile_variant_ctx(ctx, provider, target_attr, variant):
     attrs["_resolved_sources"] = provider.get("resolved_sources") or []
     attrs["_resolved_source_inputs"] = provider.get("source_inputs") or []
     attrs["_resolved_build_script_inputs"] = provider.get("build_script_inputs") or []
+    attrs["_resolved_data_inputs"] = provider.get("data_inputs") or []
+    attrs["_resolved_compile_data_inputs"] = provider.get("compile_data_inputs") or []
+    attrs["_resolved_env_file_inputs"] = provider.get("env_file_inputs") or []
     variant_ctx = {
         "label": provider["label"],
         "attr": attrs,
@@ -1494,7 +1592,11 @@ def _rust_mobile_library_impl(ctx):
         "resolved_sources": resolved_sources,
         "source_inputs": _rust_source_inputs(ctx),
         "build_script_inputs": _rust_build_script_inputs(ctx),
+        "data_inputs": _rust_data_inputs(ctx),
+        "compile_data_inputs": _rust_compile_data_inputs(ctx),
+        "env_file_inputs": _rust_env_file_inputs(ctx),
         "transitive_sources": resolved_sources,
+        "transitive_data": _rust_data_inputs(ctx),
     }
 
 def _rust_mobile_apple_provider(ctx, provider):
@@ -1513,6 +1615,7 @@ def _rust_mobile_apple_provider(ctx, provider):
         "transitive_archives": apple.get("transitive_archives") or [],
         "transitive_linkopts": apple.get("transitive_linkopts") or [],
         "transitive_sources": apple.get("transitive_sources") or [],
+        "transitive_data": apple.get("transitive_data") or [],
     }
 
 def _rust_mobile_android_provider(ctx, provider):
@@ -1531,6 +1634,7 @@ def _rust_mobile_android_provider(ctx, provider):
         "android_native_libraries": android.get("android_native_libraries") or [],
         "transitive_android_native_libraries": android.get("transitive_android_native_libraries") or [],
         "transitive_sources": android.get("transitive_sources") or [],
+        "transitive_data": android.get("transitive_data") or [],
     }
 
 def _apple_materialize_native_dep(ctx, dep):
@@ -1539,11 +1643,49 @@ def _apple_materialize_native_dep(ctx, dep):
 def _android_materialize_native_dep(ctx, dep):
     return _rust_mobile_android_provider(ctx, dep)
 
+def _rust_runtime_data(ctx):
+    return _collect_transitive(_rust_resolved_deps(ctx), "transitive_data", _rust_data_inputs(ctx))
+
+def _rust_binary_run_env(ctx, run_dir):
+    env = {"HOME": run_dir + "/home"}
+    for key, value in _rust_host_env(_rust_attr(ctx, "env_inherit", [])).items():
+        env[key] = value
+    for key, value in _rust_attr(ctx, "run_env", {}).items():
+        env[key] = value
+    return env
+
 def _rust_binary_impl(ctx):
+    if ctx["capability"] == "run":
+        binary = ctx["build_dir"] + "/" + _rust_output_name(ctx, "bin")
+        runtime_data = _rust_runtime_data(ctx)
+        run_dir = ctx["build_dir"] + "/run"
+        marker = run_dir + "/run.json"
+        log = run_dir + "/stdout.log"
+        prepare_path(run_dir, kind = "directory", identifier = _rust_action_identifier(ctx, "run-prepare"))
+        run_action(
+            argv = [binary] + _rust_attr(ctx, "args", []),
+            inputs = _unique([binary] + runtime_data),
+            outputs = [run_dir, log],
+            stdout = log,
+            stderr = log,
+            env = _rust_binary_run_env(ctx, run_dir),
+            cacheable = False,
+            toolchain_identity = "once.rust.run.v1\x00" + binary,
+            identifier = _rust_action_identifier(ctx, "run"),
+        )
+        write_path(marker, _run_result_json(ctx["label"]["id"]))
+        return {
+            "label_id": ctx["label"]["id"],
+            "target_kind": "rust_binary",
+            "binary": binary,
+            "transitive_data": runtime_data,
+        }
     return _rust_compile(ctx, "bin", "src/main.rs", _rust_output_name(ctx, "bin"))
 
 def _rust_test_env(ctx, test_dir):
     env = {"HOME": test_dir + "/home"}
+    for key, value in _rust_host_env(_rust_attr(ctx, "env_inherit", [])).items():
+        env[key] = value
     for key, value in _rust_attr(ctx, "test_env", {}).items():
         env[key] = value
     return env
@@ -1758,6 +1900,9 @@ fn report_json(
 """
 
 def _rust_test_impl(ctx):
+    if not _rust_attr(ctx, "use_libtest_harness", True):
+        fail(ctx["label"]["id"] + ": use_libtest_harness = false is declared for Bazel parity but is not implemented by rust_test yet")
+    _rust_reject_unsupported_attrs(ctx, ["crate"])
     provider = _rust_compile(ctx, "bin", "src/lib.rs", _rust_output_name(ctx, "bin"), test = True, provider_kind = "rust_test")
     test_dir = ctx["build_dir"] + "/test"
     results = test_dir + "/test_results.json"
@@ -1789,7 +1934,7 @@ def _rust_test_impl(ctx):
     )
     run_action(
         argv = [runner, provider["test_binary"], results, log, native_results, ctx["label"]["id"]] + _rust_attr(ctx, "args", []),
-        inputs = [runner, provider["test_binary"]],
+        inputs = _unique([runner, provider["test_binary"]] + (provider.get("transitive_data") or [])),
         outputs = [test_dir, results, log, native_results],
         env = _rust_test_env(ctx, test_dir),
         toolchain_identity = runner_identity + "\x00once.rust_test.run.v1",
@@ -2566,17 +2711,38 @@ _RUST_COMMON_ATTRS = [
     attr("target", "string", docs = "Rust target triple passed to `rustc --target`. Defaults to the host target.", configurable = False),
     attr("env", "map<string, string>", default = "{}", docs = "Environment variables for rustc, matching Buck2's `env` attribute.", configurable = False),
     attr("rustc_env", "map<string, string>", default = "{}", docs = "Bazel-compatible rustc environment variables.", configurable = False),
+    attr("rustc_env_files", "list<string>", default = "[]", docs = "Package-relative files containing `NAME=value` entries merged into the rustc environment before `env` and `rustc_env`.", configurable = False),
     attr("rustc_flags", "list<string>", default = "[]", docs = "Additional rustc flags appended after Once-managed flags.", configurable = False),
     attr("cap_lints", "string", docs = "Optional rustc lint cap passed as `--cap-lints`; generated Cargo dependencies use `allow` to match Cargo dependency builds.", configurable = False),
     attr("linker", "string", docs = "Optional linker path passed as `-C linker=...`. Defaults to `cc` for host Unix binary-like targets and to the Android Native Development Kit clang wrapper for Android targets when ANDROID_NDK_HOME or android_ndk is set.", configurable = False),
     attr("linker_flags", "list<string>", default = "[]", docs = "Additional linker flags lowered to `-C link-arg=...`.", configurable = False),
     attr("native_linkopts", "list<string>", default = "[]", docs = "Linker flags propagated to native consumers such as Apple app or framework targets.", configurable = False),
+    attr("exported_linker_flags", "list<string>", default = "[]", docs = "Buck-compatible alias for native linker flags propagated to downstream native consumers.", configurable = False),
+    attr("exported_post_linker_flags", "list<string>", default = "[]", docs = "Buck-compatible propagated linker flags appended after normal exported linker flags.", configurable = False),
+    attr("linker_script", "string", docs = "Package-relative linker script passed to the linker and included in the compile action inputs.", configurable = False),
     attr("android_abi", "string", docs = "Android Application Binary Interface directory (https://developer.android.com/ndk/guides/abis) for cdylib or dylib outputs, such as `arm64-v8a`; inferred from common Android target triples when omitted.", configurable = False),
     attr("android_api", "int", default = "23", docs = "Android platform level used to select the Android Native Development Kit clang wrapper for Android targets.", configurable = False),
     attr("android_ndk", "string", docs = "Android Native Development Kit root used to find clang wrapper linkers. Defaults to ANDROID_NDK_HOME.", configurable = False),
+    attr("data", "list<string>", default = "[]", docs = "Package-relative runtime data file globs propagated to Rust binaries and tests.", configurable = False),
+    attr("compile_data", "list<string>", default = "[]", docs = "Bazel-compatible compile-time data file globs included in the rustc action inputs.", configurable = False),
     attr("crate_aliases", "map<string, string>", default = "{}", docs = "Map dependency label, package name, or crate name to the local extern crate name.", configurable = False),
+    attr("aliases", "map<string, string>", default = "{}", docs = "Bazel-compatible alias map from dependency label or crate name to local extern crate name.", configurable = False),
+    attr("named_deps", "map<string, string>", default = "{}", docs = "Buck-compatible alias map from local extern crate name to dependency label or crate name.", configurable = False),
     attr("cargo_package", "string", docs = "Cargo package name used to select direct external deps from a cargo_dependencies dependency set. Defaults to CARGO_PKG_NAME when present.", configurable = False),
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
+    attr("default_deps", "string", docs = "Reserved Buck-compatible default dependency mode.", configurable = False),
+    attr("doc_deps", "list<string>", default = "[]", docs = "Reserved for Rust documentation-only dependencies.", configurable = False),
+    attr("doc_env", "map<string, string>", default = "{}", docs = "Reserved for Rust documentation action environments.", configurable = False),
+    attr("doc_link_style", "string", docs = "Reserved for Rust documentation link style selection.", configurable = False),
+    attr("doc_linker_flags", "list<string>", default = "[]", docs = "Reserved for Rust documentation linker flags.", configurable = False),
+    attr("doc_named_deps", "map<string, string>", default = "{}", docs = "Reserved for Rust documentation dependency aliases.", configurable = False),
+    attr("link_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-style native link dependencies.", configurable = False),
+    attr("link_style", "string", docs = "Reserved for Buck-compatible Rust link style selection.", configurable = False),
+    attr("mapped_srcs", "map<string, string>", default = "{}", docs = "Reserved for Buck-compatible mapped source inputs.", configurable = False),
+    attr("proc_macro_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-style procedural macro dependency separation.", configurable = False),
+    attr("rpath", "bool", default = "false", docs = "Reserved for runtime library search path handling.", configurable = False),
+    attr("runtime_dependency_handling", "string", docs = "Reserved for Buck-compatible runtime dependency handling.", configurable = False),
+    attr("rustdoc_flags", "list<string>", default = "[]", docs = "Reserved for Rust documentation compiler flags.", configurable = False),
 ]
 
 _RUST_MOBILE_ATTRS = [
@@ -2589,13 +2755,19 @@ _RUST_MOBILE_ATTRS = [
     attr("android_target", "string", required = True, docs = "Rust target triple passed to the Android shared library compile.", configurable = False),
     attr("env", "map<string, string>", default = "{}", docs = "Environment variables for rustc, matching Buck2's `env` attribute.", configurable = False),
     attr("rustc_env", "map<string, string>", default = "{}", docs = "Bazel-compatible rustc environment variables.", configurable = False),
+    attr("rustc_env_files", "list<string>", default = "[]", docs = "Package-relative files containing `NAME=value` entries merged into the rustc environment before `env` and `rustc_env`.", configurable = False),
     attr("rustc_flags", "list<string>", default = "[]", docs = "Additional rustc flags appended after Once-managed flags.", configurable = False),
     attr("cap_lints", "string", docs = "Optional rustc lint cap passed as `--cap-lints`; generated Cargo dependencies use `allow` to match Cargo dependency builds.", configurable = False),
     attr("linker_flags", "list<string>", default = "[]", docs = "Additional linker flags lowered to `-C link-arg=...`.", configurable = False),
     attr("native_linkopts", "list<string>", default = "[]", docs = "Linker flags propagated to native consumers such as Apple app or framework targets.", configurable = False),
+    attr("exported_linker_flags", "list<string>", default = "[]", docs = "Buck-compatible alias for native linker flags propagated to downstream native consumers.", configurable = False),
+    attr("exported_post_linker_flags", "list<string>", default = "[]", docs = "Buck-compatible propagated linker flags appended after normal exported linker flags.", configurable = False),
+    attr("linker_script", "string", docs = "Package-relative linker script passed to each platform linker and included in the compile action inputs.", configurable = False),
     attr("android_abi", "string", docs = "Android Application Binary Interface directory (https://developer.android.com/ndk/guides/abis) for the Android shared library output, such as `arm64-v8a`; inferred from common Android target triples when omitted.", configurable = False),
     attr("android_api", "int", default = "23", docs = "Android platform level used to select the Android Native Development Kit clang wrapper for Android targets.", configurable = False),
     attr("android_ndk", "string", docs = "Android Native Development Kit root used to find clang wrapper linkers. Defaults to ANDROID_NDK_HOME.", configurable = False),
+    attr("data", "list<string>", default = "[]", docs = "Package-relative runtime data file globs propagated through each materialized platform provider.", configurable = False),
+    attr("compile_data", "list<string>", default = "[]", docs = "Bazel-compatible compile-time data file globs included in each rustc action input set.", configurable = False),
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before each platform rustc invocation and consumes common cargo:rustc-* stdout directives.", configurable = False),
 ]
 
@@ -2664,10 +2836,17 @@ rust_mobile_library = target_kind(
 
 rust_binary = target_kind(
     docs = "Rust executable compiled with rustc from a main crate and Rust crate deps.",
-    attrs = _RUST_COMMON_ATTRS,
+    attrs = _RUST_COMMON_ATTRS + [
+        attr("args", "list<string>", default = "[]", docs = "Arguments passed to the executable during `once run`.", configurable = False),
+        attr("run_env", "map<string, string>", default = "{}", docs = "Environment variables passed to the executable during `once run`.", configurable = False),
+        attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited during `once run` before `run_env` overrides.", configurable = False),
+    ],
     deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
     providers = ["rust_binary"],
-    capabilities = [capability("build", ["binary"])],
+    capabilities = [
+        capability("build", ["binary"]),
+        capability("run", ["default"], ["binary"]),
+    ],
     examples = [
         example(
             "rust-binary-with-crate",
@@ -2683,6 +2862,9 @@ rust_test = target_kind(
     attrs = _RUST_COMMON_ATTRS + [
         attr("args", "list<string>", default = "[]", docs = "Arguments passed to the compiled libtest binary when running the test capability.", configurable = False),
         attr("test_env", "map<string, string>", default = "{}", docs = "Environment variables passed to the test runner.", configurable = False),
+        attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited by the test runner before `test_env` overrides.", configurable = False),
+        attr("crate", "target", docs = "Reserved Bazel-compatible reference to an already-built crate under test.", configurable = False),
+        attr("use_libtest_harness", "bool", default = "true", docs = "Whether to use the Rust libtest harness. Only `true` is currently supported.", configurable = False),
         attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
         attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
     ],

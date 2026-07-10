@@ -18,6 +18,7 @@ Swift SDK, Android NDK sysroot, or extra compiler flags.
 | `android_api` | int | no | `28` | Android API level appended to API-less Android target triples |
 | `target` | string | no | inferred | Swift target triple. Inferred from `android_abi` and `android_api` when omitted, or set directly when the ABI is inferable |
 | `module_name` | string | no | target name | Swift module name |
+| `package_name` | string | no | empty | Swift package name passed through `-package-name` when set |
 | `sdk` | string | no |  | Optional sysroot passed to `swiftc -sdk` |
 | `resource_dir` | string | no |  | Optional Swift resource directory passed to `swiftc -resource-dir` |
 | `swift_sdk` | string | no | first Android SDK | Installed Swift SDK identifier used to discover default Android sysroot and Swift resource paths |
@@ -25,7 +26,17 @@ Swift SDK, Android NDK sysroot, or extra compiler flags.
 | `tools_directory` | string | no | inferred | Directory containing Android clang and linker tools passed as `-tools-directory` |
 | `swiftc` | string | no | `PATH` | Override Swift compiler path |
 | `swift_flags` | list&lt;string&gt; | no | `[]` | Additional Swift compiler flags |
-| `linkopts` | list&lt;string&gt; | no | `[]` | Additional linker flags appended after Once-managed flags |
+| `copts` | list&lt;string&gt; | no | `[]` | Bazel-compatible alias for additional Swift compiler flags |
+| `defines` | list&lt;string&gt; | no | `[]` | Conditional compilation symbols lowered to `-D` flags and propagated to downstream Swift modules |
+| `linkopts` | list&lt;string&gt; | no | `[]` | Additional linker flags appended after dependency linker flags and propagated downstream |
+| `data` | list&lt;string&gt; | no | `[]` | Runtime data file globs propagated to downstream consumers |
+| `swiftc_inputs` | list&lt;string&gt; | no | `[]` | Bazel-compatible extra Swift compiler input globs |
+| `library_evolution` | bool | no | `false` | Enable Swift library evolution and emit a textual module interface |
+
+Compatibility attributes declared for Bazel parity but not implemented yet:
+`always_include_developer_search_paths`, `alwayslink`,
+`generated_header_name`, `generates_header`, `linkstatic`, `plugins`, and
+`private_deps`. Non-empty values fail analysis.
 
 ## Dep Edges
 
@@ -53,10 +64,17 @@ The target emits `swift_module`, `android_native_library`, and
 | `target` | string | Swift target triple passed to `swiftc` |
 | `android_abi` | string | APK ABI directory |
 | `swiftmodule_dir` | string | Directory holding the generated Swift module |
+| `swiftmodule` | string | Generated Swift module artifact |
+| `swiftdoc` | string | Generated Swift documentation artifact |
+| `swiftinterface` | string | Generated textual module interface when library evolution is enabled |
 | `dylib` | string | Android shared library output |
 | `android_native_libraries` | list&lt;record&gt; | Direct native libraries with `abi` and `path` fields |
 | `transitive_android_native_libraries` | list&lt;record&gt; | Direct and dependency native libraries for APK packaging |
 | `transitive_swiftmodule_dirs` | list&lt;string&gt; | Swift module search paths for downstream Swift Android libraries |
+| `transitive_swiftmodule_inputs` | list&lt;string&gt; | Swift module artifacts declared as downstream compiler inputs |
+| `transitive_swift_defines` | list&lt;string&gt; | Conditional compilation symbols propagated downstream |
+| `transitive_linkopts` | list&lt;string&gt; | Linker options propagated downstream |
+| `transitive_data` | list&lt;string&gt; | Runtime data propagated downstream |
 
 ## Outputs
 
@@ -65,6 +83,7 @@ The target emits `swift_module`, `android_native_library`, and
 | Shared library | `.once/out/<target>/lib<module_name>.so` |
 | Swift module | `.once/out/<target>/<module_name>.swiftmodule` |
 | Swift doc | `.once/out/<target>/<module_name>.swiftdoc` |
+| Swift interface | `.once/out/<target>/<module_name>.swiftinterface` when library evolution is enabled |
 
 ## Example
 

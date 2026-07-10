@@ -30,7 +30,9 @@ providers through the normal `deps` edge. Prefer a separate
 | `android_sdk` | string | no | env | Android SDK root, otherwise `ANDROID_HOME` or `ANDROID_SDK_ROOT` |
 | `java_language_level` | string | no | `17` | Java source and target level passed to `javac` |
 | `javac_opts` | list&lt;string&gt; | no | `[]` | Additional `javac` flags |
+| `javacopts` | list&lt;string&gt; | no | `[]` | Bazel-compatible alias for additional `javac` flags |
 | `kotlinc_opts` | list&lt;string&gt; | no | `[]` | Additional `kotlinc` flags |
+| `neverlink` | bool | no | `false` | Keep this library on compile classpaths while omitting its runtime dependency closure from application classpaths |
 
 Tool override attrs are also available for `javac`, `jar`, `java`,
 `java_home`, `kotlinc`, `kotlin_home`, `kotlin_stdlib`, and `aapt2`.
@@ -67,8 +69,8 @@ The first Android implementation supports Java sources, Kotlin sources, Android
 resources, assets, AAR packaging, Android resource deps, Android library deps,
 and transitive native-library provider propagation. AIDL, data binding,
 annotation processors, embedding native libraries directly into AARs, ProGuard
-consumer rules, and `neverlink` runtime pruning are not implemented yet.
-Non-empty values for unsupported attrs fail analysis instead of being ignored.
+consumer rules are not implemented yet. Non-empty values for unsupported attrs
+fail analysis instead of being ignored.
 
 ## Example
 
