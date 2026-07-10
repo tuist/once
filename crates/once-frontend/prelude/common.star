@@ -61,6 +61,14 @@ def _filter_by_extensions(paths, extensions):
                 break
     return out
 
+def _file_globs(patterns):
+    expanded = []
+    for pattern in patterns:
+        expanded.append(pattern)
+        if _ends_with(pattern, "/**"):
+            expanded.append(pattern + "/*")
+    return glob(expanded)
+
 def _package_relative(ctx, path):
     if not path:
         return path
@@ -124,3 +132,24 @@ def _shell_quote(value):
 
 def _powershell_quote(value):
     return "'" + value.replace("'", "''") + "'"
+
+def _json_string(value):
+    out = ["\""]
+    for ch in value.elems():
+        if ch == "\"":
+            out.append("\\\"")
+        elif ch == "\\":
+            out.append("\\\\")
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        else:
+            out.append(ch)
+    out.append("\"")
+    return "".join(out)
+
+def _run_result_json(target_id):
+    return "{\"schema\":\"once.run_result.v1\",\"target\":" + _json_string(target_id) + ",\"exit_code\":0}\n"
