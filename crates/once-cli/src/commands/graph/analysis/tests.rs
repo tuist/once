@@ -128,8 +128,13 @@ fn reachable_analysis_deps_walks_only_analysis_backed_direct_deps() {
         target_with_capabilities("HiddenAnalysis", &[], &[], &["build"], []),
     ];
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
-    let session =
-        BuildSession::new_with_analyzer(workspace.path(), &cache, graph.clone(), analyzer);
+    let session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        analyzer,
+        SandboxMode::default(),
+    );
 
     let reachable = session.reachable_analysis_deps(&graph[0]);
 
@@ -148,8 +153,13 @@ async fn run_with_analysis_returns_none_for_target_kinds_without_implementation(
         target_with_capabilities("Dep", &[], &[], &["build"], []),
     ];
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
-    let session =
-        BuildSession::new_with_analyzer(workspace.path(), &cache, graph.clone(), analyzer);
+    let session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        analyzer,
+        SandboxMode::default(),
+    );
 
     let outcome = session.run_with_analysis(&graph[0], "test").await.unwrap();
 
@@ -184,8 +194,13 @@ async fn independent_dependencies_run_in_parallel() {
         test_target("LeafB", &[], parallel_leaf_script("LeafB", "LeafA", "b")),
     ];
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
-    let session =
-        BuildSession::new_with_analyzer(workspace.path(), &cache, graph.clone(), analyzer);
+    let session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        analyzer,
+        SandboxMode::default(),
+    );
 
     let outcome = session
         .build_with_analysis(&graph[0])
@@ -218,8 +233,13 @@ async fn uncacheable_declared_actions_bypass_action_cache() {
         ],
     )];
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
-    let session =
-        BuildSession::new_with_analyzer(workspace.path(), &cache, graph.clone(), analyzer);
+    let session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        analyzer,
+        SandboxMode::default(),
+    );
 
     let first = session
         .build_with_analysis(&graph[0])
@@ -253,8 +273,13 @@ async fn build_direct_analysis_deps_returns_only_direct_deps_in_declared_order()
         target_with_capabilities("Shared", &[], &[], &["build"], []),
     ];
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
-    let session =
-        BuildSession::new_with_analyzer(workspace.path(), &cache, graph.clone(), analyzer);
+    let session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        analyzer,
+        SandboxMode::default(),
+    );
 
     let outcomes = session.build_direct_analysis_deps(&graph[0]).await.unwrap();
     let outcome_ids = outcomes
@@ -291,8 +316,13 @@ async fn capability_runs_are_salted_by_dependency_action_digests() {
     ];
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
 
-    let session =
-        BuildSession::new_with_analyzer(workspace.path(), &cache, graph.clone(), analyzer);
+    let session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        analyzer,
+        SandboxMode::default(),
+    );
     let first = session
         .run_with_analysis(&graph[1], "test")
         .await
@@ -301,8 +331,13 @@ async fn capability_runs_are_salted_by_dependency_action_digests() {
 
     std::fs::write(workspace.path().join("dep.txt"), b"two").unwrap();
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
-    let session =
-        BuildSession::new_with_analyzer(workspace.path(), &cache, graph.clone(), analyzer);
+    let session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        analyzer,
+        SandboxMode::default(),
+    );
     let second = session
         .run_with_analysis(&graph[1], "test")
         .await

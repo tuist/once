@@ -336,7 +336,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::{OutputSymlinkMode, ResourceRequest, RunOpts, WorkspacePath};
+    use crate::{OutputSymlinkMode, ResourceRequest, RunOpts, SandboxMode, WorkspacePath};
     use once_cas::Cas;
     use tempfile::TempDir;
 
@@ -353,11 +353,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(10_000),
             remote: None,
         }
@@ -411,11 +413,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -462,11 +466,13 @@ mod tests {
                 env: BTreeMap::new(),
                 cwd: Some(WorkspacePath::root()),
                 input_digest: None,
+            inputs: vec![],
                 outputs: vec![],
                 stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
                 resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
                 timeout_ms: Some(5_000),
                 remote: None,
             }
@@ -527,11 +533,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![WorkspacePath::try_from("out/produced.txt").unwrap()],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -540,11 +548,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };

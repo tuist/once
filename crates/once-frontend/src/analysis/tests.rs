@@ -206,6 +206,36 @@ run_action(
 }
 
 #[test]
+fn run_action_records_sandbox_policy() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "apps/ios/App");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+run_action(
+    argv = ["tool", "input"],
+    inputs = ["apps/ios/App/input"],
+    outputs = [".once/out/apps/ios/App/output"],
+    sandbox = "inputs",
+)
+"#)
+        .unwrap();
+    });
+    assert_eq!(store.actions.len(), 1);
+    assert_eq!(store.actions[0].sandbox.as_deref(), Some("inputs"));
+}
+
+#[test]
+fn run_action_rejects_invalid_sandbox_policy() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "apps/ios/App");
+    let (_, err) = with_active_store(store, || {
+        run(r#"run_action(argv = ["tool"], sandbox = "strict")"#).unwrap_err()
+    });
+    let message = format!("{err:?}");
+    assert!(message.contains("expected `sandbox`"), "{message}");
+}
+
+#[test]
 fn run_action_can_skip_prior_action_dependencies() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "tools/split");

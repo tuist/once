@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
-use once_core::EvidenceCacheState;
+use once_core::{EvidenceCacheState, SandboxMode};
 use once_frontend::analysis::{AnalysisEngine, AnalysisOptions};
 use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
@@ -68,6 +68,7 @@ pub(super) struct BuildSession {
     targets: HashMap<String, Arc<GraphTarget>>,
     analyzer: AnalysisEngine,
     module_source_digest: Digest,
+    sandbox: SandboxMode,
 }
 
 impl BuildSession {
@@ -75,8 +76,9 @@ impl BuildSession {
         workspace: &Path,
         cache: &CacheProvider,
         graph: Vec<GraphTarget>,
+        sandbox: SandboxMode,
     ) -> Result<Self> {
-        Self::new_with_options(workspace, cache, graph, AnalysisOptions::default())
+        Self::new_with_options(workspace, cache, graph, AnalysisOptions::default(), sandbox)
     }
 
     pub(super) fn new_with_options(
@@ -84,12 +86,14 @@ impl BuildSession {
         cache: &CacheProvider,
         graph: Vec<GraphTarget>,
         options: AnalysisOptions,
+        sandbox: SandboxMode,
     ) -> Result<Self> {
         Ok(Self::new_with_analyzer(
             workspace,
             cache,
             graph,
             AnalysisEngine::for_workspace_with_options(workspace, options)?,
+            sandbox,
         ))
     }
 
@@ -98,6 +102,7 @@ impl BuildSession {
         cache: &CacheProvider,
         graph: Vec<GraphTarget>,
         analyzer: AnalysisEngine,
+        sandbox: SandboxMode,
     ) -> Self {
         let module_source_digest = Digest::of_bytes(analyzer.module_source().as_bytes());
         Self {
@@ -112,6 +117,7 @@ impl BuildSession {
                 .collect(),
             analyzer,
             module_source_digest,
+            sandbox,
         }
     }
 
@@ -194,6 +200,7 @@ impl BuildSession {
                 capability,
                 analysis,
                 &dep_action_digests,
+                self.sandbox,
             )
             .await
             .with_context(|| format!("executing {capability} for {}", target.label.id))?;
@@ -302,12 +309,14 @@ impl BuildSession {
             &self.analyzer,
             reachable,
             retained,
+            self.sandbox,
         )
         .run()
         .await
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_one(
     workspace: PathBuf,
     cache: CacheProvider,
@@ -316,6 +325,7 @@ async fn build_one(
     target: Arc<GraphTarget>,
     dep_providers: Vec<JsonValue>,
     dep_action_digests: Vec<(String, Digest)>,
+    sandbox: SandboxMode,
 ) -> Result<(String, BuildOutcome)> {
     let target_id = target.label.id.clone();
     tracing::debug!(
@@ -350,6 +360,7 @@ async fn build_one(
         "build",
         analysis,
         &dep_action_digests,
+        sandbox,
     )
     .await?;
     Ok((target_id, outcome))

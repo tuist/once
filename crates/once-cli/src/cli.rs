@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use once_core::WorkspacePath;
+use once_core::{SandboxMode, WorkspacePath};
 
 mod auth;
 mod cache;
@@ -126,6 +126,10 @@ pub enum Cmd {
     /// list available ids.
     #[command(arg_required_else_help = true)]
     Build {
+        /// Local filesystem sandbox policy for command actions.
+        #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
+        sandbox: SandboxMode,
+
         /// Target id, such as `services/api/Api` or `./Api`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
@@ -138,6 +142,10 @@ pub enum Cmd {
     /// to ask a compute provider to execute the command.
     #[command(arg_required_else_help = true)]
     Run {
+        /// Local filesystem sandbox policy for command actions.
+        #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
+        sandbox: SandboxMode,
+
         /// Ask graph target kinds to open a visible runtime interface when supported.
         #[arg(long)]
         visible: bool,
@@ -171,6 +179,10 @@ pub enum Cmd {
     /// groups are owned by the target kind that exposes the capability.
     #[command(arg_required_else_help = true)]
     Test {
+        /// Local filesystem sandbox policy for command actions.
+        #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
+        sandbox: SandboxMode,
+
         /// Target id, such as `tests/unit` or `./unit`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
@@ -187,6 +199,10 @@ pub enum Cmd {
     /// headers, Once applies script-aware parsing instead.
     #[command(arg_required_else_help = true)]
     Exec {
+        /// Local filesystem sandbox policy for the command action.
+        #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
+        sandbox: SandboxMode,
+
         /// Interpret argv as `<runtime> <script> [args...]` and apply
         /// `once` headers from the script file. Useful as the
         /// explicit form, for example `once exec --script bash
@@ -450,6 +466,10 @@ fn parse_env(raw: &str) -> std::result::Result<(String, String), String> {
 
 fn parse_workspace_path(raw: &str) -> std::result::Result<WorkspacePath, String> {
     WorkspacePath::try_from(raw).map_err(|e| e.to_string())
+}
+
+fn parse_sandbox_mode(raw: &str) -> std::result::Result<SandboxMode, String> {
+    raw.parse()
 }
 
 /// Map a subprocess exit code to a CLI [`ExitCode`].

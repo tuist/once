@@ -263,6 +263,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             create_dirs: Vec::new(),
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -313,6 +314,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             create_dirs: Vec::new(),
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: cacheable.unwrap_or(true),
             depends_on_prior_actions: true,
             toolchain_identity,
@@ -356,6 +358,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             create_dirs: Vec::new(),
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -407,6 +410,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             create_dirs: Vec::new(),
             cwd: None,
             env: BTreeMap::new(),
+            sandbox: None,
             cacheable: cacheable.unwrap_or(true),
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -467,6 +471,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// the command in, defaulting to the workspace root; `env`: optional
     /// string->string dict; `cacheable`:
     /// optional bool, default true;
+    /// `sandbox`: optional local filesystem sandbox policy, either
+    /// `"off"` or `"inputs"`;
     /// `toolchain_identity`: optional string folded into the input
     /// digest; `identifier`: optional label for diagnostics.
     #[allow(
@@ -487,7 +493,9 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         depends_on_prior_actions: Option<bool>,
         stdout: Option<String>,
         stderr: Option<String>,
+        sandbox: Option<String>,
     ) -> anyhow::Result<NoneType> {
+        validate_sandbox(sandbox.as_deref())?;
         let argv = unpack_action_argv(argv, "argv")?;
         let inputs = inputs
             .map(|value| unpack_string_list(value, "inputs"))
@@ -531,6 +539,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             create_dirs,
             cwd,
             env,
+            sandbox,
             cacheable: cacheable.unwrap_or(true),
             depends_on_prior_actions: depends_on_prior_actions.unwrap_or(true),
             toolchain_identity,
@@ -620,6 +629,15 @@ fn parse_prepare_path_mode(kind: &str) -> Result<DeclaredPreparePathMode> {
         "directory" => Ok(DeclaredPreparePathMode::Directory),
         other => Err(anyhow!(
             "expected `kind` to be `remove` or `directory`, got `{other}`"
+        )),
+    }
+}
+
+fn validate_sandbox(value: Option<&str>) -> Result<()> {
+    match value {
+        None | Some("off" | "inputs") => Ok(()),
+        Some(other) => Err(anyhow!(
+            "expected `sandbox` to be `off` or `inputs`, got `{other}`"
         )),
     }
 }

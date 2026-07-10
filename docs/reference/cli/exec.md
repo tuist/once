@@ -22,6 +22,7 @@ Low-level action surface for direct commands and script adapters. The cache key 
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
+| `--sandbox` | `<SANDBOX>` | `off` | Local filesystem sandbox policy for the command action |
 | `--script` | (flag) | `false` | Interpret argv as `<runtime> <script> [args...]` and apply `once` headers from the script file. Useful as the explicit form, for example `once exec --script bash scripts/build.sh`, and for directly executable scripts via a shebang such as `#!/usr/bin/env -S once exec -- bash` |
 | `-e` | `<ENV>` |  | Pass an environment variable to the command. Repeatable |
 | `--cwd` | `<CWD>` |  | Working directory, relative to the project root. Must not be absolute or escape the project |

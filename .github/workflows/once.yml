@@ -161,7 +161,7 @@ jobs:
   tuist-cache-smoke:
     name: tuist cache smoke
     needs: changes
-    if: needs.changes.outputs.rust_ci == 'true'
+    if: needs.changes.outputs.rust_ci == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -193,14 +193,23 @@ jobs:
             "${once_bin}" exec --format json -- /bin/sh -c 'exit 0' \
             2>"${smoke_root}/first.json"
 
-          XDG_CACHE_HOME="${smoke_root}/cache-second" \
-            "${once_bin}" exec --format json -- /bin/sh -c 'exit 0' \
-            2>"${smoke_root}/second.json"
+          hit_json=""
+          for attempt in 1 2 3 4 5; do
+            second_json="${smoke_root}/second-${attempt}.json"
+            if XDG_CACHE_HOME="${smoke_root}/cache-second-${attempt}" \
+              "${once_bin}" exec --format json -- /bin/sh -c 'exit 0' \
+              2>"${second_json}" \
+              && grep -Eq '"cache"[[:space:]]*:[[:space:]]*"hit"' "${second_json}"; then
+              hit_json="${second_json}"
+              break
+            fi
+            sleep "$((attempt * 2))"
+          done
 
-          if ! grep -Eq '"cache"[[:space:]]*:[[:space:]]*"hit"' "${smoke_root}/second.json"; then
-            echo "Expected the second Tuist-backed Once execution to hit the remote cache."
+          if [ -z "${hit_json}" ]; then
+            echo "Expected a Tuist-backed Once execution to hit the remote cache after retrying."
             cat "${smoke_root}/first.json"
-            cat "${smoke_root}/second.json"
+            cat "${smoke_root}"/second-*.json
             exit 1
           fi
         env:

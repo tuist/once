@@ -254,7 +254,7 @@ mod tests {
     use crate::action::ACTION_DIGEST_DOMAIN;
     use crate::{
         CopyPathMode, Error, OutputSymlinkMode, PreparePathMode, RemoteExecution, ResourceRequest,
-        WorkspacePath,
+        SandboxMode, WorkspacePath,
     };
     use once_cas::{CacheProvider, Cas, Digest};
     use tempfile::TempDir;
@@ -271,11 +271,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         }
@@ -304,6 +306,83 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn input_sandbox_exposes_declared_inputs_and_captures_outputs() {
+        let (tmp, cas) = fresh_cas();
+        std::fs::write(tmp.path().join("declared.txt"), "declared").unwrap();
+        std::fs::write(tmp.path().join("undeclared.txt"), "undeclared").unwrap();
+        let output = WorkspacePath::try_from("out/result.txt").unwrap();
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "test -f declared.txt && test ! -e undeclared.txt && mkdir -p out && cat declared.txt > out/result.txt"
+                    .into(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: Some(Digest::of_bytes(b"sandbox-inputs")),
+            inputs: vec![WorkspacePath::try_from("declared.txt").unwrap()],
+            outputs: vec![output.clone()],
+            stdout_path: None,
+            stderr_path: None,
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            sandbox: SandboxMode::Inputs,
+            timeout_ms: None,
+            remote: None,
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        assert_eq!(first.result.exit_code, 0);
+        assert_eq!(
+            std::fs::read_to_string(output.resolve(tmp.path())).unwrap(),
+            "declared"
+        );
+        assert!(first.result.outputs.contains_key("out/result.txt"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn input_sandbox_creates_declared_cwd() {
+        let (tmp, cas) = fresh_cas();
+        let output = WorkspacePath::try_from("pkg/result.txt").unwrap();
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf ok > result.txt".into(),
+            ],
+            env: BTreeMap::new(),
+            cwd: Some(WorkspacePath::try_from("pkg").unwrap()),
+            input_digest: Some(Digest::of_bytes(b"sandbox-cwd")),
+            inputs: vec![],
+            outputs: vec![output.clone()],
+            stdout_path: None,
+            stderr_path: None,
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            sandbox: SandboxMode::Inputs,
+            timeout_ms: None,
+            remote: None,
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        assert_eq!(first.result.exit_code, 0);
+        assert_eq!(
+            std::fs::read_to_string(output.resolve(tmp.path())).unwrap(),
+            "ok"
+        );
+        assert!(first.result.outputs.contains_key("pkg/result.txt"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn stdout_stderr_redirect_to_a_shared_file_is_captured_and_restored() {
         let (tmp, cas) = fresh_cas();
         let log = WorkspacePath::try_from(".once/out/run/log.txt").unwrap();
@@ -316,12 +395,14 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![log.clone()],
             // Both streams share the log path, reproducing `> log 2>&1`.
             stdout_path: Some(Box::new(log.clone())),
             stderr_path: Some(Box::new(log.clone())),
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -365,11 +446,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![out.clone()],
             stdout_path: Some(Box::new(out.clone())),
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -616,11 +699,13 @@ mod tests {
             env: env_a,
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -629,11 +714,13 @@ mod tests {
             env: env_b,
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -648,11 +735,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -675,11 +764,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -701,11 +792,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(100),
             remote: None,
         };
@@ -726,11 +819,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: Some(WorkspacePath::try_from("sub").unwrap()),
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -752,11 +847,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -780,11 +877,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(10_000),
             remote: None,
         };
@@ -805,11 +904,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -837,11 +938,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: Some(RemoteExecution::provider("unknown-remote")),
         };
@@ -870,11 +973,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -905,11 +1010,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::new(2, 0),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -934,11 +1041,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -959,11 +1068,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: t,
             remote: None,
         };
@@ -978,11 +1089,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: c,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1000,11 +1113,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1050,11 +1165,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1072,11 +1189,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: None,
             remote: None,
         };
@@ -1094,11 +1213,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(2_000),
             remote: None,
         };
@@ -1124,11 +1245,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -1137,11 +1260,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -1168,11 +1293,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: Some(WorkspacePath::try_from("sub").unwrap()),
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -1232,11 +1359,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![WorkspacePath::try_from("Demo.app").unwrap()],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
             remote: None,
         };
@@ -1269,11 +1398,13 @@ mod tests {
             env: BTreeMap::new(),
             cwd: None,
             input_digest: None,
+            inputs: vec![],
             outputs: vec![],
             stdout_path: None,
             stderr_path: None,
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
             timeout_ms: Some(50),
             remote: None,
         };

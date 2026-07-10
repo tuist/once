@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use once_cas::{CacheProvider, Digest};
+use once_core::SandboxMode;
 use once_frontend::analysis::AnalysisEngine;
 use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
@@ -20,9 +21,11 @@ pub(super) struct BuildScheduler<'a> {
     module_source_digest: Digest,
     reachable: &'a HashSet<String>,
     retained: &'a HashSet<String>,
+    sandbox: SandboxMode,
 }
 
 impl<'a> BuildScheduler<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         root_id: &'a str,
         workspace: &'a Path,
@@ -31,6 +34,7 @@ impl<'a> BuildScheduler<'a> {
         analyzer: &'a AnalysisEngine,
         reachable: &'a HashSet<String>,
         retained: &'a HashSet<String>,
+        sandbox: SandboxMode,
     ) -> Self {
         let module_source_digest = Digest::of_bytes(analyzer.module_source().as_bytes());
         Self {
@@ -42,6 +46,7 @@ impl<'a> BuildScheduler<'a> {
             module_source_digest,
             reachable,
             retained,
+            sandbox,
         }
     }
 
@@ -105,6 +110,7 @@ impl<'a> BuildScheduler<'a> {
                 target,
                 inputs.providers,
                 inputs.action_digests,
+                self.sandbox,
             ));
         }
         Ok(())

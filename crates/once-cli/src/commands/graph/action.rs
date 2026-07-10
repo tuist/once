@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use once_core::{Action, OutputSymlinkMode, ResourceRequest, WorkspacePath};
+use once_core::{Action, OutputSymlinkMode, ResourceRequest, SandboxMode, WorkspacePath};
 use once_frontend::GraphTarget;
 use serde::Serialize;
 
@@ -37,14 +37,35 @@ pub(super) fn action_for(
         env: BTreeMap::new(),
         cwd: None,
         input_digest: None,
+        inputs: source_inputs(target)?,
         outputs: outputs.to_vec(),
         stdout_path: None,
         stderr_path: None,
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
+        sandbox: SandboxMode::default(),
         timeout_ms: None,
         remote: None,
     })
+}
+
+fn source_inputs(target: &GraphTarget) -> Result<Vec<WorkspacePath>> {
+    let mut inputs = target
+        .srcs
+        .iter()
+        .map(|src| {
+            let path = if target.label.package.is_empty() {
+                src.clone()
+            } else {
+                format!("{}/{}", target.label.package, src)
+            };
+            WorkspacePath::try_from(path.as_str())
+                .with_context(|| format!("invalid graph source path `{path}`"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    inputs.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    inputs.dedup_by(|a, b| a.as_str() == b.as_str());
+    Ok(inputs)
 }
 
 /// Workspace-relative marker directory for a generic capability fallback.

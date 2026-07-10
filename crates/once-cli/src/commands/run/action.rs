@@ -46,22 +46,27 @@ fn source_path(target: &once_frontend::Target, src: &str) -> Result<WorkspacePat
 }
 
 fn input_digest(workspace: &Path, target: &once_frontend::Target) -> Result<Option<Digest>> {
-    if target.srcs.is_empty() {
+    let paths = input_paths(target)?;
+    if paths.is_empty() {
         return Ok(None);
     }
 
+    let mut builder = InputDigestBuilder::new(b"");
+    for path in &paths {
+        builder
+            .push_source(workspace, path.as_str())
+            .with_context(|| format!("hashing source input `{path}`"))?;
+    }
+    Ok(Some(builder.finish()))
+}
+
+fn input_paths(target: &once_frontend::Target) -> Result<Vec<WorkspacePath>> {
     let mut paths: Vec<_> = target
         .srcs
         .iter()
         .map(|src| source_path(target, src))
         .collect::<Result<_>>()?;
     paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-
-    let mut builder = InputDigestBuilder::new(b"");
-    for path in paths {
-        builder
-            .push_source(workspace, path.as_str())
-            .with_context(|| format!("hashing source input `{path}`"))?;
-    }
-    Ok(Some(builder.finish()))
+    paths.dedup_by(|a, b| a.as_str() == b.as_str());
+    Ok(paths)
 }

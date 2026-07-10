@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
-use once_core::{EvidenceCacheState, EvidenceSubject, RunOpts};
+use once_core::{EvidenceCacheState, EvidenceSubject, RunOpts, SandboxMode};
 use once_frontend::analysis::AnalysisOptions;
 use once_frontend::GraphTarget;
 use serde::Serialize;
@@ -52,11 +52,12 @@ pub async fn build(
     cache: &CacheProvider,
     output: Output,
     target_id: &str,
+    sandbox: SandboxMode,
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let session = analysis::BuildSession::new(workspace, cache, graph)?;
+    let session = analysis::BuildSession::new(workspace, cache, graph, sandbox)?;
     let target = session.target(target_id)?;
-    let record = build_target(workspace, cache, target, &session).await?;
+    let record = build_target(workspace, cache, target, &session, sandbox).await?;
     record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
@@ -67,9 +68,10 @@ pub async fn test(
     cache: &CacheProvider,
     output: Output,
     target_id: &str,
+    sandbox: SandboxMode,
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let session = analysis::BuildSession::new(workspace, cache, graph)?;
+    let session = analysis::BuildSession::new(workspace, cache, graph, sandbox)?;
     let target = session.target(target_id)?;
     let test_capability = ensure_capability(target, "test")?;
     if !test_capability.requires_outputs.is_empty()
@@ -78,7 +80,7 @@ pub async fn test(
             .iter()
             .any(|capability| capability.name == "build")
     {
-        let build_record = build_target(workspace, cache, target, &session).await?;
+        let build_record = build_target(workspace, cache, target, &session, sandbox).await?;
         record_capability_run(workspace, &build_record).await;
     }
     let record = if let Some(outcome) = session.run_with_analysis(target, "test").await? {
@@ -106,7 +108,7 @@ pub async fn test(
             result,
         }
     } else {
-        run_target_capability(workspace, cache, target, "test").await?
+        run_target_capability(workspace, cache, target, "test", sandbox).await?
     };
     record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
@@ -119,6 +121,7 @@ pub async fn run(
     output: Output,
     target_id: &str,
     options: GraphRunOptions,
+    sandbox: SandboxMode,
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let session = analysis::BuildSession::new_with_options(
@@ -128,6 +131,7 @@ pub async fn run(
         AnalysisOptions {
             run_visible: options.visible,
         },
+        sandbox,
     )?;
     let target = session.target(target_id)?;
     let run_capability = ensure_capability(target, "run")?;
@@ -137,7 +141,7 @@ pub async fn run(
             .iter()
             .any(|capability| capability.name == "build")
     {
-        let build_record = build_target(workspace, cache, target, &session).await?;
+        let build_record = build_target(workspace, cache, target, &session, sandbox).await?;
         record_capability_run(workspace, &build_record).await;
     }
     let record = if let Some(outcome) = session.run_with_analysis(target, "run").await? {
@@ -165,7 +169,7 @@ pub async fn run(
             result,
         }
     } else {
-        run_target_capability(workspace, cache, target, "run").await?
+        run_target_capability(workspace, cache, target, "run", sandbox).await?
     };
     record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
@@ -180,6 +184,7 @@ async fn build_target(
     cache: &CacheProvider,
     target: &GraphTarget,
     session: &analysis::BuildSession,
+    sandbox: SandboxMode,
 ) -> Result<CapabilityRunRecord> {
     let capability = ensure_capability(target, "build")?;
     if let Some(outcome) = session.build_with_analysis(target).await? {
@@ -211,7 +216,7 @@ async fn build_target(
             result,
         })
     } else {
-        run_target_capability(workspace, cache, target, "build").await
+        run_target_capability(workspace, cache, target, "build", sandbox).await
     }
 }
 
@@ -230,10 +235,12 @@ async fn run_target_capability(
     cache: &CacheProvider,
     target: &GraphTarget,
     capability_name: &str,
+    sandbox: SandboxMode,
 ) -> Result<CapabilityRunRecord> {
     let capability = ensure_capability(target, capability_name)?;
     let outputs = action::output_paths(target, capability_name)?;
-    let action = action::action_for(target, capability_name, &outputs)?;
+    let mut action = action::action_for(target, capability_name, &outputs)?;
+    set_sandbox(&mut action, sandbox);
     let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
         .await
         .with_context(|| format!("executing {capability_name} for {}", target.label.id))?;
@@ -272,6 +279,12 @@ async fn run_target_capability(
         cache_state,
         result,
     })
+}
+
+fn set_sandbox(action: &mut once_core::Action, sandbox_mode: SandboxMode) {
+    if let once_core::Action::RunCommand { sandbox, .. } = action {
+        *sandbox = (*sandbox).stronger(sandbox_mode);
+    }
 }
 
 async fn record_capability_run(workspace: &Path, record: &CapabilityRunRecord) {

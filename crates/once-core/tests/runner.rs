@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use once_cas::Cas;
 use once_core::{
-    Action, CacheState, OutputSymlinkMode, ResourceRequest, RunOpts, Runner, WorkspacePath,
+    Action, CacheState, OutputSymlinkMode, ResourceRequest, RunOpts, Runner, SandboxMode,
+    WorkspacePath,
 };
 use tempfile::TempDir;
 
@@ -26,11 +27,13 @@ fn cmd(script: &str) -> Action {
         env: BTreeMap::new(),
         cwd: None,
         input_digest: None,
+        inputs: vec![],
         outputs: vec![],
         stdout_path: None,
         stderr_path: None,
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
+        sandbox: SandboxMode::default(),
         timeout_ms: Some(10_000),
         remote: None,
     }
@@ -105,11 +108,13 @@ async fn cache_keys_partition_by_workspace_path() {
         env: BTreeMap::new(),
         cwd: Some(WorkspacePath::try_from(sub).unwrap()),
         input_digest: None,
+        inputs: vec![],
         outputs: vec![],
         stdout_path: None,
         stderr_path: None,
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
+        sandbox: SandboxMode::default(),
         timeout_ms: Some(5_000),
         remote: None,
     };
@@ -153,11 +158,13 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         env: BTreeMap::new(),
         cwd: None,
         input_digest: None,
+        inputs: vec![],
         outputs: vec![],
         stdout_path: None,
         stderr_path: None,
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
+        sandbox: SandboxMode::default(),
         timeout_ms: Some(5_000),
         remote: None,
     };
@@ -171,11 +178,13 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         env: BTreeMap::new(),
         cwd: None,
         input_digest: None,
+        inputs: vec![],
         outputs: vec![],
         stdout_path: None,
         stderr_path: None,
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
+        sandbox: SandboxMode::default(),
         timeout_ms: Some(5_000),
         remote: None,
     };

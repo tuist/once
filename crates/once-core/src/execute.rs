@@ -6,7 +6,7 @@ use sha2::Digest as ShaDigest;
 
 use crate::{
     local, outputs, remote, Action, CopyPathMode, Error, OutputSymlinkMode, PreparePathMode,
-    Result, WorkspacePath,
+    Result, SandboxMode, WorkspacePath,
 };
 
 pub(crate) async fn run(
@@ -92,10 +92,13 @@ async fn execute_command(
         argv,
         env,
         cwd,
+        inputs,
+        outputs,
         timeout_ms,
         remote,
         stdout_path,
         stderr_path,
+        sandbox,
         ..
     } = action
     else {
@@ -107,8 +110,8 @@ async fn execute_command(
         stderr: stderr_path.as_deref(),
     };
 
-    match (remote, stream_to_parent) {
-        (Some(remote), _) => {
+    match (remote, stream_to_parent, sandbox) {
+        (Some(remote), _, _) => {
             remote::execute_command(
                 remote,
                 argv,
@@ -121,7 +124,23 @@ async fn execute_command(
             )
             .await
         }
-        (None, true) => {
+        (None, _, SandboxMode::Inputs) => {
+            execute_sandboxed_command(
+                action,
+                argv,
+                env,
+                cwd.as_ref(),
+                inputs,
+                outputs,
+                *timeout_ms,
+                workspace_root,
+                cache,
+                redirect,
+                stream_to_parent,
+            )
+            .await
+        }
+        (None, true, SandboxMode::Off) => {
             local::execute_command_streaming(
                 argv,
                 env,
@@ -133,7 +152,7 @@ async fn execute_command(
             )
             .await
         }
-        (None, false) => {
+        (None, false, SandboxMode::Off) => {
             Box::pin(local::execute_command(
                 argv,
                 env,
@@ -145,6 +164,214 @@ async fn execute_command(
             ))
             .await
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_sandboxed_command(
+    action: &Action,
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: Option<&WorkspacePath>,
+    inputs: &[WorkspacePath],
+    outputs: &[WorkspacePath],
+    timeout_ms: Option<u64>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    redirect: local::Redirect<'_>,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    let sandbox = prepare_input_sandbox(action, inputs, cwd, workspace_root).await?;
+    let result = if stream_to_parent {
+        local::execute_command_streaming(
+            argv,
+            env,
+            cwd,
+            timeout_ms,
+            &sandbox.execroot,
+            cache,
+            redirect,
+        )
+        .await
+    } else {
+        local::execute_command(
+            argv,
+            env,
+            cwd,
+            timeout_ms,
+            &sandbox.execroot,
+            cache,
+            redirect,
+        )
+        .await
+    };
+
+    match result {
+        Ok(result) if result.exit_code == 0 => {
+            copy_sandbox_outputs(outputs, &sandbox.execroot, workspace_root).await?;
+            Ok(result)
+        }
+        other => other,
+    }
+}
+
+struct PreparedSandbox {
+    root: std::path::PathBuf,
+    execroot: std::path::PathBuf,
+    keep: bool,
+}
+
+impl Drop for PreparedSandbox {
+    fn drop(&mut self) {
+        if self.keep {
+            return;
+        }
+        if let Err(error) = std::fs::remove_dir_all(&self.root) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    sandbox = %self.root.display(),
+                    %error,
+                    "failed to remove action sandbox"
+                );
+            }
+        }
+    }
+}
+
+async fn prepare_input_sandbox(
+    action: &Action,
+    inputs: &[WorkspacePath],
+    cwd: Option<&WorkspacePath>,
+    workspace_root: &Path,
+) -> Result<PreparedSandbox> {
+    let root = workspace_root
+        .join(".once")
+        .join("sandboxes")
+        .join(action.digest().to_string());
+    let execroot = root.join("execroot");
+    let sandbox_root = root.clone();
+    let sandbox_execroot = execroot.clone();
+    let input_paths = inputs.to_vec();
+    let cwd_path = cwd.cloned();
+    let workspace = workspace_root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        remove_path_blocking(&sandbox_root)?;
+        std::fs::create_dir_all(&sandbox_execroot)?;
+        for input in input_paths {
+            stage_sandbox_input_blocking(&workspace, &sandbox_execroot, &input)?;
+        }
+        if let Some(cwd) = cwd_path {
+            std::fs::create_dir_all(cwd.resolve(&sandbox_execroot))?;
+        }
+        Ok::<_, std::io::Error>(())
+    })
+    .await
+    .map_err(|source| Error::FileAction {
+        action: "prepare_sandbox",
+        path: root.display().to_string(),
+        source: std::io::Error::other(source.to_string()),
+    })?
+    .map_err(|source| Error::FileAction {
+        action: "prepare_sandbox",
+        path: root.display().to_string(),
+        source,
+    })?;
+
+    Ok(PreparedSandbox {
+        root,
+        execroot,
+        keep: keep_sandbox(),
+    })
+}
+
+fn keep_sandbox() -> bool {
+    std::env::var("ONCE_KEEP_SANDBOX")
+        .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+}
+
+fn stage_sandbox_input_blocking(
+    workspace_root: &Path,
+    sandbox_execroot: &Path,
+    input: &WorkspacePath,
+) -> std::io::Result<()> {
+    let source = input.resolve(workspace_root);
+    let destination = input.resolve(sandbox_execroot);
+    let metadata = std::fs::symlink_metadata(&source)?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        stage_sandbox_directory_blocking(&source, &destination)
+    } else {
+        link_sandbox_input_blocking(&source, &destination)
+    }
+}
+
+fn stage_sandbox_directory_blocking(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(destination)?;
+    let mut children = std::fs::read_dir(source)?.collect::<std::io::Result<Vec<_>>>()?;
+    children.sort_by_key(std::fs::DirEntry::file_name);
+    for child in children {
+        let child_source = child.path();
+        let child_destination = destination.join(child.file_name());
+        let metadata = std::fs::symlink_metadata(&child_source)?;
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            stage_sandbox_directory_blocking(&child_source, &child_destination)?;
+        } else {
+            link_sandbox_input_blocking(&child_source, &child_destination)?;
+        }
+    }
+    Ok(())
+}
+
+fn link_sandbox_input_blocking(source: &Path, destination: &Path) -> std::io::Result<()> {
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    remove_path_blocking(destination)?;
+    create_symlink_blocking(source, destination, source)
+}
+
+async fn copy_sandbox_outputs(
+    outputs: &[WorkspacePath],
+    sandbox_execroot: &Path,
+    workspace_root: &Path,
+) -> Result<()> {
+    let output_paths = outputs.to_vec();
+    let sandbox = sandbox_execroot.to_path_buf();
+    let workspace = workspace_root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        for output in output_paths {
+            let source = output.resolve(&sandbox);
+            if !source.try_exists()? {
+                continue;
+            }
+            let destination = output.resolve(&workspace);
+            copy_sandbox_output_blocking(&source, &destination)?;
+        }
+        Ok::<_, std::io::Error>(())
+    })
+    .await
+    .map_err(|source| Error::FileAction {
+        action: "copy_sandbox_outputs",
+        path: sandbox_execroot.display().to_string(),
+        source: std::io::Error::other(source.to_string()),
+    })?
+    .map_err(|source| Error::FileAction {
+        action: "copy_sandbox_outputs",
+        path: sandbox_execroot.display().to_string(),
+        source,
+    })
+}
+
+fn copy_sandbox_output_blocking(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(source)?;
+    if metadata.file_type().is_symlink() {
+        copy_symlink_blocking(source, destination)
+    } else if metadata.is_dir() {
+        remove_path_blocking(destination)?;
+        copy_directory_contents_blocking(source, destination)
+    } else if metadata.is_file() {
+        copy_file_blocking(source, destination)
+    } else {
+        Ok(())
     }
 }
 
