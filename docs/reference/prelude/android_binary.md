@@ -43,6 +43,7 @@ and signs it with a debug key by default.
 | `android_sdk` | string | no | env | Android SDK root, otherwise `ANDROID_HOME` or `ANDROID_SDK_ROOT` |
 | `java_language_level` | string | no | `17` | Java source and target level passed to `javac` |
 | `javac_opts` | list&lt;string&gt; | no | `[]` | Additional `javac` flags |
+| `javacopts` | list&lt;string&gt; | no | `[]` | Bazel-compatible alias for additional `javac` flags |
 | `kotlinc_opts` | list&lt;string&gt; | no | `[]` | Additional `kotlinc` flags |
 | `dexopts` | list&lt;string&gt; | no | `[]` | Additional `d8` flags |
 

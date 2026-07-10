@@ -25,17 +25,35 @@ binary exit status to Once.
 | `target` | string | no | host target | Rust target triple passed to `rustc --target` |
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables for `rustc` |
 | `rustc_env` | map&lt;string, string&gt; | no | `{}` | Rust compiler environment variables |
+| `rustc_env_files` | list&lt;string&gt; | no | `[]` | Files with `NAME=value` entries merged into the rustc environment before `env` and `rustc_env` |
 | `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Once-managed flags |
 | `cap_lints` | string | no | empty | Optional rustc lint cap passed as `--cap-lints` |
 | `linker` | string | no | inferred | Optional linker path passed as `-C linker=...` |
 | `linker_flags` | list&lt;string&gt; | no | `[]` | Additional linker flags lowered to `-C link-arg=...` |
+| `native_linkopts` | list&lt;string&gt; | no | `[]` | Linker flags propagated to downstream native consumers when this target is used as native input |
+| `exported_linker_flags` | list&lt;string&gt; | no | `[]` | Buck-compatible alias for native linker flags propagated to downstream native consumers |
+| `exported_post_linker_flags` | list&lt;string&gt; | no | `[]` | Buck-compatible propagated linker flags appended after normal exported linker flags |
+| `linker_script` | string | no | empty | Package-relative linker script passed to the linker and included in the compile action inputs |
+| `data` | list&lt;string&gt; | no | `[]` | Runtime data file globs available to the test runner and propagated from Rust dependencies |
+| `compile_data` | list&lt;string&gt; | no | `[]` | Bazel-compatible compile-time data file globs included in the rustc action inputs |
 | `crate_aliases` | map&lt;string, string&gt; | no | `{}` | Map dependency label, package name, or crate name to the local extern crate name |
+| `aliases` | map&lt;string, string&gt; | no | `{}` | Bazel-compatible alias map from dependency label or crate name to local extern crate name |
+| `named_deps` | map&lt;string, string&gt; | no | `{}` | Buck-compatible alias map from local extern crate name to dependency label or crate name |
 | `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set |
 | `build_script` | string | no | empty | Package-relative Cargo build script path run before `rustc` |
 | `args` | list&lt;string&gt; | no | `[]` | Arguments passed to the compiled test binary |
 | `test_env` | map&lt;string, string&gt; | no | `{}` | Environment variables passed to the test runner |
+| `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited by the test runner before `test_env` overrides |
+| `crate` | target | no | empty | Reserved Bazel-compatible reference to an already-built crate under test |
+| `use_libtest_harness` | bool | no | `true` | Whether to use the Rust libtest harness. Only `true` is supported |
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
+
+Compatibility attributes declared for Buck and Bazel parity but not implemented
+yet: `default_deps`, `doc_deps`, `doc_env`, `doc_link_style`,
+`doc_linker_flags`, `doc_named_deps`, `link_deps`, `link_style`,
+`mapped_srcs`, `proc_macro_deps`, `rpath`, `runtime_dependency_handling`,
+and `rustdoc_flags`. Non-empty values fail analysis.
 
 ## Dep Edges
 

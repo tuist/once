@@ -31,13 +31,19 @@ when the shared Rust code depends on other Rust crates.
 | `android_target` | string | yes |  | Rust target triple for the Android shared library compile |
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables for `rustc`, matching Buck2's `env` attribute |
 | `rustc_env` | map&lt;string, string&gt; | no | `{}` | Bazel-compatible `rustc` environment variables |
+| `rustc_env_files` | list&lt;string&gt; | no | `[]` | Files with `NAME=value` entries merged into the rustc environment before `env` and `rustc_env` |
 | `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Once-managed flags |
 | `cap_lints` | string | no | empty | Optional `rustc` lint cap passed as `--cap-lints`; generated Cargo dependencies use `allow` |
 | `linker_flags` | list&lt;string&gt; | no | `[]` | Additional linker flags lowered to `-C link-arg=...` |
 | `native_linkopts` | list&lt;string&gt; | no | `[]` | Linker flags propagated to Apple app or framework targets |
+| `exported_linker_flags` | list&lt;string&gt; | no | `[]` | Buck-compatible alias for native linker flags propagated to downstream native consumers |
+| `exported_post_linker_flags` | list&lt;string&gt; | no | `[]` | Buck-compatible propagated linker flags appended after normal exported linker flags |
+| `linker_script` | string | no | empty | Package-relative linker script passed to each platform linker and included in compile action inputs |
 | `android_abi` | string | no | inferred | Android [Application Binary Interface](https://developer.android.com/ndk/guides/abis) directory for the Android shared library output, such as `arm64-v8a` |
 | `android_api` | int | no | `23` | Android platform level used to select the Android Native Development Kit clang wrapper |
 | `android_ndk` | string | no | `ANDROID_NDK_HOME` | Android Native Development Kit root used to find clang wrapper linkers |
+| `data` | list&lt;string&gt; | no | `[]` | Runtime data file globs propagated through each materialized platform provider |
+| `compile_data` | list&lt;string&gt; | no | `[]` | Bazel-compatible compile-time data file globs included in each platform rustc action input set |
 | `build_script` | string | no | empty | Package-relative Cargo build script path run before each platform compile |
 
 ## Dep Edges
@@ -55,6 +61,7 @@ The target emits `native_linkable`, `apple_linkable`, and
 | --- | --- | --- |
 | `label_id` | string | Original target label id |
 | `transitive_sources` | list&lt;string&gt; | Rust sources from this target |
+| `transitive_data` | list&lt;string&gt; | Runtime data propagated through materialized platform providers |
 
 Apple consumers materialize `archive`, `staticlib`, `transitive_archives`,
 and `transitive_linkopts` while collecting their link inputs. Android consumers

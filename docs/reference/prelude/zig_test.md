@@ -59,7 +59,7 @@ unknown keys fail analysis.
 | `emit_llvm_bc` | bool | no | `false` | Emit compiler bitcode output |
 | `output_name` | string | no | target name | Output file name without platform extension |
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables passed to the Zig test binary |
-| `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited by test execution |
+| `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited before explicit `env` and `test_env` values |
 | `args` | list&lt;string&gt; | no | `[]` | Arguments passed to the compiled Zig test binary |
 | `test_env` | map&lt;string, string&gt; | no | `{}` | Once-compatible alias for extra test execution environment variables |
 | `test_runner` | string | no | empty | Package-relative Zig file passed as `--test-runner` |

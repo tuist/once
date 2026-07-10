@@ -64,16 +64,29 @@ experiments because it puts compilation outside Once.
 | `mix_config` | string | no | empty | Optional package-relative Mix project file included in the library action key when the project still needs one |
 | `version` | string | no | `0.1.0` | Application version written to generated metadata |
 | `description` | string | no | `""` | Application description written to generated metadata |
+| `app_description` | string | no | `""` | Bazel-compatible alias used when `description` is omitted |
 | `applications` | list&lt;string&gt; | no | `["kernel", "stdlib", "elixir"]` | Runtime applications written to generated metadata |
+| `extra_apps` | list&lt;string&gt; | no | `[]` | Bazel-compatible runtime applications appended to `applications` |
 | `included_applications` | list&lt;string&gt; | no | `[]` | Included applications written to generated metadata |
 | `registered` | list&lt;string&gt; | no | `[]` | Registered process names written to generated metadata |
 | `consolidate_protocols` | bool | no | `true` | Consolidate protocols after compilation and stage consolidated protocol bytecode into the application |
 | `config` | list&lt;string&gt; | no | `["config/**/*.exs"]` | Config file globs included in the compile action key |
+| `config_files` | list&lt;string&gt; | no | `[]` | Buck-compatible alias for additional config file globs |
 | `data` | list&lt;string&gt; | no | `[]` | Data file globs available during compile |
 | `priv` | list&lt;string&gt; | no | `[]` | Priv file globs copied into the application priv output |
+| `resources` | list&lt;string&gt; | no | `[]` | Buck-compatible resource globs copied into the application priv output |
 | `include` | list&lt;string&gt; | no | `["include/**/*.hrl"]` | Erlang header globs included in the compile action key |
+| `docs` | list&lt;string&gt; | no | `[]` | Buck-compatible documentation file globs included in the compile action key |
+| `os_env` | map&lt;string, string&gt; | no | `{}` | Buck-compatible environment variables exported before Elixir compile and test commands |
+| `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited before explicit `env` values |
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables exported before running Elixir compile and test commands |
 | `compile_args` | list&lt;string&gt; | no | `[]` | Additional arguments appended to `elixirc` |
+| `elixirc_opts` | list&lt;string&gt; | no | `[]` | Bazel-compatible alias for additional `elixirc` arguments |
+
+Compatibility attributes declared for Buck and Bazel parity but not implemented
+yet: `app_src`, `app_src_vsn`, `appup_src`, `erl_opts`, `ez_deps`,
+`extra_includes`, `extra_properties`, `include_src`, `mod`, `shell_configs`,
+and `shell_libs`. Non-empty values fail analysis.
 
 ## Dep Edges
 

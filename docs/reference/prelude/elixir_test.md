@@ -24,12 +24,25 @@ Once in both modes.
 | --- | --- | --- | --- | --- |
 | `mix_config` | string | no | empty | Optional package-relative Mix project file. When omitted, tests run through direct ExUnit without requiring a Mix project |
 | `config` | list&lt;string&gt; | no | `["config/**/*.exs"]` | Config file globs included in the test action key |
+| `config_files` | list&lt;string&gt; | no | `[]` | Buck-compatible alias for additional config file globs |
 | `data` | list&lt;string&gt; | no | `[]` | Data file globs available during tests |
+| `os_env` | map&lt;string, string&gt; | no | `{}` | Buck-compatible environment variables exported before running tests |
+| `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited before explicit `env` values |
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables exported before running tests |
 | `test_args` | list&lt;string&gt; | no | `[]` | Additional arguments appended to the test runner |
+| `elixir_opts` | list&lt;string&gt; | no | `[]` | Bazel-compatible options passed to the direct Elixir interpreter before test files |
+| `setup` | string | no | empty | Shell snippet run after the test environment is prepared and before ExUnit starts |
 | `no_start` | bool | no | `false` | Pass `--no-start` to `mix test` when `mix_config` enables Mix mode |
+| `ez_deps` | list&lt;string&gt; | no | `[]` | Reserved for Bazel-compatible archive dependencies |
+| `tools` | list&lt;string&gt; | no | `[]` | Package-relative executable or support-file globs available to the test setup command |
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` |
 | `timeout_ms` | int | no | empty | Optional test timeout in milliseconds |
+
+A non-empty `ez_deps` value fails analysis until Once can place Erlang archives
+on the ExUnit code path.
+
+`elixir_opts` applies only to direct ExUnit mode. When `mix_config` selects Mix
+mode, use `test_args`; combining Mix mode with `elixir_opts` fails analysis.
 
 ## Dep Edges
 
