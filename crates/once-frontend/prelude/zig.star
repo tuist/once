@@ -396,11 +396,11 @@ def _zig_run_env(ctx, test_dir = ""):
     env = {}
     if test_dir:
         env["HOME"] = test_dir + "/home"
+    for key, value in _zig_host_env(_zig_attr(ctx, "env_inherit", [])).items():
+        env[key] = value
     for key, value in _zig_attr(ctx, "env", {}).items():
         env[key] = value
     for key, value in _zig_attr(ctx, "test_env", {}).items():
-        env[key] = value
-    for key, value in _zig_host_env(_zig_attr(ctx, "env_inherit", [])).items():
         env[key] = value
     return env
 
