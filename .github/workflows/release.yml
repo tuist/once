@@ -36,7 +36,7 @@ jobs:
       latest-version: ${{ steps.detect.outputs.latest-version }}
       next-version: ${{ steps.detect.outputs.next-version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
@@ -72,7 +72,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set HOME for mise templates
         if: runner.os == 'Windows'
         shell: pwsh
@@ -107,7 +107,7 @@ jobs:
     if: needs.detect.outputs.should-release == 'true'
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
         with:
           version: ${{ env.MISE_VERSION }}
@@ -156,7 +156,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set HOME for mise templates
         if: runner.os == 'Windows'
         shell: pwsh
@@ -196,7 +196,7 @@ jobs:
     if: needs.detect.outputs.should-release == 'true'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
@@ -224,7 +224,7 @@ jobs:
     if: needs.detect.outputs.should-release == 'true' && needs.publish.result == 'success' && needs.build-sdk-libs.result == 'success'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: sdk-libs-*

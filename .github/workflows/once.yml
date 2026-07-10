@@ -20,7 +20,7 @@ jobs:
     outputs:
       rust_ci: ${{ steps.filter.outputs.rust_ci }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: filter
@@ -61,7 +61,7 @@ jobs:
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
           experimental: true
@@ -75,7 +75,7 @@ jobs:
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
           experimental: true
@@ -99,7 +99,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
           experimental: true
@@ -125,7 +125,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
           experimental: true
@@ -167,7 +167,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
           experimental: true
@@ -227,7 +227,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
           experimental: true
@@ -251,7 +251,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
           experimental: true
@@ -269,7 +269,7 @@ jobs:
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: install pinned rust
         shell: bash
         run: |
@@ -305,7 +305,7 @@ jobs:
       ONCE_BOOTSTRAP_SOURCE: source
       ONCE_CACHE_PROVIDER: local
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set HOME for mise templates
         shell: pwsh
         run: '"HOME=$env:USERPROFILE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
@@ -342,7 +342,7 @@ jobs:
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: install pinned rust
         shell: bash
         run: |
