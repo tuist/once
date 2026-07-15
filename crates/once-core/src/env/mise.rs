@@ -21,6 +21,15 @@ pub async fn workspace_tool(workspace: &Path, tool: &str) -> Result<String, Tool
     workspace_executable(workspace, tool, &[tool]).await
 }
 
+/// Whether `workspace` pins a mise toolchain via `mise.toml`.
+///
+/// Callers that resolve declared tools use this to skip mise entirely
+/// for workspaces that rely on the host toolchain, keeping the historical
+/// host-`PATH` resolution intact.
+pub fn workspace_has_mise_config(workspace: &Path) -> bool {
+    has_mise_config(workspace)
+}
+
 /// Resolve an executable while activating the declared workspace tools.
 pub async fn workspace_executable(
     workspace: &Path,
@@ -62,25 +71,18 @@ pub fn workspace_mise_env(workspace: &Path, tools: &[&str]) -> BTreeMap<String, 
         return BTreeMap::new();
     }
     let mut selected = BTreeMap::new();
-    if let Some(home) = env::var_os("HOME") {
-        selected.insert("HOME".into(), home.to_string_lossy().into_owned());
+    // The action environment is built from scratch rather than inherited,
+    // so mise's home directory has to be forwarded explicitly. The
+    // variable that names it is platform specific: `HOME` on Unix,
+    // `USERPROFILE` on Windows.
+    for key in ["HOME", "USERPROFILE"] {
+        if let Some(value) = env::var_os(key) {
+            selected.insert(key.into(), value.to_string_lossy().into_owned());
+        }
     }
-    selected.insert(
-        "MISE_DATA_DIR".into(),
-        managed_mise_data_dir().display().to_string(),
-    );
-    selected.insert(
-        "MISE_CONFIG_DIR".into(),
-        managed_mise_config_dir().display().to_string(),
-    );
-    selected.insert(
-        "MISE_CACHE_DIR".into(),
-        managed_mise_cache_dir().display().to_string(),
-    );
-    selected.insert(
-        "MISE_TRUSTED_CONFIG_PATHS".into(),
-        workspace.display().to_string(),
-    );
+    for (key, value) in managed_mise_isolation(workspace) {
+        selected.insert(key.into(), value);
+    }
     selected.insert("MISE_ENABLE_TOOLS".into(), tools.join(","));
     selected.insert("MISE_AUTO_INSTALL".into(), "0".into());
     selected.insert("MISE_EXEC_AUTO_INSTALL".into(), "0".into());
@@ -231,11 +233,34 @@ async fn mise_env(workspace: &Path) -> Result<BTreeMap<String, String>, ToolEnvE
 }
 
 fn configure_mise_command(command: &mut Command, workspace: &Path) {
-    command
-        .env("MISE_DATA_DIR", managed_mise_data_dir())
-        .env("MISE_CONFIG_DIR", managed_mise_config_dir())
-        .env("MISE_CACHE_DIR", managed_mise_cache_dir())
-        .env("MISE_TRUSTED_CONFIG_PATHS", workspace);
+    for (key, value) in managed_mise_isolation(workspace) {
+        command.env(key, value);
+    }
+}
+
+/// Directories that isolate managed mise from the user's global mise
+/// installation.
+///
+/// The analysis-time command configuration and the execution-time action
+/// environment must agree on these, otherwise a tool installed during
+/// analysis would not be found at execution. Defining them once keeps the
+/// two paths in lockstep.
+fn managed_mise_isolation(workspace: &Path) -> [(&'static str, String); 4] {
+    [
+        (
+            "MISE_DATA_DIR",
+            managed_mise_data_dir().display().to_string(),
+        ),
+        (
+            "MISE_CONFIG_DIR",
+            managed_mise_config_dir().display().to_string(),
+        ),
+        (
+            "MISE_CACHE_DIR",
+            managed_mise_cache_dir().display().to_string(),
+        ),
+        ("MISE_TRUSTED_CONFIG_PATHS", workspace.display().to_string()),
+    ]
 }
 
 fn enable_mise_tools(command: &mut Command, tools: &[&str]) {

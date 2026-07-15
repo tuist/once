@@ -319,10 +319,28 @@ impl BuildSession {
     }
 }
 
+/// Resolve the executables declared by the graph's tools to concrete
+/// paths through the workspace's mise toolchain.
+///
+/// Resolution is scoped and best-effort so declaring a tool never makes a
+/// build worse off than the host toolchain would:
+///
+/// * Workspaces without `mise.toml` resolve every executable from the
+///   host `PATH`, so an empty map is returned and `host_which` keeps
+///   walking `PATH` (and verifying existence) as before.
+/// * A declared tool the workspace does not actually pin (for example a
+///   rust target in a node-only workspace) is not managed by mise. Its
+///   preparation and resolution failures are logged and the executable is
+///   left out of the map, so the target falls back to the host toolchain
+///   instead of aborting the whole session.
 async fn resolve_graph_tools(
     workspace: &Path,
     graph: &[GraphTarget],
 ) -> Result<BTreeMap<String, String>> {
+    if !once_core::workspace_has_mise_config(workspace) {
+        return Ok(BTreeMap::new());
+    }
+
     let tool_names = graph
         .iter()
         .flat_map(|target| target.tools.iter().map(|tool| tool.name.clone()))
@@ -338,29 +356,43 @@ async fn resolve_graph_tools(
         .collect::<BTreeSet<_>>();
     let tool_names = tool_names.into_iter().collect::<Vec<_>>();
     let tool_name_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
-    once_core::workspace_prepare_tools(workspace, &tool_name_refs)
-        .await
-        .context("preparing graph tools")?;
+    if let Err(error) = once_core::workspace_prepare_tools(workspace, &tool_name_refs).await {
+        tracing::debug!(
+            %error,
+            "preparing graph tools through mise failed; falling back to the host toolchain"
+        );
+    }
 
+    // Shared across every resolution task instead of cloned per executable.
+    let tool_names = Arc::<[String]>::from(tool_names);
     let mut tasks = tokio::task::JoinSet::new();
     for executable in executable_names {
         let workspace = workspace.to_path_buf();
         let executable = executable.to_string();
-        let tool_names = tool_names.clone();
+        let tool_names = Arc::clone(&tool_names);
         tasks.spawn(async move {
             let tool_name_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
-            let path =
-                once_core::workspace_executable(&workspace, &executable, &tool_name_refs).await?;
-            Ok::<_, once_core::ToolEnvError>((executable, path))
+            let path = once_core::workspace_executable(&workspace, &executable, &tool_name_refs)
+                .await;
+            (executable, path)
         });
     }
 
     let mut paths = BTreeMap::new();
     while let Some(result) = tasks.join_next().await {
-        let (executable, path) = result
-            .context("joining graph tool resolution")?
-            .context("resolving graph tool executable")?;
-        paths.insert(executable, path);
+        let (executable, path) = result.context("joining graph tool resolution")?;
+        match path {
+            Ok(path) => {
+                paths.insert(executable, path);
+            }
+            Err(error) => {
+                tracing::debug!(
+                    executable,
+                    %error,
+                    "resolving graph tool executable through mise failed; falling back to the host PATH"
+                );
+            }
+        }
     }
     Ok(paths)
 }

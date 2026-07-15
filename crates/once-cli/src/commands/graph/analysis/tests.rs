@@ -99,7 +99,7 @@ fn target_with_capabilities(
 }
 
 #[tokio::test]
-async fn graph_tool_resolution_uses_logical_names_without_mise_config() {
+async fn graph_tool_resolution_defers_to_host_path_without_mise_config() {
     let workspace = tempfile::tempdir().unwrap();
     let mut target = target_with_capabilities("Tool", &[], &[], &["build"], []);
     target.tools.push(once_frontend::ToolRequirement {
@@ -111,8 +111,10 @@ async fn graph_tool_resolution_uses_logical_names_without_mise_config() {
         .await
         .unwrap();
 
-    assert_eq!(paths.get("rustc").map(String::as_str), Some("rustc"));
-    assert_eq!(paths.get("cargo").map(String::as_str), Some("cargo"));
+    // Without a mise config the workspace relies on the host toolchain.
+    // Returning no resolved paths keeps `host_which` walking `PATH` (and
+    // verifying existence) rather than short-circuiting to a bare name.
+    assert!(paths.is_empty());
 }
 
 #[test]

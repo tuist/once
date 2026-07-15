@@ -177,7 +177,11 @@ async fn host_env(
 }
 
 async fn resolve_host_runtime(workspace: &std::path::Path, runtime: &str) -> Result<Vec<String>> {
-    if runtime.contains('/') {
+    // A runtime that looks like a path is run directly. This must match the
+    // path detection in `graph_tools_from_parts`, which excludes both
+    // separators, otherwise a backslash runtime is never installed yet
+    // still gets sent through mise here.
+    if runtime.contains('/') || runtime.contains('\\') {
         return Ok(vec![runtime.to_string()]);
     }
     workspace_tool_command(workspace, runtime)

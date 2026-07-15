@@ -15,8 +15,9 @@ mod mise_runtime;
 mod path;
 
 pub use mise::{
-    workspace_executable, workspace_mise_command, workspace_mise_env, workspace_prepare_tools,
-    workspace_tool, workspace_tool_command, workspace_tool_env, workspace_tool_var, ToolEnvError,
+    workspace_executable, workspace_has_mise_config, workspace_mise_command, workspace_mise_env,
+    workspace_prepare_tools, workspace_tool, workspace_tool_command, workspace_tool_env,
+    workspace_tool_var, ToolEnvError,
 };
 pub use mise_runtime::{managed_mise, managed_mise_path, MANAGED_MISE_VERSION};
 
