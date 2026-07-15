@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::path::Path;
@@ -9,8 +9,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
-    Action, CopyPathMode, EvidenceCacheState, EvidenceSubject, InputDigestBuilder,
-    OutputSymlinkMode, PreparePathMode, ResourceRequest, RunOpts, SandboxMode, WorkspacePath,
+    workspace_mise_command, workspace_mise_env, Action, CopyPathMode, EvidenceCacheState,
+    EvidenceSubject, InputDigestBuilder, OutputSymlinkMode, PreparePathMode, ResourceRequest,
+    RunOpts, SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::{
     AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArgFile,
@@ -86,8 +87,11 @@ pub(super) fn run_declared_actions<'a>(
 ) -> Pin<Box<dyn Future<Output = Result<BuildOutcome>> + Send + 'a>> {
     Box::pin(async move {
         let AnalysisResult {
-            actions, provider, ..
+            mut actions,
+            provider,
+            ..
         } = analysis;
+        expose_target_tools(workspace, target, &mut actions).await?;
         tracing::debug!(
             target = %target.label.id,
             declared_actions = actions.len(),
@@ -164,6 +168,47 @@ pub(super) fn run_declared_actions<'a>(
             result: aggregate_result,
         })
     })
+}
+
+async fn expose_target_tools(
+    workspace: &Path,
+    target: &GraphTarget,
+    actions: &mut [DeclaredAction],
+) -> Result<()> {
+    let tools = target
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<BTreeSet<_>>();
+    if tools.is_empty() {
+        return Ok(());
+    }
+    let Some(prefix) = workspace_mise_command(workspace)
+        .await
+        .context("building graph tool execution command")?
+    else {
+        return Ok(());
+    };
+    let tools = tools.into_iter().collect::<Vec<_>>();
+    let tool_env = workspace_mise_env(workspace, &tools);
+    apply_tool_execution(&prefix, &tool_env, actions);
+    Ok(())
+}
+
+fn apply_tool_execution(
+    prefix: &[String],
+    tool_env: &BTreeMap<String, String>,
+    actions: &mut [DeclaredAction],
+) {
+    for action in actions {
+        if action.operation.is_some() {
+            continue;
+        }
+        let mut argv = prefix.to_vec();
+        argv.append(&mut action.argv);
+        action.argv = argv;
+        action.env.extend(tool_env.clone());
+    }
 }
 
 fn aggregate_declared_action_cache_state(
@@ -1152,6 +1197,46 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn tool_execution_wraps_command_actions_only() {
+        let command: DeclaredAction = serde_json::from_value(serde_json::json!({
+            "argv": ["rustc", "--version"],
+            "outputs": []
+        }))
+        .unwrap();
+        let portable: DeclaredAction = serde_json::from_value(serde_json::json!({
+            "operation": {
+                "kind": "write_file",
+                "path": "out.txt",
+                "bytes": [111, 107]
+            },
+            "outputs": ["out.txt"]
+        }))
+        .unwrap();
+        let mut actions = vec![command, portable];
+
+        apply_tool_execution(
+            &[
+                "/once/mise".to_string(),
+                "exec".to_string(),
+                "--".to_string(),
+            ],
+            &BTreeMap::from([("MISE_ENABLE_TOOLS".to_string(), "rust".to_string())]),
+            &mut actions,
+        );
+
+        assert_eq!(
+            actions[0].argv,
+            ["/once/mise", "exec", "--", "rustc", "--version"]
+        );
+        assert_eq!(
+            actions[0].env.get("MISE_ENABLE_TOOLS").map(String::as_str),
+            Some("rust")
+        );
+        assert!(actions[1].argv.is_empty());
+        assert!(actions[1].env.is_empty());
+    }
+
     fn module_digest() -> Digest {
         Digest::of_bytes(b"modules")
     }
@@ -1622,6 +1707,7 @@ mod tests {
             attrs: BTreeMap::new(),
             capabilities: Vec::new(),
             providers: Vec::new(),
+            tools: Vec::new(),
             diagnostics: Vec::new(),
         };
         let analysis = AnalysisResult {
@@ -1718,6 +1804,7 @@ mod tests {
             attrs: BTreeMap::new(),
             capabilities: Vec::new(),
             providers: Vec::new(),
+            tools: Vec::new(),
             diagnostics: Vec::new(),
         };
         let analysis = || AnalysisResult {
@@ -1804,6 +1891,7 @@ mod tests {
             attrs: BTreeMap::new(),
             capabilities: Vec::new(),
             providers: Vec::new(),
+            tools: Vec::new(),
             diagnostics: Vec::new(),
         };
         let action = |name: &str| DeclaredAction {
@@ -1887,6 +1975,7 @@ mod tests {
             attrs: BTreeMap::new(),
             capabilities: Vec::new(),
             providers: Vec::new(),
+            tools: Vec::new(),
             diagnostics: Vec::new(),
         };
 

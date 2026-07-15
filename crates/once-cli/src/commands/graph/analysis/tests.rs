@@ -93,8 +93,26 @@ fn target_with_capabilities(
             })
             .collect(),
         providers: Vec::new(),
+        tools: Vec::new(),
         diagnostics: Vec::new(),
     }
+}
+
+#[tokio::test]
+async fn graph_tool_resolution_uses_logical_names_without_mise_config() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut target = target_with_capabilities("Tool", &[], &[], &["build"], []);
+    target.tools.push(once_frontend::ToolRequirement {
+        name: "rust".to_string(),
+        executables: vec!["rustc".to_string(), "cargo".to_string()],
+    });
+
+    let paths = resolve_graph_tools(workspace.path(), &[target])
+        .await
+        .unwrap();
+
+    assert_eq!(paths.get("rustc").map(String::as_str), Some("rustc"));
+    assert_eq!(paths.get("cargo").map(String::as_str), Some("cargo"));
 }
 
 #[test]

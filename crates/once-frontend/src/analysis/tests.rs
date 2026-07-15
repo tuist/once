@@ -57,6 +57,19 @@ fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
 }
 
 #[test]
+fn declared_tool_paths_take_precedence_over_host_path() {
+    let cache = HostCache::with_tool_paths(BTreeMap::from([(
+        "rustc".to_string(),
+        "/managed/rustc".to_string(),
+    )]));
+
+    assert_eq!(
+        cache.which("rustc").unwrap().as_deref(),
+        Some("/managed/rustc")
+    );
+}
+
+#[test]
 fn schema_parse_path_resolves_native_globals_without_calling_them() {
     run("def _impl():\n    return run_action\n").unwrap();
 }
@@ -721,6 +734,7 @@ fn target(kind: &str) -> GraphTarget {
             requires_outputs: Vec::new(),
         }],
         providers: Vec::new(),
+        tools: Vec::new(),
         diagnostics: Vec::new(),
     }
 }

@@ -9,6 +9,7 @@ use super::platform::PlatformView;
 #[derive(Debug, Serialize)]
 pub(super) struct ToolchainContract {
     pub source: &'static str,
+    pub mise_version: &'static str,
     pub config: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lock: Option<String>,
@@ -55,6 +56,7 @@ pub(super) fn fingerprint(
     #[derive(Serialize)]
     struct Material<'a> {
         source: &'static str,
+        mise_version: &'static str,
         platform: &'a PlatformView,
         tools: &'a [ToolView],
         env: &'a BTreeMap<String, toml::Value>,
@@ -62,6 +64,7 @@ pub(super) fn fingerprint(
 
     let material = Material {
         source: "mise",
+        mise_version: once_core::MANAGED_MISE_VERSION,
         platform,
         tools,
         env,

@@ -18,7 +18,7 @@
 mod actions;
 mod scheduler;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -72,27 +72,30 @@ pub(super) struct BuildSession {
 }
 
 impl BuildSession {
-    pub(super) fn new(
+    pub(super) async fn new(
         workspace: &Path,
         cache: &CacheProvider,
         graph: Vec<GraphTarget>,
         sandbox: SandboxMode,
     ) -> Result<Self> {
-        Self::new_with_options(workspace, cache, graph, AnalysisOptions::default(), sandbox)
+        Self::new_with_options(workspace, cache, graph, AnalysisOptions::default(), sandbox).await
     }
 
-    pub(super) fn new_with_options(
+    pub(super) async fn new_with_options(
         workspace: &Path,
         cache: &CacheProvider,
         graph: Vec<GraphTarget>,
         options: AnalysisOptions,
         sandbox: SandboxMode,
     ) -> Result<Self> {
+        let tool_paths = resolve_graph_tools(workspace, &graph).await?;
         Ok(Self::new_with_analyzer(
             workspace,
             cache,
             graph,
-            AnalysisEngine::for_workspace_with_options(workspace, options)?,
+            AnalysisEngine::for_workspace_with_options_and_tool_paths(
+                workspace, options, tool_paths,
+            )?,
             sandbox,
         ))
     }
@@ -314,6 +317,52 @@ impl BuildSession {
         .run()
         .await
     }
+}
+
+async fn resolve_graph_tools(
+    workspace: &Path,
+    graph: &[GraphTarget],
+) -> Result<BTreeMap<String, String>> {
+    let tool_names = graph
+        .iter()
+        .flat_map(|target| target.tools.iter().map(|tool| tool.name.clone()))
+        .collect::<BTreeSet<_>>();
+    let executable_names = graph
+        .iter()
+        .flat_map(|target| {
+            target
+                .tools
+                .iter()
+                .flat_map(|tool| tool.executables.iter().map(String::as_str))
+        })
+        .collect::<BTreeSet<_>>();
+    let tool_names = tool_names.into_iter().collect::<Vec<_>>();
+    let tool_name_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
+    once_core::workspace_prepare_tools(workspace, &tool_name_refs)
+        .await
+        .context("preparing graph tools")?;
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for executable in executable_names {
+        let workspace = workspace.to_path_buf();
+        let executable = executable.to_string();
+        let tool_names = tool_names.clone();
+        tasks.spawn(async move {
+            let tool_name_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
+            let path =
+                once_core::workspace_executable(&workspace, &executable, &tool_name_refs).await?;
+            Ok::<_, once_core::ToolEnvError>((executable, path))
+        });
+    }
+
+    let mut paths = BTreeMap::new();
+    while let Some(result) = tasks.join_next().await {
+        let (executable, path) = result
+            .context("joining graph tool resolution")?
+            .context("resolving graph tool executable")?;
+        paths.insert(executable, path);
+    }
+    Ok(paths)
 }
 
 #[allow(clippy::too_many_arguments)]

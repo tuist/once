@@ -22,7 +22,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
-    tool_env, workspace_tool, workspace_tool_env, Action, CacheState, EvidenceSubject,
+    tool_env, workspace_tool_command, workspace_tool_env, Action, CacheState, EvidenceSubject,
     InputDigestBuilder, OutputSymlinkMode, RemoteExecution, ResourceRequest, RunOpts, SandboxMode,
     WorkspacePath,
 };
@@ -320,8 +320,7 @@ async fn action_from_script_invocation(
     invocation: &ScriptInvocation,
     input_digest: Option<Digest>,
 ) -> Result<Action> {
-    let program = resolve_runtime(&invocation.workspace, &invocation.runtime).await?;
-    let mut argv = vec![program];
+    let mut argv = resolve_runtime(&invocation.workspace, &invocation.runtime).await?;
     argv.extend(invocation.runtime_args.clone());
     argv.push(host_script_path(
         invocation.script_path.as_str(),
@@ -1203,11 +1202,11 @@ async fn script_env(
     Ok(out)
 }
 
-async fn resolve_runtime(workspace: &Path, runtime: &str) -> Result<String> {
+async fn resolve_runtime(workspace: &Path, runtime: &str) -> Result<Vec<String>> {
     if runtime.contains('/') {
-        return Ok(runtime.to_string());
+        return Ok(vec![runtime.to_string()]);
     }
-    workspace_tool(workspace, runtime)
+    workspace_tool_command(workspace, runtime)
         .await
         .with_context(|| format!("resolving script runtime `{runtime}`"))
 }

@@ -169,6 +169,7 @@ pub(super) struct HostCache {
     which: Arc<Mutex<BTreeMap<String, Option<String>>>>,
     commands: Arc<Mutex<BTreeMap<CommandKey, String>>>,
     host_env: Arc<HostEnvLookup>,
+    tool_paths: Arc<BTreeMap<String, String>>,
 }
 
 impl std::fmt::Debug for HostCache {
@@ -183,6 +184,7 @@ impl Clone for HostCache {
             which: Arc::clone(&self.which),
             commands: Arc::clone(&self.commands),
             host_env: Arc::clone(&self.host_env),
+            tool_paths: Arc::clone(&self.tool_paths),
         }
     }
 }
@@ -199,6 +201,14 @@ impl HostCache {
             which: Arc::new(Mutex::new(BTreeMap::new())),
             commands: Arc::new(Mutex::new(BTreeMap::new())),
             host_env: Arc::new(host_env),
+            tool_paths: Arc::new(BTreeMap::new()),
+        }
+    }
+
+    pub(super) fn with_tool_paths(tool_paths: BTreeMap<String, String>) -> Self {
+        Self {
+            tool_paths: Arc::new(tool_paths),
+            ..Self::default()
         }
     }
 
@@ -218,6 +228,9 @@ impl HostCache {
     /// `host_which` calls for different binaries don't serialise on
     /// each other.
     pub(super) fn which(&self, name: &str) -> Result<Option<String>> {
+        if let Some(path) = self.tool_paths.get(name) {
+            return Ok(Some(path.clone()));
+        }
         if let Some(cached) = self.lock_which()?.get(name).cloned() {
             return Ok(cached);
         }
