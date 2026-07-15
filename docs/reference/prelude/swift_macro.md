@@ -20,7 +20,7 @@ edge that points at a `swift_macro` target picks up
 | `swift_flags` | list&lt;string&gt; | no | `[]` | Extra Swift compiler flags |
 | `xcode_developer_dir` | string | no |  | Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key |
 
-## Dep edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

@@ -35,15 +35,15 @@ standard instrumentation status output, and writes `once.test_results.v1`.
 | `test_env` | map&lt;string,string&gt; | no | `{}` | Environment variables passed to the host instrumentation runner |
 | `args` | list&lt;string&gt; | no | `[]` | Raw arguments appended to the Android instrumentation command before its component |
 | `support_apks` | list&lt;string&gt; | no | `[]` | Package-relative application package globs installed before the instrumentation application |
-| `target_device` | string | no | empty | Reserved for Bazel-style device target selection |
+| `target_device` | string | no | empty | Reserved device target selection |
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
 
-A non-empty `target_device` fails analysis until Once has matching device
-provisioning semantics. Use `adb_serial` to select an already provisioned
-device.
+A non-empty `target_device` fails validation because Once does not provide the
+matching device provisioning behavior. Use `adb_serial` to select an already
+provisioned device.
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

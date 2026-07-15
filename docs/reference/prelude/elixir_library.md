@@ -1,26 +1,24 @@
 # `elixir_library`
 
-Elixir code compiled into cacheable bytecode and OTP application metadata.
+Elixir code compiled into cacheable bytecode and Erlang application metadata.
 
 ## Description
 
-`elixir_library` runs one `elixirc` action for the full target, then stages the
-compiled bytecode and generated OTP application metadata as Once build outputs.
-Downstream Elixir targets receive the compiled OTP application on the code path,
-so tests and dependent libraries do not compile the same project again.
+`elixir_library` compiles all target sources together and materializes the
+bytecode plus [Erlang Open Telecom Platform](https://www.erlang.org/docs/)
+application metadata as build outputs. Downstream Elixir targets receive the
+compiled application on the code path, so tests and dependent libraries do not
+compile the same project again.
 
-The compile action passes all target sources to Elixir together, so Elixir can
-resolve same-target compile-time relationships such as macros, structs, and
-protocols while using its own parallel compiler internally. The staging action
-depends on the compile action and rewrites the application metadata after any
-compiled module changes.
+Compiling the complete target together lets Elixir resolve relationships among
+macros, structs, protocols, and their implementations.
 
 Once records Elixir compile metadata alongside bytecode. That metadata tracks
 external resources, compile environment reads, modules that export
 `__mix_recompile__?/0`, protocols, implementations, and compiler warnings. On
-later builds, Once runs a small stale-check action before compilation so changes
-to dynamic inputs can invalidate the cached compile action even when the source
-files themselves did not change.
+later builds, Once checks that metadata before reusing the result. Changes to a
+dynamic input invalidate the cached compilation even when the source files did
+not change.
 
 Compile-time dependencies that must be loaded while compiling, such as macros
 or structs used by another target, should be modeled as separate
@@ -39,9 +37,9 @@ target granularity.
 ## Development Model
 
 Use `once build <target>` for compile feedback and `once test <target>` for
-tests. When one source file changes, Once reruns the target compile action and
-the staging action. When sources and recorded dynamic inputs are unchanged, the
-whole compile action can be reused from the cache.
+tests. When one source file changes, Once recompiles the target. When sources
+and recorded dynamic inputs are unchanged, the compiled application can be
+reused from the cache.
 
 Targets that use dynamic compile inputs learn those inputs during compilation.
 The first build after adding a new dynamic marker may compile locally instead of
@@ -83,12 +81,12 @@ experiments because it puts compilation outside Once.
 | `compile_args` | list&lt;string&gt; | no | `[]` | Additional arguments appended to `elixirc` |
 | `elixirc_opts` | list&lt;string&gt; | no | `[]` | Bazel-compatible alias for additional `elixirc` arguments |
 
-Compatibility attributes declared for Buck and Bazel parity but not implemented
-yet: `app_src`, `app_src_vsn`, `appup_src`, `erl_opts`, `ez_deps`,
+Accepted but unsupported attributes: `app_src`, `app_src_vsn`, `appup_src`,
+`erl_opts`, `ez_deps`,
 `extra_includes`, `extra_properties`, `include_src`, `mod`, `shell_configs`,
-and `shell_libs`. Non-empty values fail analysis.
+and `shell_libs`. Non-empty values fail validation.
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
@@ -106,7 +104,7 @@ The target emits `elixir_app`.
 | `mix_env` | string | Mix environment exported during compilation and tests |
 | `ebin_dir` | string | Directory containing compiled application bytecode and the generated application file |
 | `priv_dir` | string | Directory containing copied priv files |
-| `compile_metadata` | string | File containing dynamic compile metadata used for future cache invalidation |
+| `compile_metadata` | string | File containing dynamic compile metadata used for cache invalidation |
 | `compile_warnings` | string | File containing persisted compiler warning diagnostics |
 | `transitive_elixir_apps` | list&lt;record&gt; | This application plus dependency applications available to downstream Elixir targets |
 | `transitive_sources` | list&lt;string&gt; | Source files from this target and Elixir dependencies |

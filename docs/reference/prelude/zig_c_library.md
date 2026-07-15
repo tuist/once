@@ -40,7 +40,7 @@ builds.
 | `translate_c_identity` | string | no | empty | Stable identity for the standalone `translate-c` executable, folded into translate action cache keys |
 | `bootstrapped` | int | no | `-1` | Compatibility selector for bootstrapped Zig toolchains; choose the compiler with `zig` |
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

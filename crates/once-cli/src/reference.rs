@@ -369,10 +369,10 @@ fn file_path_for(out: &Path, path: &[String]) -> PathBuf {
 /// wiring) stays hand-authored in `docs/reference/mcp/index.md`.
 fn write_mcp_tools_page(out: &Path) -> Result<()> {
     let mut body = String::new();
-    writeln!(&mut body, "# MCP Tools\n").ok();
+    writeln!(&mut body, "# Model Context Protocol Tools\n").ok();
     writeln!(
         &mut body,
-        "Every tool the `once mcp` server advertises in `tools/list`, with the input schema it validates against and a worked example of what the call returns. The catalog is generated from the same record the runtime serves, so the names, descriptions, and schemas can't drift.\n"
+        "Every tool the [`once mcp`](/reference/cli/mcp) [Model Context Protocol](https://modelcontextprotocol.io/) server advertises in `tools/list`, with its input schema and a worked return example.\n"
     )
     .ok();
     for tool in crate::commands::mcp::tool_catalog() {
@@ -396,7 +396,7 @@ fn write_mcp_tools_page(out: &Path) -> Result<()> {
 
 fn write_index(out: &Path, bin: &str, entries: &[CommandEntry]) -> Result<()> {
     let mut body = String::new();
-    writeln!(&mut body, "# CLI Reference\n").ok();
+    writeln!(&mut body, "# Command-line Reference\n").ok();
     writeln!(
         &mut body,
         "Every subcommand the `{bin}` binary exposes, with its synopsis, options, and arguments. Use the sidebar to jump to a specific command.\n"

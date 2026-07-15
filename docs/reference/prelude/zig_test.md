@@ -17,7 +17,7 @@ target kind.
 Canonical module names are generated from target labels with collision-safe
 escaping. `import_names` keys must match exactly one Zig module dependency by
 full label, short label name, import name, or canonical name; ambiguous or
-unknown keys fail analysis.
+unknown keys fail validation.
 
 ## Attributes
 
@@ -66,7 +66,7 @@ unknown keys fail analysis.
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

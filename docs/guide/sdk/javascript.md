@@ -1,8 +1,14 @@
-# JavaScript SDK
+---
+prev: false
+next: false
+---
 
-The JavaScript SDK is the `buildonce` npm package. It exposes cache
-primitives for Node.js applications and tools. Script execution is CLI
-specific and is not part of the SDK surface.
+# JavaScript Software Development Kit
+
+The JavaScript library is the `buildonce` npm package. It exposes cache
+primitives for Node.js applications and tools. Script execution belongs to
+the command line and is not part of this library. See the
+[language-library overview](/guide/sdk/) to compare the available bindings.
 
 ```js
 const { Cache } = require("buildonce");
@@ -30,17 +36,18 @@ platforms. Set `ONCE_LIBRARY_PATH` when you need to load a custom
 
 ## Cache
 
-`Cache` opens the default local cache using XDG conventions. The default
+`Cache` opens the default local cache using the
+[X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/). The default
 cache root is `$XDG_CACHE_HOME/once/cas` when `XDG_CACHE_HOME` is set, and
 `$HOME/.cache/once/cas` otherwise.
 
 `version()` and `digest(bytes)` are synchronous. Cache storage operations
-return promises and must be awaited. When `bytes` is a string, the SDK
+return promises and must be awaited. When `bytes` is a string, the library
 encodes it as UTF-8 before hashing or storing it.
 
-| API | Use |
+| Application programming interface | Use |
 | --- | --- |
-| `new Cache()` | Opens the default local cache using XDG conventions. |
+| `new Cache()` | Opens the default local cache using the operating-system convention. |
 | `version()` | Synchronously returns the linked Once version. |
 | `digest(bytes)` | Synchronously returns the content digest for bytes without writing them to the cache. |
 | `putBlob(bytes)` | Stores bytes and returns a promise for their content digest. |

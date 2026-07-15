@@ -32,7 +32,7 @@ and binaries can depend on it through `deps`.
 | `java` | string | no | host PATH | Override Java runtime path |
 | `java_home` | string | no | env | Override `JAVA_HOME` passed to Android SDK tools |
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

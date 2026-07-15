@@ -15,7 +15,7 @@ targets` lists every declared target id with its target kind
 and capabilities; `query capabilities` shows what a specific
 target exposes (`build`, `run`, `test`); `query schema`
 returns the typed attribute and provider shape for a target kind;
-`query example` materializes a chosen starter; and `query evidence`
+`query example` returns the files in a chosen starter; and `query evidence`
 lists durable action evidence captured from prior executions. A quoted
 `MATCH ... RETURN ...` expression can explore the graph through
 a read-only Cypher-like pattern. All query surfaces respect

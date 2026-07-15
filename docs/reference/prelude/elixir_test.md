@@ -11,8 +11,8 @@ layout with symlinks to the compiled library and dependency bytecode, then runs
 the tests without recompiling the application.
 
 That split lets a changed test file rerun tests without recompiling the
-application. A changed library source invalidates the library compile action,
-the application staging action, and the dependent test action.
+application. A changed library source invalidates both the compiled library and
+the dependent test result.
 By default, tests run through direct ExUnit with `elixir`, so a package does not
 need `mix.exs`. Set `mix_config` when a target should run through `mix test
 --no-compile --no-deps-check` instead. Library bytecode must already be built by
@@ -33,18 +33,18 @@ Once in both modes.
 | `elixir_opts` | list&lt;string&gt; | no | `[]` | Bazel-compatible options passed to the direct Elixir interpreter before test files |
 | `setup` | string | no | empty | Shell snippet run after the test environment is prepared and before ExUnit starts |
 | `no_start` | bool | no | `false` | Pass `--no-start` to `mix test` when `mix_config` enables Mix mode |
-| `ez_deps` | list&lt;string&gt; | no | `[]` | Reserved for Bazel-compatible archive dependencies |
+| `ez_deps` | list&lt;string&gt; | no | `[]` | Reserved archive dependencies |
 | `tools` | list&lt;string&gt; | no | `[]` | Package-relative executable or support-file globs available to the test setup command |
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` |
 | `timeout_ms` | int | no | empty | Optional test timeout in milliseconds |
 
-A non-empty `ez_deps` value fails analysis until Once can place Erlang archives
-on the ExUnit code path.
+A non-empty `ez_deps` value fails validation because Once cannot place Erlang
+archives on the ExUnit code path.
 
 `elixir_opts` applies only to direct ExUnit mode. When `mix_config` selects Mix
-mode, use `test_args`; combining Mix mode with `elixir_opts` fails analysis.
+mode, use `test_args`; combining Mix mode with `elixir_opts` fails validation.
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

@@ -1,69 +1,68 @@
-# Scripted
+# Scripted Workflows
 
-Scripted is Once's adapter for existing executable automation. Keep the
-file, keep the implementation, and add a small contract that tells Once
-what the action reads, what it writes, and which host values affect the
-result.
+Scripted workflows bring existing automation into Once without rewriting it.
+The script remains the source of truth. A small header tells Once which inputs
+affect the result, which outputs to preserve, and which host values belong in
+the cache key.
 
-## Why Scripted
+This is the shortest path from an ordinary script to a cacheable Once action.
 
-Most repositories already have a long tail of scripts: test setup, asset
-generation, packaging, fixture updates, deployment hooks, local tools, and
-CI glue. They are important, but they often sit outside any cacheable
-execution model. A developer, CI job, or agent runs them again because
-there is no shared contract that says what changed.
+## Create A Cacheable Script
 
-Once gives those scripts that contract without asking teams to move the
-implementation into a new build-system shape. A script is the least typed
-way to enter the same graph and action model that typed target kinds use.
-
-::: tip Scripted workflows are adapters
-Use scripts when the workflow is still one opaque executable action. Move
-the work into a typed graph target kind when it needs multiple capabilities,
-structured diagnostics, or an agent-editable shape.
-:::
-
-## How It Works
-
-Start with a normal script. Point the shebang at Once, keep the
-implementation, and add a few `# once` comments at the top:
+Suppose a repository turns `message.txt` into `build/greeting.txt`. Save this
+script as `scripts/greet.sh`:
 
 ```sh
 #!/usr/bin/env -S once exec -- bash
-# once input "../src/**/*"
-# once output "../dist/"
-# once env "NODE_ENV"
-# once fingerprint "node --version"
+# once input "../message.txt"
+# once output "../build/greeting.txt"
 # once cwd ".."
 
-npm run build
+set -eu
+mkdir -p build
+cp message.txt build/greeting.txt
+cat build/greeting.txt
 ```
 
-Those comments are the script contract:
+The `once` headers form the cache contract:
 
-- **Inputs**: The files, directories, and globs that decide whether the work changed.
-- **Outputs**: The files or directories Once should restore on a cache hit.
-- **Environment variables**: Declared host values that are forwarded to the script and included in the cache key.
-- **Fingerprints**: Read-only commands whose output should affect the cache key.
-- **Working directory**: The directory where the script should run.
+- `input` tracks a file, directory, or glob that can change the result.
+- `output` identifies a file or directory that Once should restore on a cache
+  hit.
+- `cwd` chooses the working directory for the script body.
 
-Then run the script directly:
+Paths in the headers are relative to the script file, which keeps the contract
+stable when the repository moves.
+
+Make the script executable, create its input, and run it:
 
 ```sh
-./scripts/build.sh
+chmod +x scripts/greet.sh
+printf 'hello from Once\n' > message.txt
+./scripts/greet.sh
 ```
 
-Once reads the script, hashes the declared contract, and either reuses a
-previous result or runs the command and stores stdout, stderr, exit status,
-and declared outputs. Root `once.toml` files configure shared settings such as
-cache providers, while package `once.toml` files may grow build graph
-declarations as Once expands beyond scripts.
+The first run executes the script and reports a cache miss. Run the same command
+again:
 
-See [Infrastructure](/guide/infrastructure/) for remote cache and execution
-provider configuration.
+```sh
+./scripts/greet.sh
+```
+
+The second run reports a cache hit and restores `build/greeting.txt` from the
+recorded result. If `message.txt` changes, the input digest changes and the
+script runs again.
+
+## When To Use A Script
+
+Use a scripted workflow when one existing executable already owns the work,
+such as asset generation, test setup, packaging, or fixture updates. Move to a
+[typed graph target](/guide/graph/) when the work needs multiple capabilities,
+structured validation, or a shape that tools can inspect and edit.
 
 ## Next
 
-Read [Caching](/guide/scripted/caching) for annotation examples across
-languages and [Runtime](/guide/scripted/runtime) for the `once cache`
-primitives that scripts can call directly.
+Continue to [Caching](/guide/scripted/caching) to add environment variables,
+tool fingerprints, and dependencies to the script contract. Read
+[Manual Cache Access](/guide/scripted/runtime) only when a script needs to
+manage cache records itself.

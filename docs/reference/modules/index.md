@@ -2,12 +2,9 @@
 
 Once graph modules are Starlark files that export graph primitives. Today the
 primary exported primitive is a target kind: a schema and optional
-implementation function that lowers one target into cacheable actions. Built-in
-target kinds and project target kinds use the same shape, so a project can add a
-target kind without changing Once's native executor.
-The built-in prelude also declares its source order in Starlark, so
-adding a target kind family updates the prelude rather than hardcoding a new
-toolchain in Rust.
+implementation function that turns one target into cacheable actions. Built-in
+and project target kinds use the same public contract, so a project can add a
+target kind without changing Once itself.
 
 ## Loading Project Modules
 
@@ -50,7 +47,7 @@ copy_generated = target_kind(
 ## Target Kind Schema
 
 `target_kind(...)` declares the public contract exposed by `once query schema`
-and by MCP target kind discovery.
+and the agent discovery tools.
 
 - `kind`: optional override for the target kind used in `once.toml`.
   When omitted, Once uses the exported symbol name.
@@ -106,8 +103,8 @@ configuration isolated.
 
 ## Starter Examples
 
-`examples` points at runnable starter bundles for a target kind. Starlark owns
-the example slug, title, selection hint, and package-relative path. The
+`examples` points at runnable starter bundles for a target kind. Each declaration
+provides the example slug, title, selection hint, and package-relative path. The
 bundle itself is a real workspace directory with manifests and sources.
 Use examples when a caller should be able to discover the target kind, choose a
 starter by intent, and materialize a working target without reading
@@ -135,7 +132,7 @@ apple_library = target_kind(
         example(
             "apple-library-with-objc",
             name = "Apple library with mixed Swift and Objective-C",
-            use_when = "Your Swift API calls into Objective-C sources.",
+            use_when = "Your Swift interface calls into Objective-C sources.",
         ),
     ],
     impl = _apple_library_impl,
@@ -184,8 +181,8 @@ once query example apple_library apple-library-minimal --format json
 }
 ```
 
-MCP callers use `once_list_target_kinds` and `once_query_schema` for discovery,
-then `once_query_example` to fetch the file bundle for the chosen
+Agent integrations use `once_list_target_kinds` and `once_query_schema` for
+discovery, then `once_query_example` to fetch the file bundle for the chosen
 starter.
 
 ## Implementation Context
@@ -205,13 +202,13 @@ An implementation receives `ctx` with generic graph data:
 - `ctx["run"]`: run request options. `ctx["run"]["visible"]` is true when
   the caller requested a visible runtime interface.
 
-The implementation returns a JSON-shaped provider record. Downstream
+The implementation returns a dictionary of provider fields. Downstream
 target kinds should read provider fields from `ctx["deps"]` instead of
 inspecting target identities.
 
 ## Host Globals
 
-The Starlark executor exposes generic primitives only:
+Target kind implementations can use these generic primitives:
 
 - `host_arch()` and `host_os()` return normalized host identifiers.
 - `host_env(name)` returns one host environment variable, or an empty
@@ -219,13 +216,16 @@ The Starlark executor exposes generic primitives only:
 - `workspace_root()` returns the absolute workspace root.
 - `host_which(name)` resolves an executable on `PATH`.
 - `host_command(argv, env = {})` runs a discovery command and returns
-  stdout. Arguments and env values participate in the command-scoped
-  cache key.
+  standard output. Arguments and environment values participate in the
+  command-scoped cache key.
 - `host_file_exists(path)` checks whether a host path is currently a
   file.
-- `host_file_read(path)` reads a host file as UTF-8 text.
-- `host_file_sha256(path)` returns a host file's SHA-256 digest as
-  lowercase hex.
+- `host_file_read(path)` reads a host file as
+  [Unicode Transformation Format, 8-bit (UTF-8)](https://www.unicode.org/faq/utf_bom.html#UTF8)
+  text.
+- `host_file_sha256(path)` returns a host file's
+  [Secure Hash Algorithm 256-bit](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
+  digest as lowercase hexadecimal text.
 - `host_file_contains(path, needle)` checks host file text content.
 - `glob(patterns)` expands patterns under the active package and returns
   sorted workspace-relative file paths.
@@ -240,24 +240,24 @@ The Starlark executor exposes generic primitives only:
   for action-private helper files and `declare_output` for durable
   target outputs. `arg_format` defaults to `@{}` and must contain
   exactly one `{}` placeholder.
-- `run_action(...)` records a command action for the executor.
+- `run_action(...)` records a command action for Once to execute.
 - `write_path(path, content)` materializes generated text or byte-list
   files through normal actions.
 - `copy_path(source, destination, inputs = [])` copies one workspace
-  file through a portable Rust action.
+  file.
 - `copy_path(source, destination, kind = "tree", inputs = [])` copies
-  one or more directory contents through portable Rust actions.
+  one or more directory contents.
 - `prepare_path(path, kind = "remove")` and
-  `prepare_path(path, kind = "directory")` declare uncached portable
-  cleanup and setup actions for workspace paths.
+  `prepare_path(path, kind = "directory")` declare uncached cleanup and
+  setup actions for workspace paths.
 - `write_tree_digest(root, output, include_suffixes = [])` writes a
   deterministic digest listing for a workspace tree.
 - `toml_decode(src)` and `json_decode(src)` decode data into Starlark
   values.
 
-Toolchain behavior belongs in Starlark on top of these primitives:
-resolver commands, source filtering, file formats, SDK selection,
-compiler flags, provider conventions, and action layout.
+Use these primitives to express resolver commands, source filtering, file
+formats, tool selection, compiler flags, provider conventions, and action
+layout.
 
 ## Actions
 
@@ -291,19 +291,19 @@ Actions inside one target run in declaration order because later actions
 may consume earlier outputs. Independent graph targets run concurrently
 once their analysis-backed dependencies are complete.
 
-## Design Modules
+## Authoring Target Kinds
 
-Keep target kind implementations ecosystem-specific and the executor generic.
-If a target kind needs to understand a compiler, package manager, SDK, binary
-format, or platform naming convention, encode that in Starlark and pass
-only declared actions and provider records back to Rust.
+Keep ecosystem behavior within its target kind. A target kind can understand a
+compiler, package manager, binary format, or platform naming convention while
+still exposing the same target schema, action, and provider contracts as every
+other kind.
 
 Provider records are the cross-target kind contract. Prefer small, typed,
 documented fields such as output paths, transitive inputs, flags, and
 metadata. Avoid making consumers branch on a dependency target kind.
 
-Use `toolchain_identity` for tool versions, resolved compiler paths, SDK
-selection, generated file contents, and other non-source inputs that
+Use `toolchain_identity` for tool versions, resolved compiler paths, platform
+tool selection, generated file contents, and other non-source inputs that
 should invalidate cached actions. Do not log secrets or place secrets in
 arguments, provider records, or action metadata.
 

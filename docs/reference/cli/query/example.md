@@ -1,6 +1,6 @@
 # `once query example`
 
-Materialize a target kind starter example
+Return the files in a target kind starter example
 
 ## Synopsis
 

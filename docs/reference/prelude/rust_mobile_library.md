@@ -46,7 +46,7 @@ when the shared Rust code depends on other Rust crates.
 | `compile_data` | list&lt;string&gt; | no | `[]` | Bazel-compatible compile-time data file globs included in each platform rustc action input set |
 | `build_script` | string | no | empty | Package-relative Cargo build script path run before each platform compile |
 
-## Dep Edges
+## Dependency Edges
 
 This target kind currently declares no dependency edges.
 

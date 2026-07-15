@@ -1,185 +1,199 @@
 # Graph
 
-The Once graph is the product model for repository automation. Targets
-declare what exists in the workspace, capabilities describe what can be
-done with those targets, and target kinds lower each capability into
-content-addressed actions that can run locally, replay from cache, or move
-to a compute provider.
+The Once graph describes the named parts of a workspace and what Once can do
+with them. Start with one target, inspect it, and build it. Add dependencies or
+more specialized target kinds only when the project needs them.
 
-## Where the Graph Fits
+## Start With One Target
 
-Once has a small set of durable concepts:
-
-1. **Targets**: named units in the workspace.
-2. **Capabilities**: operations a target exposes, such as `build`, `run`,
-   and `test`.
-3. **Actions**: concrete executable work with inputs, outputs,
-   environment, platform requirements, and cache identity.
-4. **Modules**: typed logic that validates targets and lowers capabilities
-   into actions.
-5. **Scripts**: the least typed adapter backed by target kinds for existing
-   executable files.
-
-Scripts are not outside the graph. They are the easiest way to enter it.
-Teams move from script targets into richer typed target kinds when they need
-stronger relationships, multiple capabilities, or structured diagnostics.
-
-## Targets
-
-Targets are the named units in the graph. They live in `once.toml`
-files at the package level and declare what they are, what source files
-belong to them, and which other targets they depend on:
+Targets live in package-level `once.toml` files. This example declares an
+Apple library in `apps/ios/once.toml`:
 
 ```toml
 [[target]]
 name = "AppCore"
 kind = "apple_library"
 srcs = ["Sources/**/*.swift"]
-deps = ["./Logging"]
 
 [target.attrs]
 platform = "ios"
 minimum_os = "17.0"
 ```
 
-Dep references are root-relative by default; `./` and `../` resolve
-against the package that owns the manifest.
+The manifest location and target name form the target identifier
+`apps/ios/AppCore`. Query it before running any work:
 
-## Modules and Ecosystems
+```sh
+once query targets
+once query capabilities apps/ios/AppCore
+once query schema apple_library
+```
 
-A target's `kind` points at a target kind. The target kind defines the target's schema:
-which attributes it accepts, which providers it expects from deps, which
-providers it emits, and which capabilities it exposes.
+The first command lists the workspace. The second shows what `AppCore` can do.
+The third explains which attributes, dependencies, outputs, and capabilities
+an `apple_library` accepts.
 
-Modules are grouped into ecosystems. An ecosystem is a domain-specific
-target kind set that teaches Once how to describe Apple, Android, Rust,
-or another build world without baking that world into the core graph
-model.
+Build the same target:
 
-Today the built-in ecosystems cover these target kind sets:
+```sh
+once build apps/ios/AppCore
+```
 
-- [Apple](/guide/graph/apple): Swift, Objective-C, C, and C++
-  libraries, frameworks, applications, and test bundles for Apple
-  platforms.
-- [Android](/guide/graph/android): Android resources, Java libraries,
-  native library packaging, and APKs built with Android SDK tools.
-- [Rust](/guide/graph/rust): Rust libraries, binaries, procedural
-  macros, Cargo dependency lowering, and native artifacts for Apple and
-  Android consumers.
-- Swift and Kotlin shared-code entry points:
-  [`swift_android_library`](/reference/prelude/swift_android_library)
-  packages Swift into Android APKs, while
-  [`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework)
-  exposes Kotlin/Native frameworks to Apple targets.
+Outputs are materialized under `.once/out/<target>/`. The
+[target kind reference](/reference/prelude/) lists the exact output groups for
+each kind.
 
-The shared-code target kinds also expose the
-`native-mobile-shared-code-e2e` schema example. It wires an Android app to
-Swift and Rust native libraries, and an Apple app to a Kotlin/Native
-framework plus the same Rust mobile library target.
+## Connect Targets With Dependencies
 
-See [Ecosystems](/guide/graph/ecosystems) for the adoption model and
-the tradeoffs that come with letting Once own part of an ecosystem's
-build graph.
+A dependency says that one target consumes the typed output of another. The
+following target can live beside `AppCore` in the same manifest:
 
-Projects can add checked-in Starlark module files from the root
-`once.toml`:
+```toml
+[[target]]
+name = "App"
+kind = "apple_application"
+srcs = ["AppSources/**/*.swift"]
+deps = ["./AppCore"]
+
+[target.attrs]
+platform = "ios"
+bundle_id = "dev.once.App"
+minimum_os = "17.0"
+families = ["iphone"]
+```
+
+`./AppCore` resolves from the package that owns the manifest. `../` moves to a
+parent package. References without either prefix resolve from the workspace
+root.
+
+Once validates each dependency against the contract declared by the target
+kind. This catches incompatible edges before a compiler or runner starts.
+
+## Capabilities Become Actions
+
+A capability is an operation a target exposes:
+
+- [`build`](/reference/cli/build) materializes an artifact.
+- [`run`](/reference/cli/run) builds required outputs and starts the target.
+- [`test`](/reference/cli/test) builds and executes a test target.
+
+The target kind turns a capability into one or more actions. Each action
+declares its executable, arguments, inputs, outputs, environment, platform
+requirements, and cache policy. Build actions can replay from cache when their
+declared inputs match. Launch and device-test actions can opt out of replay
+when each invocation must happen again.
+
+The command surface stays the same across ecosystems:
+
+```sh
+once build apps/ios/AppCore
+once run apps/ios/App
+once test apps/ios/AppTests
+```
+
+Ask `once query capabilities <target>` which of these operations a target
+supports instead of guessing from its kind.
+
+## Choose an Ecosystem
+
+A target's `kind` connects it to a typed contract for a language or platform.
+The built-in ecosystem guides continue from the concepts above with runnable,
+ecosystem-specific examples:
+
+- [Apple](/guide/graph/apple)
+- [Android](/guide/graph/android)
+- [C and C++](/guide/graph/c)
+- [Elixir](/guide/graph/elixir)
+- [Rust](/guide/graph/rust)
+- [Zig](/guide/graph/zig)
+
+The [Ecosystems guide](/guide/graph/ecosystems) compares these choices and
+helps you decide when a typed target is a better fit than a script.
+
+Every built-in target kind also ships a complete starter with manifests and
+source files. Discover the available slugs, then return one starter as
+structured data:
+
+```sh
+once query target-kinds
+once query example apple_library apple-library-minimal --format json
+```
+
+Use the starter when you want a complete copyable workspace. Use the guide
+when you want to understand how targets connect and which capability to invoke
+next.
+
+## Select Configuration-Specific Values
+
+Some attributes accept `select`, which chooses a value from the active target
+configuration. For example, an Apple library can choose a framework by
+platform without duplicating the target:
+
+```toml
+[target.attrs]
+sdk_frameworks = { select = { ios = ["UIKit"], macos = ["AppKit"] } }
+```
+
+The target kind schema identifies configurable attributes and the tokens that
+are meaningful for that ecosystem. Attributes that determine the active
+configuration must remain literal so Once can select a branch unambiguously.
+
+## Run Supported Targets
+
+Some artifacts need a simulator, device, or service after they build. Target
+kinds that own this behavior expose the `run` capability directly. Apple and
+Android application targets, for example, can build, install, and launch the
+application through the same command:
+
+```sh
+once query capabilities apps/mobile/App
+once run apps/mobile/App
+```
+
+Check the target's capabilities before running it. The ecosystem guide and
+target kind reference explain any required simulator, device, or host setup.
+
+## Extend the Graph With Local Modules
+
+Use a local module when a project needs a typed target kind that is not built
+in. Root `once.toml` files can load checked-in
+[Starlark](https://starlark-lang.org/) modules:
 
 ```toml
 [modules]
 paths = ["modules/*.star"]
 ```
 
-Each module file exports public target kind symbols using the same `target_kind`,
-`attr`, `dep`, and `capability` helpers as the built-in ecosystems. Public
-symbols are module globals that do not start with `_`, and the symbol
-name becomes the target kind unless `kind` is set explicitly. Module paths
-are resolved relative to the project root, loaded in sorted order, and
-included in `once query target-kinds`, `once query schema`, validation, MCP
-schema tools, and graph analysis.
-
-The `[modules]` table is only loaded from the root manifest. Package
-manifests that declare `[modules]` are rejected.
-
-## Capabilities
-
-Each target kind declares which capabilities its targets expose:
-[`build`](/reference/cli/build), [`run`](/reference/cli/run), and
-[`test`](/reference/cli/test). A library might expose `build`; an
-application artifact might expose `build`; a runner target kind might consume
-that artifact and expose `run`; and a test runner target kind might expose
-`test`.
-
-The CLI dispatches on capability, and every capability runs through the
-same action substrate. Build actions can replay from cache when their
-inputs match. Run and test actions may still produce cached outputs, but
-target kinds can declare side-effectful work that must happen for the requested
-invocation.
+Public symbols in those files become target kinds and use the same schema,
+dependency, capability, and validation surfaces as built-in kinds. Confirm
+that a local kind loaded successfully before declaring targets that use it:
 
 ```sh
-once query targets
-once query schema apple_library
-once build apps/ios/AppCore
-once run  tools/demo/LaunchApp
-once test tools/tests/RunAppTests
+once query target-kinds
+once query schema my_target_kind
 ```
 
-[`query`](/reference/cli/query) commands return structured JSON so
-agents and humans can ask what a target can do before any execution
-happens.
+Only the root manifest can declare `[modules]`. Paths resolve from the
+workspace root and load in sorted order. See the
+[Modules reference](/reference/modules/) when authoring a target kind.
 
-## Runner Targets
+## Give Agents Read Access First
 
-Some ecosystems need an external runtime: a simulator, a device, a local
-service, or a remote environment. Once should not bake those runtime
-types into the core CLI. They belong in target kinds, where the ecosystem
-knowledge already lives.
-
-Model that as a runner target. A runner target depends on the artifact it
-knows how to run, carries the runtime-specific attributes its ecosystem
-understands, and exposes the generic `run` capability:
-
-```toml
-[[target]]
-name = "LaunchApp"
-kind = "some_runtime_runner"
-deps = ["../apps/App"]
-
-[target.attrs]
-runtime = "local"
-```
-
-The CLI remains generic:
-
-```sh
-once run tools/demo/LaunchApp
-```
-
-That keeps the bridge explicit: the producer target emits providers and
-output groups; the runner target kind declares which providers it accepts and
-what command it runs against them. The ecosystem owns any runtime-specific
-probing, validation, installation, launch, and diagnostics.
-
-## Agent Access
-
-The MCP server starts as an inspection surface. An agent can discover
-targets, query schemas, and inspect target kind contracts without being allowed
-to execute anything:
+The [Model Context Protocol](https://modelcontextprotocol.io/) server can
+expose graph inspection without execution:
 
 ```sh
 once mcp
 ```
 
-Running is side-effectful. It can build code, write outputs, install
-software, or launch a process, so Once only advertises execution
-tools when the server is started with an explicit opt-in:
+Execution can build code, write outputs, install software, or launch a
+process, so it requires an explicit opt-in:
 
 ```sh
 once mcp --allow-run
 ```
 
-With that opt-in, agents can call `once_build_target`,
-`once_run_target`, or `once_start_target` with the same target id the
-CLI accepts. The start call returns a runtime session id immediately,
-then the agent can use `once_runtime_status`, `once_runtime_logs`, and
-`once_stop_runtime` to follow or stop the run. Without it, the MCP
-surface remains read-oriented and the execution tools are not listed.
+With that option, an agent can build, run, or start a declared target. Without
+it, the server remains an inspection surface for targets, schemas, and graph
+relationships. See the [Model Context Protocol tools reference](/reference/mcp/tools)
+for the available operations.
