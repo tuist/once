@@ -126,7 +126,12 @@ body:has(.VPHome)::before {
 .VPNav {
   border-bottom: 1px solid var(--vp-c-divider);
   background: color-mix(in oklch, var(--vp-c-bg) 86%, transparent);
-  backdrop-filter: blur(16px);
+}
+
+@media (min-width: 768px) {
+  .VPNav {
+    backdrop-filter: blur(16px);
+  }
 }
 
 .VPNavBar.has-sidebar .content,
