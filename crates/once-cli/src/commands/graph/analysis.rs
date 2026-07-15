@@ -372,8 +372,8 @@ async fn resolve_graph_tools(
         let tool_names = Arc::clone(&tool_names);
         tasks.spawn(async move {
             let tool_name_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
-            let path = once_core::workspace_executable(&workspace, &executable, &tool_name_refs)
-                .await;
+            let path =
+                once_core::workspace_executable(&workspace, &executable, &tool_name_refs).await;
             (executable, path)
         });
     }
