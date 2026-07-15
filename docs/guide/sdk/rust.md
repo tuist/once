@@ -1,8 +1,14 @@
-# Rust SDK
+---
+prev: false
+next: false
+---
 
-The Rust SDK is the `once` crate. It exposes cache primitives for
-embedding Once in Rust applications and tools. Script execution is CLI
-specific and is not part of the SDK surface.
+# Rust Software Development Kit
+
+The Rust library is the `once` crate. It exposes cache primitives for
+embedding Once in Rust applications and tools. Script execution belongs to
+the command line and is not part of this library. See the
+[language-library overview](/guide/sdk/) to compare the available bindings.
 
 ```rust
 #[tokio::main]
@@ -37,12 +43,13 @@ be reused across blob and action-result operations.
 ### Constructors
 
 Choose a constructor based on who owns the cache location. Most
-applications should use the XDG-backed default and only pass a path when
-they need isolation or deterministic test setup.
+applications should use the default based on the
+[X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/)
+and only pass a path when they need isolation or deterministic test setup.
 
-| API | Use |
+| Application programming interface | Use |
 | --- | --- |
-| `Cache::new()` | Opens the default local cache using XDG conventions. |
+| `Cache::new()` | Opens the default local cache using the operating-system convention. |
 | `Cache::with_provider(cache)` | Wraps an existing `CacheProvider`. |
 
 The default cache root is `$XDG_CACHE_HOME/once/cas` when
@@ -52,9 +59,10 @@ The default cache root is `$XDG_CACHE_HOME/once/cas` when
 
 Use these methods when your integration needs to inspect how the cache was
 configured, for example to display diagnostics or pass the lower-level
-provider into code that already works with CAS primitives.
+provider into code that already works with content-addressed storage
+primitives.
 
-| API | Use |
+| Application programming interface | Use |
 | --- | --- |
 | `provider()` | Returns the underlying `CacheProvider`. |
 | `root()` | Returns the local root directory used by the provider. |
@@ -64,7 +72,7 @@ provider into code that already works with CAS primitives.
 Blobs are content-addressed byte payloads. Store bytes once, then refer to
 them by digest from action results, manifests, or other integration state.
 
-| API | Use |
+| Application programming interface | Use |
 | --- | --- |
 | `put_blob(bytes)` | Stores bytes and returns their content digest. |
 | `get_blob(digest)` | Reads bytes for a digest. |
@@ -98,12 +106,12 @@ async fn main() -> once::Result<()> {
 }
 ```
 
-The action-result APIs store and retrieve metadata for a completed action.
+The action-result methods store and retrieve metadata for a completed action.
 They do not run commands. The caller is responsible for defining the
 action payload, hashing it, executing any work, and deciding which blob
 digests belong in the cached result.
 
-| API | Use |
+| Application programming interface | Use |
 | --- | --- |
 | `put_action_result(action, result)` | Stores a cached result for an action digest. |
 | `get_action_result(action)` | Returns a cached result when one exists. |
@@ -122,9 +130,10 @@ level Once modules.
 | `ActionResult` | Stores an action exit code, stdout digest, stderr digest, and output digests. |
 | `Stats` | Reports local cache size and entry counts. |
 | `CacheProvider` | Provides lower-level cache access for integrations that already own a provider. |
-| `Result<T>` | SDK result alias. |
+| `Result<T>` | Library result alias. |
 | `Error` | Reports invalid digest strings and cache provider errors. |
 
 Use `digest_from_hex(hex)` when a digest crosses a string boundary, such
-as JSON, configuration, or another process. It validates lowercase BLAKE3
-hex strings and returns `Error::InvalidDigest` for invalid input.
+as structured data, configuration, or another process. It validates lowercase
+BLAKE3 hexadecimal strings and returns `Error::InvalidDigest` for invalid
+input.

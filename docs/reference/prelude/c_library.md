@@ -42,7 +42,7 @@ cache should distinguish different archiver builds.
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables passed to compile and archive actions |
 | `output_name` | string | no | target name | Static library output name without prefix or extension |
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

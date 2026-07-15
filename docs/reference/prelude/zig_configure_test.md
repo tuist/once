@@ -15,7 +15,7 @@ Zig module dependency. Test execution is host-only.
 Canonical module names are generated from target labels with collision-safe
 escaping. `import_names` keys must match exactly one Zig module dependency by
 full label, short label name, import name, or canonical name; ambiguous or
-unknown keys fail analysis.
+unknown keys fail validation.
 
 ## Attributes
 
@@ -24,7 +24,7 @@ This target accepts the complete attribute set documented by
 `translate_c_identity`, `csrcs`, linker settings, `env_inherit`, `test_env`,
 `test_runner`, `labels`, and `timeout_ms`.
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

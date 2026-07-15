@@ -5,25 +5,35 @@ Apple framework bundle.
 ## Description
 
 Builds an Apple framework product with module metadata, a generated
-Info.plist, and ad-hoc signing.
+`Info.plist` property-list file, and ad-hoc signing. Attributes whose names
+contain `sdk` configure the
+[Apple software development kit (SDK)](https://developer.apple.com/documentation/xcode)
+used for the build.
 
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `platform` | string | yes |  | Apple platform for the framework |
-| `minimum_os` | string | no |  | Minimum supported OS version |
-| `bundle_id` | string | no |  | Framework bundle identifier |
+| `minimum_os` | string | no | `13.0` | Minimum supported operating system version |
+| `target_sdk_version` | string | no | `minimum_os` | Software development kit version used in the target triple |
+| `sdk_variant` | string | no | `simulator` | `simulator` or `device`; ignored on macOS (not configurable) |
+| `xcode_developer_dir` | string | no | active Xcode | Xcode developer directory used to resolve build tools |
+| `bundle_id` | string | no | `dev.once.<product_name>` | Framework bundle identifier |
 | `product_name` | string | no | target name | Framework product name (not configurable) |
+| `module_name` | string | no | `product_name` | Swift module name |
 | `headers` | list&lt;string&gt; | no | `[]` | Headers packaged with the framework |
 | `exported_headers` | list&lt;string&gt; | no | `[]` | Headers exported to downstream consumers |
 | `resources` | list&lt;string&gt; | no | `[]` | Resource glob patterns bundled into the framework |
 | `asset_catalogs` | list&lt;string&gt; | no | `[]` | Asset catalog paths compiled into the framework bundle |
 | `privacy_manifest` | string | no |  | Privacy manifest placed in the framework bundle |
-| `sdk_frameworks` | list&lt;string&gt; | no | `[]` | Apple SDK frameworks linked by name |
-| `weak_sdk_frameworks` | list&lt;string&gt; | no | `[]` | Apple SDK frameworks linked weakly |
+| `sdk_frameworks` | list&lt;string&gt; | no | `[]` | Apple software development kit frameworks linked by name |
+| `weak_sdk_frameworks` | list&lt;string&gt; | no | `[]` | Apple software development kit frameworks linked weakly |
+| `sdk_dylibs` | list&lt;string&gt; | no | `[]` | Apple software development kit dynamic libraries linked by name |
+| `linkopts` | list&lt;string&gt; | no | `[]` | Extra linker flags |
+| `swift_flags` | list&lt;string&gt; | no | `[]` | Extra Swift compiler flags |
 
-## Dep edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
@@ -40,9 +50,35 @@ The target emits `apple_linkable`, `apple_framework`, and
 | --- | --- |
 | `build` | `default`, `framework`, `dsyms`, `swiftmodule` |
 
+## Outputs
+
+| Output | Location |
+| --- | --- |
+| Framework bundle | `.once/out/<target>/<product_name>.framework` |
+| Dynamic library | `.once/out/<target>/<product_name>.framework/<product_name>` |
+| Swift module | `.once/out/<target>/<product_name>.framework/Modules/<module_name>.swiftmodule` |
+| Swift documentation | `.once/out/<target>/<product_name>.framework/Modules/<module_name>.swiftdoc` |
+| Module map | `.once/out/<target>/<product_name>.framework/Modules/module.modulemap` |
+| Property list | `.once/out/<target>/<product_name>.framework/Info.plist` |
+| Code signature | `.once/out/<target>/<product_name>.framework/_CodeSignature/CodeResources` |
+
 ## Limitations
 
-Header packaging, resource bundling, asset catalogs, and privacy
-manifests are declared in the schema for graph compatibility but are
-not implemented yet. Non-empty values for those attrs fail analysis
-instead of being ignored.
+Header packaging, resource bundling, asset catalogs, and privacy manifests are
+unsupported. The target rejects non-empty values for those attributes instead
+of ignoring them.
+
+## Example
+
+```toml
+[[target]]
+name = "UI"
+kind = "apple_framework"
+srcs = ["UI/Sources/*.swift"]
+
+[target.attrs]
+platform = "ios"
+minimum_os = "17.0"
+sdk_variant = "simulator"
+bundle_id = "dev.once.UI"
+```

@@ -26,7 +26,7 @@ framework embedding.
 | `konan_data_dir` | string | no |  | Optional Kotlin/Native cache directory exposed as `KONAN_DATA_DIR` |
 | `compiler_opts` | list&lt;string&gt; | no | `[]` | Additional `kotlinc-native` arguments |
 
-## Dep Edges
+## Dependency Edges
 
 This target kind currently declares no dep edges.
 

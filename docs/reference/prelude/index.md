@@ -1,20 +1,20 @@
-# Prelude
+# Target Kinds
 
-The Starlark prelude bundled with `once` declares every built-in target
-kind: its attribute schema, dep edges, providers, capabilities, and
-the impl that turns a target into a set of cached actions. The
-[`once query schema`](/reference/cli/query) command exposes the same
-metadata at the keyboard.
+Once ships target kinds for supported languages and platforms. Each target
+kind defines its accepted attributes and dependencies, the providers it emits,
+and the capabilities it exposes. Its reference page also lists known
+limitations and a copyable declaration when one is available.
 
-See [ecosystem parity](/reference/prelude/ecosystem-parity) for the behavioral
-mapping to the Buck2 and Bazel rules used as references.
+Use [`once query schema`](/reference/cli/query/schema) to inspect the same
+contract from the command line. See [Ecosystems](/guide/graph/ecosystems) for
+help choosing between typed target kinds and scripted automation.
 
 ## Apple target kinds
 
 - [`apple_library`](/reference/prelude/apple_library): Swift,
   Objective-C, C, and C++ static library
 - [`swift_macro`](/reference/prelude/swift_macro): Swift
-  compiler-plugin dylib loaded by `apple_library` deps
+  compiler-plugin dynamic library loaded by `apple_library` dependencies
 - [`apple_framework`](/reference/prelude/apple_framework): dynamic
   Apple framework bundle
 - [`apple_application`](/reference/prelude/apple_application): Apple
@@ -27,19 +27,19 @@ mapping to the Buck2 and Bazel rules used as references.
 - [`android_resource`](/reference/prelude/android_resource): Android
   resources and assets compiled into a static resource package
 - [`android_library`](/reference/prelude/android_library): Android
-  Java library packaged as a jar, static resources, and AAR
+  Java library packaged as a Java archive and Android library archive
 - [`android_local_test`](/reference/prelude/android_local_test): Android
   Java and Kotlin local tests run on the host Java virtual machine
 - [`android_instrumentation_test`](/reference/prelude/android_instrumentation_test):
   Android instrumentation tests run on a device or emulator
-- [`android_binary`](/reference/prelude/android_binary): Android APK
+- [`android_binary`](/reference/prelude/android_binary): Android application package
   built from Java sources, resources, native libraries, Android resource
-  deps, and Android library deps
+  dependencies, and Android library dependencies
 
 ## Swift target kinds
 
 - [`swift_android_library`](/reference/prelude/swift_android_library):
-  Swift shared library compiled for Android and packaged through APK
+  Swift shared library compiled for Android and packaged through Android
   native-library providers
 
 ## Kotlin target kinds
@@ -60,8 +60,8 @@ mapping to the Buck2 and Bazel rules used as references.
 
 - [`cargo_dependencies`](/reference/prelude/cargo_dependencies): cacheable
   Cargo dependency set consumed by Rust targets
-- [`rust_library`](/reference/prelude/rust_library): Rust rlib consumed
-  by downstream Rust targets, or native static/shared libraries consumed
+- [`rust_library`](/reference/prelude/rust_library): Rust library artifact consumed
+  by downstream Rust targets, or native static or shared libraries consumed
   by Apple and Android targets
 - [`rust_mobile_library`](/reference/prelude/rust_mobile_library): Rust
   native library materialized by Apple and Android consumers under one
@@ -87,7 +87,7 @@ mapping to the Buck2 and Bazel rules used as references.
 - [`zig_c_library`](/reference/prelude/zig_c_library): Zig module
   generated from C provider headers
 - [`zig_binary`](/reference/prelude/zig_binary): Zig executable built
-  from a root module, Zig module deps, and C provider deps
+  from a root module, Zig module dependencies, and C provider dependencies
 - [`zig_static_library`](/reference/prelude/zig_static_library): Zig
   static library exposed to native linkers
 - [`zig_shared_library`](/reference/prelude/zig_shared_library): Zig

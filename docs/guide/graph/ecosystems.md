@@ -1,109 +1,91 @@
+---
+next: false
+---
+
 # Ecosystems
 
-Ecosystems are Once's built-in target kind sets for a programming
-language, platform, or build domain. Apple, Android, Rust, Swift, and
-Kotlin are ecosystems because each one needs its own vocabulary: source
-files, native tools, dependency metadata, generated outputs, test runners,
-and runtime behavior.
+An ecosystem is a set of target kinds for one language, platform, or build
+domain. It gives Once enough information to validate dependencies, explain
+what a target can do, and cache work from declared inputs and outputs.
 
-The lower-level [target kind reference](/reference/prelude/) lists the
-generated attribute, provider, and capability tables. In the guide, the
-useful product model is ecosystem: a supported build world that Once can
-describe, query, run, cache, and explain.
+## Choose Between a Typed Target and a Script
 
-## What Changes
+Use an ecosystem target kind when Once should understand the artifact and its
+relationships. This is a good fit when you want to:
 
-Adopting an ecosystem means lending graph ownership for that part of the
-project to Once. Once still shells out to native compilers, SDK tools,
-package managers, and test runners where that is the right execution
-path. What changes is who defines the graph. The ecosystem provides the
-target kinds, attributes, providers, and capabilities; the project uses
-those definitions to declare its targets and dependencies. The graph can
-then answer questions before work runs instead of treating the native
-command as an opaque boundary.
+- query targets and capabilities before doing work;
+- validate dependencies and attributes early;
+- reuse build outputs across targets or machines;
+- expose focused build, run, and test operations to coding agents.
 
-That is the tradeoff. Once should make a smaller version of this bet
-than a full build-system migration, but it is still a bet: the ecosystem
-integration becomes product surface.
+Use a [script target](/guide/scripted/) when an existing tool remains
+the source of truth, the workflow is still exploratory, or the native feature
+you need has not been modeled. Scripts still participate in the graph, so a
+project can begin there and adopt typed targets one boundary at a time.
 
-## The Caveats
+## Available Ecosystems
 
-The main caveat is feature coverage. Native ecosystems evolve quickly,
-and a Once ecosystem may lag behind native package managers, compilers,
-test runners, or IDEs. A target kind should expose the common path
-well, then make unsupported features obvious through structured
-diagnostics instead of failing deep inside a generated command.
+Each supported ecosystem has an incremental guide with a first project,
+query-before-build workflow, current limitations, and follow-up steps:
 
-External dependencies are the hardest part to get right. Dependency
-resolution, repository materialization, version selection, vendoring,
-and integration with language-specific package managers are separate
-concerns. Once has to decide which system owns resolution for each
-ecosystem. [Rust](/guide/graph/rust) may start from
-[Cargo metadata](https://doc.rust-lang.org/cargo/commands/cargo-metadata.html),
-[Android](/guide/graph/android) may start from
-[Gradle](https://docs.gradle.org/) or
-[Maven coordinates](https://maven.apache.org/guides/mini/guide-naming-conventions.html),
-and [Apple](/guide/graph/apple) may start from source targets or
-[SwiftPM packages](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/).
-Those bridges will not support every native feature on day one.
+- [Apple](/guide/graph/apple) covers libraries, frameworks, applications, and
+  tests written in Swift, Objective-C, C, and C++.
+- [Android](/guide/graph/android) covers resources, Java and Kotlin libraries,
+  application packages, and host or device tests.
+- [C and C++](/guide/graph/c) covers headers, source compilation, static
+  libraries, and native consumers.
+- [Elixir](/guide/graph/elixir) covers compiled applications and ExUnit tests.
+- [Rust](/guide/graph/rust) covers libraries, binaries, tests, procedural
+  macros, Cargo dependencies, and native mobile outputs.
+- [Zig](/guide/graph/zig) covers modules, binaries, tests, libraries, and C or
+  C++ dependencies.
 
-Some ecosystems intentionally cross platform boundaries. Swift can emit
-Android native shared libraries, Kotlin/Native can emit Apple frameworks,
-and Rust can emit either Apple static libraries or Android shared
-libraries from the same source shape. Once models those as provider
-contracts between target kinds instead of special cases in the core graph.
-The built-in `native-mobile-shared-code-e2e` example shows those provider
-contracts in a composed app graph.
+Use the [target kind index](/reference/prelude/) after choosing an ecosystem.
+It lists the exact schema, dependencies, capabilities, outputs, and current
+limitations for every kind.
 
-Toolchains are another commitment. Different projects source compilers,
-SDKs, linkers, and flags in different ways. Once ecosystems should avoid
-assuming every machine has the same tools on `PATH`. They need explicit
-toolchain discovery, diagnostics, and eventually project-specific
-toolchain configuration.
+## Shared Mobile Code
 
-IDE integration is a product feature, not a side effect. If an ecosystem
-replaces part of the native build graph, editors may need generated
-project files, language-server configuration, or query APIs to recover
-the experience developers expect. At the same time, IDE parity is less
-absolute in a world where coding harnesses can query the graph, inspect
-schemas, run focused checks, and read memory through MCP. Once should
-preserve the human editing loop, but it should not treat a native IDE
-clone as the only path to a good developer experience.
+Some target kinds cross platform boundaries while preserving normal graph
+dependencies:
 
-Dynamic behavior needs boundaries. If an ecosystem needs to read
-generated metadata before deciding what to do next, Once should model
-that as a structured mechanism rather than letting arbitrary scripts
-reshape the graph invisibly.
+- [`swift_android_library`](/reference/prelude/swift_android_library) packages
+  Swift code for an Android application.
+- [`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework)
+  produces a Kotlin/Native framework for an Apple target.
+- [`rust_mobile_library`](/reference/prelude/rust_mobile_library) produces the
+  Apple or Android native library variant requested by its consumer.
 
-## How To Adopt One
+Use these after the application builds without shared code. That sequence
+keeps toolchain and linking problems separate from the first graph setup.
 
-Start with the ecosystem target kinds when you want the graph to know
-about a domain, not merely run a command in that domain. Use scripts
-when the integration is exploratory, when the native tool is still the
-source of truth, or when a feature has not been modeled yet.
+## Adopt an Ecosystem Incrementally
 
-::: tip If something is missing
-Unsupported does not have to mean blocked. You can contribute the
-missing behavior to Once's ecosystem modules, define local module target
-kinds for your project, or keep that part behind a script while the
-typed model catches up.
+1. Pick the smallest artifact that has stable inputs and outputs.
+2. Declare one target and run `once query schema <kind>`.
+3. Run `once query capabilities <target>` and build that same target.
+4. Connect one consumer through `deps` and query the resulting graph.
+5. Add run or test targets only after the artifact build is reliable.
+6. Keep unsupported edges behind scripts until a typed target kind covers
+   them.
 
-Once should also grow consumer-side override tools: a way for a project
-to keep using the built-in ecosystem while replacing or extending a
-specific behavior locally. That would let teams adopt the common graph
-model without waiting for every edge case to land upstream first.
-:::
+This sequence leaves the native package manager or build system in place for
+the parts Once does not own. A project does not need to move an entire
+ecosystem at once.
 
-For a production ecosystem, expect to answer these questions:
+## Check the Boundary Before Adopting
 
-- Which native concepts become targets?
-- Which attributes are stable enough to declare?
-- Which dependency manager owns third-party resolution?
-- Which outputs are reusable build artifacts?
-- Which commands are runtime effects that should not replay from cache?
-- Which IDE or language-server affordances must be preserved?
-- Which unsupported native features need explicit diagnostics?
+Feature coverage varies by ecosystem. Before moving a production workflow,
+check the target kind reference for:
 
-That boundary is the point. Once ecosystems should make the build graph
-more inspectable and agent-friendly, but they should not hide the cost of
-forking part of a native build world into Once's model.
+- supported source, resource, and dependency shapes;
+- ownership of third-party dependency resolution;
+- required compilers and platform tools;
+- cacheable artifacts and non-cacheable runtime effects;
+- unsupported attributes and whether they fail validation;
+- editor or language-service integration the existing workflow still needs.
+
+Unsupported does not have to mean blocked. Keep that behavior in a script,
+define a checked-in local module, or contribute the missing typed behavior.
+The important part is to keep the boundary visible so readers and agents can
+tell which system owns each step.

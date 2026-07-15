@@ -1,101 +1,103 @@
+---
+next: false
+---
+
 # Evidence
 
-Evidence is durable provenance for engineering work. It records a claim
-about what happened, what it was about, and which action data supports
-it. Evidence is not cache. The action cache answers whether outputs can
-be reused; evidence answers whether humans and agents can trust a prior
-result when planning the next step.
+Evidence is a durable record of an action outcome. It complements the cache:
+the cache stores reusable results, while evidence describes what happened when
+Once requested a result.
 
-Today Once records evidence after:
+## Run And Query An Action
 
-- `once exec`
-- `once run`
-- `once build`
-- `once test`
+This walkthrough uses `scripts/greet.sh` from the
+[Scripted Workflows guide](/guide/scripted/). Give it a new input value so the
+first run computes a result:
 
-## Interacting With Evidence
+```sh
+printf 'evidence %s\n' "$(date +%s)" > message.txt
+ONCE_CACHE_PROVIDER=local ./scripts/greet.sh
+```
 
-The current interface is the CLI. Use
-[`once query evidence`](/reference/cli/query/evidence) to list recent
-records, or pass a subject to focus on one command, target, or
-capability:
+Now inspect the newest record. The example uses
+[`jq`](https://jqlang.org/) to select the final item from Once's
+[JavaScript Object Notation](https://www.json.org/json-en.html) output:
+
+```sh
+once --format json query evidence \
+  | jq '.[-1] | {subject, status, cache, action_digest, input_digest}'
+```
+
+The record reports `passed` and `miss`. Run the unchanged script again and
+repeat the query:
+
+```sh
+ONCE_CACHE_PROVIDER=local ./scripts/greet.sh
+once --format json query evidence \
+  | jq '.[-1] | {subject, status, cache, action_digest, input_digest}'
+```
+
+The new record reports `hit` and keeps the same action and input digests. This
+shows that Once restored the previously computed result.
+
+Change the declared input, run again, and compare the two newest records:
+
+```sh
+printf 'evidence changed %s\n' "$(date +%s)" > message.txt
+ONCE_CACHE_PROVIDER=local ./scripts/greet.sh
+once --format json query evidence \
+  | jq '.[-2:] | map({status, cache, action_digest, input_digest})'
+```
+
+The latest record reports a cache miss with different action and input digests.
+The previous record remains available as history, but its digests describe the
+earlier input state.
+
+## Filter Evidence By Subject
+
+Use [`once query evidence`](/reference/cli/query/evidence) to list all records
+with human-readable output:
 
 ```sh
 once query evidence
+```
+
+Graph actions have stable target subjects, so you can filter them by target or
+by target and capability:
+
+```sh
+once query evidence cli
 once query evidence cli:test
 ```
 
-For scripts and coding agents, use Once's structured output formats
-instead of scraping the human rendering:
+A literal `once exec` command uses its action digest as its subject. Use the
+structured output when you need to select or compare those command records.
 
-```sh
-once --format json query evidence
-once --format toon query evidence cli:test
-```
+Tools can request the same record shape through
+[`once_query_evidence`](/reference/mcp/tools#once-query-evidence) in the
+[Model Context Protocol](https://modelcontextprotocol.io/) catalog.
 
-Agents can also use
-[`once_query_evidence`](/reference/mcp/tools#once_query_evidence) from
-the [MCP tools](/reference/mcp/) catalog. The MCP tool returns the same
-record shape as the CLI JSON output, so an agent can inspect the graph,
-run the smallest useful check, then query memory without scraping
-terminal output.
+## Read A Record
 
-## What A Record Contains
+An action evidence record contains:
 
-Action evidence includes:
-
-- **Subject**: The command action or target capability the evidence is about.
-- **Kind**: The kind of evidence record, such as an action result.
+- **Subject**: The command action, target, or target capability.
 - **Status**: Whether the action passed or failed.
-- **Action Digest**: The content-addressed identity of the action.
-- **Input Digest**: The declared input identity when the action has one.
-- **Cache State**: Whether the result came from a cache hit, miss, or bypass.
-- **Exit Code**: The process exit code recorded for the action.
-- **Output Digests**: Digests for captured stdout, stderr, and declared
-  outputs when available.
-- **Creation Time**: When the evidence record was written.
+- **Action digest**: The identity of the complete action.
+- **Input digest**: The identity of declared inputs when available.
+- **Cache state**: Whether the result was a hit, miss, or bypass.
+- **Exit code**: The process exit code.
+- **Stream digests**: References to captured standard output and standard error
+  when available.
+- **Output digests**: References to declared outputs when available.
+- **Creation time**: When Once wrote the record.
 
-Storage details live in the [Memory reference](/reference/memory/).
+Compare digests before applying an older result to current work. Matching input
+and action digests show that two records describe the same action state;
+different digests show that some relevant part of that state changed.
 
-## Why It Helps
+## Next
 
-Evidence gives Once and coding agents a concrete memory of recent work.
-Instead of treating every session as a blank slate, an agent can ask
-whether `cli:test` already passed for the current inputs, whether
-`app:build` failed for a specific action digest, whether a result came
-from cache, or whether a target has no evidence yet.
-
-That changes planning. Once can distinguish known, missing, and stale
-information before running anything. A coding agent can use that to run
-the smallest useful check instead of repeating the whole suite.
-
-## Cache And Evidence
-
-An action result is the reusable cache fact: given these declared inputs,
-this command produced these outputs. When the same action is requested
-again, Once can restore the cached result instead of repeating the work.
-
-Evidence is the planning fact around that result. It records that a
-subject, such as a command action or target capability, produced a
-status at a specific time with specific provenance. That makes the
-result inspectable and comparable without turning the evidence itself
-into a build artifact.
-
-The distinction matters because engineering decisions usually need more
-than reuse. A coding agent needs to know whether a target has fresh test
-evidence, whether a failure came from the current inputs, or whether a
-passing result was restored from cache. Evidence gives those decisions a
-structured record to inspect.
-
-## Stale Evidence
-
-Evidence becomes stale when the facts that supported it no longer match
-the current project state. A test result might have passed yesterday,
-but if the input digest changed today, the old evidence no longer proves
-that the current target is healthy. The same applies when the action
-digest changes, the policy or tool that produced the record changes, a
-newer record supersedes it, or a retention policy expires it.
-
-Staleness should be derived from evidence and graph state rather than
-stored as the source of truth. That lets Once explain why a result can
-no longer be trusted.
+Use the [Memory reference](/reference/memory/) for the storage contract. Continue
+to the [Graph guide](/guide/graph/) when a scripted workflow needs stable target
+subjects and named capabilities such as build, run, or test.

@@ -1,4 +1,4 @@
-# CLI Reference
+# Command-line Reference
 
 Every subcommand the `once` binary exposes, with its synopsis, options, and arguments. Use the sidebar to jump to a specific command.
 
@@ -9,7 +9,7 @@ Every subcommand the `once` binary exposes, with its synopsis, options, and argu
 - [`once cache`](/reference/cli/cache): Cache management
 - [`once edit`](/reference/cli/edit): Mutate workspace manifests
 - [`once exec`](/reference/cli/exec): Execute a literal action through the cache
-- [`once mcp`](/reference/cli/mcp): Expose Once's graph and memory queries to a coding agent over MCP
+- [`once mcp`](/reference/cli/mcp): Expose Once's graph and memory queries to a coding agent
 - [`once query`](/reference/cli/query): Query the typed build graph
 - [`once run`](/reference/cli/run): Run a declared target
 - [`once runtime`](/reference/cli/runtime): Runtime session inspection and control

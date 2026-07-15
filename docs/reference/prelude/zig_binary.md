@@ -16,7 +16,7 @@ and linker flags.
 Canonical module names are generated from target labels with collision-safe
 escaping. `import_names` keys must match exactly one Zig module dependency by
 full label, short label name, import name, or canonical name; ambiguous or
-unknown keys fail analysis.
+unknown keys fail validation.
 
 ## Attributes
 
@@ -60,7 +60,7 @@ unknown keys fail analysis.
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables for `once run` |
 | `args` | list&lt;string&gt; | no | `[]` | Arguments for `once run` |
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
