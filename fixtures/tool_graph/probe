@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+test "${MISE_ENABLE_TOOLS:-}" = "http:once-probe"
+test "${MISE_AUTO_INSTALL:-}" = "0"
+test "${MISE_EXEC_AUTO_INSTALL:-}" = "0"
+printf 'managed-tool:%s\n' "$MISE_ENABLE_TOOLS" > "$1"
