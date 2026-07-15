@@ -22,6 +22,12 @@ def capability(name, output_groups, requires_outputs = []):
         "requires_outputs": requires_outputs,
     }
 
+def tool(name, executables = []):
+    return {
+        "name": name,
+        "executables": executables or [name],
+    }
+
 def example(slug, name, use_when, path = None):
     return {
         "_once_example": True,
@@ -31,7 +37,7 @@ def example(slug, name, use_when, path = None):
         "path": path or ("examples/" + slug),
     }
 
-def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None):
+def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, tools = []):
     return {
         "_once_target_kind": True,
         "kind": kind,
@@ -40,12 +46,23 @@ def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], c
         "deps": deps,
         "providers": providers,
         "capabilities": capabilities,
+        "tools": tools,
         "examples": examples,
         "impl": impl,
     }
 
-def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None):
-    return target_kind(kind, docs, attrs, deps, providers, capabilities, examples, impl)
+def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, tools = []):
+    return target_kind(
+        kind = kind,
+        docs = docs,
+        attrs = attrs,
+        deps = deps,
+        providers = providers,
+        capabilities = capabilities,
+        examples = examples,
+        impl = impl,
+        tools = tools,
+    )
 
 def _ends_with(value, suffix):
     if len(value) < len(suffix):

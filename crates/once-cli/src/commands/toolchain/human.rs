@@ -5,8 +5,9 @@ use super::contract::ToolchainContract;
 pub(super) fn render(contract: &ToolchainContract) -> String {
     let lock = contract.lock.as_deref().unwrap_or("missing");
     let mut out = format!(
-        "source: {}\nconfig: {}\nlock: {}\nplatform: {} ({}/{})\nfingerprint: {}\n",
+        "source: {}\nmise: {}\nconfig: {}\nlock: {}\nplatform: {} ({}/{})\nfingerprint: {}\n",
         contract.source,
+        contract.mise_version,
         contract.config,
         lock,
         contract.platform.mise,

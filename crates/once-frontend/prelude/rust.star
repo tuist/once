@@ -11,6 +11,8 @@ def _ascii_env_key(value):
             out.append("_")
     return "".join(out)
 
+_RUST_TOOL = tool("rust", executables = ["rustc", "cargo"])
+
 def _rust_metadata_suffix(ctx):
     return _ascii_env_key(ctx["label"]["id"])
 
@@ -2786,6 +2788,7 @@ cargo_dependencies = target_kind(
     ],
     providers = ["rust_dependency_set"],
     capabilities = [capability("build", [])],
+    tools = [_RUST_TOOL],
     examples = [
         example(
             "rust-binary-with-crate",
@@ -2804,6 +2807,7 @@ rust_library = target_kind(
     deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
     providers = ["rust_crate", "native_linkable", "apple_linkable", "android_native_library"],
     capabilities = [capability("build", ["library"])],
+    tools = [_RUST_TOOL],
     examples = [
         example(
             "rust-library-minimal",
@@ -2819,6 +2823,7 @@ rust_mobile_library = target_kind(
     attrs = _RUST_MOBILE_ATTRS,
     providers = ["native_linkable", "apple_linkable", "android_native_library"],
     capabilities = [capability("build", [])],
+    tools = [_RUST_TOOL],
     examples = [
         example(
             "rust-native-mobile-library",
@@ -2847,6 +2852,7 @@ rust_binary = target_kind(
         capability("build", ["binary"]),
         capability("run", ["default"], ["binary"]),
     ],
+    tools = [_RUST_TOOL],
     examples = [
         example(
             "rust-binary-with-crate",
@@ -2874,6 +2880,7 @@ rust_test = target_kind(
         capability("build", ["binary"]),
         capability("test", ["default", "test_results", "logs"]),
     ],
+    tools = [_RUST_TOOL],
     examples = [
         example(
             "rust-test-minimal",
@@ -2895,6 +2902,7 @@ rust_crate = target_kind(
     deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Resolved Cargo package dependencies.")],
     providers = ["rust_crate"],
     capabilities = [capability("build", ["rlib"])],
+    tools = [_RUST_TOOL],
     examples = [
         example(
             "rust-crate-minimal",
@@ -2916,6 +2924,7 @@ rust_proc_macro = target_kind(
     deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed by the procedural macro.")],
     providers = ["rust_proc_macro"],
     capabilities = [capability("build", ["proc_macro"])],
+    tools = [_RUST_TOOL],
     examples = [
         example(
             "rust-proc-macro-minimal",

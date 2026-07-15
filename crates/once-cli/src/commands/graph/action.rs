@@ -191,6 +191,7 @@ mod tests {
                 requires_outputs: Vec::new(),
             }],
             providers: Vec::new(),
+            tools: Vec::new(),
             diagnostics: Vec::new(),
         }
     }

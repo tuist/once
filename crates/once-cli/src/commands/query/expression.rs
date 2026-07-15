@@ -107,6 +107,7 @@ mod tests {
                 })
                 .collect(),
             providers: Vec::new(),
+            tools: Vec::new(),
             diagnostics: Vec::new(),
         }
     }

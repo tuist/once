@@ -10,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use once_cas::Digest;
 use once_core::{
-    tool_env, workspace_tool, workspace_tool_env, Action, OutputSymlinkMode, RemoteExecution,
-    ResourceRequest, SandboxMode, WorkspacePath,
+    tool_env, workspace_tool_command, workspace_tool_env, Action, OutputSymlinkMode,
+    RemoteExecution, ResourceRequest, SandboxMode, WorkspacePath,
 };
 
 use super::{input_digest, input_paths, parse_attr, ActionPlan};
@@ -94,8 +94,7 @@ async fn file_script_action(
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("script {} has no script_path", target.id()))?;
 
-    let program = resolve_host_runtime(workspace, &runtime).await?;
-    let mut argv = vec![program];
+    let mut argv = resolve_host_runtime(workspace, &runtime).await?;
     argv.extend(runtime_args);
     argv.push(host_script_path(&script_path, cwd.as_ref())?);
 
@@ -177,11 +176,15 @@ async fn host_env(
     Ok(out)
 }
 
-async fn resolve_host_runtime(workspace: &std::path::Path, runtime: &str) -> Result<String> {
-    if runtime.contains('/') {
-        return Ok(runtime.to_string());
+async fn resolve_host_runtime(workspace: &std::path::Path, runtime: &str) -> Result<Vec<String>> {
+    // A runtime that looks like a path is run directly. This must match the
+    // path detection in `graph_tools_from_parts`, which excludes both
+    // separators, otherwise a backslash runtime is never installed yet
+    // still gets sent through mise here.
+    if runtime.contains('/') || runtime.contains('\\') {
+        return Ok(vec![runtime.to_string()]);
     }
-    workspace_tool(workspace, runtime)
+    workspace_tool_command(workspace, runtime)
         .await
         .with_context(|| format!("resolving script runtime `{runtime}`"))
 }

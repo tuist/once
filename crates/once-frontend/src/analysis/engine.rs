@@ -81,6 +81,16 @@ impl AnalysisEngine {
         Self::from_source_with_path(crate::modules::COMBINED_MODULE_PATH, source, options)
     }
 
+    pub fn for_workspace_with_options_and_tool_paths(
+        root: &Path,
+        options: AnalysisOptions,
+        tool_paths: BTreeMap<String, String>,
+    ) -> Result<Self> {
+        let mut engine = Self::for_workspace_with_options(root, options)?;
+        engine.host_cache = HostCache::with_tool_paths(tool_paths);
+        Ok(engine)
+    }
+
     pub fn from_source(source: impl Into<Arc<str>>) -> Result<Self> {
         Self::from_source_with_path(
             crate::modules::BUILT_IN_MODULE_PATH,

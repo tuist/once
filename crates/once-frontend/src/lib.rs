@@ -35,7 +35,7 @@ pub use graph::{
     graph_from_targets, graph_from_targets_result, load_graph_workspace,
     target_kind_schemas_for_workspace, AttrSchema, Capability, DepSchema, Diagnostic, GraphTarget,
     TargetKindExample, TargetKindExampleBundle, TargetKindExampleFile, TargetKindExampleRoot,
-    TargetKindExampleSource, TargetKindSchema, TargetLabel,
+    TargetKindExampleSource, TargetKindSchema, TargetLabel, ToolRequirement,
 };
 pub use manifest::{load_cache_provider_toml_str, load_infrastructure_toml_str, load_toml_str};
 pub use manifest_editor::{

@@ -62,6 +62,8 @@ and by MCP target kind discovery.
 - `providers`: provider names this target kind can return.
 - `capabilities`: command surfaces this target kind supports, such as
   `build`, `run`, `test`, or `metadata`.
+- `tools`: `tool(...)` declarations for workspace tools the implementation
+  needs during analysis or execution.
 - `examples`: `example(...)` declarations for starter workspaces exposed
   to agents.
 - `impl`: optional function that declares actions and returns a provider
@@ -70,6 +72,37 @@ and by MCP target kind discovery.
 Attributes can be configurable unless their schema sets
 `configurable = False`. Non-configurable attributes reject `select`
 during validation before the implementation runs.
+
+## Tool Requirements
+
+`tool(name, executables = [])` adds a tool requirement to the target kind
+schema and to every loaded graph target of that kind. `name` matches a key in
+the workspace `mise.toml`. `executables` lists the commands the target kind may
+invoke and defaults to the tool name.
+
+```python
+rust_binary = target_kind(
+    docs = "Builds a Rust executable.",
+    tools = [tool("rust", executables = ["rustc", "cargo"])],
+    capabilities = [capability("build", ["binary"])],
+    impl = _rust_binary_impl,
+)
+```
+
+The requirements are returned by `once query schema` and `once query targets`,
+so scheduling can collect the complete tool set as soon as the graph is
+loaded. Script targets derive the same requirement from their declared
+runtime.
+
+Once carries a fixed mise version with each release. On first use it downloads
+the matching mise release binary, verifies its published checksum, and stores
+it in Once's data directory. A developer-installed mise is never required.
+When a graph build session starts, Once installs the union of its declared
+tools before analysis and resolves the declared executable names from that
+environment. Command actions and scripts then run through `mise exec` with
+implicit installation disabled. Once authorizes the selected workspace
+configuration for these managed invocations while keeping user-global mise
+configuration isolated.
 
 ## Starter Examples
 

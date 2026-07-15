@@ -22,6 +22,7 @@ struct TargetRecord {
     kind: String,
     deps: Vec<String>,
     capabilities: Vec<String>,
+    tools: Vec<once_frontend::ToolRequirement>,
 }
 
 #[derive(Debug, Serialize)]
@@ -68,6 +69,7 @@ fn target_records(graph: Vec<once_frontend::GraphTarget>, kind: Option<&str>) ->
                 .into_iter()
                 .map(|capability| capability.name)
                 .collect(),
+            tools: target.tools,
         })
         .collect::<Vec<_>>()
 }
@@ -324,6 +326,13 @@ fn render_schema_human(schema: &once_frontend::TargetKindSchema) -> String {
                 requires
             )
             .expect("writing to string cannot fail");
+        }
+    }
+    if !schema.tools.is_empty() {
+        out.push_str("tools:\n");
+        for tool in &schema.tools {
+            writeln!(out, "  {}: {}", tool.name, tool.executables.join(", "))
+                .expect("writing to string cannot fail");
         }
     }
     out
@@ -713,6 +722,13 @@ fn render_target_human(target: &once_frontend::GraphTarget) -> String {
         out.push_str(&names.join(", "));
         out.push('\n');
     }
+    if !target.tools.is_empty() {
+        out.push_str("tools:\n");
+        for tool in &target.tools {
+            writeln!(out, "  {}: {}", tool.name, tool.executables.join(", "))
+                .expect("writing to string cannot fail");
+        }
+    }
     out
 }
 
@@ -759,6 +775,15 @@ fn render_targets_human(records: &[TargetRecord]) -> String {
         };
         writeln!(out, "  {} ({}) [{}]", target.id, target.kind, capabilities)
             .expect("writing to string cannot fail");
+        for tool in &target.tools {
+            writeln!(
+                out,
+                "    tool {}: {}",
+                tool.name,
+                tool.executables.join(", ")
+            )
+            .expect("writing to string cannot fail");
+        }
     }
     out
 }
@@ -807,6 +832,7 @@ mod tests {
                 })
                 .collect(),
             providers: Vec::new(),
+            tools: Vec::new(),
             diagnostics: Vec::new(),
         }
     }
@@ -821,6 +847,7 @@ mod tests {
             kind: "apple_application".to_string(),
             deps: Vec::new(),
             capabilities: vec!["build".to_string(), "run".to_string()],
+            tools: Vec::new(),
         }]);
         assert!(rendered.contains("apps/ios/App (apple_application) [build, run]"));
     }
@@ -854,6 +881,15 @@ mod tests {
     }
 
     #[test]
+    fn render_schema_human_includes_tools() {
+        let schema = once_frontend::built_in_target_kind_schema("rust_binary").unwrap();
+
+        let rendered = render_schema_human(&schema);
+
+        assert!(rendered.contains("tools:\n  rust: rustc, cargo"));
+    }
+
+    #[test]
     fn target_records_filters_by_kind() {
         let records = target_records(
             vec![
@@ -872,6 +908,7 @@ mod tests {
                 kind: "apple_application".to_string(),
                 deps: Vec::new(),
                 capabilities: vec!["build".to_string(), "run".to_string()],
+                tools: Vec::new(),
             }]
         );
     }

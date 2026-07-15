@@ -55,7 +55,7 @@ pub async fn build(
     sandbox: SandboxMode,
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let session = analysis::BuildSession::new(workspace, cache, graph, sandbox)?;
+    let session = analysis::BuildSession::new(workspace, cache, graph, sandbox).await?;
     let target = session.target(target_id)?;
     let record = build_target(workspace, cache, target, &session, sandbox).await?;
     record_capability_run(workspace, &record).await;
@@ -71,7 +71,7 @@ pub async fn test(
     sandbox: SandboxMode,
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let session = analysis::BuildSession::new(workspace, cache, graph, sandbox)?;
+    let session = analysis::BuildSession::new(workspace, cache, graph, sandbox).await?;
     let target = session.target(target_id)?;
     let test_capability = ensure_capability(target, "test")?;
     if !test_capability.requires_outputs.is_empty()
@@ -132,7 +132,8 @@ pub async fn run(
             run_visible: options.visible,
         },
         sandbox,
-    )?;
+    )
+    .await?;
     let target = session.target(target_id)?;
     let run_capability = ensure_capability(target, "run")?;
     if !run_capability.requires_outputs.is_empty()
@@ -421,6 +422,7 @@ mod tests {
                 })
                 .collect(),
             providers: Vec::new(),
+            tools: Vec::new(),
             diagnostics: Vec::new(),
         }
     }

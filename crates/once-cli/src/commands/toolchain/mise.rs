@@ -44,6 +44,7 @@ pub(super) fn inspect_workspace(
 
     Ok(ToolchainContract {
         source: "mise",
+        mise_version: once_core::MANAGED_MISE_VERSION,
         config: MISE_CONFIG.to_string(),
         lock: lock.present.then(|| lock::MISE_LOCK.to_string()),
         platform,
@@ -91,6 +92,7 @@ RUST_BACKTRACE = "1"
         let contract = inspect_workspace(tmp.path(), None).unwrap();
 
         assert_eq!(contract.source, "mise");
+        assert_eq!(contract.mise_version, once_core::MANAGED_MISE_VERSION);
         assert_eq!(contract.config, MISE_CONFIG);
         assert_eq!(contract.lock, None);
         assert!(contract.fingerprint.starts_with("blake3:"));

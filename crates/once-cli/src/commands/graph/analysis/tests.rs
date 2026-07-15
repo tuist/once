@@ -93,8 +93,28 @@ fn target_with_capabilities(
             })
             .collect(),
         providers: Vec::new(),
+        tools: Vec::new(),
         diagnostics: Vec::new(),
     }
+}
+
+#[tokio::test]
+async fn graph_tool_resolution_defers_to_host_path_without_mise_config() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut target = target_with_capabilities("Tool", &[], &[], &["build"], []);
+    target.tools.push(once_frontend::ToolRequirement {
+        name: "rust".to_string(),
+        executables: vec!["rustc".to_string(), "cargo".to_string()],
+    });
+
+    let paths = resolve_graph_tools(workspace.path(), &[target])
+        .await
+        .unwrap();
+
+    // Without a mise config the workspace relies on the host toolchain.
+    // Returning no resolved paths keeps `host_which` walking `PATH` (and
+    // verifying existence) rather than short-circuiting to a bare name.
+    assert!(paths.is_empty());
 }
 
 #[test]

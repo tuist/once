@@ -51,6 +51,9 @@ pub struct GraphTarget {
     /// Providers emitted by this target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<String>,
+    /// Tools required to analyze or execute this target.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolRequirement>,
     /// Non-fatal graph loading diagnostics for this target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
@@ -66,6 +69,15 @@ pub struct Capability {
     /// Output groups that must already exist before this capability runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_outputs: Vec<String>,
+}
+
+/// A tool made available to a target through the workspace tool environment.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ToolRequirement {
+    /// Logical tool name declared by the workspace.
+    pub name: String,
+    /// Executable names the target kind may invoke from this tool.
+    pub executables: Vec<String>,
 }
 
 /// Diagnostic emitted while constructing the typed graph.
@@ -135,6 +147,9 @@ pub struct TargetKindSchema {
     pub providers: Vec<String>,
     /// Capabilities exposed by targets of this kind.
     pub capabilities: Vec<Capability>,
+    /// Tools required by implementations of this target kind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolRequirement>,
     /// Runnable starter workspaces. Each example is a lightweight
     /// descriptor; callers load the file bundle only when they choose
     /// a starter to materialize.
@@ -337,6 +352,7 @@ fn graph_target_from_schema(target: &Target, schemas: &[TargetKindSchema]) -> Gr
             }
         }
     }
+    let tools = graph_tools_from_parts(&target.kind, &attrs, schema);
     GraphTarget {
         label: TargetLabel {
             package: target.package.clone(),
@@ -351,6 +367,7 @@ fn graph_target_from_schema(target: &Target, schemas: &[TargetKindSchema]) -> Gr
             .as_ref()
             .map_or_else(Vec::new, |schema| schema.capabilities.clone()),
         providers: schema.map_or_else(Vec::new, |schema| schema.providers.clone()),
+        tools,
         diagnostics,
     }
 }
@@ -399,6 +416,7 @@ fn graph_target_from_owned_schema(target: Target, schemas: &[TargetKindSchema]) 
             }
         }
     }
+    let tools = graph_tools_from_parts(&kind, &attrs, schema);
     GraphTarget {
         label: TargetLabel {
             package,
@@ -413,8 +431,28 @@ fn graph_target_from_owned_schema(target: Target, schemas: &[TargetKindSchema]) 
             .as_ref()
             .map_or_else(Vec::new, |schema| schema.capabilities.clone()),
         providers: schema.map_or_else(Vec::new, |schema| schema.providers.clone()),
+        tools,
         diagnostics,
     }
+}
+
+fn graph_tools_from_parts(
+    kind: &str,
+    attrs: &BTreeMap<String, AttrValue>,
+    schema: Option<&TargetKindSchema>,
+) -> Vec<ToolRequirement> {
+    let mut tools = schema.map_or_else(Vec::new, |schema| schema.tools.clone());
+    if kind == "script" {
+        if let Some(AttrValue::String(runtime)) = attrs.get("script_runtime") {
+            if !runtime.contains('/') && !runtime.contains('\\') {
+                tools.push(ToolRequirement {
+                    name: runtime.clone(),
+                    executables: vec![runtime.clone()],
+                });
+            }
+        }
+    }
+    tools
 }
 
 fn graph_attrs(target: &Target) -> BTreeMap<String, AttrValue> {
@@ -613,6 +651,13 @@ fn target_kind_schema_from_value(
                 capability_from_value(capability, &format!("{path}.capabilities[{index}]"))
             })
             .collect::<std::result::Result<Vec<_>, _>>()?,
+        tools: field_list(value, path, "tools")?
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| {
+                tool_requirement_from_value(tool, &format!("{path}.tools[{index}]"))
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?,
         examples,
     })
 }
@@ -641,6 +686,16 @@ fn capability_from_value(value: Value<'_>, path: &str) -> std::result::Result<Ca
         name: field_string(value, path, "name")?,
         output_groups: field_string_list(value, path, "output_groups")?,
         requires_outputs: field_string_list(value, path, "requires_outputs")?,
+    })
+}
+
+fn tool_requirement_from_value(
+    value: Value<'_>,
+    path: &str,
+) -> std::result::Result<ToolRequirement, String> {
+    Ok(ToolRequirement {
+        name: non_empty_field_string(value, path, "name")?,
+        executables: field_string_list(value, path, "executables")?,
     })
 }
 
@@ -799,6 +854,7 @@ fn script_schema() -> TargetKindSchema {
         deps: Vec::new(),
         providers: vec!["script_action".to_string()],
         capabilities: vec![capability("run", &["default"], &[])],
+        tools: Vec::new(),
         examples: Vec::new(),
     }
 }
@@ -890,6 +946,25 @@ mod tests {
         let schemas = parse_target_kind_schemas("test.star", &source).unwrap();
         assert_eq!(schemas.len(), 1);
         assert_eq!(schemas[0].kind, "demo");
+    }
+
+    #[test]
+    fn parse_target_kind_schemas_exposes_tool_requirements() {
+        let source = source_with_common(
+            r#"demo = target_kind(
+    docs = "Demo kind",
+    tools = [tool("rust", executables = ["rustc", "cargo"])],
+)"#,
+        );
+        let schemas = parse_target_kind_schemas("test.star", &source).unwrap();
+
+        assert_eq!(
+            schemas[0].tools,
+            vec![ToolRequirement {
+                name: "rust".to_string(),
+                executables: vec!["rustc".to_string(), "cargo".to_string()],
+            }]
+        );
     }
 
     #[test]
@@ -1112,6 +1187,29 @@ demo_kind = target_kind(
     }
 
     #[test]
+    fn script_runtime_becomes_a_graph_tool_requirement() {
+        let target = Target {
+            package: "tools".to_string(),
+            kind: "script".to_string(),
+            name: "Generate".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::from([("script_runtime".to_string(), "python".to_string())]),
+            typed_attrs: BTreeMap::new(),
+        };
+
+        let graph = graph_from_targets(&[target]);
+
+        assert_eq!(
+            graph[0].tools,
+            vec![ToolRequirement {
+                name: "python".to_string(),
+                executables: vec!["python".to_string()],
+            }]
+        );
+    }
+
+    #[test]
     fn graph_from_targets_attaches_built_in_schema_to_each_target() {
         let targets = ["ToolA", "ToolB"].map(|name| Target {
             package: "tools".to_string(),
@@ -1190,6 +1288,7 @@ demo_kind = target_kind(
             deps: Vec::new(),
             providers: Vec::new(),
             capabilities: Vec::new(),
+            tools: Vec::new(),
             examples: Vec::new(),
         }];
 
@@ -1212,6 +1311,14 @@ demo_kind = target_kind(
         assert!(kinds.len() > 1);
         let unique = kinds.iter().collect::<std::collections::BTreeSet<_>>();
         assert_eq!(unique.len(), kinds.len());
+    }
+
+    #[test]
+    fn rust_schema_declares_its_mise_tool() {
+        let schema = built_in_target_kind_schema("rust_binary").unwrap();
+
+        assert_eq!(schema.tools[0].name, "rust");
+        assert_eq!(schema.tools[0].executables, ["rustc", "cargo"]);
     }
 
     #[test]
