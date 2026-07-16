@@ -15,7 +15,7 @@ If the module depends on a C provider, downstream Zig builds receive a generated
 Canonical module names are generated from target labels with collision-safe
 escaping. `import_names` keys must match exactly one Zig module dependency by
 full label, short label name, import name, or canonical name; ambiguous or
-unknown keys fail analysis.
+unknown keys fail validation.
 
 ## Attributes
 
@@ -28,7 +28,7 @@ unknown keys fail analysis.
 | `data` | list&lt;string&gt; | no | `[]` | Runtime data globs propagated to dependents |
 | `zigopts` | list&lt;string&gt; | no | `[]` | Extra flags attached to this module specification |
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

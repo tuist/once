@@ -1,8 +1,14 @@
-# Ruby SDK
+---
+prev: false
+next: false
+---
 
-The Ruby SDK is the `buildonce` gem. It exposes Once primitives for Ruby
-applications and tools. Script execution is CLI specific and is not part
-of the SDK surface.
+# Ruby Software Development Kit
+
+The Ruby library is the `buildonce` gem. It exposes Once cache primitives for
+Ruby applications and tools. Script execution belongs to the command line and
+is not part of this library. See the [language-library overview](/guide/sdk/)
+to compare the available bindings.
 
 ```ruby
 require "buildonce"
@@ -27,17 +33,18 @@ Set `ONCE_LIBRARY_PATH` when you need to load a custom `libonce` build.
 
 ## Cache
 
-`Once::Cache` opens the default local cache using XDG conventions. The
+`Once::Cache` opens the default local cache using the
+[X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/). The
 default cache root is `$XDG_CACHE_HOME/once/cas` when `XDG_CACHE_HOME` is
 set, and `$HOME/.cache/once/cas` otherwise.
 
-Ruby SDK methods are synchronous. `digest(bytes)` only hashes bytes and
-does not touch storage. When `bytes` is a string, the SDK uses the
+Ruby methods are synchronous. `digest(bytes)` only hashes bytes and
+does not touch storage. When `bytes` is a string, the library uses the
 string's byte representation.
 
-| API | Use |
+| Application programming interface | Use |
 | --- | --- |
-| `Once::Cache.new` | Opens the default local cache using XDG conventions. |
+| `Once::Cache.new` | Opens the default local cache using the operating-system convention. |
 | `version` | Returns the linked Once version. |
 | `digest(bytes)` | Returns the content digest for bytes without writing them to the cache. |
 | `put_blob(bytes)` | Stores bytes and returns their content digest. |

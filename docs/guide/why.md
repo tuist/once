@@ -1,8 +1,8 @@
 # Why
 
 Most developer automation was designed around a quiet assumption: one
-process is doing the work. A developer runs a task locally, or a CI job
-runs it after a push. The task starts, reads the repository, writes its
+process is doing the work. A developer runs a task locally, or a continuous
+integration job runs it after a push. The task starts, reads the repository, writes its
 outputs, and exits. If it takes a minute, the person or pipeline waits a
 minute.
 
@@ -30,8 +30,8 @@ than the current laptop.
 
 At the same time, new caching and compute infrastructure is emerging to
 serve this need. Some providers focus on artifact storage. Some focus on
-remote execution. Some are tied to a build system, a CI vendor, a cloud
-runtime, or an agent platform.
+remote execution. Some are tied to a build system, a continuous integration
+vendor, a cloud runtime, or an agent platform.
 
 The result is useful, but fragmented. Teams still need a way to describe
 what work should happen, what values affect it, which outputs matter, and
@@ -43,11 +43,10 @@ automation workflow to one provider.
 Once is the [narrow waist](https://en.wikipedia.org/wiki/Hourglass_model)
 between automation needs and the infrastructure that can make those
 workflows faster. Above Once, developers and agents describe targets,
-capabilities, and the actions those capabilities lower into: inputs,
-outputs, environment, working directory, runtime metadata, and the provider
-capabilities they need. Below Once, providers can supply local cache
-storage, shared cache storage, remote compute, or future execution
-surfaces.
+capabilities, and actions. Each action declares its inputs, outputs,
+environment, working directory, runtime needs, and required provider
+capabilities. Providers can supply local cache storage, shared cache storage,
+or remote compute.
 
 Keeping that waist small matters. The action contract should be simple
 enough for agents to reason about, stable enough for providers to
@@ -60,4 +59,9 @@ repositories already have. Scripts are everywhere, and they already encode
 real repository knowledge, so Once lets them enter the model immediately.
 When that work needs richer dependencies, multiple capabilities,
 structured diagnostics, or agent-driven edits, it can move into typed graph
-targets without changing the execution substrate underneath it.
+targets while keeping the same cache, build, run, and test workflow.
+
+## Next
+
+Continue with [Getting Started](/guide/getting-started) to install Once and
+reuse the result of a cacheable script.

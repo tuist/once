@@ -1,9 +1,16 @@
-# Swift SDK
+---
+prev: false
+next: false
+---
 
-The Swift SDK is a thin async wrapper over the C API in the
-`Once.xcframework` release artifact. It exposes cache primitives for Apple
-platforms. Script execution is CLI specific and is not part of the Swift
-SDK surface.
+# Swift Software Development Kit
+
+The Swift library is a thin asynchronous wrapper over the C application
+programming interface in the `Once.xcframework` release artifact. It exposes
+cache primitives for Apple
+platforms. Script execution belongs to the command line and is not part of
+this library. See the [language-library overview](/guide/sdk/) to compare the
+available bindings.
 
 ```swift
 import Foundation
@@ -21,7 +28,8 @@ func example() async throws {
 ## Installation
 
 Reference the released XCFramework from your package manifest with a
-SwiftPM binary target:
+[Swift Package Manager](https://www.swift.org/documentation/package-manager/)
+binary target:
 
 ```swift
 // swift-tools-version: 5.9
@@ -46,25 +54,26 @@ let package = Package(
 )
 ```
 
-Replace the version in the URL with the Once release you want to use. The
+Replace the version in the download address with the Once release you want to use. The
 checksum is published next to the release asset and can also be computed
 locally with `swift package compute-checksum Once.xcframework.zip`.
 
 Vendor the `Once.swift` wrapper that ships with the matching release tag
 into the Swift target that depends on `Once`. The wrapper imports the C
-module from the binary target and gives callers the high-level Swift API.
+module from the binary target and gives callers the high-level Swift interface.
 
 ## OnceCache
 
 `OnceCache` is the Swift cache client.
 
-`OnceCache` opens the default local cache using XDG conventions.
+`OnceCache` opens the default local cache using the
+[X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/).
 
 All cache operations that touch storage are `async throws`.
 
-| API | Use |
+| Application programming interface | Use |
 | --- | --- |
-| `init()` | Opens the default local cache using XDG conventions. |
+| `init()` | Opens the default local cache using the operating-system convention. |
 | `version` | Returns the linked Once version. |
 
 The default cache root is `$XDG_CACHE_HOME/once/cas` when
@@ -75,7 +84,7 @@ The default cache root is `$XDG_CACHE_HOME/once/cas` when
 Blobs are content-addressed byte payloads. Store bytes once, then refer to
 them by digest from action results, manifests, or other integration state.
 
-| API | Use |
+| Application programming interface | Use |
 | --- | --- |
 | `digest(bytes:)` | Returns the content digest for bytes without writing them to the cache. |
 | `putBlob(_:)` | Stores bytes and returns their content digest. |
@@ -85,10 +94,10 @@ them by digest from action results, manifests, or other integration state.
 ## Action Results
 
 Action results let embedders associate an action digest with an exit code,
-stdout digest, stderr digest, and output digests. The Swift SDK stores and
+stdout digest, stderr digest, and output digests. The Swift library stores and
 retrieves metadata for completed actions. It does not run commands.
 
-| API | Use |
+| Application programming interface | Use |
 | --- | --- |
 | `putActionResult(_:for:)` | Stores a cached result for an action digest. |
 | `getActionResult(_:)` | Returns a cached result when one exists. |
@@ -98,7 +107,8 @@ retrieves metadata for completed actions. It does not run commands.
 ## Types
 
 These are the public supporting types exposed by the Swift wrapper. They
-let embedders model cache state without calling the C API directly.
+let embedders model cache state without calling the C application programming
+interface directly.
 
 | Type | Use |
 | --- | --- |

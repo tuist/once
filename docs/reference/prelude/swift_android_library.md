@@ -34,12 +34,12 @@ the architecture-specific directory in the Android application package.
 | `swiftc_inputs` | list&lt;string&gt; | no | `[]` | Bazel-compatible extra Swift compiler input globs |
 | `library_evolution` | bool | no | `false` | Enable Swift library evolution and emit a textual module interface |
 
-Compatibility attributes declared for Bazel parity but not implemented yet:
+Accepted but unsupported attributes:
 `always_include_developer_search_paths`, `alwayslink`,
 `generated_header_name`, `generates_header`, `linkstatic`, `plugins`, and
-`private_deps`. Non-empty values fail analysis.
+`private_deps`. Non-empty values fail validation.
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

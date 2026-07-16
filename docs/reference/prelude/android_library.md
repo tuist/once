@@ -37,7 +37,7 @@ providers through the normal `deps` edge. Prefer a separate
 Tool override attrs are also available for `javac`, `jar`, `java`,
 `java_home`, `kotlinc`, `kotlin_home`, `kotlin_stdlib`, and `aapt2`.
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
@@ -77,12 +77,14 @@ library but does not need the complete source build.
 
 ## Limitations
 
-The first Android implementation supports Java sources, Kotlin sources, Android
-resources, assets, AAR packaging, Android resource deps, Android library deps,
-and transitive native-library provider propagation. AIDL, data binding,
-annotation processors, embedding native libraries directly into AARs, ProGuard
-consumer rules are not implemented yet. Non-empty values for unsupported attrs
-fail analysis instead of being ignored.
+The target supports Java sources, Kotlin sources, Android resources, assets,
+[Android Archive](https://developer.android.com/studio/projects/android-library)
+packaging, Android resource dependencies, Android library dependencies, and
+transitive native-library propagation. Android Interface Definition Language,
+data binding, annotation processors, embedding native libraries directly into
+Android Archives, and ProGuard consumer rules are not implemented yet.
+Non-empty values for unsupported attributes fail validation instead of being
+ignored.
 
 ## Example
 

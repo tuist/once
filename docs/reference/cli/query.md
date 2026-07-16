@@ -15,7 +15,7 @@ targets` lists every declared target id with its target kind
 and capabilities; `query capabilities` shows what a specific
 target exposes (`build`, `run`, `test`); `query schema`
 returns the typed attribute and provider shape for a target kind;
-`query example` materializes a chosen starter; `query script` validates
+`query example` returns the files in a chosen starter; `query script` validates
 an annotated script contract; `query validate-workspace` checks the
 complete loaded graph; and `query evidence` lists durable action evidence
 captured from prior executions. A quoted

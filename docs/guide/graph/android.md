@@ -1,27 +1,47 @@
+---
+prev: false
+next: false
+---
+
 # Android
 
-Once builds Android resources, Java and Kotlin libraries, and APKs from declarative
-`once.toml` manifests. [`android_resource`](/reference/prelude/android_resource)
-compiles `res/` trees with `aapt2` and propagates assets to package targets.
-[`android_library`](/reference/prelude/android_library) compiles Java and Kotlin sources,
-generates R classes, emits a classes jar, and packages an AAR. [`android_binary`](/reference/prelude/android_binary)
-links resources, compiles Java and Kotlin sources, dexes runtime jars with `d8`,
-packages native shared library providers, assembles an APK, zipaligns it, and
-signs it with a debug key by default.
-[`android_local_test`](/reference/prelude/android_local_test) compiles Java
-and Kotlin test sources and runs them on the host Java virtual machine.
-[`android_instrumentation_test`](/reference/prelude/android_instrumentation_test)
-installs an app package and an instrumentation package on a device or
-emulator, then runs `am instrument`.
+Once can build Android resources, Java and Kotlin libraries, application
+packages, and host or device tests. This guide uses one application throughout
+so each new target has a visible relationship to the previous one.
 
-For the per-target-kind attribute, dep, provider, and capability tables see
-the [target kind reference](/reference/prelude/).
+## Prerequisites
 
-## Targets
+Android targets require:
 
-The preferred shape follows Buck2's separation between resources, libraries,
-and final Android packages. Put reusable resources in an `android_resource`
-target, then let libraries or binaries depend on it:
+- a [Java Development Kit](https://docs.oracle.com/en/java/javase/21/install/overview-jdk-installation.html)
+  with `java`, `javac`, and `jar`;
+- the [Android Software Development Kit command-line tools](https://developer.android.com/tools),
+  an installed platform, and an installed build-tools package;
+- `kotlinc` and `kotlin-stdlib.jar` when a target contains Kotlin sources.
+
+The repository provides a setup task that accepts Android licenses, installs
+the pinned packages and emulator system image, creates the `once_example`
+emulator, and creates a local debug keystore when one is missing:
+
+```sh
+mise install
+mise run android:install-sdk
+```
+
+Running an application also requires platform tools, including the
+[Android Debug Bridge](https://developer.android.com/tools/adb), plus a
+connected device or configured emulator. Native Swift or Rust dependencies
+add a requirement for the
+[Android Native Development Kit](https://developer.android.com/ndk).
+
+Android targets find the development kit through the `android_sdk` attribute,
+`ANDROID_HOME`, or `ANDROID_SDK_ROOT`. When a platform or build-tools version
+is omitted, Once selects the highest installed version.
+
+## Declare One Application Graph
+
+Create `apps/hello/once.toml` with resources, a reusable library, and an
+application that connects them:
 
 ```toml
 [[target]]
@@ -37,7 +57,7 @@ min_sdk_version = 23
 [[target]]
 name = "Greeting"
 kind = "android_library"
-srcs = ["src/**/*.java"]
+srcs = ["src/main/**/*.kt"]
 deps = ["./HelloResources"]
 
 [target.attrs]
@@ -49,7 +69,7 @@ min_sdk_version = 23
 [[target]]
 name = "Hello"
 kind = "android_binary"
-srcs = ["src/**/*.kt"]
+srcs = ["src/app/**/*.kt"]
 deps = ["./Greeting"]
 
 [target.attrs]
@@ -61,35 +81,80 @@ version_code = 1
 version_name = "1.0"
 ```
 
-Dependency references are root-relative by default. `./` and `../`
-references resolve from the package that owns the manifest.
+The three targets form one chain:
 
-`android_library` can own Kotlin or Java sources and optional resources:
-
-```toml
-[[target]]
-name = "Greeting"
-kind = "android_library"
-srcs = ["src/**/*.kt"]
-
-[target.attrs]
-namespace = "dev.once.greeting"
-manifest = "AndroidManifest.xml"
+```text
+HelloResources -> Greeting -> Hello
 ```
 
-Android binaries can also depend on targets that emit
-`android_native_library`, such as
-[`swift_android_library`](/reference/prelude/swift_android_library) or
-[`rust_mobile_library`](/reference/prelude/rust_mobile_library). The
-Android application package stages each native provider under
-`lib/<abi>/`.
+`HelloResources` owns shared resources. `Greeting` compiles the reusable
+Kotlin code and consumes those resources. `Hello` owns the final application
+manifest and package identity.
 
 Swift native providers statically link the Swift standard library and include
 the matching C++ shared runtime from the selected Swift Software Development
 Kit. The `native-mobile-shared-code-e2e` starter loads its Swift and Rust
 libraries from Kotlin and displays values returned by both.
 
-Use `android_local_test` for host-side Java and Kotlin unit tests:
+Keep `ResourcesManifest.xml` focused on the resource package. Put launcher
+activities, application metadata, and version details in
+`AndroidManifest.xml`. Small targets can keep resources and assets inline,
+but an explicit `android_resource` dependency makes shared ownership easier to
+query.
+
+## Query Before Building
+
+Inspect the target chain and the final application's contract:
+
+```sh
+once query targets --kind android_binary
+once query capabilities apps/hello/HelloResources
+once query capabilities apps/hello/Greeting
+once query capabilities apps/hello/Hello
+once query schema android_binary
+```
+
+The resource and library targets expose `build`. The application exposes
+`build` and `run`.
+
+## Build and Run
+
+Build the Android application package:
+
+```sh
+once build apps/hello/Hello
+```
+
+Once builds the resource and library dependencies first, then compiles,
+packages, aligns, and signs the application. Outputs are materialized under
+`.once/out/<target>/`; the
+[`android_binary` reference](/reference/prelude/android_binary) lists the
+exact output groups.
+
+Run the package on a connected device or emulator:
+
+```sh
+once run apps/hello/Hello
+```
+
+The run waits for a device through `adb`, installs the package, resolves its
+launcher activity, and starts it. Set `launch_activity` when the manifest does
+not provide an unambiguous launcher. Set `adb_serial` when more than one
+device is connected.
+
+If `emulator_device` names an Android Virtual Device, request its visible
+interface while running:
+
+```sh
+once run --visible apps/hello/Hello
+```
+
+Installation and launch happen on every invocation because they depend on
+external device state.
+
+## Add a Local Test
+
+Add a host-side test for `Greeting` to the same manifest:
 
 ```toml
 [[target]]
@@ -102,71 +167,69 @@ deps = ["./Greeting"]
 labels = ["unit"]
 ```
 
-Use `android_instrumentation_test` for tests that need a device or emulator.
-The test package is another `android_binary` whose `instruments` attribute
-points at the app under test:
+The local runner finds zero-argument methods whose names begin with `test`. It
+can also run methods annotated by JUnit or Kotlin test libraries when those
+libraries are added to `classpath` and `runtime_classpath`.
+
+Query and run the new target:
+
+```sh
+once query capabilities apps/hello/GreetingTests
+once test apps/hello/GreetingTests
+```
+
+Local tests run on the host
+[Java Virtual Machine](https://docs.oracle.com/javase/specs/jvms/se21/html/index.html)
+and can replay from cache. Tests that need Android framework or device
+behavior should use
+[`android_instrumentation_test`](/reference/prelude/android_instrumentation_test).
+Instrumentation tests install both the application and test packages, then
+run on a connected device or emulator. They do not replay from cache.
+
+## Configure Tool Discovery
+
+Java-backed targets use `javac`, `jar`, and `java` from the host unless their
+paths are overridden. Kotlin-backed targets find `kotlinc` on `PATH` unless
+the `kotlinc` attribute is set. Set `kotlin_home` or `kotlin_stdlib` when the
+standard library is not next to the compiler installation.
+
+Native Swift targets use `ANDROID_NDK_HOME`, `android_ndk`, or
+`tools_directory` to find native linker tools. Native Rust targets use
+`ANDROID_NDK_HOME` or `android_ndk` to choose a default linker.
+
+Debug signing uses a package-relative `debug_keystore`,
+`ANDROID_DEBUG_KEYSTORE`, or `~/.android/debug.keystore`. Once does not ship
+private key material. Set `signing = "none"` when an unsigned package is
+enough.
+
+## Choose Values by Configuration
+
+Configurable Android attributes accept `select`. Active configuration tokens
+include `android`, installed and minimum platform-level tokens such as
+`compile_sdk_35` and `min_sdk_23`, `debug`, and `default`:
 
 ```toml
-[[target]]
-name = "GreetingInstrumentationApk"
-kind = "android_binary"
-srcs = ["src/androidTest/**/*.kt"]
-
 [target.attrs]
-application_id = "dev.once.greeting.test"
-manifest = "AndroidTestManifest.xml"
-resource_files = []
-instruments = "./GreetingApp"
-
-[[target]]
-name = "GreetingDeviceTests"
-kind = "android_instrumentation_test"
-deps = ["./GreetingApp", "./GreetingInstrumentationApk"]
-
-[target.attrs]
-test_app = "./GreetingInstrumentationApk"
-labels = ["device"]
+javac_opts = { select = { android = ["-Xlint:deprecation"], default = [] } }
 ```
 
-## Resources
+Attributes that choose the configuration, including `compile_sdk` and
+`min_sdk_version`, must remain literal. The target kind schema identifies any
+other non-configurable attributes.
 
-`android_resource` is the guide-level default for shared Android
-resources. It compiles matching resource files into `aapt2` compiled
-resource units, links a static resource package, and propagates those
-compiled units to consumers. `android_binary` merges dependency resource
-units into the final APK link instead of treating static resource
-packages as Android framework APKs.
+## Connect Native Dependencies
 
-The resource manifest should describe the resource package. The final
-application manifest belongs on `android_binary`, where launcher
-activities, app metadata, version values, and the application id are
-resolved for the APK.
+An `android_binary` can consume native shared libraries through normal
+dependencies:
 
-Inline `resource_files`, `resource_dirs`, `assets`, `asset_dirs`, and
-`assets_dir` remain available on `android_library` and `android_binary`
-for small targets and migration cases. For shared resources, prefer an
-explicit `android_resource` dep because the provider edge keeps resource
-ownership clear and queryable.
+- [`swift_android_library`](/reference/prelude/swift_android_library)
+  packages a Swift library for Android.
+- [`rust_mobile_library`](/reference/prelude/rust_mobile_library) produces an
+  Android shared library for the application.
 
-## Commands
-
-Inspect the graph with [`once query`](/reference/cli/query):
-
-```sh
-once query targets --kind android_binary
-once query capabilities apps/hello/Hello
-once query schema android_resource
-once query schema android_binary
-```
-
-Build an APK with [`once build`](/reference/cli/build):
-
-```sh
-once build apps/hello/Hello
-```
-
-Outputs land under `.once/out/<target>/`. The target kind reference pages list
-the exact outputs each target kind emits.
+Add native code after the Java or Kotlin application builds on its own. This
+keeps development-kit and linker setup separate from the first application
+graph.
 
 ## Coding Harnesses
 
@@ -178,8 +241,8 @@ and queries the resulting evidence. The harness does not need an Android-only
 Once integration because the same discovery and validation loop applies to
 every target kind.
 
-The `android_resource`, `android_library`, and `android_binary` schemas also
-return official source references for corresponding
+The `android_resource`, `android_library`, and `android_binary` schemas
+also return official source references for corresponding
 [Bazel Android rules](https://bazelbuild.github.io/rules_android/),
 [Buck2 Android rules](https://buck2.build/docs/prelude/rules/android/), and
 [Android Gradle plugin](https://developer.android.com/build) concepts. A
@@ -189,154 +252,32 @@ or resource dependency slice the user asks Once to own.
 If the source build uses another rule or plugin, the harness can fetch that
 public source through `once_fetch_external_source`, query
 `once_query_module_contract`, write a project-local target kind, and validate
-it with `once_validate_module`. Built-in Android target kinds remain the common
-path, not a requirement for graph adoption.
+it with `once_validate_module`. Built-in Android target kinds remain the
+common path, not a requirement for graph adoption.
 
 See [Coding harnesses](/guide/harness) for the complete protocol workflow.
 
-## Running Apps
+## Supported Target Kinds and Limitations
 
-`android_binary` produces an APK and exposes `run`. `once run` first
-materializes the required APK output, then executes the Android run action
-declared by the target kind. That run action is not cacheable, so each
-`once run` attempts a fresh install and launch instead of replaying an
-action-cache hit.
+Use the target kind reference for each artifact:
 
-The Android target kind owns the platform behavior. It waits for an Android
-device or emulator through `adb`, installs the APK with `adb install -r -d`,
-resolves the launcher activity on the device, and starts that component with
-`am start`. Set `launch_activity` when the app needs an explicit activity
-component. Set `adb_serial` when more than one device is connected.
+- [`android_resource`](/reference/prelude/android_resource)
+- [`android_library`](/reference/prelude/android_library)
+- [`android_binary`](/reference/prelude/android_binary)
+- [`android_local_test`](/reference/prelude/android_local_test)
+- [`android_instrumentation_test`](/reference/prelude/android_instrumentation_test)
 
-Pass `--visible` to request a visible runtime interface. If the target sets
-`emulator_device`, Once starts that Android Virtual Device with the Android
-emulator before waiting for a device, installing the app, and launching the
-activity.
+The current target kinds support Java and Kotlin sources, resources, assets,
+library packaging, native shared libraries, application packaging, debug
+signing, local tests, and instrumentation tests. Data binding, annotation
+processors, code shrinking, density filtering, production signing, and
+several advanced packaging controls are not implemented. Non-empty
+unsupported attributes fail validation instead of being ignored.
 
-```sh
-once build apps/hello/Hello
-once run --visible apps/hello/Hello
-```
+## Next
 
-This repository's Android setup task installs the matching emulator system
-image and creates the `once_example` device used by runnable starters:
-
-```sh
-mise run android:install-sdk
-```
-
-## Running Tests
-
-`android_local_test` runs on the host Java virtual machine and is cacheable.
-`android_instrumentation_test` runs on a connected Android device or emulator
-and is not cacheable because the action depends on external device state.
-
-Instrumentation tests wait for a device, install the app package, install the
-test package, optionally clear package data, optionally disable animations,
-and run `am instrument -w -r`. Use `instrumentation_args` for `-e` arguments
-and `test_class` for the standard class or class#method filter.
-
-```sh
-once test apps/hello/GreetingDeviceTests
-```
-
-## Toolchain
-
-Android targets require a JDK with `java`, `javac`, and `jar`.
-They also require the Android SDK command-line tools plus an installed
-Android platform and build-tools package. Build-tools provide `aapt2`, `d8`,
-`zipalign`, and `apksigner`. Running apps also requires platform-tools so
-`adb` is available.
-
-Android targets find the SDK from `android_sdk`, `ANDROID_HOME`, or
-`ANDROID_SDK_ROOT`. When `compile_sdk` or `build_tools_version` is omitted,
-the target kind picks the highest installed platform or build-tools version
-under the SDK root.
-
-Android APKs that package Swift or Rust native library deps also need the
-Android NDK. Swift Android targets use `ANDROID_NDK_HOME`, `android_ndk`, or
-`tools_directory` to find the NDK linker tools. Rust Android targets use
-`ANDROID_NDK_HOME` or `android_ndk` to choose the default clang wrapper linker.
-
-Java-backed Android targets use `javac`, `jar`, and `java` from the host
-toolchain unless those paths are overridden. The Android SDK tools also
-receive `JAVA_HOME` when it is available, which keeps `d8` and `apksigner`
-working with mise-managed Java installs.
-
-Kotlin-backed Android targets require `kotlinc` and `kotlin-stdlib.jar`.
-The target kind finds `kotlinc` on `PATH` unless `kotlinc` is set, then
-looks for the standard library under `kotlin_home` or next to the compiler
-installation. Set `kotlin_stdlib` when your Kotlin distribution stores the
-standard library somewhere else. In mixed targets Java sources compile
-first, then Kotlin compiles into the final class output with the Java
-classes on its classpath.
-
-Android build actions currently require a POSIX-compatible host shell for
-file staging and directory hashing. App launch actions use direct `adb`
-commands.
-
-Debug signing requires either a package-relative `debug_keystore`,
-`ANDROID_DEBUG_KEYSTORE`, or the standard local
-`~/.android/debug.keystore`. Once does not ship debug private key material.
-The local debug keystore is expected to use the public Android debug password,
-`android`. Use `signing = "none"` when an unsigned APK is enough.
-
-The current implementation supports Java sources, Kotlin sources, Android
-resources, assets, static resource packages, AAR packaging, native shared
-library packaging, dexing, APK packaging, zipalign, debug signing, and
-host-side Java and Kotlin local tests, and device or emulator instrumentation
-tests. AIDL, data binding, annotation processors, native splits, manifest
-placeholder expansion, shrinking, density filtering, no-compress packaging,
-startup profiles, and production signing are not implemented yet.
-Non-empty unsupported attributes fail analysis instead of being ignored.
-
-## Configurable Attributes
-
-Android targets support `select` values for configurable attributes.
-The active Android configuration exposes tokens such as:
-
-- `android`
-- `compile_sdk_<api>`, such as `compile_sdk_35`
-- `api_<api>`, such as `api_35`
-- `min_sdk_<api>`, such as `min_sdk_23`
-- `debug`
-- `default`
-
-Example:
-
-```toml
-[target.attrs]
-javac_opts = { select = { android = ["-Xlint:deprecation"], default = [] } }
-```
-
-The attributes that decide the Android configuration, such as
-`compile_sdk` and `min_sdk_version`, are not configurable. Attributes
-marked non-configurable in the target kind schema also reject `select`.
-
-## Prior Art
-
-The Android target kind set uses
-[Bazel's Android rules](https://github.com/bazelbuild/rules_android),
-[Bazel's Kotlin rules](https://github.com/bazelbuild/rules_kotlin), and
-[Buck2's Android and Kotlin rules](https://github.com/facebook/buck2) as
-reference points:
-
-- Bazel's Android rules provide a broad compatibility vocabulary for
-  Java sources, resources, assets, SDK selection, dexing, APK packaging,
-  signing, and migration-friendly attribute names.
-- Bazel's Kotlin rules model Kotlin compilation as a toolchain-backed
-  JVM compile step with the Kotlin standard library on compile and runtime
-  classpaths.
-- Buck2's Android rules provide the cleaner shape for Once: Android
-  resources are first-class packageable nodes, Java libraries focus on
-  compilation and providers, and binaries own final resource linking,
-  dexing, APK assembly, signing, and device test execution through a
-  separate instrumentation test rule.
-- Buck2's Kotlin rules keep Kotlin compiler and standard library details in
-  the Kotlin toolchain, then feed Android libraries and binaries through the
-  same provider graph.
-
-Once is not Buck-compatible, Bazel-compatible, or a drop-in replacement
-for Gradle. Android behavior lives in Starlark target kinds, while the
-Rust side stays focused on generic graph loading, validation, providers,
-actions, caching, and execution.
+Continue with [Memory](/guide/memory/) once the application builds and tests.
+It shows how Once records durable context about graph work. If the application
+shares code with Apple or Rust targets, return to
+[Ecosystems](/guide/graph/ecosystems) and add one cross-platform dependency at
+a time.

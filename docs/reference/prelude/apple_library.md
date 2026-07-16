@@ -39,7 +39,7 @@ merge them with `lipo`.
 | `alwayslink` | bool | no | `false` | Hint to downstream linker target kinds to force-load this archive (`-Wl,-force_load`) |
 | `exported_deps` | list&lt;string&gt; | no | `[]` | Target ids from `deps` whose module interface flows through to consumers' compile path |
 
-## Dep edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
@@ -114,8 +114,8 @@ affected cache slots.
 | `transitive_linkopts` | list&lt;string&gt; | Extra linker flags |
 | `transitive_defines` | list&lt;string&gt; | Preprocessor / conditional compilation flags |
 
-The shape mirrors `SwiftInfo` and `CcInfo` from Bazel's Apple build model so
-existing build engineers have a familiar mental model.
+Downstream Apple targets use this record to collect the complete compile and
+link context without inspecting the dependency's target kind.
 
 ## Configurable attributes
 
@@ -140,9 +140,8 @@ branch is selected when no other branch matches.
 sdk_frameworks = { select = { ios = ["UIKit"], macos = ["AppKit"] } }
 ```
 
-See the guide page on
-[Configurable attributes](/guide/graph/apple#configurable-attributes)
-for the overview.
+See [Choose Values by Configuration](/guide/graph/apple#choose-values-by-configuration)
+for the guided overview.
 
 ## Outputs
 

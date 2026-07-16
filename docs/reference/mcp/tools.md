@@ -1,6 +1,6 @@
-# MCP Tools
+# Model Context Protocol Tools
 
-Every tool the `once mcp` server advertises in `tools/list`, with the input schema it validates against and a worked example of what the call returns. The catalog is generated from the same record the runtime serves, so the names, descriptions, and schemas can't drift.
+Every tool the [`once mcp`](/reference/cli/mcp) [Model Context Protocol](https://modelcontextprotocol.io/) server advertises in `tools/list`, with its input schema and a worked return example.
 
 ## `once_query_targets`
 
@@ -21,7 +21,6 @@ Returns the same record shape as `once query targets --format json`: one entry p
   "type": "object"
 }
 ```
-
 **Example return**
 
 ```json
@@ -123,9 +122,9 @@ Returns the target kind schema (the typed contract a target of that kind must ma
 
 ## `once_query_example`
 
-Return the materialized file bundle for one target kind starter example.
+Return the complete file bundle for one target kind starter example.
 
-Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every UTF-8 file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`; this tool fetches the heavier file payload only after a caller chooses one.
+Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every text file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`; this tool fetches the file payload only after a caller chooses one.
 
 **Input schema**
 
@@ -228,7 +227,7 @@ Use this when no discovered target kind covers an external rule or plugin. The r
   ],
   "action_primitives": [
     { "signature": "write_path(path, content)", "purpose": "Declare a portable file-writing action." },
-    { "signature": "materialize_host_file(source, destination)", "purpose": "Snapshot a content-verified host toolchain file into a workspace output." }
+    { "signature": "materialize_host_file(source, destination)", "purpose": "Snapshot a content-verified absolute host toolchain file into a workspace output." }
   ],
   "starter": "def _generated_text_impl(ctx): ..."
 }
@@ -354,7 +353,7 @@ Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one 
 
 List targets that expose Once's generic test capability.
 
-Returns every target with a `test` capability, including its target kind, dependencies, runner type when the target kind exposes `once_test_info`, labels, and normalized result path. Use this as the agent-native test discovery entry point before running or filtering tests.
+Returns every target with a `test` capability, including its target kind, dependencies, runner type when the target kind exposes `once_test_info`, labels, and normalized result path. Use this as the agent test discovery entry point before running or filtering tests.
 
 **Input schema**
 
@@ -384,7 +383,7 @@ Returns every target with a `test` capability, including its target kind, depend
 
 Return test targets likely affected by a set of changed workspace paths.
 
-Maps changed paths to test targets using generic graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. The query does not know about any native runner.
+Maps changed paths to test targets using graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. Selection does not depend on a particular test runner.
 
 **Input schema**
 
@@ -419,7 +418,7 @@ Maps changed paths to test targets using generic graph relationships and declare
 
 Run test targets by id, or run tests affected by changed workspace paths.
 
-Executes Once's generic `test` capability for either explicit `target` / `targets` or the targets selected by `changed_paths`. This is the MCP-native edit verification loop for coding harnesses: call `once_query_affected_tests` to preview selection, call `once_run_tests` to execute, then read the normalized `once.test_results.v1` results included in each run record. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate.
+Executes Once's generic `test` capability for either explicit `target` / `targets` or the targets selected by `changed_paths`. To verify an edit, call `once_query_affected_tests` to preview selection, call `once_run_tests` to execute, then read the normalized `once.test_results.v1` results included in each run record. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate.
 
 **Input schema**
 
@@ -470,7 +469,7 @@ Executes Once's generic `test` capability for either explicit `target` / `target
 
 Read normalized once.test_results.v1 results for a target.
 
-Reads the normalized result file produced by the target's `test` capability. This is the stable agent-facing interface for pass/fail summaries, case-level failures, attempts, and artifacts; callers should not scrape native runner stdout or stderr.
+Reads the normalized result file produced by the target's `test` capability. This is the stable agent-facing interface for pass or fail summaries, case-level failures, attempts, and artifacts. Callers do not need to parse a runner's command output.
 
 **Input schema**
 
@@ -643,7 +642,7 @@ Opt-in tool exposed only when the Model Context Protocol server starts with `onc
 
 Build a target by running its generic `build` capability.
 
-Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once build <target> --format json`, so dependency traversal, actions declared by target kinds, cache policy, and output groups stay owned by the CLI graph. The tool returns stdout parsed as JSON when possible, along with exit status and stderr. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.
+This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once build <target> --format json`, including dependency traversal, target actions, cache policy, and output groups. The result includes the exit status, standard error, and standard output parsed as structured data when possible. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.
 
 **Input schema**
 
@@ -685,7 +684,7 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 
 Run a target by executing its generic `run` capability.
 
-Opt-in tool exposed only when the Model Context Protocol server starts with `once mcp --allow-run`. Executes the same path as `once run <target> --format json`, including any prerequisite build outputs declared by the target's `run` capability. Set `visible` to request a visible runtime interface when the target kind supports one. Execution policy declared by the target kind is preserved, so uncacheable actions are executed instead of replayed from the action cache. The tool returns stdout parsed as JSON when possible, plus exit status and stderr.
+This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes the exit status, standard error, and standard output parsed as structured data when possible.
 
 **Input schema**
 
@@ -731,7 +730,7 @@ Opt-in tool exposed only when the Model Context Protocol server starts with `onc
 
 Start a target in a persisted runtime session and return its session id.
 
-Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Starts `once run` under a runtime supervisor, persists stdout and stderr under `.once/runtime/<session_id>/`, and returns immediately with the session record. Use the runtime status, logs, and stop tools to follow the process.
+This tool is available only when the server starts with `once mcp --allow-run`. It starts the target, saves its standard output and standard error under `.once/runtime/<session_id>/`, and returns immediately with the session record. Use the status, logs, and stop tools to follow the process.
 
 **Input schema**
 
@@ -767,7 +766,7 @@ Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`.
 
 Return the latest persisted status for a runtime session.
 
-Reads `.once/runtime/<session_id>/session.json` and returns the supervisor's latest status. Status values include `starting`, `running`, `stopping`, `stopped`, `exited`, and `failed`.
+Reads `.once/runtime/<session_id>/session.json` and returns the latest status. Status values include `starting`, `running`, `stopping`, `stopped`, `exited`, and `failed`.
 
 **Input schema**
 
@@ -799,9 +798,9 @@ Reads `.once/runtime/<session_id>/session.json` and returns the supervisor's lat
 
 ## `once_runtime_logs`
 
-Read stdout or stderr records for a runtime session.
+Read standard output or standard error records for a runtime session.
 
-Reads persisted line-oriented stdout and stderr records from a runtime session. Pass `source` to restrict to `stdout` or `stderr`, and pass a previous `cursor` to read only newer records.
+Reads persisted line-oriented standard output and standard error records from a runtime session. Pass `source` to restrict the result to `stdout` or `stderr`, and pass a previous `cursor` to read only newer records.
 
 **Input schema**
 
@@ -851,7 +850,7 @@ Reads persisted line-oriented stdout and stderr records from a runtime session. 
 
 Request that a runtime session stop.
 
-Writes a stop request into the runtime session directory. The supervisor observes the request, kills the child process, and updates `session.json` to `stopped`.
+Requests that the process stop and updates the session status as the request is handled.
 
 **Input schema**
 
@@ -956,7 +955,7 @@ Schema-only validation: checks that the target declares a known target kind, eve
 
 Apply a batch of `create` / `update` / `delete` operations to one `once.toml` atomically.
 
-Reads the manifest at `<workspace>/<package>/once.toml` (creating it if missing), applies the batch of operations against the in-memory document, and writes the result back only if every operation succeeds. Returns `{ applied: true, path: <manifest path> }` on success or `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `once_validate_target`. The original file is never partially modified.
+Reads the manifest at `<workspace>/<package>/once.toml`, creating it if needed, and applies the operations only if every operation succeeds. Returns `{ applied: true, path: <manifest path> }` on success or `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `once_validate_target`. A failed batch leaves the original file unchanged.
 
 **Input schema**
 

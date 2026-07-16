@@ -1,150 +1,195 @@
+---
+prev: false
+next: false
+---
+
 # Apple
 
-Once builds Swift, Objective-C, C, and C++ targets for Apple
-platforms from declarative `once.toml` manifests.
-[`apple_library`](/reference/prelude/apple_library) drives
-`xcrun`-backed `swiftc` and `clang` on macOS to produce real static
-archives, Swift modules, ObjC interop headers, modulemaps, and
-header maps. [`swift_macro`](/reference/prelude/swift_macro) compiles
-Swift compiler-plugin dylibs that `apple_library` deps pick up
-automatically. The bundle, app, and test-host kinds
-([`apple_framework`](/reference/prelude/apple_framework),
-[`apple_application`](/reference/prelude/apple_application),
-[`apple_test_bundle`](/reference/prelude/apple_test_bundle)) are
-implemented as Starlark graph target kinds that declare cacheable build
-actions. Runtime effects, such as launching an app, are also declared
-by target kinds and can opt out of action-cache replay.
+Once can build libraries, frameworks, applications, and test bundles for
+Apple platforms. This guide starts with one iOS application and a library it
+depends on, then queries, builds, runs, and tests that same project.
 
-For the per-target-kind attribute, dep, provider, and capability tables see
-the [target kind reference](/reference/prelude/).
+## Prerequisites
 
-## Targets
+Apple targets require a macOS host with the Apple developer tools used by
+`xcrun`, `swiftc`, and `clang`. Verify that the Swift compiler is available:
 
-Package manifests declare targets with one canonical shape:
+```sh
+xcrun --find swiftc
+```
+
+Running this guide's iOS application also requires an installed Simulator
+runtime. Building a library does not require a running simulator.
+
+## Declare the Application
+
+Create `apps/Hello/once.toml` with a reusable library and an application that
+depends on it:
 
 ```toml
 [[target]]
 name = "AppCore"
 kind = "apple_library"
-srcs = ["Sources/**/*.swift"]
+srcs = ["Sources/AppCore/**/*.swift"]
 
 [target.attrs]
 platform = "ios"
 minimum_os = "17.0"
-sdk_frameworks = ["UIKit"]
+
+[[target]]
+name = "Hello"
+kind = "apple_application"
+srcs = ["Sources/HelloApp/**/*.swift"]
+deps = ["./AppCore"]
+
+[target.attrs]
+platform = "ios"
+bundle_id = "dev.once.Hello"
+minimum_os = "17.0"
+families = ["iphone"]
 ```
 
-Dependency references are root-relative by default. `./` and `../`
-references resolve from the package that owns the manifest.
+`./AppCore` resolves in the same package. The dependency is typed:
+`apple_application` accepts the linkable output produced by
+`apple_library`.
 
-Apple targets can also depend on native providers from other ecosystems.
-[`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework)
-emits an Apple framework provider that application and test targets can
-link and embed. [`rust_mobile_library`](/reference/prelude/rust_mobile_library)
-emits archive fields that Apple link targets consume through the same
-`deps` edge.
+The smallest useful source layout is:
 
-## Commands
+```text
+apps/Hello/
+├── once.toml
+└── Sources/
+    ├── AppCore/
+    └── HelloApp/
+```
 
-Inspect the graph with [`once query`](/reference/cli/query):
+The application source needs an entry point, such as a Swift type marked with
+`@main`. The library contains code imported by the application.
+
+## Query Before Building
+
+Inspect the exact targets declared above:
 
 ```sh
 once query targets
-once query capabilities apps/ios/AppCore
-once query schema apple_library
+once query capabilities apps/Hello/AppCore
+once query capabilities apps/Hello/Hello
+once query schema apple_application
 ```
 
-`once query schema <kind>` returns the same typed contract the
-[target kind reference](/reference/prelude/) documents: which attributes
-a target of that kind accepts, which providers each dep edge expects,
-which providers the target kind emits, and which capabilities it exposes.
+`AppCore` exposes `build`. `Hello` exposes `build` and `run`. The schema query
+shows the application attributes, accepted dependencies, capabilities, and
+outputs without starting a compiler.
 
-Materialize a target with the [`once build`](/reference/cli/build)
-capability:
+## Build and Run
+
+Build the application bundle:
 
 ```sh
-once build apps/ios/AppCore
+once build apps/Hello/Hello
 ```
 
-Outputs land under `.once/out/<target>/`. The per-target-kind reference
-pages list the exact paths each target kind emits.
+Once builds `AppCore` first because `Hello` depends on it. Outputs are
+materialized under `.once/out/<target>/`; the
+[`apple_application` reference](/reference/prelude/apple_application) lists
+the exact output groups.
 
-## Running Apps
-
-`apple_application` produces an `.app` bundle and exposes `run`.
-`once run` first materializes the required bundle output, then executes
-the launch action declared by the Apple target kind. That launch action is not
-cacheable, so each `once run` attempts a fresh launch instead of
-replaying an action-cache hit.
-
-The Apple target kind owns the platform behavior. macOS apps are launched with
-the host app launcher. iOS simulator apps use `simctl` to pick or boot a
-simulator, install the bundle, and launch the bundle identifier. Device
-launch support is not implemented yet.
-
-Pass `--visible` to open Simulator for the selected simulator before the
-install and launch steps:
+Launch the application in an iOS simulator:
 
 ```sh
-once build apps/ios/App
-once run --visible apps/ios/App
+once run --visible apps/Hello/Hello
 ```
 
-## Configurable attributes
+Once selects or boots a simulator, installs the application bundle, and
+launches its bundle identifier. The launch runs on every invocation instead
+of replaying from the action cache. Omit `--visible` when Simulator does not
+need to be brought to the foreground.
 
-Some attribute values depend on what you're building for. A library
-might link `UIKit` on iOS and `AppKit` on macOS, or pick different
-linker flags per architecture. Instead of duplicating the target,
-write the per-configuration value inline with `select`:
+macOS applications use the host application launcher. Launching directly on
+an iPhone or iPad is not supported yet.
+
+## Add a Test Target
+
+Add a test target to the same `apps/Hello/once.toml`:
+
+```toml
+[[target]]
+name = "AppCoreTests"
+kind = "apple_test_bundle"
+srcs = ["Tests/AppCoreTests/**/*.swift"]
+deps = ["./AppCore"]
+
+[target.attrs]
+platform = "ios"
+minimum_os = "17.0"
+swift_testing = true
+labels = ["unit"]
+```
+
+Place tests that use Swift Testing under `Tests/AppCoreTests/`, then inspect
+and run the new capability:
+
+```sh
+once query capabilities apps/Hello/AppCoreTests
+once test apps/Hello/AppCoreTests
+```
+
+Apple tests currently support macOS logic tests and iOS simulator bundles.
+Application-hosted tests, custom destinations, test plans, and device runners
+are not implemented. Non-empty unsupported attributes fail during graph
+analysis instead of being ignored. See the
+[`apple_test_bundle` reference](/reference/prelude/apple_test_bundle) before
+adding those features.
+
+## Choose Values by Configuration
+
+Configurable attributes can use `select`. For example, a library shared by an
+iOS and macOS target can choose the platform framework it links:
 
 ```toml
 [target.attrs]
 sdk_frameworks = { select = { ios = ["UIKit"], macos = ["AppKit"] } }
 ```
 
-When the build resolves the target, it picks the branch whose key
-matches the active configuration. A branch key can be:
+Apple configuration keys include platform names, architectures, `simulator`,
+`device`, `mac_catalyst`, combined keys such as `ios:simulator`, and
+`default`. When more than one branch matches, the most specific branch wins.
 
-- a platform: `ios`, `macos`, `tvos`, `watchos`, `visionos`
-- an architecture from `archs`: `arm64`, `x86_64`, `arm64e`, ...
-- an SDK variant: `simulator` or `device`
-- the literal token `mac_catalyst` when `mac_catalyst = true`
-- a combination joined with `:`, such as `ios:simulator`
-- `default`, used when no other branch matches
+Attributes that determine the configuration, including `platform`,
+`sdk_variant`, `archs`, and `mac_catalyst`, must remain literal. The target
+kind schema identifies any other non-configurable attributes.
 
-When more than one branch matches (e.g. both `ios` and `ios:simulator`
-on an iOS simulator build) the most specific one wins.
+## Connect Native Dependencies
 
-Two kinds of attributes cannot use `select`:
+Apple targets can consume native outputs from other ecosystems through normal
+`deps` entries:
 
-- The attributes that decide which branch is picked: `platform`,
-  `sdk_variant`, `archs`, and `mac_catalyst`. They have to be literal
-  values.
-- Attributes the target kind marks as non-configurable. Trying to use
-  `select` on those surfaces a graph loading error.
+- [`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework)
+  produces a framework that an application or test can link and embed.
+- [`rust_mobile_library`](/reference/prelude/rust_mobile_library) produces an
+  Apple static library for an Apple consumer.
 
-The surface is intentionally small for now. Richer configuration
-models (constraint settings, exec/target splits, platform
-transitions) can layer on later without changing the TOML shape.
+Add these only after the application builds on its own, then query the
+consumer again to confirm that the dependency contract is satisfied.
 
-## Prior art
+## Supported Target Kinds and Limitations
 
-The Apple target kind set adapts ideas from established Apple build tooling
-rather than copying its surface:
+Use the target kind reference for the contract that matches the artifact:
 
-- Bazel's Apple build support, where application target kinds handle
-  linking and bundling while Swift and Objective-C compilation live in
-  dedicated language target kinds.
-- [Bazel apple_binary](https://docs.bazel.build/versions/3.0.0/be/objective-c.html#apple_binary),
-  which exposes Apple binary concepts such as platform type, minimum
-  OS version, SDK frameworks, SDK dylibs, weak SDK frameworks, link
-  options, and multi-architecture outputs.
-- Buck2's Apple build primitives, which separate compile inputs, Apple
-  toolchain selection, bundle assembly, resources, asset catalogs,
-  Info.plist values, entitlements, provisioning profiles, and tests.
+- [`apple_library`](/reference/prelude/apple_library)
+- [`apple_framework`](/reference/prelude/apple_framework)
+- [`apple_application`](/reference/prelude/apple_application)
+- [`apple_test_bundle`](/reference/prelude/apple_test_bundle)
+- [`swift_macro`](/reference/prelude/swift_macro)
 
-Once is not Buck-compatible, Bazel-compatible, or a drop-in
-replacement for either tool; users and agents declare targets in
-`once.toml`, built-in target kind metadata lives in the Starlark prelude,
-and the graph is intentionally inspectable first so agents and CLI
-users can ask what a target can do before broad execution exists.
+Application resource bundles, asset catalogs, custom property-list templates,
+entitlements, provisioning profiles, signing identities, and non-ad-hoc
+signing are accepted by the schema but are not supported yet. Using a non-empty
+value for one of these attributes fails validation before the build starts.
+
+## Next
+
+Continue with [Memory](/guide/memory/) once the application builds and tests.
+It shows how Once records durable context about graph work. If the application
+also contains Android or Rust code, use [Ecosystems](/guide/graph/ecosystems)
+to choose the next independent integration.

@@ -37,16 +37,16 @@ name starts with `test`, or methods annotated with `org.junit.Test` or
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
 
-Compatibility attributes declared for Bazel parity but not implemented yet:
+Accepted but unsupported attributes:
 `custom_package`, `densities`, `enable_data_binding`, `manifest`,
 `manifest_values`, `nocompress_extensions`, `plugins`,
 `resource_configuration_filters`, `resource_jars`, `resource_strip_prefix`,
-`runtime_deps`, and `stamp`. Non-empty values fail analysis.
+`runtime_deps`, and `stamp`. Non-empty values fail validation.
 
 Tool override attrs are also available for `javac`, `java`, `java_home`,
 `kotlinc`, `kotlin_home`, `kotlin_stdlib`, and `aapt2`.
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

@@ -15,7 +15,7 @@ directories, library inputs, and linker flags.
 Canonical module names are generated from target labels with collision-safe
 escaping. `import_names` keys must match exactly one Zig module dependency by
 full label, short label name, import name, or canonical name; ambiguous or
-unknown keys fail analysis.
+unknown keys fail validation.
 
 ## Attributes
 
@@ -31,7 +31,7 @@ settings, and auxiliary output settings. It also accepts:
 | `shared_lib_name` | string | no | platform name | Exact shared library output file name when `output` is `shared` |
 | `android_abi` | string | no | empty | Android [Application Binary Interface](https://developer.android.com/ndk/guides/abis) directory for shared library packaging |
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

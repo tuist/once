@@ -51,7 +51,7 @@ Tool override attrs are also available for `javac`, `jar`, `java`,
 `java_home`, `kotlinc`, `kotlin_home`, `kotlin_stdlib`, `aapt2`, `d8`,
 `apksigner`, `zipalign`, and `adb`.
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
@@ -140,13 +140,14 @@ installs both packages on a device or emulator and runs `am instrument`.
 
 ## Limitations
 
-The first Android implementation supports Java sources, Kotlin sources,
-resources, native shared library packaging, debug signing, Android resource
-deps, Android library deps, APK install, and app launch. Data binding,
+The target supports Java sources, Kotlin sources, resources, native shared
+library packaging, debug signing, Android resource dependencies, Android
+library dependencies, application package installation, and application
+launch. Data binding,
 manifest placeholder expansion, native splits,
 shrinking, resource filtering, density filtering, no-compress packaging, and
 startup profile packaging are not implemented yet. Non-empty values for
-unsupported attrs fail analysis instead of being ignored.
+unsupported attributes fail validation instead of being ignored.
 
 Use [`android_local_test`](/reference/prelude/android_local_test) for
 host-side Java and Kotlin tests.

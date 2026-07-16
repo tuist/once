@@ -137,8 +137,8 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_query_example",
-            description: "Return the materialized file bundle for one target kind starter example.",
-            long_description: "Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every UTF-8 file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`; this tool fetches the heavier file payload only after a caller chooses one.",
+            description: "Return the complete file bundle for one target kind starter example.",
+            long_description: "Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every text file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`; this tool fetches the file payload only after a caller chooses one.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -238,7 +238,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_tests",
             description: "List targets that expose Once's generic test capability.",
-            long_description: "Returns every target with a `test` capability, including its target kind, dependencies, runner type when the target kind exposes `once_test_info`, labels, and normalized result path. Use this as the agent-native test discovery entry point before running or filtering tests.",
+            long_description: "Returns every target with a `test` capability, including its target kind, dependencies, runner type when the target kind exposes `once_test_info`, labels, and normalized result path. Use this as the agent test discovery entry point before running or filtering tests.",
             input_schema: json!({
                 "type": "object",
                 "properties": {}
@@ -248,7 +248,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_affected_tests",
             description: "Return test targets likely affected by a set of changed workspace paths.",
-            long_description: "Maps changed paths to test targets using generic graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. The query does not know about any native runner.",
+            long_description: "Maps changed paths to test targets using graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. Selection does not depend on a particular test runner.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -264,7 +264,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_run_tests",
             description: "Run test targets by id, or run tests affected by changed workspace paths.",
-            long_description: "Executes Once's generic `test` capability for either explicit `target` / `targets` or the targets selected by `changed_paths`. This is the MCP-native edit verification loop for coding harnesses: call `once_query_affected_tests` to preview selection, call `once_run_tests` to execute, then read the normalized `once.test_results.v1` results included in each run record. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate.",
+            long_description: "Executes Once's generic `test` capability for either explicit `target` / `targets` or the targets selected by `changed_paths`. To verify an edit, call `once_query_affected_tests` to preview selection, call `once_run_tests` to execute, then read the normalized `once.test_results.v1` results included in each run record. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -289,7 +289,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_test_results",
             description: "Read normalized once.test_results.v1 results for a target.",
-            long_description: "Reads the normalized result file produced by the target's `test` capability. This is the stable agent-facing interface for pass/fail summaries, case-level failures, attempts, and artifacts; callers should not scrape native runner stdout or stderr.",
+            long_description: "Reads the normalized result file produced by the target's `test` capability. This is the stable agent-facing interface for pass or fail summaries, case-level failures, attempts, and artifacts. Callers do not need to parse a runner's command output.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -364,7 +364,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_build_target",
             description: "Build a target by running its generic `build` capability.",
-            long_description: "Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Executes the same path as `once build <target> --format json`, so dependency traversal, actions declared by target kinds, cache policy, and output groups stay owned by the CLI graph. The tool returns stdout parsed as JSON when possible, along with exit status and stderr. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.",
+            long_description: "This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once build <target> --format json`, including dependency traversal, target actions, cache policy, and output groups. The result includes the exit status, standard error, and standard output parsed as structured data when possible. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -380,7 +380,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_run_target",
             description: "Run a target by executing its generic `run` capability.",
-            long_description: "Opt-in tool exposed only when the Model Context Protocol server starts with `once mcp --allow-run`. Executes the same path as `once run <target> --format json`, including any prerequisite build outputs declared by the target's `run` capability. Set `visible` to request a visible runtime interface when the target kind supports one. Execution policy declared by the target kind is preserved, so uncacheable actions are executed instead of replayed from the action cache. The tool returns stdout parsed as JSON when possible, plus exit status and stderr.",
+            long_description: "This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes the exit status, standard error, and standard output parsed as structured data when possible.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -400,7 +400,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_start_target",
             description: "Start a target in a persisted runtime session and return its session id.",
-            long_description: "Opt-in tool exposed only when the MCP server starts with `once mcp --allow-run`. Starts `once run` under a runtime supervisor, persists stdout and stderr under `.once/runtime/<session_id>/`, and returns immediately with the session record. Use the runtime status, logs, and stop tools to follow the process.",
+            long_description: "This tool is available only when the server starts with `once mcp --allow-run`. It starts the target, saves its standard output and standard error under `.once/runtime/<session_id>/`, and returns immediately with the session record. Use the status, logs, and stop tools to follow the process.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -416,7 +416,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_runtime_status",
             description: "Return the latest persisted status for a runtime session.",
-            long_description: "Reads `.once/runtime/<session_id>/session.json` and returns the supervisor's latest status. Status values include `starting`, `running`, `stopping`, `stopped`, `exited`, and `failed`.",
+            long_description: "Reads `.once/runtime/<session_id>/session.json` and returns the latest status. Status values include `starting`, `running`, `stopping`, `stopped`, `exited`, and `failed`.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -431,8 +431,8 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_runtime_logs",
-            description: "Read stdout or stderr records for a runtime session.",
-            long_description: "Reads persisted line-oriented stdout and stderr records from a runtime session. Pass `source` to restrict to `stdout` or `stderr`, and pass a previous `cursor` to read only newer records.",
+            description: "Read standard output or standard error records for a runtime session.",
+            long_description: "Reads persisted line-oriented standard output and standard error records from a runtime session. Pass `source` to restrict the result to `stdout` or `stderr`, and pass a previous `cursor` to read only newer records.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -461,7 +461,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_stop_runtime",
             description: "Request that a runtime session stop.",
-            long_description: "Writes a stop request into the runtime session directory. The supervisor observes the request, kills the child process, and updates `session.json` to `stopped`.",
+            long_description: "Requests that the process stop and updates the session status as the request is handled.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -503,7 +503,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_apply_edit",
             description: "Apply a batch of `create` / `update` / `delete` operations to one `once.toml` atomically.",
-            long_description: "Reads the manifest at `<workspace>/<package>/once.toml` (creating it if missing), applies the batch of operations against the in-memory document, and writes the result back only if every operation succeeds. Returns `{ applied: true, path: <manifest path> }` on success or `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `once_validate_target`. The original file is never partially modified.",
+            long_description: "Reads the manifest at `<workspace>/<package>/once.toml`, creating it if needed, and applies the operations only if every operation succeeds. Returns `{ applied: true, path: <manifest path> }` on success or `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `once_validate_target`. A failed batch leaves the original file unchanged.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

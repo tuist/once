@@ -1,98 +1,98 @@
-# Caching
+# Caching Scripted Workflows
 
-Script files are the easiest adapter for bringing existing repository
-automation into Once's action model without rewriting the implementation.
+The first scripted workflow declared an input, an output, and a working
+directory. Add more headers only when another fact can change the result.
 
-Most repositories already have a layer of shell, Node, Python, Ruby, or
-Elixir automation that does real work but lives outside the native build
-graph. Once lets those scripts stay where they are. The script file
-remains the source of truth, and Once learns just enough about it to
-cache it, inspect it, and schedule it safely through the same action
-substrate typed graph target kinds use.
+## Describe Every Relevant Input
 
-## Annotated Script Files
-
-Use a script file when the implementation belongs in a real script.
-The annotation model works across common scripting languages. For
-example:
-
-::: code-group
-```sh [Bash]
-#!/usr/bin/env bash
-# once input "../src/**/*.ts"
-# once fingerprint "node --version"
-# once output "../dist/"
-# once env "NODE_ENV"
-
-npm run build
-```
-
-```python [Python]
-#!/usr/bin/env python3
-# once input "../src/**/*.py"
-# once output "../dist/"
-# once env "PYTHONPATH"
-
-print("build")
-```
-
-```ruby [Ruby]
-#!/usr/bin/env ruby
-# once input "../lib/**/*.rb"
-# once output "../dist/"
-# once env "RUBYLIB"
-
-puts "build"
-```
-
-```elixir [Elixir]
-#!/usr/bin/env elixir
-# once input "../lib/**/*.ex"
-# once output "../dist/"
-# once env "MIX_ENV"
-
-IO.puts("build")
-```
-:::
-
-Ruby, Python, and Elixir all use `#` comments, so the annotations read
-naturally in those files. Once also accepts other line-comment forms
-such as `//`, `;`, `--`, `%`, and `'` for languages that use them.
-
-## Running Through Once
-
-To run an annotated script file through Once, use the runtime you
-would normally use locally and put it after `once exec --`:
+Track files and directories with `input`. Track selected environment variables
+with `env`, and use `fingerprint` for tool or host facts that are not files:
 
 ```sh
-once exec -- bash scripts/build.sh
-```
-
-If the file carries `once` headers, Once automatically switches to
-script-aware execution. The explicit `--script` form still works when
-you want to force that mode.
-
-## Executable Once Shebangs
-
-If you want the file itself to execute through Once, use a Once
-shebang and name the runtime there:
-
-::: code-group
-```sh [Bash]
 #!/usr/bin/env -S once exec -- bash
 # once input "../src/**/*.ts"
-# once fingerprint "node --version"
+# once input "../package-lock.json"
 # once output "../dist/"
 # once env "NODE_ENV"
+# once fingerprint "node --version"
+# once cwd ".."
 
 npm run build
 ```
 
+Here the source files, lockfile, `NODE_ENV` value, Node.js version, and script
+file all contribute to the cache key. The script uses the
+[npm package manager](https://www.npmjs.com/) to run the build. Once forwards
+only declared environment variables. A fingerprint command runs before the
+action; if it fails, Once stops before running the script.
+
+::: tip Keep The Contract Precise
+Declare facts that can change the result, not every file or host value the
+script can see. A precise contract produces useful cache hits while still
+invalidating the result when it should.
+:::
+
+## Connect Dependent Scripts
+
+Use `needs` when one annotated script must run before another:
+
+```sh
+#!/usr/bin/env -S once exec -- bash
+# once needs "./generate-assets.sh"
+# once input "../src/**/*.ts"
+# once output "../dist/"
+# once cwd ".."
+
+npm run build
+```
+
+Once runs independent dependencies concurrently. A dependency's declared
+output fingerprints become part of the dependent script's cache key. If the
+dependency runs again but produces the same outputs, the dependent script can
+still reuse its previous result.
+
+## Choose How Symbolic Links Are Stored
+
+Directory outputs use `materialize-external` by default. When an output contains
+a symbolic link whose target is outside that output directory, Once copies the
+target into the cached result. This makes restored directories such as
+`node_modules/` independent of a package manager's original storage location.
+
+Use `output-symlinks` only when the script needs a different policy:
+
+```sh
+# once output "../dist/"
+# once output-symlinks "preserve"
+```
+
+`preserve` stores links as links. Use it only when the link targets will exist
+at restore time.
+
+## Supported Headers
+
+| Header | Purpose |
+| --- | --- |
+| `input` | Tracks files, directories, or globs. |
+| `needs` | Runs another annotated script first and includes its output fingerprints in this script's cache key. |
+| `fingerprint` | Runs a read-only command and includes its text, exit status, standard output, and standard error in the cache key. |
+| `output` | Declares files or directories to restore on cache hits. |
+| `output-symlinks` | Uses `materialize-external` or `preserve` when capturing symbolic links in outputs. |
+| `env` | Forwards a selected environment variable and includes its value in the cache key. |
+| `cwd` | Chooses the working directory for the script body. |
+
+The script file itself is always part of the cache key, even when it has no
+`input` headers.
+
+## Use Another Script Runtime
+
+The same headers work in languages that use line comments. Put the interpreter
+after `once exec --` in the shebang:
+
+::: code-group
 ```python [Python]
 #!/usr/bin/env -S once exec -- python3
 # once input "../src/**/*.py"
 # once output "../dist/"
-# once env "PYTHONPATH"
 
 print("build")
 ```
@@ -101,7 +101,6 @@ print("build")
 #!/usr/bin/env -S once exec -- ruby
 # once input "../lib/**/*.rb"
 # once output "../dist/"
-# once env "RUBYLIB"
 
 puts "build"
 ```
@@ -110,78 +109,43 @@ puts "build"
 #!/usr/bin/env -S once exec -- elixir
 # once input "../lib/**/*.ex"
 # once output "../dist/"
-# once env "MIX_ENV"
 
 IO.puts("build")
 ```
 :::
 
-This keeps the script directly executable while still letting Once
-apply the annotated cache contract.
-
-The `once` directives at the top of the file describe the parts
-Once must reason about: tracked inputs, declared outputs, forwarded
-environment variables, dependency scripts, fingerprint commands, and a
-working directory. That keeps the implementation and the cache contract
-in one place.
-
-## Mise File Tasks
-
-Once works beautifully with [Mise file tasks](https://mise.jdx.dev/tasks/file-tasks.html).
-Keep the task as an executable script in `mise-tasks/`, `.mise/tasks/`,
-or another Mise task directory, add `# once` headers next to the
-existing task body, and run it through the same script file:
+Once also recognizes `//`, `;`, `--`, `%`, and `'` line-comment forms. To keep
+an existing shebang, invoke the interpreter explicitly:
 
 ```sh
-# mise-tasks/build
+once exec -- python3 scripts/build.py
+```
+
+Once detects the headers and applies script-aware execution. Pass `--script`
+when you need to force that mode.
+
+## Use A Mise File Task
+
+Once can wrap a [Mise file task](https://mise.jdx.dev/tasks/file-tasks.html)
+without changing how callers invoke it:
+
+```sh
 #!/usr/bin/env -S once exec -- bash
 #MISE description="Build assets"
 # once input "../src/**/*.ts"
 # once output "../dist/"
-# once env "NODE_ENV"
 
 npm run build
 ```
 
-Run it the same way you run the rest of your Mise tasks:
+After saving the task in a Mise task directory, run it normally:
 
 ```sh
 mise run build
 ```
 
-## Supported Annotations
+## Next
 
-| Annotation | Purpose |
-| --- | --- |
-| `input` | Declares tracked files, directories, or globs. |
-| `needs` | Declares another annotated script that must run first. Its declared output fingerprints are included in this script's cache key. |
-| `fingerprint` | Runs a read-only shell command before the script and includes the command text, exit status, standard output, and standard error in the cache key. |
-| `output` | Declares output files or directories that Once should restore on cache hits. |
-| `output-symlinks` | Controls output symlink capture. Use `materialize-external` to copy targets outside the output directory, or `preserve` to store links as links. |
-| `env` | Forwards selected environment variables from the host and includes them in the cache key. |
-| `cwd` | Chooses the working directory for the script. |
-
-Directory outputs default to `materialize-external`, so package-manager
-stores linked from outputs such as `node_modules/` can restore from the
-cache without depending on the original global store path.
-
-The script file itself is always part of the cache key, even when no
-`input` directives are present.
-
-Dependency scripts declared with `needs` run through the same script
-adapter. Once runs independent dependencies concurrently, restores their
-declared outputs on cache hits, and uses their output fingerprints to
-decide whether dependent scripts need to run again. If a dependency
-reruns but produces the same declared outputs, dependent scripts keep
-their cache key.
-
-Fingerprint commands are for toolchain or host facts that are not files.
-For example, a script can record a compiler version or a platform lookup
-without turning that probe into a build step. A failing fingerprint
-command stops the script before the main action runs.
-
-::: tip Path Resolution
-`once` paths are resolved relative to the script file's directory,
-so the contract stays portable when it lives in `scripts/`, `tools/`,
-or any other subdirectory next to the code it automates.
-:::
+Configure [Infrastructure](/guide/infrastructure/) when these cacheable results
+should be shared across machines. If an existing tool must probe or populate
+the cache itself, continue to [Manual Cache Access](/guide/scripted/runtime).

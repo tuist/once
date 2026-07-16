@@ -23,7 +23,7 @@ pub enum QueryCmd {
         kind: String,
     },
 
-    /// Materialize a target kind starter example.
+    /// Return the files in a target kind starter example.
     Example {
         /// Target kind that owns the example.
         kind: String,

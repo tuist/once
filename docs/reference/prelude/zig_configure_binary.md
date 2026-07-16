@@ -15,7 +15,7 @@ Zig module dependency.
 Canonical module names are generated from target labels with collision-safe
 escaping. `import_names` keys must match exactly one Zig module dependency by
 full label, short label name, import name, or canonical name; ambiguous or
-unknown keys fail analysis.
+unknown keys fail validation.
 
 ## Attributes
 
@@ -23,7 +23,7 @@ This target accepts the complete attribute set documented by
 [`zig_binary`](/reference/prelude/zig_binary), including `strip`,
 `translate_c_identity`, `csrcs`, linker settings, run `env`, and run `args`.
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

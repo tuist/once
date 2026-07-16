@@ -1,23 +1,24 @@
-# MCP
+# Model Context Protocol
 
-[`once mcp`](/reference/cli/mcp) runs a Model Context Protocol server
-over stdio so a coding agent (Claude Desktop, an IDE plug-in, an
-Anthropic SDK script) can inspect the typed build graph, query project
-memory, and optionally run graph capabilities through the same JSON
-shapes [`once query`](/reference/cli/query) and the CLI execution
-commands emit.
+[`once mcp`](/reference/cli/mcp) runs a
+[Model Context Protocol](https://modelcontextprotocol.io/) server over standard
+input and output. A coding agent can inspect the typed build graph, query
+project memory, and optionally run graph capabilities through the same
+[JavaScript Object Notation (JSON)](https://www.json.org/json-en.html) shapes
+emitted by [`once query`](/reference/cli/query) and the command-line execution
+commands.
 
 This page covers transport, handshake, error model, an example
-session, and the Claude Desktop wiring. The [Tools](/reference/mcp/tools)
-page documents each tool's input schema and return shape; it's
-generated from the same record the server advertises in `tools/list`,
-so the catalog can't drift.
+session, and Claude Desktop configuration. The
+[Tools](/reference/mcp/tools) page documents each tool's input schema and
+return shape.
 
 ## Transport
 
-Newline-delimited JSON over stdio. Each request is one line of
-JSON-RPC 2.0 in, each response is one line out. Notifications
-(messages with no `id`) get no reply.
+The server exchanges newline-delimited JSON over standard input and output.
+Each request is one line in and each response is one line out, following
+[JSON Remote Procedure Call (JSON-RPC) 2.0](https://www.jsonrpc.org/specification).
+Notifications, which have no `id`, get no reply.
 
 Spawn the server with the workspace as its working directory, or
 pass an explicit `--workspace <DIR>`:
@@ -27,7 +28,7 @@ once -C ~/code/MyApp mcp
 once mcp --workspace ~/code/MyApp
 ```
 
-## Handshake
+## Protocol Handshake
 
 Once prefers protocol version `2025-11-25` and negotiates supported client
 versions back through `2024-11-05`. The expected sequence:

@@ -45,13 +45,12 @@ Once graph target. `rust_crate` compiles to an rlib and emits the same
 | `source` | string | no |  | Cargo source identifier |
 | `checksum` | string | no |  | Cargo.lock checksum for registry packages |
 
-Compatibility attributes declared for Buck and Bazel parity but not implemented
-yet: `default_deps`, `doc_deps`, `doc_env`, `doc_link_style`,
+Accepted but unsupported attributes: `default_deps`, `doc_deps`, `doc_env`, `doc_link_style`,
 `doc_linker_flags`, `doc_named_deps`, `link_deps`, `link_style`,
 `mapped_srcs`, `proc_macro_deps`, `rpath`, `runtime_dependency_handling`,
-and `rustdoc_flags`. Non-empty values fail analysis.
+and `rustdoc_flags`. Non-empty values fail validation.
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

@@ -15,7 +15,7 @@ output group.
 Canonical module names are generated from target labels with collision-safe
 escaping. `import_names` keys must match exactly one Zig module dependency by
 full label, short label name, import name, or canonical name; ambiguous or
-unknown keys fail analysis.
+unknown keys fail validation.
 
 ## Attributes
 
@@ -58,7 +58,7 @@ unknown keys fail analysis.
 | `emit_bin` | bool | no | `true` | Emit the static library. Disable only when another emitted output is enabled |
 | `output_name` | string | no | target name | Output file name without platform extension |
 
-## Dep Edges
+## Dependency Edges
 
 | Edge | Accepts | Description |
 | --- | --- | --- |

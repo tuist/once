@@ -1,6 +1,6 @@
 # once
 
-Embeddable SDK for Once cache access.
+Libraries for embedding Once cache access.
 
 ## Rust
 
@@ -25,19 +25,19 @@ async fn main() -> once::Result<()> {
 }
 ```
 
-The high-level API is:
+The high-level programming interface is:
 
-- `Cache`: reusable client bound to the default XDG local cache.
+- `Cache`: reusable client bound to the default local cache described by the
+  [freedesktop.org base directory specification](https://specifications.freedesktop.org/basedir-spec/latest/).
 - Blob operations: `put_blob`, `get_blob`, and `has_blob`.
 - Action-cache operations: `put_action_result`, `get_action_result`, and `forget_action`.
 - Cache primitives: `Digest`, `ActionResult`, `Stats`, `CacheProvider`, and `digest_from_hex`.
 
 ## Apple
 
-Reference `Once.xcframework.zip` from a release with a SwiftPM binary
-target named `Once`, then add `crates/once/swift/Once.swift` from the
-matching repository tag to the Swift target that depends on that binary
-target:
+Reference `Once.xcframework.zip` from a release with a Swift Package Manager
+binary target named `Once`. Then vendor the `Once.swift` wrapper from the
+matching release tag into the Swift target that depends on that binary target:
 
 ```swift
 let once = OnceCache()
@@ -47,13 +47,15 @@ let bytes = try await once.getBlob(digest)
 print(String(decoding: bytes, as: UTF8.self))
 ```
 
-If you call the C API directly, all owned strings returned by `once_*`
-functions must be released with `once_string_free`. The C module name is
-`Once`. JSON requests use the default XDG local cache.
+If you call the C application programming interface directly, all owned
+strings returned by `once_*` functions must be released with
+`once_string_free`. The C module name is `Once`.
+[JavaScript Object Notation (JSON)](https://www.json.org/json-en.html) requests
+use the default local cache.
 
 ## Ruby
 
-Install the Ruby SDK from RubyGems:
+Install the Ruby library from RubyGems:
 
 ```sh
 gem install buildonce
@@ -73,7 +75,7 @@ puts bytes
 
 ## JavaScript
 
-Install the JavaScript SDK from npm:
+Install the JavaScript library from npm:
 
 ```sh
 npm install buildonce
@@ -93,9 +95,11 @@ async function main() {
 }
 ```
 
-### FFI responses
+### Foreign Function Responses
 
-FFI functions return UTF-8 JSON:
+Foreign functions return
+[Unicode Transformation Format, 8-bit (UTF-8)](https://www.unicode.org/faq/utf_bom.html#UTF8)
+JSON:
 
 ```json
 { "status": "ok", "value": "..." }
@@ -123,4 +127,6 @@ On macOS with Xcode installed:
 mise run release:package-xcframework --version 0.0.0
 ```
 
-The task writes `dist/Once.xcframework.zip` and a SHA-256 file.
+The task writes `dist/Once.xcframework.zip` and a
+[Secure Hash Algorithm 256-bit](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
+checksum file.

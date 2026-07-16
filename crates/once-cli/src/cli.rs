@@ -293,7 +293,7 @@ pub enum Cmd {
     /// and capabilities; `query capabilities` shows what a specific
     /// target exposes (`build`, `run`, `test`); `query schema`
     /// returns the typed attribute and provider shape for a target kind;
-    /// `query example` materializes a chosen starter; `query script` validates
+    /// `query example` returns the files in a chosen starter; `query script` validates
     /// an annotated script contract; `query validate-workspace` checks the
     /// complete loaded graph; and `query evidence` lists durable action evidence
     /// captured from prior executions. A quoted
@@ -361,7 +361,7 @@ pub enum Cmd {
         cmd: Option<EditCmd>,
     },
 
-    /// Expose Once's graph and memory queries to a coding agent over MCP.
+    /// Expose Once's graph and memory queries to a coding agent.
     ///
     /// Speaks the Model Context Protocol over standard input and output so a
     /// coding harness can discover schemas and starters, validate and edit
@@ -370,7 +370,7 @@ pub enum Cmd {
     /// Mounts inspection tools by default; pass `--allow-run` to expose
     /// manifest editing, test, build, run, and runtime session tools.
     Mcp {
-        /// Workspace root the MCP tools resolve targets against.
+        /// Workspace root the agent tools resolve targets against.
         /// Defaults to the value of the global `-C/--directory` flag
         /// (or the current directory).
         #[arg(long, value_name = "DIR")]
