@@ -147,6 +147,17 @@ pub async fn workspace_tool_env(
     tools: &[&str],
     extra_keys: &[&str],
 ) -> Result<BTreeMap<String, String>, ToolEnvError> {
+    workspace_tool_env_with_executables(workspace, tools, tools, extra_keys).await
+}
+
+/// Build an action environment that activates workspace tools while adding
+/// their declared executable names to `PATH`.
+pub async fn workspace_tool_env_with_executables(
+    workspace: &Path,
+    tools: &[&str],
+    executables: &[&str],
+    extra_keys: &[&str],
+) -> Result<BTreeMap<String, String>, ToolEnvError> {
     if !has_mise_config(workspace) {
         return Ok(tool_env(extra_keys));
     }
@@ -154,7 +165,7 @@ pub async fn workspace_tool_env(
     ensure_workspace_tools(workspace, tools).await?;
     let mise_env = mise_env(workspace).await?;
     let mut selected = select_extra_env(&mise_env, extra_keys);
-    let path = workspace_path(workspace, tools, &mise_env).await?;
+    let path = workspace_path(workspace, tools, executables, &mise_env).await?;
     selected.insert("PATH".into(), path);
     selected.extend(workspace_mise_env(workspace, tools));
     Ok(selected)
@@ -272,10 +283,11 @@ fn enable_mise_tools(command: &mut Command, tools: &[&str]) {
 async fn workspace_path(
     workspace: &Path,
     tools: &[&str],
+    executables: &[&str],
     mise_env: &BTreeMap<String, String>,
 ) -> Result<String, ToolEnvError> {
-    let tool_paths = try_join_all(tools.iter().map(|tool| async move {
-        workspace_tool_without_prepare(workspace, tool, tools)
+    let tool_paths = try_join_all(executables.iter().map(|executable| async move {
+        workspace_tool_without_prepare(workspace, executable, tools)
             .await
             .map(PathBuf::from)
     }))
