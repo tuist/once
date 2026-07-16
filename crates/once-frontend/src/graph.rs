@@ -150,10 +150,31 @@ pub struct TargetKindSchema {
     /// Tools required by implementations of this target kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolRequirement>,
+    /// External build-system concepts that this target kind can replace or
+    /// reproduce during incremental adoption.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_references: Vec<SourceReference>,
     /// Runnable starter workspaces. Each example is a lightweight
     /// descriptor; callers load the file bundle only when they choose
     /// a starter to materialize.
     pub examples: Vec<TargetKindExample>,
+}
+
+/// External build-system concept related to a target kind.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SourceReference {
+    /// Name of the source build system or rule set.
+    pub system: String,
+    /// Rule, plug-in, task family, or other source symbol.
+    pub symbol: String,
+    /// Primary documentation for the source concept.
+    pub url: String,
+    /// Selection guidance for partial graph adoption.
+    pub use_when: String,
+    /// Digest returned when the authoritative source was fetched. A missing
+    /// value indicates a documentation-only reference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_digest: Option<String>,
 }
 
 /// A runnable starter descriptor for a target kind.
@@ -302,6 +323,19 @@ pub fn target_kind_schemas_for_workspace(root: &Path) -> Result<Vec<TargetKindSc
         .map_err(|message| prelude_message(crate::modules::COMBINED_MODULE_PATH, &message))?;
     append_script_schema(&mut schemas)?;
     Ok(schemas)
+}
+
+pub fn validate_module_source(
+    root: &Path,
+    path: &str,
+    source: &str,
+) -> Result<Vec<TargetKindSchema>> {
+    let common = crate::modules::common_module_source();
+    parse_target_kind_schemas_with_context(
+        path,
+        &format!("{common}\n{source}"),
+        &TargetKindSchemaSource::workspace(root, path),
+    )
 }
 
 #[must_use]
@@ -658,7 +692,43 @@ fn target_kind_schema_from_value(
                 tool_requirement_from_value(tool, &format!("{path}.tools[{index}]"))
             })
             .collect::<std::result::Result<Vec<_>, _>>()?,
+        source_references: field_list(value, path, "source_references")?
+            .iter()
+            .enumerate()
+            .map(|(index, reference)| {
+                source_reference_from_value(
+                    reference,
+                    &format!("{path}.source_references[{index}]"),
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?,
         examples,
+    })
+}
+
+fn source_reference_from_value(
+    value: Value<'_>,
+    path: &str,
+) -> std::result::Result<SourceReference, String> {
+    let dict = DictRef::from_value(value).ok_or_else(|| {
+        format!(
+            "{path} should be a source_reference(...) value, got `{}`",
+            value.get_type()
+        )
+    })?;
+    let marker = dict
+        .get_str("_once_source_reference")
+        .and_then(Value::unpack_bool)
+        .unwrap_or(false);
+    if !marker {
+        return Err(format!("{path} should be a source_reference(...) value"));
+    }
+    Ok(SourceReference {
+        system: non_empty_field_string(value, path, "system")?,
+        symbol: non_empty_field_string(value, path, "symbol")?,
+        url: non_empty_field_string(value, path, "url")?,
+        use_when: non_empty_field_string(value, path, "use_when")?,
+        content_digest: optional_non_empty_field_string(value, path, "content_digest")?,
     })
 }
 
@@ -785,6 +855,21 @@ fn optional_field_string(
         })
 }
 
+fn optional_non_empty_field_string(
+    value: Value<'_>,
+    path: &str,
+    field: &str,
+) -> std::result::Result<Option<String>, String> {
+    let value = optional_field_string(value, path, field)?;
+    if value
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(format!("{path}.{field} should be non-empty when set"));
+    }
+    Ok(value)
+}
+
 fn field_bool(value: Value<'_>, path: &str, field: &str) -> std::result::Result<bool, String> {
     let value = field_value(value, path, field)?;
     value.unpack_bool().ok_or_else(|| {
@@ -855,6 +940,7 @@ fn script_schema() -> TargetKindSchema {
         providers: vec!["script_action".to_string()],
         capabilities: vec![capability("run", &["default"], &[])],
         tools: Vec::new(),
+        source_references: Vec::new(),
         examples: Vec::new(),
     }
 }
@@ -963,6 +1049,36 @@ mod tests {
             vec![ToolRequirement {
                 name: "rust".to_string(),
                 executables: vec!["rustc".to_string(), "cargo".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_target_kind_schemas_exposes_source_references() {
+        let source = source_with_common(
+            r#"demo = target_kind(
+    docs = "Demo kind",
+    source_references = [
+        source_reference(
+            "Example Build",
+            "example_library",
+            "https://example.com/example_library",
+            "Use when adopting an existing example_library target.",
+            content_digest = "0123456789abcdef",
+        ),
+    ],
+)"#,
+        );
+        let schemas = parse_target_kind_schemas("test.star", &source).unwrap();
+
+        assert_eq!(
+            schemas[0].source_references,
+            vec![SourceReference {
+                system: "Example Build".to_string(),
+                symbol: "example_library".to_string(),
+                url: "https://example.com/example_library".to_string(),
+                use_when: "Use when adopting an existing example_library target.".to_string(),
+                content_digest: Some("0123456789abcdef".to_string()),
             }]
         );
     }
@@ -1289,6 +1405,7 @@ demo_kind = target_kind(
             providers: Vec::new(),
             capabilities: Vec::new(),
             tools: Vec::new(),
+            source_references: Vec::new(),
             examples: Vec::new(),
         }];
 

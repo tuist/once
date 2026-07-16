@@ -2406,6 +2406,69 @@ _ANDROID_INSTRUMENTATION_TEST_ATTRS = [
     attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
 ]
 
+_ANDROID_RESOURCE_SOURCE_REFERENCES = [
+    source_reference(
+        "Bazel rules_android",
+        "android_library resource_files",
+        "https://bazelbuild.github.io/rules_android/#android_library",
+        "Use when reproducing only the resource and asset portion of a Bazel Android library.",
+    ),
+    source_reference(
+        "Buck2",
+        "android_resource",
+        "https://buck2.build/docs/prelude/rules/android/android_resource/",
+        "Use when adopting a Buck2 resource node without moving its consumers yet.",
+    ),
+    source_reference(
+        "Android Gradle plugin",
+        "Android source sets",
+        "https://developer.android.com/build/build-variants#sourcesets",
+        "Use when reproducing the resources and assets owned by one Gradle Android source set.",
+    ),
+]
+
+_ANDROID_LIBRARY_SOURCE_REFERENCES = [
+    source_reference(
+        "Bazel rules_android",
+        "android_library",
+        "https://bazelbuild.github.io/rules_android/#android_library",
+        "Use when adopting a Bazel Android library target and the dependency slice needed to compile it.",
+    ),
+    source_reference(
+        "Buck2",
+        "android_library",
+        "https://buck2.build/docs/prelude/rules/android/android_library/",
+        "Use when adopting a Buck2 Android library and its compile-time provider edges.",
+    ),
+    source_reference(
+        "Android Gradle plugin",
+        "com.android.library",
+        "https://developer.android.com/build",
+        "Use when reproducing one Gradle Android library module without replacing the complete Gradle build.",
+    ),
+]
+
+_ANDROID_BINARY_SOURCE_REFERENCES = [
+    source_reference(
+        "Bazel rules_android",
+        "android_binary",
+        "https://bazelbuild.github.io/rules_android/#android_binary",
+        "Use when adopting the Bazel target that owns final Android application packaging.",
+    ),
+    source_reference(
+        "Buck2",
+        "android_binary",
+        "https://buck2.build/docs/prelude/rules/android/android_binary/",
+        "Use when adopting the Buck2 target that owns the final Android application package and its required dependency closure.",
+    ),
+    source_reference(
+        "Android Gradle plugin",
+        "com.android.application",
+        "https://developer.android.com/build/configure-app-module",
+        "Use when reproducing one Gradle Android application module and only the inputs required for its selected build.",
+    ),
+]
+
 android_resource = target_kind(
     docs = "Compiles Android resources into a static resource package and propagates assets to Android app targets.",
     attrs = _ANDROID_RESOURCE_ATTRS + [
@@ -2421,6 +2484,7 @@ android_resource = target_kind(
     ],
     providers = ["android_resource"],
     capabilities = [capability("build", ["default", "resources"])],
+    source_references = _ANDROID_RESOURCE_SOURCE_REFERENCES,
     examples = [
         example(
             "android-resource-minimal",
@@ -2451,6 +2515,7 @@ android_library = target_kind(
     ],
     providers = ["android_library", "android_archive", "java_library"],
     capabilities = [capability("build", ["default", "jar", "aar", "resources"])],
+    source_references = _ANDROID_LIBRARY_SOURCE_REFERENCES,
     examples = [
         example(
             "android-library-minimal",
@@ -2537,6 +2602,7 @@ android_binary = target_kind(
         capability("build", ["default", "apk", "dex", "resources"]),
         capability("run", ["default"], ["apk"]),
     ],
+    source_references = _ANDROID_BINARY_SOURCE_REFERENCES,
     examples = [
         example(
             "android-binary-minimal",

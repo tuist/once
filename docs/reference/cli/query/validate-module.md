@@ -1,28 +1,23 @@
-# `once query evidence`
+# `once query validate-module`
 
-List durable evidence records, optionally filtered by subject
+Validate one project-local Starlark module without registering it
 
 ## Synopsis
 
 ```text
-once query evidence [OPTIONS] [SUBJECT]
+once query validate-module [OPTIONS] <PATH>
 ```
-
-## Description
-
-Evidence records are provenance for action outcomes. They record what happened after `once exec`, `once run`, `once build`, or `once test`: the subject, status, action digest, input digest when available, cache state, exit code, and captured output digests when available. Evidence is queryable history; it does not change action-cache reuse rules.
 
 ## Arguments
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `<SUBJECT>` | no | Subject id, e.g. `cli` or `cli:test` |
+| `<PATH>` | yes | Workspace-relative module path |
 
 ## Options
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | `<COUNT>` |  | Return only the newest matching records |
 | `-C, --directory` | `<DIR>` |  | Project root. Defaults to the current directory; the cache lives under `<project>/.once/`. Mirrors `make -C` |
 | `--format` | `<FORMAT>` | `human` | Output format for Once's structured data (`cache stats`, `run`/`exec` trailers). Defaults to a human-readable rendering; pass `json` or `toon` to get machine-parseable output for scripting and for agent consumers |
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |

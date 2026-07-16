@@ -68,6 +68,18 @@ The target emits `android_application` and `android_apk`.
 | `build` | `default`, `apk`, `dex`, `resources` |  |
 | `run` | `default` | `apk` |
 
+## Source References
+
+Target kind discovery returns these external concepts for partial graph
+adoption:
+
+- [`android_binary` from Bazel rules_android](https://bazelbuild.github.io/rules_android/#android_binary)
+- [`android_binary` from Buck2](https://buck2.build/docs/prelude/rules/android/android_binary/)
+- [`com.android.application` from the Android Gradle plugin](https://developer.android.com/build/configure-app-module)
+
+Use them to inspect the source target that owns final application packaging,
+then reproduce only its required dependency closure.
+
 ## Outputs
 
 | Output | Location |

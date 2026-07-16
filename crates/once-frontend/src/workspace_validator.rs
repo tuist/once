@@ -1,0 +1,348 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use crate::{
+    load_graph_workspace, target_kind_schemas_for_workspace, Diagnostic, GraphTarget,
+    TargetKindSchema, TargetSpec,
+};
+
+pub fn validate_workspace(workspace: &Path) -> crate::Result<Vec<Diagnostic>> {
+    let graph = load_graph_workspace(workspace)?;
+    let schemas = target_kind_schemas_for_workspace(workspace)?;
+    Ok(validate_graph(workspace, &graph, &schemas))
+}
+
+fn validate_graph(
+    workspace: &Path,
+    graph: &[GraphTarget],
+    schemas: &[TargetKindSchema],
+) -> Vec<Diagnostic> {
+    let mut diagnostics = graph
+        .iter()
+        .flat_map(|target| target.diagnostics.clone())
+        .collect::<Vec<_>>();
+    let targets = graph
+        .iter()
+        .map(|target| (target.label.id.as_str(), target))
+        .collect::<BTreeMap<_, _>>();
+
+    validate_unique_ids(graph, &mut diagnostics);
+    validate_target_schemas(graph, schemas, &mut diagnostics);
+    validate_dependencies(graph, schemas, &targets, &mut diagnostics);
+    validate_sources(workspace, graph, &mut diagnostics);
+    validate_cycles(graph, &targets, &mut diagnostics);
+    diagnostics.sort_by(|left, right| {
+        (&left.target, &left.attribute, &left.code, &left.message).cmp(&(
+            &right.target,
+            &right.attribute,
+            &right.code,
+            &right.message,
+        ))
+    });
+    diagnostics.dedup();
+    diagnostics
+}
+
+fn validate_target_schemas(
+    graph: &[GraphTarget],
+    schemas: &[TargetKindSchema],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for target in graph {
+        let attrs = match serde_json::to_value(&target.attrs) {
+            Ok(serde_json::Value::Object(attrs)) => attrs,
+            Ok(_) => unreachable!("target attributes always serialize as an object"),
+            Err(error) => {
+                diagnostics.push(
+                    Diagnostic::new("invalid_attributes", error.to_string())
+                        .with_target(&target.label.id)
+                        .with_attribute("attrs"),
+                );
+                continue;
+            }
+        };
+        let spec = TargetSpec {
+            name: target.label.name.clone(),
+            kind: target.kind.clone(),
+            deps: target.deps.clone(),
+            srcs: target.srcs.clone(),
+            attrs,
+        };
+        diagnostics.extend(crate::validate_target(&spec, schemas).into_iter().map(
+            |mut diagnostic| {
+                diagnostic.target = Some(target.label.id.clone());
+                diagnostic
+            },
+        ));
+    }
+}
+
+fn validate_unique_ids(graph: &[GraphTarget], diagnostics: &mut Vec<Diagnostic>) {
+    let mut seen = BTreeSet::new();
+    for target in graph {
+        if !seen.insert(target.label.id.as_str()) {
+            diagnostics.push(
+                Diagnostic::new(
+                    "duplicate_target",
+                    format!("target `{}` is declared more than once", target.label.id),
+                )
+                .with_target(&target.label.id)
+                .with_attribute("name")
+                .with_repair("Rename or remove one duplicate target declaration"),
+            );
+        }
+    }
+}
+
+fn validate_dependencies(
+    graph: &[GraphTarget],
+    schemas: &[TargetKindSchema],
+    targets: &BTreeMap<&str, &GraphTarget>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for target in graph {
+        let accepted = schemas
+            .iter()
+            .find(|schema| schema.kind == target.kind)
+            .into_iter()
+            .flat_map(|schema| &schema.deps)
+            .flat_map(|dep| &dep.expected_providers)
+            .collect::<BTreeSet<_>>();
+        for dependency_id in &target.deps {
+            let Some(dependency) = targets.get(dependency_id.as_str()) else {
+                diagnostics.push(
+                    Diagnostic::new(
+                        "missing_dependency",
+                        format!(
+                            "target `{}` depends on missing target `{dependency_id}`",
+                            target.label.id
+                        ),
+                    )
+                    .with_target(&target.label.id)
+                    .with_attribute("deps")
+                    .with_repair(format!(
+                        "Declare target `{dependency_id}` or remove it from `deps`"
+                    )),
+                );
+                continue;
+            };
+            if accepted.is_empty() {
+                diagnostics.push(
+                    Diagnostic::new(
+                        "unexpected_dependency",
+                        format!("target kind `{}` does not accept dependencies", target.kind),
+                    )
+                    .with_target(&target.label.id)
+                    .with_attribute("deps")
+                    .with_repair(format!("Remove `{dependency_id}` from `deps`")),
+                );
+                continue;
+            }
+            if !dependency
+                .providers
+                .iter()
+                .any(|provider| accepted.contains(provider))
+            {
+                diagnostics.push(
+                    Diagnostic::new(
+                        "incompatible_dependency_provider",
+                        format!(
+                            "dependency `{dependency_id}` provides [{}], but target `{}` accepts [{}]",
+                            dependency.providers.join(", "),
+                            target.label.id,
+                            accepted
+                                .iter()
+                                .map(|provider| provider.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    )
+                    .with_target(&target.label.id)
+                    .with_attribute("deps")
+                    .with_repair(format!(
+                        "Replace `{dependency_id}` with a target that emits an accepted provider"
+                    )),
+                );
+            }
+        }
+    }
+}
+
+fn validate_sources(workspace: &Path, graph: &[GraphTarget], diagnostics: &mut Vec<Diagnostic>) {
+    for target in graph {
+        let package = workspace.join(&target.label.package);
+        for source in &target.srcs {
+            let pattern = package.join(source);
+            let Some(pattern) = pattern.to_str() else {
+                diagnostics.push(source_diagnostic(
+                    target,
+                    source,
+                    "source pattern is not valid UTF-8",
+                ));
+                continue;
+            };
+            let matches = match glob::glob(pattern) {
+                Ok(paths) => paths.filter_map(Result::ok).any(|path| path.is_file()),
+                Err(error) => {
+                    diagnostics.push(source_diagnostic(target, source, &error.to_string()));
+                    continue;
+                }
+            };
+            if !matches {
+                diagnostics.push(source_diagnostic(
+                    target,
+                    source,
+                    "source pattern matches no files",
+                ));
+            }
+        }
+    }
+}
+
+fn source_diagnostic(target: &GraphTarget, source: &str, message: &str) -> Diagnostic {
+    Diagnostic::new(
+        "missing_source",
+        format!(
+            "source `{source}` for target `{}`: {message}",
+            target.label.id
+        ),
+    )
+    .with_target(&target.label.id)
+    .with_attribute("srcs")
+    .with_repair(format!(
+        "Create a matching source file or remove `{source}` from `srcs`"
+    ))
+}
+
+fn validate_cycles(
+    graph: &[GraphTarget],
+    targets: &BTreeMap<&str, &GraphTarget>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut complete = BTreeSet::new();
+    for target in graph {
+        let mut stack = Vec::new();
+        visit_target(
+            &target.label.id,
+            targets,
+            &mut stack,
+            &mut complete,
+            diagnostics,
+        );
+    }
+}
+
+fn visit_target(
+    target_id: &str,
+    targets: &BTreeMap<&str, &GraphTarget>,
+    stack: &mut Vec<String>,
+    complete: &mut BTreeSet<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if complete.contains(target_id) {
+        return;
+    }
+    if let Some(position) = stack.iter().position(|candidate| candidate == target_id) {
+        let mut cycle = stack[position..].to_vec();
+        cycle.push(target_id.to_string());
+        diagnostics.push(
+            Diagnostic::new(
+                "dependency_cycle",
+                format!("dependency cycle: {}", cycle.join(" -> ")),
+            )
+            .with_target(target_id)
+            .with_attribute("deps")
+            .with_repair("Remove or redirect one dependency edge in the cycle"),
+        );
+        return;
+    }
+    let Some(target) = targets.get(target_id) else {
+        return;
+    };
+    stack.push(target_id.to_string());
+    for dependency in &target.deps {
+        visit_target(dependency, targets, stack, complete, diagnostics);
+    }
+    stack.pop();
+    complete.insert(target_id.to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn reports_missing_dependencies_and_sources() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("app")).unwrap();
+        std::fs::write(
+            tmp.path().join("app/once.toml"),
+            r#"[[target]]
+name = "App"
+kind = "android_binary"
+srcs = ["src/**/*.kt"]
+deps = ["./Missing"]
+
+[target.attrs]
+application_id = "dev.once.app"
+"#,
+        )
+        .unwrap();
+
+        let diagnostics = validate_workspace(tmp.path()).unwrap();
+
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "missing_dependency"));
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "missing_source"));
+    }
+
+    #[test]
+    fn accepts_a_complete_script_graph() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("build.sh"), "#!/bin/sh\ntrue\n").unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            r#"[[target]]
+name = "Build"
+kind = "script"
+srcs = ["build.sh"]
+
+[target.attrs]
+script_path = "build.sh"
+script_runtime = "sh"
+"#,
+        )
+        .unwrap();
+
+        assert!(validate_workspace(tmp.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reports_schema_diagnostics_with_canonical_target_ids() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("app/src")).unwrap();
+        std::fs::write(tmp.path().join("app/src/Main.kt"), "class Main").unwrap();
+        std::fs::write(
+            tmp.path().join("app/once.toml"),
+            r#"[[target]]
+name = "App"
+kind = "android_binary"
+srcs = ["src/**/*.kt"]
+"#,
+        )
+        .unwrap();
+
+        let diagnostics = validate_workspace(tmp.path()).unwrap();
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "missing_required_attr"
+                && diagnostic.target.as_deref() == Some("app/App")
+                && diagnostic.attribute.as_deref() == Some("application_id")
+        }));
+    }
+}

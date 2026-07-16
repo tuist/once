@@ -15,8 +15,10 @@ targets` lists every declared target id with its target kind
 and capabilities; `query capabilities` shows what a specific
 target exposes (`build`, `run`, `test`); `query schema`
 returns the typed attribute and provider shape for a target kind;
-`query example` returns the files in a chosen starter; and `query evidence`
-lists durable action evidence captured from prior executions. A quoted
+`query example` returns the files in a chosen starter; `query script` validates
+an annotated script contract; `query validate-workspace` checks the
+complete loaded graph; and `query evidence` lists durable action evidence
+captured from prior executions. A quoted
 `MATCH ... RETURN ...` expression can explore the graph through
 a read-only Cypher-like pattern. All query surfaces respect
 `--format json` and `--format toon` so consumers can plan
@@ -69,9 +71,14 @@ escape forms, including Unicode escapes, are rejected.
 - [`once query schema`](/reference/cli/query/schema)
 - [`once query example`](/reference/cli/query/example)
 - [`once query target-kinds`](/reference/cli/query/target-kinds)
+- [`once query module-contract`](/reference/cli/query/module-contract)
+- [`once query external-source`](/reference/cli/query/external-source)
 - [`once query target`](/reference/cli/query/target)
 - [`once query tests`](/reference/cli/query/tests)
 - [`once query affected-tests`](/reference/cli/query/affected-tests)
 - [`once query test-results`](/reference/cli/query/test-results)
 - [`once query evidence`](/reference/cli/query/evidence)
 - [`once query validate-target`](/reference/cli/query/validate-target)
+- [`once query script`](/reference/cli/query/script)
+- [`once query validate-workspace`](/reference/cli/query/validate-workspace)
+- [`once query validate-module`](/reference/cli/query/validate-module)

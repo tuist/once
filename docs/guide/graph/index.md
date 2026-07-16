@@ -153,6 +153,18 @@ once run apps/mobile/App
 Check the target's capabilities before running it. The ecosystem guide and
 target kind reference explain any required simulator, device, or host setup.
 
+## Validate Shared Mobile Code
+
+The shared-code target kinds expose the `native-mobile-shared-code-e2e`
+starter. It wires an Android application to Swift and Rust native libraries,
+and an Apple application to a Kotlin/Native framework plus the same Rust
+mobile library target. The Apple application calls both shared
+implementations. The Android application loads the Swift and Rust libraries
+and calls both through the
+[Java Native Interface](https://developer.android.com/training/articles/perf-jni).
+The Swift target statically links its standard library and packages the C++
+shared runtime from the selected toolchain.
+
 ## Extend the Graph With Local Modules
 
 Use a local module when a project needs a typed target kind that is not built
@@ -180,20 +192,33 @@ workspace root and load in sorted order. See the
 ## Give Agents Read Access First
 
 The [Model Context Protocol](https://modelcontextprotocol.io/) server can
-expose graph inspection without execution:
+expose graph inspection without execution. An agent can discover targets,
+query schemas, and inspect target kind contracts without being allowed to
+change workspace state:
 
 ```sh
 once mcp
 ```
 
-Execution can build code, write outputs, install software, or launch a
-process, so it requires an explicit opt-in:
+Editing and running are side-effectful. They can change manifests, build code,
+write outputs, install software, or launch a process, so Once only advertises
+state-changing tools when the server is started with an explicit opt-in:
 
 ```sh
 once mcp --allow-run
 ```
 
-With that option, an agent can build, run, or start a declared target. Without
-it, the server remains an inspection surface for targets, schemas, and graph
-relationships. See the [Model Context Protocol tools reference](/reference/mcp/tools)
-for the available operations.
+With that opt-in, agents can edit manifests, run tests, or call
+`once_build_target`, `once_run_target`, or `once_start_target` with the same
+target id the command-line interface accepts. The start call returns a runtime
+session id immediately, then the agent can use `once_runtime_status`,
+`once_runtime_logs`, and `once_stop_runtime` to follow or stop the run. Without
+it, the Model Context Protocol surface remains read-only and state-changing
+tools are not listed.
+
+For a complete creation and verification loop, including graph-wide validation,
+annotated scripts, output checks, and project memory, see
+[Coding harnesses](/guide/harness).
+
+See the [Model Context Protocol tools reference](/reference/mcp/tools) for
+the available operations.

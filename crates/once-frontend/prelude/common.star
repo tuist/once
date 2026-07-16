@@ -37,7 +37,17 @@ def example(slug, name, use_when, path = None):
         "path": path or ("examples/" + slug),
     }
 
-def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, tools = []):
+def source_reference(system, symbol, url, use_when, content_digest = None):
+    return {
+        "_once_source_reference": True,
+        "system": system,
+        "symbol": symbol,
+        "url": url,
+        "use_when": use_when,
+        "content_digest": content_digest,
+    }
+
+def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, tools = [], source_references = []):
     return {
         "_once_target_kind": True,
         "kind": kind,
@@ -48,10 +58,11 @@ def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], c
         "capabilities": capabilities,
         "tools": tools,
         "examples": examples,
+        "source_references": source_references,
         "impl": impl,
     }
 
-def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, tools = []):
+def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, tools = [], source_references = []):
     return target_kind(
         kind = kind,
         docs = docs,
@@ -62,6 +73,7 @@ def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabili
         examples = examples,
         impl = impl,
         tools = tools,
+        source_references = source_references,
     )
 
 def _ends_with(value, suffix):

@@ -20,7 +20,8 @@ Android targets require:
 - `kotlinc` and `kotlin-stdlib.jar` when a target contains Kotlin sources.
 
 The repository provides a setup task that accepts Android licenses, installs
-the pinned packages, and creates a local debug keystore when one is missing:
+the pinned packages and emulator system image, creates the `once_example`
+emulator, and creates a local debug keystore when one is missing:
 
 ```sh
 mise install
@@ -89,6 +90,11 @@ HelloResources -> Greeting -> Hello
 `HelloResources` owns shared resources. `Greeting` compiles the reusable
 Kotlin code and consumes those resources. `Hello` owns the final application
 manifest and package identity.
+
+Swift native providers statically link the Swift standard library and include
+the matching C++ shared runtime from the selected Swift Software Development
+Kit. The `native-mobile-shared-code-e2e` starter loads its Swift and Rust
+libraries from Kotlin and displays values returned by both.
 
 Keep `ResourcesManifest.xml` focused on the resource package. Put launcher
 activities, application metadata, and version details in
@@ -224,6 +230,32 @@ dependencies:
 Add native code after the Java or Kotlin application builds on its own. This
 keeps development-kit and linker setup separate from the first application
 graph.
+
+## Coding Harnesses
+
+A connected coding harness can start from the request “build an Android app
+with Once.” It discovers `android_binary`, fetches the target kind's runnable
+starter, materializes its files, calls `once_validate_workspace`, builds the
+canonical target identifier, checks the Android application package output,
+and queries the resulting evidence. The harness does not need an Android-only
+Once integration because the same discovery and validation loop applies to
+every target kind.
+
+The `android_resource`, `android_library`, and `android_binary` schemas
+also return official source references for corresponding
+[Bazel Android rules](https://bazelbuild.github.io/rules_android/),
+[Buck2 Android rules](https://buck2.build/docs/prelude/rules/android/), and
+[Android Gradle plugin](https://developer.android.com/build) concepts. A
+harness can use those references to reproduce only the application, library,
+or resource dependency slice the user asks Once to own.
+
+If the source build uses another rule or plugin, the harness can fetch that
+public source through `once_fetch_external_source`, query
+`once_query_module_contract`, write a project-local target kind, and validate
+it with `once_validate_module`. Built-in Android target kinds remain the
+common path, not a requirement for graph adoption.
+
+See [Coding harnesses](/guide/harness) for the complete protocol workflow.
 
 ## Supported Target Kinds and Limitations
 

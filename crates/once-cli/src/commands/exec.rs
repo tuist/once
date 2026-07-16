@@ -369,8 +369,12 @@ async fn autodetected_script_action(
     let Ok(script_abs) = resolve_script_abs(workspace, script_arg) else {
         return Ok(None);
     };
-    let Ok(annotations) = parse_script_annotations(&script_abs, script_arg) else {
-        return Ok(None);
+    let annotations = match parse_script_annotations(&script_abs, script_arg) {
+        Ok(annotations) => annotations,
+        Err(error) if once_frontend::script_has_once_directives(&script_abs)? => {
+            return Err(error.into());
+        }
+        Err(_) => return Ok(None),
     };
     if !has_once_annotations(&annotations) {
         return Ok(None);
@@ -1481,5 +1485,31 @@ mod tests {
         .unwrap();
 
         assert!(detected.is_none());
+    }
+
+    #[tokio::test]
+    async fn autodetection_rejects_malformed_once_directives() {
+        let tmp = TempDir::new().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(tmp.path().join(".cache")));
+        let script = tmp.path().join("build.sh");
+        fs::write(&script, "#!/bin/sh\n# once ouput \"result.txt\"\ntrue\n").unwrap();
+
+        let error = autodetected_script_action(
+            &cache,
+            RunOpts::default(),
+            tmp.path(),
+            &ScriptExecutionOptions {
+                explicit_env: Vec::new(),
+                cwd_override: None,
+                timeout_ms_override: None,
+                remote_override: None,
+                sandbox: SandboxMode::default(),
+            },
+            &["/bin/sh".to_string(), "build.sh".to_string()],
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown once directive"));
     }
 }

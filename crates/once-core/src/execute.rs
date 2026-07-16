@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use once_cas::{ActionResult, CacheProvider};
@@ -57,6 +58,16 @@ pub(crate) async fn run(
                     copy_tree(sources, destination, workspace_root).await?;
                 }
             }
+            capture_file_action_outputs(std::slice::from_ref(destination), workspace_root, cache)
+                .await
+        }
+        Action::MaterializeHostFile {
+            source,
+            source_sha256,
+            destination,
+            ..
+        } => {
+            materialize_host_file(source, source_sha256, destination, workspace_root).await?;
             capture_file_action_outputs(std::slice::from_ref(destination), workspace_root, cache)
                 .await
         }
@@ -445,6 +456,39 @@ async fn copy_file(
             source,
         })?;
     Ok(())
+}
+
+async fn materialize_host_file(
+    source: &Path,
+    source_sha256: &str,
+    destination: &WorkspacePath,
+    workspace_root: &Path,
+) -> Result<()> {
+    if !source.is_absolute() {
+        return Err(Error::InvalidHostFile {
+            reason: format!("source `{}` must be absolute", source.display()),
+        });
+    }
+    let bytes = tokio::fs::read(source)
+        .await
+        .map_err(|source_error| Error::FileAction {
+            action: "read_host_file",
+            path: source.display().to_string(),
+            source: source_error,
+        })?;
+    let digest = sha2::Sha256::digest(&bytes);
+    let mut actual = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut actual, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    if actual != source_sha256 {
+        return Err(Error::HostFileDigestMismatch {
+            path: source.display().to_string(),
+            expected: source_sha256.to_string(),
+            actual,
+        });
+    }
+    write_file(destination, &bytes, workspace_root).await
 }
 
 async fn copy_tree(

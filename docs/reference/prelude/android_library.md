@@ -54,6 +54,18 @@ The target emits `android_library`, `android_archive`, and
 | --- | --- |
 | `build` | `default`, `jar`, `aar`, `resources` |
 
+## Source References
+
+Target kind discovery returns these external concepts for partial graph
+adoption:
+
+- [`android_library` from Bazel rules_android](https://bazelbuild.github.io/rules_android/#android_library)
+- [`android_library` from Buck2](https://buck2.build/docs/prelude/rules/android/android_library/)
+- [`com.android.library` from the Android Gradle plugin](https://developer.android.com/build)
+
+Use them when the requested dependency slice needs one reusable Android
+library but does not need the complete source build.
+
 ## Outputs
 
 | Output | Location |

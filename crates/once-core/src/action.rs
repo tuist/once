@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
@@ -12,7 +13,7 @@ use crate::{ResourceRequest, WorkspacePath};
 /// that should invalidate the cache. Older action result JSON still
 /// deserializes through serde defaults; the domain only partitions new
 /// action lookups.
-pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v6\0";
+pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v7\0";
 
 static DEFAULT_RESOURCE_REQUEST: LazyLock<ResourceRequest> =
     LazyLock::new(ResourceRequest::default);
@@ -141,6 +142,13 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input_digest: Option<Digest>,
     },
+    MaterializeHostFile {
+        source: PathBuf,
+        source_sha256: String,
+        destination: WorkspacePath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
     PreparePath {
         path: WorkspacePath,
         mode: PreparePathMode,
@@ -190,6 +198,7 @@ impl Action {
             Action::RunCommand { resources, .. } => resources,
             Action::WriteFile { .. }
             | Action::CopyPath { .. }
+            | Action::MaterializeHostFile { .. }
             | Action::PreparePath { .. }
             | Action::WriteTreeDigest { .. } => &DEFAULT_RESOURCE_REQUEST,
         }
@@ -200,6 +209,7 @@ impl Action {
             Action::RunCommand { input_digest, .. }
             | Action::WriteFile { input_digest, .. }
             | Action::CopyPath { input_digest, .. }
+            | Action::MaterializeHostFile { input_digest, .. }
             | Action::PreparePath { input_digest, .. }
             | Action::WriteTreeDigest { input_digest, .. } => *input_digest,
         }

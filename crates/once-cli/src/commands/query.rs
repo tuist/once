@@ -1,6 +1,10 @@
 //! `once query` - inspect the typed build graph.
 
 mod expression;
+mod external_source;
+mod script;
+
+pub(crate) use script::script_validation_value;
 
 use std::fmt::Write as _;
 use std::io::Read;
@@ -42,6 +46,28 @@ struct AffectedTestRecord {
     reasons: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct WorkspaceValidation {
+    valid: bool,
+    target_count: usize,
+    diagnostics: Vec<once_frontend::Diagnostic>,
+}
+
+#[derive(Debug, Serialize)]
+struct ModuleValidation {
+    valid: bool,
+    path: String,
+    target_kinds: Vec<once_frontend::TargetKindSchema>,
+    diagnostics: Vec<ModuleDiagnostic>,
+}
+
+#[derive(Debug, Serialize)]
+struct ModuleDiagnostic {
+    code: &'static str,
+    message: String,
+    repairs: Vec<&'static str>,
+}
+
 pub async fn targets(workspace: &Path, output: Output, kind: Option<&str>) -> Result<()> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let records = target_records(graph, kind);
@@ -52,6 +78,151 @@ pub async fn expression(workspace: &Path, output: Output, query: &str) -> Result
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let result = expression::evaluate(query, &graph)?;
     write_body(output, || expression::render_human(&result), &result).await
+}
+
+pub async fn script(workspace: &Path, output: Output, path: &str) -> Result<()> {
+    script::inspect(workspace, output, path).await
+}
+
+pub async fn validate_workspace(workspace: &Path, output: Output) -> Result<()> {
+    let validation = workspace_validation(workspace)?;
+    write_body(
+        output,
+        || render_workspace_validation(&validation),
+        &validation,
+    )
+    .await
+}
+
+pub async fn module_contract(output: Output) -> Result<()> {
+    let contract = once_frontend::module_authoring_contract();
+    write_body(
+        output,
+        || "project module authoring contract\n".to_string(),
+        &contract,
+    )
+    .await
+}
+
+pub(crate) fn module_contract_value() -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(
+        once_frontend::module_authoring_contract(),
+    )?)
+}
+
+pub async fn external_source(output: Output, url: &str, max_bytes: usize) -> Result<()> {
+    let url = url.to_string();
+    let source = tokio::task::spawn_blocking(move || external_source::fetch(&url, max_bytes))
+        .await
+        .context("joining external source fetch")??;
+    write_body(
+        output,
+        || {
+            format!(
+                "external source: {} bytes{}\n{}",
+                source.byte_count,
+                if source.truncated { " (truncated)" } else { "" },
+                source.content
+            )
+        },
+        &source,
+    )
+    .await
+}
+
+pub(crate) fn external_source_value(url: &str, max_bytes: usize) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(external_source::fetch(
+        url, max_bytes,
+    )?)?)
+}
+
+pub async fn validate_module(workspace: &Path, output: Output, path: &str) -> Result<()> {
+    let validation = module_validation(workspace, path)?;
+    write_body(
+        output,
+        || render_module_validation(&validation),
+        &validation,
+    )
+    .await
+}
+
+pub(crate) fn module_validation_value(workspace: &Path, path: &str) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(module_validation(workspace, path)?)?)
+}
+
+fn module_validation(workspace: &Path, path: &str) -> Result<ModuleValidation> {
+    let relative = once_core::WorkspacePath::try_from(path)
+        .map_err(|error| anyhow!("invalid module path: {error}"))?;
+    if relative.as_str().is_empty() {
+        anyhow::bail!("module path must name a Starlark file");
+    }
+    let source_path = relative.resolve(workspace);
+    let source = std::fs::read_to_string(&source_path)
+        .with_context(|| format!("reading module `{}`", source_path.display()))?;
+    match once_frontend::validate_module_source(workspace, relative.as_str(), &source) {
+        Ok(target_kinds) => Ok(ModuleValidation {
+            valid: true,
+            path: relative.to_string(),
+            target_kinds,
+            diagnostics: Vec::new(),
+        }),
+        Err(error) => Ok(ModuleValidation {
+            valid: false,
+            path: relative.to_string(),
+            target_kinds: Vec::new(),
+            diagnostics: vec![ModuleDiagnostic {
+                code: "invalid_module",
+                message: error.to_string(),
+                repairs: vec![
+                    "Compare the module with once query module-contract.",
+                    "Fix the reported Starlark or target kind contract error and validate again.",
+                ],
+            }],
+        }),
+    }
+}
+
+fn render_module_validation(validation: &ModuleValidation) -> String {
+    if validation.valid {
+        return format!(
+            "module valid: {} ({} target kinds)\n",
+            validation.path,
+            validation.target_kinds.len()
+        );
+    }
+    format!(
+        "module invalid: {}\n{}\n",
+        validation.path, validation.diagnostics[0].message
+    )
+}
+
+pub(crate) fn workspace_validation_value(workspace: &Path) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(workspace_validation(workspace)?)?)
+}
+
+fn workspace_validation(workspace: &Path) -> Result<WorkspaceValidation> {
+    let target_count = once_frontend::load_graph_workspace(workspace)?.len();
+    let diagnostics = once_frontend::validate_workspace(workspace)?;
+    Ok(WorkspaceValidation {
+        valid: diagnostics.is_empty(),
+        target_count,
+        diagnostics,
+    })
+}
+
+fn render_workspace_validation(validation: &WorkspaceValidation) -> String {
+    if validation.valid {
+        return format!("workspace valid: {} targets\n", validation.target_count);
+    }
+    let mut out = format!(
+        "workspace invalid: {} diagnostics across {} targets\n",
+        validation.diagnostics.len(),
+        validation.target_count
+    );
+    for diagnostic in &validation.diagnostics {
+        let _ = writeln!(out, "{}: {}", diagnostic.code, diagnostic.message);
+    }
+    out
 }
 
 fn target_records(graph: Vec<once_frontend::GraphTarget>, kind: Option<&str>) -> Vec<TargetRecord> {
@@ -104,6 +275,8 @@ pub async fn example(workspace: &Path, output: Output, kind: &str, slug: &str) -
 struct TargetKindSummary {
     kind: String,
     docs: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_references: Vec<once_frontend::SourceReference>,
     examples: Vec<TargetKindExampleSummary>,
 }
 
@@ -119,6 +292,7 @@ impl From<once_frontend::TargetKindSchema> for TargetKindSummary {
         Self {
             kind: schema.kind,
             docs: schema.docs,
+            source_references: schema.source_references,
             examples: schema
                 .examples
                 .into_iter()
@@ -132,11 +306,80 @@ impl From<once_frontend::TargetKindSchema> for TargetKindSummary {
     }
 }
 
-pub async fn target_kinds(workspace: &Path, output: Output) -> Result<()> {
-    let schemas = once_frontend::target_kind_schemas_for_workspace(workspace)?;
+pub async fn target_kinds(workspace: &Path, output: Output, query: Option<&str>) -> Result<()> {
+    let schemas = matching_target_kind_schemas(workspace, query)?;
     let summaries: Vec<TargetKindSummary> =
         schemas.into_iter().map(TargetKindSummary::from).collect();
     write_body(output, || render_target_kinds_human(&summaries), &summaries).await
+}
+
+pub(crate) fn matching_target_kind_schemas(
+    workspace: &Path,
+    query: Option<&str>,
+) -> Result<Vec<once_frontend::TargetKindSchema>> {
+    let mut schemas = once_frontend::target_kind_schemas_for_workspace(workspace)?;
+    let terms = query
+        .into_iter()
+        .flat_map(|query| query.split(|character: char| !character.is_alphanumeric()))
+        .map(str::to_lowercase)
+        .filter(|term| !term.is_empty())
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        return Ok(schemas);
+    }
+
+    if let Some(family) = terms.iter().find(|term| {
+        schemas
+            .iter()
+            .any(|schema| target_kind_family(schema) == term.as_str())
+    }) {
+        schemas.retain(|schema| target_kind_family(schema) == family.as_str());
+        return Ok(schemas);
+    }
+
+    if let Some(segment) = terms.iter().find(|term| {
+        schemas
+            .iter()
+            .any(|schema| target_kind_segments(schema).any(|candidate| candidate == term.as_str()))
+    }) {
+        schemas.retain(|schema| {
+            target_kind_segments(schema).any(|candidate| candidate == segment.as_str())
+        });
+        return Ok(schemas);
+    }
+
+    schemas.retain(|schema| target_kind_matches_terms(schema, &terms));
+    Ok(schemas)
+}
+
+fn target_kind_family(schema: &once_frontend::TargetKindSchema) -> &str {
+    schema.kind.split('_').next().unwrap_or(&schema.kind)
+}
+
+fn target_kind_segments(schema: &once_frontend::TargetKindSchema) -> impl Iterator<Item = &str> {
+    schema.kind.split('_')
+}
+
+fn target_kind_matches_terms(schema: &once_frontend::TargetKindSchema, terms: &[String]) -> bool {
+    let mut searchable = format!("{} {}", schema.kind, schema.docs);
+    for example in &schema.examples {
+        searchable.push(' ');
+        searchable.push_str(&example.slug);
+        searchable.push(' ');
+        searchable.push_str(&example.name);
+        searchable.push(' ');
+        searchable.push_str(&example.use_when);
+    }
+    for reference in &schema.source_references {
+        searchable.push(' ');
+        searchable.push_str(&reference.system);
+        searchable.push(' ');
+        searchable.push_str(&reference.symbol);
+        searchable.push(' ');
+        searchable.push_str(&reference.use_when);
+    }
+    let searchable = searchable.to_lowercase();
+    terms.iter().any(|term| searchable.contains(term))
 }
 
 pub async fn target(workspace: &Path, output: Output, target_id: &str) -> Result<()> {
@@ -190,19 +433,32 @@ pub async fn test_results(workspace: &Path, output: Output, target_id: &str) -> 
     write_body(output, || render_test_results_human(&value), &value).await
 }
 
-pub async fn evidence(workspace: &Path, output: Output, subject: Option<&str>) -> Result<()> {
-    let records = evidence_records(workspace, subject).await?;
+pub async fn evidence(
+    workspace: &Path,
+    output: Output,
+    subject: Option<&str>,
+    limit: Option<usize>,
+) -> Result<()> {
+    let records = evidence_records(workspace, subject, limit).await?;
     write_body(output, || render_evidence_human(&records), &records).await
 }
 
 pub(crate) async fn evidence_records(
     workspace: &Path,
     subject: Option<&str>,
+    limit: Option<usize>,
 ) -> Result<Vec<EvidenceRecord>> {
     let store = EvidenceStore::open_workspace(workspace);
     let mut records = store.load().await?;
     if let Some(subject) = subject {
         records.retain(|record| record.subject.matches(subject));
+    }
+    if let Some(limit) = limit {
+        if limit == 0 {
+            anyhow::bail!("evidence limit must be greater than zero");
+        }
+        let remove = records.len().saturating_sub(limit);
+        records.drain(..remove);
     }
     Ok(records)
 }
@@ -333,6 +589,17 @@ fn render_schema_human(schema: &once_frontend::TargetKindSchema) -> String {
         for tool in &schema.tools {
             writeln!(out, "  {}: {}", tool.name, tool.executables.join(", "))
                 .expect("writing to string cannot fail");
+        }
+    }
+    if !schema.source_references.is_empty() {
+        out.push_str("source references:\n");
+        for reference in &schema.source_references {
+            writeln!(
+                out,
+                "  {} {}: {}",
+                reference.system, reference.symbol, reference.url
+            )
+            .expect("writing to string cannot fail");
         }
     }
     out

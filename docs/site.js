@@ -147,6 +147,7 @@ export const site = {
         items: [
           { text: "Why Once", link: "/guide/why" },
           { text: "Getting Started", link: "/guide/getting-started" },
+          { text: "Coding Harnesses", link: "/guide/harness" },
         ],
       },
       {

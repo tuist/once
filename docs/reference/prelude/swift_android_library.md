@@ -5,10 +5,10 @@ Swift shared library for Android.
 ## Description
 
 Compiles Swift sources with `swiftc` into an Android `.so` and emits an
-`android_native_library` provider. `android_binary` packages that provider
-under `lib/<abi>/` in the APK. The rule is intentionally explicit about
-Android because Swift cross compilation usually depends on a project-provided
-Swift SDK, Android NDK sysroot, or extra compiler flags.
+`android_native_library` provider. The Swift standard library is linked
+statically. Once snapshots the matching C++ shared runtime from the Swift
+Software Development Kit and `android_binary` packages both libraries under
+the architecture-specific directory in the Android application package.
 
 ## Attributes
 
@@ -21,6 +21,7 @@ Swift SDK, Android NDK sysroot, or extra compiler flags.
 | `package_name` | string | no | empty | Swift package name passed through `-package-name` when set |
 | `sdk` | string | no |  | Optional sysroot passed to `swiftc -sdk` |
 | `resource_dir` | string | no |  | Optional Swift resource directory passed to `swiftc -resource-dir` |
+| `cxx_runtime` | string | no | Swift Software Development Kit sysroot | Optional absolute path to the C++ shared runtime packaged with the Swift library |
 | `swift_sdk` | string | no | first Android SDK | Installed Swift SDK identifier used to discover default Android sysroot and Swift resource paths |
 | `android_ndk` | string | no | `ANDROID_NDK_HOME` | Android NDK root used to find the LLVM tool directory |
 | `tools_directory` | string | no | inferred | Directory containing Android clang and linker tools passed as `-tools-directory` |
@@ -49,11 +50,36 @@ Accepted but unsupported attributes:
 The target emits `swift_module`, `android_native_library`, and
 `native_linkable`.
 
+## Runtime Boundary
+
+Once follows the official
+[Swift Software Development Kit for Android packaging model](https://www.swift.org/documentation/articles/swift-sdk-for-android-getting-started.html):
+the Swift standard library is linked statically, while `libc++_shared.so` is
+snapshotted from the selected toolchain, content-verified, cached, and emitted
+as a native dependency. The complete runtime closure therefore reaches the
+Android application package without a shell staging command.
+
+Kotlin or Java callers still need a
+[Java Native Interface](https://developer.android.com/training/articles/perf-jni)
+boundary. The runnable shared-code starter includes direct entry points for
+its primitive example. Richer application programming interfaces should use
+the official [SwiftJava generator](https://github.com/swiftlang/swift-java),
+whose Java Native Interface mode supports Android.
+
 ## Capabilities
 
 | Capability | Output groups |
 | --- | --- |
 | `build` | `default`, `native_library`, `swiftmodule` |
+
+## Source References
+
+Target kind discovery exposes the official
+[Swift Android Software Development Kit guide](https://www.swift.org/documentation/articles/swift-sdk-for-android-getting-started.html)
+for runtime packaging and the
+[SwiftJava project](https://github.com/swiftlang/swift-java) for generated
+Java Native Interface bindings. A coding harness can fetch either source
+through Once before adapting a richer interoperation boundary.
 
 ## Provider Record
 
@@ -81,6 +107,7 @@ The target emits `swift_module`, `android_native_library`, and
 | Output | Location |
 | --- | --- |
 | Shared library | `.once/out/<target>/lib<module_name>.so` |
+| C++ shared runtime | `.once/out/<target>/libc++_shared.so` |
 | Swift module | `.once/out/<target>/<module_name>.swiftmodule` |
 | Swift doc | `.once/out/<target>/<module_name>.swiftdoc` |
 | Swift interface | `.once/out/<target>/<module_name>.swiftinterface` when library evolution is enabled |

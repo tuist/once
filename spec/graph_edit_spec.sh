@@ -47,6 +47,24 @@ Describe 'once query target-kinds'
     The stdout should include '"slug":"apple-library-minimal"'
     The stdout should include '"use_when"'
   End
+
+  It 'filters discovery by ecosystem intent'
+    When call "$ONCE_BIN" --format json query target-kinds --query elixir
+    The status should be success
+    The stdout should include '"kind":"elixir_library"'
+    The stdout should include '"kind":"elixir_test"'
+    The stdout should not include '"kind":"apple_application"'
+  End
+
+  It 'prioritizes a named family over generic intent words'
+    When call "$ONCE_BIN" --format json query target-kinds --query 'typed Rust library executable test'
+    The status should be success
+    The stdout should include '"kind":"rust_library"'
+    The stdout should include '"kind":"rust_binary"'
+    The stdout should include '"kind":"rust_test"'
+    The stdout should not include '"kind":"apple_application"'
+    The stdout should not include '"kind":"zig_test"'
+  End
 End
 
 Describe 'once query example'

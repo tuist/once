@@ -187,9 +187,19 @@ async fn run_query_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
-        Some(cli::QueryCmd::TargetKinds) => commands::query::target_kinds(workspace, output)
+        Some(cli::QueryCmd::TargetKinds { query }) => {
+            commands::query::target_kinds(workspace, output, query.as_deref())
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::ModuleContract) => commands::query::module_contract(output)
             .await
             .map(|()| ExitCode::SUCCESS),
+        Some(cli::QueryCmd::ExternalSource { url, max_bytes }) => {
+            commands::query::external_source(output, &url, max_bytes)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
         Some(cli::QueryCmd::Target { target }) => {
             commands::query::target(workspace, output, &target)
                 .await
@@ -208,13 +218,26 @@ async fn run_query_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
-        Some(cli::QueryCmd::Evidence { subject }) => {
-            commands::query::evidence(workspace, output, subject.as_deref())
+        Some(cli::QueryCmd::Evidence { subject, limit }) => {
+            commands::query::evidence(workspace, output, subject.as_deref(), limit)
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
         Some(cli::QueryCmd::ValidateTarget { file }) => {
             commands::query::validate_target(workspace, output, file)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::Script { path }) => commands::query::script(workspace, output, &path)
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Some(cli::QueryCmd::ValidateWorkspace) => {
+            commands::query::validate_workspace(workspace, output)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::ValidateModule { path }) => {
+            commands::query::validate_module(workspace, output, &path)
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }

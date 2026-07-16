@@ -53,6 +53,21 @@ The second run reports a cache hit and restores `build/greeting.txt` from the
 recorded result. If `message.txt` changes, the input digest changes and the
 script runs again.
 
+## Inspect and Run Through a Coding Harness
+
+Inspect the parsed contract before execution:
+
+```sh
+once query script scripts/greet.sh
+```
+
+Coding agents can use the same workflow without reading this guide. The
+[Model Context Protocol](https://modelcontextprotocol.io/) server exposes
+`once_validate_script` for contract inspection and, when started with
+`--allow-run`, `once_exec_script` for execution. The execution result
+includes the action digest, cache state, captured streams, and matching
+evidence. Calling it twice with unchanged inputs verifies cache reuse.
+
 ## When To Use A Script
 
 Use a scripted workflow when one existing executable already owns the work,

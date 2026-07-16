@@ -4,19 +4,15 @@
 //!
 //! Transport is newline-delimited JSON over stdio: every request is
 //! one line of JSON-RPC 2.0 in, every response is one line out. The
-//! handshake follows MCP 2024-11-05: the client sends `initialize`,
-//! we reply with our server info and the `tools` capability, the
-//! client sends a `notifications/initialized` and then `tools/list`
-//! to discover what we can do, then `tools/call` for each tool.
+//! handshake negotiates a supported protocol version: the client sends
+//! `initialize`, we reply with server instructions and the `tools`
+//! capability, the client sends `notifications/initialized` and then
+//! `tools/list` to discover what we can do, then `tools/call` for each tool.
 //!
-//! Test invocation is intentionally available as a first write-capable
-//! tool because coding harnesses need a short discover, filter, run,
-//! inspect loop after editing files.
-//!
-//! Target execution is opt-in because it writes outputs and may trigger target
-//! kind side effects. When enabled, tools can build, run, or start persisted
-//! runtime sessions and return session ids agents can use to query status, read
-//! logs, or stop the process later.
+//! Editing and execution are opt-in because they write workspace state or may
+//! trigger target-kind side effects. When enabled, tools can edit manifests,
+//! build, test, run, or start persisted runtime sessions and return session ids
+//! agents can use to query status, read logs, or stop the process later.
 
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -25,12 +21,26 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+mod script;
 mod tools;
 pub(crate) use tools::tool_catalog;
-use tools::tool_definitions;
+use tools::{tool_definitions, tool_requires_allow_run};
 
 /// MCP protocol version we negotiate.
-const PROTOCOL_VERSION: &str = "2024-11-05";
+const PROTOCOL_VERSION: &str = "2025-11-25";
+const SERVER_INSTRUCTIONS: &str = "Once is a self-describing build graph and cacheable automation server. For a new typed graph with no named upstream rule, start with once_list_target_kinds. Pass its optional query when the request already names an ecosystem, target-kind family, or intent; include the named family so it takes priority over generic words, then call once_query_schema and once_query_example. When the request already points to a specific external rule or plugin, skip the target-kind catalog: call once_query_module_contract, fetch its authoritative source with once_fetch_external_source, write a project-local module, and call once_validate_module. Model only the requested dependency closure. Record upstream source_references and the returned content digest when the source was not truncated, then re-fetch and compare the digest before future maintenance. Materialize target files, inspect canonical ids with once_query_targets, call once_validate_workspace, and use capability tools to build, run, or test. For annotated automation, call once_validate_script before once_exec_script. Stateful tools require --allow-run. Evidence subjects are target ids with an optional capability suffix; script execution returns its evidence subject directly. once_validate_target checks one proposed table, once_validate_workspace checks the loaded graph, and successful execution remains the authoritative current check. Evidence is historical provenance, so do not treat an older record as proof that inputs are unchanged.";
+
+fn negotiated_protocol_version(params: Option<&Value>) -> String {
+    let requested = params
+        .and_then(|params| params.get("protocolVersion"))
+        .and_then(Value::as_str);
+    match requested {
+        Some(version @ ("2024-11-05" | "2025-03-26" | "2025-06-18" | "2025-11-25")) => {
+            version.to_string()
+        }
+        _ => PROTOCOL_VERSION.to_string(),
+    }
+}
 
 /// Run the MCP server until stdin closes.
 pub async fn serve(workspace: PathBuf, allow_run: bool) -> Result<()> {
@@ -111,15 +121,25 @@ impl Server {
     fn dispatch(&self, request: JsonRpcRequest) -> JsonRpcResponse {
         let id = request.id.clone().unwrap_or(Value::Null);
         match request.method.as_str() {
-            "initialize" => JsonRpcResponse::ok(
-                id,
-                json!({
-                    "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "once-mcp", "version": env!("CARGO_PKG_VERSION") },
-                }),
-            ),
+            "initialize" => {
+                let protocol_version = negotiated_protocol_version(request.params.as_ref());
+                JsonRpcResponse::ok(
+                    id,
+                    json!({
+                        "protocolVersion": protocol_version,
+                        "capabilities": { "tools": {} },
+                        "serverInfo": { "name": "once-mcp", "version": env!("CARGO_PKG_VERSION") },
+                        "instructions": SERVER_INSTRUCTIONS,
+                    }),
+                )
+            }
             "notifications/initialized" => JsonRpcResponse::ok(id, Value::Null),
+            "ping" => JsonRpcResponse::ok(id, json!({})),
+            "resources/list" => JsonRpcResponse::ok(id, json!({ "resources": [] })),
+            "resources/templates/list" => {
+                JsonRpcResponse::ok(id, json!({ "resourceTemplates": [] }))
+            }
+            "prompts/list" => JsonRpcResponse::ok(id, json!({ "prompts": [] })),
             "tools/list" => {
                 JsonRpcResponse::ok(id, json!({ "tools": tool_definitions(self.allow_run) }))
             }
@@ -146,6 +166,12 @@ impl Server {
                 )
             }
         };
+        if tool_requires_allow_run(&call.name) && !self.allow_run {
+            return tool_error(
+                id,
+                "state-changing tools require starting `once mcp --allow-run`",
+            );
+        }
         let result = match call.name.as_str() {
             "once_query_targets" => self.tool_query_targets(&call.arguments),
             "once_query_capabilities" => self.tool_query_capabilities(&call.arguments),
@@ -155,29 +181,37 @@ impl Server {
             "once_run_tests" => self.tool_run_tests(&call.arguments),
             "once_query_test_results" => self.tool_query_test_results(&call.arguments),
             "once_query_evidence" => self.tool_query_evidence(&call.arguments),
-            "once_build_target" if self.allow_run => self.tool_build_target(&call.arguments),
-            "once_run_target" if self.allow_run => self.tool_run_target(&call.arguments),
-            "once_start_target" if self.allow_run => self.tool_start_target(&call.arguments),
-            "once_runtime_status" if self.allow_run => self.tool_runtime_status(&call.arguments),
-            "once_runtime_logs" if self.allow_run => self.tool_runtime_logs(&call.arguments),
-            "once_stop_runtime" if self.allow_run => self.tool_stop_runtime(&call.arguments),
-            "once_build_target"
-            | "once_run_target"
-            | "once_start_target"
-            | "once_runtime_status"
-            | "once_runtime_logs"
-            | "once_stop_runtime" => Err(anyhow::anyhow!(
-                "execution tools require starting `once mcp --allow-run`"
-            )),
+            "once_query_module_contract" => crate::commands::query::module_contract_value(),
+            "once_fetch_external_source" => Self::tool_fetch_external_source(&call.arguments),
+            "once_validate_module" => self.tool_validate_module(&call.arguments),
+            "once_validate_workspace" => {
+                crate::commands::query::workspace_validation_value(&self.workspace)
+            }
+            "once_validate_script" => script::validate(&self.workspace, &call.arguments),
+            "once_exec_script" => script::execute(&self.workspace, &call.arguments),
+            "once_build_target" => self.tool_build_target(&call.arguments),
+            "once_run_target" => self.tool_run_target(&call.arguments),
+            "once_start_target" => self.tool_start_target(&call.arguments),
+            "once_runtime_status" => self.tool_runtime_status(&call.arguments),
+            "once_runtime_logs" => self.tool_runtime_logs(&call.arguments),
+            "once_stop_runtime" => self.tool_stop_runtime(&call.arguments),
             "once_apply_edit" => self.tool_apply_edit(&call.arguments),
             "once_query_schema" => tool_query_schema(&self.workspace, &call.arguments),
             "once_query_example" => tool_query_example(&self.workspace, &call.arguments),
-            "once_list_target_kinds" | "once_list_rules" => tool_list_target_kinds(&self.workspace),
+            "once_list_target_kinds" | "once_list_rules" => {
+                tool_list_target_kinds(&self.workspace, &call.arguments)
+            }
             "once_validate_target" => tool_validate_target(&self.workspace, &call.arguments),
             other => Err(anyhow::anyhow!("unknown tool `{other}`")),
         };
         match result {
-            Ok(value) => JsonRpcResponse::ok(id, json!({ "content": [text_content(&value)] })),
+            Ok(value) => JsonRpcResponse::ok(
+                id,
+                json!({
+                    "content": [text_content(&value)],
+                    "structuredContent": { "result": value },
+                }),
+            ),
             Err(error) => tool_error(id, &error.to_string()),
         }
     }
@@ -240,18 +274,8 @@ impl Server {
     }
 
     fn tool_query_affected_tests(&self, args: &Value) -> Result<Value> {
-        let changed_paths = args
-            .get("changed_paths")
-            .and_then(Value::as_array)
-            .map(|paths| {
-                paths
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        crate::commands::query::affected_tests_value(&self.workspace, &changed_paths)
+        let args: ChangedPathsArgs = serde_json::from_value(tool_args(args))?;
+        crate::commands::query::affected_tests_value(&self.workspace, &args.changed_paths)
     }
 
     fn tool_query_test_results(&self, args: &Value) -> Result<Value> {
@@ -263,20 +287,30 @@ impl Server {
     }
 
     fn tool_query_evidence(&self, args: &Value) -> Result<Value> {
-        let subject = match args.get("subject") {
-            Some(Value::Null) | None => None,
-            Some(value) => Some(
-                value
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("`subject` must be a string"))?
-                    .to_string(),
-            ),
-        };
+        let args: EvidenceQueryArgs = serde_json::from_value(tool_args(args))?;
+        if !(1..=100).contains(&args.limit) {
+            anyhow::bail!("`limit` must be between 1 and 100");
+        }
         let workspace = self.workspace.clone();
         let records = run_async_result(async move {
-            crate::commands::query::evidence_records(&workspace, subject.as_deref()).await
+            crate::commands::query::evidence_records(
+                &workspace,
+                args.subject.as_deref(),
+                Some(args.limit),
+            )
+            .await
         })?;
         Ok(serde_json::to_value(records)?)
+    }
+
+    fn tool_fetch_external_source(args: &Value) -> Result<Value> {
+        let args: ExternalSourceArgs = serde_json::from_value(tool_args(args))?;
+        crate::commands::query::external_source_value(&args.url, args.max_bytes)
+    }
+
+    fn tool_validate_module(&self, args: &Value) -> Result<Value> {
+        let args: ValidateModuleArgs = serde_json::from_value(tool_args(args))?;
+        crate::commands::query::module_validation_value(&self.workspace, &args.path)
     }
 
     fn tool_run_tests(&self, args: &Value) -> Result<Value> {
@@ -336,17 +370,10 @@ impl Server {
 }
 
 fn run_test_targets(workspace: &std::path::Path, args: &Value) -> Result<Vec<String>> {
-    let mut targets = Vec::new();
-    if let Some(target) = args.get("target").and_then(Value::as_str) {
-        targets.push(target.to_string());
-    }
-    if let Some(raw_targets) = args.get("targets").and_then(Value::as_array) {
-        targets.extend(
-            raw_targets
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string),
-        );
+    let args: RunTestsArgs = serde_json::from_value(tool_args(args))?;
+    let mut targets = args.targets;
+    if let Some(target) = args.target {
+        targets.push(target);
     }
     if !targets.is_empty() {
         targets.sort();
@@ -355,18 +382,7 @@ fn run_test_targets(workspace: &std::path::Path, args: &Value) -> Result<Vec<Str
         return Ok(targets);
     }
 
-    let changed_paths = args
-        .get("changed_paths")
-        .and_then(Value::as_array)
-        .map(|paths| {
-            paths
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let affected = crate::commands::query::affected_tests_value(workspace, &changed_paths)?;
+    let affected = crate::commands::query::affected_tests_value(workspace, &args.changed_paths)?;
     let mut targets = affected
         .as_array()
         .into_iter()
@@ -497,6 +513,62 @@ struct TargetExecutionArgs {
     target: String,
 }
 
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ChangedPathsArgs {
+    #[serde(default)]
+    changed_paths: Vec<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct EvidenceQueryArgs {
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default = "default_evidence_limit")]
+    limit: usize,
+}
+
+const fn default_evidence_limit() -> usize {
+    5
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExternalSourceArgs {
+    url: String,
+    #[serde(default = "default_external_source_max_bytes")]
+    max_bytes: usize,
+}
+
+const fn default_external_source_max_bytes() -> usize {
+    256 * 1024
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ValidateModuleArgs {
+    path: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct TargetKindFilterArgs {
+    #[serde(default)]
+    query: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct RunTestsArgs {
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    targets: Vec<String>,
+    #[serde(default)]
+    changed_paths: Vec<String>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RunTargetArgs {
@@ -561,8 +633,10 @@ fn required_string_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("`{name}` must be a string"))
 }
 
-fn tool_list_target_kinds(workspace: &Path) -> Result<Value> {
-    let schemas = once_frontend::target_kind_schemas_for_workspace(workspace)?;
+fn tool_list_target_kinds(workspace: &Path, args: &Value) -> Result<Value> {
+    let args: TargetKindFilterArgs = serde_json::from_value(tool_args(args))?;
+    let schemas =
+        crate::commands::query::matching_target_kind_schemas(workspace, args.query.as_deref())?;
     let summaries: Vec<TargetKindSummary> =
         schemas.into_iter().map(TargetKindSummary::from).collect();
     Ok(serde_json::to_value(summaries)?)
@@ -623,6 +697,8 @@ fn apply_edit_to_package(
 struct TargetKindSummary {
     kind: String,
     docs: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_references: Vec<once_frontend::SourceReference>,
     examples: Vec<TargetKindExampleSummary>,
 }
 
@@ -638,6 +714,7 @@ impl From<once_frontend::TargetKindSchema> for TargetKindSummary {
         Self {
             kind: schema.kind,
             docs: schema.docs,
+            source_references: schema.source_references,
             examples: schema
                 .examples
                 .into_iter()
@@ -899,13 +976,60 @@ demo_kind = target_kind(
         // we serve the tools API; clients gate `tools/list` on it.
         assert!(result["capabilities"]["tools"].is_object());
         assert_eq!(result["serverInfo"]["name"], "once-mcp");
+        assert!(result["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("once_list_target_kinds"));
+    }
+
+    #[test]
+    fn initialize_negotiates_a_supported_client_protocol_version() {
+        let tmp = TempDir::new().unwrap();
+        let response = server(tmp.path().to_path_buf()).dispatch(request(
+            "initialize",
+            json!({ "protocolVersion": "2025-06-18" }),
+        ));
+        assert_eq!(response.result.unwrap()["protocolVersion"], "2025-06-18");
+    }
+
+    #[test]
+    fn optional_discovery_probes_return_empty_catalogs() {
+        let tmp = TempDir::new().unwrap();
+        let server = server(tmp.path().to_path_buf());
+
+        assert_eq!(
+            server
+                .dispatch(request("resources/list", json!({})))
+                .result
+                .unwrap()["resources"],
+            json!([])
+        );
+        assert_eq!(
+            server
+                .dispatch(request("resources/templates/list", json!({})))
+                .result
+                .unwrap()["resourceTemplates"],
+            json!([])
+        );
+        assert_eq!(
+            server
+                .dispatch(request("prompts/list", json!({})))
+                .result
+                .unwrap()["prompts"],
+            json!([])
+        );
+        assert_eq!(
+            server.dispatch(request("ping", json!({}))).result.unwrap(),
+            json!({})
+        );
     }
 
     #[test]
     fn tools_list_advertises_the_full_tool_surface() {
         let tmp = TempDir::new().unwrap();
         let response = server(tmp.path().to_path_buf()).dispatch(request("tools/list", json!({})));
-        let names: Vec<String> = response.result.unwrap()["tools"]
+        let result = response.result.unwrap();
+        let names: Vec<String> = result["tools"]
             .as_array()
             .unwrap()
             .iter()
@@ -919,15 +1043,140 @@ demo_kind = target_kind(
                 "once_query_schema".to_string(),
                 "once_query_example".to_string(),
                 "once_list_target_kinds".to_string(),
+                "once_query_module_contract".to_string(),
+                "once_fetch_external_source".to_string(),
+                "once_validate_module".to_string(),
                 "once_get_target".to_string(),
                 "once_query_tests".to_string(),
                 "once_query_affected_tests".to_string(),
-                "once_run_tests".to_string(),
                 "once_query_test_results".to_string(),
                 "once_query_evidence".to_string(),
+                "once_validate_script".to_string(),
+                "once_validate_workspace".to_string(),
                 "once_validate_target".to_string(),
-                "once_apply_edit".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn module_contract_and_validation_support_local_target_kind_authoring() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("modules")).unwrap();
+        std::fs::write(
+            tmp.path().join("modules/generated.star"),
+            r#"
+def _impl(ctx):
+    out = declare_output(ctx["attr"]["output"])
+    write_path(out, ctx["attr"]["content"])
+    return {"generated_file": out}
+
+generated_file = target_kind(
+    docs = "Generate one file.",
+    attrs = [
+        attr("output", "string", required = True),
+        attr("content", "string", required = True),
+    ],
+    providers = ["generated_file"],
+    capabilities = [capability("build", ["default"])],
+    source_references = [
+        source_reference(
+            "Example Build",
+            "write_file",
+            "https://example.com/write_file",
+            "Replicate only requested generated files.",
+        ),
+    ],
+    impl = _impl,
+)
+"#,
+        )
+        .unwrap();
+        let server = server(tmp.path().to_path_buf());
+
+        let contract = server.dispatch(request(
+            "tools/call",
+            json!({ "name": "once_query_module_contract", "arguments": {} }),
+        ));
+        let contract = contract.result.unwrap()["structuredContent"]["result"].clone();
+        assert!(contract["declaration_source"]
+            .as_str()
+            .unwrap()
+            .contains("def target_kind("));
+        assert!(contract["action_primitives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["signature"]
+                .as_str()
+                .unwrap()
+                .starts_with("run_action(")));
+
+        let validation = server.dispatch(request(
+            "tools/call",
+            json!({
+                "name": "once_validate_module",
+                "arguments": { "path": "modules/generated.star" }
+            }),
+        ));
+        let validation = validation.result.unwrap()["structuredContent"]["result"].clone();
+        assert_eq!(validation["valid"], true);
+        assert_eq!(validation["target_kinds"][0]["kind"], "generated_file");
+        assert_eq!(
+            validation["target_kinds"][0]["source_references"][0]["symbol"],
+            "write_file"
+        );
+    }
+
+    #[test]
+    fn external_source_fetch_rejects_non_https_addresses() {
+        let tmp = TempDir::new().unwrap();
+        let response = server(tmp.path().to_path_buf()).dispatch(request(
+            "tools/call",
+            json!({
+                "name": "once_fetch_external_source",
+                "arguments": { "url": "http://example.com/rule" }
+            }),
+        ));
+        let result = response.result.unwrap();
+        assert_eq!(result["isError"], true);
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("must use HTTPS"));
+    }
+
+    #[test]
+    fn validate_workspace_returns_structured_graph_diagnostics() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            r#"[[target]]
+name = "Build"
+kind = "script"
+srcs = ["missing.sh"]
+
+[target.attrs]
+script_path = "missing.sh"
+script_runtime = "sh"
+"#,
+        )
+        .unwrap();
+
+        let response = server(tmp.path().to_path_buf()).dispatch(request(
+            "tools/call",
+            json!({
+                "name": "once_validate_workspace",
+                "arguments": {}
+            }),
+        ));
+
+        assert!(response.error.is_none());
+        let result = response.result.expect("result");
+        assert_eq!(result["structuredContent"]["result"]["valid"], false);
+        assert_eq!(result["structuredContent"]["result"]["target_count"], 1);
+        assert_eq!(
+            result["structuredContent"]["result"]["diagnostics"][0]["code"],
+            "missing_source"
         );
     }
 
@@ -970,6 +1219,66 @@ demo_kind = target_kind(
         assert_eq!(records[0]["subject"]["id"], "cli");
         assert_eq!(records[0]["subject"]["capability"], "test");
         assert_eq!(records[0]["status"], "passed");
+        assert_eq!(
+            result["structuredContent"]["result"][0]["subject"]["id"],
+            "cli"
+        );
+    }
+
+    #[test]
+    fn query_evidence_bounds_the_default_history() {
+        let tmp = TempDir::new().unwrap();
+        let store = EvidenceStore::open_workspace(tmp.path());
+        for index in 0..7 {
+            let record = EvidenceRecord::from_action_result(
+                EvidenceSubject::target("service", "build"),
+                Digest::of_bytes(format!("action-{index}").as_bytes()),
+                Some(Digest::of_bytes(format!("input-{index}").as_bytes())),
+                EvidenceCacheState::Miss,
+                &ActionResult {
+                    exit_code: 0,
+                    stdout: None,
+                    stderr: None,
+                    outputs: BTreeMap::default(),
+                },
+            )
+            .unwrap();
+            run_async_result({
+                let store = store.clone();
+                async move { store.append(&record).await }
+            })
+            .unwrap();
+        }
+
+        let default_response = server(tmp.path().to_path_buf()).dispatch(request(
+            "tools/call",
+            json!({
+                "name": "once_query_evidence",
+                "arguments": { "subject": "service:build" }
+            }),
+        ));
+        assert_eq!(
+            default_response.result.unwrap()["structuredContent"]["result"]
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
+
+        let limited_response = server(tmp.path().to_path_buf()).dispatch(request(
+            "tools/call",
+            json!({
+                "name": "once_query_evidence",
+                "arguments": { "subject": "service:build", "limit": 2 }
+            }),
+        ));
+        assert_eq!(
+            limited_response.result.unwrap()["structuredContent"]["result"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -977,7 +1286,8 @@ demo_kind = target_kind(
         let tmp = TempDir::new().unwrap();
         let response =
             run_server(tmp.path().to_path_buf()).dispatch(request("tools/list", json!({})));
-        let names: Vec<String> = response.result.unwrap()["tools"]
+        let result = response.result.unwrap();
+        let names: Vec<String> = result["tools"]
             .as_array()
             .unwrap()
             .iter()
@@ -989,6 +1299,15 @@ demo_kind = target_kind(
         assert!(names.contains(&"once_runtime_status".to_string()));
         assert!(names.contains(&"once_runtime_logs".to_string()));
         assert!(names.contains(&"once_stop_runtime".to_string()));
+        assert!(names.contains(&"once_run_tests".to_string()));
+        assert!(names.contains(&"once_apply_edit".to_string()));
+        assert!(names.contains(&"once_exec_script".to_string()));
+
+        for tool in result["tools"].as_array().unwrap() {
+            assert!(tool["outputSchema"].is_object());
+            assert!(tool["annotations"]["readOnlyHint"].is_boolean());
+            assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+        }
     }
 
     #[test]
@@ -1011,7 +1330,14 @@ demo_kind = target_kind(
     #[test]
     fn execution_tools_require_allow_run() {
         let tmp = TempDir::new().unwrap();
-        for tool in ["once_build_target", "once_run_target", "once_start_target"] {
+        for tool in [
+            "once_build_target",
+            "once_run_target",
+            "once_start_target",
+            "once_run_tests",
+            "once_exec_script",
+            "once_apply_edit",
+        ] {
             let response = server(tmp.path().to_path_buf()).dispatch(request(
                 "tools/call",
                 json!({ "name": tool, "arguments": { "target": "App" } }),
@@ -1054,6 +1380,13 @@ srcs = ["other_spec.sh"]
         )
         .unwrap();
         assert_eq!(targets, vec!["spec/all", "spec/other"]);
+    }
+
+    #[test]
+    fn run_test_targets_rejects_non_string_targets() {
+        let tmp = TempDir::new().unwrap();
+        let error = run_test_targets(tmp.path(), &json!({ "targets": [42] })).unwrap_err();
+        assert!(error.to_string().contains("invalid type"));
     }
 
     #[test]
@@ -1196,6 +1529,23 @@ srcs = ["other_spec.sh"]
     }
 
     #[test]
+    fn query_schema_returns_android_source_references() {
+        let tmp = TempDir::new().unwrap();
+        let value = tool_query_schema(tmp.path(), &json!({ "kind": "android_binary" })).unwrap();
+        let references = value["source_references"].as_array().unwrap();
+        assert!(references.iter().any(|reference| {
+            reference["system"] == "Bazel rules_android" && reference["symbol"] == "android_binary"
+        }));
+        assert!(references.iter().any(|reference| {
+            reference["system"] == "Buck2" && reference["symbol"] == "android_binary"
+        }));
+        assert!(references.iter().any(|reference| {
+            reference["system"] == "Android Gradle plugin"
+                && reference["symbol"] == "com.android.application"
+        }));
+    }
+
+    #[test]
     fn query_example_returns_materialized_files() {
         let tmp = TempDir::new().unwrap();
         let value = tool_query_example(
@@ -1234,7 +1584,7 @@ srcs = ["other_spec.sh"]
     #[test]
     fn list_target_kinds_includes_every_known_target_kind() {
         let tmp = TempDir::new().unwrap();
-        let value = tool_list_target_kinds(tmp.path()).unwrap();
+        let value = tool_list_target_kinds(tmp.path(), &json!({})).unwrap();
         let kinds: Vec<&str> = value
             .as_array()
             .unwrap()
@@ -1248,6 +1598,41 @@ srcs = ["other_spec.sh"]
     }
 
     #[test]
+    fn list_target_kinds_filters_by_ecosystem_intent() {
+        let tmp = TempDir::new().unwrap();
+        let value = tool_list_target_kinds(tmp.path(), &json!({ "query": "elixir" })).unwrap();
+        let kinds = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["kind"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(kinds, vec!["elixir_library", "elixir_test"]);
+    }
+
+    #[test]
+    fn list_target_kinds_prioritizes_a_named_family_over_generic_intent_words() {
+        let tmp = TempDir::new().unwrap();
+        let value = tool_list_target_kinds(
+            tmp.path(),
+            &json!({ "query": "typed Rust library executable test" }),
+        )
+        .unwrap();
+        let kinds = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["kind"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&"rust_library"));
+        assert!(kinds.contains(&"rust_binary"));
+        assert!(kinds.contains(&"rust_test"));
+        assert!(kinds.iter().all(|kind| kind.starts_with("rust_")));
+    }
+
+    #[test]
     fn mcp_tools_use_workspace_custom_modules() {
         let tmp = TempDir::new().unwrap();
         seed_custom_module_workspace(tmp.path());
@@ -1256,7 +1641,7 @@ srcs = ["other_spec.sh"]
         assert_eq!(schema["kind"], "demo_kind");
         assert_eq!(schema["providers"], json!(["demo_provider"]));
 
-        let target_kinds = tool_list_target_kinds(tmp.path()).unwrap();
+        let target_kinds = tool_list_target_kinds(tmp.path(), &json!({})).unwrap();
         assert!(target_kinds
             .as_array()
             .unwrap()

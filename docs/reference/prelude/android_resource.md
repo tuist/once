@@ -48,6 +48,17 @@ The target emits `android_resource`.
 | --- | --- |
 | `build` | `default`, `resources` |
 
+## Source References
+
+Target kind discovery returns these external concepts for partial graph
+adoption:
+
+- [`resource_files` on Bazel rules_android's `android_library`](https://bazelbuild.github.io/rules_android/#android_library)
+- [`android_resource` from Buck2](https://buck2.build/docs/prelude/rules/android/android_resource/)
+- [Android source sets from the Android Gradle plugin](https://developer.android.com/build/build-variants#sourcesets)
+
+Use them when only a resource or asset node needs to move into the Once graph.
+
 ## Outputs
 
 | Output | Location |

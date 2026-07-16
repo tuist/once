@@ -20,6 +20,7 @@ blake3.workspace = true
 clap.workspace = true
 console.workspace = true
 glob.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

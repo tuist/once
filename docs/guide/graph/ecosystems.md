@@ -73,6 +73,12 @@ This sequence leaves the native package manager or build system in place for
 the parts Once does not own. A project does not need to move an entire
 ecosystem at once.
 
+A coding harness can also fetch the authoritative external rule or plugin,
+query Once's live module-authoring contract, and maintain that local target
+kind for the project. This is useful when the project needs a narrow dependency
+slice and a general built-in integration would be unnecessary. See
+[Coding harnesses](/guide/harness#adopt-an-unfamiliar-external-rule).
+
 ## Check the Boundary Before Adopting
 
 Feature coverage varies by ecosystem. Before moving a production workflow,

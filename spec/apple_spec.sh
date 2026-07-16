@@ -343,7 +343,7 @@ printf "spawn_count=%s\n" "$(grep -c "simctl spawn" "$2/xcrun.log")"' sh "$ONCE_
     copy_apple_swift_testing_fixture
     mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_run_tests","arguments":{"changed_paths":["apps/macos/Sources/AppCore/AppCore.swift"]}}}'
 
-    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp' sh "$mcp_request" "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp --allow-run' sh "$mcp_request" "$ONCE_BIN" "$WORKSPACE"
     The status should be success
     The stdout should include 'apps/macos/AppTests'
     The stdout should include 'once.test_results.v1'
@@ -652,6 +652,26 @@ EOF
       When call framework_install_name
       The status should be success
       The stdout should include '@rpath/UI.framework/UI'
+    End
+
+    It 'preserves strict code signatures after an unchanged rebuild'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_application_swiftui_fixture
+      once --format json build apps/ios/App >/dev/null
+      once --format json build apps/ios/App >/dev/null
+
+      When call codesign --verify --deep --strict "$WORKSPACE/.once/out/apps/ios/App/App.app"
+      The status should be success
+    End
+
+    It 'preserves strict framework signatures after an unchanged rebuild'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_application_swiftui_fixture
+      once --format json build ui/UI >/dev/null
+      once --format json build ui/UI >/dev/null
+
+      When call codesign --verify --strict "$WORKSPACE/.once/out/ui/UI/UI.framework"
+      The status should be success
     End
   End
 
