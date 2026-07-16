@@ -9,9 +9,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
-    workspace_mise_command, workspace_mise_env, Action, CopyPathMode, EvidenceCacheState,
-    EvidenceSubject, InputDigestBuilder, OutputSymlinkMode, PreparePathMode, ResourceRequest,
-    RunOpts, SandboxMode, WorkspacePath,
+    workspace_mise_command, workspace_tool_env_with_executables, Action, CopyPathMode,
+    EvidenceCacheState, EvidenceSubject, InputDigestBuilder, OutputSymlinkMode, PreparePathMode,
+    ResourceRequest, RunOpts, SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::{
     AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArgFile,
@@ -183,6 +183,11 @@ async fn expose_target_tools(
     if tools.is_empty() {
         return Ok(());
     }
+    let executables = target
+        .tools
+        .iter()
+        .flat_map(|tool| tool.executables.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
     let Some(prefix) = workspace_mise_command(workspace)
         .await
         .context("building graph tool execution command")?
@@ -190,7 +195,10 @@ async fn expose_target_tools(
         return Ok(());
     };
     let tools = tools.into_iter().collect::<Vec<_>>();
-    let tool_env = workspace_mise_env(workspace, &tools);
+    let executables = executables.into_iter().collect::<Vec<_>>();
+    let tool_env = workspace_tool_env_with_executables(workspace, &tools, &executables, &[])
+        .await
+        .context("building graph tool execution environment")?;
     apply_tool_execution(&prefix, &tool_env, actions);
     Ok(())
 }
@@ -1241,7 +1249,10 @@ mod tests {
                 "exec".to_string(),
                 "--".to_string(),
             ],
-            &BTreeMap::from([("MISE_ENABLE_TOOLS".to_string(), "rust".to_string())]),
+            &BTreeMap::from([
+                ("MISE_ENABLE_TOOLS".to_string(), "rust".to_string()),
+                ("PATH".to_string(), "/opt/rust/bin:/usr/bin".to_string()),
+            ]),
             &mut actions,
         );
 
@@ -1252,6 +1263,10 @@ mod tests {
         assert_eq!(
             actions[0].env.get("MISE_ENABLE_TOOLS").map(String::as_str),
             Some("rust")
+        );
+        assert_eq!(
+            actions[0].env.get("PATH").map(String::as_str),
+            Some("/opt/rust/bin:/usr/bin")
         );
         assert!(actions[1].argv.is_empty());
         assert!(actions[1].env.is_empty());
