@@ -3604,6 +3604,15 @@ result = repr(provider["app_path"])
         "{:?}",
         embed.outputs
     );
+    let codesign = action_by_identifier(&store, "apple_application_codesign_App");
+    assert!(
+        codesign
+            .outputs
+            .iter()
+            .any(|output| output == ".once/out/app/App.app/App"),
+        "{:?}",
+        codesign.outputs
+    );
 }
 
 #[cfg(unix)]

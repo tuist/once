@@ -653,6 +653,26 @@ EOF
       The status should be success
       The stdout should include '@rpath/UI.framework/UI'
     End
+
+    It 'preserves strict code signatures after an unchanged rebuild'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_application_swiftui_fixture
+      once --format json build apps/ios/App >/dev/null
+      once --format json build apps/ios/App >/dev/null
+
+      When call codesign --verify --deep --strict "$WORKSPACE/.once/out/apps/ios/App/App.app"
+      The status should be success
+    End
+
+    It 'preserves strict framework signatures after an unchanged rebuild'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_application_swiftui_fixture
+      once --format json build ui/UI >/dev/null
+      once --format json build ui/UI >/dev/null
+
+      When call codesign --verify --strict "$WORKSPACE/.once/out/ui/UI/UI.framework"
+      The status should be success
+    End
   End
 
   Describe 'swift_macro plugin compile'

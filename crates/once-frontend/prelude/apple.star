@@ -1627,7 +1627,7 @@ def _apple_framework_impl(ctx):
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + framework_dir],
         inputs = [dylib, info_plist, modulemap, swiftmodule],
-        outputs = [cs_stamp],
+        outputs = [dylib, cs_stamp],
         env = codesign["env"],
         toolchain_identity = codesign["identity"],
         identifier = "apple_framework_codesign_" + module_name,
@@ -1940,7 +1940,7 @@ def _apple_application_impl(ctx):
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + app_dir],
         inputs = cs_inputs,
-        outputs = [app_cs_stamp],
+        outputs = [executable, app_cs_stamp],
         env = codesign["env"],
         toolchain_identity = codesign["identity"],
         identifier = "apple_application_codesign_" + product_name,
