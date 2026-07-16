@@ -657,20 +657,28 @@ EOF
     It 'preserves strict code signatures after an unchanged rebuild'
       Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
       copy_apple_application_swiftui_fixture
-      once --format json build apps/ios/App >/dev/null
-      once --format json build apps/ios/App >/dev/null
 
-      When call codesign --verify --deep --strict "$WORKSPACE/.once/out/apps/ios/App/App.app"
+      verify_unchanged_app_signature() {
+        once --format json build apps/ios/App >/dev/null &&
+          once --format json build apps/ios/App >/dev/null &&
+          codesign --verify --deep --strict "$WORKSPACE/.once/out/apps/ios/App/App.app"
+      }
+
+      When call verify_unchanged_app_signature
       The status should be success
     End
 
     It 'preserves strict framework signatures after an unchanged rebuild'
       Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
       copy_apple_application_swiftui_fixture
-      once --format json build ui/UI >/dev/null
-      once --format json build ui/UI >/dev/null
 
-      When call codesign --verify --strict "$WORKSPACE/.once/out/ui/UI/UI.framework"
+      verify_unchanged_framework_signature() {
+        once --format json build ui/UI >/dev/null &&
+          once --format json build ui/UI >/dev/null &&
+          codesign --verify --strict "$WORKSPACE/.once/out/ui/UI/UI.framework"
+      }
+
+      When call verify_unchanged_framework_signature
       The status should be success
     End
   End
