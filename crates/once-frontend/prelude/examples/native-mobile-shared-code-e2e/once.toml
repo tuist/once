@@ -45,6 +45,8 @@ resource_dirs = ["android/res"]
 min_sdk_version = 23
 version_code = 1
 version_name = "1.0"
+emulator_device = "once_example"
+launch_activity = ".MainActivity"
 
 [[target]]
 name = "AppleApp"

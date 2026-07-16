@@ -237,6 +237,12 @@ fn native_mobile_shared_code_example_declares_android_native_packaging_actions()
             .any(|source| source.ends_with("libshared_rust.so")),
         "{staged_sources:?}"
     );
+    assert!(
+        staged_sources
+            .iter()
+            .any(|source| source.ends_with("libc++_shared.so")),
+        "{staged_sources:?}"
+    );
     assert!(result
         .actions
         .iter()
@@ -364,10 +370,12 @@ fn native_mobile_android_dep_providers(root: &Path) -> [serde_json::Value; 2] {
             "label_id": "SharedSwiftAndroid",
             "target_kind": "swift_android_library",
             "android_native_libraries": [
-                {"abi": "arm64-v8a", "path": ".once/out/SharedSwiftAndroid/libSharedSwift.so"}
+                {"abi": "arm64-v8a", "path": ".once/out/SharedSwiftAndroid/libSharedSwift.so"},
+                {"abi": "arm64-v8a", "path": ".once/out/SharedSwiftAndroid/libc++_shared.so"}
             ],
             "transitive_android_native_libraries": [
-                {"abi": "arm64-v8a", "path": ".once/out/SharedSwiftAndroid/libSharedSwift.so"}
+                {"abi": "arm64-v8a", "path": ".once/out/SharedSwiftAndroid/libSharedSwift.so"},
+                {"abi": "arm64-v8a", "path": ".once/out/SharedSwiftAndroid/libc++_shared.so"}
             ],
         }),
         json!({

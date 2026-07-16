@@ -84,6 +84,11 @@ Android binaries can also depend on targets that emit
 Android application package stages each native provider under
 `lib/<abi>/`.
 
+Swift native providers statically link the Swift standard library and include
+the matching C++ shared runtime from the selected Swift Software Development
+Kit. The `native-mobile-shared-code-e2e` starter loads its Swift and Rust
+libraries from Kotlin and displays values returned by both.
+
 Use `android_local_test` for host-side Java and Kotlin unit tests:
 
 ```toml
@@ -163,6 +168,32 @@ once build apps/hello/Hello
 Outputs land under `.once/out/<target>/`. The target kind reference pages list
 the exact outputs each target kind emits.
 
+## Coding Harnesses
+
+A connected coding harness can start from the request “build an Android app
+with Once.” It discovers `android_binary`, fetches the target kind's runnable
+starter, materializes its files, calls `once_validate_workspace`, builds the
+canonical target identifier, checks the Android application package output,
+and queries the resulting evidence. The harness does not need an Android-only
+Once integration because the same discovery and validation loop applies to
+every target kind.
+
+The `android_resource`, `android_library`, and `android_binary` schemas also
+return official source references for corresponding
+[Bazel Android rules](https://bazelbuild.github.io/rules_android/),
+[Buck2 Android rules](https://buck2.build/docs/prelude/rules/android/), and
+[Android Gradle plugin](https://developer.android.com/build) concepts. A
+harness can use those references to reproduce only the application, library,
+or resource dependency slice the user asks Once to own.
+
+If the source build uses another rule or plugin, the harness can fetch that
+public source through `once_fetch_external_source`, query
+`once_query_module_contract`, write a project-local target kind, and validate
+it with `once_validate_module`. Built-in Android target kinds remain the common
+path, not a requirement for graph adoption.
+
+See [Coding harnesses](/guide/harness) for the complete protocol workflow.
+
 ## Running Apps
 
 `android_binary` produces an APK and exposes `run`. `once run` first
@@ -185,6 +216,13 @@ activity.
 ```sh
 once build apps/hello/Hello
 once run --visible apps/hello/Hello
+```
+
+This repository's Android setup task installs the matching emulator system
+image and creates the `once_example` device used by runnable starters:
+
+```sh
+mise run android:install-sdk
 ```
 
 ## Running Tests

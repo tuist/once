@@ -32,6 +32,17 @@ def _swift_android_abi_from_target(target):
         return "x86_64"
     return ""
 
+def _swift_android_runtime_triple(abi):
+    if abi == "arm64-v8a":
+        return "aarch64-linux-android"
+    if abi == "armeabi-v7a":
+        return "arm-linux-androideabi"
+    if abi == "x86":
+        return "i686-linux-android"
+    if abi == "x86_64":
+        return "x86_64-linux-android"
+    fail("unsupported Android ABI `" + abi + "` for Swift runtime packaging")
+
 def _swift_android_attr(attrs, key, default):
     value = attrs.get(key)
     if value == None:
@@ -122,8 +133,20 @@ def _swift_android_sdk_config(ctx, attrs, swiftc, target):
     if not sdk:
         sdk = _swift_android_config_value(config, "sdkRootPath")
     if not resource_dir:
+        resource_dir = _swift_android_config_value(config, "swiftStaticResourcesPath")
+    if not resource_dir:
         resource_dir = _swift_android_config_value(config, "swiftResourcesPath")
     return (sdk, resource_dir, sdk_name)
+
+def _swift_android_cxx_runtime(ctx, attrs, sdk, android_abi):
+    runtime = _swift_android_attr(attrs, "cxx_runtime", "")
+    if not runtime and sdk:
+        runtime = sdk + "/usr/lib/" + _swift_android_runtime_triple(android_abi) + "/libc++_shared.so"
+    if not runtime:
+        fail(ctx["label"]["id"] + ": set `cxx_runtime` or use a Swift Android SDK that exposes its sysroot")
+    if not host_file_exists(runtime):
+        fail(ctx["label"]["id"] + ": C++ runtime library does not exist at `" + runtime + "`")
+    return runtime
 
 def _swift_android_ndk_tool_dir(ctx, attrs):
     configured = _swift_android_attr(attrs, "tools_directory", "")
@@ -265,6 +288,7 @@ def _swift_android_library_impl(ctx):
         argv.extend(["-sdk", sdk])
     if resource_dir:
         argv.extend(["-resource-dir", resource_dir])
+    argv.append("-static-stdlib")
     if package_name:
         argv.extend(["-package-name", package_name])
     if swiftinterface:
@@ -297,7 +321,14 @@ def _swift_android_library_impl(ctx):
         identifier = "swift_android_compile:" + ctx["label"]["id"],
     )
 
-    own_native = [{"abi": android_abi, "path": library}]
+    cxx_runtime_source = _swift_android_cxx_runtime(ctx, attrs, sdk, android_abi)
+    cxx_runtime = declare_output("libc++_shared.so")
+    materialize_host_file(cxx_runtime_source, cxx_runtime)
+
+    own_native = [
+        {"abi": android_abi, "path": library},
+        {"abi": android_abi, "path": cxx_runtime},
+    ]
     return {
         "label_id": ctx["label"]["id"],
         "target_kind": "swift_android_library",
@@ -319,6 +350,21 @@ def _swift_android_library_impl(ctx):
         "affected_inputs": _unique(swift_srcs + _swift_android_compile_inputs(attrs) + _swift_android_data_inputs(attrs)),
     }
 
+_SWIFT_ANDROID_SOURCE_REFERENCES = [
+    source_reference(
+        "Swift Android Software Development Kit",
+        "Static runtime packaging",
+        "https://www.swift.org/documentation/articles/swift-sdk-for-android-getting-started.html",
+        "Use when reproducing the compiler, static standard-library, and C++ runtime closure for a Swift Android library.",
+    ),
+    source_reference(
+        "SwiftJava",
+        "jextract Java Native Interface mode",
+        "https://github.com/swiftlang/swift-java",
+        "Use when a richer Swift application programming interface needs generated Java or Kotlin-callable bindings for Android.",
+    ),
+]
+
 swift_android_library = target_kind(
     docs = "Compiles Swift sources into an Android native shared library that Android APK targets package under the requested ABI.",
     attrs = [
@@ -329,6 +375,7 @@ swift_android_library = target_kind(
         attr("package_name", "string", docs = "Swift package name passed through `-package-name` when set.", configurable = False),
         attr("sdk", "string", docs = "Optional sysroot passed to swiftc as `-sdk`, typically from an Android NDK or Swift SDK bundle.", configurable = False),
         attr("resource_dir", "string", docs = "Optional Swift resource directory passed to swiftc as `-resource-dir`.", configurable = False),
+        attr("cxx_runtime", "string", docs = "Optional absolute path to the C++ shared runtime packaged with the Swift library. Defaults to the matching library in the Swift Android SDK sysroot.", configurable = False),
         attr("swift_sdk", "string", docs = "Installed Swift SDK identifier used to discover default Android sysroot and Swift resource paths. Defaults to the first installed SDK whose identifier contains `android`.", configurable = False),
         attr("android_ndk", "string", docs = "Android NDK root used to find the LLVM tool directory. Defaults to ANDROID_NDK_HOME.", configurable = False),
         attr("tools_directory", "string", docs = "Directory containing Android clang and linker tools passed as `-tools-directory`. Defaults from android_ndk or ANDROID_NDK_HOME.", configurable = False),
@@ -365,5 +412,6 @@ swift_android_library = target_kind(
             use_when = "Use this when an Android app should package Swift and Rust native libraries alongside an Apple app that embeds Kotlin and links Rust.",
         ),
     ],
+    source_references = _SWIFT_ANDROID_SOURCE_REFERENCES,
     impl = _swift_android_library_impl,
 )

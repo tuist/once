@@ -235,11 +235,16 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
     assert!(swift.attrs.iter().any(|attr| attr.name == "copts"));
     assert!(swift.attrs.iter().any(|attr| attr.name == "defines"));
     assert!(swift.attrs.iter().any(|attr| attr.name == "package_name"));
+    assert!(swift.attrs.iter().any(|attr| attr.name == "cxx_runtime"));
     assert!(swift.attrs.iter().any(|attr| attr.name == "swiftc_inputs"));
     assert!(swift
         .attrs
         .iter()
         .any(|attr| attr.name == "library_evolution"));
+    assert!(swift
+        .source_references
+        .iter()
+        .any(|reference| reference.system == "SwiftJava"));
 
     let kotlin = built_in_target_kind_schema("kotlin_apple_framework")
         .expect("kotlin_apple_framework schema");
@@ -2547,6 +2552,9 @@ fn prelude_swift_android_library_declares_native_provider() {
     std::fs::create_dir_all(&runtime_dir).unwrap();
     std::fs::write(support_dir.join("module.map"), "module support {}\n").unwrap();
     std::fs::write(runtime_dir.join("message.txt"), "hello\n").unwrap();
+    let cxx_runtime = workspace.path().join("libc++_shared.so");
+    std::fs::write(&cxx_runtime, "runtime").unwrap();
+    let cxx_runtime = cxx_runtime.to_string_lossy();
     let source = format!(
         r#"{prelude}
 def host_which(name):
@@ -2571,6 +2579,7 @@ ctx = {{
         "package_name": "SharedPackage",
         "sdk": "/android/sdk",
         "resource_dir": "/swift/android/resources",
+        "cxx_runtime": "{cxx_runtime}",
         "tools_directory": "/android/ndk/bin",
         "copts": ["-warnings-as-errors"],
         "defines": ["SHARED_SWIFT"],
@@ -2612,8 +2621,13 @@ result = repr([
     assert!(out.contains("libdep.so"), "{out}");
     assert!(out.contains("DEP_SWIFT"), "{out}");
     assert!(out.contains("Runtime/message.txt"), "{out}");
-    assert_eq!(store.actions.len(), 1);
+    assert_eq!(store.actions.len(), 2);
     assert_swift_android_compile_action(&store.actions[0]);
+    assert!(matches!(
+        store.actions[1].operation,
+        Some(DeclaredActionOperation::MaterializeHostFile { ref destination, .. })
+            if destination.ends_with("libc++_shared.so")
+    ));
 }
 
 fn assert_swift_android_compile_action(action: &DeclaredAction) {
@@ -2622,6 +2636,7 @@ fn assert_swift_android_compile_action(action: &DeclaredAction) {
         Some("swift_android_compile:shared/swift/SharedSwift")
     );
     assert!(action.argv.iter().any(|arg| arg == "-emit-library"));
+    assert!(action.argv.iter().any(|arg| arg == "-static-stdlib"));
     assert!(action.argv.iter().any(|arg| arg == "-target"));
     assert!(action.argv.iter().any(|arg| arg == "-tools-directory"));
     assert!(action.argv.iter().any(|arg| arg == "-warnings-as-errors"));

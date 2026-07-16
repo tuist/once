@@ -35,14 +35,22 @@ _.path = [
 ]
 
 [tasks."android:install-sdk"]
-description = "Install Android SDK packages used by Once Android rule validation."
+description = "Install Android SDK packages and the emulator used by Once Android validation."
 run = '''
 set -eu
 responses="${TMPDIR:-/tmp}/once-android-sdk-licenses.$$"
 trap 'rm -f "$responses"' EXIT
 awk 'BEGIN { for (i = 0; i < 200; i++) print "y" }' > "$responses"
 sdkmanager --licenses < "$responses" >/dev/null || true
-sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.3.13750724" < "$responses"
+case "$(uname -m)" in
+  arm64|aarch64) emulator_abi="arm64-v8a" ;;
+  *) emulator_abi="x86_64" ;;
+esac
+system_image="system-images;android-35;google_apis;$emulator_abi"
+sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.3.13750724" "emulator" "$system_image" < "$responses"
+if ! avdmanager list avd | grep -q 'Name: once_example'; then
+  printf 'no\n' | avdmanager create avd --force --name once_example --package "$system_image" --device pixel_6
+fi
 mkdir -p "$HOME/.android"
 if [ ! -f "$HOME/.android/debug.keystore" ]; then
   keytool -genkeypair \
