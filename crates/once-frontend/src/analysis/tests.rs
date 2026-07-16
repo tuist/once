@@ -589,6 +589,28 @@ write_tree_digest(".once/out/p/staged", ".once/out/p/staged.sha256", include_suf
 }
 
 #[test]
+fn materialize_host_file_records_a_content_addressed_operation() {
+    let tmp = TempDir::new().unwrap();
+    let source = tmp.path().join("toolchain.bin");
+    std::fs::write(&source, b"toolchain").unwrap();
+    let store = store_for(tmp.path(), "p");
+    let source_literal = serde_json::to_string(source.to_str().unwrap()).unwrap();
+    let script = format!("materialize_host_file({source_literal}, \".once/out/p/toolchain.bin\")");
+    let (store, ()) = with_active_store(store, || run(&script).unwrap());
+
+    assert_eq!(store.actions.len(), 1);
+    assert_eq!(
+        store.actions[0].operation,
+        Some(DeclaredActionOperation::MaterializeHostFile {
+            source: source.to_string_lossy().into_owned(),
+            source_sha256: "0db3de82a739e43a2b560d166d037c3c0061601bb194866eb79b2c87045d00f2"
+                .to_string(),
+            destination: ".once/out/p/toolchain.bin".to_string(),
+        })
+    );
+}
+
+#[test]
 fn run_action_records_command_setup_paths() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "p");

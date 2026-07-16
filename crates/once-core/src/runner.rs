@@ -536,6 +536,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn materialize_host_file_verifies_content_and_replays_from_cache() {
+        let (tmp, cas) = fresh_cas();
+        let host = TempDir::new().unwrap();
+        let source = host.path().join("toolchain.bin");
+        std::fs::write(&source, b"toolchain").unwrap();
+        let action = Action::MaterializeHostFile {
+            source: source.clone(),
+            source_sha256: "0db3de82a739e43a2b560d166d037c3c0061601bb194866eb79b2c87045d00f2"
+                .to_string(),
+            destination: WorkspacePath::try_from("out/toolchain.bin").unwrap(),
+            input_digest: Some(Digest::of_bytes(b"host-toolchain")),
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        assert_eq!(
+            std::fs::read(tmp.path().join("out/toolchain.bin")).unwrap(),
+            b"toolchain"
+        );
+
+        std::fs::remove_file(source).unwrap();
+        std::fs::remove_file(tmp.path().join("out/toolchain.bin")).unwrap();
+        let second = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.cache, CacheState::Hit);
+        assert_eq!(
+            std::fs::read(tmp.path().join("out/toolchain.bin")).unwrap(),
+            b"toolchain"
+        );
+    }
+
+    #[tokio::test]
+    async fn materialize_host_file_rejects_content_changed_after_analysis() {
+        let (tmp, cas) = fresh_cas();
+        let source = tmp.path().join("toolchain.bin");
+        std::fs::write(&source, b"changed").unwrap();
+        let action = Action::MaterializeHostFile {
+            source,
+            source_sha256: "0db3de82a739e43a2b560d166d037c3c0061601bb194866eb79b2c87045d00f2"
+                .to_string(),
+            destination: WorkspacePath::try_from("out/toolchain.bin").unwrap(),
+            input_digest: Some(Digest::of_bytes(b"changed-host-toolchain")),
+        };
+
+        let error = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::HostFileDigestMismatch { .. }));
+    }
+
+    #[tokio::test]
     async fn copy_tree_action_replaces_destination_and_restores_from_cache() {
         let (tmp, cas) = fresh_cas();
         std::fs::create_dir_all(tmp.path().join("src/a")).unwrap();

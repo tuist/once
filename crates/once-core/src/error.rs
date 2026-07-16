@@ -38,6 +38,14 @@ pub enum Error {
     InvalidPath(#[from] WorkspacePathError),
     #[error("invalid copy path action: {reason}")]
     InvalidCopyPath { reason: String },
+    #[error("invalid host file materialization: {reason}")]
+    InvalidHostFile { reason: String },
+    #[error("host file `{path}` changed after analysis: expected digest {expected}, got {actual}")]
+    HostFileDigestMismatch {
+        path: String,
+        expected: String,
+        actual: String,
+    },
     #[error("declared output `{path}` was not produced")]
     MissingOutput { path: String },
     #[error("file action `{action}` failed for `{path}`: {source}")]
