@@ -53,6 +53,18 @@ Then run the script directly:
 ./scripts/build.sh
 ```
 
+To inspect the parsed contract before execution, use:
+
+```sh
+once query script scripts/build.sh
+```
+
+Coding agents can use the same workflow without reading this guide. The Model
+Context Protocol server exposes `once_validate_script` for contract inspection
+and, when started with `--allow-run`, `once_exec_script` for execution. The
+execution result includes the action digest, cache state, captured streams, and
+matching evidence. Calling it twice with unchanged inputs verifies cache reuse.
+
 Once reads the script, hashes the declared contract, and either reuses a
 previous result or runs the command and stores stdout, stderr, exit status,
 and declared outputs. Root `once.toml` files configure shared settings such as

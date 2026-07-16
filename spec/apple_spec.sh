@@ -343,7 +343,7 @@ printf "spawn_count=%s\n" "$(grep -c "simctl spawn" "$2/xcrun.log")"' sh "$ONCE_
     copy_apple_swift_testing_fixture
     mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_run_tests","arguments":{"changed_paths":["apps/macos/Sources/AppCore/AppCore.swift"]}}}'
 
-    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp' sh "$mcp_request" "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp --allow-run' sh "$mcp_request" "$ONCE_BIN" "$WORKSPACE"
     The status should be success
     The stdout should include 'apps/macos/AppTests'
     The stdout should include 'once.test_results.v1'

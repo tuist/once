@@ -293,8 +293,10 @@ pub enum Cmd {
     /// and capabilities; `query capabilities` shows what a specific
     /// target exposes (`build`, `run`, `test`); `query schema`
     /// returns the typed attribute and provider shape for a target kind;
-    /// `query example` materializes a chosen starter; and `query evidence`
-    /// lists durable action evidence captured from prior executions. A quoted
+    /// `query example` materializes a chosen starter; `query script` validates
+    /// an annotated script contract; `query validate-workspace` checks the
+    /// complete loaded graph; and `query evidence` lists durable action evidence
+    /// captured from prior executions. A quoted
     /// `MATCH ... RETURN ...` expression can explore the graph through
     /// a read-only Cypher-like pattern. All query surfaces respect
     /// `--format json` and `--format toon` so consumers can plan
@@ -361,14 +363,12 @@ pub enum Cmd {
 
     /// Expose Once's graph and memory queries to a coding agent over MCP.
     ///
-    /// Speaks the Model Context Protocol over stdio so an agent host
-    /// (Claude Desktop, an IDE plug-in, the Anthropic SDK) can call
-    /// `once_query_targets`, `once_query_capabilities`,
-    /// `once_query_schema`, `once_query_example`, and
-    /// `once_query_evidence` as tools and get JSON back without
-    /// scraping prose. Mounts inspection tools by default; pass
-    /// `--allow-run` to expose side-effectful build, run, and runtime
-    /// session tools.
+    /// Speaks the Model Context Protocol over standard input and output so a
+    /// coding harness can discover schemas and starters, validate and edit
+    /// typed graphs, inspect or execute annotated scripts, run graph
+    /// capabilities, and query project evidence without scraping prose.
+    /// Mounts inspection tools by default; pass `--allow-run` to expose
+    /// manifest editing, test, build, run, and runtime session tools.
     Mcp {
         /// Workspace root the MCP tools resolve targets against.
         /// Defaults to the value of the global `-C/--directory` flag
@@ -376,7 +376,7 @@ pub enum Cmd {
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
 
-        /// Advertise and allow side-effectful execution tools.
+        /// Advertise and allow state-changing editing and execution tools.
         #[arg(long)]
         allow_run: bool,
     },

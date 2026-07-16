@@ -161,7 +161,7 @@ probing, validation, installation, launch, and diagnostics.
 
 ## Agent Access
 
-The MCP server starts as an inspection surface. An agent can discover
+The Model Context Protocol server starts as an inspection surface. An agent can discover
 targets, query schemas, and inspect target kind contracts without being allowed
 to execute anything:
 
@@ -169,17 +169,22 @@ to execute anything:
 once mcp
 ```
 
-Running is side-effectful. It can build code, write outputs, install
-software, or launch a process, so Once only advertises execution
-tools when the server is started with an explicit opt-in:
+Editing and running are side-effectful. They can change manifests, build code,
+write outputs, install software, or launch a process, so Once only advertises
+state-changing tools when the server is started with an explicit opt-in:
 
 ```sh
 once mcp --allow-run
 ```
 
-With that opt-in, agents can call `once_build_target`,
-`once_run_target`, or `once_start_target` with the same target id the
-CLI accepts. The start call returns a runtime session id immediately,
-then the agent can use `once_runtime_status`, `once_runtime_logs`, and
-`once_stop_runtime` to follow or stop the run. Without it, the MCP
-surface remains read-oriented and the execution tools are not listed.
+With that opt-in, agents can edit manifests, run tests, or call
+`once_build_target`, `once_run_target`, or `once_start_target` with the same
+target id the command-line interface accepts. The start call returns a runtime
+session id immediately, then the agent can use `once_runtime_status`,
+`once_runtime_logs`, and `once_stop_runtime` to follow or stop the run. Without
+it, the Model Context Protocol surface remains read-only and state-changing
+tools are not listed.
+
+For a complete creation and verification loop, including graph-wide validation,
+annotated scripts, output checks, and project memory, see
+[Coding harnesses](/guide/harness).

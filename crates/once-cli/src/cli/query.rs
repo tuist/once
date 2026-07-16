@@ -31,9 +31,28 @@ pub enum QueryCmd {
         slug: String,
     },
 
-    /// List every target kind with its one-line docs and example slugs.
+    /// List target kinds with their one-line docs and example slugs.
     #[command(alias = "rules")]
-    TargetKinds,
+    TargetKinds {
+        /// Match an ecosystem, target-kind family, or intent against the catalog.
+        ///
+        /// A family term takes priority over generic intent words. When no family
+        /// or kind segment matches, Once searches docs, examples, and source references.
+        #[arg(long, value_name = "TEXT")]
+        query: Option<String>,
+    },
+
+    /// Return the project-module authoring contract and starter.
+    ModuleContract,
+
+    /// Fetch public external rule, plugin, or build-system source text.
+    ExternalSource {
+        /// Public HTTPS address for source code, metadata, or documentation.
+        url: String,
+        /// Maximum response bytes to return.
+        #[arg(long, default_value_t = 256 * 1024, value_name = "COUNT")]
+        max_bytes: usize,
+    },
 
     /// Resolve a single target's full record (kind, srcs, deps, attrs, capabilities).
     Target {
@@ -68,6 +87,9 @@ pub enum QueryCmd {
     Evidence {
         /// Subject id, e.g. `cli` or `cli:test`.
         subject: Option<String>,
+        /// Return only the newest matching records.
+        #[arg(long, value_name = "COUNT")]
+        limit: Option<usize>,
     },
 
     /// Validate a proposed `[[target]]` table against its target kind schema.
@@ -79,6 +101,21 @@ pub enum QueryCmd {
         #[arg(long, value_name = "PATH")]
         file: Option<PathBuf>,
     },
+
+    /// Validate and inspect an annotated script contract.
+    Script {
+        /// Workspace-relative script path.
+        path: String,
+    },
+
+    /// Validate target schemas, dependency edges, providers, sources, and cycles across the workspace.
+    ValidateWorkspace,
+
+    /// Validate one project-local Starlark module without registering it.
+    ValidateModule {
+        /// Workspace-relative module path.
+        path: String,
+    },
 }
 
 impl QueryCmd {
@@ -88,13 +125,18 @@ impl QueryCmd {
             Self::Capabilities { .. } => vec!["capabilities"],
             Self::Schema { .. } => vec!["schema"],
             Self::Example { .. } => vec!["example"],
-            Self::TargetKinds => vec!["target-kinds"],
+            Self::TargetKinds { .. } => vec!["target-kinds"],
+            Self::ModuleContract => vec!["module-contract"],
+            Self::ExternalSource { .. } => vec!["external-source"],
             Self::Target { .. } => vec!["target"],
             Self::Tests => vec!["tests"],
             Self::AffectedTests { .. } => vec!["affected-tests"],
             Self::TestResults { .. } => vec!["test-results"],
             Self::Evidence { .. } => vec!["evidence"],
             Self::ValidateTarget { .. } => vec!["validate-target"],
+            Self::Script { .. } => vec!["script"],
+            Self::ValidateWorkspace => vec!["validate-workspace"],
+            Self::ValidateModule { .. } => vec!["validate-module"],
         }
     }
 }

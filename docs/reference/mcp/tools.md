@@ -74,9 +74,9 @@ Returns the same record `once query capabilities <target> --format json` emits: 
 
 ## `once_query_schema`
 
-Return the typed contract for a target kind: attributes, dep edges, providers, capabilities, and runnable starter examples.
+Return the typed contract for a target kind: attributes, dep edges, providers, capabilities, source references, and runnable starters.
 
-Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.
+Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, external source concepts that can guide partial adoption, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.
 
 **Input schema**
 
@@ -106,6 +106,11 @@ Returns the target kind schema (the typed contract a target of that kind must ma
   ],
   "capabilities": [ { "name": "build", "output_groups": ["default"], "requires_outputs": [] } ],
   "providers": ["linkable", "module"],
+  "source_references": [
+    { "system": "Example Build", "symbol": "example_library",
+      "url": "https://example.com/example_library", "use_when": "...",
+      "content_digest": "..." }
+  ],
   "examples": [
     {
       "slug": "library-minimal",
@@ -159,9 +164,48 @@ Returns the same record as `once query example <kind> <slug> --format json`: the
 
 ## `once_list_target_kinds`
 
-List every target kind available in the workspace, with its one-line docs and example slugs.
+List target kinds with their docs, external source references, and example slugs, optionally filtered by ecosystem or intent.
 
-Lightweight discovery entry point. Returns one entry per target kind containing the target kind's documentation and the slugs of its bundled starter examples. Use this to discover what kinds of targets are buildable in the workspace before calling `once_query_schema` for the full contract of a chosen target kind.
+Lightweight discovery entry point. Returns matching target kinds with documentation, external build-system concepts they can partially replace, and bundled starter examples. When the request names an ecosystem or target-kind family, include it in the short `query` copied from the request to avoid loading the unrelated catalog. Family terms take priority over generic intent words; otherwise Once matches kind segments, docs, examples, and source references. Omit the query when the intent is unknown. Call `once_query_schema` for the full contract of the chosen target kind. The matching command-line operation is `once query target-kinds --query <text> --format json`.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "query": {
+      "description": "Short ecosystem, target-kind family, or intent text copied from the user's request.",
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+[
+  {
+    "kind": "library",
+    "docs": "Reusable library target...",
+    "source_references": [
+      { "system": "Example Build", "symbol": "example_library",
+        "url": "https://example.com/example_library", "use_when": "...",
+        "content_digest": "..." }
+    ],
+    "examples": [
+      { "slug": "library-minimal", "name": "Minimal library", "use_when": "..." }
+    ]
+  }
+]
+```
+
+## `once_query_module_contract`
+
+Return the complete project-module authoring contract, generic analysis and action primitives, maintenance invariants, and a starter module.
+
+Use this when no discovered target kind covers an external rule or plugin. The result contains the exact Starlark declaration helpers, schema invariants, implementation context fields, generic host-analysis and action primitives, module registration snippet, maintenance loop, and a runnable starter. A coding harness can use it to author and maintain a project-local target kind without waiting for a built-in integration. The matching command-line operation is `once query module-contract --format json`.
 
 **Input schema**
 
@@ -175,15 +219,98 @@ Lightweight discovery entry point. Returns one entry per target kind containing 
 **Example return**
 
 ```json
-[
-  {
-    "kind": "library",
-    "docs": "Reusable library target...",
-    "examples": [
-      { "slug": "library-minimal", "name": "Minimal library", "use_when": "..." }
-    ]
-  }
-]
+{
+  "language": "Starlark",
+  "registration": "[modules]\npaths = [\"modules/*.star\"]\n",
+  "schema_invariants": ["attr.default is optional schema documentation and must be a string..."],
+  "context_fields": [
+    { "signature": "ctx[\"attr\"]", "purpose": "Typed target attributes." }
+  ],
+  "action_primitives": [
+    { "signature": "write_path(path, content)", "purpose": "Declare a portable file-writing action." },
+    { "signature": "materialize_host_file(source, destination)", "purpose": "Snapshot a content-verified host toolchain file into a workspace output." }
+  ],
+  "starter": "def _generated_text_impl(ctx): ..."
+}
+```
+
+## `once_fetch_external_source`
+
+Fetch bounded UTF-8 source code, metadata, or documentation from a public HTTPS address.
+
+Fetches an authoritative external rule, plugin, registry record, or build-system reference for a coding harness to inspect before generating a local Once target kind. Only public HTTPS addresses are accepted, redirects are not followed, and response content is bounded to one mebibyte. The result includes the content, media type, digest, byte count, and truncation state. The matching command-line operation is `once query external-source <url> --format json`.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "max_bytes": {
+      "default": 262144,
+      "description": "Maximum response bytes to return.",
+      "maximum": 1048576,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "url": {
+      "description": "Public HTTPS address for external source code, metadata, or documentation.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "url"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "url": "https://example.com/rules/example.rule",
+  "content_type": "text/plain",
+  "content_digest": "...",
+  "byte_count": 4120,
+  "truncated": false,
+  "content": "rule implementation..."
+}
+```
+
+## `once_validate_module`
+
+Validate a project-local Starlark module and return its target kind contracts before registration or execution.
+
+Reads one workspace-relative module file, evaluates it with the public Once declarations and generic primitives, and returns either its discovered target kind schemas or a structured repair diagnostic. Use it after a harness writes or updates an external-rule adaptation and before registering targets that depend on it. The matching command-line operation is `once query validate-module <path> --format json`.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "path": {
+      "description": "Workspace-relative path to a Starlark module file.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "valid": true,
+  "path": "modules/generated_text.star",
+  "target_kinds": [
+    { "kind": "generated_text", "providers": ["generated_file"], "capabilities": [ { "name": "build", "output_groups": ["default"] } ] }
+  ],
+  "diagnostics": []
+}
 ```
 
 ## `once_get_target`
@@ -378,13 +505,20 @@ Reads the normalized result file produced by the target's `test` capability. Thi
 
 List durable evidence records, optionally filtered by subject.
 
-Returns the same record shape as `once query evidence --format json`: durable action evidence captured after `once exec`, `once run`, `once build`, or `once test`. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`.
+Returns the same record shape as `once query evidence --format json`: durable action evidence captured after `once exec`, `once run`, `once build`, or `once test`. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`. The tool returns the newest five matching records by default; set `limit` from 1 through 100 when more or fewer are useful. The matching command-line option is `once query evidence --limit <count>`. Evidence is historical provenance, not proof that inputs remain unchanged; run the relevant capability when a current result is required.
 
 **Input schema**
 
 ```json
 {
   "properties": {
+    "limit": {
+      "default": 5,
+      "description": "Maximum number of newest matching records to return.",
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+    },
     "subject": {
       "description": "Optional subject id or subject-capability pair, such as `cli` or `cli:test`.",
       "type": "string"
@@ -412,6 +546,97 @@ Returns the same record shape as `once query evidence --format json`: durable ac
     "created_at_unix_ms": 1812345678901
   }
 ]
+```
+
+## `once_validate_script`
+
+Parse and validate an annotated script's cache contract.
+
+Reads a workspace-relative script, validates its shebang and `once` directives, and returns the parsed runtime, inputs, outputs, dependency scripts, fingerprints, environment names, working directory, remote policy, and output symlink policy. Put singular directives with quoted values directly after the shebang, for example `# once input "input.txt"` and `# once output "output.txt"`. Plural names, colon syntax, and unquoted paths are invalid. Invalid contracts return `{ valid: false, diagnostics: [...] }`, so callers can repair directive typos before execution. The matching command-line operation is `once query script <path>`.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "path": {
+      "description": "Workspace-relative annotated script path.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "valid": true,
+  "path": "scripts/build.sh",
+  "contract": {
+    "path": "scripts/build.sh",
+    "runtime": "sh",
+    "runtime_args": [],
+    "inputs": ["src/**"],
+    "outputs": ["dist/**"],
+    "needs": [],
+    "fingerprints": [],
+    "env_vars": []
+  }
+}
+```
+
+## `once_exec_script`
+
+Execute a validated annotated script through Once's action cache.
+
+Opt-in tool exposed only when the Model Context Protocol server starts with `once mcp --allow-run`. Validates the script contract before running the same path as `once exec --script`, materializes declared outputs, and returns captured streams, exit status, action digest, cache hit or miss state, and matching evidence. Invoke it twice with unchanged declared inputs to verify cache reuse.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "args": {
+      "description": "Arguments passed to the script after its path.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "path": {
+      "description": "Workspace-relative annotated script path.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "path": "scripts/build.sh",
+  "success": true,
+  "exit_code": 0,
+  "stdout": "built\n",
+  "stderr": "",
+  "record": {
+    "action_digest": "0476bde2e7d8d1a64d9bd6f589ef5b443d0f60b71e2ad6f1c5bd7a2c4c41223f",
+    "cache": "hit",
+    "exit_code": 0
+  },
+  "evidence_subject": "0476bde2e7d8d1a64d9bd6f589ef5b443d0f60b71e2ad6f1c5bd7a2c4c41223f",
+  "evidence": []
+}
 ```
 
 ## `once_build_target`
@@ -655,6 +880,39 @@ Writes a stop request into the runtime session directory. The supervisor observe
 }
 ```
 
+## `once_validate_workspace`
+
+Validate the complete workspace graph before execution.
+
+Loads every manifest and target kind schema, then checks target attributes, duplicate target ids, missing dependencies, dependency provider compatibility, source patterns, and dependency cycles. Returns stable diagnostics with target and attribute scope plus suggested repairs. Call this after materializing a starter or applying edits and before build, run, or test. The matching command-line operation is `once query validate-workspace`.
+
+**Input schema**
+
+```json
+{
+  "properties": {},
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "valid": false,
+  "target_count": 1,
+  "diagnostics": [
+    {
+      "code": "missing_dependency",
+      "message": "target `apps/service/Service` depends on missing target `packages/core/Core`",
+      "target": "apps/service/Service",
+      "attribute": "deps",
+      "repairs": ["Declare target `packages/core/Core` or remove it from `deps`"]
+    }
+  ]
+}
+```
+
 ## `once_validate_target`
 
 Validate a proposed `[[target]]` table against its target kind schema. Returns structured diagnostics instead of prose.
@@ -733,4 +991,3 @@ Reads the manifest at `<workspace>/<package>/once.toml` (creating it if missing)
   "path": "packages/core/once.toml"
 }
 ```
-

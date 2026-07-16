@@ -88,6 +88,12 @@ missing behavior to Once's ecosystem modules, define local module target
 kinds for your project, or keep that part behind a script while the
 typed model catches up.
 
+A coding harness can also fetch the authoritative external rule or plugin,
+query Once's live module-authoring contract, and maintain that local target
+kind for the project. This is useful when the project needs a narrow dependency
+slice and a general built-in integration would be unnecessary. See
+[Coding harnesses](/guide/harness#adopt-an-unfamiliar-external-rule).
+
 Once should also grow consumer-side override tools: a way for a project
 to keep using the built-in ecosystem while replacing or extending a
 specific behavior locally. That would let teams adopt the common graph

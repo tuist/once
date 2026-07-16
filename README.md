@@ -49,8 +49,8 @@ work:
 }
 ```
 
-Remove `--allow-run` if the harness should not build, test, run, or start
-runtime sessions.
+Remove `--allow-run` if the harness should not edit manifests, build, test,
+run, or start runtime sessions.
 
 For a brand-new Rust project, also pin Rust in the project:
 
@@ -67,8 +67,12 @@ build the target.
 ```
 
 The harness can discover `rust_binary`, fetch the `rust-binary-with-crate`
-starter with `once_query_example`, write the files, and verify the result with
-`once build`.
+starter with `once_query_example`, write the files, validate the complete graph
+with `once_validate_workspace`, and verify the result with `once_build_target`.
+
+The same live discovery loop supports a request such as “build an Android app
+with Once.” See the [coding harness guide](https://once.tuist.dev/guide/harness)
+for typed graphs, annotated scripts, result checks, and project memory.
 
 ## Run A Script
 

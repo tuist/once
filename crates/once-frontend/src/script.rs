@@ -51,6 +51,16 @@ pub fn parse_script_annotations(path: &Path, display_name: &str) -> Result<Scrip
     Ok(annotations)
 }
 
+pub fn script_has_once_directives(path: &Path) -> Result<bool> {
+    let content = fs::read_to_string(path).map_err(|source| Error::Read {
+        path: path.display().to_string(),
+        source,
+    })?;
+    Ok(content
+        .lines()
+        .any(|line| annotation_payload(line.trim()).is_some()))
+}
+
 fn parse_shebang(line: &str, display_name: &str, path: &Path) -> Result<(String, Vec<String>)> {
     let Some(raw) = line.strip_prefix("#!") else {
         return Err(Error::Eval {
@@ -393,5 +403,6 @@ echo hi
 
         let err = parse_script_annotations(&path, "bad.sh").unwrap_err();
         assert!(err.to_string().contains("unknown once directive"));
+        assert!(script_has_once_directives(&path).unwrap());
     }
 }

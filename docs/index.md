@@ -13,8 +13,8 @@ hero:
       text: Why
       link: /guide/why
     - theme: alt
-      text: SDK
-      link: /guide/sdk/rust
+      text: Coding harnesses
+      link: /guide/harness
     - theme: alt
       text: Graph
       link: /guide/graph/

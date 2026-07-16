@@ -50,7 +50,8 @@ copy_generated = target_kind(
 ## Target Kind Schema
 
 `target_kind(...)` declares the public contract exposed by `once query schema`
-and by MCP target kind discovery.
+and by [Model Context Protocol](https://modelcontextprotocol.io/) target kind
+discovery.
 
 - `kind`: optional override for the target kind used in `once.toml`.
   When omitted, Once uses the exported symbol name.
@@ -66,6 +67,9 @@ and by MCP target kind discovery.
   needs during analysis or execution.
 - `examples`: `example(...)` declarations for starter workspaces exposed
   to agents.
+- `source_references`: `source_reference(...)` declarations that connect this
+  target kind to authoritative external rules, plugins, registry records, or
+  build-system concepts.
 - `impl`: optional function that declares actions and returns a provider
   record.
 
@@ -184,9 +188,82 @@ once query example apple_library apple-library-minimal --format json
 }
 ```
 
-MCP callers use `once_list_target_kinds` and `once_query_schema` for discovery,
-then `once_query_example` to fetch the file bundle for the chosen
-starter.
+[Model Context Protocol](https://modelcontextprotocol.io/) callers use
+`once_list_target_kinds` and `once_query_schema` for discovery, then
+`once_query_example` to fetch the file bundle for the chosen starter.
+
+## External Rule Assimilation
+
+A project module can reproduce the useful portion of a rule or plugin that
+Once has never seen before. The coding harness owns the translation and keeps
+it with the project. Once supplies the typed schema, validation, generic action
+primitives, execution, cache, and evidence surfaces.
+
+Start by fetching the authoritative source:
+
+```sh
+once query external-source https://example.com/rules/write_file.star --format json
+```
+
+The fetch accepts public HTTPS text, does not follow redirects, and returns at
+most the requested byte limit. Its digest lets the harness remember which
+upstream content it interpreted. Use a final raw source, registry, or
+documentation address instead of an unbounded repository page.
+
+Query the authoring contract instead of assuming that a remembered primitive
+signature is still current:
+
+```sh
+once query module-contract --format json
+```
+
+The result contains the declaration helper source, schema invariants,
+implementation context, analysis primitives, action primitives, maintenance
+invariants, module registration, and a starter. Attribute defaults in schemas
+are descriptive strings and do not insert runtime values. An implementation
+uses `ctx["attr"].get(...)` when an optional attribute needs a fallback. After
+writing the project module, validate it in isolation:
+
+```sh
+once query validate-module modules/generated_text.star --format json
+```
+
+Attach the upstream relationship to the local target kind:
+
+```python
+generated_text = target_kind(
+    docs = "Generates one text file from declared lines.",
+    attrs = [
+        attr("output", "string", required = True, configurable = False),
+        attr("lines", "list<string>", required = True),
+    ],
+    providers = ["generated_file"],
+    capabilities = [capability("build", ["default"])],
+    source_references = [
+        source_reference(
+            "Example Build",
+            "write_file",
+            "https://example.com/rules/write_file.star",
+            "Replicate the requested generated-file node and no unrelated graph nodes.",
+            content_digest = "digest returned by once_fetch_external_source",
+        ),
+    ],
+    impl = _generated_text_impl,
+)
+```
+
+`source_reference(...)` is descriptive metadata, not executable trust. It is
+returned by target kind discovery so a future maintenance pass can refetch the
+source, compare its digest, and decide whether the local translation needs an
+update. Set `content_digest` only after a complete, untruncated fetch. Omit it
+for documentation-only references.
+
+Translate only the dependency closure necessary for the user's requested
+capability. Keep everything else in the source build. Invoke tools directly
+with argument lists, declare inputs and outputs, and use portable setup
+primitives instead of hiding graph work in a shell command. Then validate the
+module, target tables, and complete workspace before executing the capability
+and checking fresh evidence.
 
 ## Implementation Context
 

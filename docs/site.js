@@ -90,6 +90,7 @@ export const site = {
     ],
     "/": [
       { text: "Why", link: "/guide/why" },
+      { text: "Coding harnesses", link: "/guide/harness" },
       {
         text: "Graph",
         collapsed: false,

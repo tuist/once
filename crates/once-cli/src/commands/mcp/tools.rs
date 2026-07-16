@@ -4,27 +4,69 @@ use serde_json::{json, Value};
 pub(super) fn tool_definitions(allow_run: bool) -> Vec<Value> {
     tool_catalog()
         .into_iter()
-        .filter(|tool| allow_run || !is_run_gated_tool(tool.name))
+        .filter(|tool| allow_run || !tool_requires_allow_run(tool.name))
         .map(|tool| {
+            let mut input_schema = tool.input_schema;
+            if let Some(schema) = input_schema.as_object_mut() {
+                schema.insert("additionalProperties".to_string(), Value::Bool(false));
+            }
             json!({
                 "name": tool.name,
-                "description": tool.description,
-                "inputSchema": tool.input_schema,
+                "description": format!("{}\n\n{}", tool.description, tool.long_description),
+                "inputSchema": input_schema,
+                "outputSchema": {
+                    "type": "object",
+                    "properties": { "result": {} },
+                    "required": ["result"],
+                    "additionalProperties": false
+                },
+                "annotations": tool_annotations(tool.name),
             })
         })
         .collect()
 }
 
-fn is_run_gated_tool(name: &str) -> bool {
+pub(super) fn tool_requires_allow_run(name: &str) -> bool {
     matches!(
         name,
-        "once_build_target"
+        "once_run_tests"
+            | "once_exec_script"
+            | "once_build_target"
             | "once_run_target"
             | "once_start_target"
             | "once_runtime_status"
             | "once_runtime_logs"
             | "once_stop_runtime"
+            | "once_apply_edit"
     )
+}
+
+fn tool_annotations(name: &str) -> Value {
+    let read_only = name.starts_with("once_query_")
+        || matches!(
+            name,
+            "once_list_target_kinds"
+                | "once_get_target"
+                | "once_fetch_external_source"
+                | "once_validate_module"
+                | "once_validate_target"
+                | "once_validate_workspace"
+                | "once_validate_script"
+                | "once_runtime_status"
+                | "once_runtime_logs"
+        );
+    let destructive = matches!(name, "once_apply_edit" | "once_stop_runtime");
+    let idempotent = read_only
+        || matches!(
+            name,
+            "once_build_target" | "once_runtime_status" | "once_runtime_logs"
+        );
+    json!({
+        "readOnlyHint": read_only,
+        "destructiveHint": destructive,
+        "idempotentHint": idempotent,
+        "openWorldHint": name == "once_fetch_external_source",
+    })
 }
 
 /// A single MCP tool, structured so the same record drives the
@@ -79,8 +121,8 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_query_schema",
-            description: "Return the typed contract for a target kind: attributes, dep edges, providers, capabilities, and runnable starter examples.",
-            long_description: "Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.",
+            description: "Return the typed contract for a target kind: attributes, dep edges, providers, capabilities, source references, and runnable starters.",
+            long_description: "Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, external source concepts that can guide partial adoption, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -91,7 +133,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 },
                 "required": ["kind"]
             }),
-            example_return: "{\n  \"kind\": \"library\",\n  \"docs\": \"Reusable library target...\",\n  \"attrs\": [\n    { \"name\": \"visibility\", \"ty\": \"string\", \"required\": true, \"configurable\": false }\n  ],\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"linkable\", \"module\"],\n  \"examples\": [\n    {\n      \"slug\": \"library-minimal\",\n      \"name\": \"Minimal library\",\n      \"use_when\": \"...\"\n    }\n  ]\n}",
+            example_return: "{\n  \"kind\": \"library\",\n  \"docs\": \"Reusable library target...\",\n  \"attrs\": [\n    { \"name\": \"visibility\", \"ty\": \"string\", \"required\": true, \"configurable\": false }\n  ],\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"linkable\", \"module\"],\n  \"source_references\": [\n    { \"system\": \"Example Build\", \"symbol\": \"example_library\",\n      \"url\": \"https://example.com/example_library\", \"use_when\": \"...\",\n      \"content_digest\": \"...\" }\n  ],\n  \"examples\": [\n    {\n      \"slug\": \"library-minimal\",\n      \"name\": \"Minimal library\",\n      \"use_when\": \"...\"\n    }\n  ]\n}",
         },
         ToolDefinition {
             name: "once_query_example",
@@ -115,13 +157,67 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_list_target_kinds",
-            description: "List every target kind available in the workspace, with its one-line docs and example slugs.",
-            long_description: "Lightweight discovery entry point. Returns one entry per target kind containing the target kind's documentation and the slugs of its bundled starter examples. Use this to discover what kinds of targets are buildable in the workspace before calling `once_query_schema` for the full contract of a chosen target kind.",
+            description: "List target kinds with their docs, external source references, and example slugs, optionally filtered by ecosystem or intent.",
+            long_description: "Lightweight discovery entry point. Returns matching target kinds with documentation, external build-system concepts they can partially replace, and bundled starter examples. When the request names an ecosystem or target-kind family, include it in the short `query` copied from the request to avoid loading the unrelated catalog. Family terms take priority over generic intent words; otherwise Once matches kind segments, docs, examples, and source references. Omit the query when the intent is unknown. Call `once_query_schema` for the full contract of the chosen target kind. The matching command-line operation is `once query target-kinds --query <text> --format json`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Short ecosystem, target-kind family, or intent text copied from the user's request."
+                    }
+                }
+            }),
+            example_return: "[\n  {\n    \"kind\": \"library\",\n    \"docs\": \"Reusable library target...\",\n    \"source_references\": [\n      { \"system\": \"Example Build\", \"symbol\": \"example_library\",\n        \"url\": \"https://example.com/example_library\", \"use_when\": \"...\",\n        \"content_digest\": \"...\" }\n    ],\n    \"examples\": [\n      { \"slug\": \"library-minimal\", \"name\": \"Minimal library\", \"use_when\": \"...\" }\n    ]\n  }\n]",
+        },
+        ToolDefinition {
+            name: "once_query_module_contract",
+            description: "Return the complete project-module authoring contract, generic analysis and action primitives, maintenance invariants, and a starter module.",
+            long_description: "Use this when no discovered target kind covers an external rule or plugin. The result contains the exact Starlark declaration helpers, schema invariants, implementation context fields, generic host-analysis and action primitives, module registration snippet, maintenance loop, and a runnable starter. A coding harness can use it to author and maintain a project-local target kind without waiting for a built-in integration. The matching command-line operation is `once query module-contract --format json`.",
             input_schema: json!({
                 "type": "object",
                 "properties": {}
             }),
-            example_return: "[\n  {\n    \"kind\": \"library\",\n    \"docs\": \"Reusable library target...\",\n    \"examples\": [\n      { \"slug\": \"library-minimal\", \"name\": \"Minimal library\", \"use_when\": \"...\" }\n    ]\n  }\n]",
+            example_return: "{\n  \"language\": \"Starlark\",\n  \"registration\": \"[modules]\\npaths = [\\\"modules/*.star\\\"]\\n\",\n  \"schema_invariants\": [\"attr.default is optional schema documentation and must be a string...\"],\n  \"context_fields\": [\n    { \"signature\": \"ctx[\\\"attr\\\"]\", \"purpose\": \"Typed target attributes.\" }\n  ],\n  \"action_primitives\": [\n    { \"signature\": \"write_path(path, content)\", \"purpose\": \"Declare a portable file-writing action.\" },\n    { \"signature\": \"materialize_host_file(source, destination)\", \"purpose\": \"Snapshot a content-verified absolute host toolchain file into a workspace output.\" }\n  ],\n  \"starter\": \"def _generated_text_impl(ctx): ...\"\n}",
+        },
+        ToolDefinition {
+            name: "once_fetch_external_source",
+            description: "Fetch bounded UTF-8 source code, metadata, or documentation from a public HTTPS address.",
+            long_description: "Fetches an authoritative external rule, plugin, registry record, or build-system reference for a coding harness to inspect before generating a local Once target kind. Only public HTTPS addresses are accepted, redirects are not followed, and response content is bounded to one mebibyte. The result includes the content, media type, digest, byte count, and truncation state. The matching command-line operation is `once query external-source <url> --format json`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Public HTTPS address for external source code, metadata, or documentation."
+                    },
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1_048_576,
+                        "default": 262_144,
+                        "description": "Maximum response bytes to return."
+                    }
+                },
+                "required": ["url"]
+            }),
+            example_return: "{\n  \"url\": \"https://example.com/rules/example.rule\",\n  \"content_type\": \"text/plain\",\n  \"content_digest\": \"...\",\n  \"byte_count\": 4120,\n  \"truncated\": false,\n  \"content\": \"rule implementation...\"\n}",
+        },
+        ToolDefinition {
+            name: "once_validate_module",
+            description: "Validate a project-local Starlark module and return its target kind contracts before registration or execution.",
+            long_description: "Reads one workspace-relative module file, evaluates it with the public Once declarations and generic primitives, and returns either its discovered target kind schemas or a structured repair diagnostic. Use it after a harness writes or updates an external-rule adaptation and before registering targets that depend on it. The matching command-line operation is `once query validate-module <path> --format json`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path to a Starlark module file."
+                    }
+                },
+                "required": ["path"]
+            }),
+            example_return: "{\n  \"valid\": true,\n  \"path\": \"modules/generated_text.star\",\n  \"target_kinds\": [\n    { \"kind\": \"generated_text\", \"providers\": [\"generated_file\"], \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\"] } ] }\n  ],\n  \"diagnostics\": []\n}",
         },
         ToolDefinition {
             name: "once_get_target",
@@ -209,17 +305,61 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_evidence",
             description: "List durable evidence records, optionally filtered by subject.",
-            long_description: "Returns the same record shape as `once query evidence --format json`: durable action evidence captured after `once exec`, `once run`, `once build`, or `once test`. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`.",
+            long_description: "Returns the same record shape as `once query evidence --format json`: durable action evidence captured after `once exec`, `once run`, `once build`, or `once test`. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`. The tool returns the newest five matching records by default; set `limit` from 1 through 100 when more or fewer are useful. The matching command-line option is `once query evidence --limit <count>`. Evidence is historical provenance, not proof that inputs remain unchanged; run the relevant capability when a current result is required.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "subject": {
                         "type": "string",
                         "description": "Optional subject id or subject-capability pair, such as `cli` or `cli:test`."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 5,
+                        "description": "Maximum number of newest matching records to return."
                     }
                 }
             }),
             example_return: "[\n  {\n    \"schema\": \"once.evidence.v1\",\n    \"id\": \"8d65122cd9dcddc8d5d9a8458ff42a40fe3dd7acbd4e0563fd7f9e8fb19b0c44\",\n    \"kind\": \"action_result\",\n    \"subject\": { \"kind\": \"target\", \"id\": \"cli\", \"capability\": \"test\" },\n    \"status\": \"passed\",\n    \"action_digest\": \"0476bde2e7d8d1a64d9bd6f589ef5b443d0f60b71e2ad6f1c5bd7a2c4c41223f\",\n    \"input_digest\": \"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccd5f5814ccfb820e6a41\",\n    \"cache\": \"miss\",\n    \"exit_code\": 0,\n    \"stdout\": \"b439bb065d84034c2e7172c1709eb28797c9bd7f2c64c5d1a1d9c1118f6f9d7e\",\n    \"created_at_unix_ms\": 1812345678901\n  }\n]",
+        },
+        ToolDefinition {
+            name: "once_validate_script",
+            description: "Parse and validate an annotated script's cache contract.",
+            long_description: "Reads a workspace-relative script, validates its shebang and `once` directives, and returns the parsed runtime, inputs, outputs, dependency scripts, fingerprints, environment names, working directory, remote policy, and output symlink policy. Put singular directives with quoted values directly after the shebang, for example `# once input \"input.txt\"` and `# once output \"output.txt\"`. Plural names, colon syntax, and unquoted paths are invalid. Invalid contracts return `{ valid: false, diagnostics: [...] }`, so callers can repair directive typos before execution. The matching command-line operation is `once query script <path>`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative annotated script path."
+                    }
+                },
+                "required": ["path"]
+            }),
+            example_return: "{\n  \"valid\": true,\n  \"path\": \"scripts/build.sh\",\n  \"contract\": {\n    \"path\": \"scripts/build.sh\",\n    \"runtime\": \"sh\",\n    \"runtime_args\": [],\n    \"inputs\": [\"src/**\"],\n    \"outputs\": [\"dist/**\"],\n    \"needs\": [],\n    \"fingerprints\": [],\n    \"env_vars\": []\n  }\n}",
+        },
+        ToolDefinition {
+            name: "once_exec_script",
+            description: "Execute a validated annotated script through Once's action cache.",
+            long_description: "Opt-in tool exposed only when the Model Context Protocol server starts with `once mcp --allow-run`. Validates the script contract before running the same path as `once exec --script`, materializes declared outputs, and returns captured streams, exit status, action digest, cache hit or miss state, and matching evidence. Invoke it twice with unchanged declared inputs to verify cache reuse.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative annotated script path."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Arguments passed to the script after its path."
+                    }
+                },
+                "required": ["path"]
+            }),
+            example_return: "{\n  \"path\": \"scripts/build.sh\",\n  \"success\": true,\n  \"exit_code\": 0,\n  \"stdout\": \"built\\n\",\n  \"stderr\": \"\",\n  \"record\": {\n    \"action_digest\": \"0476bde2e7d8d1a64d9bd6f589ef5b443d0f60b71e2ad6f1c5bd7a2c4c41223f\",\n    \"cache\": \"hit\",\n    \"exit_code\": 0\n  },\n  \"evidence_subject\": \"0476bde2e7d8d1a64d9bd6f589ef5b443d0f60b71e2ad6f1c5bd7a2c4c41223f\",\n  \"evidence\": []\n}",
         },
         ToolDefinition {
             name: "once_build_target",
@@ -333,6 +473,16 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 "required": ["session_id"]
             }),
             example_return: "{\n  \"session_id\": \"tools-demo-LaunchService-123-1812345678901\",\n  \"target\": \"tools/demo/LaunchService\",\n  \"status\": \"stopping\"\n}",
+        },
+        ToolDefinition {
+            name: "once_validate_workspace",
+            description: "Validate the complete workspace graph before execution.",
+            long_description: "Loads every manifest and target kind schema, then checks target attributes, duplicate target ids, missing dependencies, dependency provider compatibility, source patterns, and dependency cycles. Returns stable diagnostics with target and attribute scope plus suggested repairs. Call this after materializing a starter or applying edits and before build, run, or test. The matching command-line operation is `once query validate-workspace`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {}
+            }),
+            example_return: "{\n  \"valid\": false,\n  \"target_count\": 1,\n  \"diagnostics\": [\n    {\n      \"code\": \"missing_dependency\",\n      \"message\": \"target `apps/service/Service` depends on missing target `packages/core/Core`\",\n      \"target\": \"apps/service/Service\",\n      \"attribute\": \"deps\",\n      \"repairs\": [\"Declare target `packages/core/Core` or remove it from `deps`\"]\n    }\n  ]\n}",
         },
         ToolDefinition {
             name: "once_validate_target",

@@ -1,6 +1,6 @@
 # `once query target-kinds`
 
-List every target kind with its one-line docs and example slugs
+List target kinds with their one-line docs and example slugs
 
 ## Synopsis
 
@@ -12,6 +12,7 @@ once query target-kinds [OPTIONS]
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
+| `--query` | `<TEXT>` |  | Match an ecosystem, target-kind family, or intent against the catalog |
 | `-C, --directory` | `<DIR>` |  | Project root. Defaults to the current directory; the cache lives under `<project>/.once/`. Mirrors `make -C` |
 | `--format` | `<FORMAT>` | `human` | Output format for Once's structured data (`cache stats`, `run`/`exec` trailers). Defaults to a human-readable rendering; pass `json` or `toon` to get machine-parseable output for scripting and for agent consumers |
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |

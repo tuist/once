@@ -29,19 +29,20 @@ once mcp --workspace ~/code/MyApp
 
 ## Handshake
 
-MCP 2024-11-05. The expected sequence:
+Once prefers protocol version `2025-11-25` and negotiates supported client
+versions back through `2024-11-05`. The expected sequence:
 
 1. Client → `initialize` request with its protocol version,
    capabilities, and client info.
-2. Server → `initialize` result with protocol version `2024-11-05`,
-   the `tools` capability, and server info.
+2. Server → `initialize` result with the negotiated protocol version,
+   the `tools` capability, server info, and cross-tool workflow instructions.
 3. Client → `notifications/initialized` (no reply).
 4. Client → `tools/list` to discover tools, then `tools/call` for
    each invocation.
 
 ```json
 { "jsonrpc": "2.0", "id": 0, "method": "initialize",
-  "params": { "protocolVersion": "2024-11-05",
+  "params": { "protocolVersion": "2025-11-25",
               "capabilities": {},
               "clientInfo": { "name": "claude-desktop", "version": "1.0" } } }
 ```
@@ -50,9 +51,10 @@ Server reply:
 
 ```json
 { "jsonrpc": "2.0", "id": 0,
-  "result": { "protocolVersion": "2024-11-05",
+  "result": { "protocolVersion": "2025-11-25",
               "capabilities": { "tools": {} },
-              "serverInfo": { "name": "once-mcp", "version": "0.0.0" } } }
+              "serverInfo": { "name": "once-mcp", "version": "0.0.0" },
+              "instructions": "Once is a self-describing build graph…" } }
 ```
 
 ## Error model
@@ -83,8 +85,18 @@ A complete client/server exchange:
     "params": { "name": "once_query_targets", "arguments": {} } }
 ← { "jsonrpc": "2.0", "id": 2,
     "result": { "content": [ { "type": "text",
-                               "text": "[ … target list … ]" } ] } }
+                               "text": "[ … target list … ]" } ],
+                "structuredContent": { "result": [ … target list … ] } } }
 ```
+
+Every advertised tool includes behavioral annotations, a strict root input
+schema, and an output schema. Text content remains available for older clients;
+newer clients can consume `structuredContent` directly.
+
+Some hosts probe optional resource, resource-template, or prompt catalogs even
+when a server does not advertise them. Once returns valid empty catalogs for
+those probes and responds to the standard liveness request. Workflow guidance
+comes from the initialization instructions and live tool catalog.
 
 ## Wiring into Claude Desktop
 
