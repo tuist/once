@@ -6,7 +6,9 @@ Ruby Minitest files run through Once.
 
 The selected `ruby` interpreter must be able to load `minitest/autorun`. Many
 Ruby installations include Minitest. When the project needs the standalone
-gem, install it in the Ruby environment used by Once:
+gem, install it in the Ruby environment used by Once. The interpreter may be
+a name on the executable search path, an absolute path, or a
+workspace-relative path:
 
 ```sh
 gem install minitest
@@ -48,7 +50,7 @@ separate Once units.
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `ruby` | string | no | `ruby` | Ruby interpreter that can load Minitest |
+| `ruby` | string | no | `ruby` | Ruby interpreter name, absolute path, or workspace-relative path that can load Minitest |
 | `config` | list&lt;string&gt; | no | `Gemfile`, `Gemfile.lock` | Dependency and runner configuration inputs |
 | `data` | list&lt;string&gt; | no | `[]` | Runtime data and support inputs |
 | `args` | list&lt;string&gt; | no | `[]` | Arguments passed to each test file |

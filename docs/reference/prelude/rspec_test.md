@@ -5,8 +5,9 @@
 ## Start Here
 
 The selected `ruby` interpreter must be able to load `rspec/core`. Use the
-Ruby environment already managed by the project. A common direct installation
-is:
+Ruby environment already managed by the project. The interpreter may be a
+name on the executable search path, an absolute path, or a workspace-relative
+path. A common direct installation is:
 
 ```sh
 gem install rspec
@@ -49,7 +50,7 @@ A complete discovery run is required before smaller batches are planned.
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `ruby` | string | no | `ruby` | Ruby interpreter that can load the Ruby Specification library |
+| `ruby` | string | no | `ruby` | Ruby interpreter name, absolute path, or workspace-relative path that can load the Ruby Specification library |
 | `config` | list&lt;string&gt; | no | `Gemfile`, `Gemfile.lock` | Dependency and runner configuration inputs |
 | `data` | list&lt;string&gt; | no | `[]` | Runtime data and support inputs |
 | `args` | list&lt;string&gt; | no | `[]` | Additional runner arguments |

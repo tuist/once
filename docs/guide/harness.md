@@ -33,6 +33,25 @@ Start the server in the project directory with editing and execution enabled:
 }
 ```
 
+The configuration above can be stored as a Claude Code project server. The
+same connection can be registered directly from either harness:
+
+```sh
+# Codex
+codex mcp add once -- mise -C /absolute/path/to/project exec -- \
+  once mcp --workspace /absolute/path/to/project --allow-run
+
+# Claude Code, private to the current project
+claude mcp add --scope local once -- mise -C /absolute/path/to/project exec -- \
+  once mcp --workspace /absolute/path/to/project --allow-run
+```
+
+These commands configure the server, not the harness approval policy. For a
+headless run, also give the harness permission to edit the project and execute
+the registered tools inside an appropriate sandbox. Otherwise the client can
+reject `once_apply_edit` or `once_run_tests` even though the server advertises
+them.
+
 Omit `--allow-run` when the harness should only inspect the graph and project
 memory. In that mode Once does not advertise tools that edit, build, test, run,
 or start processes.
@@ -70,6 +89,40 @@ Use `once_validate_target` before creating a proposed target table from
 scratch. After `once_apply_edit`, always use `once_validate_workspace` because
 table validation cannot detect missing dependencies, incompatible providers,
 unmatched source patterns, or dependency cycles.
+
+## Adopt Existing Test Runners
+
+Use this loop when a repository already runs tests through pytest, Ruby
+Specification, Minitest, Vitest, Jest, or another native runner:
+
+1. Inspect the existing package manifests, test configuration, and documented
+   test commands. Keep each native runner as the source of truth.
+2. Call `once_list_target_kinds` once with the exact runner names in `query`,
+   such as `pytest vitest minitest`. The result combines all matching runner
+   families without loading unrelated target kinds.
+3. Call `once_query_schema` for every matching test kind. Build one target
+   table per coherent test suite, call `once_validate_target` for each table,
+   then create them with one `once_apply_edit` call.
+4. Use workspace-relative runtime paths when the repository owns an
+   environment. A pytest target automatically detects `.venv/bin/python` when
+   `python` is omitted. Python, Ruby, and Node.js target kinds also accept
+   explicit workspace-relative paths, names on the executable search path,
+   and absolute paths.
+5. Call `once_validate_workspace`, then run every new target completely once
+   with `once_run_tests`. The initial plan intentionally contains one batch per
+   target so the native runners can establish complete manifests. Read
+   `next_plan` in the completed response for the file or case batches that the
+   next run will use. The `plan` field describes the run that just finished.
+6. Call `once_query_test_manifest` when stable unit identifiers are needed for
+   exact execution. Increase `jobs` for later runs after confirming the
+   expected batches in `next_plan`.
+7. Repeat an unchanged run and inspect its cache decisions. Query an affected
+   plan with representative changed paths, and use one manifest unit to prove
+   exact execution when the target kind supports it.
+
+The [Testing and Scheduling](/guide/graph/testing) guide provides runner-first
+declarations and explains the safety boundary between affected selection and
+automatic batching.
 
 For an Android application, the live catalog leads the harness to
 `android_binary` and its runnable starter. The harness creates the returned

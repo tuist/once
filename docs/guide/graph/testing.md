@@ -54,10 +54,17 @@ once test tests --jobs 4 --format json
 ```
 
 Replace `pytest_test` with the chosen kind when querying its schema. The first
-complete run discovers stable units and writes the manifest. The next run can
-schedule those units as independent file batches across the requested workers.
+complete run discovers stable units and writes the manifest. Its structured
+response keeps that executed work in `plan` and shows the batches available to
+the next run in `next_plan`. The next run can schedule those units as
+independent file batches across the requested workers.
 Set `batching = "case"` in a pytest, Ruby Specification, Vitest, or Jest target
 only when its fixtures and startup costs make case-level batches worthwhile.
+Python, Ruby, and Node.js executable attributes accept names on the executable
+search path, absolute paths, and workspace-relative paths. A pytest target
+with no `python` attribute automatically tries `.venv/bin/python` before the
+host executable search path. Set a portable project path explicitly when the
+repository uses a different runtime layout.
 
 ## Start With the Safety Model
 

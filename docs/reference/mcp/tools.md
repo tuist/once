@@ -164,7 +164,7 @@ Returns the same record as `once query example <kind> <slug> --format json`: the
 
 List target kinds with their docs, external source references, and example slugs, optionally filtered by ecosystem or intent.
 
-Lightweight discovery entry point. Returns matching target kinds with documentation, external build-system concepts they can partially replace, and bundled starter examples. When the request names an ecosystem or target-kind family, include it in the short `query` copied from the request to avoid loading the unrelated catalog. Family terms take priority over generic intent words; otherwise Once matches kind segments, docs, examples, and source references. Omit the query when the intent is unknown. Call `once_query_schema` for the full contract of the chosen target kind. The matching command-line operation is `once query target-kinds --query <text> --format json`.
+Lightweight discovery entry point. Returns matching target kinds with documentation, external build-system concepts they can partially replace, and bundled starter examples. When the request names one or more ecosystems or runner families, include all of their names in the short `query` copied from the request. Once combines those specific matches while ignoring generic intent words, which lets a harness discover every native test integration in a mixed repository with one call. Omit the query when the intent is unknown. Call `once_query_schema` for the full contract of each chosen target kind. The matching command-line operation is `once query target-kinds --query <text> --format json`.
 
 **Input schema**
 
@@ -417,7 +417,7 @@ Maps changed paths to test targets using graph relationships and declared inputs
 
 Create an immutable test plan without assigning work to runners.
 
-Returns the selection policy, normalized changed paths, unmatched paths, selected tests, and stable execution batches. The plan deliberately contains no local worker, remote provider, or fixed-job assignment, so scheduling can change without changing test identity or invalidating reusable results. Pass `target` with a `test_unit` from `once_query_test_manifest` to create an exact unit-filtered plan. Planning rejects targets that do not declare exact filtering and units absent from the persisted whole-target manifest. Affected-test plans remain whole-target until per-unit outputs are isolated. The matching command-line operations are `once query test-plan --changed-path <path> --format json` and `once query test-plan --target <target> --test-unit <unit> --format json`.
+Returns the selection policy, normalized changed paths, unmatched paths, selected tests, and stable execution batches. The plan deliberately contains no local worker, remote provider, or fixed-job assignment, so scheduling can change without changing test identity or invalidating reusable results. Before a target's first complete run, or when its discovery inputs change, the plan intentionally contains one whole-target batch. Run that target once with `once_run_tests`, inspect `once_query_test_manifest`, then query the plan again to see automatic file or case batches. Pass `target` with a `test_unit` from the manifest to create an exact unit-filtered plan. Planning rejects targets that do not declare exact filtering and units absent from the persisted whole-target manifest. The matching command-line operations are `once query test-plan --changed-path <path> --format json` and `once query test-plan --target <target> --test-unit <unit> --format json`.
 
 **Input schema**
 
@@ -465,7 +465,7 @@ Returns the selection policy, normalized changed paths, unmatched paths, selecte
 
 Run test targets by id, or run tests affected by changed workspace paths.
 
-Creates the same immutable plan as `once_query_test_plan`, then pulls stable batches from a shared local queue. Batches with longer historical uncached durations are queued first, and idle workers dynamically take the next batch. Explicit `target` or `targets` produce an exact plan; otherwise `changed_paths` drive conservative graph selection. With exactly one target, `test_unit` runs a stable unit returned by `once_query_test_manifest` when the target kind declares filtering support. `jobs` caps workers without changing plan or batch identity. The result includes the plan, actual schedule attempts, and normalized test results. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate. The matching command-line operations are `once test --changed-path <path> --jobs <count> --format json` and `once test <target> --test-unit <unit> --format json`.
+Creates the same immutable plan as `once_query_test_plan`, then pulls stable batches from a shared local queue. Batches with longer historical uncached durations are queued first, and idle workers dynamically take the next batch. Explicit `target` or `targets` produce an exact plan; otherwise `changed_paths` drive conservative graph selection. With exactly one target, `test_unit` runs a stable unit returned by `once_query_test_manifest` when the target kind declares filtering support. `jobs` caps workers without changing plan or batch identity. The result's `plan` is the work that just executed. Its `next_plan` is recomputed after complete runs refresh discovery, so use that field to assess file or case batching for the next run. The result also includes actual schedule attempts and normalized test results. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate. The matching command-line operations are `once test --changed-path <path> --jobs <count> --format json` and `once test <target> --test-unit <unit> --format json`.
 
 **Input schema**
 
@@ -509,11 +509,12 @@ Creates the same immutable plan as `once_query_test_plan`, then pulls stable bat
 
 ```json
 {
-  "plan": { "schema": "once.test_plan.v1", "id": "<stable digest>", "selection": {}, "batches": [] },
+  "plan": { "schema": "once.test_plan.v1", "id": "<executed plan digest>", "selection": {}, "batches": [] },
+  "next_plan": { "schema": "once.test_plan.v1", "id": "<next plan digest>", "selection": {}, "batches": [] },
   "schedule": {
     "schema": "once.test_schedule.v1",
     "id": "<attempt-specific digest>",
-    "plan_id": "<stable digest>",
+    "plan_id": "<executed plan digest>",
     "strategy": "longest_estimated_duration_first_dynamic",
     "workers": 2,
     "attempts": [{ "batch_id": "<stable batch digest>", "placement": "local", "worker": "local-1", "status": "passed" }]

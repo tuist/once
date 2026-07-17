@@ -42,12 +42,15 @@ name pattern.
 Automatic batching uses one batch per test file by default. Set `batching` to
 `case` for individual cases, or `target` for one target batch. A complete run
 must establish a current manifest before smaller batches are planned.
+Once disables Vitest's mutable local cache inside the action because the
+installed packages are declared inputs. Once's action cache reuses successful
+test results when those inputs have not changed.
 
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `node` | string | no | `node` | Node.js executable |
+| `node` | string | no | `node` | Node.js executable name, absolute path, or workspace-relative path |
 | `runner` | string | no | `node_modules/vitest/vitest.mjs` | Package-relative Vitest entry point |
 | `config` | list&lt;string&gt; | no | package and lock files | Dependency and runner configuration inputs |
 | `dependencies` | list&lt;string&gt; | no | `node_modules/**/*` | Installed runner and package files required during execution |

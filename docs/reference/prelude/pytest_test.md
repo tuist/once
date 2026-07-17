@@ -4,9 +4,11 @@ Python tests run with pytest.
 
 ## Start Here
 
-The selected `python` interpreter must be able to import pytest. Use the
-Python environment already managed by the project. A common direct
-installation is:
+The selected `python` interpreter must be able to import pytest. When the
+attribute is omitted, Once first uses `.venv/bin/python` or the Windows virtual
+environment equivalent when present, then tries `python3` and `python` on the
+executable search path. You can also set an absolute or workspace-relative
+path explicitly. A common direct installation is:
 
 ```sh
 python3 -m pip install pytest
@@ -19,8 +21,8 @@ tests:
 once query example pytest_test pytest-test-minimal --format json
 ```
 
-Copy the declaration below into `once.toml`, adjust `srcs` and `python` for
-the project, then establish discovery and run the file batches:
+Copy the declaration below into `once.toml`, adjust `srcs` for the project,
+then establish discovery and run the file batches:
 
 ```sh
 once test tests --format json
@@ -48,7 +50,7 @@ uses smaller batches.
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `python` | string | no | `python3` | Python interpreter that can import pytest |
+| `python` | string | no | automatic | Python interpreter name, absolute path, or workspace-relative path that can import pytest |
 | `config` | list&lt;string&gt; | no | `pyproject.toml`, `pytest.ini`, `conftest.py` | Configuration and collection inputs |
 | `data` | list&lt;string&gt; | no | `[]` | Runtime data inputs read by tests |
 | `args` | list&lt;string&gt; | no | `[]` | Additional pytest arguments |
@@ -76,6 +78,7 @@ kind = "pytest_test"
 srcs = ["tests/**/*.py"]
 
 [target.attrs]
+python = ".venv/bin/python"
 labels = ["unit"]
 ```
 
