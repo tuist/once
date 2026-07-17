@@ -2,6 +2,37 @@
 
 Python tests run with pytest.
 
+## Start Here
+
+The selected `python` interpreter must be able to import pytest. Use the
+Python environment already managed by the project. A common direct
+installation is:
+
+```sh
+python3 -m pip install pytest
+```
+
+Retrieve the runnable starter when you want a complete declaration and sample
+tests:
+
+```sh
+once query example pytest_test pytest-test-minimal --format json
+```
+
+Copy the declaration below into `once.toml`, adjust `srcs` and `python` for
+the project, then establish discovery and run the file batches:
+
+```sh
+once test tests --format json
+once query test-manifest tests --format json
+once test tests --jobs 4 --format json
+```
+
+The first command runs the complete target. Later runs can use the resulting
+manifest for automatic batching and exact selection. See
+[Testing and Scheduling](/guide/graph/testing) for affected plans, case-level
+batching, and exact unit commands.
+
 ## Description
 
 `pytest_test` invokes pytest through the selected Python interpreter, records
@@ -48,6 +79,5 @@ srcs = ["tests/**/*.py"]
 labels = ["unit"]
 ```
 
-pytest must be importable by the selected interpreter. Declare fixtures,
-configuration, and runtime files through `srcs`, `config`, or `data` so they
-participate in caching and manifest freshness.
+Declare fixtures, configuration, and runtime files through `srcs`, `config`,
+or `data` so they participate in caching and manifest freshness.

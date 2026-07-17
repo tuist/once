@@ -2,6 +2,38 @@
 
 [Ruby Specification (RSpec)](https://rspec.info/) tests run through Once.
 
+## Start Here
+
+The selected `ruby` interpreter must be able to load `rspec/core`. Use the
+Ruby environment already managed by the project. A common direct installation
+is:
+
+```sh
+gem install rspec
+```
+
+Retrieve the runnable starter when you want a complete declaration and sample
+specifications:
+
+```sh
+once query example rspec_test rspec-test-minimal --format json
+```
+
+Copy the declaration below into `once.toml`, adjust `srcs` and the Ruby
+environment for the project, then establish discovery and run the file
+batches:
+
+```sh
+once test tests --format json
+once query test-manifest tests --format json
+once test tests --jobs 4 --format json
+```
+
+The first command runs the complete target. Later runs can use the resulting
+manifest for automatic batching and exact selection. See
+[Testing and Scheduling](/guide/graph/testing) for affected plans, case-level
+batching, and exact unit commands.
+
 ## Description
 
 `rspec_test` invokes the Ruby Specification core runner with its structured
@@ -48,6 +80,5 @@ srcs = ["spec/**/*_spec.rb"]
 env_inherit = ["GEM_HOME", "GEM_PATH"]
 ```
 
-The Ruby Specification library must be available to the selected interpreter.
 List helper files and other runtime inputs in `data` when they are outside the
 source patterns.

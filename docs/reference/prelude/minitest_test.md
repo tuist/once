@@ -2,6 +2,37 @@
 
 Ruby Minitest files run through Once.
 
+## Start Here
+
+The selected `ruby` interpreter must be able to load `minitest/autorun`. Many
+Ruby installations include Minitest. When the project needs the standalone
+gem, install it in the Ruby environment used by Once:
+
+```sh
+gem install minitest
+```
+
+Retrieve the runnable starter when you want a complete declaration and sample
+tests:
+
+```sh
+once query example minitest_test minitest-test-minimal --format json
+```
+
+Copy the declaration below into `once.toml`, adjust `srcs` and `ruby` for the
+project, then establish discovery and run the file batches:
+
+```sh
+once test tests --format json
+once query test-manifest tests --format json
+once test tests --jobs 4 --format json
+```
+
+The first command runs the complete target. Later runs schedule each
+discovered test file independently. Minitest methods are not separate Once
+units. See [Testing and Scheduling](/guide/graph/testing) for affected plans
+and file-level exact execution.
+
 ## Description
 
 `minitest_test` treats each declared test file as one stable unit. It invokes
@@ -45,5 +76,4 @@ kind = "minitest_test"
 srcs = ["test/**/*_test.rb"]
 ```
 
-Minitest must be available to the selected interpreter. Shared helpers and
-runtime files must be included in `srcs` or `data`.
+Shared helpers and runtime files must be included in `srcs` or `data`.

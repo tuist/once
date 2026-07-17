@@ -2,6 +2,36 @@
 
 JavaScript and TypeScript tests run with Vitest.
 
+## Start Here
+
+Install Vitest in the package with the project's JavaScript package manager.
+For example:
+
+```sh
+npm install --save-dev vitest
+```
+
+Retrieve the runnable starter when you want a complete declaration, package
+manifest, and sample tests:
+
+```sh
+once query example vitest_test vitest-test-minimal --format json
+```
+
+Copy the declaration below into `once.toml`, adjust `srcs` and any setup files
+for the project, then establish discovery and run the file batches:
+
+```sh
+once test tests --format json
+once query test-manifest tests --format json
+once test tests --jobs 4 --format json
+```
+
+The first command runs the complete target. Later runs can use the resulting
+manifest for automatic batching and exact selection. See
+[Testing and Scheduling](/guide/graph/testing) for affected plans, case-level
+batching, and exact unit commands.
+
 ## Description
 
 `vitest_test` invokes the package-local Vitest entry point with its structured
@@ -47,5 +77,4 @@ kind = "vitest_test"
 srcs = ["tests/**/*.test.js"]
 ```
 
-Install Vitest in the package before running the target. Include setup files,
-transforms, snapshots, and other runtime files in `data`.
+Include setup files, transforms, snapshots, and other runtime files in `data`.

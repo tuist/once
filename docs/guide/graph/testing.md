@@ -4,8 +4,60 @@ Once separates which tests should run from where and when they run. That
 separation keeps affected-test selection conservative, makes exact requests
 auditable, and lets scheduling evolve without changing test identity.
 
-Use this guide after a test target already runs through `once test`. The
-ecosystem guides explain how to declare those targets.
+Start here whether you are declaring a test target for the first time or
+planning work for an existing target. [Full ecosystem guides](/guide/graph/ecosystems)
+cover build and test targets together. Test-runner reference pages provide
+focused, copyable declarations for runner-only integrations.
+
+## Start With Your Runner
+
+Keep the native runner as the source of truth for test collection and
+execution. Choose the matching target kind, make its prerequisite available,
+and let Once record stable test identities around it:
+
+| Runner | Target declaration | Prerequisite | Default automatic batch |
+| --- | --- | --- | --- |
+| pytest | [`pytest_test`](/reference/prelude/pytest_test) | The selected Python interpreter can import pytest | One test file |
+| [Ruby Specification](https://rspec.info/) | [`rspec_test`](/reference/prelude/rspec_test) | The selected Ruby interpreter can load the runner | One specification file |
+| Minitest | [`minitest_test`](/reference/prelude/minitest_test) | The selected Ruby interpreter can load Minitest | One test file |
+| Vitest | [`vitest_test`](/reference/prelude/vitest_test) | The package-local Vitest entry point is installed | One test file |
+| Jest | [`jest_test`](/reference/prelude/jest_test) | The package-local Jest entry point is installed | One test file |
+
+Each target kind ships a runnable starter. Retrieve the one that matches your
+runner when you want a complete manifest and source layout:
+
+```sh
+# Python with pytest
+once query example pytest_test pytest-test-minimal --format json
+
+# Ruby Specification
+once query example rspec_test rspec-test-minimal --format json
+
+# Ruby with Minitest
+once query example minitest_test minitest-test-minimal --format json
+
+# JavaScript or TypeScript with Vitest
+once query example vitest_test vitest-test-minimal --format json
+
+# JavaScript or TypeScript with Jest
+once query example jest_test jest-test-minimal --format json
+```
+
+After copying or adapting the declaration, use the same first-run workflow for
+every runner. The bundled starters name their target `tests`:
+
+```sh
+once query schema pytest_test
+once test tests --format json
+once query test-manifest tests --format json
+once test tests --jobs 4 --format json
+```
+
+Replace `pytest_test` with the chosen kind when querying its schema. The first
+complete run discovers stable units and writes the manifest. The next run can
+schedule those units as independent file batches across the requested workers.
+Set `batching = "case"` in a pytest, Ruby Specification, Vitest, or Jest target
+only when its fixtures and startup costs make case-level batches worthwhile.
 
 ## Start With the Safety Model
 
@@ -129,18 +181,18 @@ runner-specific filters from names that Once did not return.
 
 | Target kind | Stable unit discovery | Exact unit execution | Automatic granularity |
 | --- | --- | --- | --- |
-| `pytest_test` | Yes | Yes | File by default, optional case |
-| `vitest_test` | Yes | Yes | File by default, optional case |
-| `jest_test` | Yes | Yes | File by default, optional case |
-| `rspec_test` for [Ruby Specification](https://rspec.info/) | Yes | Yes | File by default, optional case |
-| `minitest_test` | One unit per file | Yes, by file | File |
-| `rust_test` | Yes | Yes | Target |
-| `android_local_test` | Yes | Yes | Target |
-| `android_instrumentation_test` | Yes, from a completed device run | Yes, through the instrumentation `class` argument | Target |
-| `apple_test_bundle` with Swift Testing | Yes | Not yet | Target |
+| [`pytest_test`](/reference/prelude/pytest_test) | Yes | Yes | File by default, optional case |
+| [`vitest_test`](/reference/prelude/vitest_test) | Yes | Yes | File by default, optional case |
+| [`jest_test`](/reference/prelude/jest_test) | Yes | Yes | File by default, optional case |
+| [`rspec_test`](/reference/prelude/rspec_test) for [Ruby Specification](https://rspec.info/) | Yes | Yes | File by default, optional case |
+| [`minitest_test`](/reference/prelude/minitest_test) | One unit per file | Yes, by file | File |
+| [`rust_test`](/reference/prelude/rust_test) | Yes | Yes | Target |
+| [`android_local_test`](/reference/prelude/android_local_test) | Yes | Yes | Target |
+| [`android_instrumentation_test`](/reference/prelude/android_instrumentation_test) | Yes, from a completed device run | Yes, through the instrumentation `class` argument | Target |
+| [`apple_test_bundle`](/reference/prelude/apple_test_bundle) with Swift Testing | Yes | Not yet | Target |
 | `shellspec_test` | Yes | Not yet | Target |
-| `zig_test` | Suite-level fallback | Not yet | Target |
-| `elixir_test` | Summary counts only | Not yet | Target |
+| [`zig_test`](/reference/prelude/zig_test) | Suite-level fallback | Not yet | Target |
+| [`elixir_test`](/reference/prelude/elixir_test) | Summary counts only | Not yet | Target |
 
 Unsupported ecosystems still participate in conservative affected selection
 and target-level scheduling. Once reports the limitation instead of guessing a
