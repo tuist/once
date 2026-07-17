@@ -3,6 +3,7 @@
 mod expression;
 mod external_source;
 mod script;
+pub(crate) mod test_plan;
 
 pub(crate) use script::script_validation_value;
 
@@ -11,7 +12,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use once_core::{EvidenceRecord, EvidenceStore};
+use once_core::{
+    EvidenceRecord, EvidenceStore, TestBatchAttempt, TestManifest, TestTimingStore, TestUnit,
+};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -37,13 +40,6 @@ struct TestTargetRecord {
     runner: Option<String>,
     labels: Vec<String>,
     results_path: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct AffectedTestRecord {
-    id: String,
-    kind: String,
-    reasons: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -408,7 +404,7 @@ pub async fn affected_tests(
     changed_paths: &[String],
 ) -> Result<()> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let records = affected_test_records(workspace, &graph, changed_paths);
+    let records = test_plan::affected_tests(workspace, &graph, changed_paths)?;
     write_body(output, || render_affected_tests_human(&records), &records).await
 }
 
@@ -417,20 +413,204 @@ pub(crate) fn affected_tests_value(
     changed_paths: &[String],
 ) -> Result<serde_json::Value> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    Ok(serde_json::to_value(affected_test_records(
+    Ok(serde_json::to_value(test_plan::affected_tests(
         workspace,
         &graph,
         changed_paths,
-    ))?)
+    )?)?)
+}
+
+pub async fn test_plan_request(
+    workspace: &Path,
+    output: Output,
+    changed_paths: &[String],
+    target: Option<&str>,
+    test_unit: Option<&str>,
+) -> Result<()> {
+    let plan = match (target, test_unit) {
+        (Some(target), Some(test_unit)) => explicit_test_unit_plan(workspace, target, test_unit)?,
+        (Some(target), None) => explicit_test_plan(workspace, &[target.to_string()])?,
+        (None, None) => test_plan_for_paths(workspace, changed_paths)?,
+        (None, Some(_)) => anyhow::bail!("a test unit requires an explicit target"),
+    };
+    write_body(output, || render_test_plan_human(&plan), &plan).await
+}
+
+pub(crate) fn test_plan_for_paths(
+    workspace: &Path,
+    changed_paths: &[String],
+) -> Result<test_plan::TestPlan> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    test_plan::plan(workspace, &graph, changed_paths)
+}
+
+pub(crate) fn explicit_test_plan(
+    workspace: &Path,
+    targets: &[String],
+) -> Result<test_plan::TestPlan> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    test_plan::explicit_plan(&graph, targets)
+}
+
+pub(crate) fn explicit_test_unit_plan(
+    workspace: &Path,
+    target: &str,
+    test_unit: &str,
+) -> Result<test_plan::TestPlan> {
+    let manifest = test_manifest_record(workspace, target)?;
+    validate_test_unit(&manifest, target, test_unit)?;
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    test_plan::explicit_unit_plan(&graph, target, test_unit)
+}
+
+pub(crate) fn validate_test_unit(
+    manifest: &TestManifest,
+    target: &str,
+    test_unit: &str,
+) -> Result<()> {
+    if manifest.case_filtering != "runner_args" {
+        anyhow::bail!("target `{target}` does not support explicit test-unit filtering");
+    }
+    if !manifest.units.iter().any(|unit| unit.id == test_unit) {
+        anyhow::bail!(
+            "test unit `{test_unit}` is not present in the current manifest for `{target}`; run the whole target to refresh discovery"
+        );
+    }
+    Ok(())
 }
 
 pub async fn test_results(workspace: &Path, output: Output, target_id: &str) -> Result<()> {
-    let path = workspace.join(test_results_path(target_id)?);
-    let raw =
-        std::fs::read_to_string(&path).with_context(|| format!("reading `{}`", path.display()))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&raw).with_context(|| format!("parsing `{}`", path.display()))?;
+    let value = test_results_value(workspace, target_id)?;
     write_body(output, || render_test_results_human(&value), &value).await
+}
+
+pub async fn test_manifest(workspace: &Path, output: Output, target_id: &str) -> Result<()> {
+    let manifest = test_manifest_record(workspace, target_id)?;
+    write_body(output, || render_test_manifest_human(&manifest), &manifest).await
+}
+
+pub(crate) fn test_manifest_value(workspace: &Path, target_id: &str) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(test_manifest_record(
+        workspace, target_id,
+    )?)?)
+}
+
+pub(crate) fn test_manifest_record(workspace: &Path, target_id: &str) -> Result<TestManifest> {
+    let manifest_path = test_manifest_path(target_id)?;
+    let stored_path = workspace.join(&manifest_path);
+    if stored_path.is_file() {
+        let raw = std::fs::read_to_string(&stored_path)
+            .with_context(|| format!("reading `{}`", stored_path.display()))?;
+        return serde_json::from_str(&raw)
+            .with_context(|| format!("parsing `{}`", stored_path.display()));
+    }
+    let manifest = derive_test_manifest(workspace, target_id)?;
+    if manifest.source == "normalized_results" {
+        write_test_manifest(workspace, &manifest)?;
+    }
+    Ok(manifest)
+}
+
+pub(crate) fn refresh_test_manifest(workspace: &Path, target_id: &str) -> Result<TestManifest> {
+    let manifest = derive_test_manifest(workspace, target_id)?;
+    write_test_manifest(workspace, &manifest)?;
+    Ok(manifest)
+}
+
+fn write_test_manifest(workspace: &Path, manifest: &TestManifest) -> Result<()> {
+    let path = workspace.join(test_manifest_path(&manifest.target)?);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating `{}`", parent.display()))?;
+    }
+    let raw = serde_json::to_vec_pretty(&manifest).context("serializing test manifest")?;
+    std::fs::write(&path, raw).with_context(|| format!("writing `{}`", path.display()))?;
+    Ok(())
+}
+
+fn derive_test_manifest(workspace: &Path, target_id: &str) -> Result<TestManifest> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let target = graph
+        .iter()
+        .find(|target| target.label.id == target_id)
+        .with_context(|| format!("no target matches `{target_id}`"))?;
+    if !has_capability(target, "test") {
+        anyhow::bail!("target `{target_id}` does not expose the test capability");
+    }
+    let test_info = metadata_test_info(workspace, target);
+    let runner = test_info
+        .as_ref()
+        .and_then(|info| info.pointer("/runner/type"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let listing_supported = test_info
+        .as_ref()
+        .and_then(|info| info.pointer("/listing/supported"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let case_filtering = test_info
+        .as_ref()
+        .and_then(|info| info.pointer("/filtering/case_filtering"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unsupported")
+        .to_string();
+    let path = workspace.join(test_results_path(target_id)?);
+    let (source, units) = if path.is_file() {
+        let results = test_results_value(workspace, target_id)?;
+        (
+            "normalized_results",
+            test_units_from_results(target_id, &results)?,
+        )
+    } else {
+        ("whole_target_fallback", Vec::new())
+    };
+    TestManifest::new(
+        target_id,
+        runner,
+        source,
+        listing_supported,
+        case_filtering,
+        units,
+    )
+}
+
+fn test_manifest_path(target_id: &str) -> Result<PathBuf> {
+    Ok(PathBuf::from(".once")
+        .join("test-manifests")
+        .join(target_id_path(target_id)?)
+        .join("manifest.json"))
+}
+
+fn test_units_from_results(target_id: &str, results: &serde_json::Value) -> Result<Vec<TestUnit>> {
+    results
+        .get("cases")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|case| {
+            let id = case
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .context("normalized test case is missing its id")?;
+            let name = case
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(id);
+            let suite = case
+                .get("suite")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(target_id);
+            Ok(TestUnit {
+                id: id.to_string(),
+                name: name.to_string(),
+                suite: suite.to_string(),
+                file: case
+                    .get("file")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+            })
+        })
+        .collect()
 }
 
 pub async fn evidence(
@@ -441,6 +621,36 @@ pub async fn evidence(
 ) -> Result<()> {
     let records = evidence_records(workspace, subject, limit).await?;
     write_body(output, || render_evidence_human(&records), &records).await
+}
+
+pub async fn test_attempts(
+    workspace: &Path,
+    output: Output,
+    target: Option<&str>,
+    limit: Option<usize>,
+) -> Result<()> {
+    let records = test_attempt_records(workspace, target, limit).await?;
+    write_body(output, || render_test_attempts_human(&records), &records).await
+}
+
+pub(crate) async fn test_attempt_records(
+    workspace: &Path,
+    target: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Vec<TestBatchAttempt>> {
+    let store = TestTimingStore::open_workspace(workspace);
+    let mut records = store.load().await?;
+    if let Some(target) = target {
+        records.retain(|record| record.target == target);
+    }
+    if let Some(limit) = limit {
+        if limit == 0 {
+            anyhow::bail!("test attempt limit must be greater than zero");
+        }
+        let remove = records.len().saturating_sub(limit);
+        records.drain(..remove);
+    }
+    Ok(records)
 }
 
 pub(crate) async fn evidence_records(
@@ -467,7 +677,11 @@ pub(crate) fn test_results_value(workspace: &Path, target_id: &str) -> Result<se
     let path = workspace.join(test_results_path(target_id)?);
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("reading `{}`", path.display()))?;
-    serde_json::from_str(&raw).with_context(|| format!("parsing `{}`", path.display()))
+    let value =
+        serde_json::from_str(&raw).with_context(|| format!("parsing `{}`", path.display()))?;
+    once_core::validate_test_results(&value, target_id)
+        .with_context(|| format!("validating `{}`", path.display()))?;
+    Ok(value)
 }
 
 pub async fn validate_target(
@@ -651,6 +865,25 @@ fn render_evidence_human(records: &[EvidenceRecord]) -> String {
     out
 }
 
+fn render_test_attempts_human(records: &[TestBatchAttempt]) -> String {
+    if records.is_empty() {
+        return "test attempts: none\n".to_string();
+    }
+    let mut out = String::from("test attempts:\n");
+    for record in records {
+        let _ = writeln!(
+            out,
+            "  {} {:?} {} ms worker={} cache={}",
+            record.target,
+            record.status,
+            record.duration_ms,
+            record.worker,
+            record.cache.as_deref().unwrap_or("unknown")
+        );
+    }
+    out
+}
+
 fn evidence_status(record: &EvidenceRecord) -> &'static str {
     match record.status {
         once_core::EvidenceStatus::Passed => "passed",
@@ -700,54 +933,6 @@ fn test_records(workspace: &Path, graph: &[once_frontend::GraphTarget]) -> Vec<T
         .collect()
 }
 
-fn affected_test_records(
-    workspace: &Path,
-    graph: &[once_frontend::GraphTarget],
-    changed_paths: &[String],
-) -> Vec<AffectedTestRecord> {
-    let changed: Vec<String> = changed_paths
-        .iter()
-        .map(|path| path.trim_start_matches("./").to_string())
-        .collect();
-    let targets = graph
-        .iter()
-        .map(|target| (target.label.id.as_str(), target))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    graph
-        .iter()
-        .filter(|target| has_capability(target, "test"))
-        .filter_map(|target| {
-            let mut reasons = Vec::new();
-            if changed.is_empty() {
-                reasons.push("no changed paths supplied; include test target".to_string());
-            }
-            for path in &changed {
-                if target_owns_path(workspace, target, path) {
-                    reasons.push(format!("changed test input `{path}`"));
-                }
-                for dep_id in &target.deps {
-                    if let Some(owner) = dependency_owning_path(
-                        workspace,
-                        &targets,
-                        dep_id,
-                        path,
-                        &mut std::collections::BTreeSet::new(),
-                    ) {
-                        reasons.push(format!("changed dependency `{owner}` input `{path}`"));
-                    }
-                }
-            }
-            reasons.sort();
-            reasons.dedup();
-            (!reasons.is_empty()).then(|| AffectedTestRecord {
-                id: target.label.id.clone(),
-                kind: target.kind.clone(),
-                reasons,
-            })
-        })
-        .collect()
-}
-
 fn metadata_test_info(
     workspace: &Path,
     target: &once_frontend::GraphTarget,
@@ -764,75 +949,6 @@ fn metadata_test_info(
         .cloned()
 }
 
-fn target_owns_path(workspace: &Path, target: &once_frontend::GraphTarget, changed: &str) -> bool {
-    expanded_target_inputs(workspace, target)
-        .iter()
-        .any(|input| input == changed)
-}
-
-fn dependency_owning_path(
-    workspace: &Path,
-    targets: &std::collections::BTreeMap<&str, &once_frontend::GraphTarget>,
-    target_id: &str,
-    changed: &str,
-    visited: &mut std::collections::BTreeSet<String>,
-) -> Option<String> {
-    if !visited.insert(target_id.to_string()) {
-        return None;
-    }
-    let target = targets.get(target_id)?;
-    if target_owns_path(workspace, target, changed) {
-        return Some(target.label.id.clone());
-    }
-    for dep_id in &target.deps {
-        if let Some(owner) = dependency_owning_path(workspace, targets, dep_id, changed, visited) {
-            return Some(owner);
-        }
-    }
-    None
-}
-
-fn expanded_target_inputs(workspace: &Path, target: &once_frontend::GraphTarget) -> Vec<String> {
-    let mut inputs = Vec::new();
-    let package_dir = if target.label.package.is_empty() {
-        workspace.to_path_buf()
-    } else {
-        workspace.join(&target.label.package)
-    };
-    for pattern in &target.srcs {
-        let abs_pattern = package_dir.join(pattern);
-        let Some(pattern) = abs_pattern.to_str() else {
-            continue;
-        };
-        let Ok(entries) = glob::glob(pattern) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            if !entry.is_file() {
-                continue;
-            }
-            if let Ok(relative) = entry.strip_prefix(workspace) {
-                inputs.push(workspace_relative_path_string(relative));
-            }
-        }
-    }
-    if let Some(provider) = metadata_provider(workspace, target) {
-        inputs.extend(provider_string_list(&provider, "affected_inputs"));
-    }
-    inputs.sort();
-    inputs.dedup();
-    inputs
-}
-
-fn workspace_relative_path_string(path: &Path) -> String {
-    let path = path.to_string_lossy();
-    if std::path::MAIN_SEPARATOR == '/' {
-        path.into_owned()
-    } else {
-        path.replace(std::path::MAIN_SEPARATOR, "/")
-    }
-}
-
 fn metadata_provider(
     workspace: &Path,
     target: &once_frontend::GraphTarget,
@@ -842,20 +958,6 @@ fn metadata_provider(
         .analyze_target_capability(target, workspace, &[], "metadata")
         .ok()?;
     Some(analysis.provider)
-}
-
-fn provider_string_list(provider: &serde_json::Value, key: &str) -> Vec<String> {
-    provider
-        .get(key)
-        .and_then(serde_json::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn test_results_path(target_id: &str) -> Result<PathBuf> {
@@ -922,7 +1024,7 @@ fn render_tests_human(records: &[TestTargetRecord]) -> String {
     out
 }
 
-fn render_affected_tests_human(records: &[AffectedTestRecord]) -> String {
+fn render_affected_tests_human(records: &[test_plan::AffectedTestRecord]) -> String {
     if records.is_empty() {
         return "affected tests: none\n".to_string();
     }
@@ -931,6 +1033,24 @@ fn render_affected_tests_human(records: &[AffectedTestRecord]) -> String {
         writeln!(out, "  {} ({})", record.id, record.kind).expect("writing to string cannot fail");
         for reason in &record.reasons {
             writeln!(out, "    - {reason}").expect("writing to string cannot fail");
+        }
+    }
+    out
+}
+
+fn render_test_plan_human(plan: &test_plan::TestPlan) -> String {
+    let mut out = format!("test plan: {}\n", plan.id);
+    if plan.batches.is_empty() {
+        out.push_str("  batches: none\n");
+    } else {
+        for batch in &plan.batches {
+            writeln!(out, "  {}", batch.target).expect("writing to string cannot fail");
+        }
+    }
+    if !plan.selection.unmatched_paths.is_empty() {
+        out.push_str("unmatched changed paths:\n");
+        for path in &plan.selection.unmatched_paths {
+            writeln!(out, "  {path}").expect("writing to string cannot fail");
         }
     }
     out
@@ -961,6 +1081,21 @@ fn render_test_results_human(value: &serde_json::Value) -> String {
                 .unwrap_or("unknown");
             writeln!(out, "  {status} {id}").expect("writing to string cannot fail");
         }
+    }
+    out
+}
+
+fn render_test_manifest_human(manifest: &TestManifest) -> String {
+    let mut out = format!(
+        "test manifest: {} source={} filtering={}\n",
+        manifest.target, manifest.source, manifest.case_filtering
+    );
+    if manifest.units.is_empty() {
+        out.push_str("  units: none; run the whole target to refresh discovery\n");
+        return out;
+    }
+    for unit in &manifest.units {
+        writeln!(out, "  {} {}", unit.id, unit.name).expect("writing to string cannot fail");
     }
     out
 }
@@ -1181,14 +1316,6 @@ mod tests {
     }
 
     #[test]
-    fn workspace_relative_path_string_preserves_slash_separated_paths() {
-        assert_eq!(
-            workspace_relative_path_string(Path::new("apps/ios/App.swift")),
-            "apps/ios/App.swift"
-        );
-    }
-
-    #[test]
     fn target_id_path_accepts_only_path_safe_segments() {
         assert_eq!(
             target_id_path("apps/ios/AppTests").unwrap(),
@@ -1210,5 +1337,49 @@ mod tests {
                 "{target_id} should fail"
             );
         }
+    }
+
+    #[test]
+    fn explicit_test_unit_validation_rejects_unsupported_filtering() {
+        let manifest = TestManifest::new(
+            "suite",
+            Some("example".to_string()),
+            "normalized_results",
+            true,
+            "unsupported",
+            vec![TestUnit {
+                id: "suite::case".to_string(),
+                name: "case".to_string(),
+                suite: "suite".to_string(),
+                file: None,
+            }],
+        )
+        .unwrap();
+
+        let error = validate_test_unit(&manifest, "suite", "suite::case").unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "target `suite` does not support explicit test-unit filtering"
+        );
+    }
+
+    #[test]
+    fn explicit_test_unit_validation_requires_a_current_manifest_unit() {
+        let manifest = TestManifest::new(
+            "suite",
+            Some("example".to_string()),
+            "normalized_results",
+            true,
+            "runner_args",
+            vec![],
+        )
+        .unwrap();
+
+        let error = validate_test_unit(&manifest, "suite", "suite::missing").unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("run the whole target to refresh discovery"));
     }
 }

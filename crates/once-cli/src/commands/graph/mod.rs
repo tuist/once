@@ -70,8 +70,35 @@ pub async fn test(
     target_id: &str,
     sandbox: SandboxMode,
 ) -> Result<ExitCode> {
+    test_with_filters(workspace, cache, output, target_id, sandbox, &[]).await
+}
+
+pub async fn test_with_filters(
+    workspace: &Path,
+    cache: &CacheProvider,
+    output: Output,
+    target_id: &str,
+    sandbox: SandboxMode,
+    test_filters: &[String],
+) -> Result<ExitCode> {
+    if !test_filters.is_empty() {
+        let manifest = crate::commands::query::test_manifest_record(workspace, target_id)?;
+        for test_filter in test_filters {
+            crate::commands::query::validate_test_unit(&manifest, target_id, test_filter)?;
+        }
+    }
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let session = analysis::BuildSession::new(workspace, cache, graph, sandbox).await?;
+    let session = analysis::BuildSession::new_with_options(
+        workspace,
+        cache,
+        graph,
+        AnalysisOptions {
+            test_filters: test_filters.to_vec(),
+            ..AnalysisOptions::default()
+        },
+        sandbox,
+    )
+    .await?;
     let target = session.target(target_id)?;
     let test_capability = ensure_capability(target, "test")?;
     if !test_capability.requires_outputs.is_empty()
@@ -111,6 +138,10 @@ pub async fn test(
         run_target_capability(workspace, cache, target, "test", sandbox).await?
     };
     record_capability_run(workspace, &record).await;
+    if test_filters.is_empty() {
+        crate::commands::query::refresh_test_manifest(workspace, target_id)
+            .context("persisting test manifest")?;
+    }
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -130,6 +161,7 @@ pub async fn run(
         graph,
         AnalysisOptions {
             run_visible: options.visible,
+            ..AnalysisOptions::default()
         },
         sandbox,
     )

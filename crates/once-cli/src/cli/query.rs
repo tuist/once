@@ -70,10 +70,41 @@ pub enum QueryCmd {
         changed_paths: Vec<String>,
     },
 
+    /// Create an immutable test plan without assigning work to runners.
+    TestPlan {
+        /// Changed workspace-relative path. Repeat for multiple paths.
+        #[arg(long = "changed-path", value_name = "PATH", conflicts_with = "target")]
+        changed_paths: Vec<String>,
+        /// Create an explicit plan for this target instead of selecting by changed path.
+        #[arg(long, conflicts_with = "changed_paths")]
+        target: Option<String>,
+        /// Select one current, filterable unit from `once query test-manifest`.
+        /// Planning fails when the target does not support exact filtering or
+        /// the unit is absent from the persisted whole-target manifest.
+        #[arg(long = "test-unit", requires = "target")]
+        test_unit: Option<String>,
+    },
+
     /// Read normalized `once.test_results.v1` results for a target.
     TestResults {
         /// Target id, such as `tests/unit`.
         target: String,
+    },
+
+    /// List stable test units discovered in a target's normalized results.
+    TestManifest {
+        /// Target identifier, such as `tests/unit`.
+        target: String,
+    },
+
+    /// List persisted test batch attempts and measured durations.
+    TestAttempts {
+        /// Only include attempts for this canonical target id.
+        #[arg(long)]
+        target: Option<String>,
+        /// Return only the newest matching attempts.
+        #[arg(long, value_name = "COUNT")]
+        limit: Option<usize>,
     },
 
     /// List durable evidence records, optionally filtered by subject.
@@ -131,7 +162,10 @@ impl QueryCmd {
             Self::Target { .. } => vec!["target"],
             Self::Tests => vec!["tests"],
             Self::AffectedTests { .. } => vec!["affected-tests"],
+            Self::TestPlan { .. } => vec!["test-plan"],
             Self::TestResults { .. } => vec!["test-results"],
+            Self::TestManifest { .. } => vec!["test-manifest"],
+            Self::TestAttempts { .. } => vec!["test-attempts"],
             Self::Evidence { .. } => vec!["evidence"],
             Self::ValidateTarget { .. } => vec!["validate-target"],
             Self::Script { .. } => vec!["script"],

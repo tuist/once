@@ -10,6 +10,7 @@ mod logging;
 mod reference;
 mod render;
 
+use std::io::Write;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -24,6 +25,7 @@ async fn main() -> ExitCode {
         Err(e) => return handle_parse_error(&e),
     };
     let command = cli.surface_path().join(" ");
+    let format = cli.format;
     let logging = logging::init(cli.verbose);
     let session_id = logging.session_id();
     let log_path = log_path(&logging);
@@ -46,10 +48,37 @@ async fn main() -> ExitCode {
         }
         Err(e) => {
             tracing::error!(session_id = %session_id, error = %e, "session failed");
-            eprintln!("once: {e:#}");
+            write_dispatch_error(format, &e);
             ExitCode::from(2)
         }
     }
+}
+
+fn write_dispatch_error(format: cli::Format, error: &anyhow::Error) {
+    if format == cli::Format::Human {
+        eprintln!("once: {error:#}");
+        return;
+    }
+    let body = structured_dispatch_error(format, error);
+    if let Err(write_error) = std::io::stdout().write_all(body.as_bytes()) {
+        tracing::error!(error = %write_error, "failed to write structured error");
+    }
+}
+
+fn structured_dispatch_error(format: cli::Format, error: &anyhow::Error) -> String {
+    let envelope = serde_json::json!({
+        "schema": "once.error.v1",
+        "error": {
+            "code": "operation_failed",
+            "message": format!("{error:#}"),
+        }
+    });
+    render::structured(format, &envelope).unwrap_or_else(|render_error| {
+        format!(
+            "{{\"schema\":\"once.error.v1\",\"error\":{{\"code\":\"render_failed\",\"message\":{}}}}}\n",
+            serde_json::Value::String(render_error.to_string())
+        )
+    })
 }
 
 fn handle_parse_error(e: &clap::Error) -> ExitCode {
@@ -73,4 +102,20 @@ fn log_path(logging: &logging::Logging) -> String {
         || "unavailable".to_string(),
         |path| path.display().to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structured_dispatch_errors_have_a_stable_envelope() {
+        let error = anyhow::anyhow!("unknown test unit");
+        let rendered = structured_dispatch_error(cli::Format::Json, &error);
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+        assert_eq!(value["schema"], "once.error.v1");
+        assert_eq!(value["error"]["code"], "operation_failed");
+        assert_eq!(value["error"]["message"], "unknown test unit");
+    }
 }

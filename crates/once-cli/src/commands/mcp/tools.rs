@@ -248,7 +248,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_affected_tests",
             description: "Return test targets likely affected by a set of changed workspace paths.",
-            long_description: "Maps changed paths to test targets using graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. Selection does not depend on a particular test runner.",
+            long_description: "Maps changed paths to test targets using graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. Declared source patterns are matched without requiring the changed file to still exist. Changes to manifests, configured graph modules, and paths without a declared owner conservatively select every test. Selection does not depend on a particular test runner.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -262,9 +262,33 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
             example_return: "[\n  {\n    \"id\": \"tests/unit\",\n    \"kind\": \"test_suite\",\n    \"reasons\": [\"changed test input `tests/unit/spec.src`\"]\n  }\n]",
         },
         ToolDefinition {
+            name: "once_query_test_plan",
+            description: "Create an immutable test plan without assigning work to runners.",
+            long_description: "Returns the selection policy, normalized changed paths, unmatched paths, selected tests, and stable execution batches. The plan deliberately contains no local worker, remote provider, or fixed-job assignment, so scheduling can change without changing test identity or invalidating reusable results. Pass `target` with a `test_unit` from `once_query_test_manifest` to create an exact unit-filtered plan. Planning rejects targets that do not declare exact filtering and units absent from the persisted whole-target manifest. Affected-test plans remain whole-target until per-unit outputs are isolated. The matching command-line operations are `once query test-plan --changed-path <path> --format json` and `once query test-plan --target <target> --test-unit <unit> --format json`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "changed_paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Workspace-relative changed paths. An empty list creates a full test plan."
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Explicit canonical test target. When set, changed paths are ignored."
+                    },
+                    "test_unit": {
+                        "type": "string",
+                        "description": "One stable unit identifier from once_query_test_manifest. Requires target."
+                    }
+                }
+            }),
+            example_return: "{\n  \"schema\": \"once.test_plan.v1\",\n  \"id\": \"<stable digest>\",\n  \"selection\": {\n    \"schema\": \"once.test_selection.v1\",\n    \"policy\": { \"mode\": \"affected\", \"safety\": \"conservative\", \"evidence\": \"declared_graph\" },\n    \"changed_paths\": [\"src/lib.src\"],\n    \"unmatched_paths\": [],\n    \"tests\": [{ \"id\": \"tests/unit\", \"kind\": \"test_suite\", \"reasons\": [\"changed dependency `lib` input `src/lib.src`\"] }]\n  },\n  \"batches\": [{ \"id\": \"<stable digest>\", \"target\": \"tests/unit\", \"test_filters\": [] }]\n}",
+        },
+        ToolDefinition {
             name: "once_run_tests",
             description: "Run test targets by id, or run tests affected by changed workspace paths.",
-            long_description: "Executes Once's generic `test` capability for either explicit `target` / `targets` or the targets selected by `changed_paths`. To verify an edit, call `once_query_affected_tests` to preview selection, call `once_run_tests` to execute, then read the normalized `once.test_results.v1` results included in each run record. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate.",
+            long_description: "Creates the same immutable plan as `once_query_test_plan`, then pulls stable batches from a shared local queue. Batches with longer historical uncached durations are queued first, and idle workers dynamically take the next batch. Explicit `target` or `targets` produce an exact plan; otherwise `changed_paths` drive conservative graph selection. With exactly one target, `test_unit` runs a stable unit returned by `once_query_test_manifest` when the target kind declares filtering support. `jobs` caps workers without changing plan or batch identity. The result includes the plan, actual schedule attempts, and normalized test results. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate. The matching command-line operations are `once test --changed-path <path> --jobs <count> --format json` and `once test <target> --test-unit <unit> --format json`.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -281,10 +305,20 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "Workspace-relative changed paths. Used only when no explicit target is supplied; an empty list runs every discovered test target."
+                    },
+                    "jobs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 256,
+                        "description": "Maximum local workers. Defaults to available host parallelism and never changes plan or batch identity."
+                    },
+                    "test_unit": {
+                        "type": "string",
+                        "description": "Run one stable unit identifier returned by once_query_test_manifest. Requires exactly one explicit target."
                     }
                 }
             }),
-            example_return: "{\n  \"runs\": [\n    {\n      \"target\": \"tests/unit\",\n      \"exit_code\": 0,\n      \"success\": true,\n      \"record\": { \"target\": \"tests/unit\", \"capability\": \"test\" },\n      \"results\": { \"schema\": \"once.test_results.v1\", \"status\": \"passed\" },\n      \"stderr\": \"\"\n    }\n  ]\n}",
+            example_return: "{\n  \"plan\": { \"schema\": \"once.test_plan.v1\", \"id\": \"<stable digest>\", \"selection\": {}, \"batches\": [] },\n  \"schedule\": {\n    \"schema\": \"once.test_schedule.v1\",\n    \"id\": \"<attempt-specific digest>\",\n    \"plan_id\": \"<stable digest>\",\n    \"strategy\": \"longest_estimated_duration_first_dynamic\",\n    \"workers\": 2,\n    \"attempts\": [{ \"batch_id\": \"<stable batch digest>\", \"placement\": \"local\", \"worker\": \"local-1\", \"status\": \"passed\" }]\n  },\n  \"runs\": [\n    {\n      \"batch_id\": \"<stable batch digest>\",\n      \"target\": \"tests/unit\",\n      \"exit_code\": 0,\n      \"success\": true,\n      \"record\": { \"target\": \"tests/unit\", \"capability\": \"test\" },\n      \"results\": { \"schema\": \"once.test_results.v1\", \"status\": \"passed\" },\n      \"stderr\": \"\"\n    }\n  ]\n}",
         },
         ToolDefinition {
             name: "once_query_test_results",
@@ -300,7 +334,45 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 },
                 "required": ["target"]
             }),
-            example_return: "{\n  \"schema\": \"once.test_results.v1\",\n  \"target\": \"tests/unit\",\n  \"status\": \"passed\",\n  \"summary\": { \"total\": 2, \"passed\": 2, \"failed\": 0 },\n  \"cases\": []\n}",
+            example_return: "{\n  \"schema\": \"once.test_results.v1\",\n  \"target\": \"tests/unit\",\n  \"runner\": { \"type\": \"native\", \"metadata\": {} },\n  \"status\": \"passed\",\n  \"summary\": { \"total\": 1, \"passed\": 1, \"failed\": 0, \"skipped\": 0, \"flaky\": 0 },\n  \"cases\": [{ \"id\": \"tests/unit::case_name\", \"name\": \"case_name\", \"suite\": \"tests/unit\", \"status\": \"passed\", \"attempts\": [{ \"status\": \"passed\" }], \"runner_metadata\": {} }],\n  \"artifacts\": { \"logs\": [], \"native_results\": [] }\n}",
+        },
+        ToolDefinition {
+            name: "once_query_test_manifest",
+            description: "List stable test units discovered in a target's normalized results.",
+            long_description: "Returns an immutable `once.test_manifest.v1` projection of the target's current normalized test results and its target-kind-declared listing and filtering support. When no results exist, the manifest reports `whole_target_fallback` with no units; run the whole target once to refresh discovery. Unit identifiers can be passed to `once_query_test_plan` or `once_run_tests` only when `case_filtering` is `runner_args`. The matching command-line operation is `once query test-manifest <target> --format json`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Canonical target identifier, such as `tests/unit`."
+                    }
+                },
+                "required": ["target"]
+            }),
+            example_return: "{\n  \"schema\": \"once.test_manifest.v1\",\n  \"id\": \"<stable digest>\",\n  \"target\": \"tests/unit\",\n  \"runner\": \"native\",\n  \"source\": \"normalized_results\",\n  \"listing_supported\": true,\n  \"case_filtering\": \"runner_args\",\n  \"units\": [{ \"id\": \"tests/unit::case_name\", \"name\": \"case_name\", \"suite\": \"tests/unit\" }]\n}",
+        },
+        ToolDefinition {
+            name: "once_query_test_attempts",
+            description: "List persisted test batch attempts and measured durations.",
+            long_description: "Returns actual schedule attempts recorded by `once_run_tests` or `once test --changed-path`. Each record connects a stable plan and batch to its local worker, status, cache state, timestamps, measured duration, and the estimate used for ordering. Use `target` to inspect one test target and `limit` to bound history. The matching command-line operation is `once query test-attempts --target <target> --limit <count> --format json`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Optional canonical test target id."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20,
+                        "description": "Newest matching attempts to return."
+                    }
+                }
+            }),
+            example_return: "[\n  {\n    \"schema\": \"once.test_batch_attempt.v1\",\n    \"plan_id\": \"<stable plan digest>\",\n    \"batch_id\": \"<stable batch digest>\",\n    \"target\": \"tests/unit\",\n    \"placement\": \"local\",\n    \"worker\": \"local-1\",\n    \"duration_ms\": 842,\n    \"status\": \"passed\",\n    \"cache\": \"miss\"\n  }\n]",
         },
         ToolDefinition {
             name: "once_query_evidence",

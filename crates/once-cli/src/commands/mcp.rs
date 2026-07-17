@@ -28,7 +28,7 @@ use tools::{tool_definitions, tool_requires_allow_run};
 
 /// MCP protocol version we negotiate.
 const PROTOCOL_VERSION: &str = "2025-11-25";
-const SERVER_INSTRUCTIONS: &str = "Once is a self-describing build graph and cacheable automation server. For a new typed graph with no named upstream rule, start with once_list_target_kinds. Pass its optional query when the request already names an ecosystem, target-kind family, or intent; include the named family so it takes priority over generic words, then call once_query_schema and once_query_example. When the request already points to a specific external rule or plugin, skip the target-kind catalog: call once_query_module_contract, fetch its authoritative source with once_fetch_external_source, write a project-local module, and call once_validate_module. Model only the requested dependency closure. Record upstream source_references and the returned content digest when the source was not truncated, then re-fetch and compare the digest before future maintenance. Materialize target files, inspect canonical ids with once_query_targets, call once_validate_workspace, and use capability tools to build, run, or test. For annotated automation, call once_validate_script before once_exec_script. Stateful tools require --allow-run. Evidence subjects are target ids with an optional capability suffix; script execution returns its evidence subject directly. once_validate_target checks one proposed table, once_validate_workspace checks the loaded graph, and successful execution remains the authoritative current check. Evidence is historical provenance, so do not treat an older record as proof that inputs are unchanged.";
+const SERVER_INSTRUCTIONS: &str = "Once is a self-describing build graph and cacheable automation server. For a new typed graph with no named upstream rule, start with once_list_target_kinds. Pass its optional query when the request already names an ecosystem, target-kind family, or intent; include the named family so it takes priority over generic words, then call once_query_schema and once_query_example. When the request already points to a specific external rule or plugin, skip the target-kind catalog: call once_query_module_contract, fetch its authoritative source with once_fetch_external_source, write a project-local module, and call once_validate_module. Model only the requested dependency closure. Record upstream source_references and the returned content digest when the source was not truncated, then re-fetch and compare the digest before future maintenance. Materialize target files, inspect canonical ids with once_query_targets, call once_validate_workspace, and use capability tools to build, run, or test. Before change-scoped testing, call once_query_test_plan to inspect conservative selection, unmatched paths, and stable batches; once_run_tests returns the same plan with a duration-informed dynamic schedule and execution results. After a whole-target test, once_query_test_manifest exposes stable units from normalized results. Pass one listed unit with one explicit target to plan or run an exact filtered test when the target kind declares filtering support. Use jobs only to cap local concurrency; it does not change plan or batch identity. For annotated automation, call once_validate_script before once_exec_script. Stateful tools require --allow-run. Evidence subjects are target ids with an optional capability suffix; script execution returns its evidence subject directly. once_validate_target checks one proposed table, once_validate_workspace checks the loaded graph, and successful execution remains the authoritative current check. Evidence is historical provenance, so do not treat an older record as proof that inputs are unchanged.";
 
 fn negotiated_protocol_version(params: Option<&Value>) -> String {
     let requested = params
@@ -178,8 +178,11 @@ impl Server {
             "once_get_target" => self.tool_get_target(&call.arguments),
             "once_query_tests" => self.tool_query_tests(),
             "once_query_affected_tests" => self.tool_query_affected_tests(&call.arguments),
+            "once_query_test_plan" => self.tool_query_test_plan(&call.arguments),
             "once_run_tests" => self.tool_run_tests(&call.arguments),
             "once_query_test_results" => self.tool_query_test_results(&call.arguments),
+            "once_query_test_manifest" => self.tool_query_test_manifest(&call.arguments),
+            "once_query_test_attempts" => self.tool_query_test_attempts(&call.arguments),
             "once_query_evidence" => self.tool_query_evidence(&call.arguments),
             "once_query_module_contract" => crate::commands::query::module_contract_value(),
             "once_fetch_external_source" => Self::tool_fetch_external_source(&call.arguments),
@@ -278,12 +281,54 @@ impl Server {
         crate::commands::query::affected_tests_value(&self.workspace, &args.changed_paths)
     }
 
+    fn tool_query_test_plan(&self, args: &Value) -> Result<Value> {
+        let args: TestPlanQueryArgs = serde_json::from_value(tool_args(args))?;
+        let plan = match (args.target.as_deref(), args.test_unit.as_deref()) {
+            (Some(target), Some(test_unit)) => {
+                crate::commands::query::explicit_test_unit_plan(&self.workspace, target, test_unit)?
+            }
+            (Some(target), None) => {
+                crate::commands::query::explicit_test_plan(&self.workspace, &[target.to_string()])?
+            }
+            (None, None) => {
+                crate::commands::query::test_plan_for_paths(&self.workspace, &args.changed_paths)?
+            }
+            (None, Some(_)) => anyhow::bail!("a test unit requires an explicit target"),
+        };
+        Ok(serde_json::to_value(plan)?)
+    }
+
     fn tool_query_test_results(&self, args: &Value) -> Result<Value> {
         let target_id = args
             .get("target")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing `target` argument"))?;
         crate::commands::query::test_results_value(&self.workspace, target_id)
+    }
+
+    fn tool_query_test_manifest(&self, args: &Value) -> Result<Value> {
+        let target_id = args
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing `target` argument"))?;
+        crate::commands::query::test_manifest_value(&self.workspace, target_id)
+    }
+
+    fn tool_query_test_attempts(&self, args: &Value) -> Result<Value> {
+        let args: TestAttemptQueryArgs = serde_json::from_value(tool_args(args))?;
+        if !(1..=100).contains(&args.limit) {
+            anyhow::bail!("`limit` must be between 1 and 100");
+        }
+        let workspace = self.workspace.clone();
+        let records = run_async_result(async move {
+            crate::commands::query::test_attempt_records(
+                &workspace,
+                args.target.as_deref(),
+                Some(args.limit),
+            )
+            .await
+        })?;
+        Ok(serde_json::to_value(records)?)
     }
 
     fn tool_query_evidence(&self, args: &Value) -> Result<Value> {
@@ -314,12 +359,20 @@ impl Server {
     }
 
     fn tool_run_tests(&self, args: &Value) -> Result<Value> {
-        let targets = run_test_targets(&self.workspace, args)?;
-        let mut runs = Vec::new();
-        for target in targets {
-            runs.push(run_test_target(&self.workspace, &target)?);
-        }
-        Ok(json!({ "runs": runs }))
+        let args: RunTestsArgs = serde_json::from_value(tool_args(args))?;
+        let plan = run_test_plan_args(&self.workspace, &args)?;
+        let workspace = self.workspace.clone();
+        let workers = args.jobs;
+        run_async_result(async move {
+            let report = crate::commands::test_schedule::execute(
+                &workspace,
+                plan,
+                workers,
+                once_core::SandboxMode::Off,
+            )
+            .await?;
+            Ok(serde_json::to_value(report)?)
+        })
     }
 
     fn tool_build_target(&self, args: &Value) -> Result<Value> {
@@ -369,34 +422,55 @@ impl Server {
     }
 }
 
-fn run_test_targets(workspace: &std::path::Path, args: &Value) -> Result<Vec<String>> {
+#[cfg(test)]
+fn run_test_plan(
+    workspace: &std::path::Path,
+    args: &Value,
+) -> Result<crate::commands::query::test_plan::TestPlan> {
     let args: RunTestsArgs = serde_json::from_value(tool_args(args))?;
-    let mut targets = args.targets;
-    if let Some(target) = args.target {
-        targets.push(target);
+    run_test_plan_args(workspace, &args)
+}
+
+fn run_test_plan_args(
+    workspace: &std::path::Path,
+    args: &RunTestsArgs,
+) -> Result<crate::commands::query::test_plan::TestPlan> {
+    let mut targets = args.targets.clone();
+    if let Some(target) = &args.target {
+        targets.push(target.clone());
     }
     if !targets.is_empty() {
         targets.sort();
         targets.dedup();
         validate_test_targets(workspace, &targets)?;
-        return Ok(targets);
+        if let Some(test_unit) = &args.test_unit {
+            if targets.len() != 1 {
+                anyhow::bail!("`test_unit` requires exactly one explicit test target");
+            }
+            return crate::commands::query::explicit_test_unit_plan(
+                workspace,
+                &targets[0],
+                test_unit,
+            );
+        }
+        return crate::commands::query::explicit_test_plan(workspace, &targets);
     }
 
-    let affected = crate::commands::query::affected_tests_value(workspace, &args.changed_paths)?;
-    let mut targets = affected
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|record| record.get("id").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    targets.sort();
-    targets.dedup();
-    if targets.is_empty() {
+    if args.test_unit.is_some() {
+        anyhow::bail!("`test_unit` requires an explicit `target`");
+    }
+
+    let plan = crate::commands::query::test_plan_for_paths(workspace, &args.changed_paths)?;
+    if plan.batches.is_empty() {
         anyhow::bail!("no test targets matched the requested inputs");
     }
+    let targets = plan
+        .batches
+        .iter()
+        .map(|batch| batch.target.clone())
+        .collect::<Vec<_>>();
     validate_test_targets(workspace, &targets)?;
-    Ok(targets)
+    Ok(plan)
 }
 
 fn validate_test_targets(workspace: &std::path::Path, targets: &[String]) -> Result<()> {
@@ -416,32 +490,6 @@ fn validate_test_targets(workspace: &std::path::Path, targets: &[String]) -> Res
         }
     }
     Ok(())
-}
-
-fn run_test_target(workspace: &std::path::Path, target: &str) -> Result<Value> {
-    let exe = std::env::current_exe().context("resolving current once executable")?;
-    let output = std::process::Command::new(&exe)
-        .arg("-C")
-        .arg(workspace)
-        .arg("--format")
-        .arg("json")
-        .arg("test")
-        .arg(target)
-        .output()
-        .with_context(|| format!("running `{}` test `{target}`", exe.display()))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let (record, record_parse_error) = parse_json_record(&stdout);
-    let results = crate::commands::query::test_results_value(workspace, target).ok();
-    Ok(json!({
-        "target": target,
-        "exit_code": output.status.code().unwrap_or(-1),
-        "success": output.status.success(),
-        "record": record,
-        "record_parse_error": record_parse_error,
-        "results": results,
-        "stderr": stderr,
-    }))
 }
 
 fn run_graph_target(
@@ -522,11 +570,35 @@ struct ChangedPathsArgs {
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+struct TestPlanQueryArgs {
+    #[serde(default)]
+    changed_paths: Vec<String>,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    test_unit: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct EvidenceQueryArgs {
     #[serde(default)]
     subject: Option<String>,
     #[serde(default = "default_evidence_limit")]
     limit: usize,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct TestAttemptQueryArgs {
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default = "default_test_attempt_limit")]
+    limit: usize,
+}
+
+const fn default_test_attempt_limit() -> usize {
+    20
 }
 
 const fn default_evidence_limit() -> usize {
@@ -567,6 +639,10 @@ struct RunTestsArgs {
     targets: Vec<String>,
     #[serde(default)]
     changed_paths: Vec<String>,
+    #[serde(default)]
+    jobs: Option<usize>,
+    #[serde(default)]
+    test_unit: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1049,7 +1125,10 @@ demo_kind = target_kind(
                 "once_get_target".to_string(),
                 "once_query_tests".to_string(),
                 "once_query_affected_tests".to_string(),
+                "once_query_test_plan".to_string(),
                 "once_query_test_results".to_string(),
+                "once_query_test_manifest".to_string(),
+                "once_query_test_attempts".to_string(),
                 "once_query_evidence".to_string(),
                 "once_validate_script".to_string(),
                 "once_validate_workspace".to_string(),
@@ -1353,7 +1432,7 @@ script_runtime = "sh"
     }
 
     #[test]
-    fn run_test_targets_prefers_explicit_deduplicated_targets() {
+    fn run_test_plan_prefers_explicit_deduplicated_targets() {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("spec")).unwrap();
         std::fs::write(
@@ -1370,7 +1449,7 @@ srcs = ["other_spec.sh"]
 "#,
         )
         .unwrap();
-        let targets = run_test_targets(
+        let plan = run_test_plan(
             tmp.path(),
             &json!({
                 "target": "spec/all",
@@ -1379,14 +1458,48 @@ srcs = ["other_spec.sh"]
             }),
         )
         .unwrap();
-        assert_eq!(targets, vec!["spec/all", "spec/other"]);
+        assert_eq!(
+            plan.batches
+                .iter()
+                .map(|batch| batch.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["spec/all", "spec/other"]
+        );
     }
 
     #[test]
-    fn run_test_targets_rejects_non_string_targets() {
+    fn run_test_plan_rejects_non_string_targets() {
         let tmp = TempDir::new().unwrap();
-        let error = run_test_targets(tmp.path(), &json!({ "targets": [42] })).unwrap_err();
+        let error = run_test_plan(tmp.path(), &json!({ "targets": [42] })).unwrap_err();
         assert!(error.to_string().contains("invalid type"));
+    }
+
+    #[test]
+    fn run_test_plan_rejects_explicit_units_for_unsupported_runners() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            r#"[[target]]
+name = "unit"
+kind = "shellspec_test"
+srcs = ["unit_spec.sh"]
+"#,
+        )
+        .unwrap();
+
+        let error = run_test_plan(
+            tmp.path(),
+            &json!({
+                "target": "unit",
+                "test_unit": "unit::example"
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "target `unit` does not support explicit test-unit filtering"
+        );
     }
 
     #[test]

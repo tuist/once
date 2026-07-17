@@ -46,7 +46,7 @@ EOF
   It 'keeps editing and execution tools out of the default catalog'
     printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' > "$WORKSPACE/mcp.jsonl"
 
-    When call /bin/sh -c 'cat "$1" | "$2" -C "$3" mcp' sh "$WORKSPACE/mcp.jsonl" "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c 'cat "$1" | "$2" -C "$3" mcp | jq -r ".result.tools[].name"' sh "$WORKSPACE/mcp.jsonl" "$ONCE_BIN" "$WORKSPACE"
     The status should be success
     The stdout should include 'once_validate_script'
     The stdout should include 'once_validate_workspace'

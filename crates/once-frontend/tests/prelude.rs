@@ -3972,6 +3972,43 @@ result = repr(provider["test_info"])
     assert_android_instrumentation_run_action(run);
 }
 
+#[test]
+fn prelude_android_instrumentation_runner_requires_a_success_terminal_code() {
+    let source = eval_prelude_string_function_in(
+        android_prelude_source(),
+        "_android_instrumentation_runner_source",
+        "()",
+    )
+    .unwrap();
+
+    assert!(source.contains("INSTRUMENTATION_CODE: -1"));
+    assert!(source.contains("boolean passed = completed"));
+}
+
+#[test]
+fn prelude_android_instrumentation_metadata_needs_no_dependency_providers() {
+    let prelude = android_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "tests", "name": "device", "id": "tests/device"}},
+    "attr": {{"labels": ["device"]}},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/tests/device",
+    "capability": "metadata",
+}}
+result = repr(_android_instrumentation_test_impl(ctx)["test_info"])
+"#
+    );
+
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(out.contains("android_instrumentation"));
+    assert!(out.contains("runner_args"));
+    assert!(out.contains("tests/device"));
+}
+
 #[cfg(unix)]
 fn assert_android_instrumentation_runner_compile_action(runner_compile: &DeclaredAction) {
     assert_eq!(runner_compile.argv[0], "/jdk/bin/javac");
@@ -4024,6 +4061,10 @@ fn assert_android_instrumentation_run_action(run: &DeclaredAction) {
         .outputs
         .iter()
         .any(|output| output.ends_with("test/test_results.json")));
+    assert!(run
+        .create_dirs
+        .iter()
+        .any(|path| path.ends_with("test/home")));
 }
 
 #[test]

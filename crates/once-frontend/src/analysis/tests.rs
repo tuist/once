@@ -809,7 +809,10 @@ def _demo_impl(ctx):
 
 demo_kind = {"_once_target_kind": True, "impl": _demo_impl}
 "#,
-        AnalysisOptions { run_visible: true },
+        AnalysisOptions {
+            run_visible: true,
+            ..AnalysisOptions::default()
+        },
     )
     .unwrap();
     let tmp = TempDir::new().unwrap();
@@ -819,6 +822,33 @@ demo_kind = {"_once_target_kind": True, "impl": _demo_impl}
         .unwrap();
 
     assert_eq!(result.provider["visible"], true);
+}
+
+#[test]
+fn analysis_context_exposes_semantic_test_filters() {
+    let engine = AnalysisEngine::from_source_with_options(
+        r#"
+def _demo_impl(ctx):
+    return {"filters": ctx["test"]["filters"]}
+
+demo_kind = {"_once_target_kind": True, "impl": _demo_impl}
+"#,
+        AnalysisOptions {
+            test_filters: vec!["tests/unit::case-a".to_string()],
+            ..AnalysisOptions::default()
+        },
+    )
+    .unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    let result = engine
+        .analyze_target_capability(&target("demo_kind"), tmp.path(), &[], "test")
+        .unwrap();
+
+    assert_eq!(
+        result.provider["filters"],
+        serde_json::json!(["tests/unit::case-a"])
+    );
 }
 
 #[test]

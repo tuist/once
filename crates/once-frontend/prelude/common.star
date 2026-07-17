@@ -132,6 +132,12 @@ def _unique(values):
             out.append(value)
     return out
 
+def _test_unit_suffix(ctx, unit):
+    prefix = ctx["label"]["id"] + "::"
+    if not unit.startswith(prefix):
+        fail("test unit `" + unit + "` does not belong to target `" + ctx["label"]["id"] + "`")
+    return unit[len(prefix):]
+
 def _basename(path):
     normalized = path.replace("\\", "/")
     parts = normalized.split("/")
