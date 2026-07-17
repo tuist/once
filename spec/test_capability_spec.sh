@@ -65,6 +65,59 @@ fn other_greeting() {
 RS
   }
 
+  create_minitest_workspace() {
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/minitest-test-minimal/." "$WORKSPACE/"
+  }
+
+  create_pytest_workspace() {
+    pytest_python="$(dirname "$(realpath "$(command -v pytest)")")/python"
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/pytest-test-minimal/." "$WORKSPACE/"
+    cat >> "$WORKSPACE/once.toml" <<TOML
+
+[target.attrs]
+python = "$pytest_python"
+TOML
+  }
+
+  create_rspec_workspace() {
+    rspec_root="$(dirname "$(dirname "$(command -v rspec)")")"
+    ruby_bin="$(command -v ruby)"
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/rspec-test-minimal/." "$WORKSPACE/"
+    cat >> "$WORKSPACE/once.toml" <<TOML
+ruby = "$ruby_bin"
+env = { GEM_HOME = "$rspec_root/libexec", GEM_PATH = "$rspec_root/libexec" }
+TOML
+  }
+
+  create_javascript_test_workspace() {
+    runner_name="$1"
+    runner_entry="$(realpath "$(command -v "$runner_name")")"
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/$runner_name-test-minimal/." "$WORKSPACE/"
+    mkdir -p "$WORKSPACE/tools"
+    printf '#!/usr/bin/env node\nimport %s\n' "$(printf '%s' "$runner_entry" | jq -R .)" > "$WORKSPACE/tools/$runner_name.mjs"
+    cat >> "$WORKSPACE/once.toml" <<TOML
+
+[target.attrs]
+runner = "tools/$runner_name.mjs"
+dependencies = []
+TOML
+  }
+
+  create_vitest_workspace() {
+    create_javascript_test_workspace vitest
+    for source in "$WORKSPACE"/tests/*.test.js; do
+      sed '/^import { expect, test } from "vitest"$/d' "$source" > "$source.once"
+      mv "$source.once" "$source"
+    done
+    cat >> "$WORKSPACE/once.toml" <<'TOML'
+args = ["--globals"]
+TOML
+  }
+
+  create_jest_workspace() {
+    create_javascript_test_workspace jest
+  }
+
   java_toolchain_unavailable() {
     command -v java >/dev/null 2>&1 || return 0
     command -v javac >/dev/null 2>&1 || return 0
@@ -617,6 +670,81 @@ KOTLIN
     The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include '"runner":{"type":"rust_libtest"'
     The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include '"status":"passed"'
     The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include 'returns_greeting'
+  End
+
+  It 'discovers and schedules Minitest files as parallel batches'
+    create_minitest_workspace
+    once --format json test tests >/dev/null
+
+    When call once --format json test --jobs 2 tests
+    The status should be success
+    The stdout should include '"workers":2'
+    The stdout should include 'tests::test/math_test.rb'
+    The stdout should include 'tests::test/string_test.rb'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'test/math_test.rb'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'test/string_test.rb'
+  End
+
+  It 'discovers and schedules pytest files as parallel batches'
+    create_pytest_workspace
+    once --format json test tests >/dev/null
+
+    When call once --format json test --jobs 2 tests
+    The status should be success
+    The stdout should include '"workers":2'
+    The stdout should include 'tests::tests/test_math.py'
+    The stdout should include 'tests::tests/test_string.py'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":3'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/test_math.py'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/test_string.py'
+  End
+
+  It 'discovers and schedules RSpec files as parallel batches'
+    create_rspec_workspace
+    once --format json test tests >/dev/null
+
+    When call once --format json test --jobs 2 tests
+    The status should be success
+    The stdout should include '"workers":2'
+    The stdout should include 'tests::./spec/math_spec.rb'
+    The stdout should include 'tests::./spec/string_spec.rb'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'spec/math_spec.rb'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'spec/string_spec.rb'
+  End
+
+  It 'discovers and schedules Vitest files as parallel batches'
+    create_vitest_workspace
+    once --format json test tests >/dev/null
+
+    When call once --format json test --jobs 2 tests
+    The status should be success
+    The stdout should include '"workers":2'
+    The stdout should include 'tests%2Fmath.test.js'
+    The stdout should include 'tests%2Fstring.test.js'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/math.test.js'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/string.test.js'
+  End
+
+  It 'discovers and schedules Jest files as parallel batches'
+    create_jest_workspace
+    once --format json test tests >/dev/null
+
+    When call once --format json test --jobs 2 tests
+    The status should be success
+    The stdout should include '"workers":2'
+    The stdout should include 'tests%2Fmath.test.js'
+    The stdout should include 'tests%2Fstring.test.js'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/math.test.js'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/string.test.js'
   End
 
   It 'discovers and runs one stable Rust test unit'
