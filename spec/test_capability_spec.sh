@@ -780,6 +780,15 @@ KOTLIN
     The stderr should include 'session failed'
   End
 
+  It 'rejects a build-only target while planning tests'
+    create_rust_test_workspace
+
+    When call once --format json query test-plan --target hello
+    The status should be failure
+    The stderr should include 'target `hello` does not expose the test capability'
+    The stderr should include 'session failed'
+  End
+
   It 'rejects unsupported test-unit filtering while planning'
     create_shellspec_test_workspace
     once --format json test cli_e2e >/dev/null

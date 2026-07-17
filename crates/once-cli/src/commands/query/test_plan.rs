@@ -4,7 +4,7 @@ mod selection;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use once_core::{TestBatch, TestSelectionPolicy, TestSelectionReport, TEST_SELECTION_SCHEMA};
 use once_frontend::GraphTarget;
 
@@ -42,6 +42,13 @@ pub(crate) fn explicit_plan(
             let target = by_id
                 .get(target_id.as_str())
                 .with_context(|| format!("no target matches `{target_id}`"))?;
+            ensure!(
+                target
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability.name == "test"),
+                "target `{target_id}` does not expose the test capability"
+            );
             Ok(AffectedTestRecord {
                 id: target.label.id.clone(),
                 kind: target.kind.clone(),
@@ -156,7 +163,10 @@ fn batches_for_manifest(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use once_core::{TestManifest, TestSharding, TestUnit};
+    use once_frontend::TargetLabel;
     use tempfile::TempDir;
 
     use super::*;
@@ -206,6 +216,33 @@ mod tests {
 
         assert_eq!(plan.len(), 2);
         assert!(plan.iter().all(|batch| batch.test_filters.len() == 1));
+    }
+
+    #[test]
+    fn explicit_plan_rejects_target_without_test_capability() {
+        let workspace = TempDir::new().unwrap();
+        let graph = vec![GraphTarget {
+            label: TargetLabel {
+                package: String::new(),
+                name: "application".to_string(),
+                id: "application".to_string(),
+            },
+            kind: "example_binary".to_string(),
+            deps: Vec::new(),
+            srcs: Vec::new(),
+            attrs: BTreeMap::new(),
+            capabilities: Vec::new(),
+            providers: Vec::new(),
+            tools: Vec::new(),
+            diagnostics: Vec::new(),
+        }];
+
+        let error =
+            explicit_plan(workspace.path(), &graph, &["application".to_string()]).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("target `application` does not expose the test capability"));
     }
 
     fn write_manifest(workspace: &Path, sharding: TestSharding, units: Vec<TestUnit>) {
