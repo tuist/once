@@ -1,0 +1,4 @@
+[[target]]
+name = "tests"
+kind = "minitest_test"
+srcs = ["test/**/*_test.rb"]

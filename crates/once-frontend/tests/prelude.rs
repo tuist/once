@@ -76,7 +76,7 @@ fn android_prelude_source() -> String {
 
 fn all_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/android.star"),
@@ -85,7 +85,10 @@ fn all_prelude_source() -> String {
         include_str!("../prelude/zig.star"),
         include_str!("../prelude/swift.star"),
         include_str!("../prelude/kotlin.star"),
-        include_str!("../prelude/elixir.star")
+        include_str!("../prelude/elixir.star"),
+        include_str!("../prelude/python.star"),
+        include_str!("../prelude/ruby.star"),
+        include_str!("../prelude/javascript.star")
     )
 }
 
@@ -345,6 +348,32 @@ fn rust_and_elixir_runtime_schemas_are_discoverable() {
         .iter()
         .any(|attr| attr.name == "env_inherit"));
     assert!(elixir_test.attrs.iter().any(|attr| attr.name == "tools"));
+}
+
+#[test]
+fn dynamic_language_test_schemas_are_discoverable() {
+    for kind in [
+        "pytest_test",
+        "rspec_test",
+        "minitest_test",
+        "vitest_test",
+        "jest_test",
+    ] {
+        let schema = built_in_target_kind_schema(kind)
+            .unwrap_or_else(|| panic!("missing target kind schema `{kind}`"));
+        assert!(target_kind_has_impl(kind).unwrap());
+        assert!(schema
+            .providers
+            .iter()
+            .any(|provider| provider == "once_test_info"));
+        assert!(schema
+            .capabilities
+            .iter()
+            .any(|capability| capability.name == "test"));
+        assert!(schema.attrs.iter().any(|attr| attr.name == "batching"));
+        assert!(schema.attrs.iter().any(|attr| attr.name == "env_inherit"));
+        assert_eq!(schema.examples.len(), 1);
+    }
 }
 
 #[test]
