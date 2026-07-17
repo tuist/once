@@ -5,13 +5,17 @@ def _python_attr(ctx, name, default):
     return default if value == None else value
 
 def _python_executable(ctx):
-    requested = _python_attr(ctx, "python", "python3")
-    resolved = host_which_optional(requested)
-    if not resolved and requested == "python3":
-        resolved = host_which_optional("python")
-    if not resolved:
-        fail(ctx["label"]["id"] + ": Python interpreter `" + requested + "` was not found")
-    return resolved
+    requested = ctx["attr"].get("python")
+    if requested:
+        resolved = _resolve_host_executable(requested)
+        if not resolved:
+            fail(ctx["label"]["id"] + ": Python interpreter `" + requested + "` was not found")
+        return resolved
+    for candidate in [".venv/bin/python", ".venv/Scripts/python.exe", "python3", "python"]:
+        resolved = _resolve_host_executable(candidate)
+        if resolved:
+            return resolved
+    fail(ctx["label"]["id"] + ": no Python interpreter was found; create `.venv/bin/python` or set the `python` attribute")
 
 def _python_env(ctx, test_dir):
     env = {"HOME": test_dir + "/home", "PYTHONDONTWRITEBYTECODE": "1"}
@@ -195,7 +199,7 @@ def _python_pytest_impl(ctx):
 pytest_test = target_kind(
     docs = "Runs pytest suites through Once with stable case discovery, exact filtering, normalized results, and file-oriented automatic batching.",
     attrs = [
-        attr("python", "string", default = "\"python3\"", docs = "Python interpreter executable.", configurable = False),
+        attr("python", "string", docs = "Python interpreter executable name, absolute path, or workspace-relative path. When omitted, Once tries the workspace virtual environment before the host executable search path.", configurable = False),
         attr("config", "list<string>", default = "[\"pyproject.toml\", \"pytest.ini\", \"conftest.py\"]", docs = "Configuration and collection inputs.", configurable = False),
         attr("data", "list<string>", default = "[]", docs = "Runtime data inputs read by tests.", configurable = False),
         attr("args", "list<string>", default = "[]", docs = "Additional pytest arguments.", configurable = False),

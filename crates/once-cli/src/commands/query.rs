@@ -325,12 +325,31 @@ pub(crate) fn matching_target_kind_schemas(
         return Ok(schemas);
     }
 
-    if let Some(family) = terms.iter().find(|term| {
-        schemas
+    let families = terms
+        .iter()
+        .filter(|term| {
+            schemas
+                .iter()
+                .any(|schema| target_kind_family(schema) == term.as_str())
+        })
+        .collect::<Vec<_>>();
+    if !families.is_empty() {
+        let specific_terms = terms
             .iter()
-            .any(|schema| target_kind_family(schema) == term.as_str())
-    }) {
-        schemas.retain(|schema| target_kind_family(schema) == family.as_str());
+            .filter(|term| {
+                !generic_target_kind_query_term(term)
+                    && !families
+                        .iter()
+                        .any(|family| family.as_str() == term.as_str())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        schemas.retain(|schema| {
+            families
+                .iter()
+                .any(|family| target_kind_family(schema) == family.as_str())
+                || target_kind_matches_terms(schema, &specific_terms)
+        });
         return Ok(schemas);
     }
 
@@ -347,6 +366,32 @@ pub(crate) fn matching_target_kind_schemas(
 
     schemas.retain(|schema| target_kind_matches_terms(schema, &terms));
     Ok(schemas)
+}
+
+fn generic_target_kind_query_term(term: &str) -> bool {
+    matches!(
+        term,
+        "app"
+            | "application"
+            | "binary"
+            | "build"
+            | "existing"
+            | "executable"
+            | "kind"
+            | "kinds"
+            | "libraries"
+            | "library"
+            | "mixed"
+            | "native"
+            | "repository"
+            | "runner"
+            | "runners"
+            | "target"
+            | "targets"
+            | "test"
+            | "tests"
+            | "typed"
+    )
 }
 
 fn target_kind_family(schema: &once_frontend::TargetKindSchema) -> &str {
@@ -375,8 +420,14 @@ fn target_kind_matches_terms(schema: &once_frontend::TargetKindSchema, terms: &[
         searchable.push(' ');
         searchable.push_str(&reference.use_when);
     }
-    let searchable = searchable.to_lowercase();
-    terms.iter().any(|term| searchable.contains(term))
+    let searchable_terms = searchable
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+    terms
+        .iter()
+        .any(|term| searchable_terms.iter().any(|candidate| candidate == term))
 }
 
 pub async fn target(workspace: &Path, output: Output, target_id: &str) -> Result<()> {
@@ -657,8 +708,18 @@ pub(crate) fn test_manifest_is_current(
     let Some(provider) = metadata_provider(workspace, target) else {
         return false;
     };
-    test_discovery_fingerprint(workspace, target, &provider)
-        .is_ok_and(|fingerprint| fingerprint == expected)
+    let Ok(actual) = test_discovery_fingerprint(workspace, target, &provider) else {
+        return false;
+    };
+    let current = actual == expected;
+    tracing::debug!(
+        target = target_id,
+        expected_fingerprint = expected,
+        actual_fingerprint = actual,
+        current,
+        "checked test manifest freshness"
+    );
+    current
 }
 
 fn test_discovery_fingerprint(

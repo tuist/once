@@ -157,10 +157,36 @@ async fn run_mcp_command(
     workspace_override: Option<PathBuf>,
     allow_run: bool,
 ) -> Result<ExitCode> {
-    let workspace = workspace_override.unwrap_or_else(|| workspace.to_path_buf());
+    let workspace = resolve_mcp_workspace(workspace, workspace_override)?;
     commands::mcp::serve(workspace, allow_run)
         .await
         .map(|()| ExitCode::SUCCESS)
+}
+
+fn resolve_mcp_workspace(workspace: &Path, workspace_override: Option<PathBuf>) -> Result<PathBuf> {
+    match workspace_override {
+        Some(workspace) => resolve_workspace(Some(workspace)),
+        None => Ok(workspace.to_path_buf()),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_workspace_override_is_canonicalized() {
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = temporary.path().join("workspace");
+        let alias = temporary.path().join("alias");
+        std::fs::create_dir(&workspace).unwrap();
+        std::os::unix::fs::symlink(&workspace, &alias).unwrap();
+
+        assert_eq!(
+            resolve_mcp_workspace(temporary.path(), Some(alias)).unwrap(),
+            std::fs::canonicalize(workspace).unwrap()
+        );
+    }
 }
 
 async fn dispatch_build(

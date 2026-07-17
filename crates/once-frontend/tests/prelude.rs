@@ -374,6 +374,19 @@ fn dynamic_language_test_schemas_are_discoverable() {
         assert!(schema.attrs.iter().any(|attr| attr.name == "env_inherit"));
         assert_eq!(schema.examples.len(), 1);
     }
+
+    for (kind, expected) in [
+        ("vitest_test", "\"node_modules/vitest/vitest.mjs\""),
+        ("jest_test", "\"node_modules/jest/bin/jest.js\""),
+    ] {
+        let schema = built_in_target_kind_schema(kind).unwrap();
+        let runner = schema
+            .attrs
+            .iter()
+            .find(|attr| attr.name == "runner")
+            .unwrap();
+        assert_eq!(runner.default.as_deref(), Some(expected));
+    }
 }
 
 #[test]

@@ -66,25 +66,33 @@ RS
   }
 
   create_minitest_workspace() {
+    ruby_bin="$(command -v ruby)"
     cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/minitest-test-minimal/." "$WORKSPACE/"
+    mkdir -p "$WORKSPACE/.ruby/bin"
+    ln -s "$ruby_bin" "$WORKSPACE/.ruby/bin/ruby"
+    cat >> "$WORKSPACE/once.toml" <<'TOML'
+
+[target.attrs]
+ruby = ".ruby/bin/ruby"
+TOML
   }
 
   create_pytest_workspace() {
     pytest_python="$(dirname "$(realpath "$(command -v pytest)")")/python"
     cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/pytest-test-minimal/." "$WORKSPACE/"
-    cat >> "$WORKSPACE/once.toml" <<TOML
-
-[target.attrs]
-python = "$pytest_python"
-TOML
+    mkdir -p "$WORKSPACE/.venv/bin"
+    printf '#!/bin/sh\nexec "%s" "$@"\n' "$pytest_python" > "$WORKSPACE/.venv/bin/python"
+    chmod +x "$WORKSPACE/.venv/bin/python"
   }
 
   create_rspec_workspace() {
     rspec_root="$(dirname "$(dirname "$(command -v rspec)")")"
     ruby_bin="$(command -v ruby)"
     cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/rspec-test-minimal/." "$WORKSPACE/"
+    mkdir -p "$WORKSPACE/.ruby/bin"
+    ln -s "$ruby_bin" "$WORKSPACE/.ruby/bin/ruby"
     cat >> "$WORKSPACE/once.toml" <<TOML
-ruby = "$ruby_bin"
+ruby = ".ruby/bin/ruby"
 env = { GEM_HOME = "$rspec_root/libexec", GEM_PATH = "$rspec_root/libexec" }
 TOML
   }
@@ -94,10 +102,12 @@ TOML
     runner_entry="$(realpath "$(command -v "$runner_name")")"
     cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/$runner_name-test-minimal/." "$WORKSPACE/"
     mkdir -p "$WORKSPACE/tools"
+    ln -s "$(command -v node)" "$WORKSPACE/tools/node"
     printf '#!/usr/bin/env node\nimport %s\n' "$(printf '%s' "$runner_entry" | jq -R .)" > "$WORKSPACE/tools/$runner_name.mjs"
     cat >> "$WORKSPACE/once.toml" <<TOML
 
 [target.attrs]
+node = "tools/node"
 runner = "tools/$runner_name.mjs"
 dependencies = []
 TOML
@@ -689,10 +699,13 @@ KOTLIN
 
   It 'discovers and schedules pytest files as parallel batches'
     create_pytest_workspace
-    once --format json test tests >/dev/null
+    once --format json test --jobs 2 tests > "$WORKSPACE/first-run.json"
 
     When call once --format json test --jobs 2 tests
     The status should be success
+    The contents of file "$WORKSPACE/first-run.json" should include '"next_plan"'
+    The contents of file "$WORKSPACE/first-run.json" should include 'tests::tests/test_math.py'
+    The contents of file "$WORKSPACE/first-run.json" should include 'tests::tests/test_string.py'
     The stdout should include '"workers":2'
     The stdout should include 'tests::tests/test_math.py'
     The stdout should include 'tests::tests/test_string.py'
@@ -720,10 +733,12 @@ KOTLIN
   It 'discovers and schedules Vitest files as parallel batches'
     create_vitest_workspace
     once --format json test tests >/dev/null
+    once --format json test --jobs 2 tests >/dev/null
 
     When call once --format json test --jobs 2 tests
     The status should be success
     The stdout should include '"workers":2'
+    The stdout should include '"cache":"hit"'
     The stdout should include 'tests%2Fmath.test.js'
     The stdout should include 'tests%2Fstring.test.js'
     The stdout should include '/test/batches/'
@@ -735,10 +750,12 @@ KOTLIN
   It 'discovers and schedules Jest files as parallel batches'
     create_jest_workspace
     once --format json test tests >/dev/null
+    once --format json test --jobs 2 tests >/dev/null
 
     When call once --format json test --jobs 2 tests
     The status should be success
     The stdout should include '"workers":2'
+    The stdout should include '"cache":"hit"'
     The stdout should include 'tests%2Fmath.test.js'
     The stdout should include 'tests%2Fstring.test.js'
     The stdout should include '/test/batches/'

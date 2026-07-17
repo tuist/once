@@ -6,7 +6,7 @@ def _javascript_attr(ctx, name, default):
 
 def _javascript_node(ctx):
     requested = _javascript_attr(ctx, "node", "node")
-    resolved = host_which_optional(requested)
+    resolved = _resolve_host_executable(requested)
     if not resolved:
         fail(ctx["label"]["id"] + ": Node.js executable `" + requested + "` was not found")
     return resolved
@@ -92,10 +92,10 @@ function main() {
   const namePattern = names.length ? "^(?:" + names.map(escapePattern).join("|") + ")$" : null
   let args
   if (options.runner_type === "vitest") {
-    args = [options.runner, "run", ...options.runnerArgs, "--reporter=json", "--outputFile=" + options.native_results, ...files]
+    args = [options.runner, "run", ...options.runnerArgs, "--no-cache", "--reporter=json", "--outputFile=" + options.native_results, ...files]
     if (namePattern) args.push("--testNamePattern", namePattern)
   } else {
-    args = [options.runner, ...options.runnerArgs, "--runInBand", "--json", "--outputFile=" + options.native_results, "--runTestsByPath", ...files]
+    args = [options.runner, ...options.runnerArgs, "--no-cache", "--runInBand", "--json", "--outputFile=" + options.native_results, "--runTestsByPath", ...files]
     if (namePattern) args.push("--testNamePattern", namePattern)
   }
   const execution = spawnSync(process.execPath, args, { encoding: "utf8", env: process.env })
@@ -231,23 +231,24 @@ def _vitest_impl(ctx):
 def _jest_impl(ctx):
     return _javascript_test_impl(ctx, "jest", "Jest", "node_modules/jest/bin/jest.js")
 
-_JAVASCRIPT_TEST_ATTRS = [
-    attr("node", "string", default = "\"node\"", docs = "Node.js executable.", configurable = False),
-    attr("runner", "string", docs = "Package-relative runner entry point.", configurable = False),
-    attr("config", "list<string>", default = "[\"package.json\", \"package-lock.json\", \"pnpm-lock.yaml\", \"yarn.lock\"]", docs = "Configuration and dependency inputs.", configurable = False),
-    attr("dependencies", "list<string>", default = "[\"node_modules/**/*\"]", docs = "Installed runner and package files required during execution.", configurable = False),
-    attr("data", "list<string>", default = "[]", docs = "Runtime data, setup, transform, snapshot, and runner package inputs.", configurable = False),
-    attr("args", "list<string>", default = "[]", docs = "Additional runner arguments.", configurable = False),
-    attr("env", "map<string,string>", default = "{}", docs = "Environment variables for test execution.", configurable = True),
-    attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variables inherited by name.", configurable = False),
-    attr("batching", "string", default = "\"file\"", docs = "Automatic batch granularity: `file`, `case`, or `target`.", configurable = False),
-    attr("labels", "list<string>", default = "[]", docs = "Labels exposed through test discovery."),
-    attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
-]
+def _javascript_test_attrs(runner, display_name):
+    return [
+        attr("node", "string", default = "\"node\"", docs = "Node.js executable name, absolute path, or workspace-relative path.", configurable = False),
+        attr("runner", "string", default = "\"" + runner + "\"", docs = "Package-relative " + display_name + " entry point.", configurable = False),
+        attr("config", "list<string>", default = "[\"package.json\", \"package-lock.json\", \"pnpm-lock.yaml\", \"yarn.lock\"]", docs = "Configuration and dependency inputs.", configurable = False),
+        attr("dependencies", "list<string>", default = "[\"node_modules/**/*\"]", docs = "Installed runner and package files required during execution.", configurable = False),
+        attr("data", "list<string>", default = "[]", docs = "Runtime data, setup, transform, snapshot, and runner package inputs.", configurable = False),
+        attr("args", "list<string>", default = "[]", docs = "Additional runner arguments.", configurable = False),
+        attr("env", "map<string,string>", default = "{}", docs = "Environment variables for test execution.", configurable = True),
+        attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variables inherited by name.", configurable = False),
+        attr("batching", "string", default = "\"file\"", docs = "Automatic batch granularity: `file`, `case`, or `target`.", configurable = False),
+        attr("labels", "list<string>", default = "[]", docs = "Labels exposed through test discovery."),
+        attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
+    ]
 
 vitest_test = target_kind(
     docs = "Runs Vitest suites through Once with exact file and case filtering, normalized results, and automatic batching.",
-    attrs = _JAVASCRIPT_TEST_ATTRS,
+    attrs = _javascript_test_attrs("node_modules/vitest/vitest.mjs", "Vitest"),
     deps = [dep("deps", [], "Targets whose inputs should affect this test suite.")],
     providers = ["once_test_info"],
     capabilities = [capability("test", ["default", "test_results", "logs"])],
@@ -258,7 +259,7 @@ vitest_test = target_kind(
 
 jest_test = target_kind(
     docs = "Runs Jest suites through Once with exact file and case filtering, normalized results, and automatic batching.",
-    attrs = _JAVASCRIPT_TEST_ATTRS,
+    attrs = _javascript_test_attrs("node_modules/jest/bin/jest.js", "Jest"),
     deps = [dep("deps", [], "Targets whose inputs should affect this test suite.")],
     providers = ["once_test_info"],
     capabilities = [capability("test", ["default", "test_results", "logs"])],

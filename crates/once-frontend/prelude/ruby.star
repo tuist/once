@@ -6,7 +6,7 @@ def _ruby_attr(ctx, name, default):
 
 def _ruby_executable(ctx):
     requested = _ruby_attr(ctx, "ruby", "ruby")
-    resolved = host_which_optional(requested)
+    resolved = _resolve_host_executable(requested)
     if not resolved:
         fail(ctx["label"]["id"] + ": Ruby interpreter `" + requested + "` was not found")
     return resolved
@@ -220,7 +220,7 @@ def _ruby_minitest_impl(ctx):
     return _ruby_test_impl(ctx, "minitest", "Minitest", _ruby_minitest_adapter(), "once_minitest_adapter.rb", True)
 
 _RUBY_TEST_ATTRS = [
-    attr("ruby", "string", default = "\"ruby\"", docs = "Ruby interpreter executable.", configurable = False),
+    attr("ruby", "string", default = "\"ruby\"", docs = "Ruby interpreter executable name, absolute path, or workspace-relative path.", configurable = False),
     attr("config", "list<string>", default = "[\"Gemfile\", \"Gemfile.lock\"]", docs = "Configuration and dependency inputs.", configurable = False),
     attr("data", "list<string>", default = "[]", docs = "Runtime data inputs read by tests.", configurable = False),
     attr("args", "list<string>", default = "[]", docs = "Additional runner arguments.", configurable = False),

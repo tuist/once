@@ -20,6 +20,7 @@ pub(crate) const MAX_TEST_WORKERS: usize = 256;
 #[derive(Debug, Serialize)]
 pub(crate) struct TestExecutionReport {
     pub plan: TestPlan,
+    pub next_plan: TestPlan,
     pub schedule: TestSchedule,
     pub runs: Vec<Value>,
 }
@@ -68,8 +69,21 @@ pub(crate) async fn execute(
     .context("joining test scheduler")??;
     results::persist(&workspace_path, &plan, &completed.runs)?;
     store.append(&completed.schedule.attempts).await?;
+    let next_plan = if plan
+        .batches
+        .iter()
+        .any(|batch| batch.test_filters.is_empty())
+    {
+        crate::commands::query::test_plan::plan_from_selection(
+            &workspace_path,
+            plan.selection.clone(),
+        )?
+    } else {
+        plan.clone()
+    };
     Ok(TestExecutionReport {
         plan,
+        next_plan,
         schedule: completed.schedule,
         runs: completed.runs,
     })
@@ -153,13 +167,15 @@ fn render_human(report: &TestExecutionReport) -> String {
         .filter(|run| run.get("success").and_then(Value::as_bool) == Some(true))
         .count();
     format!(
-        "once: ran {} test batches across {} local workers, {} passed, {} failed, {} ms\nplan: {}\nschedule: {}\n",
+        "once: ran {} test batches across {} local workers, {} passed, {} failed, {} ms\nplan: {}\nnext plan: {} ({} batches)\nschedule: {}\n",
         report.runs.len(),
         report.schedule.workers,
         passed,
         report.runs.len().saturating_sub(passed),
         report.schedule.duration_ms,
         report.plan.id,
+        report.next_plan.id,
+        report.next_plan.batches.len(),
         report.schedule.id,
     )
 }

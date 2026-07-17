@@ -105,7 +105,10 @@ pub(crate) fn explicit_unit_plan(
     )?)
 }
 
-fn plan_from_selection(workspace: &Path, selection: TestSelectionReport) -> Result<TestPlan> {
+pub(crate) fn plan_from_selection(
+    workspace: &Path,
+    selection: TestSelectionReport,
+) -> Result<TestPlan> {
     let mut batches = Vec::new();
     for test in &selection.tests {
         let Some(manifest) = super::stored_test_manifest_record(workspace, &test.id)? else {

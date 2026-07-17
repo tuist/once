@@ -28,7 +28,7 @@ use tools::{tool_definitions, tool_requires_allow_run};
 
 /// MCP protocol version we negotiate.
 const PROTOCOL_VERSION: &str = "2025-11-25";
-const SERVER_INSTRUCTIONS: &str = "Once is a self-describing build graph and cacheable automation server. For a new typed graph with no named upstream rule, start with once_list_target_kinds. Pass its optional query when the request already names an ecosystem, target-kind family, or intent; include the named family so it takes priority over generic words, then call once_query_schema and once_query_example. When the request already points to a specific external rule or plugin, skip the target-kind catalog: call once_query_module_contract, fetch its authoritative source with once_fetch_external_source, write a project-local module, and call once_validate_module. Model only the requested dependency closure. Record upstream source_references and the returned content digest when the source was not truncated, then re-fetch and compare the digest before future maintenance. Materialize target files, inspect canonical ids with once_query_targets, call once_validate_workspace, and use capability tools to build, run, or test. Before change-scoped testing, call once_query_test_plan to inspect conservative selection, unmatched paths, and stable batches; once_run_tests returns the same plan with a duration-informed dynamic schedule and execution results. After a whole-target test, once_query_test_manifest exposes stable units from normalized results. Pass one listed unit with one explicit target to plan or run an exact filtered test when the target kind declares filtering support. Use jobs only to cap local concurrency; it does not change plan or batch identity. For annotated automation, call once_validate_script before once_exec_script. Stateful tools require --allow-run. Evidence subjects are target ids with an optional capability suffix; script execution returns its evidence subject directly. once_validate_target checks one proposed table, once_validate_workspace checks the loaded graph, and successful execution remains the authoritative current check. Evidence is historical provenance, so do not treat an older record as proof that inputs are unchanged.";
+const SERVER_INSTRUCTIONS: &str = "Once is a self-describing build graph and cacheable automation server. For a new typed graph with no named upstream rule, start with once_list_target_kinds. Pass its optional query when the request names ecosystems, target-kind families, or intent; include every named native test runner in one query when adopting a mixed test repository, then call once_query_schema and once_query_example for each chosen kind. When the request already points to a specific external rule or plugin, skip the target-kind catalog: call once_query_module_contract, fetch its authoritative source with once_fetch_external_source, write a project-local module, and call once_validate_module. Model only the requested dependency closure. Record upstream source_references and the returned content digest when the source was not truncated, then re-fetch and compare the digest before future maintenance. Materialize target files, inspect canonical ids with once_query_targets, call once_validate_workspace, and use capability tools to build, run, or test. New test targets intentionally begin with one whole-target batch. Run each target completely once, then inspect next_plan in the completed once_run_tests response to see the automatic file or case batches established for later runs. The plan field always describes the work that just ran. Before change-scoped testing, inspect conservative selection, unmatched paths, and stable batches with once_query_test_plan; once_run_tests returns that execution plan, the refreshed next plan, a duration-informed dynamic schedule, and execution results. Pass one listed unit with one explicit target to plan or run an exact filtered test when the target kind declares filtering support. Use jobs only to cap local concurrency; it does not change plan or batch identity. For annotated automation, call once_validate_script before once_exec_script. Stateful tools require --allow-run. Evidence subjects are target ids with an optional capability suffix; script execution returns its evidence subject directly. once_validate_target checks one proposed table, once_validate_workspace checks the loaded graph, and successful execution remains the authoritative current check. Evidence is historical provenance, so do not treat an older record as proof that inputs are unchanged.";
 
 fn negotiated_protocol_version(params: Option<&Value>) -> String {
     let requested = params
@@ -1744,6 +1744,32 @@ srcs = ["unit_spec.sh"]
         assert!(kinds.contains(&"rust_binary"));
         assert!(kinds.contains(&"rust_test"));
         assert!(kinds.iter().all(|kind| kind.starts_with("rust_")));
+    }
+
+    #[test]
+    fn list_target_kinds_combines_multiple_runner_ecosystems() {
+        let tmp = TempDir::new().unwrap();
+        let value = tool_list_target_kinds(
+            tmp.path(),
+            &json!({ "query": "mixed repository native test runners Python JavaScript TypeScript Rust Go Ruby" }),
+        )
+        .unwrap();
+        let kinds = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["kind"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&"pytest_test"));
+        assert!(kinds.contains(&"vitest_test"));
+        assert!(kinds.contains(&"jest_test"));
+        assert!(kinds.contains(&"rspec_test"));
+        assert!(kinds.contains(&"minitest_test"));
+        assert!(kinds.contains(&"rust_test"));
+        assert!(!kinds.contains(&"apple_library"));
+        assert!(!kinds.contains(&"android_test"));
+        assert!(!kinds.contains(&"go_test"));
     }
 
     #[test]
