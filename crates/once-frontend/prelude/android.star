@@ -1842,13 +1842,14 @@ def _android_instrumentation_metadata_provider(ctx, attrs):
     log = test_dir + "/android-instrumentation-test.log"
     native_results = test_dir + "/native_results.txt"
     runner = _android_attr(attrs, "instrumentation_runner", "androidx.test.runner.AndroidJUnitRunner")
+    support_apks = _android_support_apks(attrs)
     empty_app = {}
     return {
         "label_id": ctx["label"]["id"],
         "target_kind": "android_instrumentation_test",
         "target_apk": "",
         "test_apk": "",
-        "affected_inputs": [],
+        "affected_inputs": support_apks,
         "test_info": _android_instrumentation_test_info(
             ctx,
             attrs,

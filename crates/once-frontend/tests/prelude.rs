@@ -4018,25 +4018,36 @@ fn prelude_android_instrumentation_runner_requires_a_success_terminal_code() {
 #[test]
 fn prelude_android_instrumentation_metadata_needs_no_dependency_providers() {
     let prelude = android_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let support_dir = workspace.path().join("tests/support");
+    std::fs::create_dir_all(&support_dir).unwrap();
+    std::fs::write(support_dir.join("orchestrator.apk"), b"support-apk").unwrap();
     let source = format!(
         r#"{prelude}
 ctx = {{
     "label": {{"package": "tests", "name": "device", "id": "tests/device"}},
-    "attr": {{"labels": ["device"]}},
+    "attr": {{"labels": ["device"], "support_apks": ["support/*.apk"]}},
     "deps": [],
     "srcs": [],
     "build_dir": ".once/out/tests/device",
     "capability": "metadata",
 }}
-result = repr(_android_instrumentation_test_impl(ctx)["test_info"])
+result = repr(_android_instrumentation_test_impl(ctx))
 "#
     );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "tests".to_string(),
+        ".once/out/tests/device".to_string(),
+    );
 
-    let out = eval_prelude_source_to_repr(source).unwrap();
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let out = out.unwrap();
 
     assert!(out.contains("android_instrumentation"));
     assert!(out.contains("runner_args"));
     assert!(out.contains("tests/device"));
+    assert!(out.contains("tests/support/orchestrator.apk"));
 }
 
 #[cfg(unix)]
