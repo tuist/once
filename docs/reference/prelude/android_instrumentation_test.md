@@ -13,6 +13,9 @@ attribute points at the app under test. The `android_instrumentation_test`
 target depends on both Android application package targets. Once installs both
 packages with the Android Debug Bridge (`adb`), runs instrumentation, parses
 standard instrumentation status output, and writes `once.test_results.v1`.
+The run succeeds only when the device reports the standard successful terminal
+instrumentation code. A host command that exits successfully after a device
+process crash is still reported as a failed test run.
 
 ## Attributes
 
@@ -82,6 +85,10 @@ adb shell am instrument -w -r <args> <test-package>/<runner>
 `instrumentation_args` entries become repeated `-e key value` arguments.
 `test_class` becomes `-e class <value>`.
 
+After a whole-target run discovers test cases, an exact unit selected from
+`once query test-manifest` is translated to the same class filter. The active
+instrumentation runner must implement the standard `class` argument contract.
+
 ## Example
 
 ```toml
@@ -92,6 +99,7 @@ srcs = ["src/main/**/*.kt"]
 
 [target.attrs]
 application_id = "dev.once.greeting"
+namespace = "dev.once.greeting"
 manifest = "AndroidManifest.xml"
 resource_files = []
 
@@ -102,6 +110,7 @@ srcs = ["src/androidTest/**/*.kt"]
 
 [target.attrs]
 application_id = "dev.once.greeting.test"
+namespace = "dev.once.greeting.test"
 manifest = "AndroidTestManifest.xml"
 resource_files = []
 instruments = "./GreetingApp"
@@ -113,5 +122,12 @@ deps = ["./GreetingApp", "./GreetingInstrumentationApk"]
 
 [target.attrs]
 test_app = "./GreetingInstrumentationApk"
+instrumentation_runner = "dev.once.greeting.OnceInstrumentationRunner"
 labels = ["device"]
 ```
+
+The starter manifests declare package names and installable application
+elements. Its test package includes a small self-contained instrumentation
+runner, so the example does not depend on an undeclared AndroidX test runtime.
+Install the Android toolchain setup before building it so the default debug
+signing key is available.

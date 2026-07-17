@@ -165,6 +165,7 @@ export const site = {
         items: [
           { text: "Overview", link: "/guide/graph/" },
           { text: "Ecosystems", link: "/guide/graph/ecosystems" },
+          { text: "Testing and Scheduling", link: "/guide/graph/testing" },
           { text: "Apple", link: "/guide/graph/apple" },
           { text: "Android", link: "/guide/graph/android" },
           { text: "C and C++", link: "/guide/graph/c" },

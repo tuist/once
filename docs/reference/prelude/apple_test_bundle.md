@@ -81,7 +81,6 @@ srcs = ["AppTests/Sources/*.swift"]
 
 [target.attrs]
 platform = "macos"
-minimum_os = "17.0"
 swift_testing = true
 labels = ["swift-testing"]
 ```

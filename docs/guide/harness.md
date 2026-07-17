@@ -91,8 +91,9 @@ system, use this loop:
    content digest, so the harness can record exactly what it interpreted.
 3. Call `once_query_module_contract`. It returns the exact Starlark declaration
    helpers, schema invariants, implementation context, generic analysis and
-   action primitives, maintenance invariants, registration snippet, and a
-   starter module. Schema defaults are descriptive strings; implementations
+   action primitives, the reserved test provider and normalized result
+   contract, maintenance invariants, registration snippet, and build and test
+   starter modules. Schema defaults are descriptive strings; implementations
    provide optional runtime fallbacks with `ctx["attr"].get(...)`.
 4. Write a project-local target kind that represents only the requested node
    and the dependency closure needed to run it. Keep unrelated nodes in the

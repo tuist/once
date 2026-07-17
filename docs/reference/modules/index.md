@@ -216,10 +216,12 @@ once query module-contract --format json
 
 The result contains the declaration helper source, schema invariants,
 implementation context, analysis primitives, action primitives, maintenance
-invariants, module registration, and a starter. Attribute defaults in schemas
-are descriptive strings and do not insert runtime values. An implementation
-uses `ctx["attr"].get(...)` when an optional attribute needs a fallback. After
-writing the project module, validate it in isolation:
+invariants, module registration, and runnable starters. For test modules it
+also returns a matching target table and an exact normalized result example.
+Attribute defaults in schemas are descriptive strings and do not insert
+runtime values. An implementation uses `ctx["attr"].get(...)` when an optional
+attribute needs a fallback. After writing the project module, validate it in
+isolation:
 
 ```sh
 once query validate-module modules/generated_text.star --format json
@@ -278,6 +280,10 @@ An implementation receives `ctx` with generic graph data:
 - `ctx["capability"]`: active capability being analyzed.
 - `ctx["run"]`: run request options. `ctx["run"]["visible"]` is true when
   the caller requested a visible runtime interface.
+- `ctx["test"]`: test request options. `ctx["test"]["filters"]` contains
+  stable semantic unit identifiers selected for this test execution. Target
+  kinds that declare case filtering translate these identifiers into native
+  runner arguments.
 
 The implementation returns a dictionary of provider fields. Downstream
 target kinds should read provider fields from `ctx["deps"]` instead of
@@ -371,6 +377,93 @@ layout.
 Actions inside one target run in declaration order because later actions
 may consume earlier outputs. Independent graph targets run concurrently
 once their analysis-backed dependencies are complete.
+
+## Script-backed Test Target Kinds
+
+`once query module-contract --format json` returns a complete `test_starter`
+for a project-local script-backed test kind, a matching
+`test_target_starter`, and a `normalized_test_result_example`. The starter
+resolves its host tool, invokes a package-relative adapter directly, declares
+all inputs and outputs, and passes exact unit filters from
+`ctx["test"]["filters"]`.
+
+A test target declares the `once_test_info` provider and the generic test
+capability:
+
+```python
+providers = ["once_test_info"]
+capabilities = [capability("test", ["default", "test_results", "logs"])]
+```
+
+Its implementation returns `test_info` with this shape:
+
+```python
+{
+    "schema": "once.test_info.v1",
+    "target": ctx["label"]["id"],
+    "runner": {
+        "type": "scripted",
+        "display_name": "Script-backed test",
+        "metadata": {},
+    },
+    "command": {"argv": argv, "env": {}, "cwd": "."},
+    "outputs": {
+        "results": results,
+        "logs": [log],
+        "native_results": [],
+        "coverage": [],
+    },
+    "listing": {"supported": True, "strategy": "normalized_results"},
+    "filtering": {"case_filtering": "runner_args"},
+    "sharding": {"supported": False},
+    "retries": {"supported": False, "default_attempts": 1},
+    "execution": {
+        "cacheable": True,
+        "timeout_ms": None,
+        "run_from_workspace_root": True,
+    },
+    "labels": [],
+    "metadata": {},
+}
+```
+
+The adapter writes [JavaScript Object Notation](https://www.json.org/json-en.html)
+results to `ctx["build_dir"] + "/test/test_results.json"`:
+
+```json
+{
+  "schema": "once.test_results.v1",
+  "target": "tests/example",
+  "runner": {"type": "scripted", "metadata": {}},
+  "status": "passed",
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "flaky": 0
+  },
+  "cases": [{
+    "id": "tests/example::case-name",
+    "name": "case-name",
+    "suite": "tests/example",
+    "status": "passed",
+    "attempts": [{"status": "passed"}],
+    "runner_metadata": {}
+  }],
+  "artifacts": {"logs": ["<declared-log>"], "native_results": []}
+}
+```
+
+Case identifiers are stable target-qualified semantic names. Declare
+`case_filtering = "runner_args"` only when every requested identifier is
+translated exactly into the native runner invocation. Otherwise declare
+`unsupported`. A failed or incomplete runner exits unsuccessfully and writes a
+matching failed result when possible. A successful host process status must
+never turn a runner crash or missing successful terminal record into a pass.
+Once validates this complete record before it derives discovery data or marks
+a scheduled batch as successful. A malformed runner, summary, attempt, or
+artifact record fails the run instead of being accepted as partial evidence.
 
 ## Authoring Target Kinds
 
