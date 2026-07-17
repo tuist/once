@@ -35,6 +35,13 @@ query-before-build workflow, current limitations, and follow-up steps:
 - [C and C++](/guide/graph/c) covers headers, source compilation, static
   libraries, and native consumers.
 - [Elixir](/guide/graph/elixir) covers compiled applications and ExUnit tests.
+- [pytest](/reference/prelude/pytest_test) covers Python test discovery,
+  exact execution, and automatic file or case batching.
+- [Ruby Specification](/reference/prelude/rspec_test) and
+  [Minitest](/reference/prelude/minitest_test) cover Ruby test suites.
+- [Vitest](/reference/prelude/vitest_test) and
+  [Jest](/reference/prelude/jest_test) cover JavaScript and TypeScript test
+  suites.
 - [Rust](/guide/graph/rust) covers libraries, binaries, tests, procedural
   macros, Cargo dependencies, and native mobile outputs.
 - [Zig](/guide/graph/zig) covers modules, binaries, tests, libraries, and C or

@@ -53,7 +53,10 @@ The manifest reports:
 - `listing_supported`, which states whether the target kind can expose stable
   units;
 - `case_filtering`, which is `runner_args` only when exact execution is safe;
-  and
+- `sharding`, which states whether Once may create automatic batches and
+  whether their granularity is `file`, `case`, or `target`;
+- `discovery_fingerprint`, which ties the unit list to the declared inputs
+  that can change discovery; and
 - `units`, the stable identifiers observed in the latest complete run.
 
 A filtered run does not replace the complete manifest. Agents can run one case
@@ -71,9 +74,15 @@ once query test-plan \
 ```
 
 Each selected test includes a reason. The current affected policy emits one
-whole-target batch per selected test and leaves `test_filters` empty. This is
-intentional: a declared graph proves target-level impact, but it does not prove
-that an individual case is unaffected.
+complete test scope per selected target. When that target has a current
+manifest and supports exact filtering, the plan divides the complete scope
+into stable file or case batches. This changes scheduling granularity without
+using test impact as permission to omit a discovered case.
+
+The first run, a changed test input, or an incomplete manifest produces one
+whole-target batch. That run refreshes discovery. Later plans may then split
+the same target automatically. A stale manifest never filters against an old
+unit list.
 
 Run the same selection through the dynamic scheduler:
 
@@ -118,15 +127,20 @@ runner-specific filters from names that Once did not return.
 
 ## Understand Current Ecosystem Coverage
 
-| Target kind | Stable case discovery | Exact case execution |
-| --- | --- | --- |
-| `rust_test` | Yes | Yes |
-| `android_local_test` | Yes | Yes |
-| `android_instrumentation_test` | Yes, from a completed device run | Yes, through the instrumentation `class` argument |
-| `apple_test_bundle` with Swift Testing | Yes | Not yet |
-| `shellspec_test` | Yes | Not yet |
-| `zig_test` | Suite-level fallback | Not yet |
-| `elixir_test` | Summary counts only | Not yet |
+| Target kind | Stable unit discovery | Exact unit execution | Automatic granularity |
+| --- | --- | --- | --- |
+| `pytest_test` | Yes | Yes | File by default, optional case |
+| `vitest_test` | Yes | Yes | File by default, optional case |
+| `jest_test` | Yes | Yes | File by default, optional case |
+| `rspec_test` for [Ruby Specification](https://rspec.info/) | Yes | Yes | File by default, optional case |
+| `minitest_test` | One unit per file | Yes, by file | File |
+| `rust_test` | Yes | Yes | Target |
+| `android_local_test` | Yes | Yes | Target |
+| `android_instrumentation_test` | Yes, from a completed device run | Yes, through the instrumentation `class` argument | Target |
+| `apple_test_bundle` with Swift Testing | Yes | Not yet | Target |
+| `shellspec_test` | Yes | Not yet | Target |
+| `zig_test` | Suite-level fallback | Not yet | Target |
+| `elixir_test` | Summary counts only | Not yet | Target |
 
 Unsupported ecosystems still participate in conservative affected selection
 and target-level scheduling. Once reports the limitation instead of guessing a
@@ -134,16 +148,23 @@ native filter.
 
 ## Treat Sharding As Scheduling
 
-The current scheduler creates stable target batches, orders them using recent
-uncached durations, and lets idle workers pull the next batch. This avoids the
-duration skew of a fixed partition while keeping the plan independent from the
+The scheduler creates stable batches, orders them using recent uncached
+durations, and lets idle workers pull the next batch. This avoids the duration
+skew of a fixed partition while keeping the plan independent from the
 requested worker count.
 
-Automatic case-level sharding is deliberately deferred. It requires isolated
-result paths and complete discovery so concurrent batches cannot overwrite one
-another or omit a case. Remote placement is also a scheduling concern. The
-plan contains no provider-specific or worker-specific assignment, so later
-local or remote placement does not need to redefine test identity.
+Dynamic-language runners default to file batches because files commonly share
+imports, fixtures, database setup, and interpreter startup. Every discovered
+case from one file stays in the same batch. Historical batch durations let
+Once balance those stable files without coupling the plan to four, eight, or
+any other fixed number of workers. A target can opt into case granularity when
+its runner and setup make smaller batches worthwhile.
+
+Concurrent batches write results, logs, and native output below isolated batch
+directories. After all batches finish, Once validates and merges them into one
+canonical target result. The plan contains no provider-specific or
+worker-specific assignment, so local or future remote placement does not
+redefine test identity.
 
 ## Add Selection to a Project Module
 

@@ -140,9 +140,11 @@ reports a whole-target fallback instead of guessing test names.
 
 Explicit unit execution is allowed only when the target kind declares case
 filtering and translates the stable semantic unit identifier into its native
-runner arguments. Affected-test plans remain whole-target in this slice.
-Automatic case-level narrowing requires complete dependency evidence, and
-parallel case batches additionally require batch-isolated result paths.
+runner arguments. Affected-test selection remains a complete target scope.
+When a current manifest declares sharding support, planning may divide that
+scope into file or case batches without omitting any discovered unit. A
+missing, stale, or incomplete manifest falls back to one whole-target batch
+and refreshes discovery.
 
 ### Dependency evidence
 
@@ -164,10 +166,11 @@ The test plan combines one selection report with stable execution batches. A
 batch contains test-unit identities and execution requirements, but no worker
 assignment.
 
-The current implementation emits one batch per selected test target. Later,
-discovery can create smaller stable batches without changing the plan and
-schedule separation. Batch identities are derived from their semantic content,
-not their ordinal position or the requested worker count.
+The current implementation emits one batch per selected test target unless a
+current manifest declares exact filtering and automatic sharding. File
+granularity groups semantic units by their stable file field. Case granularity
+creates one batch per semantic unit. Batch identities are derived from their
+semantic content, not their ordinal position or the requested worker count.
 
 ### Schedule
 

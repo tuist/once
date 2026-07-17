@@ -56,6 +56,25 @@ help choosing between typed target kinds and scripted automation.
 - [`elixir_test`](/reference/prelude/elixir_test): ExUnit tests run against
   an already compiled Elixir application
 
+## Python target kinds
+
+- [`pytest_test`](/reference/prelude/pytest_test): pytest suites with exact
+  case execution and automatic file or case batching
+
+## Ruby target kinds
+
+- [`rspec_test`](/reference/prelude/rspec_test): Ruby Specification suites
+  with exact example execution and automatic batching
+- [`minitest_test`](/reference/prelude/minitest_test): Minitest files exposed
+  as independently scheduled units
+
+## JavaScript target kinds
+
+- [`vitest_test`](/reference/prelude/vitest_test): Vitest suites with exact
+  case execution and automatic batching
+- [`jest_test`](/reference/prelude/jest_test): Jest suites with exact case
+  execution and automatic batching
+
 ## Rust target kinds
 
 - [`cargo_dependencies`](/reference/prelude/cargo_dependencies): cacheable

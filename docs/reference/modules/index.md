@@ -283,7 +283,9 @@ An implementation receives `ctx` with generic graph data:
 - `ctx["test"]`: test request options. `ctx["test"]["filters"]` contains
   stable semantic unit identifiers selected for this test execution. Target
   kinds that declare case filtering translate these identifiers into native
-  runner arguments.
+  runner arguments. `ctx["test"]["batch_id"]` is a stable batch identifier
+  during automatically scheduled execution and is `None` for a normal
+  whole-target execution.
 
 The implementation returns a dictionary of provider fields. Downstream
 target kinds should read provider fields from `ctx["deps"]` instead of
@@ -415,7 +417,7 @@ Its implementation returns `test_info` with this shape:
     },
     "listing": {"supported": True, "strategy": "normalized_results"},
     "filtering": {"case_filtering": "runner_args"},
-    "sharding": {"supported": False},
+    "sharding": {"supported": True, "granularity": "file"},
     "retries": {"supported": False, "default_attempts": 1},
     "execution": {
         "cacheable": True,
@@ -427,8 +429,18 @@ Its implementation returns `test_info` with this shape:
 }
 ```
 
+The provider may also return `test_discovery_inputs`, a list of
+workspace-relative files whose contents can change discovered unit
+identifiers. Once fingerprints those files before reusing a manifest. When the
+field is absent, Once conservatively fingerprints the provider's complete
+`affected_inputs` list.
+
 The adapter writes [JavaScript Object Notation](https://www.json.org/json-en.html)
-results to `ctx["build_dir"] + "/test/test_results.json"`:
+results below the target test directory. When `ctx["test"]["batch_id"]` is
+present, the adapter must add `batches/<batch_id>` to that directory before
+declaring its result, log, and native-result paths. This prevents concurrent
+batches of one target from overwriting each other. Once merges the batch
+records into the target's canonical result after the schedule completes.
 
 ```json
 {
@@ -458,7 +470,16 @@ results to `ctx["build_dir"] + "/test/test_results.json"`:
 Case identifiers are stable target-qualified semantic names. Declare
 `case_filtering = "runner_args"` only when every requested identifier is
 translated exactly into the native runner invocation. Otherwise declare
-`unsupported`. A failed or incomplete runner exits unsuccessfully and writes a
+`unsupported`.
+
+Set `sharding.supported` only when exact filtering and batch-isolated outputs
+are both implemented. `granularity = "file"` groups all discovered cases with
+the same `file` value into one batch. `granularity = "case"` creates one batch
+per stable unit. `granularity = "target"`, an absent manifest, or a stale
+manifest keeps the whole target as one batch. Batch identity depends on the
+target and semantic unit identifiers, not the worker count.
+
+A failed or incomplete runner exits unsuccessfully and writes a
 matching failed result when possible. A successful host process status must
 never turn a runner crash or missing successful terminal record into a pass.
 Once validates this complete record before it derives discovery data or marks
