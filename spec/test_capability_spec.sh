@@ -646,9 +646,9 @@ KOTLIN
 
     When call once --format json query test-plan --target hello_tests --test-unit 'hello_tests::missing'
     The status should be failure
-    The stdout should include '"schema":"once.error.v1"'
-    The stdout should include 'is not present in the current manifest'
-    The stdout should include 'run the whole target to refresh discovery'
+    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include 'is not present in the current manifest'
+    The stderr should include 'run the whole target to refresh discovery'
     The stderr should include 'session failed'
   End
 
@@ -658,8 +658,8 @@ KOTLIN
 
     When call once --format json query test-plan --target cli_e2e --test-unit 'spec/cli_surface_spec.sh::lists commands'
     The status should be failure
-    The stdout should include '"schema":"once.error.v1"'
-    The stdout should include 'does not support explicit test-unit filtering'
+    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include 'does not support explicit test-unit filtering'
     The stderr should include 'session failed'
   End
 
@@ -732,8 +732,8 @@ KOTLIN
 
     When call /bin/sh -c 'ONCE_ANDROID_INSTRUMENTATION_CRASH=1 "$1" -C "$2" --format json test libs/greeting/GreetingDeviceTests' sh "$ONCE_BIN" "$WORKSPACE"
     The status should be failure
-    The stdout should include '"schema":"once.error.v1"'
-    The stdout should include 'android_instrumentation_test'
+    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include 'android_instrumentation_test'
     The stderr should include 'session failed'
     The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"status":"failed"'
     The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/android-instrumentation-test.log" should include 'Process crashed'

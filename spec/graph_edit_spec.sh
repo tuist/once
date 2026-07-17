@@ -342,8 +342,8 @@ EOF
     End
     When call "$ONCE_BIN" --format json query validate-target
     The status should not equal 0
-    The stdout should include '"schema":"once.error.v1"'
-    The stdout should include 'validate-target input'
+    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include 'validate-target input'
     The stderr should include 'session failed'
   End
 End
@@ -397,8 +397,8 @@ EOF
     End
     When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit apply
     The status should not equal 0
-    The stdout should include '"schema":"once.error.v1"'
-    The stdout should include 'apply input'
+    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include 'apply input'
     The stderr should include 'session failed'
   End
 End

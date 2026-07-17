@@ -59,8 +59,10 @@ fn write_dispatch_error(format: cli::Format, error: &anyhow::Error) {
         eprintln!("once: {error:#}");
         return;
     }
+    // Errors always go to stderr, whatever the format, so stdout carries only a
+    // command's structured result and stays safe to pipe into a JSON consumer.
     let body = structured_dispatch_error(format, error);
-    if let Err(write_error) = std::io::stdout().write_all(body.as_bytes()) {
+    if let Err(write_error) = std::io::stderr().write_all(body.as_bytes()) {
         tracing::error!(error = %write_error, "failed to write structured error");
     }
 }
