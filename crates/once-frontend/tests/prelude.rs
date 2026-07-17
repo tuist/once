@@ -4010,7 +4010,8 @@ fn prelude_android_instrumentation_runner_requires_a_success_terminal_code() {
     )
     .unwrap();
 
-    assert!(source.contains("INSTRUMENTATION_CODE: -1"));
+    assert!(source.contains("INSTRUMENTATION_CODE:"));
+    assert!(source.contains("code.startsWith(\"-1\")"));
     assert!(source.contains("boolean passed = completed"));
 }
 

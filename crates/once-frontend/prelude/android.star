@@ -1573,8 +1573,17 @@ public final class OnceAndroidInstrumentationRunner {
   }
 
   private static boolean instrumentationCompleted(String output) {
+    // A completed run reports the activity result code -1 (RESULT_OK). Match the
+    // marker tolerantly: accept surrounding whitespace and trailing content so a
+    // buffered or slightly reformatted line still counts as complete, while still
+    // rejecting a truncated run (no marker) or a different code such as -10.
     for (String line : output.split("\\\\R")) {
-      if ("INSTRUMENTATION_CODE: -1".equals(line.trim())) {
+      String trimmed = line.trim();
+      if (!trimmed.startsWith("INSTRUMENTATION_CODE:")) {
+        continue;
+      }
+      String code = trimmed.substring("INSTRUMENTATION_CODE:".length()).trim();
+      if (code.startsWith("-1") && (code.length() == 2 || !Character.isDigit(code.charAt(2)))) {
         return true;
       }
     }
