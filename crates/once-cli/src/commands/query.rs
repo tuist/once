@@ -791,13 +791,14 @@ pub(crate) async fn evidence_records(
 }
 
 pub(crate) fn test_results_value(workspace: &Path, target_id: &str) -> Result<serde_json::Value> {
-    test_results_value_at(workspace, target_id, None)
+    test_results_value_at(workspace, target_id, None, &[])
 }
 
 pub(crate) fn test_results_value_at(
     workspace: &Path,
     target_id: &str,
     result_path: Option<&str>,
+    expected_units: &[String],
 ) -> Result<serde_json::Value> {
     let path = match result_path {
         Some(path) => once_core::WorkspacePath::try_from(path)
@@ -809,7 +810,7 @@ pub(crate) fn test_results_value_at(
         std::fs::read_to_string(&path).with_context(|| format!("reading `{}`", path.display()))?;
     let value =
         serde_json::from_str(&raw).with_context(|| format!("parsing `{}`", path.display()))?;
-    once_core::validate_test_results(&value, target_id)
+    once_core::validate_test_results_for_units(&value, target_id, expected_units)
         .with_context(|| format!("validating `{}`", path.display()))?;
     Ok(value)
 }

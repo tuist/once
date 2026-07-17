@@ -54,16 +54,19 @@ pub(super) fn run_test_target(
         .get("test_results")
         .and_then(Value::as_str)
         .or(fallback_results_path.as_deref());
-    let (results, results_error) =
-        match crate::commands::query::test_results_value_at(workspace, &batch.target, results_path)
-        {
-            Ok(results) => (Some(results), None),
-            Err(error) => (None, Some(format!("{error:#}"))),
-        };
-    // The subprocess exit status is the authoritative test outcome. Normalized
-    // results are surfaced for reporting, but a shape the reader cannot parse
-    // must not flip a genuinely passing run to failed.
-    let success = output.status.success();
+    let (results, results_error) = match crate::commands::query::test_results_value_at(
+        workspace,
+        &batch.target,
+        results_path,
+        &batch.test_filters,
+    ) {
+        Ok(results) => (Some(results), None),
+        Err(error) => (None, Some(format!("{error:#}"))),
+    };
+    // Whole-target execution keeps the subprocess status authoritative because
+    // normalized results are optional. Exact batches also require normalized
+    // evidence that every requested unit ran.
+    let success = batch_succeeded(output.status.success(), batch, results_error.as_deref());
     Ok(json!({
         "batch_id": batch.id,
         "target": batch.target,
@@ -75,6 +78,14 @@ pub(super) fn run_test_target(
         "results_error": results_error,
         "stderr": stderr,
     }))
+}
+
+fn batch_succeeded(
+    process_succeeded: bool,
+    batch: &TestBatch,
+    results_error: Option<&str>,
+) -> bool {
+    process_succeeded && (batch.test_filters.is_empty() || results_error.is_none())
 }
 
 pub(super) fn classify_run(
@@ -121,5 +132,28 @@ fn parse_json_record(stdout: &str) -> (Value, Option<String>) {
     match serde_json::from_str(stdout) {
         Ok(value) => (value, None),
         Err(error) => (Value::String(stdout.to_string()), Some(error.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_batch_requires_valid_results() {
+        let exact = TestBatch::new("tests", vec!["tests::requested".to_string()]).unwrap();
+        let whole_target = TestBatch::new("tests", Vec::new()).unwrap();
+
+        assert!(!batch_succeeded(
+            true,
+            &exact,
+            Some("missing requested unit")
+        ));
+        assert!(batch_succeeded(true, &exact, None));
+        assert!(batch_succeeded(
+            true,
+            &whole_target,
+            Some("optional normalized results are unavailable")
+        ));
     }
 }

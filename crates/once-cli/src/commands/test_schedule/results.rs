@@ -56,7 +56,7 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
             add_missing_cases(target, batch, &mut cases);
             continue;
         };
-        once_core::validate_test_results(result, target)
+        once_core::validate_test_results_for_units(result, target, &batch.test_filters)
             .with_context(|| format!("validating result for test batch `{}`", batch.id))?;
         all_passed &= result.get("status").and_then(Value::as_str) == Some("passed");
         if runner.is_none() {

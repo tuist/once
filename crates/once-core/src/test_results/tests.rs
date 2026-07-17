@@ -33,6 +33,28 @@ fn accepts_the_generic_normalized_shape() {
 }
 
 #[test]
+fn requires_every_requested_test_unit() {
+    let results = valid_results();
+    validate_test_results_for_units(
+        &results,
+        "tests/example",
+        &["tests/example::case-name".to_string()],
+    )
+    .unwrap();
+
+    let error = validate_test_results_for_units(
+        &results,
+        "tests/example",
+        &["tests/example::missing".to_string()],
+    )
+    .unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains("missing requested test unit `tests/example::missing`"));
+}
+
+#[test]
 fn rejects_a_result_for_another_target() {
     let error = validate_test_results(&valid_results(), "tests/other").unwrap_err();
     assert!(error.to_string().contains("must be `tests/other`"));

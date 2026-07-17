@@ -55,7 +55,9 @@ pub use test_plan::{
     SelectedTest, TestBatch, TestPlan, TestSelectionPolicy, TestSelectionReport, TEST_PLAN_SCHEMA,
     TEST_SELECTION_SCHEMA,
 };
-pub use test_results::{validate_test_results, TEST_RESULTS_SCHEMA};
+pub use test_results::{
+    validate_test_results, validate_test_results_for_units, TEST_RESULTS_SCHEMA,
+};
 pub use test_schedule::{
     TestBatchAttempt, TestBatchAttemptSpec, TestBatchStatus, TestSchedule, TestTimingStore,
     TEST_BATCH_ATTEMPT_SCHEMA, TEST_SCHEDULE_SCHEMA,

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{Map, Value};
 
@@ -37,6 +39,28 @@ pub fn validate_test_results(value: &Value, expected_target: &str) -> Result<()>
     )?;
     if artifacts.contains_key("coverage") {
         string_array(artifacts, "coverage", "normalized test result artifacts")?;
+    }
+    Ok(())
+}
+
+pub fn validate_test_results_for_units(
+    value: &Value,
+    expected_target: &str,
+    expected_units: &[String],
+) -> Result<()> {
+    validate_test_results(value, expected_target)?;
+    let cases = value["cases"]
+        .as_array()
+        .expect("validated normalized test cases");
+    let case_ids = cases
+        .iter()
+        .filter_map(|case| case.get("id").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    for expected_unit in expected_units {
+        ensure!(
+            case_ids.contains(expected_unit.as_str()),
+            "normalized test results are missing requested test unit `{expected_unit}`"
+        );
     }
     Ok(())
 }
