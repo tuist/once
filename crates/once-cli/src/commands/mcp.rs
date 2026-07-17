@@ -366,6 +366,7 @@ impl Server {
         run_async_result(async move {
             let report = crate::commands::test_schedule::execute(
                 &workspace,
+                None,
                 plan,
                 workers,
                 once_core::SandboxMode::Off,

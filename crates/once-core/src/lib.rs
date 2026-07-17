@@ -50,7 +50,7 @@ pub use runner::{
     Runner,
 };
 pub use store::WorkspaceStore;
-pub use test_manifest::{TestManifest, TestUnit, TEST_MANIFEST_SCHEMA};
+pub use test_manifest::{TestManifest, TestSharding, TestUnit, TEST_MANIFEST_SCHEMA};
 pub use test_plan::{
     SelectedTest, TestBatch, TestPlan, TestSelectionPolicy, TestSelectionReport, TEST_PLAN_SCHEMA,
     TEST_SELECTION_SCHEMA,

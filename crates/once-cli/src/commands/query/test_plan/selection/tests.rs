@@ -96,6 +96,24 @@ fn unmatched_paths_conservatively_select_every_test() {
 }
 
 #[test]
+fn changed_paths_that_are_not_workspace_relative_do_not_fail_selection() {
+    let workspace = TempDir::new().unwrap();
+    let graph = vec![target("unit", "test", &["tests/**/*.rs"], &[], true)];
+
+    // Absolute paths and `..` escapes cannot be normalized to workspace-relative
+    // form. They must degrade to conservative selection, not abort the command.
+    let report = selection_report(
+        workspace.path(),
+        &graph,
+        &["/etc/hosts".to_string(), "../outside/file.rs".to_string()],
+    )
+    .unwrap();
+
+    assert_eq!(report.tests.len(), 1);
+    assert!(report.tests[0].reasons[0].contains("has no declared owner"));
+}
+
+#[test]
 fn configured_module_changes_select_every_test() {
     let workspace = TempDir::new().unwrap();
     std::fs::write(

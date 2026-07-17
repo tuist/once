@@ -2,13 +2,19 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use sea_orm::{ActiveValue::Set, EntityTrait, QueryOrder, TransactionTrait};
+use sea_orm::{ActiveValue::Set, DbBackend, EntityTrait, FromQueryResult, QueryOrder, Statement};
 
 use super::entity;
 use super::{TestBatchAttempt, TestBatchStatus};
 use crate::WorkspaceStore;
 
 const DURATION_SAMPLE_LIMIT: usize = 20;
+
+#[derive(FromQueryResult)]
+struct DurationSample {
+    batch_id: String,
+    duration_ms: i64,
+}
 
 #[derive(Debug, Clone)]
 pub struct TestTimingStore {
@@ -31,20 +37,14 @@ impl TestTimingStore {
             return Ok(());
         }
         let db = self.store.connect().await?;
-        let transaction = db
-            .begin()
+        let models = attempts
+            .iter()
+            .map(record_to_active_model)
+            .collect::<Result<Vec<_>>>()?;
+        entity::Entity::insert_many(models)
+            .exec(&db)
             .await
-            .context("starting test timing transaction")?;
-        for attempt in attempts {
-            entity::Entity::insert(record_to_active_model(attempt)?)
-                .exec(&transaction)
-                .await
-                .with_context(|| format!("writing test batch attempt `{}`", attempt.id))?;
-        }
-        transaction
-            .commit()
-            .await
-            .context("committing test timing transaction")?;
+            .context("writing test batch attempts")?;
         Ok(())
     }
 
@@ -64,17 +64,34 @@ impl TestTimingStore {
     }
 
     pub async fn duration_estimates(&self) -> Result<BTreeMap<String, u64>> {
+        if !self.path().exists() {
+            return Ok(BTreeMap::new());
+        }
+        let db = self.store.connect().await?;
+        // Bound the read in SQL to the most recent successful, uncached attempts
+        // per batch rather than deserializing the whole history on every schedule.
+        // DURATION_SAMPLE_LIMIT is an internal constant, so inlining it is safe.
+        let sql = format!(
+            "SELECT batch_id, duration_ms FROM ( \
+                 SELECT batch_id, duration_ms, \
+                     ROW_NUMBER() OVER ( \
+                         PARTITION BY batch_id ORDER BY started_at_unix_ms DESC, id DESC \
+                     ) AS recency \
+                 FROM test_batch_attempts \
+                 WHERE status = 'passed' AND (cache IS NULL OR cache <> 'hit') \
+             ) WHERE recency <= {DURATION_SAMPLE_LIMIT}"
+        );
+        let rows =
+            DurationSample::find_by_statement(Statement::from_string(DbBackend::Sqlite, sql))
+                .all(&db)
+                .await
+                .with_context(|| {
+                    format!("reading test timings from `{}`", self.path().display())
+                })?;
         let mut samples = BTreeMap::<String, Vec<u64>>::new();
-        for attempt in self.load().await? {
-            if attempt.status != TestBatchStatus::Passed || attempt.cache.as_deref() == Some("hit")
-            {
-                continue;
-            }
-            let durations = samples.entry(attempt.batch_id).or_default();
-            durations.push(attempt.duration_ms);
-            if durations.len() > DURATION_SAMPLE_LIMIT {
-                durations.remove(0);
-            }
+        for row in rows {
+            let duration = u64::try_from(row.duration_ms).unwrap_or(0);
+            samples.entry(row.batch_id).or_default().push(duration);
         }
         Ok(samples
             .into_iter()

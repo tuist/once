@@ -16,6 +16,7 @@ fn manifest_rejects_empty_unit_identifiers() {
         "normalized_results",
         true,
         "runner_args",
+        TestSharding::default(),
         vec![TestUnit {
             id: String::new(),
             name: "case-a".to_string(),
@@ -35,8 +36,10 @@ fn manifest(units: Vec<TestUnit>) -> TestManifest {
         "normalized_results",
         true,
         "runner_args",
+        TestSharding::default(),
         units,
     )
+    .and_then(|manifest| manifest.with_discovery_fingerprint(Some("inputs-v1".to_string())))
     .unwrap()
 }
 

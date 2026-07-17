@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use once_core::{
-    EvidenceRecord, EvidenceStore, TestBatchAttempt, TestManifest, TestTimingStore, TestUnit,
+    EvidenceRecord, EvidenceStore, InputDigestBuilder, TestBatchAttempt, TestManifest,
+    TestTimingStore, TestUnit, WorkspacePath,
 };
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -441,7 +442,15 @@ pub(crate) fn test_plan_for_paths(
     changed_paths: &[String],
 ) -> Result<test_plan::TestPlan> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    test_plan::plan(workspace, &graph, changed_paths)
+    test_plan_for_paths_with_graph(workspace, &graph, changed_paths)
+}
+
+pub(crate) fn test_plan_for_paths_with_graph(
+    workspace: &Path,
+    graph: &[once_frontend::GraphTarget],
+    changed_paths: &[String],
+) -> Result<test_plan::TestPlan> {
+    test_plan::plan(workspace, graph, changed_paths)
 }
 
 pub(crate) fn explicit_test_plan(
@@ -449,7 +458,15 @@ pub(crate) fn explicit_test_plan(
     targets: &[String],
 ) -> Result<test_plan::TestPlan> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    test_plan::explicit_plan(&graph, targets)
+    explicit_test_plan_with_graph(workspace, &graph, targets)
+}
+
+pub(crate) fn explicit_test_plan_with_graph(
+    workspace: &Path,
+    graph: &[once_frontend::GraphTarget],
+    targets: &[String],
+) -> Result<test_plan::TestPlan> {
+    test_plan::explicit_plan(workspace, graph, targets)
 }
 
 pub(crate) fn explicit_test_unit_plan(
@@ -457,10 +474,24 @@ pub(crate) fn explicit_test_unit_plan(
     target: &str,
     test_unit: &str,
 ) -> Result<test_plan::TestPlan> {
-    let manifest = test_manifest_record(workspace, target)?;
-    validate_test_unit(&manifest, target, test_unit)?;
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    test_plan::explicit_unit_plan(&graph, target, test_unit)
+    explicit_test_unit_plan_with_graph(workspace, &graph, target, test_unit)
+}
+
+pub(crate) fn explicit_test_unit_plan_with_graph(
+    workspace: &Path,
+    graph: &[once_frontend::GraphTarget],
+    target: &str,
+    test_unit: &str,
+) -> Result<test_plan::TestPlan> {
+    let manifest = test_manifest_record(workspace, target)?;
+    if !test_manifest_is_current(workspace, target, &manifest) {
+        anyhow::bail!(
+            "the test manifest for `{target}` is stale; run the whole target to refresh discovery"
+        );
+    }
+    validate_test_unit(&manifest, target, test_unit)?;
+    test_plan::explicit_unit_plan(graph, target, test_unit)
 }
 
 pub(crate) fn validate_test_unit(
@@ -496,19 +527,28 @@ pub(crate) fn test_manifest_value(workspace: &Path, target_id: &str) -> Result<s
 }
 
 pub(crate) fn test_manifest_record(workspace: &Path, target_id: &str) -> Result<TestManifest> {
+    if let Some(manifest) = stored_test_manifest_record(workspace, target_id)? {
+        return Ok(manifest);
+    }
+    // Reading a manifest must not mutate the workspace. Persistence happens only
+    // through refresh_test_manifest, which runs after an actual whole-target test.
+    derive_test_manifest(workspace, target_id)
+}
+
+pub(crate) fn stored_test_manifest_record(
+    workspace: &Path,
+    target_id: &str,
+) -> Result<Option<TestManifest>> {
     let manifest_path = test_manifest_path(target_id)?;
     let stored_path = workspace.join(&manifest_path);
     if stored_path.is_file() {
         let raw = std::fs::read_to_string(&stored_path)
             .with_context(|| format!("reading `{}`", stored_path.display()))?;
         return serde_json::from_str(&raw)
-            .with_context(|| format!("parsing `{}`", stored_path.display()));
+            .with_context(|| format!("parsing `{}`", stored_path.display()))
+            .map(Some);
     }
-    let manifest = derive_test_manifest(workspace, target_id)?;
-    if manifest.source == "normalized_results" {
-        write_test_manifest(workspace, &manifest)?;
-    }
-    Ok(manifest)
+    Ok(None)
 }
 
 pub(crate) fn refresh_test_manifest(workspace: &Path, target_id: &str) -> Result<TestManifest> {
@@ -537,7 +577,11 @@ fn derive_test_manifest(workspace: &Path, target_id: &str) -> Result<TestManifes
     if !has_capability(target, "test") {
         anyhow::bail!("target `{target_id}` does not expose the test capability");
     }
-    let test_info = metadata_test_info(workspace, target);
+    let provider = metadata_provider(workspace, target);
+    let test_info = provider
+        .as_ref()
+        .and_then(|provider| provider.get("test_info"))
+        .cloned();
     let runner = test_info
         .as_ref()
         .and_then(|info| info.pointer("/runner/type"))
@@ -554,6 +598,19 @@ fn derive_test_manifest(workspace: &Path, target_id: &str) -> Result<TestManifes
         .and_then(serde_json::Value::as_str)
         .unwrap_or("unsupported")
         .to_string();
+    let sharding = once_core::TestSharding {
+        supported: test_info
+            .as_ref()
+            .and_then(|info| info.pointer("/sharding/supported"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        granularity: test_info
+            .as_ref()
+            .and_then(|info| info.pointer("/sharding/granularity"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("target")
+            .to_string(),
+    };
     let path = workspace.join(test_results_path(target_id)?);
     let (source, units) = if path.is_file() {
         let results = test_results_value(workspace, target_id)?;
@@ -570,8 +627,68 @@ fn derive_test_manifest(workspace: &Path, target_id: &str) -> Result<TestManifes
         source,
         listing_supported,
         case_filtering,
+        sharding,
         units,
     )
+    .and_then(|manifest| {
+        manifest.with_discovery_fingerprint(
+            provider
+                .as_ref()
+                .map(|provider| test_discovery_fingerprint(workspace, target, provider))
+                .transpose()?,
+        )
+    })
+}
+
+pub(crate) fn test_manifest_is_current(
+    workspace: &Path,
+    target_id: &str,
+    manifest: &TestManifest,
+) -> bool {
+    let Some(expected) = manifest.discovery_fingerprint.as_deref() else {
+        return false;
+    };
+    let Ok(graph) = once_frontend::load_graph_workspace(workspace) else {
+        return false;
+    };
+    let Some(target) = graph.iter().find(|target| target.label.id == target_id) else {
+        return false;
+    };
+    let Some(provider) = metadata_provider(workspace, target) else {
+        return false;
+    };
+    test_discovery_fingerprint(workspace, target, &provider)
+        .is_ok_and(|fingerprint| fingerprint == expected)
+}
+
+fn test_discovery_fingerprint(
+    workspace: &Path,
+    target: &once_frontend::GraphTarget,
+    provider: &serde_json::Value,
+) -> Result<String> {
+    let mut digest = InputDigestBuilder::new(b"once.test-discovery.v1");
+    digest.push_bytes(&serde_json::to_vec(target).context("serializing test target")?);
+    digest.push_bytes(&serde_json::to_vec(provider).context("serializing test provider")?);
+    let mut inputs = provider
+        .get("test_discovery_inputs")
+        .or_else(|| provider.get("affected_inputs"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    inputs.sort();
+    inputs.dedup();
+    for input in inputs {
+        let path = WorkspacePath::try_from(input.as_str())
+            .with_context(|| format!("invalid affected test input `{input}`"))?;
+        digest.push_bytes(path.as_str().as_bytes());
+        digest
+            .push_source(workspace, path.as_str())
+            .with_context(|| format!("hashing affected test input `{input}`"))?;
+    }
+    Ok(digest.finish().to_string())
 }
 
 fn test_manifest_path(target_id: &str) -> Result<PathBuf> {
@@ -674,7 +791,20 @@ pub(crate) async fn evidence_records(
 }
 
 pub(crate) fn test_results_value(workspace: &Path, target_id: &str) -> Result<serde_json::Value> {
-    let path = workspace.join(test_results_path(target_id)?);
+    test_results_value_at(workspace, target_id, None)
+}
+
+pub(crate) fn test_results_value_at(
+    workspace: &Path,
+    target_id: &str,
+    result_path: Option<&str>,
+) -> Result<serde_json::Value> {
+    let path = match result_path {
+        Some(path) => once_core::WorkspacePath::try_from(path)
+            .context("test result path must be workspace-relative")?
+            .resolve(workspace),
+        None => workspace.join(test_results_path(target_id)?),
+    };
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("reading `{}`", path.display()))?;
     let value =
@@ -1347,6 +1477,7 @@ mod tests {
             "normalized_results",
             true,
             "unsupported",
+            once_core::TestSharding::default(),
             vec![TestUnit {
                 id: "suite::case".to_string(),
                 name: "case".to_string(),
@@ -1372,6 +1503,7 @@ mod tests {
             "normalized_results",
             true,
             "runner_args",
+            once_core::TestSharding::default(),
             vec![],
         )
         .unwrap();
@@ -1381,5 +1513,37 @@ mod tests {
         assert!(error
             .to_string()
             .contains("run the whole target to refresh discovery"));
+    }
+
+    #[test]
+    fn discovery_fingerprint_changes_with_declared_discovery_input_content() {
+        let workspace = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(workspace.path().join("tests")).unwrap();
+        std::fs::write(workspace.path().join("tests/example.py"), "first").unwrap();
+        let target = once_frontend::GraphTarget {
+            label: once_frontend::TargetLabel {
+                package: String::new(),
+                name: "tests".to_string(),
+                id: "tests".to_string(),
+            },
+            kind: "example_test".to_string(),
+            deps: Vec::new(),
+            srcs: vec!["tests/*.py".to_string()],
+            attrs: std::collections::BTreeMap::new(),
+            capabilities: Vec::new(),
+            providers: Vec::new(),
+            tools: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let provider = serde_json::json!({
+            "test_discovery_inputs": ["tests/example.py"],
+            "affected_inputs": ["tests/example.py"]
+        });
+
+        let first = test_discovery_fingerprint(workspace.path(), &target, &provider).unwrap();
+        std::fs::write(workspace.path().join("tests/example.py"), "second").unwrap();
+        let second = test_discovery_fingerprint(workspace.path(), &target, &provider).unwrap();
+
+        assert_ne!(first, second);
     }
 }

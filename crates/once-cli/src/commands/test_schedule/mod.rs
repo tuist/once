@@ -1,5 +1,6 @@
 mod executor;
 mod process;
+mod results;
 mod worker;
 
 use std::path::Path;
@@ -33,6 +34,7 @@ impl TestExecutionReport {
 
 pub(crate) async fn execute(
     workspace: &Path,
+    graph: Option<Vec<once_frontend::GraphTarget>>,
     plan: TestPlan,
     requested_workers: Option<usize>,
     sandbox: SandboxMode,
@@ -41,16 +43,21 @@ pub(crate) async fn execute(
     if plan.batches.is_empty() {
         anyhow::bail!("test plan contains no batches");
     }
-    validate_plan_targets(workspace, &plan)?;
+    let graph = match graph {
+        Some(graph) => graph,
+        None => once_frontend::load_graph_workspace(workspace).context("loading graph")?,
+    };
+    validate_plan_targets(workspace, &graph, &plan)?;
     let store = TestTimingStore::open_workspace(workspace);
     let estimates = store.duration_estimates().await?;
     let executable = std::env::current_exe().context("resolving current once executable")?;
-    let workspace = workspace.to_path_buf();
+    let workspace_path = workspace.to_path_buf();
+    let scheduler_workspace = workspace_path.clone();
     let blocking_plan = plan.clone();
     let completed = tokio::task::spawn_blocking(move || {
         executor::execute(
             &executable,
-            &workspace,
+            &scheduler_workspace,
             &blocking_plan,
             &estimates,
             requested_workers,
@@ -59,6 +66,7 @@ pub(crate) async fn execute(
     })
     .await
     .context("joining test scheduler")??;
+    results::persist(&workspace_path, &plan, &completed.runs)?;
     store.append(&completed.schedule.attempts).await?;
     Ok(TestExecutionReport {
         plan,
@@ -69,12 +77,13 @@ pub(crate) async fn execute(
 
 pub(crate) async fn run(
     workspace: &Path,
+    graph: Option<Vec<once_frontend::GraphTarget>>,
     output: Output,
     plan: TestPlan,
     requested_workers: Option<usize>,
     sandbox: SandboxMode,
 ) -> Result<ExitCode> {
-    let report = execute(workspace, plan, requested_workers, sandbox).await?;
+    let report = execute(workspace, graph, plan, requested_workers, sandbox).await?;
     let succeeded = report.succeeded();
     write_report(output, &report).await?;
     Ok(if succeeded {
@@ -96,8 +105,11 @@ fn validate_workers(workers: Option<usize>) -> Result<()> {
     Ok(())
 }
 
-fn validate_plan_targets(workspace: &Path, plan: &TestPlan) -> Result<()> {
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+fn validate_plan_targets(
+    workspace: &Path,
+    graph: &[once_frontend::GraphTarget],
+    plan: &TestPlan,
+) -> Result<()> {
     for batch in &plan.batches {
         let target = graph
             .iter()

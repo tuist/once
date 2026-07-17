@@ -25,6 +25,8 @@ pub struct AnalysisOptions {
     pub run_visible: bool,
     /// Stable semantic test-unit identifiers requested for a test capability.
     pub test_filters: Vec<String>,
+    /// Stable batch identifier used to isolate outputs for parallel test runs.
+    pub test_batch_id: Option<String>,
 }
 
 /// Result of analyzing one target.
@@ -357,10 +359,17 @@ fn build_ctx<'v>(
         "visible",
         Value::new_bool(analysis.options.run_visible),
     )]));
-    let test = heap.alloc(AllocDict([(
-        "filters",
-        heap.alloc(analysis.options.test_filters.clone()),
-    )]));
+    let test = heap.alloc(AllocDict([
+        ("filters", heap.alloc(analysis.options.test_filters.clone())),
+        (
+            "batch_id",
+            analysis
+                .options
+                .test_batch_id
+                .as_ref()
+                .map_or(Value::new_none(), |id| heap.alloc(id.clone())),
+        ),
+    ]));
     heap.alloc(AllocDict([
         ("label", label),
         ("attr", attr),

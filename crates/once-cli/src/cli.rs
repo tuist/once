@@ -212,12 +212,21 @@ pub enum Cmd {
             long = "test-unit",
             value_name = "UNIT",
             requires = "target",
-            conflicts_with_all = ["changed_paths", "all", "batch_test_unit"]
+            conflicts_with_all = ["changed_paths", "all", "batch_test_units"]
         )]
         test_unit: Option<String>,
 
-        #[arg(long, hide = true, requires = "target", conflicts_with = "test_unit")]
-        batch_test_unit: Option<String>,
+        #[arg(
+            long = "batch-test-unit",
+            hide = true,
+            requires = "target",
+            conflicts_with = "test_unit",
+            action = clap::ArgAction::Append
+        )]
+        batch_test_units: Vec<String>,
+
+        #[arg(long, hide = true, requires = "batch_test_units")]
+        test_batch_id: Option<String>,
 
         /// Target id, such as `tests/unit` or `./unit`.
         #[arg(required_unless_present_any = ["list", "changed_paths", "all"])]

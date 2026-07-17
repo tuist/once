@@ -85,8 +85,12 @@ fn run_worker<F>(
         let result = run_batch(&scheduled.batch);
         let duration_ms = millis(started.elapsed().as_millis());
         let elapsed_ms = i64::try_from(duration_ms).unwrap_or(i64::MAX);
-        let finished_at_unix_ms =
-            unix_ms_now().unwrap_or_else(|_| started_at_unix_ms.saturating_add(elapsed_ms));
+        // Clamp to the start instant: a wall clock that steps backward mid-batch
+        // (e.g. an NTP correction) must not produce a finish time preceding the
+        // start, which would otherwise fail the attempt invariant and panic.
+        let finished_at_unix_ms = unix_ms_now()
+            .unwrap_or_else(|_| started_at_unix_ms.saturating_add(elapsed_ms))
+            .max(started_at_unix_ms);
         let (run, status, exit_code, cache) = classify_run(&scheduled.batch, result);
         tracing::info!(
             plan_id,

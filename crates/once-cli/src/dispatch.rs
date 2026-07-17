@@ -118,7 +118,8 @@ async fn run_command(
             all,
             changed_paths,
             test_unit,
-            batch_test_unit,
+            batch_test_units,
+            test_batch_id,
         } => {
             Box::pin(dispatch_test(
                 workspace,
@@ -131,7 +132,8 @@ async fn run_command(
                     all,
                     changed_paths,
                     test_unit,
-                    batch_test_unit,
+                    batch_test_units,
+                    test_batch_id,
                 },
             ))
             .await
@@ -184,11 +186,12 @@ struct TestDispatchArgs {
     all: bool,
     changed_paths: Vec<String>,
     test_unit: Option<String>,
-    batch_test_unit: Option<String>,
+    batch_test_units: Vec<String>,
+    test_batch_id: Option<String>,
 }
 
 async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> Result<ExitCode> {
-    if let Some(test_unit) = args.batch_test_unit {
+    if !args.batch_test_units.is_empty() {
         let target = resolve_required_target(workspace, args.target)?;
         let cache = crate::cache_provider::resolve(workspace, xdg)?;
         return Box::pin(commands::graph::test_with_filters(
@@ -197,7 +200,8 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
             args.output,
             &target,
             args.sandbox,
-            &[test_unit],
+            &args.batch_test_units,
+            args.test_batch_id.as_deref(),
         ))
         .await;
     }
@@ -214,19 +218,25 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
         ))
         .await;
     }
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let plan = match args.target {
         Some(target) => {
             let target = resolve_target_arg(workspace, &target)?;
             if let Some(test_unit) = args.test_unit {
-                commands::query::explicit_test_unit_plan(workspace, &target, &test_unit)?
+                commands::query::explicit_test_unit_plan_with_graph(
+                    workspace, &graph, &target, &test_unit,
+                )?
             } else {
-                commands::query::explicit_test_plan(workspace, &[target])?
+                commands::query::explicit_test_plan_with_graph(workspace, &graph, &[target])?
             }
         }
-        None => commands::query::test_plan_for_paths(workspace, &args.changed_paths)?,
+        None => {
+            commands::query::test_plan_for_paths_with_graph(workspace, &graph, &args.changed_paths)?
+        }
     };
     Box::pin(commands::test_schedule::run(
         workspace,
+        Some(graph),
         args.output,
         plan,
         args.jobs,

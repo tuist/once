@@ -28,18 +28,42 @@ pub(super) fn run_test_target(
     for test_filter in &batch.test_filters {
         command.arg("--batch-test-unit").arg(test_filter);
     }
+    if !batch.test_filters.is_empty() {
+        command.arg("--test-batch-id").arg(&batch.id);
+    }
     let output = command
         .output()
         .with_context(|| format!("running `{}` test `{}`", executable.display(), batch.target))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let (record, record_parse_error) = parse_json_record(&stdout);
+    let fallback_results_path = if batch.test_filters.is_empty() {
+        None
+    } else {
+        Some(
+            std::path::PathBuf::from(".once/out")
+                .join(crate::commands::query::target_id_path(&batch.target)?)
+                .join("test/batches")
+                .join(&batch.id)
+                .join("test_results.json")
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
+        )
+    };
+    let results_path = record
+        .get("test_results")
+        .and_then(Value::as_str)
+        .or(fallback_results_path.as_deref());
     let (results, results_error) =
-        match crate::commands::query::test_results_value(workspace, &batch.target) {
+        match crate::commands::query::test_results_value_at(workspace, &batch.target, results_path)
+        {
             Ok(results) => (Some(results), None),
             Err(error) => (None, Some(format!("{error:#}"))),
         };
-    let success = output.status.success() && results_error.is_none();
+    // The subprocess exit status is the authoritative test outcome. Normalized
+    // results are surfaced for reporting, but a shape the reader cannot parse
+    // must not flip a genuinely passing run to failed.
+    let success = output.status.success();
     Ok(json!({
         "batch_id": batch.id,
         "target": batch.target,

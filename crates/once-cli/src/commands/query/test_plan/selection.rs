@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use once_core::{TestSelectionPolicy, TestSelectionReport, WorkspacePath, TEST_SELECTION_SCHEMA};
 use once_frontend::GraphTarget;
 
@@ -13,7 +13,7 @@ pub(super) fn selection_report(
     graph: &[GraphTarget],
     changed_paths: &[String],
 ) -> Result<TestSelectionReport> {
-    let changed_paths = normalize_changed_paths(changed_paths)?;
+    let changed_paths = normalize_changed_paths(changed_paths);
     if changed_paths.is_empty() {
         return Ok(TestSelectionReport {
             schema: TEST_SELECTION_SCHEMA.to_string(),
@@ -58,6 +58,10 @@ pub(super) fn selection_report(
             })
             .collect::<Vec<_>>();
         if owners.is_empty() {
+            // Deliberately conservative: a path no target claims may still affect
+            // any test (for example documentation compiled into doc-tests), so we
+            // select the whole test scope rather than risk skipping a regression.
+            // The path is also recorded in `unmatched_paths` so callers can see why.
             unmatched_paths.push(path.clone());
             add_full_test_scope(
                 graph,
@@ -99,18 +103,23 @@ pub(super) fn selection_report(
     })
 }
 
-fn normalize_changed_paths(paths: &[String]) -> Result<Vec<String>> {
+fn normalize_changed_paths(paths: &[String]) -> Vec<String> {
+    // Normalize to workspace-relative form when possible, but tolerate inputs that
+    // cannot be (absolute paths, `..`, Windows separators) rather than failing the
+    // whole command. A path we cannot normalize simply won't match a declared
+    // owner and falls through to conservative selection.
     let mut normalized = paths
         .iter()
         .map(|path| {
-            WorkspacePath::try_from(path.as_str())
-                .map(|path| path.to_string())
-                .with_context(|| format!("invalid changed path `{path}`"))
+            WorkspacePath::try_from(path.as_str()).map_or_else(
+                |_| path.trim_start_matches("./").to_string(),
+                |workspace_path| workspace_path.to_string(),
+            )
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
     normalized.sort();
     normalized.dedup();
-    Ok(normalized)
+    normalized
 }
 
 fn all_tests(graph: &[GraphTarget], reason: &str) -> Vec<AffectedTestRecord> {

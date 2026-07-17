@@ -56,6 +56,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "ctx[\"test\"][\"filters\"]",
                 "Stable semantic test-unit identifiers requested for this test execution.",
             ),
+            entry(
+                "ctx[\"test\"][\"batch_id\"]",
+                "Stable batch identifier for isolating outputs during parallel test execution, or None for a whole-target execution.",
+            ),
         ],
         analysis_primitives: vec![
             entry("glob(patterns)", "Expand package source patterns into sorted workspace paths."),
@@ -119,8 +123,12 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Return `schema`, `target`, `runner`, `command`, `outputs`, `listing`, `filtering`, `sharding`, `retries`, `execution`, `labels`, and `metadata`. The test starter shows the complete required shape.",
             ),
             entry(
-                "ctx[\"build_dir\"] + \"/test/test_results.json\"",
-                "Write normalized results at this target-owned path. The record uses schema `once.test_results.v1` and contains target, runner, status, summary, cases, and artifacts.",
+                "provider[\"test_discovery_inputs\"]",
+                "Optionally list the workspace files whose contents can change discovered test identities. Once fingerprints them before reusing a manifest.",
+            ),
+            entry(
+                "ctx[\"build_dir\"] + \"/test[/batches/<batch_id>]/test_results.json\"",
+                "Write normalized results under a batch-isolated directory when batch_id is present. The record uses schema `once.test_results.v1` and contains target, runner, status, summary, cases, and artifacts.",
             ),
             entry(
                 "case.id = ctx[\"label\"][\"id\"] + \"::\" + semantic_name",
@@ -129,6 +137,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry(
                 "filtering.case_filtering = \"runner_args\"",
                 "Declare this only when every value in `ctx[\"test\"][\"filters\"]` is translated exactly into native runner arguments. Otherwise declare `unsupported` and ignore no requested filters.",
+            ),
+            entry(
+                "sharding = {\"supported\": True, \"granularity\": \"file\"}",
+                "Enable automatic batching only when exact filters and batch-isolated outputs are implemented. Granularity is target, file, or case.",
             ),
             entry(
                 "runner exit status and results.status",
@@ -169,7 +181,8 @@ generated_text = target_kind(
     return path
 
 def _scripted_test_impl(ctx):
-    test_dir = ctx["build_dir"] + "/test"
+    batch_id = ctx["test"]["batch_id"]
+    test_dir = ctx["build_dir"] + "/test" + (("/batches/" + batch_id) if batch_id else "")
     results = test_dir + "/test_results.json"
     log = test_dir + "/scripted-test.log"
     program = _project_path(ctx, ctx["attr"]["program"])
@@ -223,6 +236,7 @@ def _scripted_test_impl(ctx):
         )
     return {
         "label_id": ctx["label"]["id"],
+        "test_discovery_inputs": glob(ctx["srcs"]),
         "test_info": test_info,
     }
 

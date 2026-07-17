@@ -34,6 +34,8 @@ struct CapabilityRunRecord {
     output_groups: Vec<String>,
     required_outputs: Vec<String>,
     outputs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    test_results: Option<String>,
     #[serde(skip)]
     input_digest: Option<Digest>,
     #[serde(skip)]
@@ -70,7 +72,7 @@ pub async fn test(
     target_id: &str,
     sandbox: SandboxMode,
 ) -> Result<ExitCode> {
-    test_with_filters(workspace, cache, output, target_id, sandbox, &[]).await
+    test_with_filters(workspace, cache, output, target_id, sandbox, &[], None).await
 }
 
 pub async fn test_with_filters(
@@ -80,7 +82,13 @@ pub async fn test_with_filters(
     target_id: &str,
     sandbox: SandboxMode,
     test_filters: &[String],
+    test_batch_id: Option<&str>,
 ) -> Result<ExitCode> {
+    if let Some(batch_id) = test_batch_id {
+        if Digest::from_hex(batch_id).is_none() {
+            anyhow::bail!("invalid internal test batch identifier");
+        }
+    }
     if !test_filters.is_empty() {
         let manifest = crate::commands::query::test_manifest_record(workspace, target_id)?;
         for test_filter in test_filters {
@@ -94,6 +102,7 @@ pub async fn test_with_filters(
         graph,
         AnalysisOptions {
             test_filters: test_filters.to_vec(),
+            test_batch_id: test_batch_id.map(str::to_string),
             ..AnalysisOptions::default()
         },
         sandbox,
@@ -112,6 +121,7 @@ pub async fn test_with_filters(
     }
     let record = if let Some(outcome) = session.run_with_analysis(target, "test").await? {
         let analysis::BuildOutcome {
+            provider,
             action_digest,
             input_digest,
             outputs,
@@ -120,6 +130,10 @@ pub async fn test_with_filters(
             result,
             ..
         } = outcome;
+        let test_results = provider
+            .pointer("/test_info/outputs/results")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
         CapabilityRunRecord {
             target: target.label.id.clone(),
             kind: target.kind.clone(),
@@ -130,6 +144,7 @@ pub async fn test_with_filters(
             output_groups: test_capability.output_groups.clone(),
             required_outputs: test_capability.requires_outputs.clone(),
             outputs,
+            test_results,
             input_digest,
             cache_state,
             result,
@@ -197,6 +212,7 @@ pub async fn run(
             output_groups: run_capability.output_groups.clone(),
             required_outputs: run_capability.requires_outputs.clone(),
             outputs,
+            test_results: None,
             input_digest,
             cache_state,
             result,
@@ -244,6 +260,7 @@ async fn build_target(
             output_groups: capability.output_groups.clone(),
             required_outputs: capability.requires_outputs.clone(),
             outputs,
+            test_results: None,
             input_digest,
             cache_state,
             result,
@@ -308,6 +325,7 @@ async fn run_target_capability(
             .into_iter()
             .map(|output| output.as_str().to_string())
             .collect(),
+        test_results: None,
         input_digest: action.input_digest(),
         cache_state,
         result,
@@ -493,6 +511,7 @@ mod tests {
             output_groups: vec!["default".to_string()],
             required_outputs: vec!["bundle".to_string()],
             outputs: vec![".once/out/apps/ios/App/run".to_string()],
+            test_results: None,
             input_digest: None,
             cache_state: EvidenceCacheState::Miss,
             result: action_result(),
@@ -518,6 +537,7 @@ mod tests {
             output_groups: Vec::new(),
             required_outputs: Vec::new(),
             outputs: Vec::new(),
+            test_results: None,
             input_digest: None,
             cache_state: EvidenceCacheState::Hit,
             result: action_result(),

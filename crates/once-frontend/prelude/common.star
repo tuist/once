@@ -138,6 +138,12 @@ def _test_unit_suffix(ctx, unit):
         fail("test unit `" + unit + "` does not belong to target `" + ctx["label"]["id"] + "`")
     return unit[len(prefix):]
 
+def _test_output_dir(ctx):
+    batch_id = (ctx.get("test") or {}).get("batch_id")
+    if batch_id:
+        return ctx["build_dir"] + "/test/batches/" + batch_id
+    return ctx["build_dir"] + "/test"
+
 def _basename(path):
     normalized = path.replace("\\", "/")
     parts = normalized.split("/")
