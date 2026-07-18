@@ -1258,6 +1258,25 @@ def _android_compile_local_test_runner(ctx, tools):
 def _android_local_test_env(attrs, tools, test_dir):
     return _android_test_env(attrs, tools, test_dir)
 
+def _android_test_unit_filter(ctx, unit):
+    suffix = _test_unit_suffix(ctx, unit)
+    parts = suffix.split(".")
+    if len(parts) < 2:
+        fail(ctx["label"]["id"] + ": Android test unit `" + unit + "` must include a class and method")
+    return ".".join(parts[:-1]) + "#" + parts[-1]
+
+def _android_local_test_filters(ctx):
+    filters = (ctx.get("test") or {}).get("filters") or []
+    return [_android_test_unit_filter(ctx, unit) for unit in filters]
+
+def _android_instrumentation_test_filters(ctx):
+    filters = (ctx.get("test") or {}).get("filters") or []
+    if len(filters) > 1:
+        fail(ctx["label"]["id"] + ": Android instrumentation execution currently accepts one explicit test unit")
+    if not filters:
+        return []
+    return ["-e", "class", _android_test_unit_filter(ctx, filters[0])]
+
 def _android_local_test_info(ctx, attrs, command_argv, command_env, results, log, native_results):
     return {
         "schema": "once.test_info.v1",
@@ -1283,7 +1302,7 @@ def _android_local_test_info(ctx, attrs, command_argv, command_env, results, log
             "strategy": "scan_compiled_classes",
         },
         "filtering": {
-            "case_filtering": "unsupported",
+            "case_filtering": "runner_args",
         },
         "sharding": {
             "supported": False,
@@ -1396,13 +1415,14 @@ public final class OnceAndroidInstrumentationRunner {
       appendCommand(nativeText, command, instrumentation);
     }
 
+    boolean completed = instrumentation.exitCode == 0 && setupFailure.isEmpty() && instrumentationCompleted(instrumentation.output);
     List<TestCase> cases = parseCases(target, instrumentation.output);
     if (cases.isEmpty()) {
-      String status = instrumentation.exitCode == 0 ? "passed" : "failed";
+      String status = completed ? "passed" : "failed";
       cases.add(new TestCase(target + "::instrumentation", "instrumentation", component, status));
     }
 
-    boolean passed = instrumentation.exitCode == 0 && setupFailure.isEmpty();
+    boolean passed = completed;
     for (TestCase testCase : cases) {
       if ("failed".equals(testCase.status)) {
         passed = false;
@@ -1550,6 +1570,24 @@ public final class OnceAndroidInstrumentationRunner {
       }
     }
     return cases;
+  }
+
+  private static boolean instrumentationCompleted(String output) {
+    // A completed run reports the activity result code -1 (RESULT_OK). Match the
+    // marker tolerantly: accept surrounding whitespace and trailing content so a
+    // buffered or slightly reformatted line still counts as complete, while still
+    // rejecting a truncated run (no marker) or a different code such as -10.
+    for (String line : output.split("\\\\R")) {
+      String trimmed = line.trim();
+      if (!trimmed.startsWith("INSTRUMENTATION_CODE:")) {
+        continue;
+      }
+      String code = trimmed.substring("INSTRUMENTATION_CODE:".length()).trim();
+      if (code.startsWith("-1") && (code.length() == 2 || !Character.isDigit(code.charAt(2)))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static void createParent(Path path) throws Exception {
@@ -1796,6 +1834,34 @@ def _android_instrumentation_test_info(ctx, attrs, command_argv, command_env, re
         },
         "labels": _android_attr(attrs, "labels", []),
         "metadata": {},
+    }
+
+def _android_instrumentation_metadata_provider(ctx, attrs):
+    test_dir = ctx["build_dir"] + "/test"
+    results = test_dir + "/test_results.json"
+    log = test_dir + "/android-instrumentation-test.log"
+    native_results = test_dir + "/native_results.txt"
+    runner = _android_attr(attrs, "instrumentation_runner", "androidx.test.runner.AndroidJUnitRunner")
+    support_apks = _android_support_apks(attrs)
+    empty_app = {}
+    return {
+        "label_id": ctx["label"]["id"],
+        "target_kind": "android_instrumentation_test",
+        "target_apk": "",
+        "test_apk": "",
+        "affected_inputs": support_apks,
+        "test_info": _android_instrumentation_test_info(
+            ctx,
+            attrs,
+            [],
+            {},
+            results,
+            log,
+            native_results,
+            empty_app,
+            empty_app,
+            runner,
+        ),
     }
 
 def _android_jar_classes(ctx, tools, classes_dir, classes_hash):
@@ -2169,6 +2235,7 @@ def _android_local_test_impl(ctx):
     if test_class:
         command_argv.append(test_class)
     command_argv.extend(_android_attr(attrs, "args", []))
+    command_argv.extend(_android_local_test_filters(ctx))
     command_env = _android_local_test_env(attrs, tools, test_dir)
     provider = {
         "label_id": ctx["label"]["id"],
@@ -2197,6 +2264,8 @@ def _android_local_test_impl(ctx):
 def _android_instrumentation_test_impl(ctx):
     attrs = _android_resolve_attrs(ctx, ["test_app", "android_sdk", "adb", "adb_serial", "javac", "java", "java_home", "instrumentation_runner", "instrumentation_args", "test_class"])
     _android_reject_unsupported_attrs(attrs, ctx["label"]["id"], ["target_device"])
+    if ctx["capability"] == "metadata":
+        return _android_instrumentation_metadata_provider(ctx, attrs)
     target_app, test_app = _android_find_instrumentation_apps(ctx, attrs)
     target_package = target_app.get("application_id") or ""
     test_package = test_app.get("application_id") or ""
@@ -2233,7 +2302,7 @@ def _android_instrumentation_test_impl(ctx):
         _android_bool_string(_android_attr(attrs, "disable_animations", False)),
         _android_device_ready_script(),
         str(len(support_apks)),
-    ] + support_apks + _android_instrumentation_args(attrs)
+    ] + support_apks + _android_instrumentation_args(attrs) + _android_instrumentation_test_filters(ctx)
     command_env = _android_instrumentation_test_env(attrs, java_tools, test_dir)
     provider = {
         "label_id": ctx["label"]["id"],
@@ -2249,6 +2318,7 @@ def _android_instrumentation_test_impl(ctx):
         argv = command_argv,
         inputs = _unique([runner_hash] + [path for path in [target_app.get("apk") or "", test_app.get("apk") or ""] if path] + support_apks),
         outputs = [test_dir, results, log, native_results],
+        create_dirs = [test_dir + "/home"],
         env = command_env,
         cacheable = False,
         toolchain_identity = java_tools["identity"] + "\x00" + adb_tools["identity"] + "\x00android_instrumentation_test_run.v1",

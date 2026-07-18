@@ -56,14 +56,7 @@ async fn run_command(
     match command {
         Cmd::Auth { cmd } => run_auth_command(workspace, xdg, output, cmd).await,
         Cmd::Build { target, sandbox } => {
-            let target = resolve_required_target(workspace, target)?;
-            let cache = crate::cache_provider::resolve(workspace, xdg)?;
-            // Graph command futures carry analysis state; boxing keeps
-            // dispatch below clippy's large_futures threshold.
-            Box::pin(commands::graph::build(
-                workspace, &cache, output, &target, sandbox,
-            ))
-            .await
+            dispatch_build(workspace, xdg, output, target, sandbox).await
         }
         Cmd::Run {
             target,
@@ -118,13 +111,30 @@ async fn run_command(
             .await
         }
         Cmd::Cache { cmd } => run_cache_command(workspace, xdg, output, cmd).await,
-        Cmd::Test { target, sandbox } => {
-            let target = resolve_required_target(workspace, target)?;
-            let cache = crate::cache_provider::resolve(workspace, xdg)?;
-            // Graph command futures carry analysis state; boxing keeps
-            // dispatch below clippy's large_futures threshold.
-            Box::pin(commands::graph::test(
-                workspace, &cache, output, &target, sandbox,
+        Cmd::Test {
+            target,
+            sandbox,
+            jobs,
+            all,
+            changed_paths,
+            test_unit,
+            batch_test_units,
+            test_batch_id,
+        } => {
+            Box::pin(dispatch_test(
+                workspace,
+                xdg,
+                TestDispatchArgs {
+                    output,
+                    target,
+                    sandbox,
+                    jobs,
+                    all,
+                    changed_paths,
+                    test_unit,
+                    batch_test_units,
+                    test_batch_id,
+                },
             ))
             .await
         }
@@ -137,14 +147,128 @@ async fn run_command(
         Cmd::Mcp {
             workspace: workspace_override,
             allow_run,
-        } => {
-            let mcp_workspace = workspace_override.unwrap_or_else(|| workspace.to_path_buf());
-            commands::mcp::serve(mcp_workspace, allow_run)
-                .await
-                .map(|()| ExitCode::SUCCESS)
-        }
+        } => run_mcp_command(workspace, workspace_override, allow_run).await,
         Cmd::Reference { out } => crate::reference::generate(&out),
     }
+}
+
+async fn run_mcp_command(
+    workspace: &Path,
+    workspace_override: Option<PathBuf>,
+    allow_run: bool,
+) -> Result<ExitCode> {
+    let workspace = resolve_mcp_workspace(workspace, workspace_override)?;
+    commands::mcp::serve(workspace, allow_run)
+        .await
+        .map(|()| ExitCode::SUCCESS)
+}
+
+fn resolve_mcp_workspace(workspace: &Path, workspace_override: Option<PathBuf>) -> Result<PathBuf> {
+    match workspace_override {
+        Some(workspace) => resolve_workspace(Some(workspace)),
+        None => Ok(workspace.to_path_buf()),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_workspace_override_is_canonicalized() {
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = temporary.path().join("workspace");
+        let alias = temporary.path().join("alias");
+        std::fs::create_dir(&workspace).unwrap();
+        std::os::unix::fs::symlink(&workspace, &alias).unwrap();
+
+        assert_eq!(
+            resolve_mcp_workspace(temporary.path(), Some(alias)).unwrap(),
+            std::fs::canonicalize(workspace).unwrap()
+        );
+    }
+}
+
+async fn dispatch_build(
+    workspace: &Path,
+    xdg: &Xdg,
+    output: Output,
+    target: Option<String>,
+    sandbox: SandboxMode,
+) -> Result<ExitCode> {
+    let target = resolve_required_target(workspace, target)?;
+    let cache = crate::cache_provider::resolve(workspace, xdg)?;
+    Box::pin(commands::graph::build(
+        workspace, &cache, output, &target, sandbox,
+    ))
+    .await
+}
+
+struct TestDispatchArgs {
+    output: Output,
+    target: Option<String>,
+    sandbox: SandboxMode,
+    jobs: Option<usize>,
+    all: bool,
+    changed_paths: Vec<String>,
+    test_unit: Option<String>,
+    batch_test_units: Vec<String>,
+    test_batch_id: Option<String>,
+}
+
+async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> Result<ExitCode> {
+    if !args.batch_test_units.is_empty() {
+        let target = resolve_required_target(workspace, args.target)?;
+        let cache = crate::cache_provider::resolve(workspace, xdg)?;
+        return Box::pin(commands::graph::test_with_filters(
+            workspace,
+            &cache,
+            args.output,
+            &target,
+            args.sandbox,
+            &args.batch_test_units,
+            args.test_batch_id.as_deref(),
+        ))
+        .await;
+    }
+    if !args.all && args.changed_paths.is_empty() && args.jobs.is_none() && args.test_unit.is_none()
+    {
+        let target = resolve_required_target(workspace, args.target)?;
+        let cache = crate::cache_provider::resolve(workspace, xdg)?;
+        return Box::pin(commands::graph::test(
+            workspace,
+            &cache,
+            args.output,
+            &target,
+            args.sandbox,
+        ))
+        .await;
+    }
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let plan = match args.target {
+        Some(target) => {
+            let target = resolve_target_arg(workspace, &target)?;
+            if let Some(test_unit) = args.test_unit {
+                commands::query::explicit_test_unit_plan_with_graph(
+                    workspace, &graph, &target, &test_unit,
+                )?
+            } else {
+                commands::query::explicit_test_plan_with_graph(workspace, &graph, &[target])?
+            }
+        }
+        None => {
+            commands::query::test_plan_for_paths_with_graph(workspace, &graph, &args.changed_paths)?
+        }
+    };
+    Box::pin(commands::test_schedule::run(
+        workspace,
+        Some(graph),
+        args.output,
+        plan,
+        args.jobs,
+        args.sandbox,
+    ))
+    .await
 }
 
 async fn run_toolchain_command(
@@ -213,8 +337,23 @@ async fn run_query_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
+        Some(cli::QueryCmd::TestPlan {
+            changed_paths,
+            target,
+            test_unit,
+        }) => run_test_plan_query(workspace, output, &changed_paths, target, test_unit).await,
         Some(cli::QueryCmd::TestResults { target }) => {
             commands::query::test_results(workspace, output, &target)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::TestManifest { target }) => {
+            commands::query::test_manifest(workspace, output, &target)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::TestAttempts { target, limit }) => {
+            commands::query::test_attempts(workspace, output, target.as_deref(), limit)
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
@@ -248,6 +387,24 @@ async fn run_query_command(
         }
         None => anyhow::bail!("query subcommand required"),
     }
+}
+
+async fn run_test_plan_query(
+    workspace: &Path,
+    output: Output,
+    changed_paths: &[String],
+    target: Option<String>,
+    test_unit: Option<String>,
+) -> Result<ExitCode> {
+    commands::query::test_plan_request(
+        workspace,
+        output,
+        changed_paths,
+        target.as_deref(),
+        test_unit.as_deref(),
+    )
+    .await
+    .map(|()| ExitCode::SUCCESS)
 }
 
 async fn run_edit_command(

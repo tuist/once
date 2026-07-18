@@ -108,6 +108,19 @@ def _package_relative(ctx, path):
         return package + "/" + path
     return path
 
+def _resolve_host_executable(requested):
+    path_like = "/" in requested or "\\" in requested
+    resolved = "" if path_like else host_which_optional(requested)
+    if resolved or not requested:
+        return resolved
+    absolute = requested.startswith("/") or (
+        len(requested) > 2 and
+        requested[1] == ":" and
+        (requested[2] == "/" or requested[2] == "\\")
+    )
+    candidate = requested if absolute else workspace_root() + "/" + requested
+    return candidate if host_file_exists(candidate) else ""
+
 def _apple_materialize_native_dep(ctx, dep):
     return dep
 
@@ -131,6 +144,18 @@ def _unique(values):
             seen[value] = True
             out.append(value)
     return out
+
+def _test_unit_suffix(ctx, unit):
+    prefix = ctx["label"]["id"] + "::"
+    if not unit.startswith(prefix):
+        fail("test unit `" + unit + "` does not belong to target `" + ctx["label"]["id"] + "`")
+    return unit[len(prefix):]
+
+def _test_output_dir(ctx):
+    batch_id = (ctx.get("test") or {}).get("batch_id")
+    if batch_id:
+        return ctx["build_dir"] + "/test/batches/" + batch_id
+    return ctx["build_dir"] + "/test"
 
 def _basename(path):
     normalized = path.replace("\\", "/")

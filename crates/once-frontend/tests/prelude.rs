@@ -76,7 +76,7 @@ fn android_prelude_source() -> String {
 
 fn all_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/android.star"),
@@ -85,7 +85,10 @@ fn all_prelude_source() -> String {
         include_str!("../prelude/zig.star"),
         include_str!("../prelude/swift.star"),
         include_str!("../prelude/kotlin.star"),
-        include_str!("../prelude/elixir.star")
+        include_str!("../prelude/elixir.star"),
+        include_str!("../prelude/python.star"),
+        include_str!("../prelude/ruby.star"),
+        include_str!("../prelude/javascript.star")
     )
 }
 
@@ -345,6 +348,45 @@ fn rust_and_elixir_runtime_schemas_are_discoverable() {
         .iter()
         .any(|attr| attr.name == "env_inherit"));
     assert!(elixir_test.attrs.iter().any(|attr| attr.name == "tools"));
+}
+
+#[test]
+fn dynamic_language_test_schemas_are_discoverable() {
+    for kind in [
+        "pytest_test",
+        "rspec_test",
+        "minitest_test",
+        "vitest_test",
+        "jest_test",
+    ] {
+        let schema = built_in_target_kind_schema(kind)
+            .unwrap_or_else(|| panic!("missing target kind schema `{kind}`"));
+        assert!(target_kind_has_impl(kind).unwrap());
+        assert!(schema
+            .providers
+            .iter()
+            .any(|provider| provider == "once_test_info"));
+        assert!(schema
+            .capabilities
+            .iter()
+            .any(|capability| capability.name == "test"));
+        assert!(schema.attrs.iter().any(|attr| attr.name == "batching"));
+        assert!(schema.attrs.iter().any(|attr| attr.name == "env_inherit"));
+        assert_eq!(schema.examples.len(), 1);
+    }
+
+    for (kind, expected) in [
+        ("vitest_test", "\"node_modules/vitest/vitest.mjs\""),
+        ("jest_test", "\"node_modules/jest/bin/jest.js\""),
+    ] {
+        let schema = built_in_target_kind_schema(kind).unwrap();
+        let runner = schema
+            .attrs
+            .iter()
+            .find(|attr| attr.name == "runner")
+            .unwrap();
+        assert_eq!(runner.default.as_deref(), Some(expected));
+    }
 }
 
 #[test]
@@ -3972,6 +4014,55 @@ result = repr(provider["test_info"])
     assert_android_instrumentation_run_action(run);
 }
 
+#[test]
+fn prelude_android_instrumentation_runner_requires_a_success_terminal_code() {
+    let source = eval_prelude_string_function_in(
+        android_prelude_source(),
+        "_android_instrumentation_runner_source",
+        "()",
+    )
+    .unwrap();
+
+    assert!(source.contains("INSTRUMENTATION_CODE:"));
+    assert!(source.contains("code.startsWith(\"-1\")"));
+    assert!(source.contains("boolean passed = completed"));
+}
+
+#[test]
+fn prelude_android_instrumentation_metadata_needs_no_dependency_providers() {
+    let prelude = android_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let support_dir = workspace.path().join("tests/support");
+    std::fs::create_dir_all(&support_dir).unwrap();
+    std::fs::write(support_dir.join("orchestrator.apk"), b"support-apk").unwrap();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "tests", "name": "device", "id": "tests/device"}},
+    "attr": {{"labels": ["device"], "support_apks": ["support/*.apk"]}},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/tests/device",
+    "capability": "metadata",
+}}
+result = repr(_android_instrumentation_test_impl(ctx))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "tests".to_string(),
+        ".once/out/tests/device".to_string(),
+    );
+
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let out = out.unwrap();
+
+    assert!(out.contains("android_instrumentation"));
+    assert!(out.contains("runner_args"));
+    assert!(out.contains("tests/device"));
+    assert!(out.contains("tests/support/orchestrator.apk"));
+}
+
 #[cfg(unix)]
 fn assert_android_instrumentation_runner_compile_action(runner_compile: &DeclaredAction) {
     assert_eq!(runner_compile.argv[0], "/jdk/bin/javac");
@@ -4024,6 +4115,10 @@ fn assert_android_instrumentation_run_action(run: &DeclaredAction) {
         .outputs
         .iter()
         .any(|output| output.ends_with("test/test_results.json")));
+    assert!(run
+        .create_dirs
+        .iter()
+        .any(|path| path.ends_with("test/home")));
 }
 
 #[test]

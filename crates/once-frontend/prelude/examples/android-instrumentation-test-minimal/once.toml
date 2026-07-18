@@ -8,7 +8,6 @@ application_id = "dev.once.greeting"
 namespace = "dev.once.greeting"
 manifest = "AndroidManifest.xml"
 resource_files = []
-signing = "none"
 
 [[target]]
 name = "GreetingInstrumentationApk"
@@ -20,7 +19,6 @@ application_id = "dev.once.greeting.test"
 namespace = "dev.once.greeting.test"
 manifest = "AndroidTestManifest.xml"
 resource_files = []
-signing = "none"
 instruments = "./GreetingApp"
 
 [[target]]
@@ -30,4 +28,5 @@ deps = ["./GreetingApp", "./GreetingInstrumentationApk"]
 
 [target.attrs]
 test_app = "./GreetingInstrumentationApk"
+instrumentation_runner = "dev.once.greeting.OnceInstrumentationRunner"
 labels = ["device"]

@@ -22,6 +22,10 @@ mod resources;
 mod runner;
 mod store;
 mod stream;
+mod test_manifest;
+mod test_plan;
+mod test_results;
+mod test_schedule;
 mod xdg;
 
 pub use action::{
@@ -46,4 +50,16 @@ pub use runner::{
     Runner,
 };
 pub use store::WorkspaceStore;
+pub use test_manifest::{TestManifest, TestSharding, TestUnit, TEST_MANIFEST_SCHEMA};
+pub use test_plan::{
+    SelectedTest, TestBatch, TestPlan, TestSelectionPolicy, TestSelectionReport, TEST_PLAN_SCHEMA,
+    TEST_SELECTION_SCHEMA,
+};
+pub use test_results::{
+    validate_test_results, validate_test_results_for_units, TEST_RESULTS_SCHEMA,
+};
+pub use test_schedule::{
+    TestBatchAttempt, TestBatchAttemptSpec, TestBatchStatus, TestSchedule, TestTimingStore,
+    TEST_BATCH_ATTEMPT_SCHEMA, TEST_SCHEDULE_SCHEMA,
+};
 pub use xdg::Xdg;

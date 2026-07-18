@@ -1,0 +1,7 @@
+[[target]]
+name = "tests"
+kind = "rspec_test"
+srcs = ["spec/**/*_spec.rb"]
+
+[target.attrs]
+env_inherit = ["GEM_HOME", "GEM_PATH"]

@@ -65,6 +65,19 @@ Describe 'once query target-kinds'
     The stdout should not include '"kind":"apple_application"'
     The stdout should not include '"kind":"zig_test"'
   End
+
+  It 'combines multiple test-runner ecosystems in one query'
+    When call "$ONCE_BIN" --format json query target-kinds --query 'mixed repository native test runners Python JavaScript TypeScript Rust Go Ruby'
+    The status should be success
+    The stdout should include '"kind":"pytest_test"'
+    The stdout should include '"kind":"vitest_test"'
+    The stdout should include '"kind":"jest_test"'
+    The stdout should include '"kind":"rspec_test"'
+    The stdout should include '"kind":"minitest_test"'
+    The stdout should include '"kind":"rust_test"'
+    The stdout should not include '"kind":"apple_library"'
+    The stdout should not include '"kind":"android_test"'
+  End
 End
 
 Describe 'once query example'
@@ -342,7 +355,9 @@ EOF
     End
     When call "$ONCE_BIN" --format json query validate-target
     The status should not equal 0
+    The stderr should include '"schema":"once.error.v1"'
     The stderr should include 'validate-target input'
+    The stderr should include 'session failed'
   End
 End
 
@@ -395,6 +410,8 @@ EOF
     End
     When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit apply
     The status should not equal 0
+    The stderr should include '"schema":"once.error.v1"'
     The stderr should include 'apply input'
+    The stderr should include 'session failed'
   End
 End

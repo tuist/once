@@ -1,0 +1,4 @@
+[[target]]
+name = "tests"
+kind = "jest_test"
+srcs = ["tests/**/*.test.js"]

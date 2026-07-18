@@ -982,7 +982,7 @@ def _elixir_test_info(ctx, runner_type, runner_display_name, runner, args, resul
             "strategy": "unsupported",
         },
         "filtering": {
-            "case_filtering": "runner_args",
+            "case_filtering": "unsupported",
         },
         "sharding": {
             "supported": False,

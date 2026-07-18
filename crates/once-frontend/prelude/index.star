@@ -8,4 +8,7 @@ PRELUDE_SOURCES = [
     "swift.star",
     "kotlin.star",
     "elixir.star",
+    "python.star",
+    "ruby.star",
+    "javascript.star",
 ]
