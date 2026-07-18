@@ -109,11 +109,7 @@ def _package_relative(ctx, path):
     return path
 
 def _resolve_host_executable(requested):
-    path_like = False
-    for character in requested:
-        if character == "/" or character == "\\":
-            path_like = True
-            break
+    path_like = "/" in requested or "\\" in requested
     resolved = "" if path_like else host_which_optional(requested)
     if resolved or not requested:
         return resolved
