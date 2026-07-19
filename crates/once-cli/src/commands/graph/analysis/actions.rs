@@ -106,6 +106,7 @@ pub(super) async fn validate_declared_actions(
     let mut action_digests = Vec::new();
     let mut validations = Vec::new();
     for (index, declared) in actions.into_iter().enumerate() {
+        let is_selected = selected_index.is_none_or(|selected| selected == index);
         let mut input_action_digests = dep_action_digests.to_vec();
         if declared.depends_on_prior_actions {
             input_action_digests.extend(
@@ -121,6 +122,31 @@ pub(super) async fn validate_declared_actions(
                 target.label.id
             )
         })?;
+        // An isolated contract probe never runs prior actions or dependency
+        // targets, so any input those steps would have produced is absent from
+        // the workspace. Such an action cannot be hashed or staged here; record
+        // it as skipped with a limitation instead of aborting the whole command.
+        let missing_inputs = missing_declared_inputs(workspace, &declared);
+        if !missing_inputs.is_empty() {
+            if is_selected {
+                let identifier = declared
+                    .identifier
+                    .clone()
+                    .unwrap_or_else(|| format!("action-{index}"));
+                validations.push(DeclaredActionValidation {
+                    index,
+                    identifier,
+                    valid: true,
+                    exit_code: 0,
+                    diagnostics: Vec::new(),
+                    limitations: vec![format!(
+                        "action not validated in isolation: consumes inputs produced by prior actions or dependencies ({})",
+                        missing_inputs.join(", ")
+                    )],
+                });
+            }
+            continue;
+        }
         let action = declared_to_action(
             workspace,
             &declared,
@@ -129,7 +155,7 @@ pub(super) async fn validate_declared_actions(
             SandboxMode::Inputs,
         )?;
         action_digests.push(action.digest());
-        if selected_index.is_some_and(|selected| selected != index) {
+        if !is_selected {
             continue;
         }
 
@@ -1284,6 +1310,22 @@ fn workspace_path(path: &str, context: &str) -> Result<WorkspacePath> {
     WorkspacePath::try_from(path).with_context(|| format!("invalid {context} `{path}`"))
 }
 
+/// Declared inputs that do not exist in the workspace. During isolated action
+/// validation these are outputs a prior action or dependency target would have
+/// produced, which the probe never runs. Malformed paths are left out so
+/// `declared_to_action` can surface them as the usual invalid-path error.
+fn missing_declared_inputs(workspace: &Path, declared: &DeclaredAction) -> Vec<String> {
+    declared
+        .inputs
+        .iter()
+        .filter(|input| {
+            WorkspacePath::try_from(input.as_str())
+                .is_ok_and(|path| !path.resolve(workspace).exists())
+        })
+        .cloned()
+        .collect()
+}
+
 fn declared_action_inputs(declared: &DeclaredAction) -> Result<Vec<WorkspacePath>> {
     let mut inputs = declared
         .inputs
@@ -1477,6 +1519,38 @@ mod tests {
 
     fn module_digest() -> Digest {
         Digest::of_bytes(b"modules")
+    }
+
+    #[test]
+    fn missing_declared_inputs_reports_only_absent_paths() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("present.rs"), b"fn main() {}").unwrap();
+        let declared = DeclaredAction {
+            operation: None,
+            argv: vec!["tool".to_string()],
+            arg_files: Vec::new(),
+            inputs: vec![
+                "present.rs".to_string(),
+                ".once/out/x/generated.rlib".to_string(),
+            ],
+            outputs: Vec::new(),
+            stdout: None,
+            stderr: None,
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
+            sandbox: None,
+            cacheable: true,
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: None,
+        };
+
+        assert_eq!(
+            missing_declared_inputs(workspace.path(), &declared),
+            vec![".once/out/x/generated.rlib".to_string()]
+        );
     }
 
     #[test]
