@@ -143,7 +143,7 @@ pub async fn validate_action_contract_with_options(
     }
     let mut validated = action.clone();
     if let Action::RunCommand { sandbox, .. } = &mut validated {
-        *sandbox = SandboxMode::Validate;
+        *sandbox = SandboxMode::Inputs;
     } else {
         return Ok(ActionContractReport {
             valid: true,
@@ -154,7 +154,7 @@ pub async fn validate_action_contract_with_options(
             ],
         });
     }
-    match crate::run_uncached(&validated, workspace, cache, false).await {
+    match crate::run_uncached_contract(&validated, workspace, cache, false).await {
         Ok(result) => Ok(ActionContractReport {
             valid: result.exit_code == 0,
             exit_code: result.exit_code,

@@ -13,7 +13,7 @@ pub(super) fn run_test_target(
 ) -> Result<Value> {
     let sandbox = match sandbox {
         SandboxMode::Off => "off",
-        SandboxMode::Inputs | SandboxMode::Validate => "inputs",
+        SandboxMode::Inputs => "inputs",
     };
     let mut command = Command::new(executable);
     command

@@ -52,8 +52,8 @@ pub use path::{WorkspacePath, WorkspacePathError};
 pub use plan::{BuiltPlan, NodeInfo, Plan, PlanError, PlanNode, PlanOutcome};
 pub use resources::{ResourceLimits, ResourcePool, ResourceRequest};
 pub use runner::{
-    run, run_uncached, run_with_cache, run_with_cache_streaming, CacheState, Outcome, RunOpts,
-    Runner,
+    run, run_uncached, run_uncached_contract, run_with_cache, run_with_cache_streaming, CacheState,
+    Outcome, RunOpts, Runner,
 };
 pub use store::WorkspaceStore;
 pub use test_manifest::{TestManifest, TestSharding, TestUnit, TEST_MANIFEST_SCHEMA};

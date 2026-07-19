@@ -15,12 +15,12 @@ pub(crate) async fn run(
     workspace_root: &Path,
     cache: &CacheProvider,
     stream_to_parent: bool,
+    validate_contract: bool,
 ) -> Result<ActionResult> {
     match action {
         Action::RunCommand {
             outputs,
             output_symlink_mode,
-            sandbox,
             ..
         } => {
             let mut result = Box::pin(execute_command(
@@ -28,9 +28,10 @@ pub(crate) async fn run(
                 workspace_root,
                 cache,
                 stream_to_parent,
+                validate_contract,
             ))
             .await?;
-            if result.exit_code == 0 && *sandbox != SandboxMode::Validate {
+            if result.exit_code == 0 && !validate_contract {
                 result.outputs =
                     outputs::capture(outputs, workspace_root, cache, *output_symlink_mode).await?;
             }
@@ -99,6 +100,7 @@ async fn execute_command(
     workspace_root: &Path,
     cache: &CacheProvider,
     stream_to_parent: bool,
+    validate_contract: bool,
 ) -> Result<ActionResult> {
     let Action::RunCommand {
         argv,
@@ -136,7 +138,7 @@ async fn execute_command(
             )
             .await
         }
-        (None, _, SandboxMode::Inputs | SandboxMode::Validate) => {
+        (None, _, SandboxMode::Inputs) => {
             execute_sandboxed_command(
                 action,
                 argv,
@@ -149,7 +151,7 @@ async fn execute_command(
                 cache,
                 redirect,
                 stream_to_parent,
-                *sandbox == SandboxMode::Validate,
+                validate_contract,
             )
             .await
         }

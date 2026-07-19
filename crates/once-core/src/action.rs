@@ -52,9 +52,6 @@ pub enum SandboxMode {
     #[default]
     Off,
     Inputs,
-    /// Execute in the input sandbox and audit filesystem effects without
-    /// copying outputs back or consulting the action cache.
-    Validate,
 }
 
 impl SandboxMode {
@@ -75,10 +72,7 @@ impl FromStr for SandboxMode {
         match raw {
             "off" => Ok(Self::Off),
             "inputs" => Ok(Self::Inputs),
-            "validate" => Ok(Self::Validate),
-            _ => Err(format!(
-                "expected `off`, `inputs`, or `validate`, got `{raw}`"
-            )),
+            _ => Err(format!("expected `off` or `inputs`, got `{raw}`")),
         }
     }
 }
