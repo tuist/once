@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::fmt::Write as _;
 use std::future::Future;
 use std::path::Path;
@@ -215,7 +216,49 @@ fn apply_tool_execution(
         let mut argv = prefix.to_vec();
         argv.append(&mut action.argv);
         action.argv = argv;
-        action.env.extend(tool_env.clone());
+        for (key, value) in tool_env {
+            // The tool environment now contributes a curated PATH. A target
+            // kind may already have set a PATH the action needs at execution
+            // time, such as the Windows rustc runtime and proc-macro directories
+            // that let rustc load its DLLs, or a JDK bin directory. Merge the two
+            // so those entries survive instead of being overwritten, keeping the
+            // action's own directories ahead of the mise-derived ones.
+            if key == "PATH" {
+                if let Some(existing) = action.env.get(key) {
+                    let merged = merge_paths(existing, value);
+                    action.env.insert(key.clone(), merged);
+                    continue;
+                }
+            }
+            action.env.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+/// Merge two `PATH` values, keeping `primary` entries first and appending the
+/// entries from `secondary` that are not already present. This preserves the
+/// directories a target kind places on an action's PATH when the tool
+/// environment contributes its own PATH.
+fn merge_paths(primary: &str, secondary: &str) -> String {
+    if primary.is_empty() {
+        return secondary.to_string();
+    }
+    if secondary.is_empty() {
+        return primary.to_string();
+    }
+    let mut seen = BTreeSet::new();
+    let mut ordered = Vec::new();
+    for entry in env::split_paths(primary).chain(env::split_paths(secondary)) {
+        if seen.insert(entry.clone()) {
+            ordered.push(entry);
+        }
+    }
+    match env::join_paths(ordered) {
+        Ok(joined) => joined.to_string_lossy().into_owned(),
+        // join_paths only fails when an entry contains the platform path
+        // separator, which a real PATH directory cannot. Keep the action's own
+        // PATH rather than dropping it.
+        Err(_) => primary.to_string(),
     }
 }
 
@@ -1270,6 +1313,34 @@ mod tests {
         );
         assert!(actions[1].argv.is_empty());
         assert!(actions[1].env.is_empty());
+    }
+
+    #[test]
+    fn tool_execution_merges_action_path_ahead_of_tool_path() {
+        let command: DeclaredAction = serde_json::from_value(serde_json::json!({
+            "argv": ["rustc", "--version"],
+            "env": {"PATH": "/target/runtime:/opt/rust/bin"},
+            "outputs": []
+        }))
+        .unwrap();
+        let mut actions = vec![command];
+
+        apply_tool_execution(
+            &[
+                "/once/mise".to_string(),
+                "exec".to_string(),
+                "--".to_string(),
+            ],
+            &BTreeMap::from([("PATH".to_string(), "/opt/rust/bin:/usr/bin".to_string())]),
+            &mut actions,
+        );
+
+        // The action's own directory survives, the shared entry is not
+        // duplicated, and the mise directory is appended.
+        assert_eq!(
+            actions[0].env.get("PATH").map(String::as_str),
+            Some("/target/runtime:/opt/rust/bin:/usr/bin")
+        );
     }
 
     fn module_digest() -> Digest {
