@@ -143,6 +143,7 @@ fn target(id: &str, kind: &str, srcs: &[&str], deps: &[&str], test: bool) -> Gra
         },
         kind: kind.to_string(),
         deps: deps.iter().map(ToString::to_string).collect(),
+        dependency_edges: BTreeMap::new(),
         srcs: srcs.iter().map(ToString::to_string).collect(),
         attrs: BTreeMap::new(),
         capabilities: test

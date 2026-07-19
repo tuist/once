@@ -119,6 +119,15 @@ fn every_schema_example_carries_meta() {
                 example.slug,
                 schema.kind
             );
+            assert!(
+                bundle
+                    .files
+                    .iter()
+                    .all(|file| !file.path.split('/').any(|component| component == ".once")),
+                "example `{}` (target kind `{}`) exposes Once runtime state",
+                example.slug,
+                schema.kind
+            );
         }
     }
 }

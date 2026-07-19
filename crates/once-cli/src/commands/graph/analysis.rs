@@ -184,16 +184,38 @@ impl BuildSession {
                 direct_analysis_deps = dep_outcomes.len(),
                 "running graph target capability through Starlark analysis"
             );
-            let mut dep_providers = Vec::with_capacity(dep_outcomes.len());
+            let mut providers_by_id = HashMap::with_capacity(dep_outcomes.len());
             let mut dep_action_digests = Vec::with_capacity(dep_outcomes.len());
             for (dep_id, outcome) in dep_outcomes {
-                dep_action_digests.push((dep_id, outcome.action_digest));
-                dep_providers.push(outcome.provider);
+                dep_action_digests.push((dep_id.clone(), outcome.action_digest));
+                providers_by_id.insert(dep_id, outcome.provider);
             }
+            let dep_providers = target
+                .deps
+                .iter()
+                .filter_map(|dep_id| providers_by_id.get(dep_id).cloned())
+                .collect::<Vec<_>>();
+            let dependency_providers = target
+                .dependency_edges
+                .iter()
+                .map(|(role, dep_ids)| {
+                    let providers = dep_ids
+                        .iter()
+                        .filter_map(|dep_id| providers_by_id.get(dep_id).cloned())
+                        .collect::<Vec<_>>();
+                    (role.clone(), providers)
+                })
+                .collect::<BTreeMap<_, _>>();
 
             let analysis = self
                 .analyzer
-                .analyze_target_capability(target, &self.workspace, &dep_providers, capability)
+                .analyze_target_capability_with_dependency_roles(
+                    target,
+                    &self.workspace,
+                    &dep_providers,
+                    &dependency_providers,
+                    capability,
+                )
                 .with_context(|| format!("analysing {}", target.label.id))?;
             let outcome = run_declared_actions(
                 &self.workspace,
@@ -216,7 +238,7 @@ impl BuildSession {
     }
 
     fn reachable_analysis_deps(&self, target: &GraphTarget) -> HashSet<String> {
-        let roots = target.deps.iter().filter_map(|dep_id| {
+        let roots = target.dependency_ids().filter_map(|dep_id| {
             let dep = self.targets.get(dep_id)?;
             self.analyzer
                 .target_kind_has_impl(&dep.kind)
@@ -242,7 +264,7 @@ impl BuildSession {
             let Some(target) = target else {
                 continue;
             };
-            for dep_id in &target.deps {
+            for dep_id in target.dependency_ids() {
                 let Some(dep) = self.targets.get(dep_id) else {
                     continue;
                 };
@@ -263,10 +285,10 @@ impl BuildSession {
             return Ok(Vec::new());
         }
 
+        let mut seen = HashSet::new();
         let direct_deps = target
-            .deps
-            .iter()
-            .filter(|dep_id| reachable.contains(*dep_id))
+            .dependency_ids()
+            .filter(|dep_id| reachable.contains(*dep_id) && seen.insert((*dep_id).clone()))
             .cloned()
             .collect::<Vec<_>>();
         let retained = direct_deps.iter().cloned().collect::<HashSet<_>>();
@@ -405,6 +427,7 @@ async fn build_one(
     module_source_digest: Digest,
     target: Arc<GraphTarget>,
     dep_providers: Vec<JsonValue>,
+    dependency_providers: BTreeMap<String, Vec<JsonValue>>,
     dep_action_digests: Vec<(String, Digest)>,
     sandbox: SandboxMode,
 ) -> Result<(String, BuildOutcome)> {
@@ -412,6 +435,7 @@ async fn build_one(
     tracing::debug!(
         target = %target_id,
         dep_providers = dep_providers.len(),
+        dependency_roles = dependency_providers.len(),
         dep_action_digests = dep_action_digests.len(),
         "starting graph target analysis"
     );
@@ -421,7 +445,13 @@ async fn build_one(
     let analysis_workspace = workspace.clone();
     let analysis = tokio::task::spawn_blocking(move || {
         analyzer
-            .analyze_target(&analysis_target, &analysis_workspace, &dep_providers)
+            .analyze_target_capability_with_dependency_roles(
+                &analysis_target,
+                &analysis_workspace,
+                &dep_providers,
+                &dependency_providers,
+                "build",
+            )
             .with_context(|| format!("analysing {}", analysis_target.label.id))
     })
     .await

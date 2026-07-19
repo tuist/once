@@ -748,6 +748,7 @@ fn target(kind: &str) -> GraphTarget {
         },
         kind: kind.to_string(),
         deps: Vec::new(),
+        dependency_edges: BTreeMap::new(),
         srcs: Vec::new(),
         attrs: BTreeMap::new(),
         capabilities: vec![Capability {
@@ -759,6 +760,55 @@ fn target(kind: &str) -> GraphTarget {
         tools: Vec::new(),
         diagnostics: Vec::new(),
     }
+}
+
+#[test]
+fn analysis_exposes_dependency_providers_by_role() {
+    let source = r#"
+def _impl(ctx):
+    return {
+        "default": ctx["deps"][0]["value"],
+        "default_by_role": ctx["deps_by_role"]["deps"][0]["value"],
+        "plugin": ctx["deps_by_role"]["plugins"][0]["value"],
+    }
+
+custom = {
+    "_once_target_kind": True,
+    "kind": "custom",
+    "impl": _impl,
+}
+"#;
+    let engine = AnalysisEngine::from_source(source).unwrap();
+    let mut target = target("custom");
+    target.deps = vec!["default".to_string()];
+    target
+        .dependency_edges
+        .insert("plugins".to_string(), vec!["plugin".to_string()]);
+    let default = vec![serde_json::json!({"value": "default-provider"})];
+    let named = BTreeMap::from([(
+        "plugins".to_string(),
+        vec![serde_json::json!({"value": "plugin-provider"})],
+    )]);
+    let workspace = TempDir::new().unwrap();
+
+    let result = engine
+        .analyze_target_capability_with_dependency_roles(
+            &target,
+            workspace.path(),
+            &default,
+            &named,
+            "build",
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.provider,
+        serde_json::json!({
+            "default": "default-provider",
+            "default_by_role": "default-provider",
+            "plugin": "plugin-provider",
+        })
+    );
 }
 
 #[test]

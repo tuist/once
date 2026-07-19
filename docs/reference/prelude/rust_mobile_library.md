@@ -11,12 +11,11 @@ declares the variant it needs, so Android-only builds do not require the Apple
 Rust target and Apple-only builds do not require the Android linker.
 
 The target emits native provider fields for Apple and Android app targets. It
-does not emit `rust_crate`, because there is no single rlib output for
-downstream Rust compilation.
-
-Rust dependencies are not supported on this target kind yet. Use explicit
-platform-specific [`rust_library`](/reference/prelude/rust_library) targets
-when the shared Rust code depends on other Rust crates.
+also emits `rust_mobile_crate`, which lets another `rust_mobile_library`
+consume it. Dependencies are materialized recursively for the platform that
+requested the native output, so one mobile crate graph can serve both
+platforms without compiling the unused variant. It does not emit `rust_crate`,
+because there is no single rlib output for downstream host Rust compilation.
 
 ## Attributes
 
@@ -48,11 +47,13 @@ when the shared Rust code depends on other Rust crates.
 
 ## Dependency Edges
 
-This target kind currently declares no dependency edges.
+| Edge | Accepts | Description |
+| --- | --- | --- |
+| `deps` | `rust_mobile_crate` | Rust mobile crate dependencies compiled recursively for the same Apple or Android target as the consumer |
 
 ## Providers
 
-The target emits `native_linkable`, `apple_linkable`, and
+The target emits `rust_mobile_crate`, `native_linkable`, `apple_linkable`, and
 `android_native_library`.
 
 ## Provider Record
@@ -60,8 +61,9 @@ The target emits `native_linkable`, `apple_linkable`, and
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `label_id` | string | Original target label id |
-| `transitive_sources` | list&lt;string&gt; | Rust sources from this target |
-| `transitive_data` | list&lt;string&gt; | Runtime data propagated through materialized platform providers |
+| `mobile_deps` | list&lt;record&gt; | Deferred Rust mobile dependency providers materialized for the requesting platform |
+| `transitive_sources` | list&lt;string&gt; | Rust sources from this target and its mobile crate dependencies |
+| `transitive_data` | list&lt;string&gt; | Runtime data propagated from this target and its mobile crate dependencies |
 
 Apple consumers materialize `archive`, `staticlib`, `transitive_archives`,
 and `transitive_linkopts` while collecting their link inputs. Android consumers
@@ -87,6 +89,7 @@ materialize `android_abi`, `dylib`, `android_native_libraries`, and
 [[target]]
 name = "SharedRust"
 kind = "rust_mobile_library"
+deps = ["./SharedCore"]
 srcs = ["shared/src/**/*.rs"]
 
 [target.attrs]
@@ -97,4 +100,16 @@ apple_target = "aarch64-apple-ios-sim"
 android_target = "aarch64-linux-android"
 android_abi = "arm64-v8a"
 android_api = 24
+
+[[target]]
+name = "SharedCore"
+kind = "rust_mobile_library"
+srcs = ["core/src/**/*.rs"]
+
+[target.attrs]
+crate_name = "shared_core"
+crate_root = "core/src/lib.rs"
+apple_target = "aarch64-apple-ios-sim"
+android_target = "aarch64-linux-android"
+android_abi = "arm64-v8a"
 ```

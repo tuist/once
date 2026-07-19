@@ -67,11 +67,31 @@ Every target accepts these common fields:
 | `kind` | yes | Target kind that defines attributes, dependencies, providers, and capabilities. |
 | `srcs` | no | Package-relative source paths or glob patterns. |
 | `deps` | no | Target identifiers consumed by this target. |
+| `dependencies` | no | Named dependency roles declared by the target kind. Each role contains target identifiers and validates its own provider contract. |
 | `attrs` | no | Target-kind-specific values validated against the selected schema. |
 
 Unknown manifest fields are rejected. Use
 [`once query schema <kind>`](/reference/cli/query/schema) to inspect the
 attributes and dependency contracts accepted by a target kind.
+
+Use `deps` for the target kind's default dependency role. Use
+`[target.dependencies]` when the schema exposes more precise roles:
+
+```toml
+[[target]]
+name = "app"
+kind = "rust_binary"
+deps = ["./library"]
+
+[target.dependencies]
+proc_macro_deps = ["./derive"]
+link_deps = ["./native"]
+```
+
+Validation checks each role against its matching schema entry. Analysis keeps
+`deps` in declared order and exposes the other roles separately, so a target
+kind can distinguish compiler plug-ins, runtime-only dependencies, native
+links, and other semantics without hardcoding them in Once.
 
 ## Target Identifiers
 

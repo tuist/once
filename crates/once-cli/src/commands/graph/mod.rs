@@ -461,6 +461,7 @@ mod tests {
             },
             kind: kind.to_string(),
             deps: Vec::new(),
+            dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
             attrs: BTreeMap::new(),
             capabilities: capabilities

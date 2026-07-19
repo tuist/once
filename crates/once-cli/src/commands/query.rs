@@ -29,6 +29,7 @@ struct TargetRecord {
     name: String,
     kind: String,
     deps: Vec<String>,
+    dependency_edges: std::collections::BTreeMap<String, Vec<String>>,
     capabilities: Vec<String>,
     tools: Vec<once_frontend::ToolRequirement>,
 }
@@ -232,6 +233,7 @@ fn target_records(graph: Vec<once_frontend::GraphTarget>, kind: Option<&str>) ->
             name: target.label.name,
             kind: target.kind,
             deps: target.deps,
+            dependency_edges: target.dependency_edges,
             capabilities: target
                 .capabilities
                 .into_iter()
@@ -1300,6 +1302,10 @@ fn render_target_human(target: &once_frontend::GraphTarget) -> String {
     if !target.deps.is_empty() {
         writeln!(out, "deps: {}", target.deps.join(", ")).expect("writing to string cannot fail");
     }
+    for (role, dependencies) in &target.dependency_edges {
+        writeln!(out, "dependencies.{role}: {}", dependencies.join(", "))
+            .expect("writing to string cannot fail");
+    }
     if !target.attrs.is_empty() {
         out.push_str("attrs:\n");
         for (key, value) in &target.attrs {
@@ -1415,6 +1421,7 @@ mod tests {
             },
             kind: kind.to_string(),
             deps: Vec::new(),
+            dependency_edges: std::collections::BTreeMap::new(),
             srcs: Vec::new(),
             attrs: BTreeMap::new(),
             capabilities: capabilities
@@ -1440,6 +1447,7 @@ mod tests {
             name: "App".to_string(),
             kind: "apple_application".to_string(),
             deps: Vec::new(),
+            dependency_edges: std::collections::BTreeMap::new(),
             capabilities: vec!["build".to_string(), "run".to_string()],
             tools: Vec::new(),
         }]);
@@ -1501,6 +1509,7 @@ mod tests {
                 name: "App".to_string(),
                 kind: "apple_application".to_string(),
                 deps: Vec::new(),
+                dependency_edges: std::collections::BTreeMap::new(),
                 capabilities: vec!["build".to_string(), "run".to_string()],
                 tools: Vec::new(),
             }]
@@ -1590,6 +1599,7 @@ mod tests {
             },
             kind: "example_test".to_string(),
             deps: Vec::new(),
+            dependency_edges: std::collections::BTreeMap::new(),
             srcs: vec!["tests/*.py".to_string()],
             attrs: std::collections::BTreeMap::new(),
             capabilities: Vec::new(),

@@ -89,6 +89,9 @@ fn collect_included_files(dir: &Dir<'_>, root: &Path, out: &mut Vec<TargetKindEx
     for file in dir.files() {
         let path = file.path();
         let relative = path.strip_prefix(root).unwrap_or(path);
+        if path_has_runtime_state(relative) {
+            continue;
+        }
         out.push(TargetKindExampleFile {
             path: display_path(relative),
             contents: file.contents_utf8().unwrap_or_default().to_string(),
@@ -114,6 +117,9 @@ fn load_workspace_files(root: &Path, path: &str) -> Result<Vec<TargetKindExample
             .path()
             .strip_prefix(&source_root)
             .unwrap_or(entry.path());
+        if path_has_runtime_state(relative) {
+            continue;
+        }
         let contents = std::fs::read_to_string(entry.path()).map_err(|source| Error::Read {
             path: entry.path().display().to_string(),
             source,
@@ -191,4 +197,36 @@ fn join_relative(base: &str, path: &str) -> String {
 fn display_path(path: &Path) -> String {
     path.to_string_lossy()
         .replace(std::path::MAIN_SEPARATOR, "/")
+}
+
+fn path_has_runtime_state(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component, Component::Normal(name) if name == ".once"))
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn workspace_example_omits_once_runtime_state() {
+        let tmp = TempDir::new().unwrap();
+        let example = tmp.path().join("examples/hello");
+        std::fs::create_dir_all(example.join("src")).unwrap();
+        std::fs::create_dir_all(example.join(".once/out/App")).unwrap();
+        std::fs::write(example.join("once.toml"), "[[target]]\n").unwrap();
+        std::fs::write(example.join("src/Main.kt"), "fun main() {}\n").unwrap();
+        std::fs::write(example.join(".once/once.sqlite"), "runtime").unwrap();
+        std::fs::write(example.join(".once/out/App/App.jar"), "artifact").unwrap();
+
+        let files = load_workspace_files(tmp.path(), "examples/hello").unwrap();
+        let paths = files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(paths, vec!["once.toml", "src/Main.kt"]);
+    }
 }

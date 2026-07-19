@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -109,6 +109,7 @@ impl<'a> BuildScheduler<'a> {
                 self.module_source_digest,
                 target,
                 inputs.providers,
+                inputs.providers_by_role,
                 inputs.action_digests,
                 self.sandbox,
             ));
@@ -119,6 +120,7 @@ impl<'a> BuildScheduler<'a> {
 
 struct DependencyInputs {
     providers: Vec<JsonValue>,
+    providers_by_role: BTreeMap<String, Vec<JsonValue>>,
     action_digests: Vec<(String, Digest)>,
 }
 
@@ -145,8 +147,7 @@ impl BuildState {
                 .with_context(|| format!("target `{target_id}` vanished from graph"))?;
             let mut dep_count = 0;
             for dep_id in target
-                .deps
-                .iter()
+                .dependency_ids()
                 .filter(|dep_id| reachable.contains(*dep_id))
             {
                 dep_count += 1;
@@ -207,6 +208,7 @@ impl BuildState {
         reachable: &HashSet<String>,
     ) -> Result<DependencyInputs> {
         let mut providers = Vec::new();
+        let mut providers_by_role = BTreeMap::new();
         let mut action_digests = Vec::new();
         for dep_id in target
             .deps
@@ -217,8 +219,18 @@ impl BuildState {
             providers.push(provider);
             action_digests.push((dep_id.clone(), action_digest));
         }
+        for (role, dep_ids) in &target.dependency_edges {
+            let mut role_providers = Vec::new();
+            for dep_id in dep_ids.iter().filter(|dep_id| reachable.contains(*dep_id)) {
+                let (provider, action_digest) = self.read_dependency(dep_id)?;
+                role_providers.push(provider);
+                action_digests.push((dep_id.clone(), action_digest));
+            }
+            providers_by_role.insert(role.clone(), role_providers);
+        }
         Ok(DependencyInputs {
             providers,
+            providers_by_role,
             action_digests,
         })
     }

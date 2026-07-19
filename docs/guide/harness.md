@@ -61,6 +61,69 @@ Every advertised tool also carries a strict input schema, behavioral hints, an
 output schema, and structured content. A harness can therefore plan from the
 live protocol contract instead of scraping this guide.
 
+## Run Headlessly with Codex and Claude
+
+Headless clients cannot stop to approve a tool call. Once marks
+`once_apply_edit` as destructive because one edit operation can delete a target.
+Use each client's non-interactive permission mode only inside a workspace whose
+contents and server configuration you trust.
+
+Run Codex with a turn-local Once server configuration:
+
+```sh
+codex exec \
+  --dangerously-bypass-approvals-and-sandbox \
+  -C /absolute/path/to/project \
+  -c 'mcp_servers.once.command="mise"' \
+  -c 'mcp_servers.once.args=["exec","--","once","mcp","--workspace","/absolute/path/to/project","--allow-run"]' \
+  'Use the Once Model Context Protocol server to create, validate, and run this project.'
+```
+
+Keep the bypass scoped to the project with `-C`. Omit it for an interactive
+session where Codex can ask before applying an edit.
+
+Claude Code accepts its server configuration from a file such as
+`once-server.json`:
+
+```json
+{
+  "mcpServers": {
+    "once": {
+      "command": "mise",
+      "args": [
+        "exec",
+        "--",
+        "once",
+        "mcp",
+        "--workspace",
+        "/absolute/path/to/project",
+        "--allow-run"
+      ]
+    }
+  }
+}
+```
+
+Then run Claude from that project:
+
+```sh
+claude -p \
+  --dangerously-skip-permissions \
+  --mcp-config ./once-server.json \
+  --strict-mcp-config \
+  'Use the Once Model Context Protocol server to create, validate, and run this project.'
+```
+
+Place `--strict-mcp-config` after the configuration path. The Claude option
+accepts more than one path, so the following option also makes the boundary
+between configuration paths and the prompt explicit.
+
+For both clients, launch Once through `mise exec` so graph actions inherit the
+project's pinned compilers and runtime environment. Query canonical target
+identifiers with `once_query_targets`; execution tools also resolve `./Target`
+from the configured workspace even when the server process was started
+elsewhere.
+
 ## Create and Run a Typed Graph
 
 Use this loop for requests such as “build an Android app with Once” or “add a

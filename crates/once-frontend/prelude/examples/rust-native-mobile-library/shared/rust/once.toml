@@ -1,10 +1,22 @@
 [[target]]
 name = "SharedRust"
 kind = "rust_mobile_library"
+deps = ["./SharedCore"]
 srcs = ["src/**/*.rs"]
 
 [target.attrs]
 crate_name = "shared_rust"
+apple_target = "aarch64-apple-ios"
+android_target = "aarch64-linux-android"
+android_abi = "arm64-v8a"
+
+[[target]]
+name = "SharedCore"
+kind = "rust_mobile_library"
+srcs = ["core/**/*.rs"]
+
+[target.attrs]
+crate_name = "shared_core"
 apple_target = "aarch64-apple-ios"
 android_target = "aarch64-linux-android"
 android_abi = "arm64-v8a"

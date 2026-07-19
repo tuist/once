@@ -182,7 +182,9 @@ fn add_affected_tests(
 fn reverse_dependencies(graph: &[GraphTarget]) -> BTreeMap<&str, Vec<&str>> {
     let mut reverse = BTreeMap::<&str, Vec<&str>>::new();
     for target in graph {
-        for dependency in &target.deps {
+        // Include named dependency roles, not just the legacy `deps` role, so a
+        // changed input reaches tests that depend on it through any role.
+        for dependency in target.dependency_ids() {
             reverse
                 .entry(dependency.as_str())
                 .or_default()

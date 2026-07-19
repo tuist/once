@@ -9,8 +9,8 @@ library when sources are present, and exposes headers plus link inputs through
 the `c_provider` record. Header-only targets are valid and still propagate
 include directories, definitions, and data.
 
-Zig target kinds consume this provider directly. Other native target kinds can
-also read the same record fields by convention.
+Rust and Zig target kinds consume this provider directly. Other native target
+kinds can also read the same record fields by convention.
 
 Object outputs preserve the workspace-relative source path under `objects/`, so
 sources with similar names such as `foo-bar.c` and `foo_bar.c` do not collide.

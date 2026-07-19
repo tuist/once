@@ -1,6 +1,6 @@
 # `once query target`
 
-Resolve a single target's full record (kind, srcs, deps, attrs, capabilities)
+Resolve one target's kind, sources, dependency roles, attributes, and capabilities
 
 ## Synopsis
 

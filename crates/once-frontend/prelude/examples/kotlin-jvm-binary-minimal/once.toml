@@ -1,0 +1,17 @@
+[[target]]
+name = "Greeting"
+kind = "kotlin_jvm_library"
+srcs = ["src/main/kotlin/dev/once/greeting/**/*.kt"]
+
+[target.attrs]
+module_name = "greeting"
+
+[[target]]
+name = "Hello"
+kind = "kotlin_jvm_binary"
+srcs = ["src/main/kotlin/dev/once/hello/**/*.kt"]
+deps = ["./Greeting"]
+
+[target.attrs]
+main_class = "dev.once.hello.MainKt"
+args = ["Once"]

@@ -388,8 +388,12 @@ impl Server {
 
     fn tool_start_target(&self, args: &Value) -> Result<Value> {
         let args: StartTargetArgs = serde_json::from_value(tool_args(args))?;
-        let target = once_frontend::normalize_cli_target(&self.workspace, &args.target)
-            .context("resolving target argument")?;
+        let target = once_frontend::normalize_cli_target_from(
+            &self.workspace,
+            &self.workspace,
+            &args.target,
+        )
+        .context("resolving target argument")?;
         Ok(serde_json::to_value(
             crate::commands::runtime::start_session(&self.workspace, &target)?,
         )?)
@@ -512,6 +516,7 @@ fn run_graph_target_with_exe(
 ) -> Result<Value> {
     let mut command = std::process::Command::new(exe);
     command
+        .current_dir(workspace)
         .arg("-C")
         .arg(workspace)
         .arg("--format")
@@ -868,6 +873,7 @@ struct TargetView {
     name: String,
     kind: String,
     deps: Vec<String>,
+    dependency_edges: std::collections::BTreeMap<String, Vec<String>>,
     capabilities: Vec<String>,
 }
 
@@ -879,6 +885,7 @@ impl From<once_frontend::GraphTarget> for TargetView {
             name: target.label.name,
             kind: target.kind,
             deps: target.deps,
+            dependency_edges: target.dependency_edges,
             capabilities: target
                 .capabilities
                 .into_iter()
@@ -1524,9 +1531,11 @@ srcs = ["unit_spec.sh"]
         let tmp = TempDir::new().unwrap();
         let exe = tmp.path().join("once-mock");
         let args_path = tmp.path().join("args.txt");
+        let cwd_path = tmp.path().join("cwd.txt");
         let args_file = shell_literal(args_path.to_str().unwrap());
+        let cwd_file = shell_literal(cwd_path.to_str().unwrap());
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {args_file}\ncapability=''\ntarget=''\nfor arg do\n  case \"$arg\" in build|run|test) capability=\"$arg\" ;;\n  *) target=\"$arg\" ;;\n  esac\ndone\nprintf '{{\"target\":\"%s\",\"capability\":\"%s\",\"status\":\"completed\"}}\\n' \"$target\" \"$capability\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {args_file}\npwd > {cwd_file}\ncapability=''\ntarget=''\nfor arg do\n  case \"$arg\" in build|run|test) capability=\"$arg\" ;;\n  *) target=\"$arg\" ;;\n  esac\ndone\nprintf '{{\"target\":\"%s\",\"capability\":\"%s\",\"status\":\"completed\"}}\\n' \"$target\" \"$capability\"\n",
         );
         std::fs::write(&exe, script).unwrap();
         let mut permissions = std::fs::metadata(&exe).unwrap().permissions();
@@ -1548,6 +1557,11 @@ srcs = ["unit_spec.sh"]
 
         let args = std::fs::read_to_string(args_path).unwrap();
         assert!(args.contains("--format\njson\nrun\n--visible\napps/App\n"));
+        let cwd = std::fs::read_to_string(cwd_path).unwrap();
+        assert_eq!(
+            std::fs::canonicalize(cwd.trim()).unwrap(),
+            std::fs::canonicalize(tmp.path()).unwrap()
+        );
     }
 
     #[test]
@@ -1902,15 +1916,32 @@ srcs = ["unit_spec.sh"]
         std::fs::create_dir_all(&pkg).unwrap();
         std::fs::write(
             pkg.join("once.toml"),
-            "[[target]]\nname = \"Hello\"\nkind = \"apple_library\"\n[target.attrs]\nplatform = \"ios\"\n",
+            r#"[[target]]
+name = "Runtime"
+kind = "kotlin_jvm_library"
+
+[[target]]
+name = "Hello"
+kind = "kotlin_jvm_binary"
+
+[target.dependencies]
+runtime_deps = ["./Runtime"]
+
+[target.attrs]
+main_class = "dev.once.hello.MainKt"
+"#,
         )
         .unwrap();
         let value = server(tmp.path().to_path_buf())
             .tool_get_target(&json!({ "target": "apps/Hello/Hello" }))
             .unwrap();
         assert_eq!(value["label"]["id"], "apps/Hello/Hello");
-        assert_eq!(value["kind"], "apple_library");
-        assert_eq!(value["attrs"]["platform"], "ios");
+        assert_eq!(value["kind"], "kotlin_jvm_binary");
+        assert_eq!(
+            value["dependency_edges"]["runtime_deps"],
+            json!(["apps/Hello/Runtime"])
+        );
+        assert_eq!(value["attrs"]["main_class"], "dev.once.hello.MainKt");
     }
 
     #[test]
@@ -1926,8 +1957,9 @@ srcs = ["unit_spec.sh"]
                         "op": "create",
                         "target": {
                             "name": "Hello",
-                            "kind": "apple_library",
-                            "attrs": { "platform": "ios" }
+                            "kind": "kotlin_jvm_binary",
+                            "dependencies": { "runtime_deps": ["./Runtime"] },
+                            "attrs": { "main_class": "dev.once.hello.MainKt" }
                         }
                     }
                 ]
@@ -1939,6 +1971,10 @@ srcs = ["unit_spec.sh"]
             .tool_get_target(&json!({ "target": "apps/Hello/Hello" }))
             .unwrap();
         assert_eq!(target["label"]["id"], "apps/Hello/Hello");
-        assert_eq!(target["kind"], "apple_library");
+        assert_eq!(target["kind"], "kotlin_jvm_binary");
+        assert_eq!(
+            target["dependency_edges"]["runtime_deps"],
+            json!(["apps/Hello/Runtime"])
+        );
     }
 }

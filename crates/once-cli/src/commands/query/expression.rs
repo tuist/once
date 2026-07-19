@@ -96,6 +96,7 @@ mod tests {
             },
             kind: kind.to_string(),
             deps: deps.iter().map(|dep| (*dep).to_string()).collect(),
+            dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
             attrs: BTreeMap::new(),
             capabilities: capabilities

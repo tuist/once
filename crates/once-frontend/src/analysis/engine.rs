@@ -160,10 +160,28 @@ impl AnalysisEngine {
         dep_providers: &[JsonValue],
         capability: &str,
     ) -> Result<AnalysisResult> {
+        self.analyze_target_capability_with_dependency_roles(
+            target,
+            workspace_root,
+            dep_providers,
+            &BTreeMap::new(),
+            capability,
+        )
+    }
+
+    pub fn analyze_target_capability_with_dependency_roles(
+        &self,
+        target: &GraphTarget,
+        workspace_root: &Path,
+        dep_providers: &[JsonValue],
+        dependency_providers: &BTreeMap<String, Vec<JsonValue>>,
+        capability: &str,
+    ) -> Result<AnalysisResult> {
         let analysis = TargetAnalysis {
             target,
             workspace_root,
             dep_providers,
+            dependency_providers,
             capability,
             options: self.options.clone(),
         };
@@ -207,6 +225,7 @@ struct TargetAnalysis<'a> {
     target: &'a GraphTarget,
     workspace_root: &'a Path,
     dep_providers: &'a [JsonValue],
+    dependency_providers: &'a BTreeMap<String, Vec<JsonValue>>,
     capability: &'a str,
     options: AnalysisOptions,
 }
@@ -355,6 +374,21 @@ fn build_ctx<'v>(
         .map(|provider| json_to_value(eval, provider))
         .collect();
     let deps = heap.alloc(dep_values);
+    let mut providers_by_role = Vec::with_capacity(analysis.dependency_providers.len() + 1);
+    providers_by_role.push(("deps".to_string(), deps));
+    providers_by_role.extend(
+        analysis
+            .dependency_providers
+            .iter()
+            .map(|(role, providers)| {
+                let values = providers
+                    .iter()
+                    .map(|provider| json_to_value(eval, provider))
+                    .collect::<Vec<_>>();
+                (role.clone(), heap.alloc(values))
+            }),
+    );
+    let deps_by_role = heap.alloc(AllocDict(providers_by_role));
     let run = heap.alloc(AllocDict([(
         "visible",
         Value::new_bool(analysis.options.run_visible),
@@ -375,6 +409,7 @@ fn build_ctx<'v>(
         ("attr", attr),
         ("srcs", srcs_value),
         ("deps", deps),
+        ("deps_by_role", deps_by_role),
         ("build_dir", heap.alloc(build_dir.to_string())),
         ("scratch_dir", heap.alloc(scratch_dir.to_string())),
         ("capability", heap.alloc(analysis.capability.to_string())),

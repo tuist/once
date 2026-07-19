@@ -41,6 +41,7 @@ struct TargetToml {
     name: String,
     kind: String,
     deps: Option<toml::Value>,
+    dependencies: BTreeMap<String, toml::Value>,
     srcs: Vec<String>,
     attrs: BTreeMap<String, toml::Value>,
 }
@@ -154,6 +155,8 @@ impl TargetToml {
             message: source.to_string(),
         })?;
         let deps = deps_from_toml(display_name, &self.name, package, self.deps.as_ref())?;
+        let dependency_edges =
+            dependency_edges_from_toml(display_name, &self.name, package, &self.dependencies)?;
         let mut attrs = BTreeMap::new();
         let mut typed_attrs = BTreeMap::new();
         for (key, value) in self.attrs {
@@ -167,11 +170,39 @@ impl TargetToml {
             kind: self.kind,
             name: self.name,
             deps,
+            dependency_edges,
             srcs: self.srcs,
             attrs,
             typed_attrs,
         })
     }
+}
+
+fn dependency_edges_from_toml(
+    display_name: &str,
+    target_name: &str,
+    package: &str,
+    values: &BTreeMap<String, toml::Value>,
+) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut edges = BTreeMap::new();
+    for (name, value) in values {
+        if name == "deps" {
+            return Err(Error::Eval {
+                path: display_name.to_string(),
+                message: format!(
+                    "target `{target_name}` dependency role `deps` must use the top-level `deps` field"
+                ),
+            });
+        }
+        let dependencies = deps_from_toml(
+            display_name,
+            &format!("{target_name}` dependency role `{name}"),
+            package,
+            Some(value),
+        )?;
+        edges.insert(name.clone(), dependencies);
+    }
+    Ok(edges)
 }
 
 fn deps_from_toml(
@@ -460,6 +491,29 @@ deps = ["./AppKit"]
         let targets =
             load_toml_with("apps/ios/once.toml", src, Path::new("."), "apps/ios").unwrap();
         assert_eq!(targets[0].deps, vec!["apps/ios/AppKit"]);
+    }
+
+    #[test]
+    fn named_dependency_roles_are_package_relative() {
+        let src = r#"
+[[target]]
+name = "App"
+kind = "custom_application"
+
+[target.dependencies]
+plugins = ["./CompilerPlugin"]
+runtime = ["shared/Runtime"]
+"#;
+        let targets =
+            load_toml_with("apps/ios/once.toml", src, Path::new("."), "apps/ios").unwrap();
+        assert_eq!(
+            targets[0].dependency_edges.get("plugins"),
+            Some(&vec!["apps/ios/CompilerPlugin".to_string()])
+        );
+        assert_eq!(
+            targets[0].dependency_edges.get("runtime"),
+            Some(&vec!["shared/Runtime".to_string()])
+        );
     }
 
     #[test]

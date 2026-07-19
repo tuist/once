@@ -44,6 +44,12 @@ help choosing between typed target kinds and scripted automation.
 
 ## Kotlin target kinds
 
+- [`kotlin_jvm_library`](/reference/prelude/kotlin_jvm_library): Kotlin
+  library compiled into a Java archive with typed classpath roles
+- [`kotlin_jvm_binary`](/reference/prelude/kotlin_jvm_binary): runnable Kotlin
+  main class for the host Java virtual machine
+- [`kotlin_jvm_test`](/reference/prelude/kotlin_jvm_test): host-side Kotlin
+  tests with normalized Once test results
 - [`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework):
   Kotlin/Native framework bundle consumed by Apple application and test
   targets

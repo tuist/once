@@ -40,6 +40,9 @@ pub struct GraphTarget {
     /// Canonical dependency target ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deps: Vec<String>,
+    /// Provider-checked dependency ids grouped by target-kind-defined role.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependency_edges: BTreeMap<String, Vec<String>>,
     /// Source file patterns declared by the target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub srcs: Vec<String>,
@@ -57,6 +60,15 @@ pub struct GraphTarget {
     /// Non-fatal graph loading diagnostics for this target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
+}
+
+impl GraphTarget {
+    /// Every dependency id, including the legacy `deps` role and named roles.
+    pub fn dependency_ids(&self) -> impl Iterator<Item = &String> {
+        self.deps
+            .iter()
+            .chain(self.dependency_edges.values().flatten())
+    }
 }
 
 /// Operation exposed by a target kind, such as build, run, or test.
@@ -395,6 +407,7 @@ fn graph_target_from_schema(target: &Target, schemas: &[TargetKindSchema]) -> Gr
         },
         kind: target.kind.clone(),
         deps: target.deps.clone(),
+        dependency_edges: target.dependency_edges.clone(),
         srcs: target.srcs.clone(),
         attrs,
         capabilities: schema
@@ -412,6 +425,7 @@ fn graph_target_from_owned_schema(target: Target, schemas: &[TargetKindSchema]) 
         kind,
         name,
         deps,
+        dependency_edges,
         srcs,
         attrs,
         typed_attrs,
@@ -459,6 +473,7 @@ fn graph_target_from_owned_schema(target: Target, schemas: &[TargetKindSchema]) 
         },
         kind,
         deps,
+        dependency_edges,
         srcs,
         attrs,
         capabilities: schema
@@ -1265,6 +1280,7 @@ demo_kind = target_kind(
             kind: "mystery_kind".to_string(),
             name: "Thing".to_string(),
             deps: Vec::new(),
+            dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
@@ -1290,6 +1306,7 @@ demo_kind = target_kind(
             kind: "script".to_string(),
             name: "Tool".to_string(),
             deps: Vec::new(),
+            dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
             attrs,
             typed_attrs: BTreeMap::new(),
@@ -1309,6 +1326,7 @@ demo_kind = target_kind(
             kind: "script".to_string(),
             name: "Generate".to_string(),
             deps: Vec::new(),
+            dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
             attrs: BTreeMap::from([("script_runtime".to_string(), "python".to_string())]),
             typed_attrs: BTreeMap::new(),
@@ -1332,6 +1350,7 @@ demo_kind = target_kind(
             kind: "script".to_string(),
             name: name.to_string(),
             deps: Vec::new(),
+            dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
@@ -1361,6 +1380,7 @@ demo_kind = target_kind(
             kind: "script".to_string(),
             name: "Tool".to_string(),
             deps: Vec::new(),
+            dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
             attrs,
             typed_attrs,
@@ -1386,6 +1406,7 @@ demo_kind = target_kind(
             kind: "demo_kind".to_string(),
             name: "Thing".to_string(),
             deps: Vec::new(),
+            dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
