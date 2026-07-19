@@ -470,9 +470,14 @@ fn target_kind_matches_terms(schema: &once_frontend::TargetKindSchema, terms: &[
         .filter(|term| !term.is_empty())
         .map(str::to_lowercase)
         .collect::<Vec<_>>();
-    terms
-        .iter()
-        .any(|term| searchable_terms.iter().any(|candidate| candidate == term))
+    // Match a term against whole tokens, but allow it to be a substring of a token
+    // so a partial query still resolves (for example `spec` finding the `rspec`
+    // runner) while staying scoped to individual words rather than the whole blob.
+    terms.iter().any(|term| {
+        searchable_terms
+            .iter()
+            .any(|candidate| candidate.contains(term.as_str()))
+    })
 }
 
 pub async fn target(workspace: &Path, output: Output, target_id: &str) -> Result<()> {
