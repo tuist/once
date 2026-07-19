@@ -53,7 +53,11 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
             .and_then(|run| run.get("results"))
             .filter(|value| !value.is_null());
         let Some(result) = result else {
-            add_missing_cases(target, batch, &mut cases);
+            // A whole-target batch may legitimately succeed without emitting
+            // normalized results (the process layer keeps the subprocess status
+            // authoritative). Record its outcome to match that verdict instead of
+            // always synthesizing a failure.
+            add_synthetic_case(target, batch, success, &mut cases);
             continue;
         };
         once_core::validate_test_results_for_units(result, target, &batch.test_filters)
@@ -121,7 +125,20 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
     Ok(value)
 }
 
-fn add_missing_cases(target: &str, batch: &TestBatch, cases: &mut BTreeMap<String, Value>) {
+fn add_synthetic_case(
+    target: &str,
+    batch: &TestBatch,
+    succeeded: bool,
+    cases: &mut BTreeMap<String, Value>,
+) {
+    let (status, name) = if succeeded {
+        (
+            "passed",
+            "test batch passed without normalized results",
+        )
+    } else {
+        ("failed", "test batch did not produce normalized results")
+    };
     let filters = if batch.test_filters.is_empty() {
         vec![format!("{target}::batch:{}", batch.id)]
     } else {
@@ -131,10 +148,10 @@ fn add_missing_cases(target: &str, batch: &TestBatch, cases: &mut BTreeMap<Strin
         cases.entry(filter.clone()).or_insert_with(|| {
             json!({
                 "id": filter,
-                "name": "test batch did not produce normalized results",
+                "name": name,
                 "suite": target,
-                "status": "failed",
-                "attempts": [{"status": "failed"}],
+                "status": status,
+                "attempts": [{"status": status}],
                 "runner_metadata": {},
             })
         });
@@ -173,6 +190,25 @@ mod tests {
         assert_eq!(value["summary"]["total"], 2);
         assert_eq!(value["cases"][0]["id"], "tests/unit::a");
         assert_eq!(value["cases"][1]["id"], "tests/unit::b");
+    }
+
+    #[test]
+    fn whole_target_batch_without_results_records_the_subprocess_verdict() {
+        let batch = TestBatch::new("tests/unit", Vec::new()).unwrap();
+        let values = BTreeMap::from([(
+            batch.id.as_str(),
+            json!({"batch_id": batch.id, "success": true, "results": Value::Null}),
+        )]);
+        let runs = values
+            .iter()
+            .map(|(id, value)| (*id, value))
+            .collect::<BTreeMap<_, _>>();
+
+        let value = aggregate("tests/unit", &[&batch], &runs).unwrap();
+
+        assert_eq!(value["status"], "passed");
+        assert_eq!(value["summary"]["passed"], 1);
+        assert_eq!(value["summary"]["failed"], 0);
     }
 
     fn run(batch: &TestBatch, name: &str) -> Value {
