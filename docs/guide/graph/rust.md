@@ -184,6 +184,33 @@ compiler configuration, environment, link argument, link library, and link
 search directives printed by the script. Dependency link-search outputs and
 Cargo `links` metadata are available to downstream targets and build scripts.
 
+Rust libraries, binaries, tests, crates, and procedural macros can also depend
+on `c_library` targets. Static and dynamic library paths plus transitive linker
+options flow through intermediate Rust crates and are applied by the final
+Rust link action. Native provider fields remain available to Apple and Android
+consumers of Rust outputs.
+
+Use named dependency roles when the relationship has compile-time semantics
+that differ from an ordinary Rust crate:
+
+```toml
+[[target]]
+name = "hello"
+kind = "rust_binary"
+srcs = ["src/main.rs"]
+deps = ["./greeting"]
+
+[target.dependencies]
+proc_macro_deps = ["./derive_greeting"]
+link_deps = ["./native_support"]
+```
+
+`proc_macro_deps` accepts `rust_proc_macro` providers built for the execution
+host. `link_deps` accepts `c_provider` records and applies their libraries and
+linker options to final artifacts. Existing targets may continue placing these
+providers in `deps`, but named roles make the contract explicit and allow Once
+to diagnose a provider in the wrong role before analysis.
+
 The target kind reference also documents compiler flags, environment files,
 linker settings, crate aliases, feature selection, and host-specific
 dependency selection. Add these only when the simple library edge above is
@@ -198,6 +225,7 @@ same sources feed both Apple and Android consumers:
 [[target]]
 name = "SharedRust"
 kind = "rust_mobile_library"
+deps = ["./SharedCore"]
 srcs = ["src/shared/**/*.rs"]
 
 [target.attrs]
@@ -206,6 +234,17 @@ apple_target = "aarch64-apple-ios"
 android_target = "aarch64-linux-android"
 android_abi = "arm64-v8a"
 android_api = 24
+
+[[target]]
+name = "SharedCore"
+kind = "rust_mobile_library"
+srcs = ["src/core/**/*.rs"]
+
+[target.attrs]
+crate_name = "shared_core"
+apple_target = "aarch64-apple-ios"
+android_target = "aarch64-linux-android"
+android_abi = "arm64-v8a"
 ```
 
 An Apple consumer requests a static library. An Android consumer requests a
@@ -215,9 +254,10 @@ Android linking requires the
 [Android Native Development Kit](https://developer.android.com/ndk), found
 through `ANDROID_NDK_HOME` or `android_ndk`.
 
-`rust_mobile_library` does not support Rust dependencies yet. Use explicit
-platform-specific `rust_library` targets when the shared code depends on other
-Rust crates.
+Dependencies between `rust_mobile_library` targets are compiled recursively
+for the platform requested by the Apple or Android consumer. Use explicit
+platform-specific `rust_library` targets only when a dependency must expose a
+host or single-target rlib instead of the deferred mobile provider.
 
 ## Supported Target Kinds and Limitations
 

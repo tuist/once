@@ -104,6 +104,7 @@ ecosystem-specific examples:
 - [Android](/guide/graph/android)
 - [C and C++](/guide/graph/c)
 - [Elixir](/guide/graph/elixir)
+- [Kotlin](/guide/graph/kotlin)
 - [Rust](/guide/graph/rust)
 - [Zig](/guide/graph/zig)
 

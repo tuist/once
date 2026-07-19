@@ -41,7 +41,9 @@ Accepted but unsupported attributes:
 `custom_package`, `densities`, `enable_data_binding`, `manifest`,
 `manifest_values`, `nocompress_extensions`, `plugins`,
 `resource_configuration_filters`, `resource_jars`, `resource_strip_prefix`,
-`runtime_deps`, and `stamp`. Non-empty values fail validation.
+`runtime_deps`, and `stamp`. Non-empty values under `[target.attrs]` fail
+validation. Use the `runtime_deps` dependency role under
+`[target.dependencies]` for runtime-only libraries.
 
 Tool override attrs are also available for `javac`, `java`, `java_home`,
 `kotlinc`, `kotlin_home`, `kotlin_stdlib`, and `aapt2`.
@@ -51,6 +53,7 @@ Tool override attrs are also available for `javac`, `java`, `java_home`,
 | Edge | Accepts | Description |
 | --- | --- | --- |
 | `deps` | `android_library`, `java_library` | Libraries under test. `android_library` targets also emit the `java_library` provider. |
+| `runtime_deps` | `android_library`, `java_library` | Libraries added only to the host test runtime classpath |
 
 ## Providers
 
@@ -97,6 +100,9 @@ name = "GreetingTests"
 kind = "android_local_test"
 srcs = ["src/test/**/*.kt"]
 deps = ["./Greeting"]
+
+[target.dependencies]
+runtime_deps = ["./TestRuntime"]
 
 [target.attrs]
 labels = ["unit"]

@@ -35,6 +35,8 @@ query-before-build workflow, current limitations, and follow-up steps:
 - [C and C++](/guide/graph/c) covers headers, source compilation, static
   libraries, and native consumers.
 - [Elixir](/guide/graph/elixir) covers compiled applications and ExUnit tests.
+- [Kotlin](/guide/graph/kotlin) covers Java virtual machine libraries and
+  binaries, Android Kotlin sources, and Kotlin/Native Apple frameworks.
 - [Rust](/guide/graph/rust) covers libraries, binaries, tests, procedural
   macros, Cargo dependencies, and native mobile outputs.
 - [Zig](/guide/graph/zig) covers modules, binaries, tests, libraries, and C or

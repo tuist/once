@@ -82,6 +82,15 @@ export const site = {
             ],
           },
           {
+            text: "Kotlin",
+            collapsed: true,
+            items: [
+              { text: "kotlin_jvm_library", link: "/reference/prelude/kotlin_jvm_library" },
+              { text: "kotlin_jvm_binary", link: "/reference/prelude/kotlin_jvm_binary" },
+              { text: "kotlin_jvm_test", link: "/reference/prelude/kotlin_jvm_test" },
+            ],
+          },
+          {
             text: "C and C++",
             collapsed: true,
             items: [
@@ -169,6 +178,7 @@ export const site = {
           { text: "Android", link: "/guide/graph/android" },
           { text: "C and C++", link: "/guide/graph/c" },
           { text: "Elixir", link: "/guide/graph/elixir" },
+          { text: "Kotlin", link: "/guide/graph/kotlin" },
           { text: "Rust", link: "/guide/graph/rust" },
           { text: "Zig", link: "/guide/graph/zig" },
         ],

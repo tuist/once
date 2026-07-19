@@ -270,6 +270,9 @@ An implementation receives `ctx` with generic graph data:
 - `ctx["attr"]`: typed attributes after manifest parsing.
 - `ctx["srcs"]`: raw source patterns from the target.
 - `ctx["deps"]`: provider records returned by analyzed dependencies.
+- `ctx["deps_by_role"]`: provider records grouped by the dependency roles
+  declared in the target kind schema. The `deps` entry contains the same
+  providers as `ctx["deps"]`.
 - `ctx["build_dir"]`: workspace-relative output directory for the
   target.
 - `ctx["scratch_dir"]`: workspace-relative scratch directory for
@@ -280,8 +283,8 @@ An implementation receives `ctx` with generic graph data:
   the caller requested a visible runtime interface.
 
 The implementation returns a dictionary of provider fields. Downstream
-target kinds should read provider fields from `ctx["deps"]` instead of
-inspecting target identities.
+target kinds should read provider fields from `ctx["deps"]` or
+`ctx["deps_by_role"]` instead of inspecting target identities.
 
 ## Host Globals
 
