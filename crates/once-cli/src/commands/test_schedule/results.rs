@@ -132,10 +132,7 @@ fn add_synthetic_case(
     cases: &mut BTreeMap<String, Value>,
 ) {
     let (status, name) = if succeeded {
-        (
-            "passed",
-            "test batch passed without normalized results",
-        )
+        ("passed", "test batch passed without normalized results")
     } else {
         ("failed", "test batch did not produce normalized results")
     };

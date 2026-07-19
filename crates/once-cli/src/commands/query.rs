@@ -124,13 +124,13 @@ fn render_action_validation_human(
         validation.actions_run
     );
     for diagnostic in &validation.diagnostics {
-        text.push_str(&format!("  {}: {}\n", diagnostic.code, diagnostic.message));
+        let _ = writeln!(text, "  {}: {}", diagnostic.code, diagnostic.message);
         for repair in &diagnostic.repairs {
-            text.push_str(&format!("    repair: {repair}\n"));
+            let _ = writeln!(text, "    repair: {repair}");
         }
     }
     for limitation in &validation.limitations {
-        text.push_str(&format!("  limitation: {limitation}\n"));
+        let _ = writeln!(text, "  limitation: {limitation}");
     }
     text
 }

@@ -73,6 +73,7 @@ pub async fn validate_action_contract(
     .await
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn validate_action_contract_with_options(
     action: &Action,
     workspace: &Path,
@@ -89,7 +90,7 @@ pub async fn validate_action_contract_with_options(
     {
         let input_set = inputs
             .iter()
-            .map(|path| path.as_str())
+            .map(WorkspacePath::as_str)
             .collect::<BTreeSet<_>>();
         let workspace_text = workspace.display().to_string();
         let command_text = argv
@@ -121,10 +122,7 @@ pub async fn validate_action_contract_with_options(
         }
         for input in inputs {
             let source = input.resolve(workspace);
-            if std::fs::symlink_metadata(&source)
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false)
-            {
+            if std::fs::symlink_metadata(&source).is_ok_and(|m| m.file_type().is_symlink()) {
                 if let Ok(resolved) = std::fs::canonicalize(&source) {
                     // Canonicalize both sides: the resolved target has every symlinked
                     // component collapsed (e.g. `/var` -> `/private/var` on macOS), so a
@@ -222,6 +220,7 @@ pub(crate) fn snapshot_tree(root: &Path, excluded: &[&str]) -> std::io::Result<C
     Ok(ContractSnapshot(entries))
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(crate) async fn audit_filesystem(
     execroot: &Path,
     workspace: &Path,
@@ -250,18 +249,8 @@ pub(crate) async fn audit_filesystem(
     }
     for output in outputs {
         let path = output.resolve(execroot);
-        if !path.try_exists()? {
-            violations.push(ContractViolation {
-                kind: ContractViolationKind::MissingOutput,
-                path: output.as_str().to_string(),
-                message: "declared output was not produced in the private execroot".to_string(),
-                repair: "Produce this output or remove it from the action outputs".to_string(),
-            });
-        } else {
-            if std::fs::symlink_metadata(&path)
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false)
-            {
+        if path.try_exists()? {
+            if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
                 if let Ok(resolved) = std::fs::canonicalize(&path) {
                     if !resolved.starts_with(execroot) {
                         violations.push(ContractViolation {
@@ -275,6 +264,13 @@ pub(crate) async fn audit_filesystem(
                 }
             }
             collect_output_symlink_escapes(&path, execroot, &mut violations)?;
+        } else {
+            violations.push(ContractViolation {
+                kind: ContractViolationKind::MissingOutput,
+                path: output.as_str().to_string(),
+                message: "declared output was not produced in the private execroot".to_string(),
+                repair: "Produce this output or remove it from the action outputs".to_string(),
+            });
         }
     }
     let input_set = inputs
@@ -447,7 +443,7 @@ fn walk(
         return Ok(());
     }
     let fingerprint = if metadata.file_type().is_symlink() {
-        format!("link:{:?}", std::fs::read_link(current)?)
+        format!("link:{}", std::fs::read_link(current)?.display())
     } else if metadata.is_dir() {
         "dir".to_string()
     } else if metadata.is_file() {

@@ -81,6 +81,7 @@ pub(crate) struct DeclaredActionValidation {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 pub(super) async fn validate_declared_actions(
     workspace: &Path,
     cache: &CacheProvider,
@@ -154,10 +155,11 @@ pub(super) async fn validate_declared_actions(
             .into_iter()
             .map(|diagnostic| {
                 let attribute = match diagnostic.operation {
-                    FilesystemOperation::Read => "inputs",
-                    FilesystemOperation::Modify | FilesystemOperation::Delete => "inputs",
+                    FilesystemOperation::Read
+                    | FilesystemOperation::Modify
+                    | FilesystemOperation::Delete
+                    | FilesystemOperation::Access => "inputs",
                     FilesystemOperation::Write => "outputs",
-                    FilesystemOperation::Access => "inputs",
                 };
                 let mut converted = once_frontend::Diagnostic::new(
                     diagnostic.code,

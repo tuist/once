@@ -286,6 +286,7 @@ async fn run_toolchain_command(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_query_command(
     workspace: &Path,
     output: Output,

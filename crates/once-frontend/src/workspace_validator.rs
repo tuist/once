@@ -107,7 +107,8 @@ fn validate_dependencies(
         // When a kind declares its dependency edge under another name and has no
         // "deps" edge, accept any edge's providers so dependencies placed in the
         // default field are not rejected outright.
-        let deps_edge = schema.and_then(|schema| schema.deps.iter().find(|edge| edge.name == "deps"));
+        let deps_edge =
+            schema.and_then(|schema| schema.deps.iter().find(|edge| edge.name == "deps"));
         let deps_accepted = match deps_edge {
             Some(edge) => edge.expected_providers.iter().collect::<BTreeSet<_>>(),
             None => schema

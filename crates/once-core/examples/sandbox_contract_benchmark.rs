@@ -168,6 +168,7 @@ fn command_action(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn benchmark_cases() -> Vec<Case> {
     vec![
         Case {
@@ -346,6 +347,7 @@ fn workspace_path(path: &str) -> WorkspacePath {
     WorkspacePath::try_from(path).unwrap()
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn ratio(numerator: u64, denominator: u64) -> f64 {
     if denominator == 0 {
         0.0
