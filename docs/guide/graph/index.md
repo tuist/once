@@ -94,6 +94,11 @@ once test apps/ios/AppTests
 Ask `once query capabilities <target>` which of these operations a target
 supports instead of guessing from its kind.
 
+When a workspace has more than one test target, continue with
+[Testing and scheduling](/guide/graph/testing). It explains conservative
+affected selection, exact unit requests, dynamic workers, current ecosystem
+coverage, and project-local scripted test adapters.
+
 ## Choose an Ecosystem
 
 A target's `kind` connects it to a typed contract for a language or platform.

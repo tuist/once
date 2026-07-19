@@ -60,8 +60,11 @@ module Once
     attach_function :once_version, [], :pointer
     attach_function :once_string_free, [:pointer], :void
     attach_function :once_digest_bytes, %i[pointer size_t], :pointer
+    attach_function :once_action_key_json, [:string], :pointer
     attach_function :once_cache_put_blob_json, [:string], :pointer
+    attach_function :once_cache_put_file_json, [:string], :pointer
     attach_function :once_cache_get_blob_json, [:string], :pointer
+    attach_function :once_cache_get_blob_to_file_json, [:string], :pointer
     attach_function :once_cache_has_blob_json, [:string], :pointer
     attach_function :once_cache_put_action_result_json, [:string], :pointer
     attach_function :once_cache_get_action_result_json, [:string], :pointer

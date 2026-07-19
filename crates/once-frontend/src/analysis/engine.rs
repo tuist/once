@@ -18,11 +18,15 @@ use super::values::{attr_value_to_starlark, json_to_value, value_to_json};
 use crate::graph::GraphTarget;
 
 /// Extra execution context supplied by command surfaces.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AnalysisOptions {
     /// Request a visible runtime surface for run capabilities when the target
     /// kind supports one.
     pub run_visible: bool,
+    /// Stable semantic test-unit identifiers requested for a test capability.
+    pub test_filters: Vec<String>,
+    /// Stable batch identifier used to isolate outputs for parallel test runs.
+    pub test_batch_id: Option<String>,
 }
 
 /// Result of analyzing one target.
@@ -179,7 +183,7 @@ impl AnalysisEngine {
             dep_providers,
             dependency_providers,
             capability,
-            options: self.options,
+            options: self.options.clone(),
         };
         analyze_target_with_host_cache(
             &self.source_path,
@@ -389,6 +393,17 @@ fn build_ctx<'v>(
         "visible",
         Value::new_bool(analysis.options.run_visible),
     )]));
+    let test = heap.alloc(AllocDict([
+        ("filters", heap.alloc(analysis.options.test_filters.clone())),
+        (
+            "batch_id",
+            analysis
+                .options
+                .test_batch_id
+                .as_ref()
+                .map_or(Value::new_none(), |id| heap.alloc(id.clone())),
+        ),
+    ]));
     heap.alloc(AllocDict([
         ("label", label),
         ("attr", attr),
@@ -399,5 +414,6 @@ fn build_ctx<'v>(
         ("scratch_dir", heap.alloc(scratch_dir.to_string())),
         ("capability", heap.alloc(analysis.capability.to_string())),
         ("run", run),
+        ("test", test),
     ]))
 }

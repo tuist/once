@@ -33,8 +33,99 @@ Describe 'test capability'
       "$REPO_ROOT/fixtures/shellspec_test/once.toml" > "$WORKSPACE/once.toml"
   }
 
+  create_parallel_shellspec_test_workspace() {
+    create_shellspec_test_workspace
+    cat >> "$WORKSPACE/once.toml" <<TOML
+
+[[target]]
+name = "graph_e2e"
+kind = "shellspec_test"
+srcs = ["spec/graph_query_spec.sh"]
+
+[target.attrs]
+shellspec = "$shellspec_bin"
+data = ["spec/spec_helper.sh"]
+labels = ["e2e", "shell"]
+env = { PATH = "$clean_path", ONCE_BIN = "$ONCE_BIN" }
+TOML
+  }
+
   create_rust_test_workspace() {
     cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/rust-test-minimal/." "$WORKSPACE/"
+  }
+
+  create_multi_rust_test_workspace() {
+    create_rust_test_workspace
+    cat >> "$WORKSPACE/tests/greeting_test.rs" <<'RS'
+
+#[test]
+fn other_greeting() {
+    assert_eq!(greeting(), "hello");
+}
+RS
+  }
+
+  create_minitest_workspace() {
+    ruby_bin="$(command -v ruby)"
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/minitest-test-minimal/." "$WORKSPACE/"
+    mkdir -p "$WORKSPACE/.ruby/bin"
+    ln -s "$ruby_bin" "$WORKSPACE/.ruby/bin/ruby"
+    cat >> "$WORKSPACE/once.toml" <<'TOML'
+
+[target.attrs]
+ruby = ".ruby/bin/ruby"
+TOML
+  }
+
+  create_pytest_workspace() {
+    pytest_python="$(dirname "$(realpath "$(command -v pytest)")")/python"
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/pytest-test-minimal/." "$WORKSPACE/"
+    mkdir -p "$WORKSPACE/.venv/bin"
+    printf '#!/bin/sh\nexec "%s" "$@"\n' "$pytest_python" > "$WORKSPACE/.venv/bin/python"
+    chmod +x "$WORKSPACE/.venv/bin/python"
+  }
+
+  create_rspec_workspace() {
+    rspec_root="$(dirname "$(dirname "$(command -v rspec)")")"
+    ruby_bin="$(command -v ruby)"
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/rspec-test-minimal/." "$WORKSPACE/"
+    mkdir -p "$WORKSPACE/.ruby/bin"
+    ln -s "$ruby_bin" "$WORKSPACE/.ruby/bin/ruby"
+    cat >> "$WORKSPACE/once.toml" <<TOML
+ruby = ".ruby/bin/ruby"
+env = { GEM_HOME = "$rspec_root/libexec", GEM_PATH = "$rspec_root/libexec" }
+TOML
+  }
+
+  create_javascript_test_workspace() {
+    runner_name="$1"
+    runner_entry="$(realpath "$(command -v "$runner_name")")"
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/$runner_name-test-minimal/." "$WORKSPACE/"
+    mkdir -p "$WORKSPACE/tools"
+    ln -s "$(command -v node)" "$WORKSPACE/tools/node"
+    printf '#!/usr/bin/env node\nimport %s\n' "$(printf '%s' "$runner_entry" | jq -R .)" > "$WORKSPACE/tools/$runner_name.mjs"
+    cat >> "$WORKSPACE/once.toml" <<TOML
+
+[target.attrs]
+node = "tools/node"
+runner = "tools/$runner_name.mjs"
+dependencies = []
+TOML
+  }
+
+  create_vitest_workspace() {
+    create_javascript_test_workspace vitest
+    for source in "$WORKSPACE"/tests/*.test.js; do
+      sed '/^import { expect, test } from "vitest"$/d' "$source" > "$source.once"
+      mv "$source.once" "$source"
+    done
+    cat >> "$WORKSPACE/once.toml" <<'TOML'
+args = ["--globals"]
+TOML
+  }
+
+  create_jest_workspace() {
+    create_javascript_test_workspace jest
   }
 
   java_toolchain_unavailable() {
@@ -325,6 +416,13 @@ case "${1:-}" in
   shell)
     shift
     if [ "${1:-}" = "am" ] && [ "${2:-}" = "instrument" ]; then
+      if [ "${ONCE_ANDROID_INSTRUMENTATION_CRASH:-}" = "1" ]; then
+        cat <<'OUT'
+INSTRUMENTATION_RESULT: shortMsg=Process crashed.
+INSTRUMENTATION_CODE: 0
+OUT
+        exit 0
+      fi
       cat <<'OUT'
 INSTRUMENTATION_STATUS: class=dev.once.greeting.GreetingInstrumentedTest
 INSTRUMENTATION_STATUS: test=useAppContext
@@ -464,6 +562,7 @@ deps = ["./GreetingApp", "./GreetingInstrumentationApk"]
 android_sdk = "$WORKSPACE/android-sdk"
 test_app = "./GreetingInstrumentationApk"
 instrumentation_runner = "androidx.test.runner.AndroidJUnitRunner"
+env_inherit = ["ONCE_ANDROID_INSTRUMENTATION_CRASH"]
 labels = ["android", "device"]
 TOML
     cat > "$WORKSPACE/libs/greeting/src/main/kotlin/dev/once/greeting/Greeting.kt" <<'KOTLIN'
@@ -504,6 +603,20 @@ KOTLIN
     The stdout should include 'changed test input `spec/cli_surface_spec.sh`'
   End
 
+  It 'creates a stable test plan independently from runner placement'
+    create_shellspec_test_workspace
+
+    When call once --format json query test-plan --changed-path spec/removed_spec.sh
+    The status should be success
+    The stdout should include '"schema":"once.test_plan.v1"'
+    The stdout should include '"schema":"once.test_selection.v1"'
+    The stdout should include '"target":"cli_e2e"'
+    The stdout should include '"test_filters":[]'
+    The stdout should include 'changed test input `spec/removed_spec.sh`'
+    The stdout should not include 'worker'
+    The stdout should not include 'remote_provider'
+  End
+
   It 'runs affected shellspec tests through the MCP tool'
     create_shellspec_test_workspace
     mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_run_tests","arguments":{"changed_paths":["spec/cli_surface_spec.sh"]}}}'
@@ -511,8 +624,39 @@ KOTLIN
     When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp --allow-run' sh "$mcp_request" "$ONCE_BIN" "$WORKSPACE"
     The status should be success
     The stdout should include 'cli_e2e'
+    The stdout should include 'once.test_plan.v1'
+    The stdout should include 'once.test_schedule.v1'
+    The stdout should include 'once.test_batch_attempt.v1'
     The stdout should include 'once.test_results.v1'
     The stdout should include '\"success\": true'
+  End
+
+  It 'dynamically schedules affected test targets and records attempts'
+    create_parallel_shellspec_test_workspace
+
+    When call once --format json test --changed-path spec/graph_query_spec.sh --jobs 2
+    The status should be success
+    The stdout should include 'once.test_plan.v1'
+    The stdout should include 'once.test_schedule.v1'
+    The stdout should include 'once.test_batch_attempt.v1'
+    The stdout should include '"strategy":"longest_estimated_duration_first_dynamic"'
+    The stdout should include '"workers":2'
+    The stdout should include '"target":"cli_e2e"'
+    The stdout should include '"target":"graph_e2e"'
+    The stdout should include '"placement":"local"'
+    The path "$WORKSPACE/.once/once.sqlite" should be file
+  End
+
+  It 'queries persisted test batch attempts'
+    create_parallel_shellspec_test_workspace
+    "$ONCE_BIN" -C "$WORKSPACE" --format json test --all --jobs 2 >/dev/null
+
+    When call once --format json query test-attempts --target graph_e2e --limit 1
+    The status should be success
+    The stdout should include 'once.test_batch_attempt.v1'
+    The stdout should include '"target":"graph_e2e"'
+    The stdout should include '"placement":"local"'
+    The stdout should include '"duration_ms"'
   End
 
   It 'runs shellspec tests and exposes normalized test results'
@@ -538,6 +682,141 @@ KOTLIN
     The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include 'returns_greeting'
   End
 
+  It 'discovers and schedules Minitest files as parallel batches'
+    create_minitest_workspace
+    once --format json test tests >/dev/null
+
+    When call once --format json test --jobs 2 tests
+    The status should be success
+    The stdout should include '"workers":2'
+    The stdout should include 'tests::test/math_test.rb'
+    The stdout should include 'tests::test/string_test.rb'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'test/math_test.rb'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'test/string_test.rb'
+  End
+
+  It 'discovers and schedules pytest files as parallel batches'
+    create_pytest_workspace
+    once --format json test --jobs 2 tests > "$WORKSPACE/first-run.json"
+
+    When call once --format json test --jobs 2 tests
+    The status should be success
+    The contents of file "$WORKSPACE/first-run.json" should include '"next_plan"'
+    The contents of file "$WORKSPACE/first-run.json" should include 'tests::tests/test_math.py'
+    The contents of file "$WORKSPACE/first-run.json" should include 'tests::tests/test_string.py'
+    The stdout should include '"workers":2'
+    The stdout should include 'tests::tests/test_math.py'
+    The stdout should include 'tests::tests/test_string.py'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":3'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/test_math.py'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/test_string.py'
+  End
+
+  It 'discovers and schedules RSpec files as parallel batches'
+    create_rspec_workspace
+    once --format json test tests >/dev/null
+
+    When call once --format json test --jobs 2 tests
+    The status should be success
+    The stdout should include '"workers":2'
+    The stdout should include 'tests::./spec/math_spec.rb'
+    The stdout should include 'tests::./spec/string_spec.rb'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'spec/math_spec.rb'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'spec/string_spec.rb'
+  End
+
+  It 'discovers and schedules Vitest files as parallel batches'
+    create_vitest_workspace
+    once --format json test tests >/dev/null
+    once --format json test --jobs 2 tests >/dev/null
+
+    When call once --format json test --jobs 2 tests
+    The status should be success
+    The stdout should include '"workers":2'
+    The stdout should include '"cache":"hit"'
+    The stdout should include 'tests%2Fmath.test.js'
+    The stdout should include 'tests%2Fstring.test.js'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/math.test.js'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/string.test.js'
+  End
+
+  It 'discovers and schedules Jest files as parallel batches'
+    create_jest_workspace
+    once --format json test tests >/dev/null
+    once --format json test --jobs 2 tests >/dev/null
+
+    When call once --format json test --jobs 2 tests
+    The status should be success
+    The stdout should include '"workers":2'
+    The stdout should include '"cache":"hit"'
+    The stdout should include 'tests%2Fmath.test.js'
+    The stdout should include 'tests%2Fstring.test.js'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/math.test.js'
+    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/string.test.js'
+  End
+
+  It 'discovers and runs one stable Rust test unit'
+    create_multi_rust_test_workspace
+    once --format json test hello_tests >/dev/null
+
+    When call /bin/sh -c '
+      "$1" -C "$2" --format json query test-manifest hello_tests > "$2/manifest.json" &&
+      "$1" -C "$2" --format json query test-plan --target hello_tests --test-unit "hello_tests::returns_greeting" > "$2/plan.json" &&
+      "$1" -C "$2" --format json test hello_tests --test-unit "hello_tests::returns_greeting"
+    ' sh "$ONCE_BIN" "$WORKSPACE"
+    The status should be success
+    The stdout should include 'once.test_schedule.v1'
+    The contents of file "$WORKSPACE/manifest.json" should include 'once.test_manifest.v1'
+    The contents of file "$WORKSPACE/manifest.json" should include '"case_filtering":"runner_args"'
+    The contents of file "$WORKSPACE/manifest.json" should include 'hello_tests::returns_greeting'
+    The contents of file "$WORKSPACE/manifest.json" should include 'hello_tests::other_greeting'
+    The contents of file "$WORKSPACE/plan.json" should include '"test_filters":["hello_tests::returns_greeting"]'
+    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include '"total":1'
+    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include 'hello_tests::returns_greeting'
+    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should not include 'hello_tests::other_greeting'
+  End
+
+  It 'rejects an unknown Rust test unit while planning'
+    create_multi_rust_test_workspace
+    once --format json test hello_tests >/dev/null
+
+    When call once --format json query test-plan --target hello_tests --test-unit 'hello_tests::missing'
+    The status should be failure
+    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include 'is not present in the current manifest'
+    The stderr should include 'run the whole target to refresh discovery'
+    The stderr should include 'session failed'
+  End
+
+  It 'rejects a build-only target while planning tests'
+    create_rust_test_workspace
+
+    When call once --format json query test-plan --target hello
+    The status should be failure
+    The stderr should include 'target `hello` does not expose the test capability'
+    The stderr should include 'session failed'
+  End
+
+  It 'rejects unsupported test-unit filtering while planning'
+    create_shellspec_test_workspace
+    once --format json test cli_e2e >/dev/null
+
+    When call once --format json query test-plan --target cli_e2e --test-unit 'spec/cli_surface_spec.sh::lists commands'
+    The status should be failure
+    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include 'does not support explicit test-unit filtering'
+    The stderr should include 'session failed'
+  End
+
   It 'runs Kotlin local test targets end to end'
     Skip if 'Java toolchain unavailable on this host' java_toolchain_unavailable
     create_android_local_test_workspace
@@ -552,6 +831,24 @@ KOTLIN
     The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/test_results.json" should include 'GreetingTest.testMessage'
   End
 
+  It 'discovers and runs one stable Kotlin local test unit'
+    Skip if 'Java toolchain unavailable on this host' java_toolchain_unavailable
+    create_android_local_test_workspace
+    once --format json test libs/greeting/GreetingTests >/dev/null
+
+    When call /bin/sh -c '
+      unit="libs/greeting/GreetingTests::dev.once.greeting.GreetingTest.testMessage"
+      "$1" -C "$2" --format json query test-manifest libs/greeting/GreetingTests > "$2/manifest.json" &&
+      "$1" -C "$2" --format json test libs/greeting/GreetingTests --test-unit "$unit"
+    ' sh "$ONCE_BIN" "$WORKSPACE"
+    The status should be success
+    The contents of file "$WORKSPACE/manifest.json" should include 'once.test_manifest.v1'
+    The contents of file "$WORKSPACE/manifest.json" should include '"case_filtering":"runner_args"'
+    The stdout should include 'once.test_schedule.v1'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/test_results.json" should include 'GreetingTest.testMessage'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/test_results.json" should include '"total":1'
+  End
+
   It 'runs Android instrumentation test targets end to end'
     Skip if 'Java toolchain unavailable on this host' java_toolchain_unavailable
     create_android_instrumentation_test_workspace
@@ -564,6 +861,36 @@ KOTLIN
     The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"runner":{"type":"android_instrumentation"'
     The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"status":"passed"'
     The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include 'GreetingInstrumentedTest.useAppContext'
+  End
+
+  It 'plans and runs one stable Android instrumentation test unit'
+    Skip if 'Java toolchain unavailable on this host' java_toolchain_unavailable
+    create_android_instrumentation_test_workspace
+    once --format json test libs/greeting/GreetingDeviceTests >/dev/null
+
+    When call /bin/sh -c '
+      unit="libs/greeting/GreetingDeviceTests::dev.once.greeting.GreetingInstrumentedTest.useAppContext"
+      "$1" -C "$2" --format json query test-plan --target libs/greeting/GreetingDeviceTests --test-unit "$unit" > "$2/plan.json" &&
+      "$1" -C "$2" --format json test libs/greeting/GreetingDeviceTests --test-unit "$unit"
+    ' sh "$ONCE_BIN" "$WORKSPACE"
+    The status should be success
+    The stdout should include 'once.test_schedule.v1'
+    The contents of file "$WORKSPACE/plan.json" should include '"test_filters":["libs/greeting/GreetingDeviceTests::dev.once.greeting.GreetingInstrumentedTest.useAppContext"]'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/native_results.txt" should include '-e class dev.once.greeting.GreetingInstrumentedTest#useAppContext'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"total":1'
+  End
+
+  It 'fails Android instrumentation when the device-side process crashes'
+    Skip if 'Java toolchain unavailable on this host' java_toolchain_unavailable
+    create_android_instrumentation_test_workspace
+
+    When call /bin/sh -c 'ONCE_ANDROID_INSTRUMENTATION_CRASH=1 "$1" -C "$2" --format json test libs/greeting/GreetingDeviceTests' sh "$ONCE_BIN" "$WORKSPACE"
+    The status should be failure
+    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include 'android_instrumentation_test'
+    The stderr should include 'session failed'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"status":"failed"'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/android-instrumentation-test.log" should include 'Process crashed'
   End
 
   It 'queries normalized shellspec test results'

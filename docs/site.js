@@ -106,6 +106,29 @@ export const site = {
             ],
           },
           {
+            text: "Python",
+            collapsed: true,
+            items: [
+              { text: "pytest_test", link: "/reference/prelude/pytest_test" },
+            ],
+          },
+          {
+            text: "Ruby",
+            collapsed: true,
+            items: [
+              { text: "rspec_test", link: "/reference/prelude/rspec_test" },
+              { text: "minitest_test", link: "/reference/prelude/minitest_test" },
+            ],
+          },
+          {
+            text: "JavaScript",
+            collapsed: true,
+            items: [
+              { text: "vitest_test", link: "/reference/prelude/vitest_test" },
+              { text: "jest_test", link: "/reference/prelude/jest_test" },
+            ],
+          },
+          {
             text: "Rust",
             collapsed: true,
             items: [
@@ -174,6 +197,7 @@ export const site = {
         items: [
           { text: "Overview", link: "/guide/graph/" },
           { text: "Ecosystems", link: "/guide/graph/ecosystems" },
+          { text: "Testing and Scheduling", link: "/guide/graph/testing" },
           { text: "Apple", link: "/guide/graph/apple" },
           { text: "Android", link: "/guide/graph/android" },
           { text: "C and C++", link: "/guide/graph/c" },
@@ -220,6 +244,7 @@ export const site = {
             text: '<span class="sidebar-target-link sidebar-target-link-javascript"><span class="sidebar-target-icon"></span><span>JavaScript</span></span>',
             link: "/guide/sdk/javascript",
           },
+          { text: "C", link: "/guide/sdk/c" },
         ],
       },
     ],

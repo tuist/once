@@ -1,7 +1,7 @@
 Gem::Specification.new do |spec|
   spec.name = "buildonce"
   spec.version = ENV.fetch("ONCE_VERSION", "0.0.0")
-  spec.summary = "Ruby SDK for Once"
+  spec.summary = "Ruby software development kit for Once"
   spec.description = "Embeds Once primitives in Ruby through the native Once library."
   spec.license = "MIT"
   spec.homepage = "https://github.com/tuist/once"

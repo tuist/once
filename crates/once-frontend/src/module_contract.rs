@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ModuleAuthoringContract {
@@ -9,8 +10,12 @@ pub struct ModuleAuthoringContract {
     pub context_fields: Vec<ContractEntry>,
     pub analysis_primitives: Vec<ContractEntry>,
     pub action_primitives: Vec<ContractEntry>,
+    pub test_contract: Vec<ContractEntry>,
     pub maintenance_invariants: Vec<&'static str>,
     pub starter: &'static str,
+    pub test_starter: &'static str,
+    pub test_target_starter: &'static str,
+    pub normalized_test_result_example: Value,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -51,6 +56,14 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry("ctx[\"scratch_dir\"]", "Workspace-relative action-private directory."),
             entry("ctx[\"capability\"]", "Capability being analyzed."),
             entry("ctx[\"run\"][\"visible\"]", "Whether a visible runtime was requested."),
+            entry(
+                "ctx[\"test\"][\"filters\"]",
+                "Stable semantic test-unit identifiers requested for this test execution.",
+            ),
+            entry(
+                "ctx[\"test\"][\"batch_id\"]",
+                "Stable batch identifier for isolating outputs during parallel test execution, or None for a whole-target execution.",
+            ),
         ],
         analysis_primitives: vec![
             entry("glob(patterns)", "Expand package source patterns into sorted workspace paths."),
@@ -100,6 +113,44 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Declare a direct executable invocation with explicit inputs, outputs, setup, caching, and sandbox policy.",
             ),
         ],
+        test_contract: vec![
+            entry(
+                "providers = [\"once_test_info\"]",
+                "Declare the reserved provider whenever a target returns a `test_info` record for the generic test discovery and execution surfaces.",
+            ),
+            entry(
+                "capability(\"test\", [\"default\", \"test_results\", \"logs\"])",
+                "Expose the generic test capability and its conventional output groups.",
+            ),
+            entry(
+                "provider[\"test_info\"]",
+                "Return `schema`, `target`, `runner`, `command`, `outputs`, `listing`, `filtering`, `sharding`, `retries`, `execution`, `labels`, and `metadata`. The test starter shows the complete required shape.",
+            ),
+            entry(
+                "provider[\"test_discovery_inputs\"]",
+                "Optionally list the workspace files whose contents can change discovered test identities. Once fingerprints them before reusing a manifest.",
+            ),
+            entry(
+                "ctx[\"build_dir\"] + \"/test[/batches/<batch_id>]/test_results.json\"",
+                "Write normalized results under a batch-isolated directory when batch_id is present. The record uses schema `once.test_results.v1` and contains target, runner, status, summary, cases, and artifacts.",
+            ),
+            entry(
+                "case.id = ctx[\"label\"][\"id\"] + \"::\" + semantic_name",
+                "Use stable target-qualified unit identifiers. Each case also contains name, suite, status, attempts, and runner_metadata.",
+            ),
+            entry(
+                "filtering.case_filtering = \"runner_args\"",
+                "Declare this only when every value in `ctx[\"test\"][\"filters\"]` is translated exactly into native runner arguments. Otherwise declare `unsupported` and ignore no requested filters.",
+            ),
+            entry(
+                "sharding = {\"supported\": True, \"granularity\": \"file\"}",
+                "Enable automatic batching only when exact filters and batch-isolated outputs are implemented. Granularity is target, file, or case.",
+            ),
+            entry(
+                "runner exit status and results.status",
+                "The runner exits unsuccessfully when the test run fails and writes a matching failed normalized record when possible. A successful process status must never normalize a runner crash or incomplete terminal result as passed.",
+            ),
+        ],
         maintenance_invariants: vec![
             "Fetch and inspect the external rule or plugin that is authoritative for the requested behavior.",
             "Model only the requested target and its necessary dependency closure; leave unrelated nodes in the source build.",
@@ -127,6 +178,126 @@ generated_text = target_kind(
     impl = _generated_text_impl,
 )
 "#,
+        test_starter: r#"def _project_path(ctx, path):
+    package = ctx["label"]["package"]
+    if package:
+        return package + "/" + path
+    return path
+
+def _scripted_test_impl(ctx):
+    batch_id = ctx["test"]["batch_id"]
+    test_dir = ctx["build_dir"] + "/test" + (("/batches/" + batch_id) if batch_id else "")
+    results = test_dir + "/test_results.json"
+    log = test_dir + "/scripted-test.log"
+    program = _project_path(ctx, ctx["attr"]["program"])
+    tool = host_which(ctx["attr"].get("tool") or "python3")
+    tool_identity = tool + "\x00" + host_command([tool, "--version"], merge_stderr = True)
+    filters = ctx["test"]["filters"]
+    argv = [
+        tool,
+        program,
+        "--once-results", results,
+        "--once-log", log,
+        "--once-target", ctx["label"]["id"],
+    ] + (ctx["attr"].get("args") or [])
+    for test_filter in filters:
+        argv.extend(["--once-test-unit", test_filter])
+    test_info = {
+        "schema": "once.test_info.v1",
+        "target": ctx["label"]["id"],
+        "runner": {
+            "type": "scripted",
+            "display_name": "Script-backed test",
+            "metadata": {},
+        },
+        "command": {"argv": argv, "env": {}, "cwd": "."},
+        "outputs": {
+            "results": results,
+            "logs": [log],
+            "native_results": [],
+            "coverage": [],
+        },
+        "listing": {"supported": True, "strategy": "normalized_results"},
+        "filtering": {"case_filtering": "runner_args"},
+        "sharding": {"supported": False},
+        "retries": {"supported": False, "default_attempts": 1},
+        "execution": {
+            "cacheable": True,
+            "timeout_ms": ctx["attr"].get("timeout_ms"),
+            "run_from_workspace_root": True,
+        },
+        "labels": ctx["attr"].get("labels") or [],
+        "metadata": {},
+    }
+    if ctx["capability"] == "test":
+        run_action(
+            argv = argv,
+            inputs = glob(ctx["srcs"]),
+            outputs = [results, log],
+            create_dirs = [test_dir],
+            toolchain_identity = tool_identity,
+            identifier = "scripted_test:" + ctx["label"]["id"],
+        )
+    return {
+        "label_id": ctx["label"]["id"],
+        "test_discovery_inputs": glob(ctx["srcs"]),
+        "test_info": test_info,
+    }
+
+scripted_test = target_kind(
+    docs = "Runs a script-backed test adapter that writes normalized Once results.",
+    attrs = [
+        attr("program", "string", required = True, docs = "Package-relative adapter program that is also included in srcs.", configurable = False),
+        attr("tool", "string", default = "\"python3\"", docs = "Host executable used to run the adapter.", configurable = False),
+        attr("args", "list<string>", default = "[]", docs = "Arguments passed before Once filter arguments.", configurable = False),
+        attr("labels", "list<string>", default = "[]", docs = "Labels exposed through test discovery."),
+        attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
+    ],
+    providers = ["once_test_info"],
+    capabilities = [capability("test", ["default", "test_results", "logs"])],
+    impl = _scripted_test_impl,
+)
+"#,
+        test_target_starter: r#"[modules]
+paths = ["modules/*.star"]
+
+[[target]]
+name = "scripted_tests"
+kind = "scripted_test"
+srcs = ["tests/test_adapter.py"]
+
+[target.attrs]
+program = "tests/test_adapter.py"
+labels = ["scripted"]
+"#,
+        normalized_test_result_example: json!({
+            "schema": "once.test_results.v1",
+            "target": "scripted_tests",
+            "runner": {
+                "type": "scripted",
+                "metadata": {}
+            },
+            "status": "passed",
+            "summary": {
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "skipped": 0,
+                "flaky": 0
+            },
+            "cases": [{
+                "id": "scripted_tests::case-name",
+                "name": "case-name",
+                "suite": "scripted",
+                "status": "passed",
+                "attempts": [{ "status": "passed" }],
+                "runner_metadata": {}
+            }],
+            "artifacts": {
+                "logs": [".once/out/scripted_tests/test/scripted-test.log"],
+                "native_results": []
+            }
+        }),
     }
 }
 
@@ -157,6 +328,22 @@ mod tests {
             .schema_invariants
             .iter()
             .any(|invariant| invariant.contains("attr.default")));
+        assert!(contract
+            .test_contract
+            .iter()
+            .any(|entry| entry.signature.contains("once_test_info")));
+        assert!(contract.test_starter.contains("ctx[\"test\"][\"filters\"]"));
+        assert!(contract.test_starter.contains("once.test_info.v1"));
+        assert!(contract
+            .test_target_starter
+            .contains("kind = \"scripted_test\""));
+        assert_eq!(
+            contract.normalized_test_result_example["schema"],
+            "once.test_results.v1"
+        );
+        let test_module = format!("{}\n{}", contract.declaration_source, contract.test_starter);
+        let engine = crate::analysis::AnalysisEngine::from_source(test_module).unwrap();
+        assert!(engine.target_kind_has_impl("scripted_test"));
         assert!(contract
             .maintenance_invariants
             .iter()

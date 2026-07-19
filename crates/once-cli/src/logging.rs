@@ -78,8 +78,11 @@ fn file_writer(
     session_id: Uuid,
 ) -> std::io::Result<(tracing_appender::non_blocking::NonBlocking, WorkerGuard)> {
     std::fs::create_dir_all(dir)?;
-    let appender = tracing_appender::rolling::never(dir, format!("{session_id}.log"));
-    Ok(tracing_appender::non_blocking(appender))
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dir.join(format!("{session_id}.log")))?;
+    Ok(tracing_appender::non_blocking(file))
 }
 
 fn file_filter() -> EnvFilter {
@@ -183,6 +186,15 @@ fn home_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_writer_returns_an_error_when_the_log_file_cannot_be_created() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session_id = Uuid::now_v7();
+        std::fs::create_dir(tmp.path().join(format!("{session_id}.log"))).unwrap();
+
+        assert!(file_writer(tmp.path(), session_id).is_err());
+    }
     use tracing_subscriber::filter::LevelFilter;
 
     #[test]

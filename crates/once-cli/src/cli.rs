@@ -177,14 +177,59 @@ pub enum Cmd {
     /// Builds the target as needed, then executes its `test`
     /// capability through the action cache. Output paths and result
     /// groups are owned by the target kind that exposes the capability.
+    /// With `--changed-path` or `--all`, stable target batches are pulled
+    /// from a duration-informed dynamic queue. `--jobs` caps local workers
+    /// without changing the plan or batch identities.
     #[command(arg_required_else_help = true)]
     Test {
         /// Local filesystem sandbox policy for command actions.
         #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
         sandbox: SandboxMode,
 
+        /// Maximum number of test batches to execute concurrently.
+        /// Defaults to the host's available parallelism for an affected plan.
+        #[arg(short = 'j', long, value_name = "COUNT")]
+        jobs: Option<usize>,
+
+        /// Run every discovered test target through the dynamic scheduler.
+        #[arg(long, conflicts_with_all = ["target", "changed_paths", "test_unit"])]
+        all: bool,
+
+        /// Select tests affected by a workspace-relative changed path.
+        /// Repeat for multiple paths. Cannot be combined with a target id.
+        #[arg(
+            long = "changed-path",
+            value_name = "PATH",
+            action = clap::ArgAction::Append,
+            conflicts_with = "target"
+        )]
+        changed_paths: Vec<String>,
+
+        /// Run one current, filterable unit from `once query test-manifest`.
+        /// The request is rejected before scheduling when the target does not
+        /// support exact filtering or the unit is absent from the manifest.
+        #[arg(
+            long = "test-unit",
+            value_name = "UNIT",
+            requires = "target",
+            conflicts_with_all = ["changed_paths", "all", "batch_test_units"]
+        )]
+        test_unit: Option<String>,
+
+        #[arg(
+            long = "batch-test-unit",
+            hide = true,
+            requires = "target",
+            conflicts_with = "test_unit",
+            action = clap::ArgAction::Append
+        )]
+        batch_test_units: Vec<String>,
+
+        #[arg(long, hide = true, requires = "batch_test_units")]
+        test_batch_id: Option<String>,
+
         /// Target id, such as `tests/unit` or `./unit`.
-        #[arg(required_unless_present = "list")]
+        #[arg(required_unless_present_any = ["list", "changed_paths", "all"])]
         target: Option<String>,
     },
 

@@ -1756,7 +1756,7 @@ def _rust_test_env(ctx, test_dir):
     return env
 
 def _rust_test_info(ctx, test_binary, results, log, native_results, test_dir):
-    args = _rust_attr(ctx, "args", [])
+    args = _rust_attr(ctx, "args", []) + _rust_test_filter_args(ctx)
     labels = _rust_attr(ctx, "labels", [])
     timeout_ms = _rust_attr(ctx, "timeout_ms", None)
     return {
@@ -1801,6 +1801,14 @@ def _rust_test_info(ctx, test_binary, results, log, native_results, test_dir):
         "metadata": {},
     }
 
+def _rust_test_filter_args(ctx):
+    filters = (ctx.get("test") or {}).get("filters") or []
+    if len(filters) > 1:
+        fail(ctx["label"]["id"] + ": Rust libtest execution currently accepts one explicit test unit")
+    if not filters:
+        return []
+    return [_test_unit_suffix(ctx, filters[0]), "--exact"]
+
 def _rust_test_runner_source():
     return """use std::collections::BTreeMap;
 use std::env;
@@ -1825,7 +1833,7 @@ fn main() {
     create_parent(log);
     create_parent(native_results);
 
-    let list_output = Command::new(binary).arg("--list").output();
+    let list_output = Command::new(binary).args(runner_args).arg("--list").output();
     let list_text = match &list_output {
         Ok(output) => output_text(output),
         Err(error) => format!("failed to list tests: {error}\\n"),
@@ -1998,7 +2006,7 @@ def _rust_test_impl(ctx):
         identifier = _rust_action_identifier(ctx, "test-runner-rustc"),
     )
     run_action(
-        argv = [runner, provider["test_binary"], results, log, native_results, ctx["label"]["id"]] + _rust_attr(ctx, "args", []),
+        argv = [runner, provider["test_binary"], results, log, native_results, ctx["label"]["id"]] + _rust_attr(ctx, "args", []) + _rust_test_filter_args(ctx),
         inputs = _unique([runner, provider["test_binary"]] + (provider.get("transitive_data") or [])),
         outputs = [test_dir, results, log, native_results],
         env = _rust_test_env(ctx, test_dir),

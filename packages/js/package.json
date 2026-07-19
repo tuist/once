@@ -1,7 +1,7 @@
 {
   "name": "buildonce",
   "version": "0.0.0",
-  "description": "JavaScript SDK for Once cache access",
+  "description": "JavaScript software development kit for Once cache access",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -904,7 +904,7 @@ def _zig_test_info(ctx, test_binary, results, log, native_results, test_dir):
             "strategy": "suite",
         },
         "filtering": {
-            "case_filtering": "runner_args",
+            "case_filtering": "unsupported",
         },
         "sharding": {
             "supported": False,

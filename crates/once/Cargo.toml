@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Rust SDK and C ABI for Once cache access"
+description = "Rust and C bindings for Once cache access"
 
 [lib]
 name = "once"
@@ -15,6 +15,7 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 [dependencies]
 once-cas.workspace = true
 once-core.workspace = true
+once-frontend.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true

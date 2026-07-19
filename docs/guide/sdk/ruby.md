@@ -33,9 +33,10 @@ Set `ONCE_LIBRARY_PATH` when you need to load a custom `libonce` build.
 
 ## Cache
 
-`Once::Cache` opens the default local cache using the
-[X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/). The
-default cache root is `$XDG_CACHE_HOME/once/cas` when `XDG_CACHE_HOME` is
+`Once::Cache` can open the default local cache, an explicit local root, or the
+effective provider for a workspace. The default follows the
+[X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/):
+its cache root is `$XDG_CACHE_HOME/once/cas` when `XDG_CACHE_HOME` is
 set, and `$HOME/.cache/once/cas` otherwise.
 
 Ruby methods are synchronous. `digest(bytes)` only hashes bytes and
@@ -45,15 +46,36 @@ string's byte representation.
 | Application programming interface | Use |
 | --- | --- |
 | `Once::Cache.new` | Opens the default local cache using the operating-system convention. |
+| `Once::Cache.new(local_cache_root:)` | Opens an isolated local cache at a caller-owned root. |
+| `Once::Cache.new(workspace_root:)` | Resolves the effective provider for a workspace. |
 | `version` | Returns the linked Once version. |
 | `digest(bytes)` | Returns the content digest for bytes without writing them to the cache. |
 | `put_blob(bytes)` | Stores bytes and returns their content digest. |
+| `put_file(path)` | Stores a file without loading its complete contents into Ruby memory. |
 | `get_blob(digest)` | Reads bytes for a digest. |
+| `get_blob_to_file(digest, path)` | Writes a blob to a file and returns its byte count. |
 | `has_blob?(digest)` | Returns whether a blob exists. |
 | `put_action_result(result, action_digest:)` | Stores a cached result for an action digest. |
 | `get_action_result(action_digest)` | Returns a cached result when one exists. |
 | `forget_action(action_digest)` | Removes one cached action result. Referenced blobs are left intact. |
 | `stats` | Returns local cache statistics. |
+
+Prefer `put_file` and `get_blob_to_file` for logs, archives, compiler outputs,
+and other payloads whose size is not tightly bounded.
+
+## Action Keys
+
+`Once::ActionKey` builds a versioned identity from ordered, labeled inputs:
+
+```ruby
+source = cache.put_file("inputs/source")
+action_digest = Once::ActionKey.new("example.compile")
+                               .add_bytes("tool", "compiler")
+                               .add_digest("source", source)
+                               .digest
+```
+
+Input order is significant and must be deterministic.
 
 ## Types
 

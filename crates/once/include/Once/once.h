@@ -24,9 +24,15 @@ void once_string_free(char *value);
 
 char *once_digest_bytes(const uint8_t *data, size_t len);
 
+char *once_action_key_json(const char *request_json);
+
 char *once_cache_put_blob_json(const char *request_json);
 
+char *once_cache_put_file_json(const char *request_json);
+
 char *once_cache_get_blob_json(const char *request_json);
+
+char *once_cache_get_blob_to_file_json(const char *request_json);
 
 char *once_cache_has_blob_json(const char *request_json);
 

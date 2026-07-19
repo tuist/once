@@ -1,11 +1,18 @@
 use sea_orm_migration::prelude::*;
 
+mod test_batch_attempts;
+
+use test_batch_attempts::M20260716000000CreateTestBatchAttempts;
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(M20260619000000CreateEvidenceRecords)]
+        vec![
+            Box::new(M20260619000000CreateEvidenceRecords),
+            Box::new(M20260716000000CreateTestBatchAttempts),
+        ]
     }
 }
 

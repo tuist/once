@@ -6,12 +6,9 @@ use once_cas::{CacheProvider, TuistCacheConfig, TUIST_OAUTH_CLIENT_ID_ENV};
 use once_core::RemoteExecution;
 use once_core::Xdg;
 use once_frontend::{
-    CacheProviderConfig, InfrastructureConfig, InfrastructureProviderConfig,
-    NamedCacheProviderConfig, TuistCacheProviderConfig, DEFAULT_TUIST_URL,
+    InfrastructureConfig, InfrastructureProviderConfig, NamedCacheProviderConfig, DEFAULT_TUIST_URL,
 };
 use serde::Deserialize;
-
-mod tuist_swift_config;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedCacheProviderConfig {
@@ -122,33 +119,24 @@ fn resolve_config_with_env(
     xdg: &Xdg,
     cache_provider_override: Option<String>,
 ) -> Result<ResolvedCacheProviderConfig> {
-    let workspace_config =
-        once_frontend::load_infrastructure_config(workspace).context("loading infrastructure")?;
-    if let Some(config) = cache_provider_config_from_env(cache_provider_override) {
-        return resolve_provider_config(xdg, &workspace_config.providers, config);
-    }
-    if let Some(config) = workspace_config.cache {
-        return resolve_provider_config(xdg, &workspace_config.providers, config);
-    }
-
-    if let Some(config) = resolve_tuist_workspace_config(workspace) {
-        Ok(ResolvedCacheProviderConfig::Tuist(config?))
-    } else {
-        resolve_default_provider(xdg)
-    }
-}
-
-fn cache_provider_config_from_env(value: Option<String>) -> Option<CacheProviderConfig> {
-    let name = non_empty(value)?;
-    if name == "local" {
-        Some(CacheProviderConfig::Local)
-    } else {
-        Some(CacheProviderConfig::Named(NamedCacheProviderConfig {
-            name,
-            account: None,
-            project: None,
-        }))
-    }
+    let config = once_frontend::resolve_cache_provider(
+        workspace,
+        &user_config_path(xdg),
+        cache_provider_override,
+    )
+    .context("resolving cache provider")?;
+    Ok(match config {
+        once_frontend::ResolvedCacheProviderConfig::Local => ResolvedCacheProviderConfig::Local,
+        once_frontend::ResolvedCacheProviderConfig::Tuist(config) => {
+            ResolvedCacheProviderConfig::Tuist(default_tuist_config(
+                config.provider_name,
+                config.url,
+                config.account,
+                config.project,
+                config.oauth_client_id,
+            ))
+        }
+    })
 }
 
 fn build_provider(xdg: &Xdg, config: ResolvedCacheProviderConfig) -> Result<CacheProvider> {
@@ -159,56 +147,6 @@ fn build_provider(xdg: &Xdg, config: ResolvedCacheProviderConfig) -> Result<Cach
                 .context("configuring Tuist cache provider")
         }
     }
-}
-
-fn resolve_provider_config(
-    xdg: &Xdg,
-    workspace_providers: &BTreeMap<String, InfrastructureProviderConfig>,
-    config: CacheProviderConfig,
-) -> Result<ResolvedCacheProviderConfig> {
-    match config {
-        CacheProviderConfig::Local => Ok(ResolvedCacheProviderConfig::Local),
-        CacheProviderConfig::Tuist(config) => Ok(ResolvedCacheProviderConfig::Tuist(
-            direct_tuist_config(config),
-        )),
-        CacheProviderConfig::Named(binding) => {
-            if let Some(provider) = workspace_providers.get(&binding.name) {
-                return Ok(resolve_named_workspace_provider(binding, provider.clone()));
-            }
-            let mut config = load_user_config(xdg)?;
-            let provider =
-                take_named_user_provider(&mut config, &binding.name).with_context(|| {
-                    format!(
-                        "infrastructure `{}` was not found in {}",
-                        binding.name,
-                        user_config_path(xdg).display()
-                    )
-                })?;
-            Ok(resolve_named_provider(binding, provider))
-        }
-    }
-}
-
-fn resolve_default_provider(xdg: &Xdg) -> Result<ResolvedCacheProviderConfig> {
-    let Some(mut config) = maybe_load_user_config(xdg)? else {
-        return Ok(ResolvedCacheProviderConfig::Local);
-    };
-    let binding = config
-        .infrastructure
-        .take()
-        .and_then(|infrastructure| infrastructure.cache)
-        .or_else(|| config.cache_provider.take());
-    let Some(binding) = binding else {
-        return Ok(ResolvedCacheProviderConfig::Local);
-    };
-    let provider = take_named_user_provider(&mut config, &binding.name).with_context(|| {
-        format!(
-            "infrastructure `{}` was not found in {}",
-            binding.name,
-            user_config_path(xdg).display()
-        )
-    })?;
-    Ok(resolve_named_provider(binding.into_named(), provider))
 }
 
 fn take_named_user_provider(config: &mut UserConfig, name: &str) -> Option<UserCacheProvider> {
@@ -363,16 +301,6 @@ fn is_builtin_execution_provider(name: &str) -> bool {
     matches!(name, "microsandbox" | "daytona")
 }
 
-fn direct_tuist_config(config: TuistCacheProviderConfig) -> TuistCacheConfig {
-    default_tuist_config(
-        "tuist".to_string(),
-        config.url,
-        config.account,
-        config.project,
-        config.oauth_client_id,
-    )
-}
-
 fn default_tuist_config(
     provider_name: String,
     url: String,
@@ -387,66 +315,6 @@ fn default_tuist_config(
         oauth_client_id: resolve_tuist_oauth_client_id(oauth_client_id),
         provider_name,
     }
-}
-
-fn resolve_tuist_workspace_config(workspace: &Path) -> Option<Result<TuistCacheConfig>> {
-    load_tuist_toml_config(workspace)
-        .or_else(|| load_tuist_swift_config(workspace))
-        .map(|config| {
-            let (account, project) = split_full_handle(&config.full_handle).with_context(|| {
-                format!(
-                    "Tuist project handle `{}` must have the form `account/project`",
-                    config.full_handle
-                )
-            })?;
-            Ok(default_tuist_config(
-                "tuist".to_string(),
-                config.url.unwrap_or_else(|| DEFAULT_TUIST_URL.to_string()),
-                Some(account),
-                Some(project),
-                None,
-            ))
-        })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TuistWorkspaceConfig {
-    full_handle: String,
-    url: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct TuistTomlConfig {
-    project: Option<String>,
-    url: Option<String>,
-}
-
-fn load_tuist_toml_config(workspace: &Path) -> Option<TuistWorkspaceConfig> {
-    let path = workspace.join("tuist.toml");
-    let src = std::fs::read_to_string(path).ok()?;
-    let config: TuistTomlConfig = toml::from_str(&src).ok()?;
-    Some(TuistWorkspaceConfig {
-        full_handle: non_empty(config.project)?,
-        url: non_empty(config.url),
-    })
-}
-
-fn load_tuist_swift_config(workspace: &Path) -> Option<TuistWorkspaceConfig> {
-    let path = workspace.join("Tuist.swift");
-    let src = std::fs::read_to_string(path).ok()?;
-    let (full_handle, url) = tuist_swift_config::parse_tuist_config(&src)?;
-    Some(TuistWorkspaceConfig { full_handle, url })
-}
-
-fn split_full_handle(full_handle: &str) -> Option<(String, String)> {
-    let mut parts = full_handle.split('/');
-    let account = non_empty(parts.next().map(str::to_string))?;
-    let project = non_empty(parts.next().map(str::to_string))?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some((account, project))
 }
 
 fn resolve_tuist_oauth_client_id(config_value: Option<String>) -> Option<String> {
@@ -498,15 +366,6 @@ enum UserCacheProvider {
         account: Option<String>,
         project: Option<String>,
     },
-}
-
-fn load_user_config(xdg: &Xdg) -> Result<UserConfig> {
-    maybe_load_user_config(xdg)?.with_context(|| {
-        format!(
-            "user cache config {} does not exist",
-            user_config_path(xdg).display()
-        )
-    })
 }
 
 fn maybe_load_user_config(xdg: &Xdg) -> Result<Option<UserConfig>> {

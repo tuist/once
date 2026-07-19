@@ -23,9 +23,9 @@ the source of truth, the workflow is still exploratory, or the native feature
 you need has not been modeled. Scripts still participate in the graph, so a
 project can begin there and adopt typed targets one boundary at a time.
 
-## Available Ecosystems
+## Full Ecosystem Guides
 
-Each supported ecosystem has an incremental guide with a first project,
+Full build ecosystems have incremental guides with a first project,
 query-before-build workflow, current limitations, and follow-up steps:
 
 - [Apple](/guide/graph/apple) covers libraries, frameworks, applications, and
@@ -41,6 +41,23 @@ query-before-build workflow, current limitations, and follow-up steps:
   macros, Cargo dependencies, and native mobile outputs.
 - [Zig](/guide/graph/zig) covers modules, binaries, tests, libraries, and C or
   C++ dependencies.
+
+## Test Runner References
+
+Test-only integrations have focused reference pages with prerequisites,
+copyable declarations, runnable starters, and first-run commands:
+
+- [pytest](/reference/prelude/pytest_test) covers Python test discovery,
+  exact execution, and automatic file or case batching.
+- [Ruby Specification](/reference/prelude/rspec_test) and
+  [Minitest](/reference/prelude/minitest_test) cover Ruby test suites.
+- [Vitest](/reference/prelude/vitest_test) and
+  [Jest](/reference/prelude/jest_test) cover JavaScript and TypeScript test
+  suites.
+
+Continue with [Testing and Scheduling](/guide/graph/testing) for the shared
+first-run workflow, affected selection, exact execution, and automatic
+batching across these runners.
 
 Use the [target kind index](/reference/prelude/) after choosing an ecosystem.
 It lists the exact schema, dependencies, capabilities, outputs, and current
