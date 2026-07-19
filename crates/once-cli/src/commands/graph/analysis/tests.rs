@@ -38,7 +38,12 @@ def _impl(ctx):
             outputs = [out],
             identifier = ctx["label"]["name"] + "-build",
         )
-    return {"target": ctx["label"]["name"], "out": out}
+    return {
+        "target": ctx["label"]["name"],
+        "out": out,
+        "default_deps": [dep["target"] for dep in ctx["deps"]],
+        "plugin_deps": [dep["target"] for dep in ctx["deps_by_role"].get("plugins") or []],
+    }
 
 test_kind = target_kind(impl = _impl)
 metadata_kind = target_kind()
@@ -82,6 +87,7 @@ fn target_with_capabilities(
         },
         kind: "test_kind".to_string(),
         deps: deps.iter().map(|dep| (*dep).to_string()).collect(),
+        dependency_edges: BTreeMap::new(),
         srcs: srcs.iter().map(|src| (*src).to_string()).collect(),
         attrs: attrs.into_iter().collect(),
         capabilities: capabilities
@@ -322,6 +328,46 @@ async fn build_direct_analysis_deps_returns_only_direct_deps_in_declared_order()
         .join(".once/out/Shared/Shared-build.txt")
         .is_file());
     assert!(!workspace.path().join(".once/out/Metadata").exists());
+}
+
+#[tokio::test]
+async fn named_dependency_roles_reach_starlark_in_declared_order() {
+    let workspace = tempfile::tempdir().unwrap();
+    let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+    let mut root = target_with_capabilities("Root", &["Library"], &[], &["build"], []);
+    root.dependency_edges.insert(
+        "plugins".to_string(),
+        vec!["PluginB".to_string(), "PluginA".to_string()],
+    );
+    let graph = vec![
+        root,
+        target_with_capabilities("Library", &[], &[], &["build"], []),
+        target_with_capabilities("PluginA", &[], &[], &["build"], []),
+        target_with_capabilities("PluginB", &[], &[], &["build"], []),
+    ];
+    let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
+    let session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        analyzer,
+        SandboxMode::default(),
+    );
+
+    let outcome = session
+        .build_with_analysis(&graph[0])
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        outcome.provider["default_deps"],
+        serde_json::json!(["Library"])
+    );
+    assert_eq!(
+        outcome.provider["plugin_deps"],
+        serde_json::json!(["PluginB", "PluginA"])
+    );
 }
 
 #[cfg(unix)]

@@ -35,7 +35,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             "Supported attribute types are string, bool, int, float, list<string>, map<string,string>, target, and select values for configurable attributes.",
             "attr.default is optional schema documentation and must be a string; it does not insert a runtime value. Implementations must use ctx[\"attr\"].get(...) when an optional attribute needs a fallback.",
             "Set configurable = False when analysis or output identity cannot safely vary through select.",
-            "Dependency declarations name provider records accepted from ctx[\"deps\"], and implementations should consume provider fields instead of dependency target kind names.",
+            "Dependency declarations name provider records accepted from ctx[\"deps\"] and ctx[\"deps_by_role\"], and implementations should consume provider fields instead of dependency target kind names.",
             "An implementation must return a JSON-shaped provider record whose fields satisfy the target kind's declared provider contract.",
         ],
         context_fields: vec![
@@ -43,6 +43,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry("ctx[\"attr\"]", "Typed target attributes."),
             entry("ctx[\"srcs\"]", "Declared source patterns."),
             entry("ctx[\"deps\"]", "Provider records returned by dependencies."),
+            entry(
+                "ctx[\"deps_by_role\"]",
+                "Provider records grouped by target-kind-defined dependency role, including deps.",
+            ),
             entry("ctx[\"build_dir\"]", "Workspace-relative durable output directory."),
             entry("ctx[\"scratch_dir\"]", "Workspace-relative action-private directory."),
             entry("ctx[\"capability\"]", "Capability being analyzed."),

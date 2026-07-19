@@ -54,7 +54,7 @@ pub enum QueryCmd {
         max_bytes: usize,
     },
 
-    /// Resolve a single target's full record (kind, srcs, deps, attrs, capabilities).
+    /// Resolve one target's kind, sources, dependency roles, attributes, and capabilities.
     Target {
         /// Target id, such as `packages/core/Core`.
         target: String,

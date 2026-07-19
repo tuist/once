@@ -91,7 +91,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_targets",
             description: "List every declared target in the workspace, optionally filtered by target kind.",
-            long_description: "Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, target kind, dep edges, and the capabilities it exposes. The optional `kind` argument narrows results to one target kind.",
+            long_description: "Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, target kind, default dependencies, named dependency roles, and exposed capabilities. The optional `kind` argument narrows results to one target kind.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -101,7 +101,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                     }
                 }
             }),
-            example_return: "[\n  { \"id\": \"packages/core/Core\", \"package\": \"packages/core\", \"name\": \"Core\",\n    \"kind\": \"library\", \"deps\": [], \"capabilities\": [\"build\"] },\n  { \"id\": \"apps/service/Service\", \"package\": \"apps/service\", \"name\": \"Service\",\n    \"kind\": \"application\", \"deps\": [\"packages/core/Core\"],\n    \"capabilities\": [\"build\", \"run\"] }\n]",
+            example_return: "[\n  { \"id\": \"packages/core/Core\", \"package\": \"packages/core\", \"name\": \"Core\",\n    \"kind\": \"library\", \"deps\": [], \"dependency_edges\": {}, \"capabilities\": [\"build\"] },\n  { \"id\": \"apps/service/Service\", \"package\": \"apps/service\", \"name\": \"Service\",\n    \"kind\": \"application\", \"deps\": [\"packages/core/Core\"],\n    \"dependency_edges\": { \"plugins\": [\"tools/compiler/Plugin\"] },\n    \"capabilities\": [\"build\", \"run\"] }\n]",
         },
         ToolDefinition {
             name: "once_query_capabilities",
@@ -221,8 +221,8 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_get_target",
-            description: "Return the resolved view of a single target: target kind, srcs, deps, typed attrs, capabilities, providers.",
-            long_description: "Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one target id. Includes the target's typed attribute values (with the types declared by its target kind schema), the capabilities it exposes, the providers it emits, and any diagnostics emitted while loading the manifest. Use this before editing a target to learn its current shape.",
+            description: "Return one resolved target with its sources, dependency roles, typed attributes, capabilities, and providers.",
+            long_description: "Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one target id. Includes default dependencies in `deps`, named roles in `dependency_edges`, typed attribute values, exposed capabilities, emitted providers, and manifest diagnostics. Use this before editing a target to learn its current shape.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -233,7 +233,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 },
                 "required": ["target"]
             }),
-            example_return: "{\n  \"label\": { \"package\": \"packages/core\", \"name\": \"Core\", \"id\": \"packages/core/Core\" },\n  \"kind\": \"library\",\n  \"srcs\": [\"src/**/*.src\"],\n  \"deps\": [],\n  \"attrs\": { \"visibility\": \"public\" },\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"linkable\", \"module\"]\n}",
+            example_return: "{\n  \"label\": { \"package\": \"packages/core\", \"name\": \"Core\", \"id\": \"packages/core/Core\" },\n  \"kind\": \"library\",\n  \"srcs\": [\"src/**/*.src\"],\n  \"deps\": [],\n  \"dependency_edges\": { \"plugins\": [\"tools/compiler/Plugin\"] },\n  \"attrs\": { \"visibility\": \"public\" },\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"linkable\", \"module\"]\n}",
         },
         ToolDefinition {
             name: "once_query_tests",
@@ -487,13 +487,13 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_validate_target",
             description: "Validate a proposed `[[target]]` table against its target kind schema. Returns structured diagnostics instead of prose.",
-            long_description: "Schema-only validation: checks that the target declares a known target kind, every required attribute is present, every declared attribute is known to the target kind and matches the target kind's declared type, and the target name is well-formed. The check is local; it does not resolve dep references or read other manifests. Returns `{ valid: true }` on success or `{ valid: false, diagnostics: [...] }` where each diagnostic carries a stable `code`, the offending `target` id, the offending `attribute` when applicable, and `repairs` an agent can apply.",
+            long_description: "Schema-only validation: checks that the target declares a known target kind, every named dependency role is declared by that kind, every required attribute is present, every declared attribute is known and has the declared type, and the target name is well-formed. The check is local; it does not resolve dependency references or read other manifests. Returns `{ valid: true }` on success or `{ valid: false, diagnostics: [...] }` where each diagnostic carries a stable `code`, the offending `target` id, the offending `attribute` when applicable, and `repairs` an agent can apply.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "target": {
                         "type": "object",
-                        "description": "Raw `[[target]]` table shape with `name`, `kind`, optional `deps`, `srcs`, and `attrs`."
+                        "description": "Raw `[[target]]` table shape with `name`, `kind`, optional `deps`, `dependencies`, `srcs`, and `attrs`."
                     }
                 },
                 "required": ["target"]

@@ -268,6 +268,7 @@ mod tests {
             kind: "script".to_string(),
             name: "build".to_string(),
             deps: Vec::new(),
+            dependency_edges: BTreeMap::new(),
             srcs: vec!["scripts/build.sh".to_string(), "src/input.txt".to_string()],
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),

@@ -65,6 +65,7 @@ fn validate_target_schemas(
             name: target.label.name.clone(),
             kind: target.kind.clone(),
             deps: target.deps.clone(),
+            dependencies: target.dependency_edges.clone(),
             srcs: target.srcs.clone(),
             attrs,
         };
@@ -101,69 +102,108 @@ fn validate_dependencies(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for target in graph {
-        let accepted = schemas
+        let schema = schemas.iter().find(|schema| schema.kind == target.kind);
+        validate_dependency_role(
+            target,
+            "deps",
+            &target.deps,
+            schema.and_then(|schema| schema.deps.iter().find(|edge| edge.name == "deps")),
+            schema.is_some_and(|schema| schema.deps.iter().any(|edge| edge.name == "deps")),
+            targets,
+            diagnostics,
+        );
+        for (role, dependencies) in &target.dependency_edges {
+            let role_schema =
+                schema.and_then(|schema| schema.deps.iter().find(|edge| edge.name == *role));
+            validate_dependency_role(
+                target,
+                role,
+                dependencies,
+                role_schema,
+                role_schema.is_some(),
+                targets,
+                diagnostics,
+            );
+        }
+    }
+}
+
+fn validate_dependency_role(
+    target: &GraphTarget,
+    role: &str,
+    dependencies: &[String],
+    schema: Option<&crate::graph::DepSchema>,
+    role_declared: bool,
+    targets: &BTreeMap<&str, &GraphTarget>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let attribute = if role == "deps" {
+        "deps".to_string()
+    } else {
+        format!("dependencies.{role}")
+    };
+    let accepted = schema
+        .into_iter()
+        .flat_map(|edge| &edge.expected_providers)
+        .collect::<BTreeSet<_>>();
+    for dependency_id in dependencies {
+        let Some(dependency) = targets.get(dependency_id.as_str()) else {
+            diagnostics.push(
+                Diagnostic::new(
+                    "missing_dependency",
+                    format!(
+                        "target `{}` depends on missing target `{dependency_id}`",
+                        target.label.id
+                    ),
+                )
+                .with_target(&target.label.id)
+                .with_attribute(&attribute)
+                .with_repair(format!(
+                    "Declare target `{dependency_id}` or remove it from `{attribute}`"
+                )),
+            );
+            continue;
+        };
+        if !role_declared && role != "deps" {
+            continue;
+        }
+        if accepted.is_empty() {
+            diagnostics.push(
+                Diagnostic::new(
+                    "unexpected_dependency",
+                    format!("target kind `{}` does not accept dependencies", target.kind),
+                )
+                .with_target(&target.label.id)
+                .with_attribute(&attribute)
+                .with_repair(format!("Remove `{dependency_id}` from `{attribute}`")),
+            );
+            continue;
+        }
+        if !dependency
+            .providers
             .iter()
-            .find(|schema| schema.kind == target.kind)
-            .into_iter()
-            .flat_map(|schema| &schema.deps)
-            .flat_map(|dep| &dep.expected_providers)
-            .collect::<BTreeSet<_>>();
-        for dependency_id in &target.deps {
-            let Some(dependency) = targets.get(dependency_id.as_str()) else {
-                diagnostics.push(
-                    Diagnostic::new(
-                        "missing_dependency",
-                        format!(
-                            "target `{}` depends on missing target `{dependency_id}`",
-                            target.label.id
-                        ),
-                    )
-                    .with_target(&target.label.id)
-                    .with_attribute("deps")
-                    .with_repair(format!(
-                        "Declare target `{dependency_id}` or remove it from `deps`"
-                    )),
-                );
-                continue;
-            };
-            if accepted.is_empty() {
-                diagnostics.push(
-                    Diagnostic::new(
-                        "unexpected_dependency",
-                        format!("target kind `{}` does not accept dependencies", target.kind),
-                    )
-                    .with_target(&target.label.id)
-                    .with_attribute("deps")
-                    .with_repair(format!("Remove `{dependency_id}` from `deps`")),
-                );
-                continue;
-            }
-            if !dependency
-                .providers
-                .iter()
-                .any(|provider| accepted.contains(provider))
-            {
-                diagnostics.push(
-                    Diagnostic::new(
-                        "incompatible_dependency_provider",
-                        format!(
-                            "dependency `{dependency_id}` provides [{}], but target `{}` accepts [{}]",
-                            dependency.providers.join(", "),
-                            target.label.id,
-                            accepted
-                                .iter()
-                                .map(|provider| provider.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                    )
-                    .with_target(&target.label.id)
-                    .with_attribute("deps")
-                    .with_repair(format!(
-                        "Replace `{dependency_id}` with a target that emits an accepted provider"
-                    )),
-                );
-            }
+            .any(|provider| accepted.contains(provider))
+        {
+            diagnostics.push(
+                Diagnostic::new(
+                    "incompatible_dependency_provider",
+                    format!(
+                        "dependency `{dependency_id}` provides [{}], but target `{}` accepts [{}]",
+                        dependency.providers.join(", "),
+                        target.label.id,
+                        accepted
+                            .iter()
+                            .map(|provider| provider.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+                .with_target(&target.label.id)
+                .with_attribute(&attribute)
+                .with_repair(format!(
+                    "Replace `{dependency_id}` with a target that emits an accepted provider"
+                )),
+            );
         }
     }
 }
@@ -260,7 +300,7 @@ fn visit_target(
         return;
     };
     stack.push(target_id.to_string());
-    for dependency in &target.deps {
+    for dependency in target.dependency_ids() {
         visit_target(dependency, targets, stack, complete, diagnostics);
     }
     stack.pop();
@@ -343,6 +383,125 @@ srcs = ["src/**/*.kt"]
             diagnostic.code == "missing_required_attr"
                 && diagnostic.target.as_deref() == Some("app/App")
                 && diagnostic.attribute.as_deref() == Some("application_id")
+        }));
+    }
+
+    #[test]
+    fn named_dependency_roles_check_their_own_provider_contract() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("modules")).unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            r#"[modules]
+paths = ["modules/*.star"]
+
+[[target]]
+name = "Library"
+kind = "normal"
+
+[[target]]
+name = "Plugin"
+kind = "normal"
+
+[[target]]
+name = "Root"
+kind = "consumer"
+deps = ["./Library"]
+
+[target.dependencies]
+plugins = ["./Plugin"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("modules/roles.star"),
+            r#"normal = target_kind(
+    docs = "Normal provider",
+    attrs = [],
+    deps = [],
+    providers = ["normal_provider"],
+    capabilities = [],
+)
+
+consumer = target_kind(
+    docs = "Consumes separate dependency roles",
+    attrs = [],
+    deps = [
+        dep("deps", ["normal_provider"], "Normal dependencies"),
+        dep("plugins", ["plugin_provider"], "Compiler plugins"),
+    ],
+    providers = [],
+    capabilities = [],
+)
+"#,
+        )
+        .unwrap();
+
+        let diagnostics = validate_workspace(tmp.path()).unwrap();
+
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "incompatible_dependency_provider")
+            .expect("named-role provider mismatch");
+        assert_eq!(diagnostic.target.as_deref(), Some("Root"));
+        assert_eq!(
+            diagnostic.attribute.as_deref(),
+            Some("dependencies.plugins")
+        );
+        assert!(diagnostic.message.contains("plugin_provider"));
+    }
+
+    #[test]
+    fn unknown_dependency_role_does_not_duplicate_provider_diagnostic() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("modules")).unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            r#"[modules]
+paths = ["modules/*.star"]
+
+[[target]]
+name = "Library"
+kind = "normal"
+
+[[target]]
+name = "Root"
+kind = "consumer"
+
+[target.dependencies]
+plugins = ["./Library"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("modules/roles.star"),
+            r#"normal = target_kind(
+    docs = "Normal provider",
+    attrs = [],
+    deps = [],
+    providers = ["normal_provider"],
+    capabilities = [],
+)
+
+consumer = target_kind(
+    docs = "Consumes normal dependencies",
+    attrs = [],
+    deps = [dep("deps", ["normal_provider"], "Normal dependencies")],
+    providers = [],
+    capabilities = [],
+)
+"#,
+        )
+        .unwrap();
+
+        let diagnostics = validate_workspace(tmp.path()).unwrap();
+
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "unknown_dependency_role"));
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "unexpected_dependency"
+                && diagnostic.attribute.as_deref() == Some("dependencies.plugins")
         }));
     }
 }

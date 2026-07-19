@@ -53,6 +53,23 @@ pub fn validate_target(target: &TargetSpec, schemas: &[TargetKindSchema]) -> Vec
         return diagnostics;
     };
 
+    for role in target.dependencies.keys() {
+        if role == "deps" || !schema.deps.iter().any(|edge| &edge.name == role) {
+            diagnostics.push(
+                Diagnostic::new(
+                    "unknown_dependency_role",
+                    format!(
+                        "target kind `{}` does not declare dependency role `{role}`",
+                        schema.kind
+                    ),
+                )
+                .with_target(target.name.as_str())
+                .with_attribute(format!("dependencies.{role}"))
+                .with_repair(suggest_known_dependency_roles(schema)),
+            );
+        }
+    }
+
     for attr_schema in &schema.attrs {
         if attr_schema.required && !target.attrs.contains_key(&attr_schema.name) {
             diagnostics.push(
@@ -89,6 +106,19 @@ pub fn validate_target(target: &TargetSpec, schemas: &[TargetKindSchema]) -> Vec
     }
 
     diagnostics
+}
+
+fn suggest_known_dependency_roles(schema: &TargetKindSchema) -> String {
+    let roles = schema
+        .deps
+        .iter()
+        .map(|edge| edge.name.as_str())
+        .filter(|name| *name != "deps")
+        .collect::<Vec<_>>();
+    if roles.is_empty() {
+        return "Remove the named dependency role; this target kind declares none".to_string();
+    }
+    format!("Use one of: {}", roles.join(", "))
 }
 
 fn validate_attr(
@@ -314,6 +344,31 @@ mod tests {
             .find(|d| d.code == "unknown_attr" && d.attribute.as_deref() == Some("wat"))
             .expect("unknown wat diagnostic");
         assert!(unknown.repairs[0].contains("platform"));
+    }
+
+    #[test]
+    fn named_dependency_roles_validate_against_the_selected_kind() {
+        let schemas = built_in_target_kind_schemas();
+        let mut valid = target("Library", "rust_library");
+        valid
+            .dependencies
+            .insert("proc_macro_deps".to_string(), vec!["./derive".to_string()]);
+        assert!(validate_target(&valid, &schemas).is_empty());
+
+        valid
+            .dependencies
+            .insert("compiler_plugins".to_string(), vec!["./plugin".to_string()]);
+        let diagnostics = validate_target(&valid, &schemas);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "unknown_dependency_role")
+            .expect("unknown dependency role diagnostic");
+        assert_eq!(
+            diagnostic.attribute.as_deref(),
+            Some("dependencies.compiler_plugins")
+        );
+        assert!(diagnostic.repairs[0].contains("proc_macro_deps"));
+        assert!(diagnostic.repairs[0].contains("link_deps"));
     }
 
     #[test]

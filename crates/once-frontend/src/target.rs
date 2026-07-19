@@ -14,6 +14,8 @@ pub struct Target {
     pub name: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deps: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependency_edges: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub srcs: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -76,6 +78,7 @@ mod tests {
             kind: "script".into(),
             name: "bar".into(),
             deps: vec![],
+            dependency_edges: BTreeMap::new(),
             srcs: vec![],
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),

@@ -55,7 +55,7 @@ impl GraphModel {
             let Some(&target_index) = target_indices.get(&target.label.id) else {
                 continue;
             };
-            for dep in &target.deps {
+            for dep in target.dependency_ids() {
                 if let Some(&dep_index) = target_indices.get(dep) {
                     edges.push(Edge {
                         from: target_index,
@@ -221,6 +221,10 @@ fn target_properties(target: &GraphTarget) -> BTreeMap<String, Value> {
         ("name".to_string(), json!(target.label.name)),
         ("kind".to_string(), json!(target.kind)),
         ("deps".to_string(), json!(target.deps)),
+        (
+            "dependency_edges".to_string(),
+            json!(target.dependency_edges),
+        ),
         ("srcs".to_string(), json!(target.srcs)),
         ("attrs".to_string(), json!(target.attrs)),
         ("providers".to_string(), json!(target.providers)),

@@ -42,6 +42,8 @@ pub struct TargetSpec {
     #[serde(default)]
     pub deps: Vec<String>,
     #[serde(default)]
+    pub dependencies: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
     pub srcs: Vec<String>,
     #[serde(default)]
     pub attrs: JsonMap<String, JsonValue>,
@@ -56,6 +58,7 @@ pub struct TargetUpdate {
     pub name: Option<String>,
     pub kind: Option<String>,
     pub deps: Option<Vec<String>>,
+    pub dependencies: Option<BTreeMap<String, Vec<String>>>,
     pub srcs: Option<Vec<String>>,
     pub attrs: Option<JsonMap<String, JsonValue>>,
 }
@@ -251,6 +254,12 @@ fn apply_update(
     if let Some(deps) = &set.deps {
         table.insert("deps", Item::Value(Value::Array(string_array(deps))));
     }
+    if let Some(dependencies) = &set.dependencies {
+        table.insert(
+            "dependencies",
+            Item::Table(build_dependencies_table(dependencies)),
+        );
+    }
     if let Some(srcs) = &set.srcs {
         table.insert("srcs", Item::Value(Value::Array(string_array(srcs))));
     }
@@ -268,6 +277,12 @@ fn build_target_table(spec: &TargetSpec) -> Result<Table, Vec<Diagnostic>> {
     table.insert("kind", Item::Value(Value::from(spec.kind.as_str())));
     if !spec.deps.is_empty() {
         table.insert("deps", Item::Value(Value::Array(string_array(&spec.deps))));
+    }
+    if !spec.dependencies.is_empty() {
+        table.insert(
+            "dependencies",
+            Item::Table(build_dependencies_table(&spec.dependencies)),
+        );
     }
     if !spec.srcs.is_empty() {
         table.insert("srcs", Item::Value(Value::Array(string_array(&spec.srcs))));
@@ -292,9 +307,29 @@ fn target_spec_from_table(table: &Table) -> TargetSpec {
             .unwrap_or_default()
             .to_string(),
         deps: string_vec_from_item(table.get("deps")),
+        dependencies: dependencies_from_item(table.get("dependencies")),
         srcs: string_vec_from_item(table.get("srcs")),
         attrs: attrs_from_item(table.get("attrs")),
     }
+}
+
+fn build_dependencies_table(dependencies: &BTreeMap<String, Vec<String>>) -> Table {
+    let mut table = Table::new();
+    table.set_implicit(false);
+    for (name, values) in dependencies {
+        table.insert(name, Item::Value(Value::Array(string_array(values))));
+    }
+    table
+}
+
+fn dependencies_from_item(item: Option<&Item>) -> BTreeMap<String, Vec<String>> {
+    let Some(Item::Table(table)) = item else {
+        return BTreeMap::new();
+    };
+    table
+        .iter()
+        .map(|(name, item)| (name.to_string(), string_vec_from_item(Some(item))))
+        .collect()
 }
 
 fn string_vec_from_item(item: Option<&Item>) -> Vec<String> {
@@ -511,6 +546,38 @@ kind = "apple_library"
             min < plat,
             "attrs should serialize in sorted order, got:\n{out}"
         );
+    }
+
+    #[test]
+    fn create_and_update_serialize_named_dependency_roles() {
+        let mut spec = TargetSpec {
+            name: "Library".to_string(),
+            kind: "rust_library".to_string(),
+            ..Default::default()
+        };
+        spec.dependencies
+            .insert("proc_macro_deps".to_string(), vec!["./derive".to_string()]);
+        let created = apply_operations("", &[EditOperation::Create { target: spec }])
+            .expect("create named dependency role");
+        assert!(created.contains("[target.dependencies]"));
+        assert!(created.contains("proc_macro_deps = [\"./derive\"]"));
+
+        let updated = apply_operations(
+            &created,
+            &[EditOperation::Update {
+                target_name: "Library".to_string(),
+                set: TargetUpdate {
+                    dependencies: Some(BTreeMap::from([(
+                        "link_deps".to_string(),
+                        vec!["./native".to_string()],
+                    )])),
+                    ..Default::default()
+                },
+            }],
+        )
+        .expect("update named dependency role");
+        assert!(updated.contains("link_deps = [\"./native\"]"));
+        assert!(!updated.contains("proc_macro_deps"));
     }
 
     #[test]
