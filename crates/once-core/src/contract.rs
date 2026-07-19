@@ -109,7 +109,7 @@ pub async fn validate_action_contract_with_options(
                     continue;
                 }
                 let absolute = workspace.join(entry).display().to_string();
-                if !input_set.contains(entry.as_str())
+                if !path_within_declared_input(entry, input_set.iter().copied())
                     && text_mentions_path(&command_text, &absolute)
                 {
                     preflight.push(ActionContractDiagnostic {
@@ -323,7 +323,7 @@ pub(crate) async fn audit_filesystem(
                 // boundary in stderr rather than as an incidental substring, so a common
                 // directory name like `src` is not flagged just for appearing in output.
                 if fingerprint != "dir"
-                    && !input_set.contains(path)
+                    && !path_within_declared_input(path, input_set.iter().map(String::as_str))
                     && !under_any(path, &allowed_outputs)
                     && text_mentions_path(text.as_ref(), path)
                 {
@@ -358,6 +358,16 @@ fn under_any(path: &str, prefixes: &BTreeSet<String>) -> bool {
     prefixes
         .iter()
         .any(|p| path == p || path.starts_with(&format!("{p}/")))
+}
+
+/// Whether `path` is a declared input or lives under one. A declared directory
+/// input covers its children, so an absolute path to a file under a declared
+/// source directory is not an undeclared read even though `input_set` only holds
+/// the directory itself.
+fn path_within_declared_input<'a>(path: &str, inputs: impl IntoIterator<Item = &'a str>) -> bool {
+    inputs
+        .into_iter()
+        .any(|input| path == input || path.starts_with(&format!("{input}/")))
 }
 
 fn collect_output_symlink_escapes(
@@ -465,6 +475,40 @@ fn walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declared_directory_input_covers_its_children() {
+        let inputs = ["src", "Cargo.toml"];
+        assert!(path_within_declared_input(
+            "src/main.rs",
+            inputs.iter().copied()
+        ));
+        assert!(path_within_declared_input("src", inputs.iter().copied()));
+        assert!(path_within_declared_input(
+            "Cargo.toml",
+            inputs.iter().copied()
+        ));
+        assert!(!path_within_declared_input(
+            "docs/readme.md",
+            inputs.iter().copied()
+        ));
+        // A shared prefix that is not a path boundary is not covered.
+        assert!(!path_within_declared_input(
+            "srcex/main.rs",
+            inputs.iter().copied()
+        ));
+    }
+
+    #[test]
+    fn text_mentions_path_requires_a_path_boundary() {
+        // `src` inside a longer path is not a standalone mention.
+        assert!(!text_mentions_path("compiling src/main.rs", "src"));
+        assert!(text_mentions_path("reading src now", "src"));
+        assert!(text_mentions_path("src/main.rs failed", "src/main.rs"));
+        // `src` inside another path component is not a standalone mention.
+        assert!(!text_mentions_path("error at end/src", "src"));
+        assert!(!text_mentions_path("no mention here", "src"));
+    }
 
     #[test]
     fn diagnostics_include_repairs_for_each_contract_violation() {
