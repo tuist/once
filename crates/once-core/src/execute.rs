@@ -298,11 +298,16 @@ async fn prepare_input_sandbox(
     let input_paths = inputs.to_vec();
     let cwd_path = cwd.cloned();
     let workspace = workspace_root.to_path_buf();
+    // Contract validation stages copies rather than symlinks so a probe that
+    // writes one of its declared inputs mutates the private execroot copy (where
+    // the audit still flags the write) instead of reaching through a symlink and
+    // corrupting the real workspace source the docs promise to leave untouched.
+    let copy_inputs = validate_contract;
     tokio::task::spawn_blocking(move || {
         remove_path_blocking(&sandbox_root)?;
         std::fs::create_dir_all(&sandbox_execroot)?;
         for input in input_paths {
-            stage_sandbox_input_blocking(&workspace, &sandbox_execroot, &input)?;
+            stage_sandbox_input_blocking(&workspace, &sandbox_execroot, &input, copy_inputs)?;
         }
         if let Some(cwd) = cwd_path {
             std::fs::create_dir_all(cwd.resolve(&sandbox_execroot))?;
@@ -357,9 +362,17 @@ fn stage_sandbox_input_blocking(
     workspace_root: &Path,
     sandbox_execroot: &Path,
     input: &WorkspacePath,
+    copy: bool,
 ) -> std::io::Result<()> {
     let source = input.resolve(workspace_root);
     let destination = input.resolve(sandbox_execroot);
+    if copy {
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        remove_path_blocking(&destination)?;
+        return copy_sandbox_output_blocking(&source, &destination);
+    }
     let metadata = std::fs::symlink_metadata(&source)?;
     if metadata.is_dir() && !metadata.file_type().is_symlink() {
         stage_sandbox_directory_blocking(&source, &destination)
