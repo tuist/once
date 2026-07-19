@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const os = require("node:os");
 const fs = require("node:fs");
 const childProcess = require("node:child_process");
-const { Cache, OnceError, digest } = require("./lib");
+const { ActionKey, Cache, OnceError, digest } = require("./lib");
 
 async function assertRejectsOnceError(work) {
   await assert.rejects(work, OnceError);
@@ -33,6 +33,32 @@ async function main() {
   assert.equal(await cache.hasBlob(blobDigest), true);
   assert.deepEqual(await cache.getBlob(blobDigest), Buffer.from("hello"));
   assert.deepEqual(await cache.getBlob(digest("")), Buffer.alloc(0));
+
+  const explicitRoot = `${tmp}/explicit-cache`;
+  const fileCache = new Cache({ localCacheRoot: explicitRoot });
+  const inputPath = `${tmp}/input.bin`;
+  const outputPath = `${tmp}/nested/output.bin`;
+  fs.writeFileSync(inputPath, "file payload");
+  const fileDigest = await fileCache.putFile(inputPath);
+  assert.equal(await fileCache.getBlobToFile(fileDigest, outputPath), 12);
+  assert.deepEqual(fs.readFileSync(outputPath), Buffer.from("file payload"));
+  assert.equal(await cache.hasBlob(fileDigest), false);
+  assert.throws(
+    () => new Cache({ localCacheRoot: explicitRoot, workspaceRoot: tmp }),
+    /cannot be used together/,
+  );
+
+  const actionKey = new ActionKey("compile")
+    .addBytes("tool", "swiftc")
+    .addDigest("source", digest("source"));
+  assert.equal(actionKey.digest(), actionKey.digest());
+  assert.notEqual(
+    actionKey.digest(),
+    new ActionKey("link")
+      .addBytes("tool", "swiftc")
+      .addDigest("source", digest("source"))
+      .digest(),
+  );
   await assertRejectsOnceError(() => cache.getBlob("not-a-digest"));
   await assertRejectsOnceError(() => cache.hasBlob("not-a-digest"));
 

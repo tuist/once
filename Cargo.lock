@@ -3367,6 +3367,7 @@ version = "0.0.0"
 dependencies = [
  "once-cas",
  "once-core",
+ "once-frontend",
  "serde",
  "serde_json",
  "tempfile",

@@ -14,21 +14,28 @@ export interface CacheStats {
 
 export class OnceError extends Error {}
 
+export interface CacheOptions {
+  localCacheRoot?: string;
+  workspaceRoot?: string;
+}
+
 export class Cache {
+  constructor(options?: CacheOptions);
   version(): string;
   /**
-   * Strings are encoded as UTF-8 before hashing.
+   * Strings use Unicode Transformation Format, 8-bit before hashing.
    */
   digest(bytes: Buffer | Uint8Array | string): string;
   /**
-   * Strings are encoded as UTF-8 before being stored.
+   * Strings use Unicode Transformation Format, 8-bit before being stored.
    *
-   * Blob bytes currently cross the native boundary as JSON arrays, so very
-   * large blobs should use the Rust SDK or CLI until the JavaScript SDK has a
-   * streaming native ABI.
+   * Use putFile for large blobs to avoid loading the complete payload into
+   * JavaScript memory.
    */
   putBlob(bytes: Buffer | Uint8Array | string): Promise<string>;
+  putFile(path: string): Promise<string>;
   getBlob(digest: string): Promise<Buffer>;
+  getBlobToFile(digest: string, path: string): Promise<number>;
   hasBlob(digest: string): Promise<boolean>;
   putActionResult(result: ActionResult, actionDigest: string): Promise<boolean>;
   getActionResult(actionDigest: string): Promise<ActionResult | null>;
@@ -36,7 +43,14 @@ export class Cache {
   stats(): Promise<CacheStats>;
 }
 
+export class ActionKey {
+  constructor(namespace: string);
+  addBytes(label: string, bytes: Buffer | Uint8Array | string): this;
+  addDigest(label: string, digest: string): this;
+  digest(): string;
+}
+
 /**
- * Strings are encoded as UTF-8 before hashing.
+ * Strings use Unicode Transformation Format, 8-bit before hashing.
  */
 export function digest(bytes: Buffer | Uint8Array | string): string;

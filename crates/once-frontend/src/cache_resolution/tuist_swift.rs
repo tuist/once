@@ -1,12 +1,3 @@
-//! Extracts the Tuist project handle and cache URL from a `Tuist.swift`
-//! manifest. Swift has no cheap off-the-shelf parser here, so this is a
-//! narrow scanner: it walks the source while skipping comments and string
-//! literals, finds the top-level `Tuist(...)` constructor, and reads the
-//! `fullHandle` and `url` string arguments out of its argument list.
-
-/// Reads `(fullHandle, url)` from the top-level `Tuist(...)` constructor.
-/// Returns `None` when the manifest has no such constructor or no
-/// non-empty `fullHandle`.
 pub(super) fn parse_tuist_config(src: &str) -> Option<(String, Option<String>)> {
     let body = tuist_constructor_body(src)?;
     let full_handle = string_argument(body, "fullHandle")?;
@@ -197,9 +188,5 @@ fn leading_string(src: &str) -> Option<String> {
 
 fn non_empty(value: &str) -> Option<String> {
     let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }

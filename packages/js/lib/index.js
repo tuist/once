@@ -15,6 +15,26 @@ const native = loadNative();
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 
 class Cache {
+  constructor(options = {}) {
+    if (options == null || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("Cache options must be an object");
+    }
+    const { localCacheRoot, workspaceRoot } = options;
+    if (localCacheRoot != null && workspaceRoot != null) {
+      throw new TypeError("localCacheRoot and workspaceRoot cannot be used together");
+    }
+    if (localCacheRoot != null && typeof localCacheRoot !== "string") {
+      throw new TypeError("localCacheRoot must be a string");
+    }
+    if (workspaceRoot != null && typeof workspaceRoot !== "string") {
+      throw new TypeError("workspaceRoot must be a string");
+    }
+    this.selection = {
+      ...(localCacheRoot == null ? {} : { local_cache_root: localCacheRoot }),
+      ...(workspaceRoot == null ? {} : { workspace_root: workspaceRoot }),
+    };
+  }
+
   version() {
     return native.once_version() || "";
   }
@@ -28,19 +48,43 @@ class Cache {
     const buffer = toBuffer(bytes, "Cache#putBlob bytes");
     return decodeRequest(
       native.once_cache_put_blob_json,
-      { bytes: Array.from(buffer) },
+      { ...this.selection, bytes: Array.from(buffer) },
     );
+  }
+
+  async putFile(filePath) {
+    validatePath(filePath, "filePath");
+    return decodeRequest(native.once_cache_put_file_json, {
+      ...this.selection,
+      path: filePath,
+    });
   }
 
   async getBlob(digest) {
     validateDigest(digest, "digest");
-    const response = decodeRequest(native.once_cache_get_blob_json, { digest });
+    const response = decodeRequest(native.once_cache_get_blob_json, {
+      ...this.selection,
+      digest,
+    });
     return Buffer.from(response.bytes);
+  }
+
+  async getBlobToFile(digest, filePath) {
+    validateDigest(digest, "digest");
+    validatePath(filePath, "filePath");
+    return decodeRequest(native.once_cache_get_blob_to_file_json, {
+      ...this.selection,
+      digest,
+      path: filePath,
+    });
   }
 
   async hasBlob(digest) {
     validateDigest(digest, "digest");
-    return decodeRequest(native.once_cache_has_blob_json, { digest });
+    return decodeRequest(native.once_cache_has_blob_json, {
+      ...this.selection,
+      digest,
+    });
   }
 
   async putActionResult(result, actionDigest) {
@@ -48,6 +92,7 @@ class Cache {
     return decodeRequest(
       native.once_cache_put_action_result_json,
       {
+        ...this.selection,
         action_digest: actionDigest,
         result: actionResultToNative(result),
       },
@@ -58,7 +103,7 @@ class Cache {
     validateDigest(actionDigest, "actionDigest");
     const result = decodeRequest(
       native.once_cache_get_action_result_json,
-      { action_digest: actionDigest },
+      { ...this.selection, action_digest: actionDigest },
     );
     return result === null ? null : actionResultFromNative(result);
   }
@@ -67,18 +112,49 @@ class Cache {
     validateDigest(actionDigest, "actionDigest");
     return decodeRequest(
       native.once_cache_forget_action_json,
-      { action_digest: actionDigest },
+      { ...this.selection, action_digest: actionDigest },
     );
   }
 
   async stats() {
-    const stats = decodeRequest(native.once_cache_stats_json, {});
+    const stats = decodeRequest(native.once_cache_stats_json, this.selection);
     return {
       blobCount: stats.blob_count,
       blobBytes: stats.blob_bytes,
       actionCount: stats.action_count,
       actionBytes: stats.action_bytes,
     };
+  }
+}
+
+class ActionKey {
+  constructor(namespace) {
+    if (typeof namespace !== "string") {
+      throw new TypeError("ActionKey namespace must be a string");
+    }
+    this.namespace = namespace;
+    this.inputs = [];
+  }
+
+  addBytes(label, bytes) {
+    validateLabel(label);
+    const buffer = toBuffer(bytes, "ActionKey#addBytes bytes");
+    this.inputs.push({ kind: "bytes", label, bytes: Array.from(buffer) });
+    return this;
+  }
+
+  addDigest(label, digest) {
+    validateLabel(label);
+    validateDigest(digest, "digest");
+    this.inputs.push({ kind: "digest", label, digest });
+    return this;
+  }
+
+  digest() {
+    return decodeRequest(native.once_action_key_json, {
+      namespace: this.namespace,
+      inputs: this.inputs,
+    });
   }
 }
 
@@ -103,7 +179,9 @@ function decodeResponse(pointer) {
   try {
     response = JSON.parse(pointer);
   } catch (error) {
-    throw new OnceError(`native Once response must be valid JSON: ${error.message}`);
+    throw new OnceError(
+      `native Once response must be valid JavaScript Object Notation: ${error.message}`,
+    );
   }
   if (response.status === "ok") {
     return response.value;
@@ -135,6 +213,18 @@ function validateDigest(value, name) {
   }
 }
 
+function validateLabel(value) {
+  if (typeof value !== "string") {
+    throw new TypeError("ActionKey input label must be a string");
+  }
+}
+
+function validatePath(value, name) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`${name} must be a non-empty string`);
+  }
+}
+
 function toBuffer(bytes, name) {
   if (Buffer.isBuffer(bytes)) {
     return bytes;
@@ -159,13 +249,26 @@ function loadNative() {
       "const void *",
       "size_t",
     ]),
+    once_action_key_json: library.func("once_action_key_json", onceString, [
+      "str",
+    ]),
     once_cache_put_blob_json: library.func(
       "once_cache_put_blob_json",
       onceString,
       ["str"],
     ),
+    once_cache_put_file_json: library.func(
+      "once_cache_put_file_json",
+      onceString,
+      ["str"],
+    ),
     once_cache_get_blob_json: library.func(
       "once_cache_get_blob_json",
+      onceString,
+      ["str"],
+    ),
+    once_cache_get_blob_to_file_json: library.func(
+      "once_cache_get_blob_to_file_json",
       onceString,
       ["str"],
     ),
@@ -229,6 +332,7 @@ function libraryName() {
 }
 
 module.exports = {
+  ActionKey,
   Cache,
   OnceError,
   digest,

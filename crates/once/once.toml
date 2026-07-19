@@ -4,6 +4,7 @@ kind = "rust_library"
 deps = [
   "crates/once-cas/once_cas",
   "crates/once-core/once_core",
+  "crates/once-frontend/once_frontend",
   "cargo_dependencies",
 ]
 srcs = ["src/**/*.rs"]

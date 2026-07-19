@@ -32,6 +32,29 @@ Dir.mktmpdir("once-ruby-") do |dir|
   raise "blob missing" unless cache.has_blob?(blob_digest)
   raise "blob content mismatch" unless cache.get_blob(blob_digest) == "hello"
   raise "empty blob mismatch" unless cache.get_blob(Once.digest("")) == ""
+
+  explicit_cache = Once::Cache.new(local_cache_root: File.join(dir, "explicit-cache"))
+  input_path = File.join(dir, "input.bin")
+  output_path = File.join(dir, "nested", "output.bin")
+  File.binwrite(input_path, "file payload")
+  file_digest = explicit_cache.put_file(input_path)
+  raise "file byte count mismatch" unless explicit_cache.get_blob_to_file(file_digest, output_path) == 12
+  raise "file content mismatch" unless File.binread(output_path) == "file payload"
+  raise "explicit cache leaked into default cache" if cache.has_blob?(file_digest)
+  begin
+    Once::Cache.new(local_cache_root: dir, workspace_root: dir)
+    raise "expected conflicting cache roots to fail"
+  rescue ArgumentError
+  end
+
+  action_key = Once::ActionKey.new("compile")
+                              .add_bytes("tool", "swiftc")
+                              .add_digest("source", Once.digest("source"))
+  raise "action key is unstable" unless action_key.digest == action_key.digest
+  other_key = Once::ActionKey.new("link")
+                            .add_bytes("tool", "swiftc")
+                            .add_digest("source", Once.digest("source"))
+  raise "action key namespace was ignored" if action_key.digest == other_key.digest
   assert_raises_once_error { cache.get_blob("not-a-digest") }
   assert_raises_once_error { cache.has_blob?("not-a-digest") }
 
