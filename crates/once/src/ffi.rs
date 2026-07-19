@@ -1,8 +1,8 @@
-//! C ABI boundary for the embeddable Once cache API.
+//! C foreign-function boundary for the embeddable Once cache interface.
 //!
 //! The exported functions are safe to call from any host thread. Strings
 //! returned from this module are owned by Rust and must be released with
-//! `once_string_free`. JSON cache functions share a lazily initialized
+//! `once_string_free`. Cache request functions share a lazily initialized
 //! Tokio runtime. Raw pointer inputs are checked before dereferencing:
 //! a null byte pointer is valid only with length zero, which is treated
 //! as an empty byte buffer.
@@ -11,52 +11,19 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_uchar};
 use std::sync::{Mutex, OnceLock};
 
-use once_cas::{ActionResult, Digest};
+use once_cas::Digest;
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
 
-use crate::{digest_from_hex, Cache};
+use crate::{digest_from_hex, ActionKeyBuilder, Cache};
 
-#[derive(Debug, Deserialize)]
-struct BlobPutRequest {
-    bytes: Vec<u8>,
-}
+mod protocol;
 
-#[derive(Debug, Deserialize)]
-struct DigestRequest {
-    digest: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ActionResultPutRequest {
-    action_digest: String,
-    result: ActionResult,
-}
-
-#[derive(Debug, Deserialize)]
-struct ActionDigestRequest {
-    action_digest: String,
-}
-
-#[derive(Debug, Serialize)]
-struct BlobResponse {
-    bytes: Vec<u8>,
-}
-
-#[derive(Debug, Serialize)]
-struct StatsResponse {
-    blob_count: u64,
-    blob_bytes: u64,
-    action_count: u64,
-    action_bytes: u64,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-enum FfiResponse<T> {
-    Ok { value: T },
-    Error { message: String },
-}
+use protocol::{
+    ActionDigestRequest, ActionKeyInputRequest, ActionKeyRequest, ActionResultPutRequest,
+    BlobFileRequest, BlobPutRequest, BlobResponse, CacheRequest, CacheSelection, DigestRequest,
+    FfiResponse, FilePutRequest, StatsResponse,
+};
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 static RUNTIME_INIT: Mutex<()> = Mutex::new(());
@@ -94,11 +61,30 @@ pub extern "C" fn once_digest_bytes(data: *const c_uchar, len: usize) -> *mut c_
     response_ok(Digest::of_bytes(bytes).to_hex())
 }
 
-/// Store a blob in the local cache.
+/// Build a versioned action key from labeled bytes and digests.
+#[no_mangle]
+pub extern "C" fn once_action_key_json(request_json: *const c_char) -> *mut c_char {
+    run_json::<ActionKeyRequest, _>(request_json, |request| {
+        let mut builder = ActionKeyBuilder::new(request.namespace);
+        for input in request.inputs {
+            match input {
+                ActionKeyInputRequest::Bytes { label, bytes } => {
+                    builder.push_bytes(label, bytes);
+                }
+                ActionKeyInputRequest::Digest { label, digest } => {
+                    builder.push_digest(label, digest_from_hex(&digest)?);
+                }
+            }
+        }
+        Ok(builder.finish().to_hex())
+    })
+}
+
+/// Store a blob in the selected cache.
 #[no_mangle]
 pub extern "C" fn once_cache_put_blob_json(request_json: *const c_char) -> *mut c_char {
     run_json::<BlobPutRequest, _>(request_json, |request| {
-        let cache = Cache::new();
+        let cache = cache_from_selection(request.cache)?;
         block_on(async {
             cache
                 .put_blob(&request.bytes)
@@ -108,12 +94,26 @@ pub extern "C" fn once_cache_put_blob_json(request_json: *const c_char) -> *mut 
     })
 }
 
-/// Read a blob from the local cache.
+/// Store a file in the selected cache without encoding its bytes in the request.
+#[no_mangle]
+pub extern "C" fn once_cache_put_file_json(request_json: *const c_char) -> *mut c_char {
+    run_json::<FilePutRequest, _>(request_json, |request| {
+        let cache = cache_from_selection(request.cache)?;
+        block_on(async {
+            cache
+                .put_file(request.path)
+                .await
+                .map(|digest| digest.to_hex())
+        })
+    })
+}
+
+/// Read a blob from the selected cache.
 #[no_mangle]
 pub extern "C" fn once_cache_get_blob_json(request_json: *const c_char) -> *mut c_char {
     run_json::<DigestRequest, _>(request_json, |request| {
         let digest = digest_from_hex(&request.digest)?;
-        let cache = Cache::new();
+        let cache = cache_from_selection(request.cache)?;
         block_on(async {
             cache
                 .get_blob(digest)
@@ -123,22 +123,32 @@ pub extern "C" fn once_cache_get_blob_json(request_json: *const c_char) -> *mut 
     })
 }
 
-/// Return whether a blob exists in the local cache.
+/// Materialize a blob at a file path without encoding its bytes in the response.
+#[no_mangle]
+pub extern "C" fn once_cache_get_blob_to_file_json(request_json: *const c_char) -> *mut c_char {
+    run_json::<BlobFileRequest, _>(request_json, |request| {
+        let digest = digest_from_hex(&request.digest)?;
+        let cache = cache_from_selection(request.cache)?;
+        block_on(async { cache.get_blob_to_file(digest, request.path).await })
+    })
+}
+
+/// Return whether a blob exists in the selected cache.
 #[no_mangle]
 pub extern "C" fn once_cache_has_blob_json(request_json: *const c_char) -> *mut c_char {
     run_json::<DigestRequest, _>(request_json, |request| {
         let digest = digest_from_hex(&request.digest)?;
-        let cache = Cache::new();
+        let cache = cache_from_selection(request.cache)?;
         block_on(async { cache.has_blob(digest).await })
     })
 }
 
-/// Store an action result in the local cache.
+/// Store an action result in the selected cache.
 #[no_mangle]
 pub extern "C" fn once_cache_put_action_result_json(request_json: *const c_char) -> *mut c_char {
     run_json::<ActionResultPutRequest, _>(request_json, |request| {
         let action = digest_from_hex(&request.action_digest)?;
-        let cache = Cache::new();
+        let cache = cache_from_selection(request.cache)?;
         block_on(async {
             cache
                 .put_action_result(action, &request.result)
@@ -148,40 +158,52 @@ pub extern "C" fn once_cache_put_action_result_json(request_json: *const c_char)
     })
 }
 
-/// Read an action result from the local cache.
+/// Read an action result from the selected cache.
 #[no_mangle]
 pub extern "C" fn once_cache_get_action_result_json(request_json: *const c_char) -> *mut c_char {
     run_json::<ActionDigestRequest, _>(request_json, |request| {
         let action = digest_from_hex(&request.action_digest)?;
-        let cache = Cache::new();
+        let cache = cache_from_selection(request.cache)?;
         block_on(async { cache.get_action_result(action).await })
     })
 }
 
-/// Remove an action result from the local cache.
+/// Remove an action result from the selected cache.
 #[no_mangle]
 pub extern "C" fn once_cache_forget_action_json(request_json: *const c_char) -> *mut c_char {
     run_json::<ActionDigestRequest, _>(request_json, |request| {
         let action = digest_from_hex(&request.action_digest)?;
-        let cache = Cache::new();
+        let cache = cache_from_selection(request.cache)?;
         block_on(async { cache.forget_action(action).await })
     })
 }
 
 /// Return local cache statistics.
 #[no_mangle]
-pub extern "C" fn once_cache_stats_json(_request_json: *const c_char) -> *mut c_char {
-    let cache = Cache::new();
-    match block_on(async {
-        cache.stats().await.map(|stats| StatsResponse {
-            blob_count: stats.blob_count,
-            blob_bytes: stats.blob_bytes,
-            action_count: stats.action_count,
-            action_bytes: stats.action_bytes,
+pub extern "C" fn once_cache_stats_json(request_json: *const c_char) -> *mut c_char {
+    run_json::<CacheRequest, _>(request_json, |request| {
+        let cache = cache_from_selection(request.cache)?;
+        block_on(async {
+            cache.stats().await.map(|stats| StatsResponse {
+                blob_count: stats.blob_count,
+                blob_bytes: stats.blob_bytes,
+                action_count: stats.action_count,
+                action_bytes: stats.action_bytes,
+            })
         })
-    }) {
-        Ok(value) => response_ok(value),
-        Err(error) => response_error(error.to_string()),
+    })
+}
+
+fn cache_from_selection(selection: CacheSelection) -> crate::Result<Cache> {
+    match (selection.local_cache_root, selection.workspace_root) {
+        (None, None) => Ok(Cache::new()),
+        (Some(root), None) => Ok(Cache::local(root)),
+        (None, Some(workspace)) => Cache::from_workspace(workspace),
+        (Some(_), Some(_)) => Err(once_cas::Error::InvalidConfig {
+            provider: "sdk",
+            message: "local_cache_root and workspace_root cannot be used together".to_string(),
+        }
+        .into()),
     }
 }
 
@@ -276,146 +298,10 @@ fn str_from_raw(value: *const c_char, name: &str) -> std::result::Result<String,
     unsafe {
         CStr::from_ptr(value)
             .to_str()
-            .map_err(|_| format!("{name} must be valid UTF-8"))
+            .map_err(|_| format!("{name} must use Unicode Transformation Format, 8-bit"))
             .map(std::borrow::ToOwned::to_owned)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn response_json(response: *mut c_char) -> serde_json::Value {
-        let json = unsafe { CStr::from_ptr(response).to_string_lossy().into_owned() };
-        once_string_free(response);
-        serde_json::from_str(&json).unwrap()
-    }
-
-    #[test]
-    fn version_returns_owned_string() {
-        let response = once_version();
-        let version = unsafe { CStr::from_ptr(response).to_string_lossy().into_owned() };
-        once_string_free(response);
-
-        assert_eq!(version, env!("CARGO_PKG_VERSION"));
-    }
-
-    #[test]
-    fn digest_bytes_returns_json_response() {
-        let response = once_digest_bytes(b"hello".as_ptr(), 5);
-        let json = response_json(response);
-
-        assert_eq!(json["status"], "ok");
-        assert_eq!(json["value"], Digest::of_bytes(b"hello").to_hex());
-    }
-
-    #[test]
-    fn digest_bytes_rejects_null_pointer_with_non_zero_length() {
-        let response = once_digest_bytes(std::ptr::null(), 1);
-        let json = response_json(response);
-
-        assert_eq!(json["status"], "error");
-        assert_eq!(json["message"], "data cannot be null when len is non-zero");
-    }
-
-    #[test]
-    fn cache_request_rejects_invalid_utf8() {
-        let request = [0xff, 0x00];
-        let response = once_cache_put_blob_json(request.as_ptr().cast());
-        let json = response_json(response);
-
-        assert_eq!(json["status"], "error");
-        assert_eq!(json["message"], "request_json must be valid UTF-8");
-    }
-
-    #[test]
-    fn raw_strings_with_interior_null_bytes_return_error_json() {
-        let response = string_to_raw("before\0after");
-        let value = unsafe { CStr::from_ptr(response).to_string_lossy().into_owned() };
-        once_string_free(response);
-
-        assert_eq!(value, RESPONSE_SERIALIZATION_ERROR);
-    }
-
-    #[test]
-    fn put_blob_returns_digest() {
-        let _env_lock = crate::TEST_ENV_LOCK.lock().unwrap();
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CACHE_HOME", tmp.path());
-        let request = serde_json::json!({
-            "bytes": [104, 101, 108, 108, 111]
-        })
-        .to_string();
-
-        let response = once_cache_put_blob_json(CString::new(request).unwrap().as_ptr());
-        let json = response_json(response);
-
-        assert_eq!(json["status"], "ok");
-        assert_eq!(json["value"], Digest::of_bytes(b"hello").to_hex());
-        std::env::remove_var("XDG_CACHE_HOME");
-    }
-
-    #[test]
-    fn cache_request_rejects_malformed_json() {
-        let request = CString::new("not json").unwrap();
-        let response = once_cache_put_blob_json(request.as_ptr());
-        let json = response_json(response);
-
-        assert_eq!(json["status"], "error");
-        assert!(!json["message"].as_str().unwrap().is_empty());
-    }
-
-    #[test]
-    fn cache_request_rejects_invalid_digest() {
-        let request = serde_json::json!({
-            "digest": "not-a-digest"
-        })
-        .to_string();
-
-        let response = once_cache_get_blob_json(CString::new(request).unwrap().as_ptr());
-        let json = response_json(response);
-
-        assert_eq!(json["status"], "error");
-        assert_eq!(json["message"], "invalid digest: not-a-digest");
-    }
-
-    #[test]
-    fn action_result_request_rejects_invalid_digest() {
-        let request = serde_json::json!({
-            "action_digest": "not-a-digest",
-            "result": {
-                "exit_code": 0,
-                "stdout": null,
-                "stderr": null,
-                "outputs": {}
-            }
-        })
-        .to_string();
-
-        let response = once_cache_put_action_result_json(CString::new(request).unwrap().as_ptr());
-        let json = response_json(response);
-
-        assert_eq!(json["status"], "error");
-        assert_eq!(json["message"], "invalid digest: not-a-digest");
-    }
-
-    #[test]
-    fn cache_calls_can_initialize_runtime_concurrently() {
-        let _env_lock = crate::TEST_ENV_LOCK.lock().unwrap();
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CACHE_HOME", tmp.path());
-        let request = CString::new(r#"{"bytes":[104,101,108,108,111]}"#).unwrap();
-
-        std::thread::scope(|scope| {
-            for _ in 0..8 {
-                let request = &request;
-                scope.spawn(move || {
-                    let json = response_json(once_cache_put_blob_json(request.as_ptr()));
-                    assert_eq!(json["status"], "ok");
-                    assert_eq!(json["value"], Digest::of_bytes(b"hello").to_hex());
-                });
-            }
-        });
-
-        std::env::remove_var("XDG_CACHE_HOME");
-    }
-}
+mod tests;

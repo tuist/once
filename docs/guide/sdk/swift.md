@@ -66,17 +66,21 @@ module from the binary target and gives callers the high-level Swift interface.
 
 `OnceCache` is the Swift cache client.
 
-`OnceCache` opens the default local cache using the
-[X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/).
+Choose the initializer based on who owns provider selection. A workspace-bound
+client uses the same effective configuration as the command line.
 
 All cache operations that touch storage are `async throws`.
 
 | Application programming interface | Use |
 | --- | --- |
 | `init()` | Opens the default local cache using the operating-system convention. |
+| `init(localCacheRoot:)` | Opens an isolated local cache at a caller-owned file location. |
+| `init(workspaceRoot:)` | Resolves the effective provider for a workspace file location. |
 | `version` | Returns the linked Once version. |
 
-The default cache root is `$XDG_CACHE_HOME/once/cas` when
+The default follows the
+[X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/):
+its cache root is `$XDG_CACHE_HOME/once/cas` when
 `XDG_CACHE_HOME` is set, and `$HOME/.cache/once/cas` otherwise.
 
 ## Blobs
@@ -88,8 +92,28 @@ them by digest from action results, manifests, or other integration state.
 | --- | --- |
 | `digest(bytes:)` | Returns the content digest for bytes without writing them to the cache. |
 | `putBlob(_:)` | Stores bytes and returns their content digest. |
+| `putBlob(contentsOf:)` | Stores a file without loading its complete contents into Swift memory. |
 | `getBlob(_:)` | Reads bytes for a digest. |
+| `getBlob(_:writeTo:)` | Writes a blob to a file location and returns its byte count. |
 | `hasBlob(_:)` | Returns whether a blob exists. |
+
+Prefer the file methods for logs, archives, compiler outputs, and other
+payloads whose size is not tightly bounded.
+
+## Action Keys
+
+`OnceActionKey` builds a versioned identity from ordered, labeled inputs:
+
+```swift
+let cache = OnceCache(workspaceRoot: workspaceURL)
+let source = try await cache.putBlob(contentsOf: sourceURL)
+var key = OnceActionKey(namespace: "example.compile")
+key.add(bytes: Data("swiftc".utf8), label: "compiler")
+key.add(digest: source, label: "source")
+let actionDigest = try await key.digest()
+```
+
+Input order is significant and must be deterministic.
 
 ## Action Results
 
@@ -113,5 +137,6 @@ interface directly.
 | Type | Use |
 | --- | --- |
 | `OnceActionResult` | Stores an action exit code, stdout digest, stderr digest, and output digests. |
+| `OnceActionKey` | Builds a versioned action digest from ordered, labeled inputs. |
 | `OnceCacheStats` | Reports local cache size and entry counts. |
 | `OnceError` | Reports Swift wrapper failures. |

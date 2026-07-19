@@ -1,7 +1,7 @@
-# Once JavaScript SDK
+# Once JavaScript Software Development Kit
 
 `buildonce` exposes Once primitives to Node.js. It loads the same
-native Once library used by the other SDKs and does not expose script
+native Once library used by the other language libraries and does not expose script
 execution.
 
 ```js
@@ -19,6 +19,8 @@ async function example() {
 The package looks for a bundled native library under `prebuilds/`. Set
 `ONCE_LIBRARY_PATH` to load a custom `libonce` build.
 
-`putBlob` sends bytes to the native library through the JSON SDK ABI. This
-keeps the package portable across platforms, but it means very large blobs are
-materialized as JSON byte arrays before crossing into Rust.
+Use `new Cache({ workspaceRoot })` to share the effective provider configured
+for a repository, or `new Cache({ localCacheRoot })` for isolation. Use
+`putFile` and `getBlobToFile` for large payloads so the host does not need to
+hold their complete contents in JavaScript memory. `ActionKey` builds a stable
+digest from ordered, labeled inputs.

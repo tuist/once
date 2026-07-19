@@ -234,6 +234,7 @@ export const site = {
             text: '<span class="sidebar-target-link sidebar-target-link-javascript"><span class="sidebar-target-icon"></span><span>JavaScript</span></span>',
             link: "/guide/sdk/javascript",
           },
+          { text: "C", link: "/guide/sdk/c" },
         ],
       },
     ],

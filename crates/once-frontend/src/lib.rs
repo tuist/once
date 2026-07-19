@@ -6,6 +6,7 @@
 
 pub mod analysis;
 mod cache_provider;
+mod cache_resolution;
 mod error;
 mod examples;
 mod graph;
@@ -29,6 +30,9 @@ pub use cache_provider::{
     CacheProviderConfig, ExecutionProviderConfig, InfrastructureConfig,
     InfrastructureProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig,
     DEFAULT_TUIST_URL,
+};
+pub use cache_resolution::{
+    resolve_cache_provider, ResolvedCacheProviderConfig, ResolvedTuistCacheProviderConfig,
 };
 pub use error::{Error, Result};
 pub use examples::{load_example_bundle, load_target_kind_example};
