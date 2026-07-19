@@ -1,6 +1,13 @@
 name: deploy web
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-web.yml"
+      - "infra/**"
+      - "web/**"
+      - "mise.toml"
   workflow_dispatch:
     inputs:
       commit_sha:
