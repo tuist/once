@@ -32,6 +32,7 @@ pub(super) fn tool_requires_allow_run(name: &str) -> bool {
         "once_run_tests"
             | "once_exec_script"
             | "once_build_target"
+            | "once_validate_actions"
             | "once_run_target"
             | "once_start_target"
             | "once_runtime_status"
@@ -448,6 +449,21 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 "required": ["target"]
             }),
             example_return: "{\n  \"target\": \"apps/service/Service\",\n  \"capability\": \"build\",\n  \"exit_code\": 0,\n  \"success\": true,\n  \"record\": {\n    \"target\": \"apps/service/Service\",\n    \"kind\": \"application\",\n    \"capability\": \"build\",\n    \"cache\": \"miss\",\n    \"outputs\": [\".once/out/apps/service/Service/package\"]\n  },\n  \"stderr\": \"\"\n}",
+        },
+        ToolDefinition {
+            name: "once_validate_actions",
+            description: "Run scripted graph actions in a private validation sandbox.",
+            long_description: "Runs the same declared action analysis used by the graph, bypasses the action cache, inventories private and real-workspace filesystem changes, and returns structured input and output repairs. The matching command-line operation is `once query validate-actions <target> --capability <name>`. This tool requires `once mcp --allow-run` because it executes commands. Successful reads that leave no filesystem evidence remain a documented limitation of symlink-only validation.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": { "type": "string", "description": "Canonical target id." },
+                    "capability": { "type": "string", "default": "build", "description": "Capability to validate." },
+                    "action": { "type": "integer", "minimum": 0, "description": "Optional zero-based action index." }
+                },
+                "required": ["target"]
+            }),
+            example_return: "{\"valid\":false,\"target\":\"pkg/tool\",\"capability\":\"build\",\"actions_run\":1,\"diagnostics\":[{\"code\":\"undeclared_write\",\"target\":\"pkg/tool\",\"attribute\":\"outputs\",\"repairs\":[\"Declare this path as an output or stop writing it\"]}]}"
         },
         ToolDefinition {
             name: "once_run_target",

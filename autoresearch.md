@@ -9,7 +9,7 @@ Improve Once's ability to report whether a scripted graph action's declared work
 - Primary: detection harmonic mean of precision and recall (`detection_f1_pct`, percentage, higher is better)
 - Secondary: `precision_pct`, `recall_pct`, `actionable_diagnostic_rate_pct`, `false_positive_rate_pct`, `runtime_overhead_pct`, and `benchmark_ms`
 
-Precision is true positives divided by all reported violations. Recall is true positives divided by all seeded violations. Actionable-diagnostic rate is seeded violations that produce a path-specific structured repair divided by all seeded violations. False-positive rate is compliant cases reported as violations divided by all compliant cases. Runtime overhead is the median private-input-sandbox runtime relative to unsandboxed execution across nine paired runs.
+Precision is true positives divided by all reported violations. Recall is true positives divided by all seeded violations. Actionable-diagnostic rate is seeded violations that produce a path-specific structured repair divided by all seeded violations. False-positive rate is compliant cases reported as violations divided by all compliant cases. Runtime overhead is the median contract-validation runtime relative to the existing private-input sandbox across nine paired runs.
 
 ## How to Run
 

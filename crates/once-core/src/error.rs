@@ -4,6 +4,10 @@ use crate::WorkspacePathError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("action filesystem contract violated: {violations:?}")]
+    ContractViolation {
+        violations: Vec<crate::ContractViolation>,
+    },
     #[error("cas error: {0}")]
     Cas(#[from] once_cas::Error),
     #[error("failed to spawn {program}: {source}")]
@@ -40,6 +44,8 @@ pub enum Error {
     InvalidCopyPath { reason: String },
     #[error("invalid host file materialization: {reason}")]
     InvalidHostFile { reason: String },
+    #[error("invalid action contract validation: {reason}")]
+    InvalidContractValidation { reason: String },
     #[error("host file `{path}` changed after analysis: expected digest {expected}, got {actual}")]
     HostFileDigestMismatch {
         path: String,

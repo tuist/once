@@ -31,7 +31,7 @@ use once_frontend::analysis::{AnalysisEngine, AnalysisOptions};
 use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
 
-use self::actions::run_declared_actions;
+use self::actions::{run_declared_actions, validate_declared_actions, DeclaredActionValidation};
 use self::scheduler::BuildScheduler;
 
 /// Per-target outcome cached during a single command invocation.
@@ -50,6 +50,11 @@ pub(super) struct BuildOutcome {
     pub cache_tag: &'static str,
     pub cache_state: EvidenceCacheState,
     pub result: ActionResult,
+}
+
+pub(super) struct AnalyzedCapability {
+    pub analysis: once_frontend::analysis::AnalysisResult,
+    pub dep_action_digests: Vec<(String, Digest)>,
 }
 
 /// Command-scoped graph build session.
@@ -177,46 +182,10 @@ impl BuildSession {
                 return Ok(None);
             }
 
-            let dep_outcomes = self.build_direct_analysis_deps(target).await?;
-            tracing::debug!(
-                target = %target.label.id,
-                capability,
-                direct_analysis_deps = dep_outcomes.len(),
-                "running graph target capability through Starlark analysis"
-            );
-            let mut providers_by_id = HashMap::with_capacity(dep_outcomes.len());
-            let mut dep_action_digests = Vec::with_capacity(dep_outcomes.len());
-            for (dep_id, outcome) in dep_outcomes {
-                dep_action_digests.push((dep_id.clone(), outcome.action_digest));
-                providers_by_id.insert(dep_id, outcome.provider);
-            }
-            let dep_providers = target
-                .deps
-                .iter()
-                .filter_map(|dep_id| providers_by_id.get(dep_id).cloned())
-                .collect::<Vec<_>>();
-            let dependency_providers = target
-                .dependency_edges
-                .iter()
-                .map(|(role, dep_ids)| {
-                    let providers = dep_ids
-                        .iter()
-                        .filter_map(|dep_id| providers_by_id.get(dep_id).cloned())
-                        .collect::<Vec<_>>();
-                    (role.clone(), providers)
-                })
-                .collect::<BTreeMap<_, _>>();
-
-            let analysis = self
-                .analyzer
-                .analyze_target_capability_with_dependency_roles(
-                    target,
-                    &self.workspace,
-                    &dep_providers,
-                    &dependency_providers,
-                    capability,
-                )
-                .with_context(|| format!("analysing {}", target.label.id))?;
+            let AnalyzedCapability {
+                analysis,
+                dep_action_digests,
+            } = self.analyze_capability(target, capability).await?;
             let outcome = run_declared_actions(
                 &self.workspace,
                 &self.cache,
@@ -231,6 +200,84 @@ impl BuildSession {
             .with_context(|| format!("executing {capability} for {}", target.label.id))?;
             Ok(Some(outcome))
         })
+    }
+
+    pub(super) async fn analyze_capability(
+        &self,
+        target: &GraphTarget,
+        capability: &str,
+    ) -> Result<AnalyzedCapability> {
+        if !self.analyzer.target_kind_has_impl(&target.kind) {
+            anyhow::bail!(
+                "target kind `{}` does not declare scripted actions",
+                target.kind
+            );
+        }
+        let dep_outcomes = self.build_direct_analysis_deps(target).await?;
+        tracing::debug!(
+            target = %target.label.id,
+            capability,
+            direct_analysis_deps = dep_outcomes.len(),
+            "analysing graph target capability actions"
+        );
+        let mut providers_by_id = HashMap::with_capacity(dep_outcomes.len());
+        let mut dep_action_digests = Vec::with_capacity(dep_outcomes.len());
+        for (dep_id, outcome) in dep_outcomes {
+            dep_action_digests.push((dep_id.clone(), outcome.action_digest));
+            providers_by_id.insert(dep_id, outcome.provider);
+        }
+        let dep_providers = target
+            .deps
+            .iter()
+            .filter_map(|dep_id| providers_by_id.get(dep_id).cloned())
+            .collect::<Vec<_>>();
+        let dependency_providers = target
+            .dependency_edges
+            .iter()
+            .map(|(role, dep_ids)| {
+                let providers = dep_ids
+                    .iter()
+                    .filter_map(|dep_id| providers_by_id.get(dep_id).cloned())
+                    .collect::<Vec<_>>();
+                (role.clone(), providers)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let analysis = self
+            .analyzer
+            .analyze_target_capability_with_dependency_roles(
+                target,
+                &self.workspace,
+                &dep_providers,
+                &dependency_providers,
+                capability,
+            )
+            .with_context(|| format!("analysing {}", target.label.id))?;
+        Ok(AnalyzedCapability {
+            analysis,
+            dep_action_digests,
+        })
+    }
+
+    pub(super) async fn validate_actions(
+        &self,
+        target: &GraphTarget,
+        capability: &str,
+        selected_index: Option<usize>,
+    ) -> Result<Vec<DeclaredActionValidation>> {
+        let AnalyzedCapability {
+            analysis,
+            dep_action_digests,
+        } = self.analyze_capability(target, capability).await?;
+        validate_declared_actions(
+            &self.workspace,
+            &self.cache,
+            self.module_source_digest,
+            target,
+            analysis,
+            &dep_action_digests,
+            selected_index,
+        )
+        .await
     }
 
     fn reachable_analysis_targets(&self, target: &GraphTarget) -> HashSet<String> {

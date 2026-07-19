@@ -92,6 +92,49 @@ pub async fn validate_workspace(workspace: &Path, output: Output) -> Result<()> 
     .await
 }
 
+pub async fn validate_actions(
+    workspace: &Path,
+    output: Output,
+    target: &str,
+    capability: &str,
+    action: Option<usize>,
+) -> Result<()> {
+    let xdg = once_core::Xdg::from_env();
+    let cache = crate::cache_provider::resolve(workspace, &xdg)?;
+    let validation = crate::commands::graph::validate_action_contracts(
+        workspace, &cache, target, capability, action,
+    )
+    .await?;
+    write_body(
+        output,
+        || render_action_validation_human(&validation),
+        &validation,
+    )
+    .await
+}
+
+fn render_action_validation_human(
+    validation: &crate::commands::graph::ActionContractValidation,
+) -> String {
+    let mut text = format!(
+        "{} {}: {} ({} actions)\n",
+        validation.target,
+        validation.capability,
+        if validation.valid { "valid" } else { "invalid" },
+        validation.actions_run
+    );
+    for diagnostic in &validation.diagnostics {
+        text.push_str(&format!("  {}: {}\n", diagnostic.code, diagnostic.message));
+        for repair in &diagnostic.repairs {
+            text.push_str(&format!("    repair: {repair}\n"));
+        }
+    }
+    for limitation in &validation.limitations {
+        text.push_str(&format!("  limitation: {limitation}\n"));
+    }
+    text
+}
+
 pub async fn module_contract(output: Output) -> Result<()> {
     let contract = once_frontend::module_authoring_contract();
     write_body(

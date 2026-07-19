@@ -193,6 +193,7 @@ impl Server {
             "once_validate_script" => script::validate(&self.workspace, &call.arguments),
             "once_exec_script" => script::execute(&self.workspace, &call.arguments),
             "once_build_target" => self.tool_build_target(&call.arguments),
+            "once_validate_actions" => self.tool_validate_actions(&call.arguments),
             "once_run_target" => self.tool_run_target(&call.arguments),
             "once_start_target" => self.tool_start_target(&call.arguments),
             "once_runtime_status" => self.tool_runtime_status(&call.arguments),
@@ -381,6 +382,26 @@ impl Server {
         run_graph_target(&self.workspace, "build", &args.target, false)
     }
 
+    fn tool_validate_actions(&self, args: &Value) -> Result<Value> {
+        let args: ValidateActionsArgs = serde_json::from_value(tool_args(args))?;
+        let workspace = self.workspace.clone();
+        let cache = crate::cache_provider::resolve(&workspace, &once_core::Xdg::from_env())?;
+        let target = args.target;
+        let capability = args.capability;
+        let action = args.action;
+        let result = run_async_result(async move {
+            crate::commands::graph::validate_action_contracts(
+                &workspace,
+                &cache,
+                &target,
+                &capability,
+                action,
+            )
+            .await
+        })?;
+        Ok(serde_json::to_value(result)?)
+    }
+
     fn tool_run_target(&self, args: &Value) -> Result<Value> {
         let args: RunTargetArgs = serde_json::from_value(tool_args(args))?;
         run_graph_target(&self.workspace, "run", &args.target, args.visible)
@@ -565,6 +586,20 @@ fn tool_args(args: &Value) -> Value {
 #[serde(deny_unknown_fields)]
 struct TargetExecutionArgs {
     target: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ValidateActionsArgs {
+    target: String,
+    #[serde(default = "default_build_capability")]
+    capability: String,
+    #[serde(default)]
+    action: Option<usize>,
+}
+
+fn default_build_capability() -> String {
+    "build".to_string()
 }
 
 #[derive(Deserialize, Default)]

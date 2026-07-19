@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use once_cas::{CacheProvider, Cas, Digest};
 use once_core::{
-    run_uncached, Action, OutputSymlinkMode, ResourceRequest, SandboxMode, WorkspacePath,
+    run_uncached, validate_action_contract, Action, OutputSymlinkMode, ResourceRequest,
+    SandboxMode, WorkspacePath,
 };
 use tempfile::TempDir;
 
@@ -31,7 +32,10 @@ async fn main() {
         if case.should_report {
             positives += 1;
         }
-        let reported = run_case(case).await;
+        let (reported, has_actionable_diagnostic) = run_case(case).await;
+        if case.should_report && has_actionable_diagnostic {
+            actionable += 1;
+        }
         match (case.should_report, reported) {
             (true, true) => true_positives += 1,
             (false, true) => false_positives += 1,
@@ -74,7 +78,7 @@ async fn main() {
     );
 }
 
-async fn run_case(case: &Case) -> bool {
+async fn run_case(case: &Case) -> (bool, bool) {
     let workspace = TempDir::new().expect("temporary workspace");
     (case.setup)(workspace.path());
     let cache_dir = TempDir::new().expect("temporary cache");
@@ -85,30 +89,36 @@ async fn run_case(case: &Case) -> bool {
         case.outputs,
         SandboxMode::Inputs,
     );
-    run_uncached(&action, workspace.path(), &cache, false)
+    validate_action_contract(&action, workspace.path(), &cache)
         .await
-        .map_or(true, |result| result.exit_code != 0)
+        .map_or((true, false), |report| {
+            let actionable = report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| !diagnostic.path.is_empty() && !diagnostic.repairs.is_empty());
+            (!report.valid, actionable)
+        })
 }
 
 async fn runtime_overhead() -> f64 {
-    let mut off = Vec::new();
-    let mut inputs = Vec::new();
+    let mut sandboxed = Vec::new();
+    let mut validated = Vec::new();
     for _ in 0..9 {
-        off.push(time_compliant_action(SandboxMode::Off).await);
-        inputs.push(time_compliant_action(SandboxMode::Inputs).await);
+        sandboxed.push(time_compliant_action(false).await);
+        validated.push(time_compliant_action(true).await);
     }
-    off.sort_unstable();
-    inputs.sort_unstable();
-    let baseline = off[off.len() / 2].as_secs_f64();
-    let sandboxed = inputs[inputs.len() / 2].as_secs_f64();
+    sandboxed.sort_unstable();
+    validated.sort_unstable();
+    let baseline = sandboxed[sandboxed.len() / 2].as_secs_f64();
+    let validated = validated[validated.len() / 2].as_secs_f64();
     if baseline == 0.0 {
         0.0
     } else {
-        ((sandboxed - baseline) / baseline) * 100.0
+        ((validated - baseline) / baseline) * 100.0
     }
 }
 
-async fn time_compliant_action(sandbox: SandboxMode) -> Duration {
+async fn time_compliant_action(validate: bool) -> Duration {
     let workspace = TempDir::new().expect("temporary workspace");
     std::fs::create_dir_all(workspace.path().join("src")).unwrap();
     std::fs::write(workspace.path().join("src/input.txt"), "hello\n").unwrap();
@@ -118,13 +128,20 @@ async fn time_compliant_action(sandbox: SandboxMode) -> Duration {
         "mkdir -p out && cat src/input.txt > out/result.txt".to_string(),
         &["src/input.txt"],
         &["out/result.txt"],
-        sandbox,
+        SandboxMode::Inputs,
     );
     let started = Instant::now();
-    let result = run_uncached(&action, workspace.path(), &cache, false)
-        .await
-        .unwrap();
-    assert_eq!(result.exit_code, 0);
+    if validate {
+        let report = validate_action_contract(&action, workspace.path(), &cache)
+            .await
+            .unwrap();
+        assert!(report.valid, "{:?}", report.diagnostics);
+    } else {
+        let result = run_uncached(&action, workspace.path(), &cache, false)
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
     started.elapsed()
 }
 

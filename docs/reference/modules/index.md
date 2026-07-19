@@ -370,7 +370,11 @@ layout.
 - `sandbox`: local filesystem sandbox policy. `off` uses the current
   workspace view. `inputs` runs in an action-private workspace view
   populated from declared inputs and copies declared outputs back after
-  a successful command.
+  a successful command. `validate` runs the same private view uncached,
+  audits created, modified, and deleted paths, and returns structured
+  contract repairs without copying outputs back. Successful reads that
+  leave no filesystem evidence remain a limitation of symlink-only
+  validation.
 - `cacheable`: `True` by default. Set `False` for interactive or local
   side-effect actions.
 - `depends_on_prior_actions`: `True` by default. When true, each action key

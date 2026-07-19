@@ -7,6 +7,9 @@
 
 mod action;
 mod analysis;
+mod contract;
+
+pub use contract::{validate_action_contracts, ActionContractValidation};
 
 use std::path::Path;
 use std::process::ExitCode;
