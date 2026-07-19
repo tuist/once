@@ -422,3 +422,30 @@ fn walk(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostics_include_repairs_for_each_contract_violation() {
+        let cases = [
+            ContractViolationKind::UndeclaredRead,
+            ContractViolationKind::UndeclaredWrite,
+            ContractViolationKind::DeclaredInputModified,
+            ContractViolationKind::DeclaredInputDeleted,
+            ContractViolationKind::SymlinkEscape,
+            ContractViolationKind::MissingOutput,
+        ];
+        for kind in cases {
+            let diagnostic = diagnostic_from_violation(ContractViolation {
+                kind,
+                path: "artifact".to_string(),
+                message: "observed during validation".to_string(),
+                repair: "repair the action declaration".to_string(),
+            });
+            assert!(!diagnostic.code.is_empty());
+            assert!(!diagnostic.repairs.is_empty(), "{kind:?}");
+        }
+    }
+}

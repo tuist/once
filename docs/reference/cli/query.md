@@ -84,4 +84,5 @@ escape forms, including Unicode escapes, are rejected.
 - [`once query validate-target`](/reference/cli/query/validate-target)
 - [`once query script`](/reference/cli/query/script)
 - [`once query validate-workspace`](/reference/cli/query/validate-workspace)
+- [`once query validate-actions`](/reference/cli/query/validate-actions)
 - [`once query validate-module`](/reference/cli/query/validate-module)

@@ -48,3 +48,9 @@ The fast corpus contains eight adversarial actions and four compliant controls. 
 ## What's Been Tried
 
 - The initial baseline scores only action failure as a detected contract violation. It intentionally measures the existing symbolic-link sandbox before adding post-run observation.
+
+## Prior Art
+
+Primary Bazel references show that a symbolic-link sandbox makes undeclared relative reads fail, but does not observe successful absolute reads. Bazel also checks input metadata after execution for mutation. See the [sandboxing reference](https://github.com/bazelbuild/bazel/blob/e9e7d623a3d2d41803564b03a2e051a9f1c912d9/docs/docs/sandboxing.mdx#L68-L86), [input mutation check](https://github.com/bazelbuild/bazel/blob/e9e7d623a3d2d41803564b03a2e051a9f1c912d9/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxedSpawnRunner.java#L455-L514), and [hermetic escape tests](https://github.com/bazelbuild/bazel/blob/e9e7d623a3d2d41803564b03a2e051a9f1c912d9/src/test/shell/bazel/bazel_hermetic_sandboxing_test.sh#L296-L355).
+
+Buck2 likewise relies on declared materialization and output allowlists for local actions, while its structured action errors provide a useful model for repairs. See the [local executor](https://github.com/facebook/buck2/blob/main/app/buck2_execute_impl/src/executors/local.rs#L180-L248), [action interface](https://buck2.build/docs/api/build/AnalysisActions/#analysisactionsrun), [structured action errors](https://buck2.build/docs/api/build/ActionSubError/), and [local hermetic builds discussion](https://github.com/facebook/buck2/issues/358). These systems motivate the generic post-run inventory and explicit limitation for successful absolute reads used here.

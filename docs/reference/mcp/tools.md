@@ -2,6 +2,43 @@
 
 Every tool the [`once mcp`](/reference/cli/mcp) [Model Context Protocol](https://modelcontextprotocol.io/) server advertises in `tools/list`, with its input schema and a worked return example.
 
+## `once_validate_actions`
+
+Run scripted graph actions in an isolated validation workspace.
+
+Runs the same declared action analysis as the graph, bypasses the action cache, checks isolated and project workspace changes, and returns structured input and output repairs. The matching command-line operation is `once query validate-actions <target> --capability <name>`. This tool requires `once mcp --allow-run` because it executes commands. Reads that leave no observable filesystem evidence remain a limitation of this validation mode.
+
+**Input schema**
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "target": { "type": "string" },
+    "capability": { "type": "string", "default": "build" },
+    "action": { "type": "integer", "minimum": 0 }
+  },
+  "required": ["target"]
+}
+```
+
+**Example return**
+
+```json
+{
+  "valid": false,
+  "target": "pkg/tool",
+  "capability": "build",
+  "actions_run": 1,
+  "diagnostics": [{
+    "code": "undeclared_write",
+    "target": "pkg/tool",
+    "attribute": "outputs",
+    "repairs": ["Declare this path as an output or stop writing it"]
+  }]
+}
+```
+
 ## `once_query_targets`
 
 List every declared target in the workspace, optionally filtered by target kind.
@@ -57,6 +94,7 @@ Returns the same record `once query capabilities <target> --format json` emits: 
   "type": "object"
 }
 ```
+
 **Example return**
 
 ```json
@@ -834,6 +872,45 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
   },
   "stderr": ""
 }
+```
+
+## `once_validate_actions`
+
+Run scripted graph actions in an isolated validation workspace.
+
+Runs the same declared action analysis used by the graph, bypasses the action cache, checks isolated and project workspace changes, and returns structured input and output repairs. The matching command-line operation is `once query validate-actions <target> --capability <name>`. This tool requires `once mcp --allow-run` because it executes commands. Reads that leave no observable filesystem evidence remain a documented limitation of this validation mode.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "action": {
+      "description": "Optional zero-based action index.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "capability": {
+      "default": "build",
+      "description": "Capability to validate.",
+      "type": "string"
+    },
+    "target": {
+      "description": "Canonical target id.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{"valid":false,"target":"pkg/tool","capability":"build","actions_run":1,"diagnostics":[{"code":"undeclared_write","target":"pkg/tool","attribute":"outputs","repairs":["Declare this path as an output or stop writing it"]}]}
 ```
 
 ## `once_run_target`
