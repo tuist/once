@@ -3,6 +3,7 @@ use std::path::Path;
 
 use once_cas::{ActionResult, CacheProvider};
 use serde::{Deserialize, Serialize};
+use sha2::Digest as _;
 
 use crate::{Action, SandboxMode, WorkspacePath};
 
@@ -98,9 +99,17 @@ pub async fn validate_action_contract_with_options(
             .collect::<Vec<_>>()
             .join(" ");
         if command_text.contains(&workspace_text) {
-            for entry in walk_paths(workspace)? {
+            let snapshot = snapshot_tree(workspace, &[".once"])?;
+            for (entry, fingerprint) in &snapshot.0 {
+                // Directory entries and paths that merely appear as a substring of a
+                // declared longer path (e.g. `src` inside `src/main.rs`) are not reads;
+                // require the absolute path to appear at a path boundary in the command.
+                if fingerprint == "dir" {
+                    continue;
+                }
+                let absolute = workspace.join(entry).display().to_string();
                 if !input_set.contains(entry.as_str())
-                    && command_text.contains(&workspace.join(&entry).display().to_string())
+                    && text_mentions_path(&command_text, &absolute)
                 {
                     preflight.push(ActionContractDiagnostic {
                         code: "undeclared_read".to_string(), operation: FilesystemOperation::Read,
@@ -117,9 +126,14 @@ pub async fn validate_action_contract_with_options(
                 .unwrap_or(false)
             {
                 if let Ok(resolved) = std::fs::canonicalize(&source) {
-                    let covered = inputs
-                        .iter()
-                        .any(|other| resolved.starts_with(other.resolve(workspace)));
+                    // Canonicalize both sides: the resolved target has every symlinked
+                    // component collapsed (e.g. `/var` -> `/private/var` on macOS), so a
+                    // raw `resolve` of the declared input would never prefix-match it.
+                    let covered = inputs.iter().any(|other| {
+                        let declared = other.resolve(workspace);
+                        let declared = std::fs::canonicalize(&declared).unwrap_or(declared);
+                        resolved.starts_with(&declared)
+                    });
                     if !covered {
                         preflight.push(ActionContractDiagnostic {
                             code: "symlink_escape".to_string(), operation: FilesystemOperation::Access,
@@ -308,10 +322,14 @@ pub(crate) async fn audit_filesystem(
                 .await
                 .map_err(std::io::Error::other)?;
             let text = String::from_utf8_lossy(&bytes);
-            for path in before_workspace.0.keys() {
-                if !input_set.contains(path)
+            for (path, fingerprint) in &before_workspace.0 {
+                // Only files are candidate reads, and the path must appear at a path
+                // boundary in stderr rather than as an incidental substring, so a common
+                // directory name like `src` is not flagged just for appearing in output.
+                if fingerprint != "dir"
+                    && !input_set.contains(path)
                     && !under_any(path, &allowed_outputs)
-                    && text.contains(path)
+                    && text_mentions_path(text.as_ref(), path)
                 {
                     violations.push(ContractViolation {
                         kind: ContractViolationKind::UndeclaredRead,
@@ -375,9 +393,34 @@ fn collect_output_symlink_escapes(
     Ok(())
 }
 
-fn walk_paths(root: &Path) -> std::io::Result<Vec<String>> {
-    let snapshot = snapshot_tree(root, &[".once"])?;
-    Ok(snapshot.0.into_keys().collect())
+/// Whether `path` appears in `text` at a path boundary, so that a short path
+/// (`src`) is not reported just because it is a substring of a longer path
+/// (`src/main.rs`) or of an unrelated word in the output.
+fn text_mentions_path(text: &str, path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    text.match_indices(path).any(|(start, matched)| {
+        let end = start + matched.len();
+        let before = start == 0 || !is_path_byte(bytes[start - 1]);
+        let after = end == bytes.len() || !is_path_byte(bytes[end]);
+        before && after
+    })
+}
+
+fn is_path_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/')
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let digest = sha2::Sha256::digest(bytes);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut hex, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    hex
 }
 fn is_output_parent(path: &str, outputs: &BTreeSet<String>) -> bool {
     outputs
@@ -408,7 +451,7 @@ fn walk(
     } else if metadata.is_dir() {
         "dir".to_string()
     } else if metadata.is_file() {
-        format!("file:{:?}", std::fs::read(current)?)
+        format!("file:{}", hex_digest(&std::fs::read(current)?))
     } else {
         "other".to_string()
     };

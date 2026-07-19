@@ -105,19 +105,15 @@ impl Runner {
 
     pub async fn run(&self, action: &Action) -> Result<Outcome> {
         let key = action.digest();
-        if !requires_validation(action) {
-            if let Some(hit) = lookup_cached(&self.cache, &self.workspace_root, &key).await? {
-                return Ok(hit);
-            }
+        if let Some(hit) = lookup_cached(&self.cache, &self.workspace_root, &key).await? {
+            return Ok(hit);
         }
         let _permit = self
             .resources
             .acquire(action.resource_request().clone())
             .await;
-        if !requires_validation(action) {
-            if let Some(hit) = lookup_cached(&self.cache, &self.workspace_root, &key).await? {
-                return Ok(hit);
-            }
+        if let Some(hit) = lookup_cached(&self.cache, &self.workspace_root, &key).await? {
+            return Ok(hit);
         }
         Box::pin(produce(
             action,
@@ -155,10 +151,8 @@ pub async fn run_with_cache(
     opts: RunOpts,
 ) -> Result<Outcome> {
     let key = action.digest();
-    if !requires_validation(action) {
-        if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
-            return Ok(hit);
-        }
+    if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
+        return Ok(hit);
     }
     Box::pin(produce(action, workspace_root, cache, opts, key)).await
 }
@@ -170,10 +164,8 @@ pub async fn run_with_cache_streaming(
     opts: RunOpts,
 ) -> Result<Outcome> {
     let key = action.digest();
-    if !requires_validation(action) {
-        if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
-            return Ok(hit);
-        }
+    if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
+        return Ok(hit);
     }
     let result = Box::pin(execute::run(action, workspace_root, cache, true, false)).await?;
     let cacheable = result.exit_code == 0 || opts.cache_failures;
@@ -190,11 +182,6 @@ pub async fn run_with_cache_streaming(
         result,
         cache: CacheState::Miss,
     })
-}
-
-fn requires_validation(action: &Action) -> bool {
-    let _ = action;
-    false
 }
 
 /// Execute one action without reading or writing the action cache.
