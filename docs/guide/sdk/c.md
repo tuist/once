@@ -83,7 +83,7 @@ Use the file functions for payloads whose size is not tightly bounded.
 {
   "namespace": "example.compile",
   "inputs": [
-    { "kind": "bytes", "label": "compiler", "bytes": [115, 119, 105, 102, 116, 99] },
+    { "kind": "bytes", "label": "tool", "bytes": [99, 111, 109, 112, 105, 108, 101, 114] },
     { "kind": "digest", "label": "source", "digest": "<64 lowercase hexadecimal characters>" }
   ]
 }

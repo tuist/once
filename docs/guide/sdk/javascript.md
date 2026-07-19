@@ -75,9 +75,9 @@ inputs:
 ```js
 const { ActionKey } = require("buildonce");
 
-const source = await cache.putFile("Sources/App.swift");
+const source = await cache.putFile("inputs/source");
 const actionDigest = new ActionKey("example.compile")
-  .addBytes("compiler", "swiftc")
+  .addBytes("tool", "compiler")
   .addDigest("source", source)
   .digest();
 ```

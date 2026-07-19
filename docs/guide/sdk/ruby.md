@@ -68,9 +68,9 @@ and other payloads whose size is not tightly bounded.
 `Once::ActionKey` builds a versioned identity from ordered, labeled inputs:
 
 ```ruby
-source = cache.put_file("Sources/App.swift")
+source = cache.put_file("inputs/source")
 action_digest = Once::ActionKey.new("example.compile")
-                               .add_bytes("compiler", "swiftc")
+                               .add_bytes("tool", "compiler")
                                .add_digest("source", source)
                                .digest
 ```

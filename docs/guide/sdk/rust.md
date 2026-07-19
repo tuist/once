@@ -93,10 +93,10 @@ Start with a namespace owned by the integration, then add labeled values and
 content digests in deterministic order.
 
 ```rust
-let source = cache.put_file("Sources/App.swift").await?;
+let source = cache.put_file("inputs/source").await?;
 let mut key = once::ActionKeyBuilder::new("example.compile");
-key.push_bytes("compiler", "swiftc")
-    .push_bytes("configuration", "debug")
+key.push_bytes("tool", "compiler")
+    .push_bytes("configuration", "release")
     .push_digest("source", source);
 let action = key.finish();
 ```
