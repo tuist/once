@@ -49,7 +49,7 @@ constructor uses the same effective configuration as the command line.
 | --- | --- |
 | `Cache::new()` | Opens the default local cache using the operating-system convention. |
 | `Cache::local(root)` | Opens an isolated local cache at a caller-owned root. |
-| `Cache::from_workspace(root)` | Resolves the effective workspace, user, or process-selected provider. |
+| `Cache::from_workspace(root)` | Resolves the same effective provider as the command line for this workspace. |
 | `Cache::with_provider(cache)` | Wraps an existing `CacheProvider`. |
 
 The default follows the

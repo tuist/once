@@ -59,9 +59,8 @@ these optional fields to any cache request:
 | `local_cache_root` | Opens an isolated local cache at this path. |
 | `workspace_root` | Resolves the same effective provider as the command line for this workspace. |
 
-The workspace selection considers the process override, workspace
-infrastructure, compatible Tuist project configuration, and the user default
-in that order.
+The workspace selection follows the provider precedence described in the
+[language-library overview](/guide/sdk/).
 
 ## Blobs
 
@@ -98,4 +97,8 @@ be passed to the action-result functions:
 | `once_cache_put_action_result_json` | Stores action metadata under `action_digest`. |
 | `once_cache_get_action_result_json` | Returns action metadata when it exists. |
 | `once_cache_forget_action_json` | Removes action metadata without deleting referenced blobs. |
-| `once_cache_stats_json` | Returns statistics for the local cache tier. |
+
+## Statistics
+
+`once_cache_stats_json` reports statistics for the local cache tier. It takes
+no action digest and describes the local tier only.
