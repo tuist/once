@@ -1,0 +1,1 @@
+{"bestDirection": "higher", "maxIterations": 4, "metricName": "detection_f1_pct", "metricUnit": "pct", "name": "Validate scripted action filesystem contracts", "timestamp": 1784457837912, "type": "config"}
