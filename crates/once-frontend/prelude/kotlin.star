@@ -539,7 +539,10 @@ _KOTLIN_JVM_DEP_EDGES = [
 
 _KOTLIN_TOOL = tool("kotlin", ["kotlinc"])
 _JAVA_RUNTIME_TOOL = tool("java", ["java"])
-_JAVA_COMPILER_TOOL = tool("java_compiler", ["javac"])
+# javac ships with the JDK, so it resolves from the same mise "java" tool as
+# the runtime rather than a tool of its own. The distinct requirement keeps the
+# javac executable off the classpath of targets that only need the runtime.
+_JAVA_COMPILER_TOOL = tool("java", ["javac"])
 
 kotlin_jvm_library = target_kind(
     docs = "Compiles Kotlin sources into a Java archive with typed compile, friend, exported, provided, and runtime dependency roles.",
