@@ -245,7 +245,7 @@ _C_LIBRARY_ATTRS = [
 ]
 
 c_library = target_kind(
-    docs = "C and C++ static library provider consumed by toolchain target kinds such as Zig.",
+    docs = "C and C++ static library provider consumed by native target kinds such as Rust and Zig.",
     attrs = _C_LIBRARY_ATTRS,
     deps = [dep("deps", ["c_provider"], "C provider dependencies whose headers and link inputs are propagated.")],
     providers = ["c_provider", "native_linkable", "apple_linkable", "android_native_library"],

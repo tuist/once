@@ -600,6 +600,29 @@ def _rust_native_linkopts(ctx):
         _rust_attr(ctx, "exported_post_linker_flags", [])
     )
 
+def _rust_native_dep_link_inputs(deps):
+    out = []
+    for dep in deps:
+        out.extend(dep.get("transitive_native_link_inputs") or [])
+        if dep.get("c_provider"):
+            out.extend(dep.get("transitive_static_libraries") or [])
+            out.extend(dep.get("transitive_dynamic_libraries") or [])
+    return _unique(out)
+
+def _rust_native_dep_linkopts(deps):
+    out = []
+    for dep in deps:
+        out.extend(dep.get("transitive_native_linkopts") or [])
+        if dep.get("c_provider"):
+            out.extend(dep.get("transitive_linkopts") or [])
+    return _unique(out)
+
+def _rust_native_dep_link_args(deps):
+    args = []
+    for value in _rust_native_dep_link_inputs(deps) + _rust_native_dep_linkopts(deps):
+        args.extend(["-C", "link-arg=" + value])
+    return args
+
 def _rust_linker_script(ctx):
     linker_script = _rust_attr(ctx, "linker_script", "")
     if not linker_script:
@@ -695,11 +718,17 @@ def _rust_cargo_package_name(ctx):
         return package
     return ""
 
+def _rust_dependency_role(ctx, name):
+    return (ctx.get("deps_by_role") or {}).get(name) or []
+
+def _rust_declared_deps(ctx):
+    return ctx["deps"] + _rust_dependency_role(ctx, "proc_macro_deps") + _rust_dependency_role(ctx, "link_deps")
+
 def _rust_resolved_deps(ctx):
     direct = []
     dependency_sets = []
     seen = {}
-    for dep in ctx["deps"]:
+    for dep in _rust_declared_deps(ctx):
         if dep.get("dependency_set"):
             dependency_sets.append(dep)
         else:
@@ -1473,6 +1502,8 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     rustc_args.extend(dep_search_args)
     rustc_args.extend(linker_args)
     rustc_args.extend(_rust_linker_flags(ctx))
+    if crate_type != "rlib":
+        rustc_args.extend(_rust_native_dep_link_args(deps))
     rustc_args.extend(linker_script_args)
     rustc_args.append(crate_root)
     argv = (
@@ -1486,7 +1517,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     build_inputs.extend(wrapped[1])
     run_action(
         argv = argv,
-        inputs = _unique(srcs + dep_inputs + dep_search_inputs + build_inputs + dependency_build_outputs + dependency_build_inputs + linker_script_inputs + _rust_extra_inputs(ctx)),
+        inputs = _unique(srcs + dep_inputs + dep_search_inputs + build_inputs + dependency_build_outputs + dependency_build_inputs + linker_script_inputs + (_rust_native_dep_link_inputs(deps) if crate_type != "rlib" else []) + _rust_extra_inputs(ctx)),
         outputs = [output],
         env = compile_env,
         toolchain_identity = identity + linker_identity,
@@ -1531,6 +1562,8 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
         "archive": output if crate_type == "staticlib" else "",
         "transitive_archives": _collect_transitive(deps, "transitive_archives", own_native_archives),
         "transitive_linkopts": _collect_transitive(deps, "transitive_linkopts", _rust_native_linkopts(ctx)),
+        "transitive_native_link_inputs": _rust_native_dep_link_inputs(deps),
+        "transitive_native_linkopts": _unique(_rust_native_linkopts(ctx) + _rust_native_dep_linkopts(deps)),
         "android_abi": android_abi,
         "android_native_libraries": own_android_native_libraries,
         "transitive_android_native_libraries": _rust_collect_android_native_libraries(deps, own_android_native_libraries),
@@ -1546,10 +1579,15 @@ def _rust_library_impl(ctx):
 def _rust_mobile_output_prefix(provider, variant):
     return "rust-mobile/" + (provider.get("label_id") or "dependency") + "/" + variant + "/"
 
-def _rust_mobile_variant_ctx(ctx, provider, target_attr, variant):
+def _rust_mobile_variant_ctx(ctx, provider, target_attr, variant, materialized = None):
     target = provider.get(target_attr) or ""
     if not target:
         fail((provider.get("label_id") or "rust_mobile_library") + ": `" + target_attr + "` is required")
+    if materialized == None:
+        materialized = {}
+    deps = []
+    for dep in provider.get("mobile_deps") or []:
+        deps.append(_rust_mobile_rlib_provider(ctx, dep, target_attr, variant, materialized))
     attrs = {}
     for key, value in (provider.get("attrs") or {}).items():
         attrs[key] = value
@@ -1565,7 +1603,7 @@ def _rust_mobile_variant_ctx(ctx, provider, target_attr, variant):
         "label": provider["label"],
         "attr": attrs,
         "srcs": provider.get("srcs") or [],
-        "deps": [],
+        "deps": deps,
         "build_dir": ctx.get("build_dir") or _rust_build_dir(ctx),
         "scratch_dir": ctx.get("scratch_dir") or _rust_scratch_dir(ctx),
         "_action_suffix": variant,
@@ -1576,9 +1614,17 @@ def _rust_mobile_variant_ctx(ctx, provider, target_attr, variant):
             variant_ctx[key] = value
     return variant_ctx
 
+def _rust_mobile_rlib_provider(ctx, provider, target_attr, variant, materialized):
+    cache_key = variant + "\x00rlib\x00" + (provider.get("label_id") or "")
+    cached = materialized.get(cache_key)
+    if cached != None:
+        return cached
+    variant_ctx = _rust_mobile_variant_ctx(ctx, provider, target_attr, variant, materialized)
+    result = _rust_compile(variant_ctx, "rlib", "src/lib.rs", _rust_output_name(variant_ctx, "rlib"))
+    materialized[cache_key] = result
+    return result
+
 def _rust_mobile_library_impl(ctx):
-    if len(ctx["deps"]) > 0:
-        fail(ctx["label"]["id"] + ": rust_mobile_library does not support Rust deps yet; use platform-specific rust_library targets when the mobile library has Rust dependencies")
     crate_root = _rust_crate_root(ctx, "src/lib.rs")
     resolved_sources = _rust_sources(ctx, crate_root)
     return {
@@ -1591,22 +1637,29 @@ def _rust_mobile_library_impl(ctx):
         "root": crate_root,
         "apple_target": _rust_attr(ctx, "apple_target", ""),
         "android_target": _rust_attr(ctx, "android_target", ""),
+        "mobile_deps": ctx["deps"],
         "resolved_sources": resolved_sources,
         "source_inputs": _rust_source_inputs(ctx),
         "build_script_inputs": _rust_build_script_inputs(ctx),
         "data_inputs": _rust_data_inputs(ctx),
         "compile_data_inputs": _rust_compile_data_inputs(ctx),
         "env_file_inputs": _rust_env_file_inputs(ctx),
-        "transitive_sources": resolved_sources,
-        "transitive_data": _rust_data_inputs(ctx),
+        "transitive_sources": _collect_transitive(ctx["deps"], "transitive_sources", resolved_sources),
+        "transitive_data": _collect_transitive(ctx["deps"], "transitive_data", _rust_data_inputs(ctx)),
     }
 
-def _rust_mobile_apple_provider(ctx, provider):
+def _rust_mobile_apple_provider(ctx, provider, materialized = None):
     if provider.get("target_kind") != "rust_mobile_library":
         return provider
-    apple_ctx = _rust_mobile_variant_ctx(ctx, provider, "apple_target", "apple")
+    if materialized == None:
+        materialized = {}
+    cache_key = "apple\x00" + (provider.get("label_id") or "")
+    cached = materialized.get(cache_key)
+    if cached != None:
+        return cached
+    apple_ctx = _rust_mobile_variant_ctx(ctx, provider, "apple_target", "apple", materialized)
     apple = _rust_compile(apple_ctx, "staticlib", "src/lib.rs", _rust_output_name(apple_ctx, "staticlib"))
-    return {
+    result = {
         "label_id": provider.get("label_id") or "",
         "target_kind": "rust_mobile_library",
         "crate_name": provider.get("crate_name") or "",
@@ -1619,13 +1672,21 @@ def _rust_mobile_apple_provider(ctx, provider):
         "transitive_sources": apple.get("transitive_sources") or [],
         "transitive_data": apple.get("transitive_data") or [],
     }
+    materialized[cache_key] = result
+    return result
 
-def _rust_mobile_android_provider(ctx, provider):
+def _rust_mobile_android_provider(ctx, provider, materialized = None):
     if provider.get("target_kind") != "rust_mobile_library":
         return provider
-    android_ctx = _rust_mobile_variant_ctx(ctx, provider, "android_target", "android")
+    if materialized == None:
+        materialized = {}
+    cache_key = "android\x00" + (provider.get("label_id") or "")
+    cached = materialized.get(cache_key)
+    if cached != None:
+        return cached
+    android_ctx = _rust_mobile_variant_ctx(ctx, provider, "android_target", "android", materialized)
     android = _rust_compile(android_ctx, "cdylib", "src/lib.rs", _rust_output_name(android_ctx, "cdylib"))
-    return {
+    result = {
         "label_id": provider.get("label_id") or "",
         "target_kind": "rust_mobile_library",
         "crate_name": provider.get("crate_name") or "",
@@ -1638,12 +1699,14 @@ def _rust_mobile_android_provider(ctx, provider):
         "transitive_sources": android.get("transitive_sources") or [],
         "transitive_data": android.get("transitive_data") or [],
     }
+    materialized[cache_key] = result
+    return result
 
-def _apple_materialize_native_dep(ctx, dep):
-    return _rust_mobile_apple_provider(ctx, dep)
+def _apple_materialize_native_dep(ctx, dep, state = None):
+    return _rust_mobile_apple_provider(ctx, dep, state)
 
-def _android_materialize_native_dep(ctx, dep):
-    return _rust_mobile_android_provider(ctx, dep)
+def _android_materialize_native_dep(ctx, dep, state = None):
+    return _rust_mobile_android_provider(ctx, dep, state)
 
 def _rust_runtime_data(ctx):
     return _collect_transitive(_rust_resolved_deps(ctx), "transitive_data", _rust_data_inputs(ctx))
@@ -2773,6 +2836,12 @@ _RUST_MOBILE_ATTRS = [
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before each platform rustc invocation and consumes common cargo:rustc-* stdout directives.", configurable = False),
 ]
 
+_RUST_DEP_PROVIDERS = ["rust_crate", "rust_proc_macro", "rust_dependency_set", "c_provider"]
+_RUST_NAMED_DEP_ROLES = [
+    dep("proc_macro_deps", ["rust_proc_macro"], "Procedural macros compiled for the execution host and passed to rustc through --extern."),
+    dep("link_deps", ["c_provider"], "Native libraries and linker options consumed by final Rust artifacts."),
+]
+
 cargo_dependencies = target_kind(
     docs = "Cacheable Cargo dependency set consumed by Rust targets. The target kind reads Cargo.toml and Cargo.lock through `cargo metadata`, compiles resolved external crates as Once actions, and exposes them as one graph dependency.",
     attrs = [
@@ -2804,7 +2873,7 @@ rust_library = target_kind(
     attrs = _RUST_COMMON_ATTRS + [
         attr("crate_type", "string", default = "rlib", docs = "Rust crate type for the library output. Defaults to `rlib`; final artifacts may use `staticlib`, `cdylib`, or `dylib`.", configurable = False),
     ],
-    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
+    deps = [dep("deps", _RUST_DEP_PROVIDERS, "Rust crate dependencies consumed through --extern and C providers linked into final artifacts.")] + _RUST_NAMED_DEP_ROLES,
     providers = ["rust_crate", "native_linkable", "apple_linkable", "android_native_library"],
     capabilities = [capability("build", ["library"])],
     tools = [_RUST_TOOL],
@@ -2821,7 +2890,8 @@ rust_library = target_kind(
 rust_mobile_library = target_kind(
     docs = "Rust library materialized by Apple and Android consumers as native mobile libraries.",
     attrs = _RUST_MOBILE_ATTRS,
-    providers = ["native_linkable", "apple_linkable", "android_native_library"],
+    deps = [dep("deps", ["rust_mobile_crate"], "Rust mobile crate dependencies materialized recursively for the consuming Apple or Android platform.")],
+    providers = ["rust_mobile_crate", "native_linkable", "apple_linkable", "android_native_library"],
     capabilities = [capability("build", [])],
     tools = [_RUST_TOOL],
     examples = [
@@ -2846,7 +2916,7 @@ rust_binary = target_kind(
         attr("run_env", "map<string, string>", default = "{}", docs = "Environment variables passed to the executable during `once run`.", configurable = False),
         attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited during `once run` before `run_env` overrides.", configurable = False),
     ],
-    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
+    deps = [dep("deps", _RUST_DEP_PROVIDERS, "Rust crate dependencies consumed through --extern and C providers linked into the executable.")] + _RUST_NAMED_DEP_ROLES,
     providers = ["rust_binary"],
     capabilities = [
         capability("build", ["binary"]),
@@ -2874,7 +2944,7 @@ rust_test = target_kind(
         attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
         attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
     ],
-    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed through --extern.")],
+    deps = [dep("deps", _RUST_DEP_PROVIDERS, "Rust crate dependencies consumed through --extern and C providers linked into the test executable.")] + _RUST_NAMED_DEP_ROLES,
     providers = ["rust_test", "once_test_info"],
     capabilities = [
         capability("build", ["binary"]),
@@ -2899,7 +2969,7 @@ rust_crate = target_kind(
         attr("source", "string", docs = "Cargo source identifier, such as registry+https://github.com/rust-lang/crates.io-index.", configurable = False),
         attr("checksum", "string", docs = "Cargo.lock checksum for registry packages.", configurable = False),
     ],
-    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Resolved Cargo package dependencies.")],
+    deps = [dep("deps", _RUST_DEP_PROVIDERS, "Resolved Cargo package dependencies and C providers linked into final artifacts.")] + _RUST_NAMED_DEP_ROLES,
     providers = ["rust_crate"],
     capabilities = [capability("build", ["rlib"])],
     tools = [_RUST_TOOL],
@@ -2921,7 +2991,7 @@ rust_proc_macro = target_kind(
         attr("source", "string", docs = "Cargo source identifier, such as registry+https://github.com/rust-lang/crates.io-index.", configurable = False),
         attr("checksum", "string", docs = "Cargo.lock checksum for registry packages.", configurable = False),
     ],
-    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_dependency_set"], "Rust crate dependencies consumed by the procedural macro.")],
+    deps = [dep("deps", _RUST_DEP_PROVIDERS, "Rust crate dependencies consumed by the procedural macro and C providers linked into the host plugin.")] + _RUST_NAMED_DEP_ROLES,
     providers = ["rust_proc_macro"],
     capabilities = [capability("build", ["proc_macro"])],
     tools = [_RUST_TOOL],

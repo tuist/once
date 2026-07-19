@@ -1,0 +1,8 @@
+[[target]]
+name = "Greeting"
+kind = "kotlin_jvm_library"
+srcs = ["src/main/kotlin/**/*.kt"]
+
+[target.attrs]
+module_name = "greeting"
+jvm_target = "17"

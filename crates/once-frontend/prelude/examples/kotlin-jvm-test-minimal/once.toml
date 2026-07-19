@@ -1,0 +1,13 @@
+[[target]]
+name = "Greeting"
+kind = "kotlin_jvm_library"
+srcs = ["src/main/kotlin/dev/once/greeting/**/*.kt"]
+
+[[target]]
+name = "GreetingTests"
+kind = "kotlin_jvm_test"
+srcs = ["src/test/kotlin/dev/once/greeting/**/*.kt"]
+deps = ["./Greeting"]
+
+[target.attrs]
+labels = ["unit"]

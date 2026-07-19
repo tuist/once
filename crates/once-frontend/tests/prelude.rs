@@ -58,6 +58,29 @@ fn android_ndk_prebuilt_tag() -> &'static str {
     }
 }
 
+#[cfg(unix)]
+fn fake_android_ndk_for_mobile_test(workspace: &Path) -> std::path::PathBuf {
+    let ndk = workspace.join("android-ndk");
+    for tag in [
+        "darwin-arm64",
+        "darwin-x86_64",
+        "linux-arm64",
+        "linux-x86_64",
+    ] {
+        let bin_dir = ndk.join("toolchains/llvm/prebuilt").join(tag).join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join("clang"), "").unwrap();
+    }
+    std::fs::write(
+        ndk.join("toolchains/llvm/prebuilt")
+            .join(android_ndk_prebuilt_tag())
+            .join("bin/aarch64-linux-android24-clang"),
+        "",
+    )
+    .unwrap();
+    ndk
+}
+
 fn apple_prelude_source() -> String {
     format!(
         "{}\n{}",
@@ -101,6 +124,7 @@ fn apple_application_exposes_build_and_run() {
         kind: "apple_application".to_string(),
         name: "App".to_string(),
         deps: vec!["apps/ios/AppKit".to_string()],
+        dependency_edges: BTreeMap::new(),
         srcs: Vec::new(),
         attrs: BTreeMap::new(),
         typed_attrs: BTreeMap::new(),
@@ -194,6 +218,13 @@ fn android_target_kind_schemas_expose_all_target_kinds() {
         .attrs
         .iter()
         .any(|attr| attr.name == "runtime_deps"));
+    assert!(local_test.deps.iter().any(|dep| {
+        dep.name == "runtime_deps"
+            && dep
+                .expected_providers
+                .iter()
+                .any(|provider| provider == "java_library")
+    }));
 
     let instrumentation_test = built_in_target_kind_schema("android_instrumentation_test").unwrap();
     assert!(instrumentation_test
@@ -251,7 +282,45 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
     assert!(target_kind_has_impl("kotlin_apple_framework").unwrap());
     assert!(kotlin.providers.iter().any(|p| p == "apple_framework"));
     assert!(kotlin.providers.iter().any(|p| p == "native_linkable"));
+}
 
+#[test]
+fn kotlin_jvm_target_kind_schemas_are_discoverable() {
+    let kotlin_jvm =
+        built_in_target_kind_schema("kotlin_jvm_library").expect("kotlin_jvm_library schema");
+    assert!(target_kind_has_impl("kotlin_jvm_library").unwrap());
+    assert!(kotlin_jvm.providers.iter().any(|p| p == "java_library"));
+    for role in [
+        "deps",
+        "associates",
+        "exported_deps",
+        "provided_deps",
+        "runtime_deps",
+    ] {
+        assert!(kotlin_jvm.deps.iter().any(|dep| dep.name == role));
+    }
+    let kotlin_binary =
+        built_in_target_kind_schema("kotlin_jvm_binary").expect("kotlin_jvm_binary schema");
+    assert!(target_kind_has_impl("kotlin_jvm_binary").unwrap());
+    assert!(kotlin_binary
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "run"));
+    let kotlin_test =
+        built_in_target_kind_schema("kotlin_jvm_test").expect("kotlin_jvm_test schema");
+    assert!(target_kind_has_impl("kotlin_jvm_test").unwrap());
+    assert!(kotlin_test
+        .providers
+        .iter()
+        .any(|provider| provider == "once_test_info"));
+    assert!(kotlin_test
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "test"));
+}
+
+#[test]
+fn rust_cross_platform_target_kind_schemas_are_discoverable() {
     let rust = built_in_target_kind_schema("rust_library").expect("rust_library schema");
     assert!(rust.providers.iter().any(|p| p == "apple_linkable"));
     assert!(rust.providers.iter().any(|p| p == "android_native_library"));
@@ -270,6 +339,20 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
         .iter()
         .any(|attr| attr.name == "exported_post_linker_flags"));
     assert!(rust.attrs.iter().any(|attr| attr.name == "linker_script"));
+    assert!(rust.deps.iter().any(|dep| {
+        dep.name == "deps"
+            && dep
+                .expected_providers
+                .iter()
+                .any(|provider| provider == "c_provider")
+    }));
+    assert!(rust.deps.iter().any(|dep| {
+        dep.name == "proc_macro_deps" && dep.expected_providers == vec!["rust_proc_macro"]
+    }));
+    assert!(rust
+        .deps
+        .iter()
+        .any(|dep| { dep.name == "link_deps" && dep.expected_providers == vec!["c_provider"] }));
 
     let rust_test = built_in_target_kind_schema("rust_test").expect("rust_test schema");
     assert!(target_kind_has_impl("rust_test").unwrap());
@@ -296,7 +379,18 @@ fn cross_platform_target_kind_schemas_are_discoverable() {
         .iter()
         .any(|p| p == "android_native_library"));
     assert!(rust_mobile.providers.iter().any(|p| p == "native_linkable"));
+    assert!(rust_mobile
+        .providers
+        .iter()
+        .any(|p| p == "rust_mobile_crate"));
     assert!(!rust_mobile.providers.iter().any(|p| p == "rust_crate"));
+    assert!(rust_mobile.deps.iter().any(|dep| {
+        dep.name == "deps"
+            && dep
+                .expected_providers
+                .iter()
+                .any(|provider| provider == "rust_mobile_crate")
+    }));
     assert!(rust_mobile
         .attrs
         .iter()
@@ -2830,6 +2924,238 @@ result = repr(provider["framework_path"])
 }
 
 #[test]
+fn prelude_kotlin_jvm_library_separates_compile_and_runtime_roles() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let source_dir = workspace.path().join("apps/hello/src");
+    let kotlin_dir = workspace.path().join("toolchains/kotlin/lib");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::create_dir_all(&kotlin_dir).unwrap();
+    std::fs::write(
+        source_dir.join("Greeting.kt"),
+        "package dev.once.hello\nfun greeting() = \"hello\"\n",
+    )
+    .unwrap();
+    let stdlib = kotlin_dir.join("kotlin-stdlib.jar");
+    std::fs::write(&stdlib, "stdlib").unwrap();
+    let stdlib = stdlib.to_string_lossy();
+    let source = format!(
+        r#"{prelude}
+def host_command(argv, env = None, merge_stderr = None):
+    if argv == ["/tools/kotlinc", "-version"]:
+        return "kotlinc 2.4.0\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{"package": "apps/hello", "name": "Greeting", "id": "apps/hello/Greeting"}},
+    "attr": {{
+        "kotlinc": "/tools/kotlinc",
+        "kotlin_stdlib": "{stdlib}",
+        "module_name": "greeting",
+    }},
+    "deps": [{{
+        "label_id": "libs/core",
+        "transitive_compile_jars": [".once/out/libs/core/Core.jar"],
+        "transitive_runtime_jars": [".once/out/libs/core/Core.jar"],
+    }}],
+    "deps_by_role": {{
+        "deps": [],
+        "associates": [{{
+            "label_id": "libs/friend",
+            "transitive_compile_jars": [".once/out/libs/friend/Friend.jar"],
+            "transitive_runtime_jars": [".once/out/libs/friend/Friend.jar"],
+        }}],
+        "exported_deps": [{{
+            "label_id": "libs/exported",
+            "transitive_compile_jars": [".once/out/libs/exported/Exported.jar"],
+            "transitive_runtime_jars": [".once/out/libs/exported/Exported.jar"],
+        }}],
+        "provided_deps": [{{
+            "label_id": "libs/provided",
+            "transitive_compile_jars": [".once/out/libs/provided/Provided.jar"],
+            "transitive_runtime_jars": [".once/out/libs/provided/Provided.jar"],
+        }}],
+        "runtime_deps": [{{
+            "label_id": "libs/runtime",
+            "transitive_compile_jars": [".once/out/libs/runtime/Runtime.jar"],
+            "transitive_runtime_jars": [".once/out/libs/runtime/Runtime.jar"],
+        }}],
+    }},
+    "srcs": ["src/**/*.kt"],
+    "build_dir": ".once/out/apps/hello/Greeting",
+    "scratch_dir": ".once/tmp/analysis/apps/hello/Greeting",
+    "capability": "build",
+}}
+result = repr(_kotlin_jvm_library_impl(ctx))
+"#
+    );
+    let store = store_for(workspace.path(), "apps/hello");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("libs/runtime/Runtime.jar"), "{out}");
+    assert!(!out.contains("libs/provided/Provided.jar\", \".once/out/libs/runtime"));
+    let compile = action_by_identifier(&store, "kotlin_jvm_compile:apps/hello/Greeting");
+    let classpath = compile
+        .argv
+        .iter()
+        .position(|arg| arg == "-classpath")
+        .map(|index| compile.argv[index + 1].as_str())
+        .expect("compile classpath");
+    for jar in ["Core.jar", "Friend.jar", "Exported.jar", "Provided.jar"] {
+        assert!(classpath.contains(jar), "{classpath}");
+    }
+    assert!(!classpath.contains("Runtime.jar"), "{classpath}");
+    assert!(compile
+        .argv
+        .iter()
+        .any(|arg| arg.starts_with("-Xfriend-paths=") && arg.contains("Friend.jar")));
+}
+
+#[test]
+fn prelude_kotlin_jvm_binary_run_uses_runtime_role() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let kotlin_dir = workspace.path().join("toolchains/kotlin/lib");
+    std::fs::create_dir_all(&kotlin_dir).unwrap();
+    let stdlib = kotlin_dir.join("kotlin-stdlib.jar");
+    std::fs::write(&stdlib, "stdlib").unwrap();
+    let stdlib = stdlib.to_string_lossy();
+    let source = format!(
+        r#"{prelude}
+def host_command(argv, env = None, merge_stderr = None):
+    if argv == ["/tools/kotlinc", "-version"]:
+        return "kotlinc 2.4.0\n"
+    if argv == ["/tools/java", "-version"]:
+        return "java 17\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{"package": "apps/hello", "name": "Hello", "id": "apps/hello/Hello"}},
+    "attr": {{
+        "kotlinc": "/tools/kotlinc",
+        "java": "/tools/java",
+        "kotlin_stdlib": "{stdlib}",
+        "main_class": "dev.once.hello.MainKt",
+        "args": ["Once"],
+    }},
+    "deps": [],
+    "deps_by_role": {{
+        "deps": [],
+        "runtime_deps": [{{
+            "transitive_runtime_jars": [".once/out/libs/runtime/Runtime.jar"],
+        }}],
+    }},
+    "srcs": [],
+    "build_dir": ".once/out/apps/hello/Hello",
+    "scratch_dir": ".once/tmp/analysis/apps/hello/Hello",
+    "capability": "run",
+}}
+result = repr(_kotlin_jvm_binary_impl(ctx))
+"#
+    );
+    let store = store_for(workspace.path(), "apps/hello");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert!(out.unwrap().contains("Runtime.jar"));
+    let run = action_by_identifier(&store, "kotlin_jvm_run:apps/hello/Hello");
+    assert_eq!(run.argv[0], "/tools/java");
+    assert!(run.argv.iter().any(|arg| arg == "dev.once.hello.MainKt"));
+    assert!(run.argv.iter().any(|arg| arg == "Once"));
+    assert!(run.argv.iter().any(|arg| arg.contains("Runtime.jar")));
+}
+
+#[test]
+fn prelude_kotlin_jvm_test_emits_test_info_and_uses_runtime_role() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let source_dir = workspace.path().join("apps/hello/src/test");
+    let kotlin_dir = workspace.path().join("toolchains/kotlin/lib");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::create_dir_all(&kotlin_dir).unwrap();
+    std::fs::write(
+        source_dir.join("GreetingTest.kt"),
+        "class GreetingTest { fun testGreeting() { check(true) } }\n",
+    )
+    .unwrap();
+    let stdlib = kotlin_dir.join("kotlin-stdlib.jar");
+    std::fs::write(&stdlib, "stdlib").unwrap();
+    let stdlib = stdlib.to_string_lossy();
+    let source = format!(
+        r#"{prelude}
+def host_command(argv, env = None, merge_stderr = None):
+    if argv == ["/tools/kotlinc", "-version"]:
+        return "kotlinc 2.4.0\n"
+    if argv == ["/tools/java", "-version"]:
+        return "java 17\n"
+    if argv == ["/tools/javac", "-version"]:
+        return "javac 17\n"
+    fail("unexpected host_command: " + repr(argv))
+
+ctx = {{
+    "label": {{"package": "apps/hello", "name": "GreetingTests", "id": "apps/hello/GreetingTests"}},
+    "attr": {{
+        "kotlinc": "/tools/kotlinc",
+        "java": "/tools/java",
+        "javac": "/tools/javac",
+        "kotlin_stdlib": "{stdlib}",
+        "labels": ["unit"],
+        "test_class": "GreetingTest#testGreeting",
+    }},
+    "deps": [{{
+        "transitive_compile_jars": [".once/out/libs/core/Core.jar"],
+        "transitive_runtime_jars": [".once/out/libs/core/Core.jar"],
+    }}],
+    "deps_by_role": {{
+        "deps": [],
+        "runtime_deps": [{{
+            "transitive_runtime_jars": [".once/out/libs/runtime/Runtime.jar"],
+        }}],
+    }},
+    "srcs": ["src/test/**/*.kt"],
+    "build_dir": ".once/out/apps/hello/GreetingTests",
+    "scratch_dir": ".once/tmp/analysis/apps/hello/GreetingTests",
+    "capability": "test",
+}}
+result = repr(_kotlin_jvm_test_impl(ctx))
+"#
+    );
+    let store = store_for(workspace.path(), "apps/hello");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("once.test_info.v1"), "{out}");
+    assert!(out.contains("kotlin_jvm"), "{out}");
+    assert!(out.contains("unit"), "{out}");
+    let compile = action_by_identifier(&store, "kotlin_jvm_test_compile:apps/hello/GreetingTests");
+    let classpath = compile
+        .argv
+        .iter()
+        .position(|arg| arg == "-classpath")
+        .map(|index| compile.argv[index + 1].as_str())
+        .expect("compile classpath");
+    assert!(classpath.contains("Core.jar"), "{classpath}");
+    assert!(!classpath.contains("Runtime.jar"), "{classpath}");
+    let runner_compile = action_by_identifier(
+        &store,
+        "kotlin_jvm_test_runner_compile:apps/hello/GreetingTests",
+    );
+    assert_eq!(runner_compile.argv[0], "/tools/javac");
+    let run = action_by_identifier(&store, "kotlin_jvm_test:apps/hello/GreetingTests");
+    assert_eq!(run.argv[0], "/tools/java");
+    assert!(run.argv.iter().any(|arg| arg == "OnceJvmTestRunner"));
+    assert!(run.argv.iter().any(|arg| arg == "kotlin_jvm"));
+    assert!(run.argv.iter().any(|arg| arg.contains("Runtime.jar")));
+    assert!(run
+        .argv
+        .iter()
+        .any(|arg| arg == "GreetingTest#testGreeting"));
+}
+
+#[test]
 fn prelude_android_rejects_rust_rlib_native_dep() {
     let prelude = all_prelude_source();
     let err = eval_prelude_function_in(
@@ -3276,6 +3602,97 @@ result = repr([
         .any(|output| output.ends_with("rust-mobile/SharedRust/apple/libshared_rust.a")));
 }
 
+#[cfg(unix)]
+#[test]
+fn prelude_rust_mobile_library_materializes_transitive_deps_once_for_android() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    for name in ["core", "left", "right", "root"] {
+        let dir = workspace.path().join(format!("mobile/{name}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lib.rs"), "pub fn value() -> i32 { 1 }\n").unwrap();
+    }
+    let fake_ndk = fake_android_ndk_for_mobile_test(workspace.path());
+    let fake_ndk = fake_ndk.to_string_lossy();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "rustc":
+        return "/toolchains/rust/bin/rustc"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
+        return "/toolchains/rust\n"
+    if len(argv) >= 2 and argv[1] == "--version":
+        return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    fail("unexpected host_command: " + str(argv))
+
+def mobile(name, deps):
+    lower = name.lower()
+    return _rust_mobile_library_impl({{
+        "label": {{"package": "", "name": name, "id": name}},
+        "attr": {{
+            "crate_name": lower,
+            "crate_root": "mobile/" + lower + "/lib.rs",
+            "apple_target": "aarch64-apple-ios-sim",
+            "android_target": "aarch64-linux-android",
+            "android_abi": "arm64-v8a",
+            "android_api": 24,
+            "android_ndk": "{fake_ndk}",
+        }},
+        "deps": deps,
+        "srcs": ["mobile/" + lower + "/**/*.rs"],
+        "build_dir": ".once/out/" + name,
+    }})
+
+core = mobile("Core", [])
+left = mobile("Left", [core])
+right = mobile("Right", [core])
+root = mobile("Root", [left, right])
+consumer = {{
+    "label": {{"package": "", "name": "AndroidApp", "id": "AndroidApp"}},
+    "attr": {{}},
+    "deps": [root],
+    "srcs": [],
+    "build_dir": ".once/out/AndroidApp",
+    "scratch_dir": ".once/tmp/analysis/AndroidApp",
+}}
+result = repr(_android_native_libraries(consumer, consumer["deps"]))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        String::new(),
+        ".once/out/AndroidApp".to_string(),
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("rust-mobile/Root/android/libroot.so"), "{out}");
+    assert_eq!(store.actions.len(), 4);
+    let core_actions = store
+        .actions
+        .iter()
+        .filter(|action| action.identifier.as_deref() == Some("Core:rustc:android"))
+        .count();
+    assert_eq!(core_actions, 1);
+    let left = action_by_identifier(&store, "Left:rustc:android");
+    assert!(left.argv.iter().any(|arg| {
+        arg.starts_with("core=") && arg.contains("rust-mobile/Core/android/libcore-CORE.rlib")
+    }));
+    let root = action_by_identifier(&store, "Root:rustc:android");
+    assert!(root.argv.iter().any(|arg| arg.starts_with("left=")
+        && Path::new(arg)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("rlib"))));
+    assert!(root.argv.iter().any(|arg| arg.starts_with("right=")
+        && Path::new(arg)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("rlib"))));
+}
+
 #[test]
 fn prelude_rust_mobile_library_carries_resolved_auxiliary_inputs() {
     let prelude = all_prelude_source();
@@ -3332,7 +3749,7 @@ result = repr([
 }
 
 #[test]
-fn prelude_rust_mobile_library_rejects_rust_deps() {
+fn prelude_rust_mobile_library_carries_mobile_deps() {
     let prelude = all_prelude_source();
     let source = format!(
         r#"{prelude}
@@ -3347,19 +3764,141 @@ ctx = {{
         "android_target": "aarch64-linux-android",
     }},
     "deps": [{{
-        "target_kind": "rust_crate",
-        "label_id": "third_party/dep",
+        "target_kind": "rust_mobile_library",
+        "label_id": "shared/rust/Core",
+        "transitive_sources": ["shared/rust/core/lib.rs"],
+        "transitive_data": ["shared/rust/core/data.txt"],
     }}],
     "srcs": ["src/**/*.rs"],
     "build_dir": ".once/out/shared/rust/SharedRust",
 }}
-result = repr(_rust_mobile_library_impl(ctx))
+provider = _rust_mobile_library_impl(ctx)
+result = repr([
+    provider["mobile_deps"][0]["label_id"],
+    provider["transitive_sources"],
+    provider["transitive_data"],
+])
 "#
     );
 
-    let err = eval_prelude_source_to_repr(source).unwrap_err();
+    let out = eval_prelude_source_to_repr(source).unwrap();
 
-    assert!(err.contains("does not support Rust deps yet"), "{err}");
+    assert!(out.contains("shared/rust/Core"), "{out}");
+    assert!(out.contains("shared/rust/core/lib.rs"), "{out}");
+    assert!(out.contains("shared/rust/core/data.txt"), "{out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_rust_binary_links_transitive_c_provider_inputs() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let source_dir = workspace.path().join("crates/app/src");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("main.rs"), "fn main() {}\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "rustc":
+        return "/toolchains/rust/bin/rustc"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
+        return "/toolchains/rust\n"
+    if len(argv) >= 2 and argv[1] == "--version":
+        return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    fail("unexpected host_command: " + str(argv))
+
+def _rust_c_tool_env(target, host_triple):
+    return {{}}
+
+ctx = {{
+    "label": {{
+        "package": "crates/app",
+        "name": "app",
+        "id": "crates/app/app",
+    }},
+    "attr": {{
+        "crate_root": "src/main.rs",
+        "linker": "/usr/bin/cc",
+    }},
+    "deps": [],
+    "deps_by_role": {{
+        "deps": [],
+        "link_deps": [{{
+            "c_provider": True,
+            "label_id": "native/math",
+            "transitive_static_libraries": [".once/out/native/math/libmath.a"],
+            "transitive_dynamic_libraries": ["vendor/libsupport.so"],
+            "transitive_linkopts": ["-pthread"],
+            "transitive_archives": [".once/out/native/math/libmath.a"],
+        }}],
+    }},
+    "srcs": ["src/**/*.rs"],
+    "build_dir": ".once/out/crates/app/app",
+    "capability": "build",
+}}
+provider = _rust_binary_impl(ctx)
+result = repr(provider)
+"#
+    );
+    let store = store_for(workspace.path(), "crates/app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("libmath.a"), "{out}");
+    let action = action_by_identifier(&store, "crates/app/app:rustc");
+    for value in [
+        ".once/out/native/math/libmath.a",
+        "vendor/libsupport.so",
+        "-pthread",
+    ] {
+        assert!(
+            action
+                .argv
+                .iter()
+                .any(|arg| arg == &format!("link-arg={value}")),
+            "{:?}",
+            action.argv
+        );
+    }
+    assert!(action
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/native/math/libmath.a"));
+    assert!(action
+        .inputs
+        .iter()
+        .any(|input| input == "vendor/libsupport.so"));
+}
+
+#[test]
+fn prelude_rust_resolves_proc_macro_dependency_role() {
+    let source = format!(
+        r#"{}
+ctx = {{
+    "label": {{"package": "crates/app", "name": "app", "id": "crates/app/app"}},
+    "attr": {{}},
+    "deps": [{{"label_id": "crates/core", "crate_name": "core"}}],
+    "deps_by_role": {{
+        "deps": [{{"label_id": "crates/core", "crate_name": "core"}}],
+        "proc_macro_deps": [{{
+            "label_id": "crates/derive",
+            "crate_name": "derive",
+            "proc_macro": ".once/out/crates/derive/libderive.so",
+        }}],
+    }},
+}}
+result = repr([dep["label_id"] for dep in _rust_resolved_deps(ctx)])
+"#,
+        all_prelude_source()
+    );
+
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(out, "[\"crates/core\", \"crates/derive\"]");
 }
 
 #[cfg(unix)]
@@ -3778,6 +4317,13 @@ ctx = {{
         "transitive_compile_jars": [".once/out/apps/hello/Greeting/Greeting.jar"],
         "transitive_runtime_jars": [".once/out/apps/hello/Greeting/Greeting.jar"],
     }}],
+    "deps_by_role": {{
+        "deps": [],
+        "runtime_deps": [{{
+            "transitive_compile_jars": [".once/out/apps/hello/Runtime/Runtime.jar"],
+            "transitive_runtime_jars": [".once/out/apps/hello/Runtime/Runtime.jar"],
+        }}],
+    }},
     "srcs": ["src/test/**/*.kt", "src/test/**/*.java"],
     "build_dir": ".once/out/apps/hello/GreetingTests",
     "capability": "test",
@@ -3810,6 +4356,10 @@ fn assert_android_local_test_actions(store: &AnalysisStore, out: &str) {
         "android_local_test_java_compile:apps/hello/GreetingTests",
     );
     assert!(javac.argv.iter().any(|arg| arg == "-Xlint:all"));
+    assert!(!javac
+        .argv
+        .iter()
+        .any(|arg| arg.contains("Runtime/Runtime.jar")));
     let runner_compile = action_by_identifier(
         store,
         "android_local_test_runner_compile:apps/hello/GreetingTests",
@@ -3818,7 +4368,7 @@ fn assert_android_local_test_actions(store: &AnalysisStore, out: &str) {
     assert!(runner_compile
         .inputs
         .iter()
-        .any(|input| input.ends_with("OnceAndroidLocalTestRunner.java")));
+        .any(|input| input.ends_with("OnceJvmTestRunner.java")));
     let run = action_by_identifier(store, "android_local_test:apps/hello/GreetingTests");
     assert_eq!(run.argv[0], "/jdk/bin/java");
     assert_eq!(run.argv[1], "-Duser.language=en");
@@ -3834,10 +4384,7 @@ fn assert_android_local_test_actions(store: &AnalysisStore, out: &str) {
         run.env.get("ANDROID_TEST_ENV").map(String::as_str),
         Some("test")
     );
-    assert!(run
-        .argv
-        .iter()
-        .any(|arg| arg == "OnceAndroidLocalTestRunner"));
+    assert!(run.argv.iter().any(|arg| arg == "OnceJvmTestRunner"));
     assert!(run
         .argv
         .iter()
@@ -3858,6 +4405,14 @@ fn assert_android_local_test_actions(store: &AnalysisStore, out: &str) {
         .inputs
         .iter()
         .any(|input| input == "third_party/junit.jar"));
+    assert!(run
+        .argv
+        .iter()
+        .any(|arg| arg.contains("Runtime/Runtime.jar")));
+    assert!(run
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/apps/hello/Runtime/Runtime.jar"));
     assert!(run
         .outputs
         .iter()

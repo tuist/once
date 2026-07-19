@@ -435,8 +435,9 @@ def _validate_apple_native_deps(deps, consumer_label):
 
 def _apple_native_deps(ctx):
     out = []
+    materialized = {}
     for dep in ctx["deps"]:
-        out.append(_apple_materialize_native_dep(ctx, dep))
+        out.append(_apple_materialize_native_dep(ctx, dep, materialized))
     return out
 
 # A select-shape attribute value is a dict with exactly one `select`
