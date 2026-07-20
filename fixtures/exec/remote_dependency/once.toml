@@ -1,0 +1,6 @@
+[infrastructures.remote_tests]
+kind = "microsandbox"
+image = "node:22.18.0-alpine"
+
+[infrastructure.execution]
+provider = "remote_tests"

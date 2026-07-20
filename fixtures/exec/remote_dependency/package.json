@@ -1,0 +1,8 @@
+{
+  "name": "once-remote-vitest-fixture",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "vitest": "4.1.10"
+  }
+}
