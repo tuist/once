@@ -118,6 +118,13 @@ def _kotlin_apple_framework_impl(ctx):
         identifier = "kotlin_apple_framework:" + ctx["label"]["id"],
     )
 
+    framework_bundle = {
+        "path": framework_path,
+        "module_name": module_name,
+        "files": framework_files,
+        "label_id": ctx["label"]["id"],
+    }
+
     return {
         "label_id": ctx["label"]["id"],
         "target_kind": "kotlin_apple_framework",
@@ -128,7 +135,9 @@ def _kotlin_apple_framework_impl(ctx):
         "framework_path": ctx["build_dir"] + "/" + framework_dir,
         "framework_module_name": module_name,
         "framework_files": framework_files,
-        "transitive_frameworks": [ctx["build_dir"] + "/" + framework_dir],
+        "transitive_link_framework_bundles": [framework_bundle],
+        "transitive_framework_bundles": [framework_bundle],
+        "transitive_frameworks": [framework_path],
         "affected_inputs": sources,
     }
 

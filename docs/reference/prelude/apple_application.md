@@ -11,6 +11,11 @@ contain `sdk` configure the
 [Apple software development kit (SDK)](https://developer.apple.com/documentation/xcode)
 used for the build.
 
+Framework dependencies are transitive at runtime. Declare the framework the
+application imports directly. Once links the direct dynamic boundary, embeds
+its complete framework closure, removes duplicate paths, signs every embedded
+framework, and then signs the application.
+
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |

@@ -294,6 +294,13 @@ The implementation returns a dictionary of provider fields. Downstream
 target kinds should read provider fields from `ctx["deps"]` or
 `ctx["deps_by_role"]` instead of inspecting target identities.
 
+When an artifact has different link-time and runtime dependency closures,
+publish those closures as separate provider fields. Do not flatten them into
+one transitive list. Runtime bundle records should retain the owning target,
+bundle path, module name, and complete file outputs so final packaging actions
+can de-duplicate, materialize, and sign the closure without rediscovering the
+graph.
+
 ## Host Globals
 
 Target kind implementations can use these generic primitives:
