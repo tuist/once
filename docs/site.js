@@ -212,6 +212,10 @@ export const site = {
         collapsed: false,
         items: [
           { text: "Overview", link: "/guide/infrastructure/" },
+          { text: "Remote Execution", link: "/guide/infrastructure/remote-execution" },
+          { text: "Microsandbox", link: "/guide/infrastructure/microsandbox" },
+          { text: "E2B", link: "/guide/infrastructure/e2b" },
+          { text: "Daytona", link: "/guide/infrastructure/daytona" },
           { text: "Tuist", link: "/guide/infrastructure/tuist" },
         ],
       },

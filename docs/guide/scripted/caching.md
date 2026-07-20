@@ -47,9 +47,11 @@ npm run build
 ```
 
 Once runs independent dependencies concurrently. A dependency's declared
-output fingerprints become part of the dependent script's cache key. If the
-dependency runs again but produces the same outputs, the dependent script can
-still reuse its previous result.
+outputs become declared inputs of the dependent script, and their fingerprints
+become part of its cache key. This lets a remote test consume an installation
+script's `node_modules` output without exposing the rest of the host workspace.
+If the dependency runs again but produces the same outputs, the dependent
+script can still reuse its previous result.
 
 ## Choose How Symbolic Links Are Stored
 
@@ -79,6 +81,7 @@ at restore time.
 | `output-symlinks` | Uses `materialize-external` or `preserve` when capturing symbolic links in outputs. |
 | `env` | Forwards a selected environment variable and includes its value in the cache key. |
 | `cwd` | Chooses the working directory for the script body. |
+| `remote` | Selects a named remote execution infrastructure provider. |
 
 The script file itself is always part of the cache key, even when it has no
 `input` headers.
@@ -147,5 +150,7 @@ mise run build
 ## Next
 
 Configure [Infrastructure](/guide/infrastructure/) when these cacheable results
-should be shared across machines. If an existing tool must probe or populate
-the cache itself, continue to [Manual Cache Access](/guide/scripted/runtime).
+should be shared across machines, or use
+[Remote Execution](/guide/infrastructure/remote-execution) to run them in a
+fresh sandbox. If an existing tool must probe or populate the cache itself,
+continue to [Manual Cache Access](/guide/scripted/runtime).
