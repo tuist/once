@@ -140,7 +140,7 @@ async fn finish_run(
 
 fn set_remote(action: &mut Action, remote_execution: RemoteExecution) {
     if let Action::RunCommand { remote, .. } = action {
-        *remote = Some(remote_execution);
+        *remote = Some(Box::new(remote_execution));
     }
 }
 
@@ -152,7 +152,7 @@ fn set_sandbox(action: &mut Action, sandbox_mode: SandboxMode) {
 
 fn action_remote(action: &Action) -> Option<&RemoteExecution> {
     match action {
-        Action::RunCommand { remote, .. } => remote.as_ref(),
+        Action::RunCommand { remote, .. } => remote.as_deref(),
         _ => None,
     }
 }

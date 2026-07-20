@@ -104,8 +104,12 @@ pub fn load_infrastructure_toml_str(
     let providers = manifest
         .infrastructures
         .into_iter()
-        .map(|(name, provider)| (name, provider.into_config()))
-        .collect();
+        .map(|(name, provider)| {
+            provider
+                .into_config(path, &name)
+                .map(|provider| (name, provider))
+        })
+        .collect::<Result<_>>()?;
     Ok(crate::cache_provider::InfrastructureConfig {
         cache,
         execution,
@@ -341,6 +345,111 @@ exclude = ["fixtures/**"]
 "#;
         let targets = load_toml_str("once.toml", src).unwrap();
         assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn loads_named_microsandbox_execution_provider() {
+        let config = load_infrastructure_toml_str(
+            "once.toml",
+            r#"
+[infrastructure.execution]
+provider = "remote_tests"
+
+[infrastructures.remote_tests]
+kind = "microsandbox"
+image = "node:22.18.0-alpine"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.execution,
+            Some(crate::cache_provider::NamedCacheProviderConfig {
+                name: "remote_tests".to_string(),
+                account: None,
+                project: None,
+            })
+        );
+        assert_eq!(
+            config.providers.get("remote_tests"),
+            Some(
+                &crate::cache_provider::InfrastructureProviderConfig::Microsandbox(
+                    crate::cache_provider::MicrosandboxExecutionProviderConfig {
+                        image: "node:22.18.0-alpine".to_string(),
+                    }
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_empty_microsandbox_image() {
+        let error = load_infrastructure_toml_str(
+            "once.toml",
+            r#"
+[infrastructures.remote_tests]
+kind = "microsandbox"
+image = "   "
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("image must not be empty"));
+    }
+
+    #[test]
+    fn loads_hosted_execution_providers() {
+        let config = load_infrastructure_toml_str(
+            "once.toml",
+            r#"
+[infrastructures.e2b_tests]
+kind = "e2b"
+template = "vitest-v1"
+
+[infrastructures.daytona_tests]
+kind = "daytona"
+image = "node:22-bookworm"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.providers.get("e2b_tests"),
+            Some(&crate::cache_provider::InfrastructureProviderConfig::E2b(
+                crate::cache_provider::E2bExecutionProviderConfig {
+                    template: "vitest-v1".to_string(),
+                }
+            ))
+        );
+        assert_eq!(
+            config.providers.get("daytona_tests"),
+            Some(
+                &crate::cache_provider::InfrastructureProviderConfig::Daytona(
+                    crate::cache_provider::DaytonaExecutionProviderConfig {
+                        image: "node:22-bookworm".to_string(),
+                    }
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_empty_hosted_provider_environments() {
+        for manifest in [
+            r#"
+[infrastructures.remote_tests]
+kind = "e2b"
+template = ""
+"#,
+            r#"
+[infrastructures.remote_tests]
+kind = "daytona"
+image = "   "
+"#,
+        ] {
+            let error = load_infrastructure_toml_str("once.toml", manifest).unwrap_err();
+            assert!(error.to_string().contains("must not be empty"));
+        }
     }
 
     #[test]

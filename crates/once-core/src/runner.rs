@@ -1017,7 +1017,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
-            remote: Some(RemoteExecution::provider("unknown-remote")),
+            remote: Some(Box::new(RemoteExecution::provider("unknown-remote"))),
         };
 
         let error = run(&action, tmp.path(), &cas, RunOpts::default())

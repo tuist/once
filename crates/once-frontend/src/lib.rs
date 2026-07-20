@@ -27,8 +27,9 @@ pub const TOML_BUILD_FILE_NAME: &str = "once.toml";
 pub const BUILD_FILE_NAME: &str = TOML_BUILD_FILE_NAME;
 
 pub use cache_provider::{
-    CacheProviderConfig, ExecutionProviderConfig, InfrastructureConfig,
-    InfrastructureProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig,
+    CacheProviderConfig, DaytonaExecutionProviderConfig, E2bExecutionProviderConfig,
+    ExecutionProviderConfig, InfrastructureConfig, InfrastructureProviderConfig,
+    MicrosandboxExecutionProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig,
     DEFAULT_TUIST_URL,
 };
 pub use cache_resolution::{

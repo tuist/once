@@ -108,6 +108,7 @@ async fn execute_command(
         cwd,
         inputs,
         outputs,
+        resources,
         timeout_ms,
         remote,
         stdout_path,
@@ -128,10 +129,15 @@ async fn execute_command(
         (Some(remote), _, _) => {
             remote::execute_command(
                 remote,
-                argv,
-                env,
-                cwd.as_ref(),
-                *timeout_ms,
+                remote::PreparedCommand {
+                    argv,
+                    env,
+                    cwd: cwd.as_ref(),
+                    inputs,
+                    outputs,
+                    resources,
+                    timeout_ms: *timeout_ms,
+                },
                 workspace_root,
                 cache,
                 stream_to_parent,

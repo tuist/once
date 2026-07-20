@@ -39,8 +39,26 @@ pub struct TuistCacheProviderConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MicrosandboxExecutionProviderConfig {
+    pub image: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct E2bExecutionProviderConfig {
+    pub template: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaytonaExecutionProviderConfig {
+    pub image: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InfrastructureProviderConfig {
     Local,
+    Microsandbox(MicrosandboxExecutionProviderConfig),
+    E2b(E2bExecutionProviderConfig),
+    Daytona(DaytonaExecutionProviderConfig),
     Tuist(TuistCacheProviderConfig),
 }
 
@@ -83,6 +101,15 @@ pub(crate) enum DirectCacheProviderToml {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum InfrastructureProviderToml {
     Local,
+    Microsandbox {
+        image: String,
+    },
+    E2b {
+        template: String,
+    },
+    Daytona {
+        image: String,
+    },
     Tuist {
         url: Option<String>,
         account: Option<String>,
@@ -138,9 +165,37 @@ impl NamedCacheProviderToml {
 }
 
 impl InfrastructureProviderToml {
-    pub(crate) fn into_config(self) -> InfrastructureProviderConfig {
-        match self {
+    pub(crate) fn into_config(
+        self,
+        display_name: &str,
+        provider_name: &str,
+    ) -> Result<InfrastructureProviderConfig> {
+        Ok(match self {
             Self::Local => InfrastructureProviderConfig::Local,
+            Self::Microsandbox { image } => {
+                let image = image.trim().to_string();
+                if image.is_empty() {
+                    return Err(Error::Eval {
+                        path: display_name.to_string(),
+                        message: format!(
+                            "microsandbox infrastructure `{provider_name}` image must not be empty"
+                        ),
+                    });
+                }
+                InfrastructureProviderConfig::Microsandbox(MicrosandboxExecutionProviderConfig {
+                    image,
+                })
+            }
+            Self::E2b { template } => {
+                let template =
+                    required_value(display_name, provider_name, "e2b", "template", &template)?;
+                InfrastructureProviderConfig::E2b(E2bExecutionProviderConfig { template })
+            }
+            Self::Daytona { image } => {
+                let image =
+                    required_value(display_name, provider_name, "daytona", "image", &image)?;
+                InfrastructureProviderConfig::Daytona(DaytonaExecutionProviderConfig { image })
+            }
             Self::Tuist {
                 url,
                 account,
@@ -152,8 +207,25 @@ impl InfrastructureProviderToml {
                 project: non_empty(project),
                 oauth_client_id: non_empty(oauth_client_id),
             }),
-        }
+        })
     }
+}
+
+fn required_value(
+    display_name: &str,
+    provider_name: &str,
+    kind: &str,
+    field: &str,
+    value: &str,
+) -> Result<String> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return Err(Error::Eval {
+            path: display_name.to_string(),
+            message: format!("{kind} infrastructure `{provider_name}` {field} must not be empty"),
+        });
+    }
+    Ok(value)
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {

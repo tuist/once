@@ -23,6 +23,7 @@ once-frontend = { version = "0.0.0", path = "crates/once-frontend" }
 
 anyhow = "1"
 bazel-remote-apis = "0.27"
+base64 = "0.22"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 console = "0.16"
@@ -38,10 +39,11 @@ toon-rust = "0.1"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
 tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
 tree-sitter = "0.26.9"
 tree-sitter-cypher = "0.2.6"
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "multipart", "query", "rustls", "stream"] }
 sea-orm = { version = "1.1.20", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-sqlite"] }
 sea-orm-migration = { version = "1.1.20", default-features = false, features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
 schlussel = { git = "https://github.com/tuist/schlussel.git", rev = "80a7bc1fc0b68bdc2cd2379b16240ddbfbe0267b" }
@@ -51,6 +53,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 uuid = { version = "1", features = ["v7"] }
 walkdir = "2"
 zstd = "0.13"
+tar = "0.4"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

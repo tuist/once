@@ -1,15 +1,24 @@
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use once_cas::{ActionResult, CacheProvider};
 
-use crate::{Error, Result, WorkspacePath};
+use crate::{Error, RemoteExecution, Result};
 
 #[cfg(all(
     feature = "remote-microsandbox",
     any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
 ))]
-use super::join_path;
+mod input;
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
+mod output;
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
+use super::{join_path, PreparedCommand};
 #[cfg(all(
     feature = "remote-microsandbox",
     any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
@@ -19,68 +28,130 @@ use crate::stream::{self, Destination};
     feature = "remote-microsandbox",
     any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
 ))]
+use std::collections::BTreeMap;
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 use std::time::Duration;
 
-#[allow(clippy::too_many_arguments)]
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
+mod path {
+    use crate::WorkspacePath;
+
+    pub(super) fn guest_path(root: &str, path: &WorkspacePath) -> String {
+        super::super::join_path(root, path.as_str())
+    }
+
+    pub(super) fn guest_child(parent: &str, name: &str) -> String {
+        super::super::join_path(parent, name)
+    }
+}
+
 #[cfg(all(
     feature = "remote-microsandbox",
     any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
 ))]
 pub(super) async fn execute_command(
-    argv: &[String],
-    env: &BTreeMap<String, String>,
-    cwd: Option<&WorkspacePath>,
-    timeout_ms: Option<u64>,
+    remote: &RemoteExecution,
+    command: PreparedCommand<'_>,
     workspace_root: &Path,
     cache: &CacheProvider,
     stream_to_parent: bool,
 ) -> Result<ActionResult> {
-    let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
-    let image = std::env::var("ONCE_MICROSANDBOX_IMAGE").unwrap_or_else(|_| "alpine".to_string());
+    let (program, rest) = command.argv.split_first().ok_or(Error::EmptyArgv)?;
+    let image = remote.environment.clone().unwrap_or_else(|| {
+        std::env::var("ONCE_MICROSANDBOX_IMAGE").unwrap_or_else(|_| "alpine".to_string())
+    });
     let guest_root =
         std::env::var("ONCE_MICROSANDBOX_WORKDIR").unwrap_or_else(|_| "/workspace".to_string());
-    let guest_cwd = cwd.map_or_else(
+    let guest_cwd = command.cwd.map_or_else(
         || guest_root.clone(),
         |cwd| join_path(&guest_root, cwd.as_str()),
     );
     let sandbox_name = sandbox_name();
-    let sandbox = microsandbox::Sandbox::builder(&sandbox_name)
+    let cpu_count =
+        u8::try_from(command.resources.cpu_slots.clamp(1, usize::from(u8::MAX))).unwrap_or(u8::MAX);
+    let mut builder = microsandbox::Sandbox::builder(&sandbox_name)
         .image(image)
-        .workdir(&guest_cwd)
-        .volume(&guest_root, |mount| mount.bind(workspace_root))
+        .workdir("/")
+        .cpus(cpu_count);
+    if command.resources.memory_bytes > 0 {
+        let memory_mib = u32::try_from(
+            command
+                .resources
+                .memory_bytes
+                .div_ceil(1024 * 1024)
+                .clamp(1, u64::from(u32::MAX)),
+        )
+        .unwrap_or(u32::MAX);
+        builder = builder.memory(memory_mib);
+    }
+    let sandbox = builder
         .create()
         .await
         .map_err(|source| microsandbox_error(&source))?;
     let cleanup = SandboxCleanup::new(sandbox.clone());
 
-    let work = async {
-        let mut handle = sandbox
-            .exec_stream_with(program, |exec| {
-                let exec = exec.args(rest.iter().cloned()).cwd(&guest_cwd);
-                env.iter()
-                    .fold(exec, |exec, (key, value)| exec.env(key, value))
-            })
+    let result = async {
+        input::stage_inputs(&sandbox.fs(), workspace_root, &guest_root, command.inputs).await?;
+        sandbox
+            .fs()
+            .mkdir(&guest_cwd)
             .await
             .map_err(|source| microsandbox_error(&source))?;
-        collect_output(&mut handle, cache, stream_to_parent).await
-    };
 
-    let result = match timeout_ms {
-        Some(ms) => {
-            let dur = Duration::from_millis(ms);
-            match tokio::time::timeout(dur, work).await {
-                Ok(result) => result,
-                Err(_) => Err(Error::Timeout(dur)),
+        let work = async {
+            let mut handle = sandbox
+                .exec_stream_with(program, |exec| {
+                    let exec = exec.args(rest.iter().cloned()).cwd(&guest_cwd);
+                    command
+                        .env
+                        .iter()
+                        .fold(exec, |exec, (key, value)| exec.env(key, value))
+                })
+                .await
+                .map_err(|source| microsandbox_error(&source))?;
+            collect_output(&mut handle, cache, stream_to_parent).await
+        };
+
+        let result = match command.timeout_ms {
+            Some(ms) => {
+                let dur = Duration::from_millis(ms);
+                match tokio::time::timeout(dur, work).await {
+                    Ok(result) => result,
+                    Err(_) => Err(Error::Timeout(dur)),
+                }
             }
+            None => work.await,
+        };
+
+        match result {
+            Ok(result) if result.exit_code == 0 => output::retrieve_outputs(
+                &sandbox.fs(),
+                workspace_root,
+                &guest_root,
+                command.outputs,
+            )
+            .await
+            .map(|()| result),
+            result => result,
         }
-        None => work.await,
-    };
+    }
+    .await;
 
     let cleanup = cleanup.run().await;
 
     match (result, cleanup) {
         (Ok(result), Ok(())) => Ok(result),
-        (Ok(_), Err(err)) | (Err(err), _) => Err(err),
+        (Ok(_), Err(error)) | (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(cleanup_error)) => {
+            tracing::warn!(provider = "microsandbox", %cleanup_error, "failed to remove remote sandbox after execution failure");
+            Err(error)
+        }
     }
 }
 
@@ -165,17 +236,14 @@ async fn cleanup_sandbox(sandbox: microsandbox::Sandbox) -> Result<()> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::unused_async)]
 #[cfg(not(all(
     feature = "remote-microsandbox",
     any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
 )))]
 pub(super) async fn execute_command(
-    _argv: &[String],
-    _env: &BTreeMap<String, String>,
-    _cwd: Option<&WorkspacePath>,
-    _timeout_ms: Option<u64>,
+    _remote: &RemoteExecution,
+    _command: super::PreparedCommand<'_>,
     _workspace_root: &Path,
     _cache: &CacheProvider,
     _stream_to_parent: bool,
@@ -243,7 +311,14 @@ async fn collect_output(
         }
         stream::shutdown_pipe(&mut stdout_writer).await?;
         stream::shutdown_pipe(&mut stderr_writer).await?;
-        Ok::<_, Error>(exit_code.unwrap_or(-1))
+        // A stream that ends without an `Exited` event leaves the real exit
+        // status unknown. Surface that explicitly instead of inventing a -1,
+        // which would silently report a possibly successful command as failed
+        // and skip retrieving its declared outputs.
+        exit_code.ok_or_else(|| Error::RemoteProviderApi {
+            provider: "microsandbox".to_string(),
+            message: "command stream ended without an exit status".to_string(),
+        })
     };
     let stdout_store = async {
         cache
