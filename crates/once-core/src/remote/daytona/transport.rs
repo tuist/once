@@ -201,8 +201,9 @@ mod tests {
 
     #[test]
     fn streams_prefer_artifacts_over_dedicated_fields() {
-        let response =
-            parse(r#"{"exitCode":0,"stdout":"out","artifacts":{"stdout":"a-out","stderr":"a-err"}}"#);
+        let response = parse(
+            r#"{"exitCode":0,"stdout":"out","artifacts":{"stdout":"a-out","stderr":"a-err"}}"#,
+        );
         let (stdout, stderr) = response.output_streams();
         assert_eq!(stdout, b"a-out");
         assert_eq!(stderr, b"a-err");
