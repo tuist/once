@@ -6,6 +6,7 @@
 //! buffered.
 
 mod action;
+mod contract;
 mod directory_blob;
 mod env;
 mod error;
@@ -31,6 +32,11 @@ mod xdg;
 pub use action::{
     Action, CopyPathMode, OutputSymlinkMode, PreparePathMode, RemoteExecution, SandboxMode,
 };
+pub use contract::{
+    validate_action_contract, validate_action_contract_with_options, ActionContractDiagnostic,
+    ActionContractOptions, ActionContractReport, FilesystemOperation,
+};
+pub use contract::{ContractViolation, ContractViolationKind};
 pub use env::{
     managed_mise, managed_mise_path, select_tool_env, tool_env, workspace_executable,
     workspace_has_mise_config, workspace_mise_command, workspace_mise_env, workspace_prepare_tools,
@@ -46,8 +52,8 @@ pub use path::{WorkspacePath, WorkspacePathError};
 pub use plan::{BuiltPlan, NodeInfo, Plan, PlanError, PlanNode, PlanOutcome};
 pub use resources::{ResourceLimits, ResourcePool, ResourceRequest};
 pub use runner::{
-    run, run_uncached, run_with_cache, run_with_cache_streaming, CacheState, Outcome, RunOpts,
-    Runner,
+    run, run_uncached, run_uncached_contract, run_with_cache, run_with_cache_streaming, CacheState,
+    Outcome, RunOpts, Runner,
 };
 pub use store::WorkspaceStore;
 pub use test_manifest::{TestManifest, TestSharding, TestUnit, TEST_MANIFEST_SCHEMA};

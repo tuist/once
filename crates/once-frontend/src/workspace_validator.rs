@@ -103,11 +103,25 @@ fn validate_dependencies(
 ) {
     for target in graph {
         let schema = schemas.iter().find(|schema| schema.kind == target.kind);
+        // The conventional top-level `deps` field maps to the edge named "deps".
+        // When a kind declares its dependency edge under another name and has no
+        // "deps" edge, accept any edge's providers so dependencies placed in the
+        // default field are not rejected outright.
+        let deps_edge =
+            schema.and_then(|schema| schema.deps.iter().find(|edge| edge.name == "deps"));
+        let deps_accepted = match deps_edge {
+            Some(edge) => edge.expected_providers.iter().collect::<BTreeSet<_>>(),
+            None => schema
+                .into_iter()
+                .flat_map(|schema| &schema.deps)
+                .flat_map(|edge| &edge.expected_providers)
+                .collect::<BTreeSet<_>>(),
+        };
         validate_dependency_role(
             target,
             "deps",
             &target.deps,
-            schema.and_then(|schema| schema.deps.iter().find(|edge| edge.name == "deps")),
+            &deps_accepted,
             schema.is_some_and(|schema| schema.deps.iter().any(|edge| edge.name == "deps")),
             targets,
             diagnostics,
@@ -115,11 +129,15 @@ fn validate_dependencies(
         for (role, dependencies) in &target.dependency_edges {
             let role_schema =
                 schema.and_then(|schema| schema.deps.iter().find(|edge| edge.name == *role));
+            let accepted = role_schema
+                .into_iter()
+                .flat_map(|edge| &edge.expected_providers)
+                .collect::<BTreeSet<_>>();
             validate_dependency_role(
                 target,
                 role,
                 dependencies,
-                role_schema,
+                &accepted,
                 role_schema.is_some(),
                 targets,
                 diagnostics,
@@ -132,7 +150,7 @@ fn validate_dependency_role(
     target: &GraphTarget,
     role: &str,
     dependencies: &[String],
-    schema: Option<&crate::graph::DepSchema>,
+    accepted: &BTreeSet<&String>,
     role_declared: bool,
     targets: &BTreeMap<&str, &GraphTarget>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -142,10 +160,6 @@ fn validate_dependency_role(
     } else {
         format!("dependencies.{role}")
     };
-    let accepted = schema
-        .into_iter()
-        .flat_map(|edge| &edge.expected_providers)
-        .collect::<BTreeSet<_>>();
     for dependency_id in dependencies {
         let Some(dependency) = targets.get(dependency_id.as_str()) else {
             diagnostics.push(

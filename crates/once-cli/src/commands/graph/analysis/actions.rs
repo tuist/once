@@ -10,15 +10,17 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
-    workspace_mise_command, workspace_tool_env_with_executables, Action, CopyPathMode,
-    EvidenceCacheState, EvidenceSubject, InputDigestBuilder, OutputSymlinkMode, PreparePathMode,
-    ResourceRequest, RunOpts, SandboxMode, WorkspacePath,
+    validate_action_contract_with_options, workspace_mise_command,
+    workspace_tool_env_with_executables, Action, ActionContractOptions, CopyPathMode,
+    EvidenceCacheState, EvidenceSubject, FilesystemOperation, InputDigestBuilder,
+    OutputSymlinkMode, PreparePathMode, ResourceRequest, RunOpts, SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::{
     AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArgFile,
     DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
 use once_frontend::GraphTarget;
+use serde::Serialize;
 use tokio::process::Command;
 
 use super::BuildOutcome;
@@ -66,6 +68,162 @@ struct DeclaredActionFailure<'a> {
     argv: &'a [String],
     arg_files: &'a [DeclaredArgFile],
     result: &'a ActionResult,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DeclaredActionValidation {
+    pub(crate) index: usize,
+    pub(crate) identifier: String,
+    pub(crate) valid: bool,
+    pub(crate) exit_code: i32,
+    pub(crate) diagnostics: Vec<once_frontend::Diagnostic>,
+    pub(crate) limitations: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
+pub(super) async fn validate_declared_actions(
+    workspace: &Path,
+    cache: &CacheProvider,
+    module_source_digest: Digest,
+    target: &GraphTarget,
+    analysis: AnalysisResult,
+    dep_action_digests: &[(String, Digest)],
+    selected_index: Option<usize>,
+) -> Result<Vec<DeclaredActionValidation>> {
+    let mut actions = analysis.actions;
+    expose_target_tools(workspace, target, &mut actions).await?;
+    if let Some(index) = selected_index {
+        if index >= actions.len() {
+            anyhow::bail!(
+                "action index {index} is out of range for target `{}` with {} actions",
+                target.label.id,
+                actions.len()
+            );
+        }
+    }
+
+    let mut action_digests = Vec::new();
+    let mut validations = Vec::new();
+    for (index, declared) in actions.into_iter().enumerate() {
+        let is_selected = selected_index.is_none_or(|selected| selected == index);
+        let mut input_action_digests = dep_action_digests.to_vec();
+        if declared.depends_on_prior_actions {
+            input_action_digests.extend(
+                action_digests
+                    .iter()
+                    .enumerate()
+                    .map(|(prior_index, digest)| (format!("same-target:{prior_index}"), *digest)),
+            );
+        }
+        materialize_declared_arg_files(workspace, &declared.arg_files).with_context(|| {
+            format!(
+                "writing argument files for action {index} for {}",
+                target.label.id
+            )
+        })?;
+        // An isolated contract probe never runs prior actions or dependency
+        // targets, so any input those steps would have produced is absent from
+        // the workspace. Such an action cannot be hashed or staged here; record
+        // it as skipped with a limitation instead of aborting the whole command.
+        let missing_inputs = missing_declared_inputs(workspace, &declared);
+        if !missing_inputs.is_empty() {
+            if is_selected {
+                let identifier = declared
+                    .identifier
+                    .clone()
+                    .unwrap_or_else(|| format!("action-{index}"));
+                validations.push(DeclaredActionValidation {
+                    index,
+                    identifier,
+                    valid: true,
+                    exit_code: 0,
+                    diagnostics: Vec::new(),
+                    limitations: vec![format!(
+                        "action not validated in isolation: consumes inputs produced by prior actions or dependencies ({})",
+                        missing_inputs.join(", ")
+                    )],
+                });
+            }
+            continue;
+        }
+        let action = declared_to_action(
+            workspace,
+            &declared,
+            module_source_digest,
+            &input_action_digests,
+            SandboxMode::Inputs,
+        )?;
+        action_digests.push(action.digest());
+        if !is_selected {
+            continue;
+        }
+
+        let create_dirs = declared
+            .create_dirs
+            .iter()
+            .map(|path| workspace_path(path, "create_dirs entry"))
+            .collect::<Result<Vec<_>>>()?;
+        let report = validate_action_contract_with_options(
+            &action,
+            workspace,
+            cache,
+            &ActionContractOptions { create_dirs },
+        )
+        .await
+        .with_context(|| format!("validating action {index} for target `{}`", target.label.id))?;
+        let identifier = declared
+            .identifier
+            .clone()
+            .unwrap_or_else(|| format!("action-{index}"));
+        let mut diagnostics = report
+            .diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                let attribute = match diagnostic.operation {
+                    FilesystemOperation::Read
+                    | FilesystemOperation::Modify
+                    | FilesystemOperation::Delete
+                    | FilesystemOperation::Access => "inputs",
+                    FilesystemOperation::Write => "outputs",
+                };
+                let mut converted = once_frontend::Diagnostic::new(
+                    diagnostic.code,
+                    format!("action `{identifier}` ({index}): {}", diagnostic.message),
+                )
+                .with_target(target.label.id.clone())
+                .with_attribute(attribute);
+                for repair in diagnostic.repairs {
+                    converted = converted.with_repair(repair);
+                }
+                converted
+            })
+            .collect::<Vec<_>>();
+        if report.exit_code != 0 && diagnostics.is_empty() {
+            diagnostics.push(
+                once_frontend::Diagnostic::new(
+                    "action_execution_failed",
+                    format!(
+                        "action `{identifier}` ({index}) exited with code {} before its filesystem contract could be validated",
+                        report.exit_code
+                    ),
+                )
+                .with_target(target.label.id.clone())
+                .with_repair(
+                    "Inspect the action output, repair the command failure, and validate again",
+                ),
+            );
+        }
+        validations.push(DeclaredActionValidation {
+            index,
+            identifier,
+            valid: report.valid,
+            exit_code: report.exit_code,
+            diagnostics,
+            limitations: report.limitations,
+        });
+    }
+    Ok(validations)
 }
 
 /// Materialise each declared action through the action cache, then
@@ -1152,6 +1310,22 @@ fn workspace_path(path: &str, context: &str) -> Result<WorkspacePath> {
     WorkspacePath::try_from(path).with_context(|| format!("invalid {context} `{path}`"))
 }
 
+/// Declared inputs that do not exist in the workspace. During isolated action
+/// validation these are outputs a prior action or dependency target would have
+/// produced, which the probe never runs. Malformed paths are left out so
+/// `declared_to_action` can surface them as the usual invalid-path error.
+fn missing_declared_inputs(workspace: &Path, declared: &DeclaredAction) -> Vec<String> {
+    declared
+        .inputs
+        .iter()
+        .filter(|input| {
+            WorkspacePath::try_from(input.as_str())
+                .is_ok_and(|path| !path.resolve(workspace).exists())
+        })
+        .cloned()
+        .collect()
+}
+
 fn declared_action_inputs(declared: &DeclaredAction) -> Result<Vec<WorkspacePath>> {
     let mut inputs = declared
         .inputs
@@ -1345,6 +1519,38 @@ mod tests {
 
     fn module_digest() -> Digest {
         Digest::of_bytes(b"modules")
+    }
+
+    #[test]
+    fn missing_declared_inputs_reports_only_absent_paths() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("present.rs"), b"fn main() {}").unwrap();
+        let declared = DeclaredAction {
+            operation: None,
+            argv: vec!["tool".to_string()],
+            arg_files: Vec::new(),
+            inputs: vec![
+                "present.rs".to_string(),
+                ".once/out/x/generated.rlib".to_string(),
+            ],
+            outputs: Vec::new(),
+            stdout: None,
+            stderr: None,
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
+            sandbox: None,
+            cacheable: true,
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: None,
+        };
+
+        assert_eq!(
+            missing_declared_inputs(workspace.path(), &declared),
+            vec![".once/out/x/generated.rlib".to_string()]
+        );
     }
 
     #[test]

@@ -521,8 +521,9 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// the command in, defaulting to the workspace root; `env`: optional
     /// string->string dict; `cacheable`:
     /// optional bool, default true;
-    /// `sandbox`: optional local filesystem sandbox policy, either
-    /// `"off"` or `"inputs"`;
+    /// `sandbox`: optional local filesystem sandbox policy, `"off"`,
+    /// `"inputs"`, or `"validate"`; validation runs uncached and returns
+    /// filesystem contract diagnostics without materializing outputs;
     /// `toolchain_identity`: optional string folded into the input
     /// digest; `identifier`: optional label for diagnostics.
     #[allow(

@@ -92,6 +92,49 @@ pub async fn validate_workspace(workspace: &Path, output: Output) -> Result<()> 
     .await
 }
 
+pub async fn validate_actions(
+    workspace: &Path,
+    output: Output,
+    target: &str,
+    capability: &str,
+    action: Option<usize>,
+) -> Result<()> {
+    let xdg = once_core::Xdg::from_env();
+    let cache = crate::cache_provider::resolve(workspace, &xdg)?;
+    let validation = crate::commands::graph::validate_action_contracts(
+        workspace, &cache, target, capability, action,
+    )
+    .await?;
+    write_body(
+        output,
+        || render_action_validation_human(&validation),
+        &validation,
+    )
+    .await
+}
+
+fn render_action_validation_human(
+    validation: &crate::commands::graph::ActionContractValidation,
+) -> String {
+    let mut text = format!(
+        "{} {}: {} ({} actions)\n",
+        validation.target,
+        validation.capability,
+        if validation.valid { "valid" } else { "invalid" },
+        validation.actions_run
+    );
+    for diagnostic in &validation.diagnostics {
+        let _ = writeln!(text, "  {}: {}", diagnostic.code, diagnostic.message);
+        for repair in &diagnostic.repairs {
+            let _ = writeln!(text, "    repair: {repair}");
+        }
+    }
+    for limitation in &validation.limitations {
+        let _ = writeln!(text, "  limitation: {limitation}");
+    }
+    text
+}
+
 pub async fn module_contract(output: Output) -> Result<()> {
     let contract = once_frontend::module_authoring_contract();
     write_body(
@@ -427,9 +470,14 @@ fn target_kind_matches_terms(schema: &once_frontend::TargetKindSchema, terms: &[
         .filter(|term| !term.is_empty())
         .map(str::to_lowercase)
         .collect::<Vec<_>>();
-    terms
-        .iter()
-        .any(|term| searchable_terms.iter().any(|candidate| candidate == term))
+    // Match a term against whole tokens, but allow it to be a substring of a token
+    // so a partial query still resolves (for example `spec` finding the `rspec`
+    // runner) while staying scoped to individual words rather than the whole blob.
+    terms.iter().any(|term| {
+        searchable_terms
+            .iter()
+            .any(|candidate| candidate.contains(term.as_str()))
+    })
 }
 
 pub async fn target(workspace: &Path, output: Output, target_id: &str) -> Result<()> {

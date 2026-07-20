@@ -167,7 +167,7 @@ pub async fn run_with_cache_streaming(
     if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
         return Ok(hit);
     }
-    let result = Box::pin(execute::run(action, workspace_root, cache, true)).await?;
+    let result = Box::pin(execute::run(action, workspace_root, cache, true, false)).await?;
     let cacheable = result.exit_code == 0 || opts.cache_failures;
     if cacheable {
         cache.put_action_result(&key, &result).await?;
@@ -198,6 +198,23 @@ pub async fn run_uncached(
         workspace_root,
         cache,
         stream_to_parent,
+        false,
+    ))
+    .await
+}
+
+pub async fn run_uncached_contract(
+    action: &Action,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    Box::pin(execute::run(
+        action,
+        workspace_root,
+        cache,
+        stream_to_parent,
+        true,
     ))
     .await
 }
@@ -228,7 +245,7 @@ async fn produce(
     opts: RunOpts,
     key: Digest,
 ) -> Result<Outcome> {
-    let result = Box::pin(execute::run(action, workspace_root, cache, false)).await?;
+    let result = Box::pin(execute::run(action, workspace_root, cache, false, false)).await?;
     let cacheable = result.exit_code == 0 || opts.cache_failures;
     if cacheable {
         cache.put_action_result(&key, &result).await?;

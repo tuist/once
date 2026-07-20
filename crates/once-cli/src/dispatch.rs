@@ -286,6 +286,7 @@ async fn run_toolchain_command(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_query_command(
     workspace: &Path,
     output: Output,
@@ -375,6 +376,13 @@ async fn run_query_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
+        Some(cli::QueryCmd::ValidateActions {
+            target,
+            capability,
+            action,
+        }) => commands::query::validate_actions(workspace, output, &target, &capability, action)
+            .await
+            .map(|()| ExitCode::SUCCESS),
         Some(cli::QueryCmd::ValidateModule { path }) => {
             commands::query::validate_module(workspace, output, &path)
                 .await

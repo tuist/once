@@ -142,6 +142,18 @@ pub enum QueryCmd {
     /// Validate target schemas, dependency edges, providers, sources, and cycles across the workspace.
     ValidateWorkspace,
 
+    /// Run scripted actions in a private validation sandbox and report filesystem contract repairs.
+    ValidateActions {
+        /// Target id whose scripted capability should be probed.
+        target: String,
+        /// Capability to validate.
+        #[arg(long, default_value = "build")]
+        capability: String,
+        /// Validate only one zero-based action index.
+        #[arg(long)]
+        action: Option<usize>,
+    },
+
     /// Validate one project-local Starlark module without registering it.
     ValidateModule {
         /// Workspace-relative module path.
@@ -170,6 +182,7 @@ impl QueryCmd {
             Self::ValidateTarget { .. } => vec!["validate-target"],
             Self::Script { .. } => vec!["script"],
             Self::ValidateWorkspace => vec!["validate-workspace"],
+            Self::ValidateActions { .. } => vec!["validate-actions"],
             Self::ValidateModule { .. } => vec!["validate-module"],
         }
     }

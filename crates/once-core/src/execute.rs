@@ -6,8 +6,8 @@ use once_cas::{ActionResult, CacheProvider};
 use sha2::Digest as ShaDigest;
 
 use crate::{
-    local, outputs, remote, Action, CopyPathMode, Error, OutputSymlinkMode, PreparePathMode,
-    Result, SandboxMode, WorkspacePath,
+    contract, local, outputs, remote, Action, CopyPathMode, Error, OutputSymlinkMode,
+    PreparePathMode, Result, SandboxMode, WorkspacePath,
 };
 
 pub(crate) async fn run(
@@ -15,6 +15,7 @@ pub(crate) async fn run(
     workspace_root: &Path,
     cache: &CacheProvider,
     stream_to_parent: bool,
+    validate_contract: bool,
 ) -> Result<ActionResult> {
     match action {
         Action::RunCommand {
@@ -27,9 +28,10 @@ pub(crate) async fn run(
                 workspace_root,
                 cache,
                 stream_to_parent,
+                validate_contract,
             ))
             .await?;
-            if result.exit_code == 0 {
+            if result.exit_code == 0 && !validate_contract {
                 result.outputs =
                     outputs::capture(outputs, workspace_root, cache, *output_symlink_mode).await?;
             }
@@ -98,6 +100,7 @@ async fn execute_command(
     workspace_root: &Path,
     cache: &CacheProvider,
     stream_to_parent: bool,
+    validate_contract: bool,
 ) -> Result<ActionResult> {
     let Action::RunCommand {
         argv,
@@ -148,6 +151,7 @@ async fn execute_command(
                 cache,
                 redirect,
                 stream_to_parent,
+                validate_contract,
             )
             .await
         }
@@ -191,8 +195,10 @@ async fn execute_sandboxed_command(
     cache: &CacheProvider,
     redirect: local::Redirect<'_>,
     stream_to_parent: bool,
+    validate_contract: bool,
 ) -> Result<ActionResult> {
-    let sandbox = prepare_input_sandbox(action, inputs, cwd, workspace_root).await?;
+    let sandbox =
+        prepare_input_sandbox(action, inputs, cwd, workspace_root, validate_contract).await?;
     let result = if stream_to_parent {
         local::execute_command_streaming(
             argv,
@@ -218,11 +224,35 @@ async fn execute_sandboxed_command(
     };
 
     match result {
-        Ok(result) if result.exit_code == 0 => {
-            copy_sandbox_outputs(outputs, &sandbox.execroot, workspace_root).await?;
+        Ok(result) => {
+            if validate_contract {
+                let violations = contract::audit_filesystem(
+                    &sandbox.execroot,
+                    workspace_root,
+                    inputs,
+                    outputs,
+                    &sandbox.before_execroot,
+                    &sandbox.before_workspace,
+                    &result,
+                    cache,
+                )
+                .await
+                .map_err(|source| Error::FileAction {
+                    action: "audit_sandbox",
+                    path: sandbox.execroot.display().to_string(),
+                    source,
+                })?;
+                if !violations.is_empty() {
+                    return Err(Error::ContractViolation { violations });
+                }
+                return Ok(result);
+            }
+            if result.exit_code == 0 {
+                copy_sandbox_outputs(outputs, &sandbox.execroot, workspace_root).await?;
+            }
             Ok(result)
         }
-        other => other,
+        Err(error) => Err(error),
     }
 }
 
@@ -230,6 +260,8 @@ struct PreparedSandbox {
     root: std::path::PathBuf,
     execroot: std::path::PathBuf,
     keep: bool,
+    before_execroot: contract::ContractSnapshot,
+    before_workspace: contract::ContractSnapshot,
 }
 
 impl Drop for PreparedSandbox {
@@ -254,6 +286,7 @@ async fn prepare_input_sandbox(
     inputs: &[WorkspacePath],
     cwd: Option<&WorkspacePath>,
     workspace_root: &Path,
+    validate_contract: bool,
 ) -> Result<PreparedSandbox> {
     let root = workspace_root
         .join(".once")
@@ -265,11 +298,16 @@ async fn prepare_input_sandbox(
     let input_paths = inputs.to_vec();
     let cwd_path = cwd.cloned();
     let workspace = workspace_root.to_path_buf();
+    // Contract validation stages copies rather than symlinks so a probe that
+    // writes one of its declared inputs mutates the private execroot copy (where
+    // the audit still flags the write) instead of reaching through a symlink and
+    // corrupting the real workspace source the docs promise to leave untouched.
+    let copy_inputs = validate_contract;
     tokio::task::spawn_blocking(move || {
         remove_path_blocking(&sandbox_root)?;
         std::fs::create_dir_all(&sandbox_execroot)?;
         for input in input_paths {
-            stage_sandbox_input_blocking(&workspace, &sandbox_execroot, &input)?;
+            stage_sandbox_input_blocking(&workspace, &sandbox_execroot, &input, copy_inputs)?;
         }
         if let Some(cwd) = cwd_path {
             std::fs::create_dir_all(cwd.resolve(&sandbox_execroot))?;
@@ -288,10 +326,30 @@ async fn prepare_input_sandbox(
         source,
     })?;
 
+    let before_execroot = if validate_contract {
+        contract::snapshot_tree(&execroot, &[]).map_err(|source| Error::FileAction {
+            action: "snapshot_sandbox",
+            path: execroot.display().to_string(),
+            source,
+        })?
+    } else {
+        contract::ContractSnapshot(std::collections::BTreeMap::new())
+    };
+    let before_workspace = if validate_contract {
+        contract::snapshot_tree(workspace_root, &[".once"]).map_err(|source| Error::FileAction {
+            action: "snapshot_workspace",
+            path: workspace_root.display().to_string(),
+            source,
+        })?
+    } else {
+        contract::ContractSnapshot(std::collections::BTreeMap::new())
+    };
     Ok(PreparedSandbox {
         root,
         execroot,
         keep: keep_sandbox(),
+        before_execroot,
+        before_workspace,
     })
 }
 
@@ -304,9 +362,17 @@ fn stage_sandbox_input_blocking(
     workspace_root: &Path,
     sandbox_execroot: &Path,
     input: &WorkspacePath,
+    copy: bool,
 ) -> std::io::Result<()> {
     let source = input.resolve(workspace_root);
     let destination = input.resolve(sandbox_execroot);
+    if copy {
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        remove_path_blocking(&destination)?;
+        return copy_sandbox_output_blocking(&source, &destination);
+    }
     let metadata = std::fs::symlink_metadata(&source)?;
     if metadata.is_dir() && !metadata.file_type().is_symlink() {
         stage_sandbox_directory_blocking(&source, &destination)

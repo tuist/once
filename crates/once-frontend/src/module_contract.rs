@@ -110,7 +110,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             ),
             entry(
                 "run_action(argv, inputs = [], outputs = [], clean_paths = [], create_dirs = [], cwd = None, env = {}, toolchain_identity = None, identifier = None, cacheable = True, depends_on_prior_actions = True, stdout = None, stderr = None, sandbox = None)",
-                "Declare a direct executable invocation with explicit inputs, outputs, setup, caching, and sandbox policy.",
+                "Declare a direct executable invocation with explicit inputs, outputs, setup, caching, and sandbox policy. Use `once query validate-actions` to investigate filesystem contract drift without changing the sandbox policy.",
             ),
         ],
         test_contract: vec![
