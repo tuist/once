@@ -1,6 +1,6 @@
 [tools]
 erlang = "29.0.2"
-elixir = "1.20.1"
+elixir = "1.20.2"
 java = "17.0.2"
 android-sdk = "21.0"
 kotlin = "2.4.0"
