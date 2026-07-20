@@ -44,6 +44,28 @@ used for the build.
 The target emits `apple_linkable`, `apple_framework`, and
 `apple_bundle`.
 
+The provider separates link-time and runtime framework closures. A downstream
+link action links this framework, while the final application or test bundle
+receives every framework needed at runtime. Static archives consumed by this
+framework stop at the dynamic link boundary and are not linked into the final
+binary again.
+
+If a final link also reaches one of those absorbed archives through a separate
+static dependency, or two dynamic frameworks absorb the same archive, analysis
+reports the frameworks and duplicate archive, then explains how to repair the
+graph instead of producing two copies of the same code.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `framework_path` | string | Built framework directory |
+| `framework_module_name` | string | Module name used by direct consumers |
+| `framework_files` | list&lt;string&gt; | Framework outputs tracked by the action graph |
+| `transitive_archives` | list&lt;string&gt; | Empty after the dynamic link boundary |
+| `absorbed_static_archives` | list&lt;string&gt; | Static archives already linked into this framework |
+| `transitive_link_framework_bundles` | list&lt;record&gt; | Framework bundles a downstream link action must link directly |
+| `transitive_framework_bundles` | list&lt;record&gt; | De-duplicated runtime framework closure with paths, module names, files, and owning targets |
+| `transitive_frameworks` | list&lt;string&gt; | Compatibility view of runtime framework paths |
+
 ## Capabilities
 
 | Capability | Output groups |
@@ -61,6 +83,11 @@ The target emits `apple_linkable`, `apple_framework`, and
 | Module map | `.once/out/<target>/<product_name>.framework/Modules/module.modulemap` |
 | Property list | `.once/out/<target>/<product_name>.framework/Info.plist` |
 | Code signature | `.once/out/<target>/<product_name>.framework/_CodeSignature/CodeResources` |
+
+An application or test only needs to depend on the framework it uses directly.
+Once carries nested dynamic framework dependencies to the final bundle,
+de-duplicates them by framework path, embeds each bundle once, and signs the
+result.
 
 ## Limitations
 

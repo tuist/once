@@ -113,9 +113,14 @@ affected cache slots.
 | `transitive_sdk_dylibs` | list&lt;string&gt; | SDK dynamic libraries to link |
 | `transitive_linkopts` | list&lt;string&gt; | Extra linker flags |
 | `transitive_defines` | list&lt;string&gt; | Preprocessor / conditional compilation flags |
+| `transitive_link_framework_bundles` | list&lt;record&gt; | Dynamic framework bundles carried to the next link action |
+| `transitive_framework_bundles` | list&lt;record&gt; | Dynamic framework bundles carried to the final application or test bundle |
+| `transitive_frameworks` | list&lt;string&gt; | Compatibility view of runtime framework paths |
 
 Downstream Apple targets use this record to collect the complete compile and
-link context without inspecting the dependency's target kind.
+link context without inspecting the dependency's target kind. Dynamic
+framework dependencies continue through static libraries automatically, so a
+final application or test does not repeat dependencies that it never imports.
 
 ## Configurable attributes
 

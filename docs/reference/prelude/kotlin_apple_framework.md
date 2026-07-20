@@ -53,6 +53,8 @@ The target emits `kotlin_native_framework`, `apple_framework`,
 | `framework_path` | string | Built framework directory |
 | `framework_module_name` | string | Module name linked by Apple consumers |
 | `framework_files` | list&lt;string&gt; | Framework file outputs tracked by the action graph |
+| `transitive_link_framework_bundles` | list&lt;record&gt; | Framework bundles a downstream link action must link directly |
+| `transitive_framework_bundles` | list&lt;record&gt; | Framework bundles a final application or test must embed and sign |
 | `transitive_frameworks` | list&lt;string&gt; | Frameworks exposed to downstream Apple targets |
 
 ## Outputs

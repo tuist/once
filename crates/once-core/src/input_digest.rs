@@ -12,6 +12,9 @@ use std::path::Path;
 
 use once_cas::Digest;
 
+use crate::directory_blob::capture_directory_blob;
+use crate::OutputSymlinkMode;
+
 #[derive(Debug)]
 /// Build an input digest piece by piece.
 ///
@@ -57,18 +60,23 @@ impl InputDigestBuilder {
         self
     }
 
-    /// Hash a workspace-relative source file and append the result
-    /// keyed by the workspace-relative path. Streams the file through
-    /// [`Digest::of_reader`] so multi-megabyte sources never sit in
-    /// memory.
+    /// Hash a workspace-relative source file or directory and append
+    /// the result keyed by the workspace-relative path. Files stream
+    /// through [`Digest::of_reader`]; directories use the same stable
+    /// encoding as cached directory outputs.
     pub fn push_source<P: AsRef<Path>>(
         &mut self,
         workspace_root: P,
         ws_rel: &str,
     ) -> std::io::Result<&mut Self> {
         let abs = workspace_root.as_ref().join(ws_rel);
-        let file = std::fs::File::open(&abs)?;
-        let digest = Digest::of_reader(std::io::BufReader::new(file))?;
+        let digest = if std::fs::metadata(&abs)?.is_dir() {
+            let bytes = capture_directory_blob(&abs, OutputSymlinkMode::Preserve)?;
+            Digest::of_bytes(&bytes)
+        } else {
+            let file = std::fs::File::open(&abs)?;
+            Digest::of_reader(std::io::BufReader::new(file))?
+        };
         Ok(self.push_keyed(ws_rel.as_bytes(), &digest))
     }
 
@@ -132,6 +140,32 @@ mod tests {
             b.finish()
         };
         assert_ne!(first, third, "content change invalidates the digest");
+    }
+
+    #[test]
+    fn push_source_hashes_directory_contents() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("Framework.framework");
+        std::fs::create_dir_all(source.join("Modules")).unwrap();
+        std::fs::write(source.join("Framework"), b"binary").unwrap();
+        std::fs::write(
+            source.join("Modules/module.modulemap"),
+            b"module Framework {}",
+        )
+        .unwrap();
+
+        let digest = |tmp: &TempDir| {
+            let mut builder = InputDigestBuilder::new(b"test.input.v1");
+            builder
+                .push_source(tmp.path(), "Framework.framework")
+                .unwrap();
+            builder.finish()
+        };
+        let first = digest(&tmp);
+        assert_eq!(first, digest(&tmp));
+
+        std::fs::write(source.join("Framework"), b"changed").unwrap();
+        assert_ne!(first, digest(&tmp));
     }
 
     #[test]

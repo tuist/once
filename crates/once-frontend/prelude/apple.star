@@ -423,6 +423,81 @@ def _collect_transitive(deps, key, own_values):
                 out.append(value)
     return out
 
+def _apple_framework_bundle(path, module_name, files, label_id, absorbed_static_archives = []):
+    return {
+        "path": path,
+        "module_name": module_name,
+        "files": files,
+        "label_id": label_id,
+        "absorbed_static_archives": absorbed_static_archives,
+    }
+
+def _apple_legacy_framework_bundles(dep, include_transitive):
+    direct_path = dep.get("framework_path") or ""
+    paths = dep.get("transitive_frameworks") if include_transitive else None
+    if paths == None:
+        paths = [direct_path] if direct_path else []
+    out = []
+    for path in paths:
+        module_name = ""
+        files = []
+        absorbed_static_archives = []
+        if path == direct_path:
+            module_name = dep.get("framework_module_name") or ""
+            files = dep.get("framework_files") or []
+            absorbed_static_archives = dep.get("absorbed_static_archives") or []
+        out.append(_apple_framework_bundle(
+            path,
+            module_name,
+            files,
+            dep.get("label_id") or "",
+            absorbed_static_archives,
+        ))
+    return out
+
+def _apple_dep_framework_bundles(dep, key, include_transitive):
+    bundles = dep.get(key)
+    if bundles != None:
+        return bundles
+    return _apple_legacy_framework_bundles(dep, include_transitive)
+
+def _apple_collect_framework_bundles(deps, key, own_bundles, include_transitive):
+    seen = {}
+    out = []
+    for bundle in own_bundles:
+        path = bundle.get("path") or ""
+        if path and path not in seen:
+            seen[path] = True
+            out.append(bundle)
+    for dep in deps:
+        for bundle in _apple_dep_framework_bundles(dep, key, include_transitive):
+            path = bundle.get("path") or ""
+            if path and path not in seen:
+                seen[path] = True
+                out.append(bundle)
+    return out
+
+def _apple_collect_link_framework_bundles(deps, own_bundles = []):
+    return _apple_collect_framework_bundles(deps, "transitive_link_framework_bundles", own_bundles, False)
+
+def _apple_collect_runtime_framework_bundles(deps, own_bundles = []):
+    return _apple_collect_framework_bundles(deps, "transitive_framework_bundles", own_bundles, True)
+
+def _apple_framework_bundle_paths(bundles):
+    return [bundle["path"] for bundle in bundles]
+
+def _apple_validate_static_framework_diamonds(consumer_label, static_archives, framework_bundles):
+    absorbed_by = {}
+    for bundle in framework_bundles:
+        framework_label = bundle.get("label_id") or bundle.get("path") or "framework dependency"
+        for archive in bundle.get("absorbed_static_archives") or []:
+            if archive in static_archives:
+                fail(consumer_label + ": static archive `" + archive + "` is linked directly and is already part of dynamic framework `" + framework_label + "`; remove the duplicate static dependency or move the shared code behind one dynamic framework boundary")
+            previous_framework = absorbed_by.get(archive)
+            if previous_framework and previous_framework != framework_label:
+                fail(consumer_label + ": static archive `" + archive + "` is included by both dynamic framework `" + previous_framework + "` and `" + framework_label + "`; move the shared code behind one dynamic framework boundary")
+            absorbed_by[archive] = framework_label
+
 def _validate_apple_native_deps(deps, consumer_label):
     for dep in deps:
         if dep.get("target_kind") != "rust_library":
@@ -912,6 +987,16 @@ def _apple_library_impl(ctx):
         dylib = dep.get("plugin_dylib")
         if dylib and dylib not in plugin_dylibs:
             plugin_dylibs.append(dylib)
+    compile_framework_bundles = _apple_collect_link_framework_bundles(deps)
+    compile_framework_search_dirs = []
+    compile_framework_files = []
+    for bundle in compile_framework_bundles:
+        framework_parent = _parent_dir(bundle["path"])
+        if framework_parent and framework_parent not in compile_framework_search_dirs:
+            compile_framework_search_dirs.append(framework_parent)
+        for file in bundle.get("files") or []:
+            if file not in compile_framework_files:
+                compile_framework_files.append(file)
 
     # Own exported headers as workspace-relative paths, plus the
     # dirs we expose to consumers.
@@ -990,6 +1075,8 @@ def _apple_library_impl(ctx):
     transitive_linkopts = _collect_transitive(deps, "transitive_linkopts", linkopts)
     transitive_defines = _collect_transitive(deps, "transitive_defines", defines)
     transitive_alwayslink_archives = _collect_transitive(deps, "transitive_alwayslink_archives", [archive] if alwayslink else [])
+    transitive_link_framework_bundles = _apple_collect_link_framework_bundles(deps)
+    transitive_framework_bundles = _apple_collect_runtime_framework_bundles(deps)
 
     # --- Per-arch compile pipeline -----------------------------------
     # When a target requests a single architecture (the default,
@@ -1041,6 +1128,8 @@ def _apple_library_impl(ctx):
                 swift_base_argv.extend(["-weak_framework", framework])
             for dep_dir in compile_swiftmodule_dirs:
                 swift_base_argv.extend(["-I", dep_dir])
+            for framework_dir in compile_framework_search_dirs:
+                swift_base_argv.extend(["-F", framework_dir])
             # Header search paths flow through `-Xcc -I` so swiftc's
             # underlying Clang invocation (for bridging headers + ObjC
             # interop) can locate dep headers.
@@ -1080,6 +1169,9 @@ def _apple_library_impl(ctx):
             for dylib in plugin_dylibs:
                 if dylib not in swift_inputs:
                     swift_inputs.append(dylib)
+            for file in compile_framework_files:
+                if file not in swift_inputs:
+                    swift_inputs.append(file)
 
             swift_module_argv = list(swift_base_argv)
             swift_module_argv.extend([
@@ -1154,6 +1246,8 @@ def _apple_library_impl(ctx):
                     argv.extend(["-I", hdir])
                 for hdir in compile_header_dirs:
                     argv.extend(["-I", hdir])
+                for framework_dir in compile_framework_search_dirs:
+                    argv.extend(["-F", framework_dir])
                 for mmap in dep_modulemaps:
                     argv.append("-fmodule-map-file=" + mmap)
                 if hmap_path:
@@ -1169,6 +1263,9 @@ def _apple_library_impl(ctx):
                 for h in own_exported_headers:
                     if h not in inputs:
                         inputs.append(h)
+                for file in compile_framework_files:
+                    if file not in inputs:
+                        inputs.append(file)
                 run_action(
                     argv = argv,
                     inputs = inputs,
@@ -1267,6 +1364,9 @@ def _apple_library_impl(ctx):
         "transitive_sdk_dylibs": transitive_sdk_dylibs,
         "transitive_linkopts": transitive_linkopts,
         "transitive_defines": transitive_defines,
+        "transitive_link_framework_bundles": transitive_link_framework_bundles,
+        "transitive_framework_bundles": transitive_framework_bundles,
+        "transitive_frameworks": _apple_framework_bundle_paths(transitive_framework_bundles),
     }
 
 def _swift_macro_impl(ctx):
@@ -1436,15 +1536,15 @@ def _collect_dep_compile_inputs(deps, build_dir):
         for ar in dep.get("transitive_archives") or []:
             if ar and ar not in archives:
                 archives.append(ar)
-        framework_path = dep.get("framework_path")
-        if framework_path:
-            for f in dep.get("framework_files") or []:
+        for bundle in _apple_dep_framework_bundles(dep, "transitive_link_framework_bundles", False):
+            framework_path = bundle.get("path") or ""
+            for f in bundle.get("files") or []:
                 if f and f not in framework_files:
                     framework_files.append(f)
             framework_parent = _parent_dir(framework_path)
             if framework_parent and framework_parent not in framework_search_dirs:
                 framework_search_dirs.append(framework_parent)
-            module_name = dep.get("framework_module_name")
+            module_name = bundle.get("module_name") or ""
             if module_name and module_name not in framework_module_names:
                 framework_module_names.append(module_name)
         for fw in dep.get("transitive_sdk_frameworks") or []:
@@ -1526,6 +1626,7 @@ def _apple_framework_impl(ctx):
         dep_linkopts,
         plugin_dylibs,
     ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
+    _apple_validate_static_framework_diamonds(ctx["label"]["id"], dep_archives, _apple_collect_runtime_framework_bundles(deps))
 
     swift_argv = list(swiftc["argv"]) + [
         "-emit-library",
@@ -1635,15 +1736,23 @@ def _apple_framework_impl(ctx):
     )
 
     own_swiftmodule_dir = ctx["build_dir"] + "/" + framework_dir + "/Modules"
-    transitive_archives = _collect_transitive(deps, "transitive_archives", [])
+    absorbed_static_archives = _collect_transitive(deps, "transitive_archives", [])
     transitive_swiftmodule_dirs = _collect_transitive(deps, "transitive_swiftmodule_dirs", [own_swiftmodule_dir])
     transitive_sdk_frameworks = _collect_transitive(deps, "transitive_sdk_frameworks", sdk_frameworks_attr)
     transitive_weak_sdk_frameworks = _collect_transitive(deps, "transitive_weak_sdk_frameworks", weak_sdk_frameworks)
     transitive_sdk_dylibs = _collect_transitive(deps, "transitive_sdk_dylibs", sdk_dylibs_attr)
     transitive_linkopts = _collect_transitive(deps, "transitive_linkopts", linkopts)
-    transitive_frameworks = _collect_transitive(deps, "transitive_frameworks", [ctx["build_dir"] + "/" + framework_dir])
 
     framework_files = [dylib, swiftmodule, swiftdoc, modulemap, info_plist, cs_stamp]
+    own_framework_bundle = _apple_framework_bundle(
+        ctx["build_dir"] + "/" + framework_dir,
+        module_name,
+        framework_files,
+        ctx["label"]["id"],
+        absorbed_static_archives,
+    )
+    transitive_link_framework_bundles = [own_framework_bundle]
+    transitive_framework_bundles = _apple_collect_runtime_framework_bundles(deps, [own_framework_bundle])
 
     return {
         "label_id": ctx["label"]["id"],
@@ -1652,12 +1761,63 @@ def _apple_framework_impl(ctx):
         "framework_files": framework_files,
         "swiftmodule_dir": own_swiftmodule_dir,
         "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
-        "transitive_archives": transitive_archives,
-        "transitive_frameworks": transitive_frameworks,
+        "transitive_archives": [],
+        "absorbed_static_archives": absorbed_static_archives,
+        "transitive_link_framework_bundles": transitive_link_framework_bundles,
+        "transitive_framework_bundles": transitive_framework_bundles,
+        "transitive_frameworks": _apple_framework_bundle_paths(transitive_framework_bundles),
         "transitive_sdk_frameworks": transitive_sdk_frameworks,
         "transitive_weak_sdk_frameworks": transitive_weak_sdk_frameworks,
         "transitive_sdk_dylibs": transitive_sdk_dylibs,
         "transitive_linkopts": transitive_linkopts,
+    }
+
+def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesign, identifier_prefix):
+    embedded_paths = []
+    embedded_stamps = []
+    destination_sources = {}
+    for bundle in _apple_collect_runtime_framework_bundles(deps):
+        framework_path = bundle["path"]
+        framework_basename = _basename(framework_path)
+        previous_source = destination_sources.get(framework_basename)
+        if previous_source and previous_source != framework_path:
+            fail(ctx["label"]["id"] + ": framework bundle collision for `" + framework_basename + "` between `" + previous_source + "` and `" + framework_path + "`")
+        destination_sources[framework_basename] = framework_path
+        source_files = bundle.get("files") or [framework_path]
+        framework_prefix = framework_path + "/"
+        embedded_relative_path = bundle_dir + "/" + frameworks_dir + "/" + framework_basename
+        embed_outputs = []
+        for source in source_files:
+            if source == framework_path:
+                embed_outputs.append(declare_output(embedded_relative_path))
+                continue
+            if source.startswith(framework_prefix):
+                rel = source[len(framework_prefix):]
+                embed_outputs.append(declare_output(embedded_relative_path + "/" + rel))
+        embedded_stamp = declare_output(embedded_relative_path + "/_CodeSignature/CodeResources")
+        if embedded_stamp not in embed_outputs:
+            embed_outputs.append(embedded_stamp)
+        embedded_framework_path = ctx["build_dir"] + "/" + embedded_relative_path
+        embedded_paths.append(embedded_framework_path)
+        copy_path(
+            framework_path,
+            embedded_framework_path,
+            kind = "tree",
+            inputs = source_files,
+            identifier = identifier_prefix + "_copy_" + framework_basename,
+        )
+        run_action(
+            argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", embedded_framework_path],
+            inputs = [embedded_framework_path],
+            outputs = embed_outputs,
+            env = codesign["env"],
+            toolchain_identity = codesign["identity"],
+            identifier = identifier_prefix + "_" + framework_basename,
+        )
+        embedded_stamps.append(embedded_stamp)
+    return {
+        "paths": embedded_paths,
+        "stamps": embedded_stamps,
     }
 
 def shell_quote_for_action(path):
@@ -1784,6 +1944,7 @@ def _apple_application_impl(ctx):
         dep_linkopts,
         plugin_dylibs,
     ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
+    _apple_validate_static_framework_diamonds(ctx["label"]["id"], dep_archives, _apple_collect_runtime_framework_bundles(deps))
 
     swift_argv = list(swiftc["argv"]) + [
         "-module-name",
@@ -1878,65 +2039,22 @@ def _apple_application_impl(ctx):
     array_entries = {"UIDeviceFamily": device_family_codes}
     write_path(info_plist, _render_plist(plist_entries, bool_entries, array_entries))
 
-    # Embed each transitive dep framework into App.app/Frameworks/.
-    # Each framework is copied as a whole bundle directory and
-    # individually ad-hoc codesigned so the app's dyld loads them
-    # without rejecting the signature.
     codesign = _resolve_codesign(xcode_developer_dir)
-    embedded_stamps = []
-    dep_framework_paths = []
-    dep_framework_files = {}
-    for dep in deps:
-        framework_path = dep.get("framework_path")
-        if framework_path and framework_path not in dep_framework_paths:
-            dep_framework_paths.append(framework_path)
-            dep_framework_files[framework_path] = dep.get("framework_files") or []
-    for framework_path in dep_framework_paths:
-        framework_basename = _basename(framework_path)
-        source_files = dep_framework_files.get(framework_path) or []
-        # Declare every file that lands in the embedded framework so
-        # the Once runner preserves them. Map each source file
-        # (`<build_dir>/<fw>/<sub>`) to its embedded path
-        # (`<app>/Frameworks/<fw>/<sub>`) by stripping the framework
-        # path prefix.
-        framework_prefix = framework_path + "/"
-        embed_outputs = []
-        for source in source_files:
-            if source == framework_path:
-                embed_outputs.append(declare_output(app_dir + "/Frameworks/" + framework_basename))
-                continue
-            if source.startswith(framework_prefix):
-                rel = source[len(framework_prefix):]
-                embed_outputs.append(declare_output(app_dir + "/Frameworks/" + framework_basename + "/" + rel))
-        embedded_stamp = declare_output(app_dir + "/Frameworks/" + framework_basename + "/_CodeSignature/CodeResources")
-        if embedded_stamp not in embed_outputs:
-            embed_outputs.append(embedded_stamp)
-        embed_inputs = list(source_files)
-        embedded_framework_path = ctx["build_dir"] + "/" + app_dir + "/Frameworks/" + framework_basename
-        prepare_path(embedded_framework_path, kind = "remove", identifier = "apple_application_embed_clean_" + framework_basename)
-        copy_path(
-            framework_path,
-            embedded_framework_path,
-            kind = "tree",
-            inputs = embed_inputs,
-            identifier = "apple_application_embed_copy_" + framework_basename,
-        )
-        run_action(
-            argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", embedded_framework_path],
-            inputs = embed_inputs,
-            outputs = embed_outputs,
-            env = codesign["env"],
-            toolchain_identity = codesign["identity"],
-            identifier = "apple_application_embed_" + framework_basename,
-        )
-        embedded_stamps.append(embedded_stamp)
+    embedded_frameworks = _apple_embed_framework_bundles(
+        ctx,
+        deps,
+        app_dir,
+        "Frameworks",
+        codesign,
+        "apple_application_embed",
+    )
 
     # Ad-hoc codesign the .app bundle itself. Must run after embedded
     # frameworks land so their signature is included in the bundle's
     # resource envelope.
     app_cs_stamp = declare_output(app_dir + "/_CodeSignature/CodeResources")
     cs_inputs = [executable, info_plist]
-    for stamp in embedded_stamps:
+    for stamp in embedded_frameworks["stamps"]:
         cs_inputs.append(stamp)
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + app_dir],
@@ -2002,9 +2120,13 @@ def _apple_test_bundle_impl(ctx):
     if platform == "macos" or platform == "macosx":
         test_binary = declare_output(bundle_dir + "/Contents/MacOS/" + product_name)
         info_plist = declare_output(bundle_dir + "/Contents/Info.plist")
+        framework_bundle_dir = "Contents/Frameworks"
+        framework_loader_path = "@loader_path/../Frameworks"
     else:
         test_binary = declare_output(bundle_dir + "/" + product_name)
         info_plist = declare_output(bundle_dir + "/Info.plist")
+        framework_bundle_dir = "Frameworks"
+        framework_loader_path = "@loader_path/Frameworks"
     test_bundle_path = ctx["build_dir"] + "/" + bundle_dir
     runner_type = "swift_testing" if swift_testing else "xctest"
     # `xctest` and `simctl` are macOS-only runtime tools. Resolve
@@ -2038,6 +2160,7 @@ def _apple_test_bundle_impl(ctx):
         dep_linkopts,
         plugin_dylibs,
     ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
+    _apple_validate_static_framework_diamonds(ctx["label"]["id"], dep_archives, _apple_collect_runtime_framework_bundles(deps))
 
     # An XCTest bundle is a Mach-O loadable bundle; swiftc takes
     # `-emit-library` and the linker `-bundle` flag is plumbed through
@@ -2066,6 +2189,10 @@ def _apple_test_bundle_impl(ctx):
         "-rpath",
         "-Xlinker",
         xctest_usr_lib_dir,
+        "-Xlinker",
+        "-rpath",
+        "-Xlinker",
+        framework_loader_path,
         "-framework",
         "XCTest",
         "-o",
@@ -2140,14 +2267,24 @@ def _apple_test_bundle_impl(ctx):
     write_path(info_plist, _render_plist(plist_entries))
 
     codesign = _resolve_codesign(xcode_developer_dir)
+    embedded_frameworks = _apple_embed_framework_bundles(
+        ctx,
+        deps,
+        bundle_dir,
+        framework_bundle_dir,
+        codesign,
+        "apple_test_bundle_embed",
+    )
     if platform == "macos" or platform == "macosx":
         test_cs_stamp = declare_output(bundle_dir + "/Contents/_CodeSignature/CodeResources")
     else:
         test_cs_stamp = declare_output(bundle_dir + "/_CodeSignature/CodeResources")
+    test_codesign_inputs = [test_binary, info_plist]
+    test_codesign_inputs.extend(embedded_frameworks["stamps"])
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", test_bundle_path],
-        inputs = [test_binary, info_plist],
-        outputs = [test_cs_stamp],
+        inputs = test_codesign_inputs,
+        outputs = [test_binary, test_cs_stamp],
         env = codesign["env"],
         toolchain_identity = codesign["identity"],
         identifier = "apple_test_bundle_codesign_" + module_name,
@@ -2215,6 +2352,7 @@ exit "$status"
             runner_type = runner_type,
         )
         test_inputs = [test_binary, info_plist, test_cs_stamp]
+        test_inputs.extend(embedded_frameworks["paths"])
         for src in swift_srcs:
             if src not in test_inputs:
                 test_inputs.append(src)

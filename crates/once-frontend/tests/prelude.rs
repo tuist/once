@@ -29,6 +29,10 @@ fn action_by_identifier<'a>(store: &'a AnalysisStore, identifier: &str) -> &'a D
         .unwrap_or_else(|| panic!("missing action `{identifier}`"))
 }
 
+fn action_has_input_suffix(action: &DeclaredAction, suffix: &str) -> bool {
+    action.inputs.iter().any(|input| input.ends_with(suffix))
+}
+
 fn assert_target_kind_attrs(kind: &str, expected: &[&str]) {
     let schema = built_in_target_kind_schema(kind)
         .unwrap_or_else(|| panic!("missing target kind schema `{kind}`"));
@@ -4194,6 +4198,236 @@ result = repr(provider["app_path"])
         "{:?}",
         codesign.outputs
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_apple_framework_stops_static_links_and_propagates_runtime_frameworks() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("framework/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("Plugin.swift"), "import Support\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "xcrun":
+        return "/usr/bin/xcrun"
+    if name == "codesign":
+        return "/usr/bin/codesign"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--find" in argv:
+        return "/toolchain/" + argv[len(argv) - 1] + "\n"
+    if "--show-sdk-path" in argv:
+        return "/sdks/iPhoneSimulator.sdk\n"
+    if "--version" in argv:
+        return "Swift version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+support = {{
+    "path": ".once/out/support/Support.framework",
+    "module_name": "Support",
+    "files": [".once/out/support/Support.framework/Support"],
+    "label_id": "support/Support",
+}}
+ctx = {{
+    "label": {{
+        "package": "framework",
+        "name": "Plugin",
+        "id": "framework/Plugin",
+    }},
+    "attr": {{
+        "platform": "ios",
+        "bundle_id": "dev.once.Plugin",
+        "minimum_os": "17.0",
+        "sdk_variant": "simulator",
+    }},
+    "deps": [{{
+        "label_id": "static/Static",
+        "transitive_archives": [".once/out/static/Static.a"],
+        "transitive_link_framework_bundles": [support],
+        "transitive_framework_bundles": [support],
+    }}],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/framework/Plugin",
+    "capability": "build",
+}}
+provider = _apple_framework_impl(ctx)
+result = repr([
+    provider["transitive_archives"],
+    provider["absorbed_static_archives"],
+    [bundle["path"] for bundle in provider["transitive_link_framework_bundles"]],
+    [bundle["path"] for bundle in provider["transitive_framework_bundles"]],
+])
+"#
+    );
+    let store = store_for(workspace.path(), "framework");
+
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        "[[], [\".once/out/static/Static.a\"], [\".once/out/framework/Plugin/Plugin.framework\"], [\".once/out/framework/Plugin/Plugin.framework\", \".once/out/support/Support.framework\"]]"
+    );
+}
+
+#[test]
+fn prelude_apple_link_reports_static_framework_diamonds() {
+    let error = eval_prelude_function(
+        "_apple_validate_static_framework_diamonds",
+        r#"(
+            "app/App",
+            [".once/out/shared/Shared.a"],
+            [{
+                "path": ".once/out/plugin/Plugin.framework",
+                "label_id": "plugin/Plugin",
+                "absorbed_static_archives": [".once/out/shared/Shared.a"],
+            }],
+        )"#,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("app/App"), "{error}");
+    assert!(error.contains("plugin/Plugin"), "{error}");
+    assert!(
+        error.contains("remove the duplicate static dependency"),
+        "{error}"
+    );
+
+    let sibling_error = eval_prelude_function(
+        "_apple_validate_static_framework_diamonds",
+        r#"(
+            "app/App",
+            [],
+            [
+                {"label_id": "plugin/One", "absorbed_static_archives": ["Shared.a"]},
+                {"label_id": "plugin/Two", "absorbed_static_archives": ["Shared.a"]},
+            ],
+        )"#,
+    )
+    .unwrap_err();
+    assert!(sibling_error.contains("plugin/One"), "{sibling_error}");
+    assert!(sibling_error.contains("plugin/Two"), "{sibling_error}");
+}
+
+#[cfg(unix)]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn prelude_apple_test_bundle_stages_transitive_framework_runtime_closure() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("tests/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("PluginTests.swift"), "import XCTest\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "xcrun":
+        return "/usr/bin/xcrun"
+    if name == "codesign":
+        return "/usr/bin/codesign"
+    if name == "sh":
+        return "/bin/sh"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--find" in argv:
+        if argv[len(argv) - 1] == "swiftc":
+            return "/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc\n"
+        return "/toolchain/" + argv[len(argv) - 1] + "\n"
+    if "--show-sdk-path" in argv:
+        return "/sdks/MacOSX.sdk\n"
+    if "--show-sdk-platform-path" in argv:
+        return "/Platforms/MacOSX.platform\n"
+    if "--version" in argv:
+        return "Swift version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+plugin = {{
+    "path": ".once/out/plugin/Plugin.framework",
+    "module_name": "Plugin",
+    "files": [".once/out/plugin/Plugin.framework/Plugin"],
+    "label_id": "plugin/Plugin",
+}}
+support = {{
+    "path": ".once/out/support/Support.framework",
+    "module_name": "Support",
+    "label_id": "support/Support",
+}}
+ctx = {{
+    "label": {{
+        "package": "tests",
+        "name": "PluginTests",
+        "id": "tests/PluginTests",
+    }},
+    "attr": {{
+        "platform": "macos",
+        "minimum_os": "14.0",
+    }},
+    "deps": [{{
+        "label_id": "plugin/Plugin",
+        "transitive_link_framework_bundles": [plugin],
+        "transitive_framework_bundles": [plugin, support],
+    }}],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/tests/PluginTests",
+    "capability": "test",
+}}
+provider = _apple_test_bundle_impl(ctx)
+result = repr(provider["test_bundle_path"])
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "tests".to_string(),
+        ".once/out/tests/PluginTests".to_string(),
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert!(out.unwrap().contains("PluginTests.xctest"));
+    let compile = action_by_identifier(&store, "apple_test_bundle_compile_PluginTests");
+    assert!(compile
+        .argv
+        .windows(2)
+        .any(|args| args == ["-framework", "Plugin"]));
+    assert!(!compile
+        .argv
+        .windows(2)
+        .any(|args| args == ["-framework", "Support"]));
+    let plugin_embed = action_by_identifier(&store, "apple_test_bundle_embed_Plugin.framework");
+    let support_copy =
+        action_by_identifier(&store, "apple_test_bundle_embed_copy_Support.framework");
+    assert_eq!(support_copy.inputs, [".once/out/support/Support.framework"]);
+    let support_embed = action_by_identifier(&store, "apple_test_bundle_embed_Support.framework");
+    assert_eq!(
+        support_embed.inputs,
+        [".once/out/tests/PluginTests/PluginTests.xctest/Contents/Frameworks/Support.framework"]
+    );
+    let codesign = action_by_identifier(&store, "apple_test_bundle_codesign_PluginTests");
+    assert!(action_has_input_suffix(
+        codesign,
+        "Contents/Frameworks/Support.framework/_CodeSignature/CodeResources"
+    ));
+    assert!(codesign
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("Contents/MacOS/PluginTests")));
+    let runner = action_by_identifier(&store, "apple_xctest:tests/PluginTests");
+    assert!(action_has_input_suffix(
+        runner,
+        "Contents/Frameworks/Plugin.framework"
+    ));
+    assert!(action_has_input_suffix(
+        runner,
+        "Contents/Frameworks/Support.framework"
+    ));
+    assert!(!runner.cacheable);
+    for action in [compile, plugin_embed, support_copy, support_embed, codesign] {
+        assert!(action.cacheable);
+    }
 }
 
 #[cfg(unix)]

@@ -10,6 +10,11 @@ the
 [Apple software development kit (SDK)](https://developer.apple.com/documentation/xcode)
 used for the build.
 
+Tests do not need to repeat framework dependencies that belong to a plugin or
+library in their dependency graph. Once links only the direct framework
+boundary and stages the full runtime framework closure inside the test bundle
+before signing it.
+
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |
@@ -58,6 +63,7 @@ The target emits `apple_test_bundle`, `apple_bundle`, and `once_test_info`.
 | Other Apple platform test binary | `.once/out/<target>/<product_name>.xctest/<product_name>` |
 | macOS property list | `.once/out/<target>/<product_name>.xctest/Contents/Info.plist` |
 | Other Apple platform property list | `.once/out/<target>/<product_name>.xctest/Info.plist` |
+| Runtime frameworks | The test bundle's `Frameworks` directory when dependencies require them |
 | macOS code signature | `.once/out/<target>/<product_name>.xctest/Contents/_CodeSignature/CodeResources` |
 | Other Apple platform code signature | `.once/out/<target>/<product_name>.xctest/_CodeSignature/CodeResources` |
 | Test results | `.once/out/<target>/test/test_results.json` after `once test` |
