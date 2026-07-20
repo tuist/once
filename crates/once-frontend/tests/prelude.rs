@@ -4347,7 +4347,6 @@ plugin = {{
 support = {{
     "path": ".once/out/support/Support.framework",
     "module_name": "Support",
-    "files": [".once/out/support/Support.framework/Support"],
     "label_id": "support/Support",
 }}
 ctx = {{
@@ -4373,7 +4372,11 @@ provider = _apple_test_bundle_impl(ctx)
 result = repr(provider["test_bundle_path"])
 "#
     );
-    let store = store_for(workspace.path(), "tests");
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "tests".to_string(),
+        ".once/out/tests/PluginTests".to_string(),
+    );
 
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
@@ -4388,10 +4391,22 @@ result = repr(provider["test_bundle_path"])
         .windows(2)
         .any(|args| args == ["-framework", "Support"]));
     action_by_identifier(&store, "apple_test_bundle_embed_Plugin.framework");
-    action_by_identifier(&store, "apple_test_bundle_embed_Support.framework");
+    let support_copy =
+        action_by_identifier(&store, "apple_test_bundle_embed_copy_Support.framework");
+    assert_eq!(support_copy.inputs, [".once/out/support/Support.framework"]);
+    let support_embed = action_by_identifier(&store, "apple_test_bundle_embed_Support.framework");
+    assert_eq!(
+        support_embed.inputs,
+        [".once/out/tests/PluginTests/PluginTests.xctest/Contents/Frameworks/Support.framework"]
+    );
     let codesign = action_by_identifier(&store, "apple_test_bundle_codesign_PluginTests");
     assert!(codesign.inputs.iter().any(|input| input
         .ends_with("Contents/Frameworks/Support.framework/_CodeSignature/CodeResources")));
+    assert!(codesign
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("Contents/MacOS/PluginTests")));
+    assert!(store.actions.iter().all(|action| action.cacheable));
 }
 
 #[cfg(unix)]

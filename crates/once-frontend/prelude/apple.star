@@ -1782,7 +1782,7 @@ def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesi
         if previous_source and previous_source != framework_path:
             fail(ctx["label"]["id"] + ": framework bundle collision for `" + framework_basename + "` between `" + previous_source + "` and `" + framework_path + "`")
         destination_sources[framework_basename] = framework_path
-        source_files = bundle.get("files") or []
+        source_files = bundle.get("files") or [framework_path]
         framework_prefix = framework_path + "/"
         embedded_relative_path = bundle_dir + "/" + frameworks_dir + "/" + framework_basename
         embed_outputs = []
@@ -1797,7 +1797,6 @@ def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesi
         if embedded_stamp not in embed_outputs:
             embed_outputs.append(embedded_stamp)
         embedded_framework_path = ctx["build_dir"] + "/" + embedded_relative_path
-        prepare_path(embedded_framework_path, kind = "remove", identifier = identifier_prefix + "_clean_" + framework_basename)
         copy_path(
             framework_path,
             embedded_framework_path,
@@ -1807,7 +1806,7 @@ def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesi
         )
         run_action(
             argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", embedded_framework_path],
-            inputs = source_files,
+            inputs = [embedded_framework_path],
             outputs = embed_outputs,
             env = codesign["env"],
             toolchain_identity = codesign["identity"],
@@ -2280,7 +2279,7 @@ def _apple_test_bundle_impl(ctx):
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", test_bundle_path],
         inputs = test_codesign_inputs,
-        outputs = [test_cs_stamp],
+        outputs = [test_binary, test_cs_stamp],
         env = codesign["env"],
         toolchain_identity = codesign["identity"],
         identifier = "apple_test_bundle_codesign_" + module_name,
