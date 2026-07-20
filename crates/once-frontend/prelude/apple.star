@@ -1773,6 +1773,7 @@ def _apple_framework_impl(ctx):
     }
 
 def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesign, identifier_prefix):
+    embedded_paths = []
     embedded_stamps = []
     destination_sources = {}
     for bundle in _apple_collect_runtime_framework_bundles(deps):
@@ -1797,6 +1798,7 @@ def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesi
         if embedded_stamp not in embed_outputs:
             embed_outputs.append(embedded_stamp)
         embedded_framework_path = ctx["build_dir"] + "/" + embedded_relative_path
+        embedded_paths.append(embedded_framework_path)
         copy_path(
             framework_path,
             embedded_framework_path,
@@ -1813,7 +1815,10 @@ def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesi
             identifier = identifier_prefix + "_" + framework_basename,
         )
         embedded_stamps.append(embedded_stamp)
-    return embedded_stamps
+    return {
+        "paths": embedded_paths,
+        "stamps": embedded_stamps,
+    }
 
 def shell_quote_for_action(path):
     # Single-quote the path and escape any embedded single quotes by
@@ -2035,7 +2040,7 @@ def _apple_application_impl(ctx):
     write_path(info_plist, _render_plist(plist_entries, bool_entries, array_entries))
 
     codesign = _resolve_codesign(xcode_developer_dir)
-    embedded_stamps = _apple_embed_framework_bundles(
+    embedded_frameworks = _apple_embed_framework_bundles(
         ctx,
         deps,
         app_dir,
@@ -2049,7 +2054,7 @@ def _apple_application_impl(ctx):
     # resource envelope.
     app_cs_stamp = declare_output(app_dir + "/_CodeSignature/CodeResources")
     cs_inputs = [executable, info_plist]
-    for stamp in embedded_stamps:
+    for stamp in embedded_frameworks["stamps"]:
         cs_inputs.append(stamp)
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + app_dir],
@@ -2262,7 +2267,7 @@ def _apple_test_bundle_impl(ctx):
     write_path(info_plist, _render_plist(plist_entries))
 
     codesign = _resolve_codesign(xcode_developer_dir)
-    embedded_stamps = _apple_embed_framework_bundles(
+    embedded_frameworks = _apple_embed_framework_bundles(
         ctx,
         deps,
         bundle_dir,
@@ -2275,7 +2280,7 @@ def _apple_test_bundle_impl(ctx):
     else:
         test_cs_stamp = declare_output(bundle_dir + "/_CodeSignature/CodeResources")
     test_codesign_inputs = [test_binary, info_plist]
-    test_codesign_inputs.extend(embedded_stamps)
+    test_codesign_inputs.extend(embedded_frameworks["stamps"])
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", test_bundle_path],
         inputs = test_codesign_inputs,
@@ -2347,6 +2352,7 @@ exit "$status"
             runner_type = runner_type,
         )
         test_inputs = [test_binary, info_plist, test_cs_stamp]
+        test_inputs.extend(embedded_frameworks["paths"])
         for src in swift_srcs:
             if src not in test_inputs:
                 test_inputs.append(src)

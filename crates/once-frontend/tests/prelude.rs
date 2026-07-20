@@ -29,6 +29,10 @@ fn action_by_identifier<'a>(store: &'a AnalysisStore, identifier: &str) -> &'a D
         .unwrap_or_else(|| panic!("missing action `{identifier}`"))
 }
 
+fn action_has_input_suffix(action: &DeclaredAction, suffix: &str) -> bool {
+    action.inputs.iter().any(|input| input.ends_with(suffix))
+}
+
 fn assert_target_kind_attrs(kind: &str, expected: &[&str]) {
     let schema = built_in_target_kind_schema(kind)
         .unwrap_or_else(|| panic!("missing target kind schema `{kind}`"));
@@ -4310,6 +4314,7 @@ fn prelude_apple_link_reports_static_framework_diamonds() {
 
 #[cfg(unix)]
 #[test]
+#[allow(clippy::too_many_lines)]
 fn prelude_apple_test_bundle_stages_transitive_framework_runtime_closure() {
     let prelude = all_prelude_source();
     let workspace = TempDir::new().unwrap();
@@ -4323,6 +4328,8 @@ def host_which(name):
         return "/usr/bin/xcrun"
     if name == "codesign":
         return "/usr/bin/codesign"
+    if name == "sh":
+        return "/bin/sh"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
@@ -4366,7 +4373,7 @@ ctx = {{
     }}],
     "srcs": ["Sources/**/*.swift"],
     "build_dir": ".once/out/tests/PluginTests",
-    "capability": "build",
+    "capability": "test",
 }}
 provider = _apple_test_bundle_impl(ctx)
 result = repr(provider["test_bundle_path"])
@@ -4390,7 +4397,7 @@ result = repr(provider["test_bundle_path"])
         .argv
         .windows(2)
         .any(|args| args == ["-framework", "Support"]));
-    action_by_identifier(&store, "apple_test_bundle_embed_Plugin.framework");
+    let plugin_embed = action_by_identifier(&store, "apple_test_bundle_embed_Plugin.framework");
     let support_copy =
         action_by_identifier(&store, "apple_test_bundle_embed_copy_Support.framework");
     assert_eq!(support_copy.inputs, [".once/out/support/Support.framework"]);
@@ -4400,13 +4407,27 @@ result = repr(provider["test_bundle_path"])
         [".once/out/tests/PluginTests/PluginTests.xctest/Contents/Frameworks/Support.framework"]
     );
     let codesign = action_by_identifier(&store, "apple_test_bundle_codesign_PluginTests");
-    assert!(codesign.inputs.iter().any(|input| input
-        .ends_with("Contents/Frameworks/Support.framework/_CodeSignature/CodeResources")));
+    assert!(action_has_input_suffix(
+        codesign,
+        "Contents/Frameworks/Support.framework/_CodeSignature/CodeResources"
+    ));
     assert!(codesign
         .outputs
         .iter()
         .any(|output| output.ends_with("Contents/MacOS/PluginTests")));
-    assert!(store.actions.iter().all(|action| action.cacheable));
+    let runner = action_by_identifier(&store, "apple_xctest:tests/PluginTests");
+    assert!(action_has_input_suffix(
+        runner,
+        "Contents/Frameworks/Plugin.framework"
+    ));
+    assert!(action_has_input_suffix(
+        runner,
+        "Contents/Frameworks/Support.framework"
+    ));
+    assert!(!runner.cacheable);
+    for action in [compile, plugin_embed, support_copy, support_embed, codesign] {
+        assert!(action.cacheable);
+    }
 }
 
 #[cfg(unix)]
