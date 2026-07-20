@@ -73,7 +73,7 @@ fn resolve_provider_config(
         )),
         CacheProviderConfig::Named(binding) => {
             if let Some(provider) = workspace_providers.get(&binding.name) {
-                return Ok(resolve_named_workspace_provider(binding, provider.clone()));
+                return resolve_named_workspace_provider(binding, provider.clone());
             }
             let mut config = load_user_config(user_config_path)?;
             let provider =
@@ -144,23 +144,29 @@ fn resolve_named_provider(
 fn resolve_named_workspace_provider(
     binding: NamedCacheProviderConfig,
     provider: InfrastructureProviderConfig,
-) -> ResolvedCacheProviderConfig {
+) -> Result<ResolvedCacheProviderConfig> {
     let NamedCacheProviderConfig {
         name,
         account: binding_account,
         project: binding_project,
     } = binding;
     match provider {
-        InfrastructureProviderConfig::Local => ResolvedCacheProviderConfig::Local,
-        InfrastructureProviderConfig::Tuist(config) => {
-            ResolvedCacheProviderConfig::Tuist(ResolvedTuistCacheProviderConfig {
+        InfrastructureProviderConfig::Local => Ok(ResolvedCacheProviderConfig::Local),
+        InfrastructureProviderConfig::Microsandbox(_)
+        | InfrastructureProviderConfig::E2b(_)
+        | InfrastructureProviderConfig::Daytona(_) => Err(Error::Eval {
+            path: name.clone(),
+            message: format!("infrastructure `{name}` provides execution but not shared caching"),
+        }),
+        InfrastructureProviderConfig::Tuist(config) => Ok(ResolvedCacheProviderConfig::Tuist(
+            ResolvedTuistCacheProviderConfig {
                 provider_name: name,
                 url: config.url,
                 account: binding_account.or(config.account),
                 project: binding_project.or(config.project),
                 oauth_client_id: config.oauth_client_id,
-            })
-        }
+            },
+        )),
     }
 }
 

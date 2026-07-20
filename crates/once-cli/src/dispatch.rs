@@ -625,7 +625,7 @@ async fn dispatch_exec(
     args: commands::exec::ExecArgs,
 ) -> Result<ExitCode> {
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
-    commands::exec::exec(workspace, &cache, args, output).await
+    commands::exec::exec(workspace, xdg, &cache, args, output).await
 }
 
 #[allow(clippy::too_many_arguments)]

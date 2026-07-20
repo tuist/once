@@ -43,6 +43,37 @@ the same definitions.
 See [Modules](/reference/modules/) and [Infrastructure](/guide/infrastructure/)
 for the contracts owned by those tables.
 
+An execution-only provider can select a sandbox adapter and immutable tool
+environment:
+
+```toml
+[infrastructures.remote_tests]
+kind = "microsandbox"
+image = "node:22.18.0-alpine"
+
+[infrastructure.execution]
+provider = "remote_tests"
+```
+
+The provider name is a workspace policy label. Script headers and command-line
+options can select it without coupling the script to Microsandbox.
+
+Hosted execution providers select their immutable environment with a template
+or image:
+
+```toml
+[infrastructures.e2b_tests]
+kind = "e2b"
+template = "vitest-node-22"
+
+[infrastructures.daytona_tests]
+kind = "daytona"
+image = "node:22.18.0-bookworm"
+```
+
+E2B, Daytona, and Microsandbox provide execution only. Tuist provides shared
+caching. Bind each capability independently when a workspace uses both.
+
 ## Targets
 
 The root manifest and package manifests can declare one or more targets:

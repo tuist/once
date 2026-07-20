@@ -1,102 +1,137 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use once_cas::{ActionResult, CacheProvider};
-use serde::{Deserialize, Serialize};
 
-use super::join_path;
+use super::archive::{create_input_archive, install_output_archive, output_archive_file};
+use super::{join_path, PreparedCommand};
 use crate::stream::{self, Destination};
-use crate::{Error, Result, WorkspacePath};
+use crate::{Error, RemoteExecution, Result, WorkspacePath};
 
-#[derive(Debug)]
-struct Config {
-    sandbox: String,
-    api_url: String,
-    api_key: String,
-}
+mod cleanup;
+mod client;
+mod transport;
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ExecuteRequest {
-    command: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cwd: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    timeout: Option<u64>,
-}
+use cleanup::SandboxCleanup;
+use client::{Client, Config};
+use transport::ExecuteResponse;
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ExecuteResponse {
-    #[serde(default, alias = "exitCode")]
-    exit_code: Option<i32>,
-    #[serde(default)]
-    result: Option<String>,
-    #[serde(default)]
-    stdout: Option<String>,
-    #[serde(default)]
-    stderr: Option<String>,
-    #[serde(default)]
-    artifacts: Option<Artifacts>,
-}
-
-// Daytona has returned output in several shapes. Prefer the structured
-// artifact streams, then legacy stdout/stderr, then the older `result`
-// stdout fallback.
-#[derive(Deserialize)]
-struct Artifacts {
-    #[serde(default)]
-    stdout: Option<String>,
-    #[serde(default)]
-    stderr: Option<String>,
-}
+const GUEST_ROOT: &str = "/workspace";
+const INPUT_ARCHIVE: &str = "/tmp/once-inputs.tar";
+const OUTPUT_ARCHIVE: &str = "/tmp/once-outputs.tar";
 
 pub(super) async fn execute_command(
-    argv: &[String],
-    env: &BTreeMap<String, String>,
-    cwd: Option<&WorkspacePath>,
-    timeout_ms: Option<u64>,
+    remote: &RemoteExecution,
+    command: PreparedCommand<'_>,
+    workspace_root: &Path,
     cache: &CacheProvider,
     stream_to_parent: bool,
 ) -> Result<ActionResult> {
-    let config = config()?;
-    let request = ExecuteRequest {
-        command: command(argv, env)?,
-        cwd: Some(workdir(cwd)),
-        timeout: timeout_ms.map(timeout_secs),
-    };
-    let url = format!(
-        "{}/toolbox/{}/process/execute",
-        config.api_url.trim_end_matches('/'),
-        config.sandbox
-    );
-    let response = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(config.api_key)
-        .json(&request)
-        .send()
-        .await
-        .map_err(|source| Error::RemoteProviderHttp {
-            provider: "daytona".to_string(),
-            source,
-        })?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_else(|_| String::new());
-        return Err(Error::RemoteProviderApi {
-            provider: "daytona".to_string(),
-            message: format!("HTTP {status}: {body}"),
-        });
+    let config = Config::from_env()?;
+    let client = Client::new(config)?;
+    execute_with_client(
+        remote,
+        command,
+        workspace_root,
+        cache,
+        stream_to_parent,
+        client,
+    )
+    .await
+}
+
+async fn execute_with_client(
+    remote: &RemoteExecution,
+    command: PreparedCommand<'_>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+    client: Client,
+) -> Result<ActionResult> {
+    let sandbox = client
+        .create(
+            remote.environment.as_deref(),
+            command.resources,
+            command.timeout_ms,
+        )
+        .await?;
+    let cleanup = SandboxCleanup::new(client.clone(), sandbox.id.clone());
+
+    let result = async {
+        let archive = create_input_archive(workspace_root, command.inputs, "daytona").await?;
+        client
+            .upload(&sandbox, archive.path(), archive.len(), INPUT_ARCHIVE)
+            .await?;
+        ensure_success(
+            &client
+                .execute(
+                    &sandbox,
+                    &format!(
+                        "mkdir -p {} && tar -xf {} -C {}",
+                        shell_word(GUEST_ROOT),
+                        shell_word(INPUT_ARCHIVE),
+                        shell_word(GUEST_ROOT)
+                    ),
+                    None,
+                    &BTreeMap::new(),
+                    command.timeout_ms.map(timeout_secs),
+                )
+                .await?,
+            "staging declared inputs",
+        )?;
+
+        let response = client
+            .execute(
+                &sandbox,
+                &command_line(command.argv)?,
+                Some(&workdir(command.cwd)),
+                command.env,
+                command.timeout_ms.map(timeout_secs),
+            )
+            .await?;
+        let result = action_result(response, cache, stream_to_parent).await?;
+        if result.exit_code == 0 && !command.outputs.is_empty() {
+            ensure_success(
+                &client
+                    .execute(
+                        &sandbox,
+                        &pack_outputs_command(command.outputs),
+                        None,
+                        &BTreeMap::new(),
+                        command.timeout_ms.map(timeout_secs),
+                    )
+                    .await?,
+                "packing declared outputs",
+            )?;
+            let archive = output_archive_file(workspace_root)?;
+            client
+                .download(&sandbox, OUTPUT_ARCHIVE, archive.path())
+                .await?;
+            install_output_archive(archive.path(), workspace_root, command.outputs, "daytona")
+                .await?;
+        }
+        Ok(result)
     }
-    let response =
-        response
-            .json::<ExecuteResponse>()
-            .await
-            .map_err(|source| Error::RemoteProviderHttp {
-                provider: "daytona".to_string(),
-                source,
-            })?;
-    let exit_code = exit_code(&response)?;
-    let (stdout, stderr) = output_streams(response);
+    .await;
+
+    let cleanup_result = cleanup.run().await;
+    match (result, cleanup_result) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Ok(_), Err(error)) | (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(cleanup_error)) => {
+            tracing::warn!(provider = "daytona", %cleanup_error, "failed to delete remote sandbox after execution failure");
+            Err(error)
+        }
+    }
+}
+
+async fn action_result(
+    response: ExecuteResponse,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<ActionResult> {
+    let exit_code = response.exit_code()?;
+    let (stdout, stderr) = response.output_streams();
     stream::write_parent(&stdout, Destination::Stdout, stream_to_parent).await?;
     stream::write_parent(&stderr, Destination::Stderr, stream_to_parent).await?;
     let stdout = cache.put_blob(&stdout).await?;
@@ -109,93 +144,66 @@ pub(super) async fn execute_command(
     })
 }
 
-fn output_streams(response: ExecuteResponse) -> (Vec<u8>, Vec<u8>) {
-    let stdout = response
-        .artifacts
-        .as_ref()
-        .and_then(|artifacts| artifacts.stdout.clone())
-        .or(response.stdout)
-        .or(response.result)
-        .unwrap_or_default()
-        .into_bytes();
-    let stderr = response
-        .artifacts
-        .and_then(|artifacts| artifacts.stderr)
-        .or(response.stderr)
-        .unwrap_or_default()
-        .into_bytes();
-    (stdout, stderr)
-}
-
-fn exit_code(response: &ExecuteResponse) -> Result<i32> {
-    response.exit_code.ok_or_else(|| Error::RemoteProviderApi {
-        provider: "daytona".to_string(),
-        message: "Daytona response did not include an exit code".to_string(),
-    })
-}
-
-fn config() -> Result<Config> {
-    Ok(Config {
-        sandbox: env("ONCE_DAYTONA_SANDBOX", "the sandbox id or name")?,
-        api_url: std::env::var("ONCE_DAYTONA_API_URL")
-            .unwrap_or_else(|_| "https://proxy.app.daytona.io".to_string()),
-        api_key: std::env::var("ONCE_DAYTONA_API_KEY")
-            .or_else(|_| std::env::var("DAYTONA_API_KEY"))
-            .map_err(|_| Error::RemoteProviderConfig {
-                provider: "daytona".to_string(),
-                message: "set ONCE_DAYTONA_API_KEY or DAYTONA_API_KEY".to_string(),
-            })?,
-    })
-}
-
-fn env(name: &str, description: &str) -> Result<String> {
-    let value = std::env::var(name).map_err(|_| Error::RemoteProviderConfig {
-        provider: "daytona".to_string(),
-        message: format!("set {name} to {description}"),
-    })?;
-    if value.trim().is_empty() {
-        return Err(Error::RemoteProviderConfig {
-            provider: "daytona".to_string(),
-            message: format!("{name} cannot be empty"),
-        });
+fn ensure_success(response: &ExecuteResponse, operation: &str) -> Result<()> {
+    let exit_code = response.exit_code()?;
+    if exit_code == 0 {
+        return Ok(());
     }
-    Ok(value)
+    let (stdout, stderr) = response.output_streams();
+    let detail = String::from_utf8_lossy(&stderr);
+    let detail = if detail.trim().is_empty() {
+        String::from_utf8_lossy(&stdout)
+    } else {
+        detail
+    };
+    Err(Error::RemoteProviderApi {
+        provider: "daytona".to_string(),
+        message: format!("{operation} failed with exit code {exit_code}: {detail}"),
+    })
 }
 
-fn command(argv: &[String], env: &BTreeMap<String, String>) -> Result<String> {
+fn command_line(argv: &[String]) -> Result<String> {
     if argv.is_empty() {
         return Err(Error::EmptyArgv);
     }
+    Ok(argv
+        .iter()
+        .map(|word| shell_word(word))
+        .collect::<Vec<_>>()
+        .join(" "))
+}
 
-    let mut words = Vec::new();
-    if !env.is_empty() {
-        words.push(shell_word("env"));
-        words.push(shell_word("-i"));
-        words.extend(
-            env.iter()
-                .map(|(key, value)| shell_word(&format!("{key}={value}"))),
-        );
-    }
-    words.extend(argv.iter().map(|word| shell_word(word)));
-
-    Ok(words.join(" "))
+fn pack_outputs_command(outputs: &[WorkspacePath]) -> String {
+    let paths = outputs
+        .iter()
+        .map(|path| {
+            let relative = if path.as_str().is_empty() {
+                ".".to_string()
+            } else {
+                format!("./{}", path.as_str())
+            };
+            shell_word(&relative)
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "tar -cf {} -C {} {paths}",
+        shell_word(OUTPUT_ARCHIVE),
+        shell_word(GUEST_ROOT)
+    )
 }
 
 fn workdir(cwd: Option<&WorkspacePath>) -> String {
-    let root = std::env::var("ONCE_DAYTONA_WORKDIR").unwrap_or_else(|_| "/workspace".to_string());
-    match cwd {
-        Some(cwd) => join_path(&root, cwd.as_str()),
-        None => root,
-    }
+    cwd.map_or_else(
+        || GUEST_ROOT.to_string(),
+        |cwd| join_path(GUEST_ROOT, cwd.as_str()),
+    )
 }
 
 fn timeout_secs(timeout_ms: u64) -> u64 {
     timeout_ms.div_ceil(1000).max(1)
 }
 
-/// Quotes one POSIX sh word with single quotes. Embedded single quotes
-/// are represented as the standard close, escaped quote, reopen
-/// sequence.
 fn shell_word(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -203,89 +211,118 @@ fn shell_word(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote::test_server::{self, Response};
+    use crate::ResourceRequest;
 
     #[test]
-    fn response_requires_exit_code() {
-        let response = ExecuteResponse {
-            exit_code: None,
-            result: Some("ok".to_string()),
-            stdout: None,
-            stderr: None,
-            artifacts: None,
-        };
-
-        let error = exit_code(&response).unwrap_err();
-        assert!(
-            matches!(error, Error::RemoteProviderApi { ref provider, .. } if provider == "daytona")
-        );
-        assert!(error.to_string().contains("exit code"));
-    }
-
-    #[test]
-    fn command_quotes_argv_and_env() {
-        let env = BTreeMap::from([
-            ("EMPTY".to_string(), String::new()),
-            ("TOKEN".to_string(), "abc'123".to_string()),
-        ]);
-
-        let command = command(
-            &[
-                "printf".to_string(),
-                "%s".to_string(),
-                "hello world".to_string(),
-            ],
-            &env,
-        )
+    fn command_quotes_argv() {
+        let command = command_line(&[
+            "printf".to_string(),
+            "%s".to_string(),
+            "hello world".to_string(),
+        ])
         .unwrap();
-
-        assert_eq!(
-            command,
-            "'env' '-i' 'EMPTY=' 'TOKEN=abc'\\''123' 'printf' '%s' 'hello world'"
-        );
+        assert_eq!(command, "'printf' '%s' 'hello world'");
     }
 
     #[test]
-    fn shell_word_quotes_empty_values() {
-        assert_eq!(shell_word(""), "''");
+    fn output_paths_cannot_become_options() {
+        let command = pack_outputs_command(&[WorkspacePath::try_from("-danger").unwrap()]);
+        assert!(command.ends_with("'./-danger'"));
     }
 
-    #[test]
-    fn command_quotes_shell_metacharacters_in_env_values() {
-        let env = BTreeMap::from([(
-            "SPECIAL".to_string(),
-            "line 1\n$(echo nope)`uname`;$HOME".to_string(),
-        )]);
-
-        let command = command(&["printenv".to_string(), "SPECIAL".to_string()], &env).unwrap();
-
-        assert_eq!(
-            command,
-            "'env' '-i' 'SPECIAL=line 1\n$(echo nope)`uname`;$HOME' 'printenv' 'SPECIAL'"
-        );
-    }
-
-    #[test]
-    fn output_streams_use_documented_precedence() {
-        let response = ExecuteResponse {
-            exit_code: Some(0),
-            result: Some("result".to_string()),
-            stdout: Some("stdout".to_string()),
-            stderr: Some("stderr".to_string()),
-            artifacts: Some(Artifacts {
-                stdout: Some("artifact stdout".to_string()),
-                stderr: Some("artifact stderr".to_string()),
-            }),
+    #[tokio::test]
+    async fn deletes_the_sandbox_after_success() {
+        let (url, server) = test_server::spawn(vec![
+            Response::json(r#"{"id":"daytona-test","state":"started","toolboxProxyUrl":null}"#),
+            Response::empty(200),
+            Response::json(r#"{"exitCode":0,"result":""}"#),
+            Response::json(r#"{"exitCode":0,"result":"ok"}"#),
+            Response::json(r#"{"exitCode":0,"result":""}"#),
+            Response::tar_file("./reports/result.txt", b"passed\n"),
+            Response::empty(204),
+        ])
+        .await;
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::open_local(workspace.path().join("cache"));
+        let argv = vec!["true".to_string()];
+        let env = BTreeMap::new();
+        let resources = ResourceRequest::default();
+        let outputs = vec![WorkspacePath::try_from("reports").unwrap()];
+        let command = PreparedCommand {
+            argv: &argv,
+            env: &env,
+            cwd: None,
+            inputs: &[],
+            outputs: &outputs,
+            resources: &resources,
+            timeout_ms: None,
         };
+        let client = Client::new(Config::for_test(url.clone(), format!("{url}/toolbox"))).unwrap();
 
-        let (stdout, stderr) = output_streams(response);
+        let result = execute_with_client(
+            &RemoteExecution::provider("daytona"),
+            command,
+            workspace.path(),
+            &cache,
+            false,
+            client,
+        )
+        .await
+        .unwrap();
+        let requests = server.await.unwrap();
 
-        assert_eq!(stdout, b"artifact stdout");
-        assert_eq!(stderr, b"artifact stderr");
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("reports/result.txt")).unwrap(),
+            "passed\n"
+        );
+        assert!(requests
+            .iter()
+            .any(|request| request.method == "DELETE" && request.path == "/sandbox/daytona-test"));
+        let create: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(create["autoDeleteInterval"], 0);
     }
 
-    #[test]
-    fn timeout_uses_at_least_one_second() {
-        assert_eq!(timeout_secs(1), 1);
-        assert_eq!(timeout_secs(1_001), 2);
+    #[tokio::test]
+    async fn deletes_the_sandbox_when_upload_fails() {
+        let (url, server) = test_server::spawn(vec![
+            Response::json(r#"{"id":"daytona-test","state":"started","toolboxProxyUrl":null}"#),
+            Response::empty(500),
+            Response::empty(204),
+        ])
+        .await;
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::open_local(workspace.path().join("cache"));
+        let argv = vec!["true".to_string()];
+        let env = BTreeMap::new();
+        let resources = ResourceRequest::default();
+        let command = PreparedCommand {
+            argv: &argv,
+            env: &env,
+            cwd: None,
+            inputs: &[],
+            outputs: &[],
+            resources: &resources,
+            timeout_ms: None,
+        };
+        let client = Client::new(Config::for_test(url.clone(), format!("{url}/toolbox"))).unwrap();
+
+        let error = execute_with_client(
+            &RemoteExecution::provider("daytona"),
+            command,
+            workspace.path(),
+            &cache,
+            false,
+            client,
+        )
+        .await
+        .unwrap_err();
+        let requests = server.await.unwrap();
+
+        assert!(error.to_string().contains("500"));
+        assert!(requests
+            .iter()
+            .any(|request| request.method == "DELETE" && request.path == "/sandbox/daytona-test"));
     }
 }

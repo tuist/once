@@ -1,8 +1,8 @@
 # Tuist
 
-[Tuist](https://tuist.dev) lets Once share cache entries and execute commands
-across machines. Start with the cache, verify that another checkout can reuse a
-result, then add remote execution if the project needs it.
+[Tuist](https://tuist.dev) lets Once share cache entries across machines.
+Configure it when developers and coding agents should reuse the same action
+results.
 
 ## Configure The Cache
 
@@ -96,26 +96,9 @@ steps:
 
 The resulting session remains available for the rest of the job.
 
-## Add Remote Execution
-
-Bind execution to the same provider when commands should run through Tuist:
-
-```toml
-[infrastructure.execution]
-provider = "tuist"
-project = "preview-execution"
-```
-
-The `project` override is optional. It lets cache and execution use different
-Tuist projects while sharing the provider's account and authentication.
-
-Run a command remotely with the configured provider:
-
-```sh
-once exec --remote -- bash scripts/greet.sh
-```
-
 ## Next
 
-Read [Memory](/guide/memory/) to inspect the status, cache state, and action
-identity that Once records for each run.
+Add an [execution provider](/guide/infrastructure/remote-execution) when the
+command should also run away from the current computer. Read
+[Memory](/guide/memory/) to inspect the status, cache state, and action identity
+that Once records for each run.

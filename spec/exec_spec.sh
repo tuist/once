@@ -191,16 +191,49 @@ SH
     The stderr should include 'cache miss'
   End
 
+  It 'transfers only declared script inputs and retrieves microsandbox outputs'
+    Skip if 'microsandbox specs are opt-in' microsandbox_specs_disabled
+    copy_exec_fixture remote_dependency
+    printf hidden > "$WORKSPACE/undeclared.txt"
+
+    When call once exec --script -- /bin/sh scripts/test.sh
+    The status should be success
+    The stdout should equal 'source:test'
+    The stderr should include 'cache miss'
+    The file "$WORKSPACE/reports/vitest.json" should be exist
+    The contents of file "$WORKSPACE/reports/vitest.json" should include '"numPassedTests":1'
+    The path "$WORKSPACE/node_modules/.bin/vitest" should be symlink
+  End
+
+  It 'restores remote dependency and test outputs from cache'
+    Skip if 'microsandbox specs are opt-in' microsandbox_specs_disabled
+    copy_exec_fixture remote_dependency
+    printf hidden > "$WORKSPACE/undeclared.txt"
+    if [ "${ONCE_RUN_MICROSANDBOX_SPECS:-}" = "1" ]; then
+      once exec --script -- /bin/sh scripts/test.sh >/dev/null 2>&1
+      rm -rf "$WORKSPACE/node_modules" "$WORKSPACE/reports"
+      printf changed > "$WORKSPACE/undeclared.txt"
+    fi
+
+    When call once exec --script -- /bin/sh scripts/test.sh
+    The status should be success
+    The stdout should equal 'source:test'
+    The stderr should include 'cache hit'
+    The file "$WORKSPACE/reports/vitest.json" should be exist
+    The contents of file "$WORKSPACE/reports/vitest.json" should include '"numPassedTests":1'
+    The path "$WORKSPACE/node_modules/.bin/vitest" should be symlink
+  End
+
   It 'runs a command through the daytona compute provider'
     copy_exec_fixture daytona
-    python3 "$WORKSPACE/daytona_api.py" > "$WORKSPACE/daytona_port" &
+    python3 "$WORKSPACE/daytona_api.py" "$WORKSPACE/daytona_deleted" > "$WORKSPACE/daytona_port" &
     while [ ! -s "$WORKSPACE/daytona_port" ]; do sleep 0.05; done
     port="$(cat "$WORKSPACE/daytona_port")"
-    When call env ONCE_DAYTONA_SANDBOX=sandbox-1 ONCE_DAYTONA_API_URL="http://127.0.0.1:$port" ONCE_DAYTONA_API_KEY=token-1 ONCE_DAYTONA_WORKDIR="$WORKSPACE" "$ONCE_BIN" -C "$WORKSPACE" exec --remote --compute daytona -e VALUE=output -- /bin/sh -c 'printf "daytona-$VALUE"'
+    When call env ONCE_DAYTONA_CONTROL_URL="http://127.0.0.1:$port/api" ONCE_DAYTONA_TOOLBOX_URL="http://127.0.0.1:$port/toolbox" ONCE_DAYTONA_API_KEY=token-1 "$ONCE_BIN" -C "$WORKSPACE" exec --remote --compute daytona -e VALUE=output -- /bin/sh -c 'printf "daytona-$VALUE"'
     The status should be success
     The stdout should equal 'daytona-output'
-    The stderr should include 'daytona stderr'
     The stderr should include 'cache miss'
+    The file "$WORKSPACE/daytona_deleted" should be exist
   End
 
   It 'propagates the underlying exit code'

@@ -4,34 +4,41 @@ prev: false
 
 # Infrastructure
 
-Once uses a local cache by default. You do not need infrastructure
-configuration to run a cacheable script or graph target on one machine.
+Once works locally without configuration. Infrastructure becomes useful when
+you want to run an action on another machine or share a cached result with
+another developer or coding agent.
 
-## Start Locally
+## Run An Action Somewhere Else
 
-Run the [scripted workflow](/guide/scripted/) twice:
+Choose a named execution provider in the repository root `once.toml`:
 
-```sh
-./scripts/greet.sh
-./scripts/greet.sh
+```toml
+[infrastructures.remote_tests]
+kind = "e2b"
+template = "vitest-node-22"
+
+[infrastructure.execution]
+provider = "remote_tests"
 ```
 
-The first run reports a cache miss. The second reports a cache hit and restores
-the declared output from the local cache.
-
-This local behavior remains available after a shared provider is configured.
-Set `ONCE_CACHE_PROVIDER=local` for one process when you want to bypass the
-workspace's remote cache setting:
+Then run a literal command through that provider:
 
 ```sh
-ONCE_CACHE_PROVIDER=local ./scripts/greet.sh
+once exec --remote -- node --version
 ```
+
+Annotated scripts can select the same provider with
+`# once remote "remote_tests"`. Once creates a clean execution root, transfers
+only declared inputs, runs the command, retrieves declared outputs after a
+successful exit, and deletes the machine.
+
+Read [Remote Execution](/guide/infrastructure/remote-execution) for the full
+action lifecycle and a real Vitest workflow.
 
 ## Share Results Across Machines
 
-Add a named provider to the repository root `once.toml` when teammates or
-automation runners on different machines should reuse the same results. Bind
-the cache capability to that provider:
+A cache provider lets another machine reuse an action result instead of
+running it again:
 
 ```toml
 [infrastructures.tuist]
@@ -43,44 +50,33 @@ project = "app"
 provider = "tuist"
 ```
 
-The provider table holds shared connection settings. The capability table
-chooses which named provider supplies the cache.
-
-After authenticating, run the same script on two machines with identical
-inputs. The first machine reports a cache miss and uploads the result. A second
-machine whose local cache has not seen the result should report a cache hit and
-restore the output. That hit verifies that the configured provider supplied the
-result.
-
-## Configure Remote Execution Separately
-
-A provider can supply more than one capability. Bind remote execution only when
-commands should also run on that provider:
-
-```toml
-[infrastructure.execution]
-provider = "tuist"
-project = "preview-execution"
-```
-
-The capability can override the provider's default project. With this
-configuration, `--remote` uses the bound execution provider:
-
-```sh
-once exec --remote -- bash scripts/greet.sh
-```
-
-Pass `--compute <provider>` to choose a different execution provider for one
-command.
+The execution and cache capabilities are independent. A repository can run
+actions through E2B or Daytona while storing reusable results through Tuist.
+It can also use either capability on its own.
 
 ## Available Providers
 
-- [Tuist](/guide/infrastructure/tuist) provides shared cache and remote
-  execution.
+| Provider | Capability | Environment | Best fit |
+| --- | --- | --- | --- |
+| [Microsandbox](/guide/infrastructure/microsandbox) | Execution | Local image | Validate an action boundary on the current computer. |
+| [E2B](/guide/infrastructure/e2b) | Execution | Hosted template | Start a prepared hosted environment quickly. |
+| [Daytona](/guide/infrastructure/daytona) | Execution | Hosted container image | Build a hosted environment from a familiar image. |
+| [Tuist](/guide/infrastructure/tuist) | Shared cache | Not applicable | Reuse action results across machines. |
+
+## Keep A Local Escape Hatch
+
+The local cache remains available after a shared cache is configured. Set
+`ONCE_CACHE_PROVIDER=local` for one invocation:
+
+```sh
+ONCE_CACHE_PROVIDER=local ./scripts/greet.sh
+```
+
+For execution, omit `--remote` to run on the current computer. Pass
+`--compute <provider>` with `--remote` to choose a different named execution
+provider for one invocation.
 
 ## Next
 
-Follow the [Tuist setup guide](/guide/infrastructure/tuist) to configure
-authentication and verify a shared result. Continue to
-[Memory](/guide/memory/) to inspect the evidence that Once records after work
-runs.
+Start with [Remote Execution](/guide/infrastructure/remote-execution), then
+open the setup guide for the provider you want to use.

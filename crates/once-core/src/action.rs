@@ -13,7 +13,7 @@ use crate::{ResourceRequest, WorkspacePath};
 /// that should invalidate the cache. Older action result JSON still
 /// deserializes through serde defaults; the domain only partitions new
 /// action lookups.
-pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v7\0";
+pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v8\0";
 
 static DEFAULT_RESOURCE_REQUEST: LazyLock<ResourceRequest> =
     LazyLock::new(ResourceRequest::default);
@@ -127,7 +127,7 @@ pub enum Action {
         /// part of the action key so local and remote runs never share
         /// a cache slot by accident.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        remote: Option<RemoteExecution>,
+        remote: Option<Box<RemoteExecution>>,
     },
     WriteFile {
         path: WorkspacePath,
@@ -219,7 +219,14 @@ impl Action {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub struct RemoteExecution {
+    /// Named infrastructure configuration used for placement and logs.
     pub provider: String,
+    /// Executor adapter. When absent, the provider name identifies the adapter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor: Option<String>,
+    /// Immutable toolchain image, snapshot, or template used for this action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,6 +237,8 @@ impl RemoteExecution {
     pub fn provider(provider: impl Into<String>) -> Self {
         Self {
             provider: provider.into(),
+            executor: None,
+            environment: None,
             account: None,
             project: None,
         }
@@ -280,5 +289,31 @@ mod tests {
         assert_ne!(base.digest(), with_stdout.digest());
         assert_ne!(base.digest(), with_stderr.digest());
         assert_ne!(with_stdout.digest(), with_stderr.digest());
+    }
+
+    #[test]
+    fn remote_environment_changes_action_digest() {
+        let mut first = action(OutputSymlinkMode::default());
+        let mut second = first.clone();
+        if let Action::RunCommand { remote, .. } = &mut first {
+            *remote = Some(Box::new(RemoteExecution {
+                provider: "remote_tests".to_string(),
+                executor: Some("microsandbox".to_string()),
+                environment: Some("node:22.18.0-alpine".to_string()),
+                account: None,
+                project: None,
+            }));
+        }
+        if let Action::RunCommand { remote, .. } = &mut second {
+            *remote = Some(Box::new(RemoteExecution {
+                provider: "remote_tests".to_string(),
+                executor: Some("microsandbox".to_string()),
+                environment: Some("node:24.4.1-alpine".to_string()),
+                account: None,
+                project: None,
+            }));
+        }
+
+        assert_ne!(first.digest(), second.digest());
     }
 }

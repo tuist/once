@@ -112,7 +112,7 @@ async fn file_script_action(
             resources,
             sandbox: SandboxMode::default(),
             timeout_ms,
-            remote,
+            remote: remote.map(Box::new),
         },
         output: String::new(),
         output_dir: None,

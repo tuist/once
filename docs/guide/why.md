@@ -64,4 +64,6 @@ targets while keeping the same cache, build, run, and test workflow.
 ## Next
 
 Continue with [Getting Started](/guide/getting-started) to install Once and
-reuse the result of a cacheable script.
+reuse the result of a cacheable script. If running work away from the current
+computer is your main interest, read
+[Remote Execution](/guide/infrastructure/remote-execution).

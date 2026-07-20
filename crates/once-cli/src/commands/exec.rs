@@ -24,7 +24,7 @@ use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     tool_env, workspace_tool_command, workspace_tool_env, Action, CacheState, EvidenceSubject,
     InputDigestBuilder, OutputSymlinkMode, RemoteExecution, ResourceRequest, RunOpts, SandboxMode,
-    WorkspacePath,
+    WorkspacePath, Xdg,
 };
 use once_frontend::{parse_script_annotations, ScriptAnnotations};
 use serde::Serialize;
@@ -77,25 +77,28 @@ struct ScriptInvocation {
 }
 
 #[derive(Clone)]
-struct ScriptGraphOptions {
+struct ScriptGraphOptions<'a> {
     explicit_env: BTreeMap<String, String>,
     timeout_ms_override: Option<u64>,
     remote_override: Option<RemoteExecution>,
     sandbox: SandboxMode,
+    xdg: Option<&'a Xdg>,
 }
 
-struct ScriptExecutionOptions {
+struct ScriptExecutionOptions<'a> {
     explicit_env: Vec<(String, String)>,
     cwd_override: Option<WorkspacePath>,
     timeout_ms_override: Option<u64>,
     remote_override: Option<RemoteExecution>,
     sandbox: SandboxMode,
+    xdg: Option<&'a Xdg>,
 }
 
 #[derive(Clone)]
 struct DependencyFingerprint {
     script_path: String,
     digest: Digest,
+    outputs: Vec<WorkspacePath>,
 }
 
 #[derive(Debug)]
@@ -111,6 +114,7 @@ struct FingerprintShell {
 
 pub async fn exec(
     workspace: &Path,
+    xdg: &Xdg,
     cache: &CacheProvider,
     args: ExecArgs,
     output: Output,
@@ -118,7 +122,7 @@ pub async fn exec(
     let opts = RunOpts {
         cache_failures: args.cache_failures,
     };
-    let (workspace, action) = plan_exec_action(workspace, cache, opts, args).await?;
+    let (workspace, action) = plan_exec_action(workspace, xdg, cache, opts, args).await?;
     let streams_live = action_remote(&action).is_some() && output.format == Format::Human;
     let outcome = run_exec_action(cache, &workspace, opts, &action, streams_live).await?;
     crate::commands::evidence::record_outcome(
@@ -135,6 +139,7 @@ pub async fn exec(
 
 async fn plan_exec_action(
     workspace: &Path,
+    xdg: &Xdg,
     cache: &CacheProvider,
     opts: RunOpts,
     args: ExecArgs,
@@ -155,6 +160,7 @@ async fn plan_exec_action(
         timeout_ms_override: timeout_ms,
         remote_override: remote,
         sandbox,
+        xdg: Some(xdg),
     };
 
     if script {
@@ -179,7 +185,7 @@ async fn plan_exec_action(
                 resources: ResourceRequest::default(),
                 sandbox,
                 timeout_ms: options.timeout_ms_override,
-                remote: options.remote_override,
+                remote: options.remote_override.map(Box::new),
             },
         ))
     }
@@ -277,6 +283,7 @@ async fn script_action(
         timeout_ms_override,
         remote_override,
         SandboxMode::Off,
+        None,
         argv,
     )
     .await?;
@@ -286,7 +293,7 @@ async fn script_action(
         &[],
         &[],
     )?);
-    let action = action_from_script_invocation(&invocation, input_digest).await?;
+    let action = action_from_script_invocation(&invocation, input_digest, &[]).await?;
     Ok((invocation.workspace.clone(), action))
 }
 
@@ -294,14 +301,15 @@ async fn script_action_with_dependencies(
     workspace: &Path,
     cache: &CacheProvider,
     opts: RunOpts,
-    options: &ScriptExecutionOptions,
+    options: &ScriptExecutionOptions<'_>,
     argv: &[String],
 ) -> Result<(PathBuf, Action)> {
-    let graph_options = ScriptGraphOptions {
+    let mut graph_options = ScriptGraphOptions {
         explicit_env: options.explicit_env.iter().cloned().collect(),
         timeout_ms_override: options.timeout_ms_override,
         remote_override: options.remote_override.clone(),
         sandbox: options.sandbox,
+        xdg: options.xdg,
     };
     let invocation = script_invocation(
         workspace,
@@ -310,17 +318,26 @@ async fn script_action_with_dependencies(
         graph_options.timeout_ms_override,
         graph_options.remote_override.clone(),
         graph_options.sandbox,
+        graph_options.xdg,
         argv,
     )
     .await?;
+    if graph_options.remote_override.is_none() {
+        graph_options.remote_override = invocation.remote.clone();
+    }
     script_action_with_dependency_graph(cache, opts, invocation, graph_options).await
 }
 
 async fn action_from_script_invocation(
     invocation: &ScriptInvocation,
     input_digest: Option<Digest>,
+    dependencies: &[DependencyFingerprint],
 ) -> Result<Action> {
-    let mut argv = resolve_runtime(&invocation.workspace, &invocation.runtime).await?;
+    let mut argv = if invocation.remote.is_some() {
+        vec![invocation.runtime.clone()]
+    } else {
+        resolve_runtime(&invocation.workspace, &invocation.runtime).await?
+    };
     argv.extend(invocation.runtime_args.clone());
     argv.push(host_script_path(
         invocation.script_path.as_str(),
@@ -328,12 +345,21 @@ async fn action_from_script_invocation(
     )?);
     argv.extend(invocation.script_args.clone());
 
+    let mut inputs = invocation.inputs.clone();
+    inputs.extend(
+        dependencies
+            .iter()
+            .flat_map(|dependency| dependency.outputs.iter().cloned()),
+    );
+    inputs.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    inputs.dedup();
+
     Ok(Action::RunCommand {
         argv,
         env: invocation.env.clone(),
         cwd: Some(invocation.cwd.clone()),
         input_digest,
-        inputs: invocation.inputs.clone(),
+        inputs,
         outputs: invocation.outputs.clone(),
         stdout_path: None,
         stderr_path: None,
@@ -341,7 +367,7 @@ async fn action_from_script_invocation(
         resources: ResourceRequest::default(),
         sandbox: invocation.sandbox,
         timeout_ms: invocation.timeout_ms,
-        remote: invocation.remote.clone(),
+        remote: invocation.remote.clone().map(Box::new),
     })
 }
 
@@ -349,9 +375,29 @@ fn remote_execution(provider: Option<&str>) -> Option<RemoteExecution> {
     provider.map(RemoteExecution::provider)
 }
 
+fn resolve_script_remote(
+    workspace: &Path,
+    xdg: Option<&Xdg>,
+    remote_override: Option<RemoteExecution>,
+    annotation_provider: Option<&str>,
+) -> Result<Option<RemoteExecution>> {
+    if remote_override.is_some() {
+        return Ok(remote_override);
+    }
+    let Some(provider) = annotation_provider else {
+        return Ok(None);
+    };
+    match xdg {
+        Some(xdg) => crate::cache_provider::resolve_execution(workspace, xdg, Some(provider))
+            .map(Some)
+            .with_context(|| format!("resolving remote execution provider `{provider}`")),
+        None => Ok(remote_execution(Some(provider))),
+    }
+}
+
 fn action_remote(action: &Action) -> Option<&RemoteExecution> {
     match action {
-        Action::RunCommand { remote, .. } => remote.as_ref(),
+        Action::RunCommand { remote, .. } => remote.as_deref(),
         _ => None,
     }
 }
@@ -360,7 +406,7 @@ async fn autodetected_script_action(
     cache: &CacheProvider,
     opts: RunOpts,
     workspace: &Path,
-    options: &ScriptExecutionOptions,
+    options: &ScriptExecutionOptions<'_>,
     argv: &[String],
 ) -> Result<Option<(PathBuf, Action)>> {
     let Ok((_, _, script_arg, _)) = parse_script_exec_argv(workspace, argv) else {
@@ -388,7 +434,7 @@ async fn script_action_with_dependency_graph(
     cache: &CacheProvider,
     opts: RunOpts,
     invocation: ScriptInvocation,
-    graph_options: ScriptGraphOptions,
+    graph_options: ScriptGraphOptions<'_>,
 ) -> Result<(PathBuf, Action)> {
     let root_id = invocation.script_path.as_str().to_string();
     let graph = collect_script_graph(invocation, &graph_options).await?;
@@ -404,13 +450,14 @@ async fn script_action_with_dependency_graph(
         &dependency_fingerprints,
         &fingerprints,
     )?);
-    let action = action_from_script_invocation(root, input_digest).await?;
+    let action =
+        action_from_script_invocation(root, input_digest, &dependency_fingerprints).await?;
     Ok((root.workspace.clone(), action))
 }
 
 async fn collect_script_graph(
     root: ScriptInvocation,
-    graph_options: &ScriptGraphOptions,
+    graph_options: &ScriptGraphOptions<'_>,
 ) -> Result<BTreeMap<String, ScriptInvocation>> {
     let mut graph = BTreeMap::new();
     let mut stack = Vec::new();
@@ -420,7 +467,7 @@ async fn collect_script_graph(
 
 fn collect_script_node<'a>(
     invocation: ScriptInvocation,
-    graph_options: &'a ScriptGraphOptions,
+    graph_options: &'a ScriptGraphOptions<'a>,
     graph: &'a mut BTreeMap<String, ScriptInvocation>,
     stack: &'a mut Vec<String>,
 ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
@@ -449,7 +496,7 @@ fn collect_script_node<'a>(
 
 async fn dependency_script_invocation(
     workspace: &Path,
-    graph_options: &ScriptGraphOptions,
+    graph_options: &ScriptGraphOptions<'_>,
     script_path: &WorkspacePath,
 ) -> Result<ScriptInvocation> {
     let script_arg = script_path.as_str();
@@ -467,6 +514,7 @@ async fn dependency_script_invocation(
         graph_options.timeout_ms_override,
         graph_options.remote_override.clone(),
         graph_options.sandbox,
+        graph_options.xdg,
     )
     .await
 }
@@ -554,7 +602,8 @@ async fn run_dependency_script(
         &dependency_fingerprints,
         &run_fingerprint_commands(&invocation).await?,
     )?);
-    let action = action_from_script_invocation(&invocation, input_digest).await?;
+    let action =
+        action_from_script_invocation(&invocation, input_digest, &dependency_fingerprints).await?;
     let outcome = runner
         .run(&action)
         .await
@@ -568,6 +617,7 @@ async fn run_dependency_script(
     Ok(DependencyFingerprint {
         script_path: invocation.script_path.as_str().to_string(),
         digest: dependency_output_digest(&outcome),
+        outputs: invocation.outputs,
     })
 }
 
@@ -724,6 +774,7 @@ fn exit_status_text(status: std::process::ExitStatus) -> String {
         .map_or_else(|| "signal".to_string(), |code| format!("exit code {code}"))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn script_invocation(
     workspace: &Path,
     explicit_env: BTreeMap<String, String>,
@@ -731,6 +782,7 @@ async fn script_invocation(
     timeout_ms_override: Option<u64>,
     remote_override: Option<RemoteExecution>,
     sandbox: SandboxMode,
+    xdg: Option<&Xdg>,
     argv: &[String],
 ) -> Result<ScriptInvocation> {
     let (runtime, runtime_args, script_arg, script_args) = parse_script_exec_argv(workspace, argv)?;
@@ -748,6 +800,7 @@ async fn script_invocation(
         timeout_ms_override,
         remote_override,
         sandbox,
+        xdg,
     )
     .await
 }
@@ -764,6 +817,7 @@ async fn script_invocation_from_annotations(
     timeout_ms_override: Option<u64>,
     remote_override: Option<RemoteExecution>,
     sandbox: SandboxMode,
+    xdg: Option<&Xdg>,
 ) -> Result<ScriptInvocation> {
     let workspace =
         resolve_script_workspace(workspace, script_abs, &annotations, cwd_override.as_ref())?;
@@ -804,8 +858,20 @@ async fn script_invocation_from_annotations(
         None => resolve_script_cwd(&script_dir, annotations.cwd.as_deref())?,
     };
     let timeout_ms = timeout_ms_override;
-    let env = script_env(&workspace, &runtime, &annotations.env_vars, explicit_env).await?;
-    let remote = remote_override.or_else(|| remote_execution(annotations.remote.as_deref()));
+    let remote = resolve_script_remote(
+        &workspace,
+        xdg,
+        remote_override,
+        annotations.remote.as_deref(),
+    )?;
+    let env = script_env(
+        &workspace,
+        &runtime,
+        &annotations.env_vars,
+        explicit_env,
+        remote.is_some(),
+    )
+    .await?;
     let output_symlink_mode = output_symlink_mode(annotations.output_symlinks.as_deref())?;
 
     Ok(ScriptInvocation {
@@ -1186,9 +1252,12 @@ async fn script_env(
     runtime: &str,
     env_vars: &[String],
     explicit_env: BTreeMap<String, String>,
+    remote: bool,
 ) -> Result<BTreeMap<String, String>> {
     let env_keys = env_vars.iter().map(String::as_str).collect::<Vec<_>>();
-    let mut out = if runtime.contains('/') {
+    let mut out = if remote {
+        BTreeMap::new()
+    } else if runtime.contains('/') {
         tool_env(&env_keys)
     } else {
         workspace_tool_env(workspace, &[runtime], &env_keys)
@@ -1235,6 +1304,16 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    fn xdg_under(root: &Path) -> Xdg {
+        Xdg {
+            cache_home: root.join("cache"),
+            state_home: root.join("state"),
+            data_home: root.join("data"),
+            config_home: root.join("config"),
+            runtime_dir: root.join("runtime"),
+        }
+    }
 
     #[test]
     fn finds_script_after_runtime_args() {
@@ -1306,6 +1385,7 @@ mod tests {
                 timeout_ms_override: None,
                 remote_override: None,
                 sandbox: SandboxMode::default(),
+                xdg: None,
             },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
@@ -1325,6 +1405,77 @@ mod tests {
         assert_eq!(argv, vec!["/bin/bash".to_string(), "build.sh".to_string()]);
         assert_eq!(cwd.unwrap().as_str(), "scripts");
         assert!(input_digest.is_some());
+    }
+
+    #[tokio::test]
+    async fn remote_script_resolves_named_executor_and_dependency_outputs() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        let script = tmp.path().join("scripts").join("test.sh");
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
+        fs::write(
+            tmp.path().join("once.toml"),
+            r#"
+[infrastructures.remote_tests]
+kind = "microsandbox"
+image = "node:22.18.0-alpine"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            &script,
+            "#!/bin/sh\n# once remote \"remote_tests\"\n# once input \"../tests\"\ntrue\n",
+        )
+        .unwrap();
+        fs::create_dir(tmp.path().join("tests")).unwrap();
+
+        let invocation = script_invocation(
+            tmp.path(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            SandboxMode::Off,
+            Some(&xdg),
+            &["/bin/sh".to_string(), "scripts/test.sh".to_string()],
+        )
+        .await
+        .unwrap();
+        let action = action_from_script_invocation(
+            &invocation,
+            None,
+            &[DependencyFingerprint {
+                script_path: "scripts/install.sh".to_string(),
+                digest: Digest::of_bytes(b"dependencies"),
+                outputs: vec![WorkspacePath::try_from("node_modules").unwrap()],
+            }],
+        )
+        .await
+        .unwrap();
+
+        let Action::RunCommand {
+            argv,
+            env,
+            inputs,
+            remote,
+            ..
+        } = action
+        else {
+            panic!("script action should produce a command action");
+        };
+        assert_eq!(argv, vec!["/bin/sh".to_string(), "test.sh".to_string()]);
+        assert!(env.is_empty());
+        assert!(inputs.iter().any(|input| input.as_str() == "node_modules"));
+        assert_eq!(
+            remote,
+            Some(Box::new(RemoteExecution {
+                provider: "remote_tests".to_string(),
+                executor: Some("microsandbox".to_string()),
+                environment: Some("node:22.18.0-alpine".to_string()),
+                account: None,
+                project: None,
+            }))
+        );
     }
 
     #[tokio::test]
@@ -1478,6 +1629,7 @@ mod tests {
                 timeout_ms_override: None,
                 remote_override: None,
                 sandbox: SandboxMode::default(),
+                xdg: None,
             },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
         )
@@ -1504,6 +1656,7 @@ mod tests {
                 timeout_ms_override: None,
                 remote_override: None,
                 sandbox: SandboxMode::default(),
+                xdg: None,
             },
             &["/bin/sh".to_string(), "build.sh".to_string()],
         )
