@@ -47,7 +47,7 @@ def source_reference(system, symbol, url, use_when, content_digest = None):
         "content_digest": content_digest,
     }
 
-def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, tools = [], source_references = []):
+def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, resolver = None, tools = [], source_references = []):
     return {
         "_once_target_kind": True,
         "kind": kind,
@@ -60,9 +60,10 @@ def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], c
         "examples": examples,
         "source_references": source_references,
         "impl": impl,
+        "resolver": resolver,
     }
 
-def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, tools = [], source_references = []):
+def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, resolver = None, tools = [], source_references = []):
     return target_kind(
         kind = kind,
         docs = docs,
@@ -72,9 +73,21 @@ def rule(kind = None, docs = "", attrs = [], deps = [], providers = [], capabili
         capabilities = capabilities,
         examples = examples,
         impl = impl,
+        resolver = resolver,
         tools = tools,
         source_references = source_references,
     )
+
+def _resolver_snapshot_inputs(files, excluded_paths = []):
+    excluded = {}
+    for path in excluded_paths:
+        if path:
+            excluded[path[2:] if path.startswith("./") else path] = True
+    return {
+        path: content
+        for path, content in (files or {}).items()
+        if not excluded.get(path)
+    }
 
 def _ends_with(value, suffix):
     if len(value) < len(suffix):

@@ -2369,6 +2369,469 @@ exit "$status"
 
     return provider
 
+def _swiftpm_sanitize(value):
+    lowered = value.lower()
+    out = ""
+    previous_dash = False
+    for index in range(len(lowered)):
+        character = lowered[index]
+        allowed = character in "abcdefghijklmnopqrstuvwxyz0123456789"
+        if allowed:
+            out += character
+            previous_dash = False
+        elif out and not previous_dash:
+            out += "-"
+            previous_dash = True
+    if _ends_with(out, "-"):
+        out = out[:len(out) - 1]
+    return out or "package"
+
+def _swiftpm_normalized_pin(raw):
+    state = raw.get("state") or {}
+    identity = raw.get("identity") or raw.get("package") or ""
+    location = raw.get("location") or raw.get("repositoryURL") or ""
+    if not identity and location:
+        identity = _basename(location)
+        if _ends_with(identity, ".git"):
+            identity = identity[:len(identity) - 4]
+    if not identity:
+        fail("Package.resolved contains a pin without an identity or location")
+    return {
+        "identity": identity.lower(),
+        "kind": raw.get("kind") or "remoteSourceControl",
+        "location": location,
+        "version": state.get("version") or "",
+        "revision": state.get("revision") or "",
+        "branch": state.get("branch") or "",
+        "checksum": state.get("checksum") or raw.get("checksum") or "",
+    }
+
+def _swiftpm_resolved_pins(document):
+    version = document.get("version")
+    if version == 1:
+        raw_pins = (document.get("object") or {}).get("pins") or []
+    elif version == 2 or version == 3:
+        raw_pins = document.get("pins") or []
+    else:
+        fail("unsupported Package.resolved schema version `" + str(version) + "`; expected 1, 2, or 3")
+    pins = []
+    seen = {}
+    for raw in raw_pins:
+        pin = _swiftpm_normalized_pin(raw)
+        identity = pin["identity"]
+        if identity in seen:
+            fail("Package.resolved contains duplicate identity `" + identity + "`")
+        seen[identity] = True
+        pins.append(pin)
+    return pins
+
+def _swiftpm_visit_graph_node(node, nodes, visiting, depth):
+    identity = (node.get("identity") or node.get("name") or "").lower()
+    if not identity:
+        fail("Swift package graph contains a dependency without an identity")
+    if depth > 1024:
+        fail("Swift package graph exceeds the maximum dependency depth of 1024")
+    if visiting.get(identity):
+        fail("Swift package graph contains a dependency cycle through `" + identity + "`")
+    existing = nodes.get(identity)
+    if existing:
+        return
+    visiting[identity] = True
+    dependencies = []
+    for child in node.get("dependencies") or []:
+        child_identity = (child.get("identity") or child.get("name") or "").lower()
+        if not child_identity:
+            fail("Swift package graph dependency under `" + identity + "` has no identity")
+        if child_identity not in dependencies:
+            dependencies.append(child_identity)
+        _swiftpm_visit_graph_node(child, nodes, visiting, depth + 1)
+    visiting.pop(identity)
+    nodes[identity] = {
+        "identity": identity,
+        "name": node.get("name") or identity,
+        "location": node.get("url") or "",
+        "path": node.get("path") or "",
+        "version": node.get("version") or "",
+        "dependencies": dependencies,
+    }
+
+def _swiftpm_graph_nodes(root):
+    nodes = {}
+    visiting = {}
+
+    for dependency in root.get("dependencies") or []:
+        _swiftpm_visit_graph_node(dependency, nodes, visiting, 1)
+    return nodes
+
+def _swiftpm_pin_requires_network(pin):
+    kind = (pin.get("kind") or "").lower()
+    return kind not in ["local", "localsourcecontrol", "filesystem"]
+
+def _swiftpm_pin_token(pin):
+    checksum = pin.get("checksum") or ""
+    revision = pin.get("revision") or ""
+    version = pin.get("version") or ""
+    branch = pin.get("branch") or ""
+    if checksum:
+        return "checksum-" + _swiftpm_sanitize(checksum[:12])
+    if revision:
+        return "revision-" + _swiftpm_sanitize(revision[:12])
+    if version:
+        return "version-" + _swiftpm_sanitize(version)
+    if branch:
+        return "branch-" + _swiftpm_sanitize(branch)
+    return "local"
+
+def _swiftpm_target_name(pin):
+    return "swiftpm-" + _swiftpm_sanitize(pin["identity"]) + "-" + _swiftpm_pin_token(pin)
+
+def _swiftpm_workspace_path(path):
+    if not path:
+        return ""
+    root = workspace_root().replace("\\", "/")
+    normalized = path.replace("\\", "/")
+    if "://" in normalized or normalized.startswith("git@"):
+        return ""
+    if normalized == ".." or normalized.startswith("../") or "/../" in normalized or normalized.endswith("/.."):
+        return ""
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    prefix = root + "/"
+    if normalized.startswith(prefix):
+        return normalized[len(prefix):]
+    if normalized == root or normalized.startswith("/"):
+        return ""
+    if len(normalized) > 2 and normalized[1] == ":":
+        return ""
+    return normalized
+
+def _swiftpm_graph_target_specs(pins, graph):
+    graph_nodes = _swiftpm_graph_nodes(graph)
+    pins_by_identity = {}
+    for pin in pins:
+        pins_by_identity[pin["identity"]] = pin
+        node = graph_nodes.get(pin["identity"])
+        if node == None:
+            fail("Swift package graph is stale relative to Package.resolved; locked package `" + pin["identity"] + "` is missing")
+        pin_version = pin.get("version") or ""
+        node_version = node.get("version") or ""
+        if pin_version and node_version and node_version != "unspecified" and pin_version != node_version:
+            fail("Swift package graph version `" + node_version + "` for `" + pin["identity"] + "` does not match Package.resolved version `" + pin_version + "`")
+
+    combined = {}
+    for identity, node in graph_nodes.items():
+        pin = pins_by_identity.get(identity)
+        if pin:
+            combined[identity] = dict(pin)
+        else:
+            local_path = _swiftpm_workspace_path(node.get("location") or node.get("path") or "")
+            if not local_path:
+                fail("Swift package graph is stale relative to Package.resolved; package `" + identity + "` is neither locked nor a workspace-local dependency")
+            combined[identity] = {
+                "identity": identity,
+                "kind": "localSourceControl",
+                "location": local_path,
+                "version": "",
+                "revision": "",
+                "branch": "",
+                "checksum": "",
+            }
+
+    names = {}
+    for identity, pin in combined.items():
+        name = _swiftpm_target_name(pin)
+        if name in names.values():
+            fail("Swift package identities produce duplicate synthetic target `" + name + "`")
+        names[identity] = name
+
+    targets = []
+    for identity in sorted(combined.keys()):
+        pin = combined[identity]
+        node = graph_nodes.get(identity) or {}
+        deps = []
+        for dependency in node.get("dependencies") or []:
+            dependency_name = names.get(dependency)
+            if dependency_name:
+                deps.append("./" + dependency_name)
+        checkout_path = _swiftpm_workspace_path(node.get("path") or "")
+        targets.append({
+            "name": names[identity],
+            "kind": "swift_package_pin",
+            "deps": deps,
+            "attrs": {
+                "identity": identity,
+                "package_name": node.get("name") or identity,
+                "source_kind": pin.get("kind") or "",
+                "location": pin.get("location") or node.get("location") or "",
+                "version": pin.get("version") or "",
+                "revision": pin.get("revision") or "",
+                "branch": pin.get("branch") or "",
+                "checksum": pin.get("checksum") or "",
+                "checkout_path": checkout_path,
+            },
+        })
+
+    roots = []
+    for node in graph.get("dependencies") or []:
+        identity = (node.get("identity") or node.get("name") or "").lower()
+        name = names.get(identity)
+        if name and name not in roots:
+            roots.append(name)
+    remote_identities = []
+    locked_pins = []
+    for identity in sorted(combined.keys()):
+        pin = combined[identity]
+        locked_pins.append("\x1f".join([
+            identity,
+            pin.get("kind") or "",
+            pin.get("location") or "",
+            pin.get("version") or "",
+            pin.get("revision") or "",
+            pin.get("branch") or "",
+            pin.get("checksum") or "",
+        ]))
+        if _swiftpm_pin_requires_network(pin):
+            remote_identities.append(identity)
+    return {
+        "targets": targets,
+        "roots": roots,
+        "attrs": {
+            "resolved_identities": sorted(combined.keys()),
+            "_remote_identities": remote_identities,
+            "_locked_pins": locked_pins,
+        },
+    }
+
+def _swiftpm_package_file(attrs, value):
+    package_path = attrs.get("package_path") or "."
+    if package_path.startswith("./"):
+        package_path = package_path[2:]
+    if not package_path or package_path == ".":
+        return value
+    if package_path.endswith("/"):
+        package_path = package_path[:-1]
+    if value.startswith(package_path + "/"):
+        return value
+    return package_path + "/" + value
+
+def _swiftpm_manifest_file(attrs):
+    return _swiftpm_package_file(attrs, "Package.swift")
+
+def _swiftpm_package_path(ctx, value):
+    package = ctx["label"]["package"]
+    if not value or value == ".":
+        return package or "."
+    if value.startswith("/") or (len(value) > 2 and value[1] == ":"):
+        fail(ctx["label"]["id"] + ": Swift package paths must be workspace-relative, got `" + value + "`")
+    if value.startswith("./"):
+        value = value[2:]
+    if value == ".." or value.startswith("../") or "/../" in value:
+        fail(ctx["label"]["id"] + ": Swift package paths must stay inside the owner package, got `" + value + "`")
+    if package:
+        return package + "/" + value
+    return value
+
+def _swiftpm_build_triple_dir(platform, sdk_variant, arch):
+    return _apple_triple(platform, "", sdk_variant, arch, False)
+
+def _swiftpm_absolute_package_path(ctx, value):
+    path = _swiftpm_package_path(ctx, value)
+    if path.startswith("/"):
+        return path
+    return workspace_root() + "/" + path
+
+def _swiftpm_swift_executable(requested_swift, xcode_developer_dir, swiftc_path):
+    if xcode_developer_dir:
+        return _xctoolchain_bin(xcode_developer_dir, "swift")
+    if not requested_swift or requested_swift == "swift":
+        return _parent_dir(swiftc_path) + "/swift"
+    swift = _resolve_host_executable(requested_swift)
+    if not swift:
+        fail("unable to resolve Swift executable `" + requested_swift + "`")
+    return swift
+
+def _swift_package_dependencies_resolver(ctx):
+    attrs = ctx["attrs"]
+    files = ctx["files"]
+    resolved_file = _swiftpm_package_file(attrs, attrs.get("resolved_file") or "Package.resolved")
+    resolved_content = files.get(resolved_file)
+    if resolved_content == None:
+        fail(ctx["label"]["id"] + ": resolver source `" + resolved_file + "` is missing; include it in resolver_inputs, or srcs when resolver_inputs is omitted")
+    pins = _swiftpm_resolved_pins(json_decode(resolved_content))
+    manifest_file = _swiftpm_manifest_file(attrs)
+    manifest_content = files.get(manifest_file)
+    if manifest_content == None:
+        fail(ctx["label"]["id"] + ": Swift package manifest `" + manifest_file + "` is missing; include it in resolver_inputs, or srcs when resolver_inputs is omitted")
+
+    graph_file_value = attrs.get("graph_file") or ""
+    graph_file = _swiftpm_package_file(attrs, graph_file_value) if graph_file_value else ""
+    if graph_file:
+        graph_content = files.get(graph_file)
+        if graph_content == None:
+            fail(ctx["label"]["id"] + ": graph snapshot `" + graph_file + "` is missing; include it in resolver_inputs, or srcs when resolver_inputs is omitted")
+        graph_snapshot = json_decode(graph_content)
+        if graph_snapshot.get("once_manifest") == None:
+            fail(ctx["label"]["id"] + ": Swift package graph snapshot `" + graph_file + "` has no manifest binding")
+        if graph_snapshot["once_manifest"] != manifest_content:
+            fail(ctx["label"]["id"] + ": Swift package graph snapshot `" + graph_file + "` is stale relative to `" + manifest_file + "`")
+        if graph_snapshot.get("once_resolved") == None:
+            fail(ctx["label"]["id"] + ": Swift package graph snapshot `" + graph_file + "` has no resolved-file binding")
+        if graph_snapshot["once_resolved"] != resolved_content:
+            fail(ctx["label"]["id"] + ": Swift package graph snapshot `" + graph_file + "` is stale relative to `" + resolved_file + "`")
+        expected_inputs = _resolver_snapshot_inputs(files, [graph_file])
+        if graph_snapshot.get("once_inputs") != expected_inputs:
+            fail(ctx["label"]["id"] + ": Swift package graph snapshot `" + graph_file + "` input binding does not match resolver_inputs")
+    else:
+        xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
+        platform = attrs.get("platform") or "macos"
+        sdk_variant = attrs.get("sdk_variant") or "simulator"
+        swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
+        swift = _swiftpm_swift_executable(attrs.get("swift") or "swift", xcode_developer_dir, swiftc["swiftc_path"])
+        package_path = _swiftpm_absolute_package_path(ctx, attrs.get("package_path") or ".")
+        argv = [
+            swift,
+            "package",
+            "--package-path", package_path,
+            "--force-resolved-versions",
+        ]
+        vendor_path = attrs.get("vendor_path") or ""
+        allow_network = attrs.get("allow_network") or False
+        remote_identities = []
+        for pin in pins:
+            if _swiftpm_pin_requires_network(pin):
+                remote_identities.append(pin["identity"])
+        if remote_identities and not vendor_path and not allow_network:
+            fail(ctx["label"]["id"] + ": live graph inspection for remote Swift packages requires explicit network permission; check in graph_file or set allow_network = true")
+        if vendor_path:
+            fail(ctx["label"]["id"] + ": vendor_path requires a checked-in graph_file so graph loading never mutates the vendored Swift Package Manager scratch tree")
+        resolver_scratch = workspace_root() + "/.once/tmp/swiftpm-resolver/" + _swiftpm_sanitize(ctx["label"]["id"])
+        argv.extend(["--scratch-path", resolver_scratch])
+        argv.extend(["show-dependencies", "--format", "json"])
+        graph_content = host_command(argv, env = _developer_env(xcode_developer_dir))
+    graph = graph_snapshot if graph_file else json_decode(graph_content)
+    return _swiftpm_graph_target_specs(pins, graph)
+
+def _swift_package_pin_impl(ctx):
+    attrs = ctx["attr"]
+    dependencies = []
+    for dep in ctx["deps"]:
+        if dep.get("swift_package_pin"):
+            dependencies.append(dep.get("identity") or dep.get("label_id"))
+    return {
+        "label_id": ctx["label"]["id"],
+        "swift_package_pin": True,
+        "identity": attrs["identity"],
+        "package_name": attrs.get("package_name") or attrs["identity"],
+        "source_kind": attrs.get("source_kind") or "",
+        "location": attrs.get("location") or "",
+        "version": attrs.get("version") or "",
+        "revision": attrs.get("revision") or "",
+        "branch": attrs.get("branch") or "",
+        "checksum": attrs.get("checksum") or "",
+        "checkout_path": attrs.get("checkout_path") or "",
+        "dependency_identities": dependencies,
+    }
+
+def _swift_package_dependencies_impl(ctx):
+    attrs = ctx["attr"]
+    platform = attrs.get("platform") or "macos"
+    minimum_os = attrs.get("minimum_os") or "13.0"
+    sdk_variant = attrs.get("sdk_variant") or "simulator"
+    arch = attrs.get("arch") or host_arch()
+    configuration = attrs.get("configuration") or "release"
+    xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
+    products = attrs.get("products") or []
+    if len(products) == 0:
+        fail(ctx["label"]["id"] + ": products must list at least one static Swift package product")
+
+    swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
+    swift = _swiftpm_swift_executable(attrs.get("swift") or "swift", xcode_developer_dir, swiftc["swiftc_path"])
+    version = host_command([swift, "--version"], env = swiftc["env"]).strip()
+    action_env = dict(swiftc["env"])
+    action_path = _parent_dir(swiftc["swiftc_path"]) + ":" + _parent_dir(swift) + ":/usr/bin:/bin"
+    action_env["PATH"] = action_path
+    triple = _apple_triple(platform, minimum_os, sdk_variant, arch, False)
+    build_triple_dir = _swiftpm_build_triple_dir(platform, sdk_variant, arch)
+    package_path = _swiftpm_package_path(ctx, attrs.get("package_path") or ".")
+    all_srcs = glob(ctx["srcs"])
+    scratch = declare_output("swiftpm")
+    bin_dir = scratch + "/" + build_triple_dir + "/" + configuration
+    archives = []
+    for product in products:
+        archives.append(bin_dir + "/lib" + product + ".a")
+    module_dir = bin_dir + "/Modules"
+    vendor_path_attr = attrs.get("vendor_path") or ""
+    allow_network = attrs.get("allow_network") or False
+    remote_identities = attrs.get("_remote_identities") or []
+    locked_pins = attrs.get("_locked_pins") or []
+    if remote_identities and not vendor_path_attr and not allow_network:
+        fail(ctx["label"]["id"] + ": locked remote Swift packages require vendor_path for a network-independent build or allow_network = true for explicit network access")
+    build_inputs = list(all_srcs)
+    clean_paths = [scratch]
+    if vendor_path_attr:
+        vendor_path = _swiftpm_package_path(ctx, vendor_path_attr)
+        copy_path(
+            vendor_path,
+            scratch,
+            kind = "tree",
+            inputs = all_srcs,
+            toolchain_identity = "once.swiftpm.vendor.v1",
+            identifier = "swiftpm_vendor_seed:" + ctx["label"]["id"],
+        )
+        build_inputs.append(scratch)
+        # A tree copy replaces its destination, so removed vendor checkouts cannot persist.
+        clean_paths = [bin_dir]
+
+    argv = [
+        swift,
+        "build",
+        "--package-path", package_path,
+        "--scratch-path", scratch,
+        "--configuration", configuration,
+        "--triple", triple,
+        "--sdk", swiftc["sdk_path"],
+        "--force-resolved-versions",
+        "--manifest-cache", "local",
+    ]
+    if vendor_path_attr or not allow_network:
+        argv.append("--disable-dependency-cache")
+    build_flags = attrs.get("build_flags") or []
+    argv.extend(build_flags)
+    run_action(
+        argv = argv,
+        inputs = build_inputs,
+        outputs = archives + [module_dir],
+        clean_paths = clean_paths,
+        env = action_env,
+        toolchain_identity = "once.swiftpm.build.v2\x00" + version + "\x00" + swiftc["identity"] + "\x00" + triple + "\x00" + action_path + "\x00allow_network\x00" + str(allow_network) + "\x00remote\x00" + "\x00".join(remote_identities) + "\x00pins\x00" + "\x00".join(locked_pins),
+        identifier = "swiftpm_build:" + ctx["label"]["id"],
+    )
+
+    return {
+        "label_id": ctx["label"]["id"],
+        "swift_package_dependencies": True,
+        "resolved_identities": attrs.get("resolved_identities") or [],
+        "swiftmodule_dir": module_dir,
+        "archive": archives[0],
+        "alwayslink": attrs.get("alwayslink") or False,
+        "exported_headers": [],
+        "exported_header_dirs": [],
+        "modulemap": "",
+        "hmap": "",
+        "transitive_swiftmodule_dirs": [module_dir],
+        "transitive_exported_headers": [],
+        "transitive_exported_header_dirs": [],
+        "transitive_modulemaps": [],
+        "transitive_hmaps": [],
+        "transitive_archives": archives,
+        "transitive_alwayslink_archives": archives if attrs.get("alwayslink") else [],
+        "transitive_sdk_frameworks": attrs.get("sdk_frameworks") or [],
+        "transitive_weak_sdk_frameworks": attrs.get("weak_sdk_frameworks") or [],
+        "transitive_sdk_dylibs": attrs.get("sdk_dylibs") or [],
+        "transitive_linkopts": attrs.get("linkopts") or [],
+        "transitive_defines": [],
+    }
+
 swift_macro = target_kind(
     docs = "Compiles a Swift compiler-plugin dylib that consumers load via `-load-plugin-library` at compile time.",
     impl = _swift_macro_impl,
@@ -2390,6 +2853,99 @@ swift_macro = target_kind(
             "swift-macro-minimal",
             name = "Minimal Swift macro plugin",
             use_when = "You want a host-loaded Swift compiler plugin target that a library can depend on.",
+        ),
+    ],
+)
+
+swift_package_dependencies = target_kind(
+    docs = "Imports Package.resolved and a locked Swift package graph as synthetic package pins, then builds selected static products through Swift Package Manager for Apple consumers.",
+    attrs = [
+        attr("package_path", "string", default = ".", docs = "Package-relative directory containing Package.swift and Package.resolved.", configurable = False),
+        attr("resolved_file", "string", default = "Package.resolved", docs = "Resolver source containing the Swift package lock graph, relative to package_path.", configurable = False),
+        attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to the resolver. Defaults to srcs when empty or omitted; use this to exclude vendored source and binary files from graph loading.", configurable = False),
+        attr("graph_file", "string", docs = "Optional checked-in [JavaScript Object Notation (JSON)](https://www.json.org/json-en.html) output relative to package_path from `swift package show-dependencies --format json`, with exact once_manifest, once_resolved, and once_inputs bindings. When omitted, analysis runs that locked command.", configurable = False),
+        attr("vendor_path", "string", docs = "Optional package-relative Swift Package Manager scratch tree containing checkouts, repositories, and workspace state. The build copies it before use.", configurable = False),
+        attr("allow_network", "bool", default = "false", docs = "Allow invoking Swift Package Manager for remote packages when vendor_path is absent. Prefer a complete vendor_path; Once does not independently sandbox Swift Package Manager network access.", configurable = False),
+        attr("products", "list<string>", default = "[]", docs = "Root and transitive static library product names exposed as Apple linker inputs.", configurable = False),
+        attr("platform", "string", default = "macos", docs = "Apple platform used to build the package products.", configurable = False),
+        attr("minimum_os", "string", default = "13.0", docs = "Minimum Apple operating system version used in the build triple.", configurable = False),
+        attr("sdk_variant", "string", default = "simulator", docs = "Simulator or device software development kit selection. Ignored for macOS.", configurable = False),
+        attr("arch", "string", docs = "Single target architecture. Defaults to the execution host architecture.", configurable = False),
+        attr("configuration", "string", default = "release", docs = "Swift Package Manager build configuration, either debug or release.", configurable = False),
+        attr("swift", "string", default = "swift", docs = "Swift Package Manager executable or workspace-relative executable path. The default selects the executable paired with the resolved Swift compiler.", configurable = False),
+        attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode developer directory for Swift and the Apple software development kit.", configurable = False),
+        attr("build_flags", "list<string>", default = "[]", docs = "Additional arguments appended to the locked Swift package build.", configurable = False),
+        attr("alwayslink", "bool", default = "false", docs = "Force-load every selected static product in downstream Apple links."),
+        attr("sdk_frameworks", "list<string>", default = "[]", docs = "Apple software development kit frameworks required by the selected products."),
+        attr("weak_sdk_frameworks", "list<string>", default = "[]", docs = "Weakly linked Apple software development kit frameworks required by the selected products."),
+        attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple software development kit dynamic libraries required by the selected products."),
+        attr("linkopts", "list<string>", default = "[]", docs = "Additional linker flags propagated with the package products."),
+        attr("resolved_identities", "list<string>", default = "[]", docs = "Synthetic package identities populated by the resolver.", configurable = False),
+        attr("_remote_identities", "list<string>", default = "[]", docs = "Remote package identities populated by the resolver for execution policy.", configurable = False),
+        attr("_locked_pins", "list<string>", default = "[]", docs = "Resolver-owned immutable package state included in native build action identities.", configurable = False),
+    ],
+    deps = [
+        dep("deps", ["swift_package_pin"], "Locked direct package dependencies emitted by the resolver."),
+    ],
+    providers = ["swift_package_dependencies", "apple_linkable", "apple_module"],
+    capabilities = [capability("build", ["default", "binary", "swiftmodule"])],
+    tools = [tool("swift", ["swift", "swiftc"])],
+    resolver = _swift_package_dependencies_resolver,
+    impl = _swift_package_dependencies_impl,
+    source_references = [
+        source_reference(
+            "swift-package-manager",
+            "ResolvedPackagesStore",
+            "https://github.com/swiftlang/swift-package-manager/blob/main/Sources/PackageGraph/ResolvedPackagesStore.swift",
+            "Defines the Package.resolved schemas and locked package state imported by this target kind.",
+        ),
+        source_reference(
+            "swift-package-manager",
+            "ShowDependencies",
+            "https://github.com/swiftlang/swift-package-manager/blob/main/Sources/Commands/PackageCommands/ShowDependencies.swift",
+            "Defines the dependency graph command and JavaScript Object Notation output imported by the resolver.",
+        ),
+    ],
+    examples = [
+        example(
+            "swift-package-dependencies-minimal",
+            name = "Swift package dependencies",
+            use_when = "Use this when an Apple target consumes locked Swift package products.",
+        ),
+    ],
+)
+
+swift_package_pin = target_kind(
+    docs = "Synthetic locked Swift package identity emitted from Package.resolved. Users depend on swift_package_dependencies instead of declaring pins directly.",
+    attrs = [
+        attr("identity", "string", required = True, docs = "Canonical lowercase Swift package identity.", configurable = False),
+        attr("package_name", "string", docs = "Package display name from the resolved graph.", configurable = False),
+        attr("source_kind", "string", docs = "Swift package source kind, such as remoteSourceControl, registry, or localSourceControl.", configurable = False),
+        attr("location", "string", docs = "Locked registry, source control, or local package location.", configurable = False),
+        attr("version", "string", docs = "Locked semantic version when present.", configurable = False),
+        attr("revision", "string", docs = "Locked source control revision when present.", configurable = False),
+        attr("branch", "string", docs = "Locked source control branch when present.", configurable = False),
+        attr("checksum", "string", docs = "Locked registry checksum when present.", configurable = False),
+        attr("checkout_path", "string", docs = "Workspace-relative checkout path reported by Swift Package Manager.", configurable = False),
+    ],
+    deps = [dep("deps", ["swift_package_pin"], "Locked transitive Swift package dependencies.")],
+    providers = ["swift_package_pin"],
+    capabilities = [capability("build", [])],
+    impl = _swift_package_pin_impl,
+    source_references = [
+        source_reference(
+            "swift-package-manager",
+            "ResolvedPackagesStore",
+            "https://github.com/swiftlang/swift-package-manager/blob/main/Sources/PackageGraph/ResolvedPackagesStore.swift",
+            "Defines the locked identity, version, revision, branch, and checksum represented by this synthetic target.",
+        ),
+    ],
+    examples = [
+        example(
+            "swift-package-dependencies-minimal",
+            name = "Resolved Swift package pin",
+            use_when = "Use this when inspecting the synthetic locked package identity emitted by Swift package dependency resolution.",
+            path = "examples/swift-package-dependencies-minimal",
         ),
     ],
 )

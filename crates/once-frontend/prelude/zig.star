@@ -73,7 +73,13 @@ def _zig_collect_dep_data(deps):
     return _unique(inputs)
 
 def _zig_zig_module_deps(deps):
-    return [dep for dep in deps if dep.get("zig_module")]
+    out = []
+    for dep in deps:
+        if dep.get("zig_module"):
+            out.append(dep)
+        for module in dep.get("zig_modules") or []:
+            out.append(module)
+    return out
 
 def _zig_direct_c_deps(deps):
     return [dep for dep in deps if dep.get("c_provider")]
@@ -183,9 +189,7 @@ def _zig_append_unique_context(out, seen, context):
 def _zig_transitive_module_contexts(deps):
     out = []
     seen = {}
-    for dep in deps:
-        if not dep.get("zig_module"):
-            continue
+    for dep in _zig_zig_module_deps(deps):
         context = dep.get("module_context")
         if context != None:
             _zig_append_unique_context(out, seen, context)
@@ -1100,6 +1104,331 @@ def _zig_c_library_impl(ctx):
     }
     return _zig_provider(ctx, "zig_c_library", root, c_module_context["main"], cinfo, "module")
 
+def _zig_zon_tokens(source):
+    tokens = []
+    index = 0
+    for _ in range(len(source) + 1):
+        if index >= len(source):
+            break
+        ch = source[index:index + 1]
+        if ch in [" ", "\t", "\r", "\n"]:
+            index += 1
+            continue
+        if ch == "/" and index + 1 < len(source) and source[index + 1:index + 2] == "/":
+            index += 2
+            for _ in range(len(source) + 1):
+                if index >= len(source) or source[index:index + 1] == "\n":
+                    break
+                index += 1
+            continue
+        if ch in [".", "{", "}", "=", ",", "@"]:
+            tokens.append({"kind": "punct", "value": ch})
+            index += 1
+            continue
+        if ch == "\"":
+            index += 1
+            value = []
+            escaped = False
+            closed = False
+            for _ in range(len(source) + 1):
+                if index >= len(source):
+                    break
+                current = source[index:index + 1]
+                index += 1
+                if escaped:
+                    if current == "n":
+                        value.append("\n")
+                    elif current == "r":
+                        value.append("\r")
+                    elif current == "t":
+                        value.append("\t")
+                    else:
+                        value.append(current)
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == "\"":
+                    closed = True
+                    break
+                else:
+                    value.append(current)
+            if not closed:
+                fail("unterminated string in build.zig.zon")
+            tokens.append({"kind": "string", "value": "".join(value)})
+            continue
+        start = index
+        for _ in range(len(source) + 1):
+            if index >= len(source):
+                break
+            current = source[index:index + 1]
+            if current in [" ", "\t", "\r", "\n", ".", "{", "}", "=", ",", "@", "\""]:
+                break
+            if current == "/" and index + 1 < len(source) and source[index + 1:index + 2] == "/":
+                break
+            index += 1
+        if start == index:
+            fail("unsupported token `" + ch + "` in build.zig.zon")
+        tokens.append({"kind": "atom", "value": source[start:index]})
+    return tokens
+
+def _zig_zon_field_at(tokens, index):
+    if index >= len(tokens) or tokens[index]["value"] != ".":
+        return None
+    index += 1
+    if index < len(tokens) and tokens[index]["value"] == "@":
+        index += 1
+    if index >= len(tokens) or tokens[index]["kind"] not in ["atom", "string"]:
+        return None
+    return (tokens[index]["value"], index + 1)
+
+def _zig_zon_struct_end(tokens, open_index):
+    depth = 0
+    for index in range(open_index, len(tokens)):
+        value = tokens[index]["value"]
+        if value == "{":
+            depth += 1
+        elif value == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    fail("unterminated struct in build.zig.zon")
+
+def _zig_zon_scalar(tokens, index, end):
+    if index >= end:
+        return None
+    token = tokens[index]
+    if token["kind"] in ["string", "atom"]:
+        if token["value"] == "true":
+            return True
+        if token["value"] == "false":
+            return False
+        return token["value"]
+    if token["value"] == "." and index + 1 < end and tokens[index + 1]["kind"] in ["string", "atom"]:
+        return tokens[index + 1]["value"]
+    return None
+
+def _zig_zon_fields(tokens, start, end):
+    fields = {}
+    index = start
+    for _ in range(len(tokens) + 1):
+        if index >= end:
+            break
+        field = _zig_zon_field_at(tokens, index)
+        if field == None:
+            index += 1
+            continue
+        name, value_index = field
+        if value_index >= end or tokens[value_index]["value"] != "=":
+            index += 1
+            continue
+        value_index += 1
+        value = _zig_zon_scalar(tokens, value_index, end)
+        if value != None:
+            fields[name] = value
+        if value_index + 1 < end and tokens[value_index]["value"] == "." and tokens[value_index + 1]["value"] == "{":
+            index = _zig_zon_struct_end(tokens, value_index + 1) + 1
+        else:
+            index = value_index + 1
+    return fields
+
+def _zig_zon_named_struct(tokens, wanted):
+    for index in range(len(tokens)):
+        field = _zig_zon_field_at(tokens, index)
+        if field == None or field[0] != wanted:
+            continue
+        value_index = field[1]
+        if value_index + 2 >= len(tokens):
+            continue
+        if tokens[value_index]["value"] != "=" or tokens[value_index + 1]["value"] != "." or tokens[value_index + 2]["value"] != "{":
+            continue
+        open_index = value_index + 2
+        return (open_index + 1, _zig_zon_struct_end(tokens, open_index))
+    return None
+
+def _zig_zon_dependencies(source):
+    tokens = _zig_zon_tokens(source)
+    bounds = _zig_zon_named_struct(tokens, "dependencies")
+    if bounds == None:
+        return {}
+    dependencies = {}
+    index = bounds[0]
+    for _ in range(len(tokens) + 1):
+        if index >= bounds[1]:
+            break
+        field = _zig_zon_field_at(tokens, index)
+        if field == None:
+            index += 1
+            continue
+        name, value_index = field
+        if value_index + 2 >= bounds[1] or tokens[value_index]["value"] != "=" or tokens[value_index + 1]["value"] != "." or tokens[value_index + 2]["value"] != "{":
+            index += 1
+            continue
+        open_index = value_index + 2
+        close_index = _zig_zon_struct_end(tokens, open_index)
+        dependencies[name] = _zig_zon_fields(tokens, open_index + 1, close_index)
+        index = close_index + 1
+    return dependencies
+
+def _zig_zon_package_fields(source):
+    tokens = _zig_zon_tokens(source)
+    return _zig_zon_fields(tokens, 1, len(tokens) - 1)
+
+def _zig_normalize_package_path(path):
+    normalized = []
+    for part in path.replace("\\", "/").split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            if len(normalized) == 0:
+                fail("Zig package path `" + path + "` escapes the workspace")
+            normalized.pop()
+        else:
+            normalized.append(part)
+    return "/".join(normalized)
+
+def _zig_package_source_root(manifest, alias, dependency, vendor_dir, package_paths, files):
+    identity = dependency.get("hash") or dependency.get("path") or alias
+    configured = package_paths.get(identity) or package_paths.get(alias)
+    if configured:
+        return _zig_normalize_package_path(configured)
+    package_path = dependency.get("path")
+    if package_path:
+        return _zig_normalize_package_path(_parent_dir(manifest) + "/" + package_path)
+    content_hash = dependency.get("hash") or ""
+    by_hash = vendor_dir + "/" + content_hash
+    if content_hash and by_hash + "/build.zig.zon" in files:
+        return by_hash
+    return vendor_dir + "/" + alias
+
+def _zig_package_identity(alias, dependency, source_root):
+    return dependency.get("hash") or source_root or alias
+
+def _zig_trim_trailing_slash(value):
+    if _ends_with(value, "/"):
+        return value[:len(value) - 1]
+    return value
+
+def _zig_package_target_name(alias, identity):
+    return "zig-package-" + _zig_safe_name(alias + "-" + identity)
+
+def _zig_package_record(alias, dependency, manifest, vendor_dir, package_paths, files):
+    source_root = _zig_package_source_root(manifest, alias, dependency, vendor_dir, package_paths, files)
+    identity = _zig_package_identity(alias, dependency, source_root)
+    return {
+        "alias": alias,
+        "dependency": dependency,
+        "identity": identity,
+        "key": alias + "\x00" + identity,
+        "manifest": source_root + "/build.zig.zon",
+        "source_root": source_root,
+        "target_name": _zig_package_target_name(alias, identity),
+    }
+
+def _zig_dependency_resolver_impl(ctx):
+    attrs = ctx["attr"]
+    files = ctx["files"]
+    manifest = attrs.get("manifest") or "build.zig.zon"
+    source = files.get(manifest)
+    if source == None:
+        fail(ctx["label"]["id"] + ": Zig dependency manifest `" + manifest + "` is not declared in resolver_inputs, or srcs when resolver_inputs is omitted")
+    vendor_dir = _zig_trim_trailing_slash(attrs.get("vendor_dir") or "third_party/zig")
+    package_paths = attrs.get("package_paths") or {}
+    module_paths = attrs.get("module_paths") or {}
+    direct = _zig_zon_dependencies(source)
+    queue = []
+    queued = {}
+    root_names = []
+    for alias, dependency in direct.items():
+        record = _zig_package_record(alias, dependency, manifest, vendor_dir, package_paths, files)
+        if record["key"] in queued:
+            continue
+        queued[record["key"]] = True
+        queue.append(record)
+        root_names.append(record["target_name"])
+
+    targets = []
+    cursor = 0
+    package_limit = 10000
+    for _ in range(package_limit):
+        if cursor >= len(queue):
+            break
+        record = queue[cursor]
+        cursor += 1
+        child_source = files.get(record["manifest"])
+        if child_source == None:
+            fail(ctx["label"]["id"] + ": materialized Zig package `" + record["alias"] + "` must declare `" + record["manifest"] + "` in resolver_inputs, or srcs when resolver_inputs is omitted")
+        child_dependencies = _zig_zon_dependencies(child_source)
+        child_fields = _zig_zon_package_fields(child_source)
+        deps = []
+        import_names = {}
+        for child_alias, child_dependency in child_dependencies.items():
+            child = _zig_package_record(child_alias, child_dependency, record["manifest"], vendor_dir, package_paths, files)
+            deps.append("./" + child["target_name"])
+            import_names[child["target_name"]] = child_alias
+            if child["key"] not in queued:
+                if len(queue) >= package_limit:
+                    fail(ctx["label"]["id"] + ": Zig dependency graph exceeds the package limit of " + str(package_limit) + " while expanding `" + child["alias"] + "`")
+                queued[child["key"]] = True
+                queue.append(child)
+        dependency = record["dependency"]
+        main = module_paths.get(record["identity"]) or module_paths.get(record["alias"]) or (record["source_root"] + "/src/root.zig")
+        source_globs = [
+            record["source_root"] + "/**/*",
+        ]
+        target_attrs = {
+            "main": main,
+            "import_name": record["alias"],
+            "import_names": import_names,
+            "package_name": child_fields.get("name") or record["alias"],
+            "package_version": child_fields.get("version") or "",
+            "package_fingerprint": str(child_fields.get("fingerprint") or ""),
+            "source_root": record["source_root"],
+            "source_url": dependency.get("url") or "",
+            "source_hash": dependency.get("hash") or "",
+            "source_path": dependency.get("path") or "",
+            "lazy": dependency.get("lazy") or False,
+        }
+        targets.append({
+            "name": record["target_name"],
+            "kind": "zig_package",
+            "deps": deps,
+            "srcs": source_globs,
+            "attrs": target_attrs,
+        })
+    if cursor < len(queue):
+        fail(ctx["label"]["id"] + ": Zig dependency graph expansion stopped before package `" + queue[cursor]["alias"] + "`; the graph exceeds the package limit of " + str(package_limit))
+    return {
+        "targets": targets,
+        "roots": root_names,
+        "attrs": {"_root_packages": root_names},
+    }
+
+def _zig_package_impl(ctx):
+    provider = _zig_library_impl(ctx)
+    provider["package_name"] = _zig_attr(ctx, "package_name", "")
+    provider["package_version"] = _zig_attr(ctx, "package_version", "")
+    provider["package_fingerprint"] = _zig_attr(ctx, "package_fingerprint", "")
+    provider["source_url"] = _zig_attr(ctx, "source_url", "")
+    provider["source_hash"] = _zig_attr(ctx, "source_hash", "")
+    provider["source_path"] = _zig_attr(ctx, "source_path", "")
+    return provider
+
+def _zig_dependencies_impl(ctx):
+    roots = _zig_attr(ctx, "_root_packages", [])
+    modules = []
+    for dep in ctx["deps"]:
+        label = dep.get("label_id") or ""
+        short = label.split("/")[len(label.split("/")) - 1] if label else ""
+        if short in roots:
+            modules.append(dep)
+    return {
+        "label_id": ctx["label"]["id"],
+        "zig_dependency_set": True,
+        "zig_modules": modules,
+        "transitive_sources": _zig_collect_dep_sources(modules),
+        "transitive_data": _zig_collect_dep_data(modules),
+    }
+
 _ZIG_MODULE_ATTRS = [
     attr("main", "string", required = True, docs = "Package-relative root Zig module.", configurable = False),
     attr("import_name", "string", docs = "Name used by downstream modules when importing this target. Defaults to the target name.", configurable = False),
@@ -1147,7 +1476,72 @@ _ZIG_BUILD_ATTRS = [
     attr("output_name", "string", docs = "Output file name without platform extension. Defaults to the target name.", configurable = False),
 ]
 
-_ZIG_DEP_EDGE = [dep("deps", ["zig_module", "c_provider"], "Zig modules and C provider dependencies consumed by this target.")]
+_ZIG_DEP_EDGE = [dep("deps", ["zig_module", "zig_dependency_set", "c_provider"], "Zig modules, imported Zig dependency sets, and C provider dependencies consumed by this target.")]
+
+zig_dependencies = target_kind(
+    docs = "Locked Zig package dependency set imported from build.zig.zon. Zig remains authoritative for package identity and content hashes; Once lowers complete materialized package source trees into ordinary Zig module targets.",
+    attrs = [
+        attr("manifest", "string", default = "build.zig.zon", docs = "Package-relative Zig package manifest used as the locked root graph.", configurable = False),
+        attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to the resolver. Defaults to srcs when empty or omitted; normally include every materialized build.zig.zon file.", configurable = False),
+        attr("vendor_dir", "string", default = "third_party/zig", docs = "Package-relative directory containing content-addressed Zig package sources.", configurable = False),
+        attr("package_paths", "map<string, string>", default = "{}", docs = "Overrides from dependency alias or content hash to a materialized package source directory.", configurable = False),
+        attr("module_paths", "map<string, string>", default = "{}", docs = "Overrides from dependency alias or content hash to its root Zig module. Defaults to src/root.zig inside the package.", configurable = False),
+        attr("_root_packages", "list<string>", default = "[]", docs = "Resolver-owned names of packages directly exposed by the root manifest.", configurable = False),
+    ],
+    deps = [dep("deps", ["zig_module"], "Resolved Zig package modules emitted from the locked package graph.")],
+    providers = ["zig_dependency_set"],
+    capabilities = [capability("build", [])],
+    examples = [
+        example(
+            "zig-binary-with-package",
+            name = "Zig binary with a locked package",
+            use_when = "Use this when Zig code imports packages pinned by build.zig.zon.",
+        ),
+    ],
+    source_references = [
+        source_reference(
+            "Zig",
+            "build.zig.zon package manifest",
+            "https://ziglang.org/download/0.16.0/release-notes.html",
+            "Use this to preserve Zig package fingerprints, content multihashes, local overrides, and package source semantics.",
+        ),
+    ],
+    resolver = _zig_dependency_resolver_impl,
+    impl = _zig_dependencies_impl,
+)
+
+zig_package = target_kind(
+    docs = "One content-identified Zig package lowered from build.zig.zon into a Zig module provider.",
+    attrs = _ZIG_MODULE_ATTRS + [
+        attr("package_name", "string", required = True, docs = "Package name declared by the dependency package or its root alias.", configurable = False),
+        attr("package_version", "string", docs = "Semantic version declared by the dependency package when present.", configurable = False),
+        attr("package_fingerprint", "string", docs = "Stable package fingerprint declared by modern Zig package manifests.", configurable = False),
+        attr("source_root", "string", required = True, docs = "Materialized package source directory.", configurable = False),
+        attr("source_url", "string", docs = "Source location recorded by the root package manifest.", configurable = False),
+        attr("source_hash", "string", docs = "Zig content multihash recorded by the declaring manifest. Source verification remains the responsibility of Zig's fetch workflow.", configurable = False),
+        attr("source_path", "string", docs = "Package-relative local source path when the dependency is not content-addressed.", configurable = False),
+        attr("lazy", "bool", default = "false", docs = "Whether build.zig.zon marks this package as lazily fetched.", configurable = False),
+    ],
+    deps = [dep("deps", ["zig_module"], "Locked Zig package dependencies imported with their edge-local names.")],
+    providers = ["zig_module"],
+    capabilities = [capability("build", [])],
+    examples = [
+        example(
+            "zig-binary-with-package",
+            name = "Resolved Zig package module",
+            use_when = "Use this when inspecting the synthetic target generated for a build.zig.zon dependency.",
+        ),
+    ],
+    source_references = [
+        source_reference(
+            "Zig",
+            "module dependency graph",
+            "https://ziglang.org/documentation/0.16.0/",
+            "Use this to preserve Zig module names and directed dependency edges when lowering a package.",
+        ),
+    ],
+    impl = _zig_package_impl,
+)
 
 zig_library = target_kind(
     docs = "Zig module provider compiled at the use site by downstream Zig build targets.",

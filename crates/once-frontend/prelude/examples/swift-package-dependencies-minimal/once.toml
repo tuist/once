@@ -1,0 +1,36 @@
+[[target]]
+name = "Packages"
+kind = "swift_package_dependencies"
+srcs = [
+  "Package.swift",
+  "Package.resolved",
+  "swiftpm-dependencies.json",
+  "Sources/**/*.swift",
+  "Vendor/Greeting/**/*.swift",
+  "Vendor/Greeting/Package.swift",
+]
+
+[target.attrs]
+package_path = "."
+resolved_file = "Package.resolved"
+resolver_inputs = [
+  "Package.swift",
+  "Package.resolved",
+  "swiftpm-dependencies.json",
+  "Vendor/Greeting/Package.swift",
+]
+graph_file = "swiftpm-dependencies.json"
+products = ["Root", "Greeting"]
+platform = "macos"
+minimum_os = "13.0"
+
+[[target]]
+name = "Consumer"
+kind = "apple_application"
+srcs = ["Consumer/**/*.swift"]
+deps = ["./Packages"]
+
+[target.attrs]
+platform = "macos"
+bundle_id = "dev.once.Consumer"
+minimum_os = "13.0"

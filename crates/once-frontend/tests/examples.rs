@@ -15,7 +15,9 @@ use std::path::Path;
 
 #[cfg(unix)]
 use once_frontend::analysis::{AnalysisEngine, AnalysisResult};
-use once_frontend::{built_in_target_kind_schemas_result, load_target_kind_example};
+use once_frontend::{
+    built_in_target_kind_schemas_result, load_target_kind_example, validate_workspace,
+};
 #[cfg(unix)]
 use once_frontend::{AttrValue, GraphTarget};
 #[cfg(unix)]
@@ -74,6 +76,18 @@ fn every_schema_example_loads_without_diagnostics() {
                     target.diagnostics
                 );
             }
+            let diagnostics = validate_workspace(tmp.path()).unwrap_or_else(|err| {
+                panic!(
+                    "example `{}` (target kind `{}`) failed workspace validation: {err}",
+                    example.slug, schema.kind
+                )
+            });
+            assert!(
+                diagnostics.is_empty(),
+                "example `{}` (target kind `{}`) failed workspace validation: {diagnostics:?}",
+                example.slug,
+                schema.kind
+            );
             let example_targets = graph
                 .iter()
                 .filter(|target| target.kind == schema.kind)

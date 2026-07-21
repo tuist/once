@@ -10,10 +10,20 @@ kind = "cargo_dependencies"
 srcs = [
   "Cargo.toml",
   "Cargo.lock",
+  ".cargo/config.toml",
+  "cargo-metadata.json",
   "apps/*/Cargo.toml",
 ]
 
 [target.attrs]
 manifest = "Cargo.toml"
 lockfile = "Cargo.lock"
+resolver_inputs = [
+  "Cargo.toml",
+  "Cargo.lock",
+  ".cargo/config.toml",
+  "cargo-metadata.json",
+  "apps/*/Cargo.toml",
+]
 vendor_dir = "third_party/rust/vendor"
+packages = ["itoa"]

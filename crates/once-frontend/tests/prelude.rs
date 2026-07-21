@@ -377,6 +377,26 @@ fn rust_cross_platform_target_kind_schemas_are_discoverable() {
         .iter()
         .any(|attr| attr.name == "use_libtest_harness"));
 
+    for kind in ["rust_crate", "rust_proc_macro"] {
+        let schema = built_in_target_kind_schema(kind).expect("Cargo-generated Rust schema");
+        assert!(schema.deps.iter().any(|dep| {
+            dep.name == "build_deps"
+                && dep
+                    .expected_providers
+                    .iter()
+                    .any(|provider| provider == "rust_crate")
+        }));
+    }
+
+    let cargo_dependencies =
+        built_in_target_kind_schema("cargo_dependencies").expect("cargo_dependencies schema");
+    assert!(cargo_dependencies.deps.iter().any(|dep| {
+        dep.name == "deps"
+            && dep
+                .expected_providers
+                .iter()
+                .any(|provider| provider == "rust_crate")
+    }));
     let rust_mobile =
         built_in_target_kind_schema("rust_mobile_library").expect("rust_mobile_library schema");
     assert!(target_kind_has_impl("rust_mobile_library").unwrap());
@@ -446,6 +466,339 @@ fn rust_and_elixir_runtime_schemas_are_discoverable() {
         .iter()
         .any(|attr| attr.name == "env_inherit"));
     assert!(elixir_test.attrs.iter().any(|attr| attr.name == "tools"));
+}
+
+#[test]
+fn mix_dependency_target_kinds_are_discoverable() {
+    let dependencies =
+        built_in_target_kind_schema("mix_dependencies").expect("mix_dependencies schema");
+    assert!(target_kind_has_impl("mix_dependencies").unwrap());
+    assert!(dependencies
+        .providers
+        .iter()
+        .any(|provider| provider == "mix_dependency_set"));
+    for name in [
+        "manifest",
+        "lockfile",
+        "resolver_inputs",
+        "graph_file",
+        "vendor_dir",
+        "path_dependencies",
+        "mix_env",
+        "roots",
+        "_mix_resolved",
+        "_mix_locked_roots",
+    ] {
+        assert!(dependencies.attrs.iter().any(|attr| attr.name == name));
+    }
+
+    let package = built_in_target_kind_schema("mix_package").expect("mix_package schema");
+    assert!(target_kind_has_impl("mix_package").unwrap());
+    assert!(package
+        .providers
+        .iter()
+        .any(|provider| provider == "elixir_app"));
+    for name in [
+        "_mix_locked",
+        "_mix_package_name",
+        "_mix_source",
+        "_mix_checksum",
+        "_mix_outer_checksum",
+        "_mix_revision",
+        "_mix_managers",
+        "_mix_custom_compile",
+    ] {
+        assert!(package.attrs.iter().any(|attr| attr.name == name));
+    }
+
+    let source = format!(
+        "{}\nresult = repr(mix_dependencies.get(\"resolver\") != None)\n",
+        all_prelude_source()
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), "True");
+}
+
+#[test]
+fn prelude_mix_dependencies_expands_native_locked_graph() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("prelude/examples/elixir-library-with-mix-dependency");
+    let graph = once_frontend::load_graph_workspace(&root).expect("Mix example graph loads");
+    let owner = graph
+        .iter()
+        .find(|target| target.label.id == "mix_dependencies")
+        .expect("mix_dependencies owner");
+    let package = graph
+        .iter()
+        .find(|target| target.label.id == "mix-locked-greeting")
+        .expect("synthetic Mix package");
+
+    assert_eq!(owner.deps, vec!["local_helper", "mix-locked-greeting"]);
+    assert_eq!(package.kind, "mix_package");
+    assert_eq!(
+        package.attrs.get("version"),
+        Some(&once_frontend::AttrValue::String("0.1.0".to_string()))
+    );
+    assert_eq!(
+        package.attrs.get("_mix_source"),
+        Some(&once_frontend::AttrValue::String(
+            "hex:hexpm/locked_greeting".to_string()
+        ))
+    );
+    assert_eq!(
+        package.attrs.get("_mix_checksum"),
+        Some(&once_frontend::AttrValue::String("0".repeat(64)))
+    );
+    assert_eq!(
+        package.attrs.get("_mix_outer_checksum"),
+        Some(&once_frontend::AttrValue::String("1".repeat(64)))
+    );
+}
+
+#[test]
+fn prelude_mix_dependencies_rejects_stale_snapshots_and_unmapped_paths() {
+    let prelude = all_prelude_source();
+    let stale_graph =
+        serde_json::json!({"manifest": "", "lockfile": "old\n", "mix_env": "prod"}).to_string();
+    let stale_source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attrs": {{"graph_file": "graph.json"}},
+    "files": {{
+        "mix.exs": "",
+        "mix.lock": "fresh\n",
+        "graph.json": {stale_graph:?},
+    }},
+}}
+result = repr(_mix_read_locked_graph(ctx))
+"#
+    );
+    let stale_error = eval_prelude_source_to_repr(stale_source).unwrap_err();
+    assert!(
+        stale_error.contains("is stale relative to"),
+        "{stale_error}"
+    );
+
+    let environment_graph = serde_json::json!({
+        "manifest": "",
+        "lockfile": "fresh\n",
+        "mix_env": "prod",
+        "lock": {},
+        "dependencies": [],
+    })
+    .to_string();
+    let environment_source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attrs": {{"graph_file": "graph.json", "mix_env": "test"}},
+    "files": {{
+        "mix.exs": "",
+        "mix.lock": "fresh\n",
+        "graph.json": {environment_graph:?},
+    }},
+}}
+result = repr(_mix_read_locked_graph(ctx))
+"#
+    );
+    let environment_error = eval_prelude_source_to_repr(environment_source).unwrap_err();
+    assert!(
+        environment_error.contains("MIX_ENV=prod") && environment_error.contains("MIX_ENV=test"),
+        "{environment_error}"
+    );
+
+    let path_graph = serde_json::json!({
+        "manifest": "",
+        "lockfile": "fresh\n",
+        "mix_env": "prod",
+        "once_inputs": {"mix.exs": "", "mix.lock": "fresh\n"},
+        "lock": {},
+        "dependencies": [{
+            "app": "local_helper",
+            "dependencies": [],
+            "path_dependency": true,
+            "top_level": true,
+        }],
+    })
+    .to_string();
+    let path_source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attrs": {{"graph_file": "graph.json"}},
+    "files": {{
+        "mix.exs": "",
+        "mix.lock": "fresh\n",
+        "graph.json": {path_graph:?},
+    }},
+}}
+result = repr(_mix_dependencies_resolver(ctx))
+"#
+    );
+    let path_error = eval_prelude_source_to_repr(path_source).unwrap_err();
+    assert!(path_error.contains("path_dependencies"), "{path_error}");
+}
+
+#[test]
+fn prelude_mix_snapshot_binds_every_resolver_input() {
+    let prelude = all_prelude_source();
+    let graph = serde_json::json!({
+        "manifest": "",
+        "lockfile": "fresh\n",
+        "mix_env": "prod",
+        "once_inputs": {
+            "mix.exs": "",
+            "mix.lock": "fresh\n",
+            "local_helper/mix.exs": "old local manifest\n",
+        },
+        "lock": {},
+        "dependencies": [],
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attrs": {{"graph_file": "graph.json"}},
+    "files": {{
+        "mix.exs": "",
+        "mix.lock": "fresh\n",
+        "local_helper/mix.exs": "new local manifest\n",
+        "graph.json": {graph:?},
+    }},
+}}
+result = repr(_mix_read_locked_graph(ctx))
+"#
+    );
+
+    let error = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(
+        error.contains("input binding does not match resolver_inputs"),
+        "{error}"
+    );
+}
+
+#[test]
+fn prelude_mix_dependencies_rejects_missing_child_targets() {
+    let prelude = all_prelude_source();
+    let graph = serde_json::json!({
+        "manifest": "",
+        "lockfile": "fresh\n",
+        "mix_env": "prod",
+        "once_inputs": {"mix.exs": "", "mix.lock": "fresh\n"},
+        "lock": {
+            "parent": [
+                "hex",
+                "parent",
+                "1.0.0",
+                "0".repeat(64),
+                ["mix"],
+                [],
+                "hexpm",
+                "1".repeat(64),
+            ],
+        },
+        "dependencies": [{
+            "app": "parent",
+            "dependencies": ["missing_child"],
+            "path_dependency": false,
+            "top_level": true,
+        }],
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attrs": {{"graph_file": "graph.json"}},
+    "files": {{
+        "mix.exs": "",
+        "mix.lock": "fresh\n",
+        "graph.json": {graph:?},
+    }},
+}}
+result = repr(_mix_dependencies_resolver(ctx))
+"#
+    );
+    let error = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(error.contains("active graph contains no target"), "{error}");
+}
+
+#[test]
+fn prelude_mix_dependencies_aggregates_locked_package_providers() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attr": {{
+        "_mix_resolved": True,
+        "_mix_locked_roots": ["mix-decimal"],
+    }},
+    "deps": [{{
+        "locked": True,
+        "app_name": "decimal",
+        "package_name": "decimal",
+        "version": "2.1.1",
+        "source": "hex:hexpm/decimal",
+        "checksum": "abc123",
+        "outer_checksum": "def456",
+        "revision": "",
+        "transitive_sources": ["deps/decimal/lib/decimal.ex"],
+        "transitive_elixir_apps": [{{
+            "app_name": "decimal",
+            "ebin_dir": ".once/out/mix-decimal/ebin",
+        }}],
+    }}],
+}}
+result = repr(_mix_dependencies_impl(ctx))
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(out.contains("\"dependency_set\": True"), "{out}");
+    assert!(out.contains("\"locked\": True"), "{out}");
+    assert!(out.contains("hex:hexpm/decimal"), "{out}");
+    assert!(out.contains(".once/out/mix-decimal/ebin"), "{out}");
+}
+
+#[test]
+fn prelude_mix_package_rejects_unmodeled_build_managers() {
+    let prelude = all_prelude_source();
+    for (attrs, expected) in [
+        (
+            r#"{"_mix_managers": ["rebar3"]}"#,
+            "Rebar and Make packages",
+        ),
+        (
+            r#"{"_mix_managers": ["mix"], "_mix_custom_compile": True}"#,
+            "custom Mix dependency compile commands",
+        ),
+    ] {
+        let source = format!(
+            r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "package", "id": "package"}},
+    "attr": {attrs},
+}}
+result = repr(_mix_supported_manager(ctx))
+"#
+        );
+        let err = eval_prelude_source_to_repr(source).unwrap_err();
+        assert!(err.contains(expected), "{err}");
+    }
+}
+
+#[test]
+fn prelude_mix_package_uses_native_mix_compiler_pipeline() {
+    let source = format!("{}\nresult = _mix_compile_source()\n", all_prelude_source());
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(out.contains("Mix.Task.run(\"compile.all\""), "{out}");
+    assert!(out.contains("--no-prune-code-paths"), "{out}");
+    assert!(!out.contains("deps.get"), "{out}");
 }
 
 #[test]
@@ -719,6 +1072,119 @@ fn c_and_zig_target_kind_schemas_are_discoverable() {
 }
 
 #[test]
+fn zig_dependency_target_kinds_are_discoverable() {
+    let dependencies =
+        built_in_target_kind_schema("zig_dependencies").expect("zig_dependencies schema");
+    assert!(target_kind_has_impl("zig_dependencies").unwrap());
+    assert!(dependencies
+        .providers
+        .iter()
+        .any(|provider| provider == "zig_dependency_set"));
+    for name in [
+        "manifest",
+        "resolver_inputs",
+        "vendor_dir",
+        "package_paths",
+        "module_paths",
+        "_root_packages",
+    ] {
+        assert!(dependencies.attrs.iter().any(|attr| attr.name == name));
+    }
+
+    let package = built_in_target_kind_schema("zig_package").expect("zig_package schema");
+    assert!(target_kind_has_impl("zig_package").unwrap());
+    assert!(package
+        .providers
+        .iter()
+        .any(|provider| provider == "zig_module"));
+    for name in [
+        "package_name",
+        "package_version",
+        "package_fingerprint",
+        "source_root",
+        "source_url",
+        "source_hash",
+        "source_path",
+    ] {
+        assert!(package.attrs.iter().any(|attr| attr.name == name));
+    }
+
+    let source = format!(
+        "{}\nresult = repr(zig_dependencies.get(\"resolver\") != None)\n",
+        all_prelude_source()
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), "True");
+}
+
+#[test]
+fn prelude_zig_path_identity_uses_the_materialized_source_root() {
+    let prelude = all_prelude_source();
+    let first = eval_prelude_string_function_in(
+        &prelude,
+        "_zig_package_identity",
+        r#"("support", {"path": "../support"}, "packages/a/support")"#,
+    )
+    .unwrap();
+    let second = eval_prelude_string_function_in(
+        &prelude,
+        "_zig_package_identity",
+        r#"("support", {"path": "../support"}, "packages/b/support")"#,
+    )
+    .unwrap();
+
+    assert_eq!(first, "packages/a/support");
+    assert_eq!(second, "packages/b/support");
+    assert_ne!(first, second);
+}
+
+#[test]
+fn prelude_zig_dependencies_expands_and_preserves_locked_hashes() {
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("prelude/examples/zig-binary-with-package");
+    let graph = once_frontend::load_graph_workspace(&root).expect("Zig package example loads");
+    let owner = graph
+        .iter()
+        .find(|target| target.label.id == "zig_dependencies")
+        .expect("zig_dependencies owner");
+    let package = graph
+        .iter()
+        .find(|target| {
+            target.kind == "zig_package"
+                && target.attrs.get("package_name")
+                    == Some(&once_frontend::AttrValue::String("math".to_string()))
+        })
+        .expect("synthetic Zig package");
+
+    assert_eq!(owner.deps, vec![package.label.id.clone()]);
+    assert_eq!(
+        graph
+            .iter()
+            .filter(|target| target.kind == "zig_package")
+            .count(),
+        2
+    );
+    assert!(package
+        .srcs
+        .contains(&"third_party/zig/math/**/*".to_string()));
+    assert_eq!(
+        package.attrs.get("package_version"),
+        Some(&once_frontend::AttrValue::String("1.0.0".to_string()))
+    );
+    assert_eq!(
+        package.attrs.get("source_root"),
+        Some(&once_frontend::AttrValue::String(
+            "third_party/zig/math".to_string()
+        ))
+    );
+    assert_eq!(
+        package.attrs.get("source_hash"),
+        Some(&once_frontend::AttrValue::String(
+            "math-1.0.0-N3AjZe8AAAA_BHML9VFPGVQiHPOsQpQ9CpiaVtRYkACI".to_string()
+        ))
+    );
+}
+
+#[test]
 fn prelude_elixir_parity_alias_helpers_merge_values() {
     let prelude = all_prelude_source();
     let source = format!(
@@ -900,18 +1366,21 @@ ctx = {{
         "optimize": "ReleaseSafe",
     }},
     "deps": [{{
-        "zig_module": True,
-        "label_id": "pkg/math",
-        "import_name": "math",
-        "canonical_name": "once_pkg_x47_math",
-        "module_context": {{
+        "zig_dependency_set": True,
+        "zig_modules": [{{
+            "zig_module": True,
+            "label_id": "pkg/math",
             "import_name": "math",
             "canonical_name": "once_pkg_x47_math",
-            "main": "pkg/src/math.zig",
-            "deps": [],
-            "zigopts": [],
-        }},
-        "transitive_module_contexts": [],
+            "module_context": {{
+                "import_name": "math",
+                "canonical_name": "once_pkg_x47_math",
+                "main": "pkg/src/math.zig",
+                "deps": [],
+                "zigopts": [],
+            }},
+            "transitive_module_contexts": [],
+        }}],
         "transitive_sources": ["pkg/src/math.zig"],
         "transitive_data": [],
     }}],
@@ -5226,9 +5695,912 @@ fn prelude_cargo_metadata_targets_preserve_rust_target() {
 
     assert!(out.contains("\"target\": \"x86_64-apple-darwin\""), "{out}");
     assert!(
-            out.contains("\"srcs\": [\"third_party/rust/vendor/cpufeatures-0.2.17/Cargo.toml\", \"third_party/rust/vendor/cpufeatures-0.2.17/build.rs\", \"third_party/rust/vendor/cpufeatures-0.2.17/src/**/*.rs\"]"),
-            "{out}"
-        );
+        out.contains("\"srcs\": [\"third_party/rust/vendor/cpufeatures-0.2.17/**/*\"]"),
+        "{out}"
+    );
+}
+
+#[test]
+fn prelude_cargo_dependencies_declares_graph_resolver() {
+    let source = format!(
+        "{}\nresult = repr(cargo_dependencies.get(\"resolver\") != None)\n",
+        all_prelude_source()
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(out, "True");
+    assert_target_kind_attrs(
+        "cargo_dependencies",
+        &["resolver_inputs", "metadata_file", "host_metadata_file"],
+    );
+}
+
+#[test]
+fn prelude_cargo_metadata_must_match_the_authoritative_lockfile() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+metadata = {{
+    "packages": [{{
+        "name": "itoa",
+        "version": "1.0.14",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+    }}],
+}}
+_cargo_attach_locked_checksums(metadata, {{"package": []}})
+result = repr(metadata)
+"#
+    );
+    let error = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(
+        error.contains("absent from the authoritative Cargo.lock"),
+        "{error}"
+    );
+}
+
+#[test]
+fn prelude_cargo_snapshot_selection_must_match_the_target() {
+    let prelude = all_prelude_source();
+    let snapshot = serde_json::json!({
+        "once_snapshot": {
+            "inputs": {"Cargo.toml": "[workspace]\n"},
+            "selection": {
+                "features": [],
+                "all_features": false,
+                "no_default_features": false,
+                "target": "",
+                "host": false,
+                "host_triple": "aarch64-apple-darwin",
+            },
+        },
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attr": {{
+        "metadata_file": "metadata.json",
+        "features": ["derive"],
+    }},
+    "files": {{
+        "Cargo.toml": "[workspace]\n",
+        "metadata.json": {snapshot:?},
+    }},
+}}
+metadata = json_decode(ctx["files"]["metadata.json"])
+_cargo_validate_metadata_snapshot(ctx, metadata, "metadata.json", False, "aarch64-apple-darwin")
+result = repr(metadata)
+"#
+    );
+    let error = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(error.contains("selection `features`"), "{error}");
+}
+
+#[test]
+fn prelude_cargo_snapshot_selection_resolves_configurable_attributes() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "linux"
+
+def host_arch():
+    return "x86_64"
+
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attr": {{
+        "features": {{"select": {{"linux": ["derive"], "default": []}}}},
+        "all_features": {{"select": {{"linux": True, "default": False}}}},
+        "no_default_features": False,
+    }},
+}}
+result = repr(_cargo_snapshot_selection(ctx, False, "x86_64-unknown-linux-gnu"))
+"#
+    );
+
+    let result = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(result.contains("\"features\": [\"derive\"]"), "{result}");
+    assert!(result.contains("\"all_features\": True"), "{result}");
+}
+
+#[test]
+fn prelude_cargo_snapshot_selection_must_match_the_compiler_host() {
+    let prelude = all_prelude_source();
+    let snapshot = serde_json::json!({
+        "once_snapshot": {
+            "inputs": {"Cargo.toml": "[workspace]\n"},
+            "selection": {
+                "features": [],
+                "all_features": false,
+                "no_default_features": false,
+                "target": "",
+                "host": false,
+                "host_triple": "x86_64-unknown-linux-gnu",
+            },
+        },
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attr": {{"metadata_file": "metadata.json"}},
+    "files": {{
+        "Cargo.toml": "[workspace]\n",
+        "metadata.json": {snapshot:?},
+    }},
+}}
+metadata = json_decode(ctx["files"]["metadata.json"])
+_cargo_validate_metadata_snapshot(ctx, metadata, "metadata.json", False, "aarch64-apple-darwin")
+result = repr(metadata)
+"#
+    );
+    let error = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(error.contains("selection `host_triple`"), "{error}");
+}
+
+#[test]
+fn prelude_cargo_target_snapshot_requires_host_metadata() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attr": {{
+        "target": "aarch64-unknown-linux-gnu",
+        "metadata_file": "metadata.json",
+    }},
+    "files": {{}},
+}}
+result = repr(_cargo_resolved_metadata(ctx))
+"#
+    );
+
+    let error = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(error.contains("host_metadata_file is required"), "{error}");
+}
+
+#[test]
+fn prelude_cargo_workspace_edges_use_the_generated_target_name_map() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+target_id = "registry+https://registry.example/index#shared@1.0.0"
+host_id = "git+https://example.invalid/shared#shared@1.0.0"
+workspace_id = "path+file:///workspace/app#0.1.0"
+def package(id, source):
+    return {{
+        "id": id,
+        "name": "shared",
+        "version": "1.0.0",
+        "source": source,
+        "manifest_path": "/workspace/vendor/shared/Cargo.toml",
+        "targets": [{{
+            "name": "shared",
+            "kind": ["lib"],
+            "crate_types": ["lib"],
+            "src_path": "/workspace/vendor/shared/src/lib.rs",
+            "edition": "2021",
+        }}],
+    }}
+metadata = {{
+    "packages": [{{
+        "id": workspace_id,
+        "name": "app",
+        "version": "0.1.0",
+        "source": None,
+        "targets": [],
+    }}, package(target_id, "registry+https://registry.example/index")],
+    "resolve": {{"nodes": [
+        {{"id": workspace_id, "features": [], "deps": [{{
+            "name": "shared",
+            "pkg": target_id,
+            "dep_kinds": [{{"kind": None}}],
+        }}]}},
+        {{"id": target_id, "features": [], "deps": []}},
+    ]}},
+}}
+host_metadata = {{
+    "packages": [package(host_id, "git+https://example.invalid/shared")],
+    "resolve": {{"nodes": [{{"id": host_id, "features": [], "deps": []}}]}},
+}}
+resolution = _cargo_metadata_resolution({{
+    "label": {{"package": "pkg", "name": "deps", "id": "pkg/deps"}},
+    "attrs": {{"vendor_dir": "vendor"}},
+}}, metadata, host_metadata)
+result = repr(resolution["specs"][0]["name"] == resolution["workspace_deps"]["app"][0])
+"#
+    );
+
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), "True");
+}
+
+#[test]
+fn prelude_cargo_workspace_edges_reject_missing_providers() {
+    let prelude = all_prelude_source();
+    let error = eval_prelude_function_in(
+        prelude,
+        "_cargo_resolved_workspace_deps",
+        r#"([], {"app": ["shared-1.0.0"]}, {})"#,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("provider is missing"), "{error}");
+}
+
+#[test]
+fn prelude_cargo_ignores_unused_build_dependencies_without_a_build_script() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def package(name):
+    return {{
+        "id": "registry+https://registry.example/index#" + name + "@1.0.0",
+        "name": name,
+        "version": "1.0.0",
+        "source": "registry+https://registry.example/index",
+        "manifest_path": "/workspace/vendor/" + name + "/Cargo.toml",
+        "targets": [{{
+            "name": name,
+            "kind": ["lib"],
+            "crate_types": ["lib"],
+            "src_path": "/workspace/vendor/" + name + "/src/lib.rs",
+            "edition": "2021",
+        }}],
+    }}
+owner = package("owner")
+helper = package("helper")
+metadata = {{
+    "packages": [owner, helper],
+    "resolve": {{"nodes": [
+        {{
+            "id": owner["id"],
+            "features": [],
+            "deps": [{{
+                "name": "helper",
+                "pkg": helper["id"],
+                "dep_kinds": [{{"kind": "build"}}],
+            }}],
+        }},
+        {{"id": helper["id"], "features": [], "deps": []}},
+    ]}},
+}}
+resolution = _cargo_metadata_resolution({{
+    "label": {{"package": "pkg", "name": "deps", "id": "pkg/deps"}},
+    "attrs": {{"vendor_dir": "vendor"}},
+}}, metadata)
+owner_specs = [spec for spec in resolution["specs"] if spec["name"] == "owner-1.0.0"]
+result = repr(len(owner_specs) == 1 and owner_specs[0].get("build_deps") == None)
+"#
+    );
+
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), "True");
+}
+
+#[test]
+fn prelude_cargo_metadata_rejects_missing_generated_dependencies() {
+    let prelude = all_prelude_source();
+    let error = eval_prelude_function_in(
+        prelude,
+        "_cargo_metadata_dep_refs",
+        r#"({
+            "deps": [{
+                "name": "missing_dependency",
+                "pkg": "registry+https://example.invalid#index@1.0.0",
+                "dep_kinds": [{"kind": None}],
+            }],
+        }, {}, True, False, True)"#,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("has no generated target"), "{error}");
+}
+
+#[test]
+fn prelude_cargo_vendor_paths_are_package_relative() {
+    let tmp = TempDir::new().expect("tempdir");
+    let vendor = tmp.path().join("nested/vendor/itoa");
+    std::fs::create_dir_all(&vendor).unwrap();
+    std::fs::write(
+        vendor.join("Cargo.toml"),
+        "[package]\nname = \"itoa\"\nversion = \"1.0.14\"\n",
+    )
+    .unwrap();
+    let manifest = "[package]\nname = \"consumer\"\nversion = \"0.1.0\"\n";
+    let checksum = "a".repeat(64);
+    let lockfile = format!(
+        "version = 3\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.14\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{checksum}\"\n"
+    );
+    let package_id = "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.14";
+    let metadata = serde_json::json!({
+        "once_snapshot": {
+            "inputs": {
+                "Cargo.lock": lockfile,
+                "Cargo.toml": manifest,
+            },
+            "selection": {
+                "features": [],
+                "all_features": false,
+                "no_default_features": false,
+                "target": "",
+                "host": false,
+                "host_triple": "test-host-triple",
+            },
+        },
+        "packages": [{
+            "id": package_id,
+            "name": "itoa",
+            "version": "1.0.14",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "manifest_path": "/workspace/vendor/itoa/Cargo.toml",
+            "targets": [{
+                "name": "itoa",
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "src_path": "/workspace/vendor/itoa/src/lib.rs",
+                "edition": "2021",
+            }],
+        }],
+        "resolve": {
+            "nodes": [{"id": package_id, "features": [], "deps": []}],
+        },
+    })
+    .to_string();
+    let store = store_for(tmp.path(), "nested");
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _rustc_toolchain(target):
+    return ("rustc", {{}}, "test-host-triple")
+
+attrs = {{"metadata_file": "metadata.json", "vendor_dir": "vendor"}}
+ctx = {{
+    "label": {{"package": "nested", "name": "deps", "id": "nested/deps"}},
+    "attr": attrs,
+    "attrs": attrs,
+    "files": {{
+        "Cargo.toml": {manifest:?},
+        "Cargo.lock": {lockfile:?},
+        "metadata.json": {metadata:?},
+    }},
+}}
+result = repr(_cargo_dependencies_resolver(ctx))
+"#
+    );
+
+    let (_, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let result = result.unwrap();
+    assert!(
+        result.contains("\"srcs\": [\"vendor/itoa/**/*\"]"),
+        "{result}"
+    );
+}
+
+#[test]
+fn prelude_cargo_vendor_version_comes_from_the_package_table() {
+    let prelude = all_prelude_source();
+    let wrong_package = eval_prelude_function_in(
+        &prelude,
+        "_cargo_package_version_matches",
+        r#"("[package]\nversion = \"2.0.0\"\n\n[dependencies]\nother = \"1.0.14\"\n", "1.0.14")"#,
+    )
+    .unwrap();
+    let matching_package = eval_prelude_function_in(
+        &prelude,
+        "_cargo_package_version_matches",
+        r#"("[package]\nname = \"itoa\"\nversion=\"1.0.14\"\n\n[dependencies]\n", "1.0.14")"#,
+    )
+    .unwrap();
+
+    assert_eq!(wrong_package, "False");
+    assert_eq!(matching_package, "True");
+}
+
+#[test]
+fn prelude_swift_package_dependencies_declares_graph_resolver() {
+    let source = format!(
+        "{}\nresult = repr(swift_package_dependencies.get(\"resolver\") != None)\n",
+        apple_prelude_source()
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(out, "True");
+    assert_target_kind_attrs(
+        "swift_package_dependencies",
+        &[
+            "package_path",
+            "resolved_file",
+            "resolver_inputs",
+            "graph_file",
+            "vendor_path",
+            "allow_network",
+            "products",
+            "resolved_identities",
+            "_remote_identities",
+            "_locked_pins",
+        ],
+    );
+}
+
+#[test]
+fn prelude_swift_package_resolved_supports_legacy_and_current_schemas() {
+    let current = eval_prelude_function(
+        "_swiftpm_resolved_pins",
+        r#"({
+            "version": 3,
+            "pins": [{
+                "identity": "Swift-Algorithms",
+                "kind": "remoteSourceControl",
+                "location": "https://github.com/apple/swift-algorithms.git",
+                "state": {
+                    "revision": "1234567890abcdef",
+                    "version": "1.2.0",
+                },
+            }],
+        })"#,
+    )
+    .unwrap();
+    assert!(
+        current.contains("\"identity\": \"swift-algorithms\""),
+        "{current}"
+    );
+    assert!(
+        current.contains("\"revision\": \"1234567890abcdef\""),
+        "{current}"
+    );
+    assert!(current.contains("\"version\": \"1.2.0\""), "{current}");
+
+    let legacy = eval_prelude_function(
+        "_swiftpm_resolved_pins",
+        r#"({
+            "version": 1,
+            "object": {
+                "pins": [{
+                    "package": "NIO",
+                    "repositoryURL": "https://github.com/apple/swift-nio.git",
+                    "state": {
+                        "branch": "main",
+                        "revision": "abcdef0123456789",
+                    },
+                }],
+            },
+        })"#,
+    )
+    .unwrap();
+    assert!(legacy.contains("\"identity\": \"nio\""), "{legacy}");
+    assert!(legacy.contains("\"branch\": \"main\""), "{legacy}");
+    assert!(
+        legacy.contains("\"location\": \"https://github.com/apple/swift-nio.git\""),
+        "{legacy}"
+    );
+}
+
+#[test]
+fn prelude_swift_package_graph_emits_stable_locked_targets_and_edges() {
+    let out = eval_prelude_function(
+        "_swiftpm_graph_target_specs",
+        r#"([{
+            "identity": "swift-algorithms",
+            "kind": "remoteSourceControl",
+            "location": "https://github.com/apple/swift-algorithms.git",
+            "version": "1.2.0",
+            "revision": "1234567890abcdef",
+            "branch": "",
+            "checksum": "",
+        }, {
+            "identity": "swift-numerics",
+            "kind": "registry",
+            "location": "swiftlang.swift-numerics",
+            "version": "1.0.0",
+            "revision": "",
+            "branch": "",
+            "checksum": "fedcba0987654321",
+        }], {
+            "identity": "root",
+            "dependencies": [{
+                "identity": "swift-algorithms",
+                "name": "Algorithms",
+                "dependencies": [{
+                    "identity": "swift-numerics",
+                    "name": "Numerics",
+                    "dependencies": [],
+                }],
+            }],
+        })"#,
+    )
+    .unwrap();
+
+    assert!(
+        out.contains("\"name\": \"swiftpm-swift-algorithms-revision-1234567890ab\""),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"name\": \"swiftpm-swift-numerics-checksum-fedcba098765\""),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"deps\": [\"./swiftpm-swift-numerics-checksum-fedcba098765\"]"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"roots\": [\"swiftpm-swift-algorithms-revision-1234567890ab\"]"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"resolved_identities\": [\"swift-algorithms\", \"swift-numerics\"]"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"_remote_identities\": [\"swift-algorithms\", \"swift-numerics\"]"),
+        "{out}"
+    );
+    assert!(out.contains("\"_locked_pins\":"), "{out}");
+}
+
+#[test]
+fn prelude_swift_package_graph_must_contain_every_locked_pin() {
+    let error = eval_prelude_function(
+        "_swiftpm_graph_target_specs",
+        r#"([{
+            "identity": "swift-algorithms",
+            "kind": "remoteSourceControl",
+            "location": "https://github.com/apple/swift-algorithms.git",
+            "version": "1.2.0",
+            "revision": "1234567890abcdef",
+            "branch": "",
+            "checksum": "",
+        }], {
+            "identity": "root",
+            "dependencies": [],
+        })"#,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("is missing"), "{error}");
+}
+
+#[test]
+fn prelude_swift_package_graph_rejects_unlocked_remote_nodes() {
+    let traversal =
+        eval_prelude_string_function("_swiftpm_workspace_path", r#"("../outside")"#).unwrap();
+    assert!(traversal.is_empty());
+
+    let error = eval_prelude_function(
+        "_swiftpm_graph_target_specs",
+        r#"([], {
+            "identity": "root",
+            "dependencies": [{
+                "identity": "swift-log",
+                "name": "Logging",
+                "url": "https://github.com/apple/swift-log.git",
+                "path": ".build/checkouts/swift-log",
+                "dependencies": [],
+            }],
+        })"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        error.contains("neither locked nor a workspace-local dependency"),
+        "{error}"
+    );
+}
+
+#[test]
+fn prelude_swift_package_snapshot_must_match_the_manifest() {
+    let resolved = serde_json::json!({"version": 3, "pins": []}).to_string();
+    let graph = serde_json::json!({
+        "once_manifest": "old manifest\n",
+        "once_resolved": resolved.clone(),
+        "identity": "root",
+        "dependencies": [],
+    })
+    .to_string();
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "Packages", "id": "Packages"}},
+    "attrs": {{"graph_file": "graph.json"}},
+    "files": {{
+        "Package.swift": "new manifest\n",
+        "Package.resolved": {resolved:?},
+        "graph.json": {graph:?},
+    }},
+}}
+result = repr(_swift_package_dependencies_resolver(ctx))
+"#
+    );
+    let error = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(
+        error.contains("stale relative to `Package.swift`"),
+        "{error}"
+    );
+
+    let graph = serde_json::json!({
+        "once_manifest": "new manifest\n",
+        "once_resolved": "old resolved\n",
+        "identity": "root",
+        "dependencies": [],
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "Packages", "id": "Packages"}},
+    "attrs": {{"graph_file": "graph.json"}},
+    "files": {{
+        "Package.swift": "new manifest\n",
+        "Package.resolved": {resolved:?},
+        "graph.json": {graph:?},
+    }},
+}}
+result = repr(_swift_package_dependencies_resolver(ctx))
+"#
+    );
+    let error = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(
+        error.contains("stale relative to `Package.resolved`"),
+        "{error}"
+    );
+
+    let graph = serde_json::json!({
+        "once_manifest": "new manifest\n",
+        "once_resolved": resolved.clone(),
+        "once_inputs": {
+            "Package.swift": "new manifest\n",
+            "Package.resolved": resolved.clone(),
+            "Vendor/Local/Package.swift": "old local manifest\n",
+        },
+        "identity": "root",
+        "dependencies": [],
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "Packages", "id": "Packages"}},
+    "attrs": {{"graph_file": "graph.json"}},
+    "files": {{
+        "Package.swift": "new manifest\n",
+        "Package.resolved": {resolved:?},
+        "Vendor/Local/Package.swift": "new local manifest\n",
+        "graph.json": {graph:?},
+    }},
+}}
+result = repr(_swift_package_dependencies_resolver(ctx))
+"#
+    );
+    let error = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(
+        error.contains("input binding does not match resolver_inputs"),
+        "{error}"
+    );
+}
+
+#[test]
+fn prelude_swift_package_build_directory_uses_canonical_triple() {
+    let macos = eval_prelude_string_function(
+        "_swiftpm_build_triple_dir",
+        r#"("macos", "simulator", "arm64")"#,
+    )
+    .unwrap();
+    assert_eq!(macos, "arm64-apple-macosx");
+
+    let ios = eval_prelude_string_function(
+        "_swiftpm_build_triple_dir",
+        r#"("ios", "simulator", "arm64")"#,
+    )
+    .unwrap();
+    assert_eq!(ios, "arm64-apple-ios-simulator");
+}
+
+#[test]
+fn prelude_swift_package_files_follow_package_path() {
+    let manifest =
+        eval_prelude_string_function("_swiftpm_manifest_file", r#"({"package_path": "swift"})"#)
+            .unwrap();
+    let resolved = eval_prelude_string_function(
+        "_swiftpm_package_file",
+        r#"({"package_path": "swift"}, "Package.resolved")"#,
+    )
+    .unwrap();
+    let graph = eval_prelude_string_function(
+        "_swiftpm_package_file",
+        r#"({"package_path": "swift"}, "dependencies.json")"#,
+    )
+    .unwrap();
+
+    assert_eq!(manifest, "swift/Package.swift");
+    assert_eq!(resolved, "swift/Package.resolved");
+    assert_eq!(graph, "swift/dependencies.json");
+}
+
+#[test]
+fn prelude_swift_package_default_executable_matches_compiler_toolchain() {
+    let swift = eval_prelude_string_function(
+        "_swiftpm_swift_executable",
+        r#"("swift", "", "/Applications/Xcode.app/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc")"#,
+    )
+    .unwrap();
+    assert_eq!(
+        swift,
+        "/Applications/Xcode.app/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
+    );
+
+    let pinned = eval_prelude_string_function(
+        "_swiftpm_swift_executable",
+        r#"("swift", "/Applications/Xcode-Next.app/Contents/Developer", "/ignored/swiftc")"#,
+    )
+    .unwrap();
+    assert_eq!(
+        pinned,
+        "/Applications/Xcode-Next.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
+    );
+}
+
+#[test]
+fn prelude_swift_package_example_expands_local_dependency_pin() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("prelude/examples/swift-package-dependencies-minimal");
+    let graph = once_frontend::load_graph_workspace(&root).expect("Swift package example loads");
+    let owner = graph
+        .iter()
+        .find(|target| target.label.id == "Packages")
+        .expect("Swift package dependency owner");
+    let pin = graph
+        .iter()
+        .find(|target| target.label.id == "swiftpm-greeting-local")
+        .expect("resolved local package pin");
+
+    assert_eq!(owner.deps, vec!["swiftpm-greeting-local"]);
+    assert_eq!(pin.kind, "swift_package_pin");
+    assert_eq!(
+        pin.attrs.get("identity"),
+        Some(&once_frontend::AttrValue::String("greeting".to_string()))
+    );
+    assert_eq!(
+        pin.attrs.get("source_kind"),
+        Some(&once_frontend::AttrValue::String(
+            "localSourceControl".to_string()
+        ))
+    );
+}
+
+#[test]
+fn prelude_cargo_dependencies_expands_locked_packages_into_graph_targets() {
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("prelude/examples/rust-binary-with-crate");
+    let graph = once_frontend::load_graph_workspace(&root).expect("Cargo example graph loads");
+    let owner = graph
+        .iter()
+        .find(|target| target.label.id == "cargo_dependencies")
+        .expect("cargo_dependencies owner");
+    let crate_target = graph
+        .iter()
+        .find(|target| target.label.id == "itoa-1.0.14")
+        .expect("resolved itoa target");
+
+    assert_eq!(owner.deps, vec!["itoa-1.0.14"]);
+    assert_eq!(crate_target.kind, "rust_crate");
+    assert_eq!(
+        crate_target.attrs.get("version"),
+        Some(&once_frontend::AttrValue::String("1.0.14".to_string()))
+    );
+    assert_eq!(
+        crate_target.attrs.get("checksum"),
+        Some(&once_frontend::AttrValue::String(
+            "d75a2a4b1b190afb6f5425f10f6a8f959d2ea0b9c2b1d79553551850539e4674".to_string()
+        ))
+    );
+}
+
+#[test]
+fn prelude_cargo_resolver_specs_use_named_build_dependency_role() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "",
+        "name": "cargo_dependencies",
+        "id": "cargo_dependencies",
+    }},
+    "attr": {{
+        "dep_rustc_flags": ["-C", "panic=abort", "-C", "opt-level=2"],
+    }},
+}}
+targets = _cargo_resolver_target_specs(ctx, [{{
+    "name": "builder-1.0.0-host",
+    "kind": "rust_crate",
+    "deps": ["./runtime-1.0.0"],
+    "build_deps": ["./macro-1.0.0"],
+    "host_tool": True,
+    "srcs": ["vendor/builder/src/**/*.rs"],
+    "attrs": {{
+        "package_name": "builder",
+        "version": "1.0.0",
+    }},
+}}])
+result = repr(targets)
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(
+        out.contains("\"dependencies\": {\"build_deps\": [\"./macro-1.0.0\"]}"),
+        "{out}"
+    );
+    assert!(out.contains("\"deps\": [\"./runtime-1.0.0\"]"), "{out}");
+    assert!(
+        out.contains("\"rustc_flags\": [\"-C\", \"opt-level=2\"]"),
+        "{out}"
+    );
+    assert!(!out.contains("\"host_tool\""), "{out}");
+    assert!(
+        !out.contains("\"build_deps\": [\"./macro-1.0.0\"], \"host_tool\""),
+        "{out}"
+    );
+}
+
+#[test]
+fn prelude_cargo_dependencies_aggregates_resolved_target_providers() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "",
+        "name": "cargo_dependencies",
+        "id": "cargo_dependencies",
+    }},
+    "attr": {{
+        "_cargo_resolved": True,
+        "_cargo_workspace_deps": {{
+            "hello": ["itoa-1.0.14"],
+        }},
+        "_cargo_workspace_dep_aliases": {{
+            "hello": {{"itoa-1.0.14": "formatted_integer"}},
+        }},
+    }},
+    "deps": [
+        {{
+            "label_id": "cargo_dependencies/itoa-1.0.14",
+            "package_name": "itoa",
+            "crate_name": "itoa",
+            "rlib": ".once/out/cargo_dependencies/itoa-1.0.14/libitoa.rlib",
+        }},
+        {{
+            "label_id": "cargo_dependencies/transitive-1.0.0",
+            "package_name": "transitive",
+            "crate_name": "transitive",
+            "rlib": ".once/out/cargo_dependencies/transitive-1.0.0/libtransitive.rlib",
+        }},
+    ],
+    "srcs": [],
+}}
+result = repr(_cargo_dependencies_impl(ctx))
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(out.contains("\"dependency_set\": True"), "{out}");
+    assert!(
+        out.contains("\"extern_name\": \"formatted_integer\""),
+        "{out}"
+    );
+    assert!(out.contains("cargo_dependencies/transitive-1.0.0"), "{out}");
 }
 
 #[test]
@@ -5389,280 +6761,6 @@ result = repr("ok")
         .args
         .iter()
         .any(|arg| arg == "--cfg=feature=r#default#"));
-}
-
-#[test]
-#[allow(clippy::too_many_lines)]
-fn prelude_cargo_metadata_windows_omits_unrelated_prior_dependency_search_paths() {
-    let prelude = all_prelude_source();
-    let source = format!(
-        r#"{prelude}
-def host_os():
-    return "windows"
-
-def host_env(name):
-    return ""
-
-def host_which(name):
-    fail("unexpected host_which call: " + name)
-
-def host_command(argv, env = None, merge_stderr = None):
-    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
-        return "target_arch=\"x86_64\"\nwindows\n"
-    fail("unexpected host_command call")
-
-def _rustc_toolchain(target):
-    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
-
-ctx = {{
-    "label": {{
-        "package": "cargo_dependencies_x86_64_pc_windows_msvc",
-        "name": "cargo_dependencies_x86_64_pc_windows_msvc",
-        "id": "cargo_dependencies_x86_64_pc_windows_msvc",
-    }},
-    "attr": {{}},
-    "deps": [],
-    "srcs": [],
-}}
-specs = [
-    {{
-        "name": "alpha-1.0.0",
-        "kind": "rust_crate",
-        "deps": [],
-        "srcs": [],
-        "attrs": {{
-            "package_name": "alpha",
-            "crate_name": "alpha",
-            "version": "1.0.0",
-            "crate_root": "third_party/rust/vendor/alpha-1.0.0/src/lib.rs",
-            "edition": "2021",
-        }},
-    }},
-    {{
-        "name": "beta-1.0.0",
-        "kind": "rust_crate",
-        "deps": [],
-        "srcs": [],
-        "attrs": {{
-            "package_name": "beta",
-            "crate_name": "beta",
-            "version": "1.0.0",
-            "crate_root": "third_party/rust/vendor/beta-1.0.0/src/lib.rs",
-            "edition": "2021",
-        }},
-    }},
-]
-providers, _ = _cargo_compile_resolved_specs(ctx, specs)
-result = repr([provider["label_id"] for provider in providers])
-"#
-    );
-    let workspace = TempDir::new().unwrap();
-    let store = store_for(
-        workspace.path(),
-        "cargo_dependencies_x86_64_pc_windows_msvc",
-    );
-
-    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
-
-    assert_eq!(
-        out.unwrap(),
-        "[\"cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0\", \"cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0\"]"
-    );
-    let beta_rustc = store
-        .actions
-        .iter()
-        .find(|action| {
-            action.identifier.as_deref()
-                == Some("cargo_dependencies_x86_64_pc_windows_msvc/beta-1.0.0:rustc")
-        })
-        .expect("beta rustc action");
-    let arg_file = beta_rustc.arg_files.first().expect("beta response file");
-    // beta does not depend on alpha, so an unrelated prior provider must never
-    // leak into beta's externs or search path. Folding every prior provider
-    // into each crate grew the Windows search set with the whole dependency
-    // closure and exhausted the runner's disk.
-    assert!(
-        !arg_file
-            .args
-            .iter()
-            .any(|arg| arg.contains("cargo_dependencies_x86_64_pc_windows_msvc/alpha-1.0.0")),
-        "unrelated prior provider alpha leaked into {:?}",
-        arg_file.args
-    );
-    assert!(!arg_file.args.iter().any(|arg| arg.starts_with("alpha=")));
-    assert!(
-        !store.actions.iter().any(|action| {
-            action
-                .outputs
-                .iter()
-                .any(|output| output.contains("/search/prior-deps"))
-        }),
-        "no per-crate prior-deps staging directory should be created",
-    );
-}
-
-#[test]
-#[allow(clippy::too_many_lines)]
-fn prelude_cargo_metadata_windows_proc_macro_deps_from_metadata_are_direct_externs() {
-    let prelude = all_prelude_source();
-    let source = format!(
-        r#"{prelude}
-def host_os():
-    return "windows"
-
-def host_env(name):
-    return ""
-
-def host_which(name):
-    fail("unexpected host_which call: " + name)
-
-def host_command(argv, env = None, merge_stderr = None):
-    if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "cfg":
-        return "target_arch=\"x86_64\"\nwindows\n"
-    fail("unexpected host_command call")
-
-def _rustc_toolchain(target):
-    return ("C:/Rust/bin/rustc.exe", "rustc-test", "x86_64-pc-windows-msvc")
-
-ctx = {{
-    "attrs": {{
-        "target": "x86_64-pc-windows-msvc",
-        "vendor_dir": "third_party/rust/vendor",
-    }},
-}}
-
-def package(name, version, target_name, kind = "lib"):
-    crate_types = ["proc-macro"] if kind == "proc-macro" else ["lib"]
-    return {{
-        "id": "registry+https://github.com/rust-lang/crates.io-index#" + name + "@" + version,
-        "name": name,
-        "version": version,
-        "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "manifest_path": "/workspace/vendor/" + name + "-" + version + "/Cargo.toml",
-        "targets": [{{
-            "name": target_name,
-            "kind": [kind],
-            "crate_types": crate_types,
-            "src_path": "/workspace/vendor/" + name + "-" + version + "/src/lib.rs",
-            "edition": "2018",
-        }}],
-    }}
-
-def dep(name, package, version):
-    return {{
-        "name": name,
-        "pkg": "registry+https://github.com/rust-lang/crates.io-index#" + package + "@" + version,
-        "dep_kinds": [{{"kind": None, "target": None}}],
-    }}
-
-packages = [
-    package("futures-channel", "0.3.32", "futures_channel"),
-    package("futures-core", "0.3.32", "futures_core"),
-    package("futures-io", "0.3.32", "futures_io"),
-    package("futures-macro", "0.3.32", "futures_macro", "proc-macro"),
-    package("futures-sink", "0.3.32", "futures_sink"),
-    package("futures-task", "0.3.32", "futures_task"),
-    package("memchr", "2.8.0", "memchr"),
-    package("pin-project-lite", "0.2.17", "pin_project_lite"),
-    package("slab", "0.4.12", "slab"),
-    package("futures-util", "0.3.32", "futures_util"),
-]
-metadata = {{
-    "packages": packages,
-    "resolve": {{
-        "nodes": [
-            {{"id": package["id"], "features": [], "deps": []}}
-            for package in packages
-            if package["name"] != "futures-util"
-        ] + [{{
-            "id": "registry+https://github.com/rust-lang/crates.io-index#futures-util@0.3.32",
-            "features": [
-                "alloc",
-                "async-await",
-                "async-await-macro",
-                "channel",
-                "default",
-                "futures-channel",
-                "futures-io",
-                "futures-macro",
-                "futures-sink",
-                "io",
-                "memchr",
-                "sink",
-                "slab",
-                "std",
-            ],
-            "deps": [
-                dep("futures_channel", "futures-channel", "0.3.32"),
-                dep("futures_core", "futures-core", "0.3.32"),
-                dep("futures_io", "futures-io", "0.3.32"),
-                dep("futures_macro_alias", "futures-macro", "0.3.32"),
-                dep("futures_sink", "futures-sink", "0.3.32"),
-                dep("futures_task", "futures-task", "0.3.32"),
-                dep("memchr", "memchr", "2.8.0"),
-                dep("pin_project_lite", "pin-project-lite", "0.2.17"),
-                dep("slab", "slab", "0.4.12"),
-            ],
-        }}],
-    }},
-}}
-specs = _cargo_metadata_targets(ctx, metadata)
-deps, _ = _cargo_compile_resolved_specs({{
-    "label": {{
-        "package": "cargo_dependencies_x86_64_pc_windows_msvc",
-        "name": "cargo_dependencies_x86_64_pc_windows_msvc",
-        "id": "cargo_dependencies_x86_64_pc_windows_msvc",
-    }},
-    "attr": {{}},
-    "deps": [],
-    "srcs": [],
-}}, specs)
-result = repr([provider["label_id"] for provider in deps])
-"#
-    );
-    let workspace = TempDir::new().unwrap();
-    let store = store_for(
-        workspace.path(),
-        "cargo_dependencies_x86_64_pc_windows_msvc",
-    );
-
-    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
-
-    assert!(out.unwrap().contains("futures-util-0.3.32"));
-    let rustc = store
-        .actions
-        .iter()
-        .find(|action| {
-            action.identifier.as_deref()
-                == Some("cargo_dependencies_x86_64_pc_windows_msvc/futures-util-0.3.32:rustc")
-        })
-        .expect("futures-util rustc action");
-    let arg_file = rustc.arg_files.first().expect("futures-util response file");
-    let macro_dir =
-        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/futures-macro-0.3.32/proc-macro-search";
-    let macro_artifact = format!(
-        "{macro_dir}/futures_macro-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_FUTURES_MACRO_0_3_32.dll"
-    );
-    let macro_extern = format!("futures_macro_alias={macro_artifact}");
-
-    // Proc-macros are passed as ordinary externs in the response file, the
-    // same way as rlibs and as on other platforms.
-    assert!(
-        arg_file
-            .args
-            .windows(2)
-            .any(|args| args[0] == "--extern" && args[1] == macro_extern),
-        "{macro_extern} extern missing from {:?}",
-        arg_file.args
-    );
-    assert!(
-        !rustc
-            .argv
-            .windows(2)
-            .any(|args| args[0] == "--extern" && args[1] == macro_extern),
-        "{macro_extern} should not be passed inline: {:?}",
-        rustc.argv
-    );
 }
 
 #[test]
@@ -6373,11 +7471,11 @@ ctx = {{
         "build_script": "build.rs",
     }},
     "deps": [],
-    "build_deps": [{{
+    "deps_by_role": {{"build_deps": [{{
         "label_id": "macros/derive",
         "crate_name": "derive",
         "proc_macro": ".once/out/macros/derive/derive.dll",
-    }}],
+    }}]}},
     "srcs": ["src/**/*.rs"],
 }}
 _rust_compile(ctx, "rlib", "src/lib.rs", "libapp.rlib")

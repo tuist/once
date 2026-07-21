@@ -1,0 +1,16 @@
+.{
+    .name = .once_zig_package_example,
+    .version = "0.0.0",
+    .fingerprint = 0xb50447f4f928d2ee,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .math = .{
+            .url = "https://example.invalid/math.tar.gz",
+            .hash = "math-1.0.0-N3AjZe8AAAA_BHML9VFPGVQiHPOsQpQ9CpiaVtRYkACI",
+        },
+    },
+    .paths = .{
+        "build.zig.zon",
+        "src",
+    },
+}

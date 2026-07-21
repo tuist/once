@@ -1,0 +1,24 @@
+{
+  "once_manifest": "// swift-tools-version: 6.0\nimport PackageDescription\n\nlet package = Package(\n    name: \"Root\",\n    products: [\n        .library(name: \"Root\", type: .static, targets: [\"Root\"]),\n    ],\n    dependencies: [\n        .package(path: \"Vendor/Greeting\"),\n    ],\n    targets: [\n        .target(\n            name: \"Root\",\n            dependencies: [\n                .product(name: \"Greeting\", package: \"Greeting\"),\n            ]\n        ),\n    ]\n)\n",
+  "once_resolved": "{\n  \"pins\" : [\n  ],\n  \"version\" : 3\n}\n",
+  "once_inputs": {
+    "Package.resolved": "{\n  \"pins\" : [\n  ],\n  \"version\" : 3\n}\n",
+    "Package.swift": "// swift-tools-version: 6.0\nimport PackageDescription\n\nlet package = Package(\n    name: \"Root\",\n    products: [\n        .library(name: \"Root\", type: .static, targets: [\"Root\"]),\n    ],\n    dependencies: [\n        .package(path: \"Vendor/Greeting\"),\n    ],\n    targets: [\n        .target(\n            name: \"Root\",\n            dependencies: [\n                .product(name: \"Greeting\", package: \"Greeting\"),\n            ]\n        ),\n    ]\n)\n",
+    "Vendor/Greeting/Package.swift": "// swift-tools-version: 6.0\nimport PackageDescription\n\nlet package = Package(\n    name: \"Greeting\",\n    products: [\n        .library(name: \"Greeting\", type: .static, targets: [\"Greeting\"]),\n    ],\n    targets: [\n        .target(name: \"Greeting\"),\n    ]\n)\n"
+  },
+  "identity": "root",
+  "name": "Root",
+  "url": "/workspace",
+  "version": "unspecified",
+  "path": "/workspace",
+  "dependencies": [
+    {
+      "identity": "greeting",
+      "name": "Greeting",
+      "url": "Vendor/Greeting",
+      "version": "unspecified",
+      "path": "Vendor/Greeting",
+      "dependencies": []
+    }
+  ]
+}
