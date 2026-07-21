@@ -5716,6 +5716,63 @@ fn prelude_cargo_dependencies_declares_graph_resolver() {
 }
 
 #[test]
+fn prelude_cargo_metadata_uses_declared_cargo_config() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+commands = []
+def host_command(argv, env = None, merge_stderr = None):
+    commands.append(argv)
+    return "{{\"argv\": []}}"
+
+ctx = {{
+    "label": {{"package": "examples/rust", "name": "deps", "id": "examples/rust/deps"}},
+    "attr": {{}},
+    "files": {{".cargo/config.toml": "[source.crates-io]\nreplace-with = 'vendored'\n"}},
+}}
+_cargo_metadata_for_platform(ctx, "cargo", "examples/rust/Cargo.toml", "x86_64-unknown-linux-gnu")
+result = repr(commands[0])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(
+        out.contains(
+            "[\"cargo\", \"--config\", \"/workspace/examples/rust/.cargo/config.toml\", \"metadata\""
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn prelude_cargo_explicit_targets_scope_generated_names() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+package = {{
+    "name": "itoa",
+    "version": "1.0.14",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+}}
+counts = _cargo_duplicate_counts([package])
+result = repr([
+    _cargo_target_name(package, counts),
+    _cargo_target_name(package, counts, "aarch64-apple-darwin"),
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(
+        out,
+        "[\"itoa-1.0.14\", \"itoa-1.0.14-aarch64-apple-darwin\"]"
+    );
+}
+
+#[test]
 fn prelude_cargo_metadata_must_match_the_authoritative_lockfile() {
     let prelude = all_prelude_source();
     let source = format!(
@@ -6647,8 +6704,8 @@ targets = _cargo_metadata_targets({{
 }})
 by_name = {{target["name"]: target for target in targets}}
 result = repr([
-    by_name["anyhow-1.0.102"]["attrs"]["crate_root"],
-    by_name["anyhow-1.0.102"]["attrs"]["build_script"],
+    by_name["anyhow-1.0.102-x86_64-pc-windows-msvc"]["attrs"]["crate_root"],
+    by_name["anyhow-1.0.102-x86_64-pc-windows-msvc"]["attrs"]["build_script"],
 ])
 "#
     );
@@ -6710,7 +6767,7 @@ targets = _cargo_metadata_targets({{
         }}],
     }},
 }})
-target = {{target["name"]: target for target in targets}}["anyhow-1.0.102"]
+target = {{target["name"]: target for target in targets}}["anyhow-1.0.102-x86_64-pc-windows-msvc"]
 ctx = {{
     "label": {{
         "package": "cargo_dependencies_x86_64_pc_windows_msvc",
@@ -6728,7 +6785,7 @@ result = repr("ok")
     let workspace = TempDir::new().unwrap();
     let store = store_for(
         workspace.path(),
-        "cargo_dependencies_x86_64_pc_windows_msvc/anyhow-1.0.102",
+        "cargo_dependencies_x86_64_pc_windows_msvc/anyhow-1.0.102-x86_64-pc-windows-msvc",
     );
 
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
@@ -6739,7 +6796,7 @@ result = repr("ok")
         .iter()
         .find(|action| {
             action.identifier.as_deref()
-                == Some("cargo_dependencies_x86_64_pc_windows_msvc/anyhow-1.0.102:rustc")
+                == Some("cargo_dependencies_x86_64_pc_windows_msvc/anyhow-1.0.102-x86_64-pc-windows-msvc:rustc")
         })
         .expect("rustc action");
     assert_eq!(rustc.arg_files.len(), 1);
@@ -6825,10 +6882,10 @@ targets = _cargo_metadata_targets({{
 }})
 by_name = {{target["name"]: target for target in targets}}
 result = repr([
-    by_name["quote-1.0.45"]["attrs"].get("target"),
-    by_name["quote-1.0.45-host"]["attrs"].get("target"),
-    by_name["linktime-proc-macro-0.2.0"]["attrs"].get("target"),
-    by_name["linktime-proc-macro-0.2.0"]["deps"],
+    by_name["quote-1.0.45-x86_64-apple-darwin"]["attrs"].get("target"),
+    by_name["quote-1.0.45-x86_64-apple-darwin-host"]["attrs"].get("target"),
+    by_name["linktime-proc-macro-0.2.0-x86_64-apple-darwin"]["attrs"].get("target"),
+    by_name["linktime-proc-macro-0.2.0-x86_64-apple-darwin"]["deps"],
 ])
 "#
     );
@@ -6836,7 +6893,7 @@ result = repr([
 
     assert_eq!(
         out,
-        "[\"x86_64-apple-darwin\", None, None, [\"./quote-1.0.45-host\"]]"
+        "[\"x86_64-apple-darwin\", None, None, [\"./quote-1.0.45-x86_64-apple-darwin-host\"]]"
     );
 }
 
@@ -6964,12 +7021,12 @@ host_metadata = {{
 targets = _cargo_metadata_targets(ctx, target_metadata, host_metadata)
 by_name = {{target["name"]: target for target in targets}}
 result = repr([
-    by_name["cpufeatures-0.2.17"]["deps"],
-    by_name["cpufeatures-0.2.17-host"]["deps"],
-    by_name["cpufeatures-0.2.17-host"]["attrs"].get("target"),
-    by_name["libc-0.2.186-host"]["attrs"].get("target"),
-    by_name["cpufeatures-0.2.17"].get("host_tool"),
-    by_name["cpufeatures-0.2.17-host"].get("host_tool"),
+    by_name["cpufeatures-0.2.17-x86_64-apple-darwin"]["deps"],
+    by_name["cpufeatures-0.2.17-x86_64-apple-darwin-host"]["deps"],
+    by_name["cpufeatures-0.2.17-x86_64-apple-darwin-host"]["attrs"].get("target"),
+    by_name["libc-0.2.186-x86_64-apple-darwin-host"]["attrs"].get("target"),
+    by_name["cpufeatures-0.2.17-x86_64-apple-darwin"].get("host_tool"),
+    by_name["cpufeatures-0.2.17-x86_64-apple-darwin-host"].get("host_tool"),
 ])
 "#
     );
@@ -6977,7 +7034,7 @@ result = repr([
 
     assert_eq!(
         out,
-        "[[], [\"./libc-0.2.186-host\"], None, None, False, True]"
+        "[[], [\"./libc-0.2.186-x86_64-apple-darwin-host\"], None, None, False, True]"
     );
 }
 
@@ -7110,14 +7167,17 @@ host_metadata = {{
 targets = _cargo_metadata_targets(ctx, target_metadata, host_metadata)
 by_name = {{target["name"]: target for target in targets}}
 result = repr([
-    by_name["document-features-0.2.12"]["attrs"]["features"],
-    by_name["document-features-0.2.12"]["deps"],
+    by_name["document-features-0.2.12-x86_64-apple-darwin"]["attrs"]["features"],
+    by_name["document-features-0.2.12-x86_64-apple-darwin"]["deps"],
 ])
 "#
     );
     let out = eval_prelude_source_to_repr(source).unwrap();
 
-    assert_eq!(out, "[[\"default\"], [\"./litrs-1.0.0-host\"]]");
+    assert_eq!(
+        out,
+        "[[\"default\"], [\"./litrs-1.0.0-x86_64-apple-darwin-host\"]]"
+    );
 }
 
 #[cfg(unix)]

@@ -2258,19 +2258,30 @@ def _cargo_dependencies_resolver(ctx):
     }
 
 def _cargo_metadata_for_platform(ctx, cargo, manifest, platform):
-    argv = [
-        cargo,
+    argv = [cargo]
+    config = _cargo_resolver_config(ctx)
+    if config:
+        argv.extend(["--config", _workspace_absolute(config)])
+    argv.extend([
         "metadata",
         "--locked",
         "--offline",
         "--format-version", "1",
         "--manifest-path", _workspace_absolute(manifest),
-    ]
+    ])
     if platform:
         argv.extend(["--filter-platform", platform])
     argv.extend(_cargo_feature_args(ctx))
     metadata_content = host_command(argv)
     return json_decode(metadata_content)
+
+def _cargo_resolver_config(ctx):
+    files = ctx.get("files") or {}
+    for path in [".cargo/config.toml", ".cargo/config"]:
+        if path in files:
+            package = ctx["label"]["package"]
+            return package + "/" + path if package else path
+    return ""
 
 def _cargo_ref_name(ref):
     if ref.startswith("./"):
@@ -2389,12 +2400,14 @@ def _cargo_duplicate_counts(packages):
         counts[key] = counts.get(key, 0) + 1
     return counts
 
-def _cargo_target_name(package, duplicate_counts):
+def _cargo_target_name(package, duplicate_counts, target = ""):
     base = package["name"] + "-" + package["version"]
     key = _cargo_key([package["name"], package["version"]])
-    if duplicate_counts.get(key, 0) <= 1:
-        return base
-    return base + "-" + _cargo_source_suffix(package.get("source") or "")
+    if duplicate_counts.get(key, 0) > 1:
+        base += "-" + _cargo_source_suffix(package.get("source") or "")
+    if target:
+        base += "-" + _cargo_source_suffix(target)
+    return base
 
 def _cargo_normalized_path(path):
     return path.replace("\\", "/")
@@ -2444,8 +2457,8 @@ def _cargo_package_is_proc_macro(package):
         return False
     return _cargo_kind_for_target(target) == "rust_proc_macro"
 
-def _cargo_host_variant_name(package, duplicate_counts):
-    return _cargo_target_name(package, duplicate_counts) + "-host"
+def _cargo_host_variant_name(package, duplicate_counts, target = ""):
+    return _cargo_target_name(package, duplicate_counts, target) + "-host"
 
 def _cargo_host_dependency_ids(packages, nodes, host_nodes = None):
     package_by_id, _ = _cargo_package_indexes(packages, _cargo_duplicate_counts(packages))
@@ -2488,19 +2501,19 @@ def _cargo_host_dependency_ids(packages, nodes, host_nodes = None):
                     stack.append(dep_id)
     return needed
 
-def _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids):
+def _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, target = ""):
     target_names = {}
     host_names = {}
     for package in packages:
         package_id = package.get("id")
         if package.get("source") == None or not package_id:
             continue
-        target_name = _cargo_target_name(package, duplicate_counts)
+        target_name = _cargo_target_name(package, duplicate_counts, target)
         target_names[package_id] = target_name
         if _cargo_package_is_proc_macro(package):
             host_names[package_id] = target_name
         elif host_dependency_ids.get(package_id):
-            host_names[package_id] = _cargo_host_variant_name(package, duplicate_counts)
+            host_names[package_id] = _cargo_host_variant_name(package, duplicate_counts, target)
     return (target_names, host_names)
 
 def _cargo_package_indexes(packages, duplicate_counts):
@@ -2689,9 +2702,9 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None):
     nodes = _cargo_resolve_nodes(metadata)
     host_nodes = _cargo_resolve_nodes(host_metadata) if host_metadata != None else nodes
     host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, host_nodes)
-    id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids)
     vendor_dir = _trim_trailing_slash(ctx["attrs"].get("vendor_dir") or "vendor")
     rust_target = ctx["attrs"].get("target") or ""
+    id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, rust_target)
     targets = []
     for package in packages:
         if package.get("source") == None:
@@ -2700,7 +2713,7 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None):
         if target == None:
             continue
         package_id = package.get("id")
-        name = id_to_target_name.get(package_id) or _cargo_target_name(package, duplicate_counts)
+        name = id_to_target_name.get(package_id) or _cargo_target_name(package, duplicate_counts, rust_target)
         kind = _cargo_kind_for_target(target)
         source_root = _cargo_vendor_source_root(ctx, vendor_dir, package, _cargo_target_name(package, duplicate_counts))
         rel_root = _cargo_source_rel(package, target)

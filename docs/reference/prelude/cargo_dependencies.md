@@ -27,6 +27,13 @@ direct external dependencies Cargo reported for that workspace package.
 The configured manifest and lockfile must both be covered by `resolver_inputs`,
 together with any workspace member manifests Cargo needs to inspect. When
 `resolver_inputs` is empty or omitted, `srcs` supplies those files instead.
+When the declared inputs include `.cargo/config.toml` or `.cargo/config`, Once
+passes that file to Cargo explicitly. Vendored source replacement therefore
+works even when Once loads the graph from a different process directory.
+
+Generated target names include the destination target triple when `target` is
+set. Native and cross-compiled dependency graphs can therefore coexist in one
+package without synthetic target collisions.
 
 ## Attributes
 
