@@ -92,13 +92,14 @@ pub async fn test_with_filters(
             anyhow::bail!("invalid internal test batch identifier");
         }
     }
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     if !test_filters.is_empty() {
-        let manifest = crate::commands::query::test_manifest_record(workspace, target_id)?;
+        let manifest =
+            crate::commands::query::test_manifest_record_with_graph(workspace, target_id, &graph)?;
         for test_filter in test_filters {
             crate::commands::query::validate_test_unit(&manifest, target_id, test_filter)?;
         }
     }
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let session = analysis::BuildSession::new_with_options(
         workspace,
         cache,
@@ -157,7 +158,7 @@ pub async fn test_with_filters(
     };
     record_capability_run(workspace, &record).await;
     if test_filters.is_empty() {
-        crate::commands::query::refresh_test_manifest(workspace, target_id)
+        crate::commands::query::refresh_test_manifest_for_target(workspace, target)
             .context("persisting test manifest")?;
     }
     write_record(output, &record).await?;
@@ -167,12 +168,12 @@ pub async fn test_with_filters(
 pub async fn run(
     workspace: &Path,
     cache: &CacheProvider,
+    graph: Vec<GraphTarget>,
     output: Output,
     target_id: &str,
     options: GraphRunOptions,
     sandbox: SandboxMode,
 ) -> Result<ExitCode> {
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let session = analysis::BuildSession::new_with_options(
         workspace,
         cache,
@@ -273,14 +274,25 @@ async fn build_target(
     }
 }
 
-pub fn supports(workspace: &Path, target_id: &str, capability: &str) -> Result<bool> {
-    let Some(target) = find_graph_target(workspace, target_id)? else {
-        return Ok(false);
-    };
-    Ok(target
-        .capabilities
+pub fn load_graph_for_capability(
+    workspace: &Path,
+    target_id: &str,
+    capability: &str,
+) -> Result<Option<Vec<GraphTarget>>> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    Ok(graph_supports(&graph, target_id, capability).then_some(graph))
+}
+
+fn graph_supports(graph: &[GraphTarget], target_id: &str, capability: &str) -> bool {
+    graph
         .iter()
-        .any(|candidate| candidate.name == capability))
+        .find(|target| target.label.id == target_id)
+        .is_some_and(|target| {
+            target
+                .capabilities
+                .iter()
+                .any(|candidate| candidate.name == capability)
+        })
 }
 
 async fn run_target_capability(
@@ -360,13 +372,6 @@ async fn record_capability_run(workspace: &Path, record: &CapabilityRunRecord) {
         &record.result,
     )
     .await;
-}
-
-fn find_graph_target(workspace: &Path, target_id: &str) -> Result<Option<GraphTarget>> {
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    Ok(graph
-        .into_iter()
-        .find(|target| target.label.id == target_id))
 }
 
 fn ensure_capability<'a>(
@@ -486,6 +491,15 @@ mod tests {
         let target = graph_target("apple_application", &["build", "run"]);
         let capability = ensure_capability(&target, "run").unwrap();
         assert_eq!(capability.name, "run");
+    }
+
+    #[test]
+    fn graph_supports_finds_a_capability_in_a_preloaded_graph() {
+        let graph = vec![graph_target("apple_application", &["build", "run"])];
+
+        assert!(graph_supports(&graph, "apps/ios/App", "run"));
+        assert!(!graph_supports(&graph, "apps/ios/App", "test"));
+        assert!(!graph_supports(&graph, "apps/ios/Missing", "run"));
     }
 
     #[test]

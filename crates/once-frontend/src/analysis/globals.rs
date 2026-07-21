@@ -115,10 +115,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// `dict<string, string>` of environment variables overlaid on the
     /// host process env. Both `argv` and `env` participate in the
     /// cache key, so a different `DEVELOPER_DIR` resolves to a
-    /// different cached result. Schema parsing returns `""`.
+    /// different cached result. When set, `cwd` must be absolute.
+    /// Schema parsing returns `""`.
     fn host_command<'v>(
         argv: Value<'v>,
         env: Option<Value<'v>>,
+        cwd: Option<&str>,
         merge_stderr: Option<bool>,
     ) -> anyhow::Result<String> {
         if !analysis_active() {
@@ -132,7 +134,14 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let merge_stderr = merge_stderr.unwrap_or(false);
         with_store(|store| -> Result<String> {
             let store = store.ok_or_else(|| anyhow!("host_command called outside analysis"))?;
-            store.host_cache.command(&argv, &env, merge_stderr)
+            if let Some(cwd) = cwd {
+                if !Path::new(cwd).is_absolute() {
+                    return Err(anyhow!("host_command cwd must be absolute, got `{cwd}`"));
+                }
+            }
+            store
+                .host_cache
+                .command(&argv, &env, cwd.map(Path::new), merge_stderr)
         })
     }
 

@@ -8,8 +8,15 @@ use crate::{
 
 pub fn validate_workspace(workspace: &Path) -> crate::Result<Vec<Diagnostic>> {
     let graph = load_graph_workspace(workspace)?;
+    validate_workspace_graph(workspace, &graph)
+}
+
+pub fn validate_workspace_graph(
+    workspace: &Path,
+    graph: &[GraphTarget],
+) -> crate::Result<Vec<Diagnostic>> {
     let schemas = target_kind_schemas_for_workspace(workspace)?;
-    Ok(validate_graph(workspace, &graph, &schemas))
+    Ok(validate_graph(workspace, graph, &schemas))
 }
 
 fn validate_graph(

@@ -17,6 +17,9 @@ use super::store::{with_active_store, AnalysisStore, DeclaredAction, HostCache};
 use super::values::{attr_value_to_starlark, json_to_value, value_to_json};
 use crate::graph::GraphTarget;
 
+type ResolverCallback<'a> =
+    dyn FnMut(&GraphTarget, &BTreeMap<String, String>) -> Result<Option<JsonValue>> + 'a;
+
 /// Extra execution context supplied by command surfaces.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AnalysisOptions {
@@ -50,7 +53,7 @@ pub struct AnalysisResult {
 pub struct AnalysisEngine {
     source_path: Arc<str>,
     source: Arc<str>,
-    target_kind_impls: TargetKindImpls,
+    target_kind_callbacks: TargetKindCallbacks,
     host_cache: HostCache,
     options: AnalysisOptions,
 }
@@ -60,7 +63,7 @@ impl fmt::Debug for AnalysisEngine {
         f.debug_struct("AnalysisEngine")
             .field("source_path", &self.source_path)
             .field("source_len", &self.source.len())
-            .field("target_kind_impls", &self.target_kind_impls)
+            .field("target_kind_callbacks", &self.target_kind_callbacks)
             .field("host_cache", &self.host_cache)
             .field("options", &self.options)
             .finish()
@@ -78,6 +81,20 @@ impl AnalysisEngine {
 
     pub fn for_workspace(root: &Path) -> Result<Self> {
         Self::for_workspace_with_options(root, AnalysisOptions::default())
+    }
+
+    pub(crate) fn resolve_workspace_targets<T>(
+        root: &Path,
+        operation: impl FnOnce(&mut ResolverCallback<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let source = crate::modules::combined_module_source_for_workspace(root)?;
+        resolve_targets_in_starlark(
+            crate::modules::COMBINED_MODULE_PATH,
+            &source,
+            root,
+            &HostCache::default(),
+            operation,
+        )
     }
 
     pub fn for_workspace_with_options(root: &Path, options: AnalysisOptions) -> Result<Self> {
@@ -117,11 +134,11 @@ impl AnalysisEngine {
     ) -> Result<Self> {
         let source_path = source_path.into();
         let source = source.into();
-        let target_kind_impls = parse_target_kind_impls(&source_path, &source)?;
+        let target_kind_callbacks = parse_target_kind_callbacks(&source_path, &source)?;
         Ok(Self {
             source_path,
             source,
-            target_kind_impls,
+            target_kind_callbacks,
             host_cache: HostCache::default(),
             options,
         })
@@ -134,7 +151,7 @@ impl AnalysisEngine {
 
     #[must_use]
     pub fn target_kind_has_impl(&self, kind: &str) -> bool {
-        self.target_kind_impls.has_impl(kind)
+        self.target_kind_callbacks.has_impl(kind)
     }
 
     /// Run a single target's target kind impl and collect its declared
@@ -196,14 +213,19 @@ impl AnalysisEngine {
 
 /// Cached view of which target kinds declare executable impls.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TargetKindImpls {
-    by_kind: BTreeMap<String, bool>,
+struct TargetKindCallbacks {
+    by_kind: BTreeMap<String, TargetKindCallbackFlags>,
 }
 
-impl TargetKindImpls {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TargetKindCallbackFlags {
+    has_impl: bool,
+}
+
+impl TargetKindCallbacks {
     #[must_use]
     pub fn has_impl(&self, kind: &str) -> bool {
-        self.by_kind.get(kind).copied().unwrap_or(false)
+        self.by_kind.get(kind).is_some_and(|flags| flags.has_impl)
     }
 }
 
@@ -263,7 +285,7 @@ pub fn target_kind_has_impl(kind: &str) -> Result<bool> {
     Ok(AnalysisEngine::new()?.target_kind_has_impl(kind))
 }
 
-fn parse_target_kind_impls(path: &str, source: &str) -> Result<TargetKindImpls> {
+fn parse_target_kind_callbacks(path: &str, source: &str) -> Result<TargetKindCallbacks> {
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
             .map_err(|error| anyhow!("prelude parse failed: {error:?}"))?;
@@ -281,7 +303,9 @@ fn parse_target_kind_impls(path: &str, source: &str) -> Result<TargetKindImpls> 
             if by_kind
                 .insert(
                     target_kind.clone(),
-                    impl_value.is_some_and(|value| !value.is_none()),
+                    TargetKindCallbackFlags {
+                        has_impl: impl_value.is_some_and(|value| !value.is_none()),
+                    },
                 )
                 .is_some()
             {
@@ -290,7 +314,7 @@ fn parse_target_kind_impls(path: &str, source: &str) -> Result<TargetKindImpls> 
                 ));
             }
         }
-        Ok(TargetKindImpls { by_kind })
+        Ok(TargetKindCallbacks { by_kind })
     })
 }
 
@@ -326,6 +350,55 @@ fn analyze_in_starlark(
     })
 }
 
+fn resolve_targets_in_starlark<T>(
+    path: &str,
+    source: &str,
+    workspace_root: &Path,
+    host_cache: &HostCache,
+    operation: impl FnOnce(&mut ResolverCallback<'_>) -> Result<T>,
+) -> Result<T> {
+    Module::with_temp_heap(|module| {
+        let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
+            .map_err(|error| anyhow!("prelude parse failed: {error:?}"))?;
+        let globals = globals_for_prelude();
+        let mut eval = Evaluator::new(&module);
+        eval.eval_module(ast, &globals)
+            .map_err(|error| anyhow!("prelude eval failed: {error:?}"))?;
+        let target_kinds = crate::modules::exported_target_kind_values(&module);
+        let mut resolve = |target: &GraphTarget,
+                           files: &BTreeMap<String, String>|
+         -> Result<Option<JsonValue>> {
+            let resolver = find_callback_for_kind(&target_kinds, &target.kind, "resolver")?;
+            let Some(resolver) = resolver else {
+                return Ok(None);
+            };
+            let build_dir = format!(".once/out/{}", target.label.id);
+            let store = AnalysisStore::with_host_cache(
+                workspace_root.to_path_buf(),
+                target.label.package.clone(),
+                build_dir,
+                host_cache.clone(),
+            );
+            let (store, result) = with_active_store(store, || -> Result<Option<JsonValue>> {
+                let ctx = build_resolver_ctx(&eval, target, files);
+                let graph_data = eval.eval_function(resolver, &[ctx], &[]).map_err(|error| {
+                    anyhow!("resolver eval failed for {}: {error:?}", target.label.id)
+                })?;
+                Ok(Some(value_to_json(graph_data)))
+            });
+            let value = result?;
+            if !store.actions.is_empty() || !store.declared_outputs.is_empty() {
+                return Err(anyhow!(
+                    "resolver for {} declared actions or outputs; resolvers may only return graph data",
+                    target.label.id
+                ));
+            }
+            Ok(value)
+        };
+        operation(&mut resolve)
+    })
+}
+
 fn find_impl_for_kind<'v>(
     target_kinds: &[crate::modules::TargetKindExport<'v>],
     kind: &str,
@@ -346,6 +419,58 @@ fn find_impl_for_kind<'v>(
         }
     }
     Err(anyhow!("no target kind found for kind `{kind}`"))
+}
+
+fn find_callback_for_kind<'v>(
+    target_kinds: &[crate::modules::TargetKindExport<'v>],
+    kind: &str,
+    field: &str,
+) -> Result<Option<Value<'v>>> {
+    for export in target_kinds {
+        let dict = DictRef::from_value(export.value)
+            .ok_or_else(|| anyhow!("target kind export `{}` is not a dict", export.name))?;
+        let target_kind = crate::modules::target_kind(export.value, export.name)
+            .map_err(|message| anyhow!(message))?;
+        if target_kind != kind {
+            continue;
+        }
+        let value = dict
+            .get_str(field)
+            .ok_or_else(|| anyhow!("target kind `{kind}` is missing `{field}` field"))?;
+        return Ok((!value.is_none()).then_some(value));
+    }
+    Err(anyhow!("no target kind found for kind `{kind}`"))
+}
+
+fn build_resolver_ctx<'v>(
+    eval: &Evaluator<'v, '_, '_>,
+    target: &GraphTarget,
+    files: &BTreeMap<String, String>,
+) -> Value<'v> {
+    let heap = eval.heap();
+    let label = heap.alloc(AllocDict([
+        ("package", heap.alloc(target.label.package.clone())),
+        ("name", heap.alloc(target.label.name.clone())),
+        ("id", heap.alloc(target.label.id.clone())),
+    ]));
+    let attr_pairs = target
+        .attrs
+        .iter()
+        .map(|(key, value)| (key.clone(), attr_value_to_starlark(eval, value)))
+        .collect::<Vec<_>>();
+    let attr = heap.alloc(AllocDict(attr_pairs));
+    let file_pairs = files
+        .iter()
+        .map(|(path, contents)| (path.clone(), heap.alloc(contents.clone())))
+        .collect::<Vec<_>>();
+    let file_values = heap.alloc(AllocDict(file_pairs));
+    heap.alloc(AllocDict([
+        ("label", label),
+        ("attr", attr),
+        ("attrs", attr),
+        ("srcs", heap.alloc(target.srcs.clone())),
+        ("files", file_values),
+    ]))
 }
 
 fn build_ctx<'v>(
