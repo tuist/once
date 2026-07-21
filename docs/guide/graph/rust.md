@@ -126,7 +126,11 @@ visible.
 
 Keep third-party requirements in `Cargo.toml` and exact versions in
 `Cargo.lock`. A root `cargo_dependencies` target lets Cargo resolve the
-packages while Once builds the resolved crates as graph dependencies:
+packages while Once builds the resolved crates as graph dependencies. The
+bundled starter omits `metadata_file` and resolves live in locked, offline mode
+so the same example remains portable across compiler hosts. To opt into a
+checked snapshot instead, include it in the resolver inputs and set
+`metadata_file`:
 
 ```toml
 [[target]]
@@ -135,13 +139,24 @@ kind = "cargo_dependencies"
 srcs = [
   "Cargo.toml",
   "Cargo.lock",
+  ".cargo/config.toml",
+  "cargo-metadata.json",
   "apps/*/Cargo.toml",
 ]
 
 [target.attrs]
 manifest = "Cargo.toml"
 lockfile = "Cargo.lock"
+resolver_inputs = [
+  "Cargo.toml",
+  "Cargo.lock",
+  ".cargo/config.toml",
+  "cargo-metadata.json",
+  "apps/*/Cargo.toml",
+]
+metadata_file = "cargo-metadata.json"
 vendor_dir = "third_party/rust/vendor"
+packages = ["itoa"]
 ```
 
 Add that target to a first-party Rust target and identify the matching Cargo
@@ -164,17 +179,73 @@ CARGO_PKG_NAME = "hello"
 CARGO_PKG_VERSION = "0.0.0"
 ```
 
-The dependency target runs `cargo metadata --locked`. Registry and Git
-packages come from the configured vendor directory. Workspace and path
-packages remain first-party Once targets. The Cargo manifests and lockfile
-stay authoritative for package names, versions, active features, renamed
-dependencies, procedural macros, and build dependencies.
+With this configuration, the dependency target reads the checked-in Cargo
+metadata snapshot while loading the graph. If `metadata_file` is omitted, it runs
+`cargo metadata --locked --offline` instead.
+Registry and Git packages come from the configured vendor directory. Workspace
+and path packages remain first-party Once targets. The Cargo manifests and
+lockfile stay authoritative for package names, versions, active features,
+renamed dependencies, procedural macros, and build dependencies.
+Every external metadata package must match an exact name, version, and source
+entry in `Cargo.lock`; registry entries must also carry a lockfile checksum.
+Checked-in metadata also carries `once_snapshot` provenance with the exact
+resolver input text, feature and target selection, and the compiler host triple.
+A manifest, configuration, feature, target, or compiler host change therefore
+rejects stale metadata during graph loading. Once asks the selected Rust
+compiler for its host triple before accepting a native snapshot.
+
+For live offline metadata, configure Cargo to use the same vendored sources:
+
+```toml
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "third_party/rust/vendor"
+```
+
+Keep that configuration in `resolver_inputs` with the manifests and lockfile.
+Generated crate targets include the complete vendored package tree, which
+covers files read through Rust source inclusion macros as well as package data.
+
+Each resolved package becomes a synthetic `rust_crate` or `rust_proc_macro`
+target. Normal Cargo edges use `deps`; build-script edges use the named
+`build_deps` role. The `cargo_dependencies` target only aggregates their
+providers, so Once can schedule independent crate builds concurrently instead
+of compiling the locked package list inside one analysis implementation.
+
+Inspect the imported packages, then build and run the first-party consumer:
+
+```sh
+once query targets --kind rust_crate
+once query targets --kind rust_proc_macro
+once build apps/hello/hello
+once run apps/hello/hello
+```
+
+The bundled Cargo starter uses `itoa` from the locked graph and prints `42`.
+That final run verifies more than graph loading: the local binary compiled and
+linked against the provider emitted by the synthetic crate target.
 
 Use [`once query schema cargo_dependencies`](/reference/prelude/cargo_dependencies)
-before adding feature or target filters. A complete cross-compiled binary can
-need destination-specific dependencies and host-built procedural macros.
-Once does not synthesize that split from one target, so represent those
-configurations explicitly.
+before adding feature or target filters. For a cross-compiled binary, Once asks
+Cargo for destination metadata and host metadata. Destination crates retain
+the requested Rust target, while procedural macros, build dependencies, and
+their required host variants compile for the execution host.
+
+Refresh a native snapshot when dependency inputs change:
+
+```sh
+cargo metadata --format-version 1 --locked --offline > cargo-metadata.json
+```
+
+Use the same feature flags declared by `cargo_dependencies` and pass its target
+through `--filter-platform`. Add the `once_snapshot` input and selection
+provenance documented in the
+[`cargo_dependencies` reference](/reference/prelude/cargo_dependencies). For
+any snapshot target that sets `target`, record a second snapshot for the
+execution host, mark its selection with `host = true`, and set
+`host_metadata_file`.
 
 ## Use Build Scripts and Advanced Compiler Inputs
 

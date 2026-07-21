@@ -39,6 +39,7 @@ dependency instead of a normal target dependency.
 | `named_deps` | map&lt;string, string&gt; | no | `{}` | Buck-compatible alias map from local extern crate name to dependency label or crate name |
 | `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set. Defaults to `CARGO_PKG_NAME` when present |
 | `build_script` | string | no | empty | Package-relative Cargo build script path run before `rustc`; common `cargo:rustc-*` stdout directives are consumed, dependency `cargo:rustc-link-search` outputs are replayed downstream, and direct dependency `links` metadata is consumed |
+| `_build_script_inputs` | list&lt;string&gt; | resolver-owned | `[]` | Generated package source inputs made available to its Cargo build script |
 | `package_name` | string | no | target name | Original Cargo package name when lowered from Cargo metadata |
 | `version` | string | no | empty | Resolved Cargo package version when lowered from Cargo metadata |
 | `source` | string | no | empty | Cargo source identifier |
@@ -55,8 +56,20 @@ Use the dependency roles with the same names under `[target.dependencies]`.
 | Edge | Accepts | Description |
 | --- | --- | --- |
 | `deps` | `rust_crate`, `rust_proc_macro`, `rust_dependency_set`, `c_provider` | Rust crate dependencies consumed by the procedural macro and C providers linked into the host plugin |
+| `build_deps` | `rust_crate`, `rust_proc_macro`, `rust_dependency_set`, `c_provider` | Dependencies compiled for this package's Cargo build script |
 | `proc_macro_deps` | `rust_proc_macro` | Procedural macros compiled for the execution host and passed to `rustc` through `--extern` |
 | `link_deps` | `c_provider` | Native libraries and linker options consumed by the host plug-in |
+
+## Sources
+
+- [Cargo metadata](https://doc.rust-lang.org/stable/cargo/commands/cargo-metadata.html)
+  defines procedural macro targets and the host dependency information lowered
+  into generated `rust_proc_macro` targets.
+- [The Cargo lockfile](https://doc.rust-lang.org/cargo/reference/lockfile.html)
+  defines the resolved package versions and checksums attached to those targets.
+- [Bazel rules for Rust, Crate Universe](https://bazelbuild.github.io/rules_rust/crate_universe_bzlmod.html)
+  documents the upstream pattern of generating build targets from Cargo while
+  separating procedural macro dependencies from normal crate dependencies.
 
 ## Providers
 

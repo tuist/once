@@ -42,6 +42,7 @@ Once graph target. `rust_crate` compiles to an rlib and emits the same
 | `named_deps` | map&lt;string, string&gt; | no | `{}` | Buck-compatible alias map from local extern crate name to dependency label or crate name |
 | `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set. Defaults to `CARGO_PKG_NAME` when present |
 | `build_script` | string | no | empty | Package-relative Cargo build script path run before `rustc`; common `cargo:rustc-*` stdout directives are consumed, dependency `cargo:rustc-link-search` outputs are replayed downstream, and direct dependency `links` metadata is consumed |
+| `_build_script_inputs` | list&lt;string&gt; | resolver-owned | `[]` | Generated package source inputs made available to its Cargo build script |
 | `source` | string | no |  | Cargo source identifier |
 | `checksum` | string | no |  | Cargo.lock checksum for registry packages |
 
@@ -56,8 +57,23 @@ Use the dependency roles with the same names under `[target.dependencies]`.
 | Edge | Accepts | Description |
 | --- | --- | --- |
 | `deps` | `rust_crate`, `rust_proc_macro`, `rust_dependency_set`, `c_provider` | Resolved Cargo package dependencies and C providers propagated to final link actions |
+| `build_deps` | `rust_crate`, `rust_proc_macro`, `rust_dependency_set`, `c_provider` | Dependencies compiled for this package's Cargo build script |
 | `proc_macro_deps` | `rust_proc_macro` | Procedural macros compiled for the execution host and passed to `rustc` through `--extern` |
 | `link_deps` | `c_provider` | Native libraries and linker options propagated to final link actions |
+
+## Sources
+
+- [Cargo metadata](https://doc.rust-lang.org/stable/cargo/commands/cargo-metadata.html)
+  defines the package targets, dependency kinds, features, and source metadata
+  lowered into generated `rust_crate` targets.
+- [The Cargo lockfile](https://doc.rust-lang.org/cargo/reference/lockfile.html)
+  defines the resolved package versions and checksums attached to those targets.
+- [Bazel rules for Rust, Crate Universe](https://bazelbuild.github.io/rules_rust/crate_universe_bzlmod.html)
+  documents the upstream pattern of generating one build target per resolved
+  crate while keeping dependency roles explicit.
+- [Cargo build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html)
+  defines build dependencies and the directives consumed from build-script
+  output.
 
 ## Providers
 

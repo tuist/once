@@ -38,6 +38,11 @@ help choosing between typed target kinds and scripted automation.
 
 ## Swift target kinds
 
+- [`swift_package_dependencies`](/reference/prelude/swift_package_dependencies):
+  locked Swift package graph and selected static products exposed to Apple
+  targets
+- [`swift_package_pin`](/reference/prelude/swift_package_pin): one synthetic
+  locked Swift package identity and its transitive edges
 - [`swift_android_library`](/reference/prelude/swift_android_library):
   Swift shared library compiled for Android and packaged through Android
   native-library providers
@@ -56,6 +61,10 @@ help choosing between typed target kinds and scripted automation.
 
 ## Elixir target kinds
 
+- [`mix_dependencies`](/reference/prelude/mix_dependencies): locked Mix and Hex
+  dependency graph imported as independently scheduled packages
+- [`mix_package`](/reference/prelude/mix_package): one generated package with
+  locked identity and native Mix compilation
 - [`elixir_library`](/reference/prelude/elixir_library): Elixir
   code compiled into cacheable bytecode with a target-level compiler
   action
@@ -107,6 +116,10 @@ help choosing between typed target kinds and scripted automation.
 
 ## Zig target kinds
 
+- [`zig_dependencies`](/reference/prelude/zig_dependencies): locked Zig
+  package graph imported from `build.zig.zon`
+- [`zig_package`](/reference/prelude/zig_package): one content-identified Zig
+  package lowered into a module provider
 - [`zig_library`](/reference/prelude/zig_library): Zig module provider
   compiled at the use site by downstream Zig targets
 - [`zig_c_library`](/reference/prelude/zig_c_library): Zig module
