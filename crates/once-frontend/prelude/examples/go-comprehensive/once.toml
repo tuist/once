@@ -1,0 +1,65 @@
+[[target]]
+name = "GoDependencies"
+kind = "go_dependencies"
+srcs = ["go.mod", "go.sum", "vendor/modules.txt"]
+
+[target.attrs]
+resolver_inputs = ["go.mod", "go.sum", "vendor/modules.txt"]
+
+[[target]]
+name = "GreetingSources"
+kind = "go_source"
+srcs = ["internal/greeting/punctuation.go"]
+
+[target.attrs]
+package = "./internal/greeting"
+importpath = "example.com/once-go-comprehensive/internal/greeting"
+
+[[target]]
+name = "Greeting"
+kind = "go_library"
+srcs = ["internal/greeting/greeting.go"]
+deps = ["GoDependencies"]
+
+[target.dependencies]
+embed = ["GreetingSources"]
+
+[target.attrs]
+package = "./internal/greeting"
+importpath = "example.com/once-go-comprehensive/internal/greeting"
+
+[[target]]
+name = "Hello"
+kind = "go_binary"
+srcs = ["cmd/hello/main.go"]
+deps = ["Greeting", "GoDependencies"]
+
+[target.attrs]
+package = "./cmd/hello"
+
+[[target]]
+name = "HelloLinux"
+kind = "go_binary"
+srcs = ["cmd/hello/main.go"]
+deps = ["Greeting", "GoDependencies"]
+
+[target.attrs]
+package = "./cmd/hello"
+goos = "linux"
+goarch = "amd64"
+strip = true
+
+[[target]]
+name = "GreetingTests"
+kind = "go_test"
+srcs = ["internal/greeting/greeting_test.go"]
+deps = ["GoDependencies"]
+
+[target.dependencies]
+target_under_test = ["Greeting"]
+
+[target.attrs]
+package = "./internal/greeting"
+coverage = true
+cover_packages = ["example.com/once-go-comprehensive/internal/greeting"]
+labels = ["unit"]

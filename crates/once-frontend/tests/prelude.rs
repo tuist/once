@@ -101,12 +101,21 @@ fn android_prelude_source() -> String {
     )
 }
 
+fn go_prelude_source() -> String {
+    format!(
+        "{}\n{}",
+        include_str!("../prelude/common.star"),
+        include_str!("../prelude/go.star")
+    )
+}
+
 fn all_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/android.star"),
+        include_str!("../prelude/go.star"),
         include_str!("../prelude/rust.star"),
         include_str!("../prelude/c.star"),
         include_str!("../prelude/zig.star"),
@@ -117,6 +126,300 @@ fn all_prelude_source() -> String {
         include_str!("../prelude/ruby.star"),
         include_str!("../prelude/javascript.star")
     )
+}
+
+#[test]
+fn go_target_kind_schemas_cover_bazel_buck_and_locked_modules() {
+    for kind in [
+        "go_dependencies",
+        "go_module",
+        "go_source",
+        "go_library",
+        "go_binary",
+        "go_test",
+    ] {
+        assert!(target_kind_has_impl(kind).unwrap(), "missing `{kind}` impl");
+        let schema = built_in_target_kind_schema(kind)
+            .unwrap_or_else(|| panic!("missing target kind schema `{kind}`"));
+        assert!(
+            schema
+                .examples
+                .iter()
+                .any(|example| example.slug == "go-comprehensive"),
+            "{kind} should expose the comprehensive Go starter"
+        );
+        assert!(
+            schema
+                .source_references
+                .iter()
+                .all(|reference| reference.content_digest.is_some()),
+            "{kind} should bind complete upstream sources"
+        );
+    }
+
+    assert_target_kind_attrs(
+        "go_binary",
+        &[
+            "build_mode",
+            "cgo",
+            "goarch",
+            "goos",
+            "link_mode",
+            "linkmode",
+            "package_name",
+            "pgoprofile",
+            "race",
+            "x_defs",
+        ],
+    );
+    assert_target_kind_attrs(
+        "go_test",
+        &[
+            "cover_packages",
+            "coverage_mode",
+            "fail_fast",
+            "rundir",
+            "test_env",
+        ],
+    );
+}
+
+#[test]
+fn go_dependencies_lower_checksum_bound_vendor_modules() {
+    let source = format!(
+        r##"{}
+ctx = {{
+    "label": {{"package": "", "name": "GoDependencies", "id": "GoDependencies"}},
+    "attrs": {{}},
+    "files": {{
+        "go.mod": "module example.com/app\n\ngo 1.26.0\n\nrequire github.com/pkg/errors v0.9.1\n",
+        "go.sum": "github.com/pkg/errors v0.9.1 h1:checksum\ngithub.com/pkg/errors v0.9.1/go.mod h1:manifest\n",
+        "vendor/modules.txt": "# github.com/pkg/errors v0.9.1\n## explicit\ngithub.com/pkg/errors\n",
+    }},
+}}
+result = repr(_go_dependencies_resolver(ctx))
+"##,
+        go_prelude_source()
+    );
+
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(out.contains("go-module-github.com_x47_pkg_x47_errors_x64_v0.9.1"));
+    assert!(out.contains("h1:checksum"));
+    assert!(out.contains("vendor/github.com/pkg/errors/**/*"));
+    assert!(out.contains("_go_resolved"));
+}
+
+#[test]
+fn go_action_paths_remain_workspace_relative_for_nested_modules() {
+    let source = format!(
+        r#"{}
+ctx = {{
+    "label": {{"package": "apps/hello", "name": "Hello", "id": "apps/hello/Hello"}},
+    "attr": {{}},
+    "deps": [],
+}}
+module = {{"workspace_file": "apps/hello/go.work"}}
+result = repr(_go_action_env(ctx, module, ".once/tmp/analysis/apps/hello/Hello/go-build"))
+"#,
+        go_prelude_source()
+    );
+
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(
+        out.contains("{{once.execution_root}}/.once/tmp/analysis/apps/hello/Hello/go-build/cache")
+    );
+    assert!(out.contains("{{once.execution_root}}/apps/hello/go.work"));
+    assert!(!out.contains("../"));
+}
+
+#[test]
+fn go_dependencies_reject_vendor_replacement_drift() {
+    let source = format!(
+        r##"{}
+ctx = {{
+    "label": {{"package": "", "name": "GoDependencies", "id": "GoDependencies"}},
+    "attrs": {{}},
+    "files": {{
+        "go.mod": "module example.com/app\n\ngo 1.26.0\n\nrequire example.com/old v1.0.0\nreplace example.com/old v1.0.0 => example.com/new v1.1.0\n",
+        "go.sum": "example.com/new v1.2.0 h1:checksum\n",
+        "vendor/modules.txt": "# example.com/old v1.0.0 => example.com/new v1.2.0\n## explicit\nexample.com/old/package\n",
+    }},
+}}
+result = repr(_go_dependencies_resolver(ctx))
+"##,
+        go_prelude_source()
+    );
+
+    let error = eval_prelude_source_to_repr(source).unwrap_err().clone();
+
+    assert!(error.contains("does not match go.mod"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn go_binary_declares_offline_cross_platform_build_action() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::create_dir_all(workspace.path().join("cmd/hello")).unwrap();
+    std::fs::create_dir_all(workspace.path().join("vendor/example.com/message")).unwrap();
+    std::fs::write(
+        workspace.path().join("cmd/hello/main.go"),
+        "package main\nfunc main() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workspace
+            .path()
+            .join("vendor/example.com/message/message.go"),
+        "package message\n",
+    )
+    .unwrap();
+    for (path, contents) in [
+        ("go.mod", "module example.com/app\ngo 1.26.0\n"),
+        ("go.sum", ""),
+        ("vendor/modules.txt", ""),
+    ] {
+        std::fs::write(workspace.path().join(path), contents).unwrap();
+    }
+    let source = format!(
+        r#"{}
+def host_which(name):
+    if name == "go":
+        return "/toolchains/go/bin/go"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if len(argv) == 2 and argv[1] == "version":
+        return "go version go1.26.5 darwin/arm64\n"
+    if len(argv) >= 3 and argv[1] == "env":
+        return "{{\"GOOS\":\"darwin\",\"GOARCH\":\"arm64\",\"GOROOT\":\"/toolchains/go\"}}"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{"package": "", "name": "Hello", "id": "Hello"}},
+    "attr": {{"package": "./cmd/hello", "goos": "linux", "goarch": "amd64"}},
+    "deps": [{{
+        "go_dependency_set": True,
+        "label_id": "GoDependencies",
+        "module_root": "",
+        "manifest": "go.mod",
+        "sum_files": ["go.sum"],
+        "vendor_manifest": "vendor/modules.txt",
+        "vendor_dir": "vendor",
+        "transitive_sources": ["go.mod", "go.sum", "vendor/modules.txt", "vendor/example.com/message/message.go"],
+    }}],
+    "srcs": ["cmd/hello/*.go"],
+    "build_dir": ".once/out/Hello",
+    "scratch_dir": ".once/tmp/analysis/Hello",
+    "capability": "build",
+}}
+provider = _go_binary_impl(ctx)
+result = repr(provider)
+"#,
+        go_prelude_source()
+    );
+    let store = store_for(workspace.path(), "");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("go_binary"), "{out}");
+    let action = action_by_identifier(&store, "Hello:go-build");
+    assert!(action.argv.iter().any(|arg| arg == "-mod=vendor"));
+    assert!(action.argv.iter().any(|arg| arg == "./cmd/hello"));
+    assert_eq!(action.env.get("GOOS").map(String::as_str), Some("linux"));
+    assert_eq!(action.env.get("GOARCH").map(String::as_str), Some("amd64"));
+    assert_eq!(action.env.get("CGO_ENABLED").map(String::as_str), Some("0"));
+    assert!(action
+        .env
+        .get("GOCACHE")
+        .is_some_and(|value| value.starts_with("{{once.execution_root}}/")));
+    assert!(action
+        .inputs
+        .iter()
+        .any(|input| input == "vendor/example.com/message/message.go"));
+    assert!(action
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("Hello")));
+}
+
+#[cfg(unix)]
+#[test]
+fn go_test_declares_normalized_runner_and_coverage_outputs() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::create_dir_all(workspace.path().join("greeting")).unwrap();
+    std::fs::write(
+        workspace.path().join("greeting/greeting_test.go"),
+        "package greeting\nimport \"testing\"\nfunc TestGreeting(t *testing.T) {}\n",
+    )
+    .unwrap();
+    for (path, contents) in [
+        ("go.mod", "module example.com/app\ngo 1.26.0\n"),
+        ("go.sum", ""),
+        ("vendor/modules.txt", ""),
+    ] {
+        std::fs::create_dir_all(workspace.path().join(path).parent().unwrap()).unwrap();
+        std::fs::write(workspace.path().join(path), contents).unwrap();
+    }
+    let source = format!(
+        r#"{}
+def host_which(name):
+    if name == "go":
+        return "/toolchains/go/bin/go"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if len(argv) == 2 and argv[1] == "version":
+        return "go version go1.26.5 darwin/arm64\n"
+    if len(argv) >= 3 and argv[1] == "env":
+        return "{{\"GOOS\":\"darwin\",\"GOARCH\":\"arm64\",\"GOROOT\":\"/toolchains/go\"}}"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{"package": "", "name": "GreetingTests", "id": "GreetingTests"}},
+    "attr": {{"package": "./greeting", "coverage": True, "labels": ["unit"]}},
+    "deps": [],
+    "srcs": ["greeting/*_test.go"],
+    "build_dir": ".once/out/GreetingTests",
+    "scratch_dir": ".once/tmp/analysis/GreetingTests",
+    "capability": "test",
+    "test": {{"filters": ["GreetingTests::TestGreeting"], "batch_id": "batch-1"}},
+}}
+provider = _go_test_impl(ctx)
+result = repr(provider["test_info"])
+"#,
+        go_prelude_source()
+    );
+    let store = store_for(workspace.path(), "");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("go_test"), "{out}");
+    assert!(out.contains("unit"), "{out}");
+    let build = action_by_identifier(&store, "GreetingTests:go-test-build");
+    assert!(build.argv.iter().any(|arg| arg == "-c"));
+    let run = action_by_identifier(&store, "GreetingTests:go-test");
+    assert!(run.argv.iter().any(|arg| arg == "--once-filter"));
+    assert!(run.argv.iter().any(|arg| arg == "TestGreeting"));
+    assert!(run
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("test/batches/batch-1/test_results.json")));
+    assert!(run
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("test/batches/batch-1/coverage.out")));
+    assert!(store.actions.iter().any(|action| {
+        matches!(
+            &action.operation,
+            Some(DeclaredActionOperation::WriteFile { path, .. })
+                if path.ends_with("once_go_test_runner.go")
+                    && !path.ends_with("test/once_go_test_runner.go")
+        )
+    }));
 }
 
 #[test]

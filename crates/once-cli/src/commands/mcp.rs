@@ -1816,9 +1816,9 @@ srcs = ["unit_spec.sh"]
         assert!(kinds.contains(&"rspec_test"));
         assert!(kinds.contains(&"minitest_test"));
         assert!(kinds.contains(&"rust_test"));
+        assert!(kinds.contains(&"go_test"));
         assert!(!kinds.contains(&"apple_library"));
         assert!(!kinds.contains(&"android_test"));
-        assert!(!kinds.contains(&"go_test"));
     }
 
     #[test]
