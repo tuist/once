@@ -28,6 +28,11 @@ use crate::stream::{self, Destination};
     feature = "remote-microsandbox",
     any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
 ))]
+use crate::{resolve_execution_argv, resolve_execution_env};
+#[cfg(all(
+    feature = "remote-microsandbox",
+    any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))
+))]
 use std::collections::BTreeMap;
 #[cfg(all(
     feature = "remote-microsandbox",
@@ -62,12 +67,14 @@ pub(super) async fn execute_command(
     cache: &CacheProvider,
     stream_to_parent: bool,
 ) -> Result<ActionResult> {
-    let (program, rest) = command.argv.split_first().ok_or(Error::EmptyArgv)?;
     let image = remote.environment.clone().unwrap_or_else(|| {
         std::env::var("ONCE_MICROSANDBOX_IMAGE").unwrap_or_else(|_| "alpine".to_string())
     });
     let guest_root =
         std::env::var("ONCE_MICROSANDBOX_WORKDIR").unwrap_or_else(|_| "/workspace".to_string());
+    let argv = resolve_execution_argv(command.argv, Path::new(&guest_root));
+    let env = resolve_execution_env(command.env, Path::new(&guest_root));
+    let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
     let guest_cwd = command.cwd.map_or_else(
         || guest_root.clone(),
         |cwd| join_path(&guest_root, cwd.as_str()),
@@ -108,9 +115,7 @@ pub(super) async fn execute_command(
             let mut handle = sandbox
                 .exec_stream_with(program, |exec| {
                     let exec = exec.args(rest.iter().cloned()).cwd(&guest_cwd);
-                    command
-                        .env
-                        .iter()
+                    env.iter()
                         .fold(exec, |exec, (key, value)| exec.env(key, value))
                 })
                 .await

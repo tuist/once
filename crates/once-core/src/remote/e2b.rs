@@ -6,7 +6,9 @@ use once_cas::{ActionResult, CacheProvider};
 use super::archive::{create_input_archive, install_output_archive, output_archive_file};
 use super::{join_path, PreparedCommand};
 use crate::stream::{self, Destination};
-use crate::{Error, RemoteExecution, Result, WorkspacePath};
+use crate::{
+    resolve_execution_argv, resolve_execution_env, Error, RemoteExecution, Result, WorkspacePath,
+};
 
 mod cleanup;
 mod client;
@@ -81,21 +83,23 @@ async fn execute_with_client(
         )
         .await?;
 
-        let (program, args) = command.argv.split_first().ok_or(Error::EmptyArgv)?;
+        let resolved_command = resolve_execution_argv(command.argv, Path::new(GUEST_ROOT));
+        let env = resolve_execution_env(command.env, Path::new(GUEST_ROOT));
+        let (program, command_args) = resolved_command.split_first().ok_or(Error::EmptyArgv)?;
         let response = client
             .execute(
                 &sandbox,
                 program,
-                args,
+                command_args,
                 Some(&workdir(command.cwd)),
-                command.env,
+                &env,
                 command.timeout_ms,
             )
             .await?;
         let result = action_result(response, cache, stream_to_parent).await?;
         if result.exit_code == 0 && !command.outputs.is_empty() {
-            let args = pack_output_args(command.outputs);
-            run_setup(&client, &sandbox, "tar", &args, command.timeout_ms).await?;
+            let output_args = pack_output_args(command.outputs);
+            run_setup(&client, &sandbox, "tar", &output_args, command.timeout_ms).await?;
             let archive = output_archive_file(workspace_root)?;
             client
                 .download(&sandbox, OUTPUT_ARCHIVE, archive.path())

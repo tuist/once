@@ -10,9 +10,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
-    validate_action_contract_with_options, workspace_mise_command,
-    workspace_tool_env_with_executables, Action, ActionContractOptions, CopyPathMode,
-    EvidenceCacheState, EvidenceSubject, FilesystemOperation, InputDigestBuilder,
+    resolve_execution_argv, resolve_execution_env, validate_action_contract_with_options,
+    workspace_mise_command, workspace_tool_env_with_executables, Action, ActionContractOptions,
+    CopyPathMode, EvidenceCacheState, EvidenceSubject, FilesystemOperation, InputDigestBuilder,
     OutputSymlinkMode, PreparePathMode, ResourceRequest, RunOpts, SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::{
@@ -853,13 +853,15 @@ async fn run_uncached_action(
                     .await
                     .map_err(Into::into);
             }
+            let argv = resolve_execution_argv(argv, workspace);
+            let env = resolve_execution_env(env, workspace);
             let (program, rest) = argv
                 .split_first()
                 .ok_or_else(|| anyhow::anyhow!("declared action has empty argv"))?;
             let mut command = Command::new(program);
             command.args(rest);
             command.env_clear();
-            for (key, value) in env {
+            for (key, value) in &env {
                 command.env(key, value);
             }
             command.stdin(Stdio::null());
@@ -1335,6 +1337,14 @@ fn declared_action_inputs(declared: &DeclaredAction) -> Result<Vec<WorkspacePath
     for arg_file in &declared.arg_files {
         inputs.push(workspace_path(&arg_file.path, "run_action arg file")?);
     }
+    for path in &declared.create_dirs {
+        // Action-private directories must exist inside isolated and remote
+        // execution roots, while output directories must not be staged back
+        // as inputs.
+        if path == ".once/tmp" || path.starts_with(".once/tmp/") {
+            inputs.push(workspace_path(path, "run_action create_dirs entry")?);
+        }
+    }
     inputs.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     inputs.dedup_by(|a, b| a.as_str() == b.as_str());
     Ok(inputs)
@@ -1568,7 +1578,7 @@ mod tests {
             stdout: None,
             stderr: None,
             clean_paths: Vec::new(),
-            create_dirs: Vec::new(),
+            create_dirs: vec![".once/tmp/work".to_string()],
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
@@ -1589,10 +1599,13 @@ mod tests {
 
         assert!(workspace.path().join(".once/out/x").is_dir());
         assert!(workspace.path().join(".once/out/x/sub").is_dir());
-        let Action::RunCommand { argv, .. } = action else {
+        let Action::RunCommand { argv, inputs, .. } = action else {
             panic!("command declaration should lower to RunCommand");
         };
         assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
+        assert!(inputs
+            .iter()
+            .any(|input| input.as_str() == ".once/tmp/work"));
     }
 
     #[tokio::test]

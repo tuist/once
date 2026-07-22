@@ -6,7 +6,9 @@ use once_cas::{ActionResult, CacheProvider};
 use super::archive::{create_input_archive, install_output_archive, output_archive_file};
 use super::{join_path, PreparedCommand};
 use crate::stream::{self, Destination};
-use crate::{Error, RemoteExecution, Result, WorkspacePath};
+use crate::{
+    resolve_execution_argv, resolve_execution_env, Error, RemoteExecution, Result, WorkspacePath,
+};
 
 mod cleanup;
 mod client;
@@ -80,12 +82,14 @@ async fn execute_with_client(
             "staging declared inputs",
         )?;
 
+        let argv = resolve_execution_argv(command.argv, Path::new(GUEST_ROOT));
+        let env = resolve_execution_env(command.env, Path::new(GUEST_ROOT));
         let response = client
             .execute(
                 &sandbox,
-                &command_line(command.argv)?,
+                &command_line(&argv)?,
                 Some(&workdir(command.cwd)),
-                command.env,
+                &env,
                 command.timeout_ms.map(timeout_secs),
             )
             .await?;

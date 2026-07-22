@@ -80,6 +80,16 @@ fn declare_output_outside_analysis_returns_bare_name() {
 }
 
 #[test]
+fn execution_path_is_stable_and_rejects_workspace_escapes() {
+    assert_eq!(
+        eval_string(r#"value = execution_path("./.once/cache")"#).unwrap(),
+        "{{once.execution_root}}/.once/cache"
+    );
+    assert!(run(r#"value = execution_path("../cache")"#).is_err());
+    assert!(run(r#"value = execution_path("/cache")"#).is_err());
+}
+
+#[test]
 fn host_env_reads_active_analysis_environment_only() {
     let name = "ONCE_HOST_ENV_TEST";
     let source = format!(
