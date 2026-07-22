@@ -242,8 +242,9 @@ pub(crate) fn workspace_validation_value(workspace: &Path) -> Result<serde_json:
 }
 
 fn workspace_validation(workspace: &Path) -> Result<WorkspaceValidation> {
-    let target_count = once_frontend::load_graph_workspace(workspace)?.len();
-    let diagnostics = once_frontend::validate_workspace(workspace)?;
+    let graph = once_frontend::load_graph_workspace(workspace)?;
+    let target_count = graph.len();
+    let diagnostics = once_frontend::validate_workspace_graph(workspace, &graph)?;
     Ok(WorkspaceValidation {
         valid: diagnostics.is_empty(),
         target_count,
@@ -636,6 +637,17 @@ pub(crate) fn test_manifest_record(workspace: &Path, target_id: &str) -> Result<
     derive_test_manifest(workspace, target_id)
 }
 
+pub(crate) fn test_manifest_record_with_graph(
+    workspace: &Path,
+    target_id: &str,
+    graph: &[once_frontend::GraphTarget],
+) -> Result<TestManifest> {
+    if let Some(manifest) = stored_test_manifest_record(workspace, target_id)? {
+        return Ok(manifest);
+    }
+    derive_test_manifest_from_graph(workspace, target_id, graph)
+}
+
 pub(crate) fn stored_test_manifest_record(
     workspace: &Path,
     target_id: &str,
@@ -652,8 +664,11 @@ pub(crate) fn stored_test_manifest_record(
     Ok(None)
 }
 
-pub(crate) fn refresh_test_manifest(workspace: &Path, target_id: &str) -> Result<TestManifest> {
-    let manifest = derive_test_manifest(workspace, target_id)?;
+pub(crate) fn refresh_test_manifest_for_target(
+    workspace: &Path,
+    target: &once_frontend::GraphTarget,
+) -> Result<TestManifest> {
+    let manifest = derive_test_manifest_for_target(workspace, target)?;
     write_test_manifest(workspace, &manifest)?;
     Ok(manifest)
 }
@@ -671,10 +686,26 @@ fn write_test_manifest(workspace: &Path, manifest: &TestManifest) -> Result<()> 
 
 fn derive_test_manifest(workspace: &Path, target_id: &str) -> Result<TestManifest> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    derive_test_manifest_from_graph(workspace, target_id, &graph)
+}
+
+fn derive_test_manifest_from_graph(
+    workspace: &Path,
+    target_id: &str,
+    graph: &[once_frontend::GraphTarget],
+) -> Result<TestManifest> {
     let target = graph
         .iter()
         .find(|target| target.label.id == target_id)
         .with_context(|| format!("no target matches `{target_id}`"))?;
+    derive_test_manifest_for_target(workspace, target)
+}
+
+fn derive_test_manifest_for_target(
+    workspace: &Path,
+    target: &once_frontend::GraphTarget,
+) -> Result<TestManifest> {
+    let target_id = &target.label.id;
     if !has_capability(target, "test") {
         anyhow::bail!("target `{target_id}` does not expose the test capability");
     }

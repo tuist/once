@@ -582,7 +582,9 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
         remote,
     } = args;
     let resolved_target = resolve_required_target(workspace, target.clone())?;
-    if commands::graph::supports(workspace, &resolved_target, "run")? {
+    if let Some(graph) =
+        commands::graph::load_graph_for_capability(workspace, &resolved_target, "run")?
+    {
         if runtime_rpc || runtime_rpc_socket.is_some() {
             anyhow::bail!("--runtime-rpc is only supported for executable script targets");
         }
@@ -594,6 +596,7 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
         return Box::pin(commands::graph::run(
             workspace,
             &cache,
+            graph,
             output,
             &resolved_target,
             commands::graph::GraphRunOptions { visible },

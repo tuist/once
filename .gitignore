@@ -1,5 +1,6 @@
 /target
 /.once/
+**/.once/
 /.blick/runs/
 /vendor
 /third_party/rust/src/

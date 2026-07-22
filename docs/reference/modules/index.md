@@ -1,10 +1,11 @@
 # Modules
 
-Once graph modules are Starlark files that export graph primitives. Today the
-primary exported primitive is a target kind: a schema and optional
-implementation function that turns one target into cacheable actions. Built-in
-and project target kinds use the same public contract, so a project can add a
-target kind without changing Once itself.
+Once graph modules are Starlark files that export graph primitives. The primary
+exported primitive is a target kind: a schema, an optional resolver that expands
+locked dependency metadata into targets, and an optional implementation that
+turns one target into cacheable actions. Built-in and project target kinds use
+the same public contract, so a project can add a target kind without changing
+Once itself.
 
 ## Loading Project Modules
 
@@ -69,10 +70,90 @@ discovery.
   build-system concepts.
 - `impl`: optional function that declares actions and returns a provider
   record.
+- `resolver`: optional function that reads declared text inputs and returns
+  synthetic targets before graph validation and scheduling.
 
 Attributes can be configurable unless their schema sets
 `configurable = False`. Non-configurable attributes reject `select`
 during validation before the implementation runs.
+
+## Dependency Resolver Contract
+
+A target kind resolver imports an authoritative locked dependency graph. It is
+not a replacement for the ecosystem package manager. Cargo, Mix and Hex, Swift
+Package Manager, Zig, or another native tool continues to own manifest
+semantics, registry behavior, version selection, and lockfile updates.
+
+The resolver receives a restricted context:
+
+- `ctx["label"]`: package, name, and stable target identifier.
+- `ctx["attr"]`: typed owner attributes. `ctx["attrs"]` is an equivalent
+  spelling for resolver compatibility.
+- `ctx["srcs"]`: declared build source patterns.
+- `ctx["files"]`: resolver input files decoded as text, keyed by path relative
+  to the owner package. Non-empty `resolver_inputs` patterns define this map.
+  When the list is empty or omitted, `srcs` is used for compatibility.
+
+Resolver files are limited to 16 mebibytes per file and 64 mebibytes in total
+for one target. Use `resolver_inputs` to keep binary, generated, or large build
+sources out of this text-only context while retaining them in `srcs` for build
+actions. A resolver should consume bounded text such as a manifest, lock file,
+or checked-in graph snapshot.
+
+It may use generic host discovery primitives, including `host_command`, to ask
+the native package manager for locked metadata. It cannot declare actions or
+outputs. Resolution happens while the graph loads, so the returned value must
+be deterministic for the declared files, target attributes, module source, and
+resolver toolchain.
+
+The compact return form is a list of target records. The detailed form also
+chooses owner roots and adds resolver-owned attributes to the owner:
+
+```python
+def _resolve(ctx):
+    return {
+        "targets": [
+            {
+                "name": "package-1.2.3",
+                "kind": "ecosystem_package",
+                "deps": ["./transitive-4.5.6"],
+                "dependencies": {
+                    "build_deps": ["./build-helper-2.0.0"],
+                },
+                "srcs": ["third_party/package-1.2.3/src/**"],
+                "attrs": {
+                    "version": "1.2.3",
+                    "content_hash": "...",
+                },
+            },
+        ],
+        "roots": ["package-1.2.3"],
+        "attrs": {
+            "resolution_state": "locked",
+        },
+    }
+```
+
+Each target record accepts only `name`, `kind`, `deps`, `dependencies`, `srcs`,
+and `attrs`. Dependency references use the same syntax as a manifest, including
+`./name` for a target in the owner package. A bare root name that matches an
+emitted target is also package-local. When `roots` is omitted, every emitted
+target becomes an owner dependency. Resolver-owned and synthetic attributes
+must be declared in their target kind schemas, including internal bookkeeping
+attributes. A resolver attribute cannot replace a value declared by the owner
+target. Expansion stops at 100,000 workspace targets so a recursive resolver
+cannot grow the graph without bound.
+
+Ordinary builds consume locked metadata and already materialized sources. A
+separate explicit update workflow should invoke the native package manager when
+the lockfile or source set needs to change. Modules may use the
+[PubGrub version-solving algorithm](https://github.com/dart-lang/pub/blob/master/doc/solver.md)
+for an ecosystem that has no authoritative resolver, but it is not the primary
+integration boundary.
+
+See [Ecosystems: Import Locked Third-Party Graphs](/guide/graph/ecosystems#import-locked-third-party-graphs)
+for the shared update, source-materialization, query, and first-party consumer
+workflow.
 
 ## Tool Requirements
 
@@ -305,14 +386,24 @@ graph.
 
 Target kind implementations can use these generic primitives:
 
+Modules are trusted analysis code. `host_command` executes on the host while
+the graph is loading, so load modules only from trusted sources and reserve it
+for deterministic discovery. It must not mutate workspace sources or the build
+output tree, and resolver scratch state belongs only under `.once/tmp`. Prefer
+declared lock files and checked-in graph snapshots when a package manager can
+supply them. Build work and source fetching belong in explicit actions or a
+separate update workflow.
+
 - `host_arch()` and `host_os()` return normalized host identifiers.
 - `host_env(name)` returns one host environment variable, or an empty
   string when it is unset.
 - `workspace_root()` returns the absolute workspace root.
 - `host_which(name)` resolves an executable on `PATH`.
-- `host_command(argv, env = {})` runs a discovery command and returns
-  standard output. Arguments and environment values participate in the
-  command-scoped cache key.
+- `host_command(argv, env = {}, cwd = None, merge_stderr = False)` runs a
+  discovery command and returns standard output. Arguments, environment
+  values, the working directory, and stream merging participate in the
+  command-scoped cache key. When set, `cwd` must be an absolute path, normally
+  derived from `workspace_root()`.
 - `host_file_exists(path)` checks whether a host path is currently a
   file.
 - `host_file_read(path)` reads a host file as

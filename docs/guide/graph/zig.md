@@ -70,6 +70,75 @@ tools/hello/
 The binary and test import the module with `@import("math")`. The
 `import_name` and `deps` entry make that name explicit.
 
+## Import Locked Zig Packages
+
+Use [`zig_dependencies`](/reference/prelude/zig_dependencies) when the project
+already declares packages in `build.zig.zon`. Zig's package manifest remains
+the source of truth for dependency aliases, local paths, lazy packages, source
+locations, and content multihashes.
+
+```toml
+[[target]]
+name = "zig_dependencies"
+kind = "zig_dependencies"
+srcs = [
+  "build.zig.zon",
+  "third_party/zig/**/build.zig.zon",
+]
+
+[target.attrs]
+manifest = "build.zig.zon"
+resolver_inputs = ["build.zig.zon", "third_party/zig/**/build.zig.zon"]
+vendor_dir = "third_party/zig"
+
+[[target]]
+name = "hello"
+kind = "zig_binary"
+srcs = ["src/**/*.zig"]
+deps = ["zig_dependencies"]
+
+[target.attrs]
+main = "src/main.zig"
+```
+
+Once reads the locked package graph and emits one queryable `zig_package`
+target per package instance. Local path dependencies are resolved relative to
+the manifest that declares them, and the normalized materialized source root is
+part of their identity. The same relative spelling in two parent packages
+therefore cannot collapse distinct dependencies. Remote packages are expected
+under the vendor directory, keyed by their Zig content multihash when present.
+Verify those directories through Zig's native fetch workflow before committing
+them. Ordinary builds do not fetch or update packages, and their action keys
+include the actual source contents. Resolution fails explicitly when a graph
+exceeds 10,000 package instances.
+
+The conventional public module path is `src/root.zig`. Use `module_paths` when
+a package exposes another module:
+
+```toml
+[target.attrs.module_paths]
+special_package = "third_party/zig/special/source/main.zig"
+```
+
+Use `package_paths` to map an alias or content multihash to a different
+materialized source directory. This is useful when an existing vendoring
+layout cannot be changed. Run Zig's native package fetch workflow explicitly
+when the lock or vendored source set changes, then review the expanded graph
+with `once query targets --kind zig_package`.
+
+Build and run a first-party consumer after inspecting the imported packages:
+
+```sh
+once query targets --kind zig_package
+once build hello
+once run hello
+```
+
+The bundled dependency starter imports a locked `math` package and prints its
+answer, `42`, from the local binary. Compilation fails if the dependency set
+does not propagate both the edge-local import alias and the package module, so
+this run verifies the complete provider handoff.
+
 ## Query Before Building
 
 Inspect the targets and their capabilities:
@@ -162,6 +231,8 @@ than only linking a native archive.
 
 Start with the references used by this guide:
 
+- [`zig_dependencies`](/reference/prelude/zig_dependencies)
+- [`zig_package`](/reference/prelude/zig_package)
 - [`zig_library`](/reference/prelude/zig_library)
 - [`zig_binary`](/reference/prelude/zig_binary)
 - [`zig_test`](/reference/prelude/zig_test)

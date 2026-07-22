@@ -1,0 +1,36 @@
+[[target]]
+name = "mix_dependencies"
+kind = "mix_dependencies"
+srcs = ["mix.exs", "mix.lock", "mix-dependencies.json"]
+
+[target.attrs]
+manifest = "mix.exs"
+lockfile = "mix.lock"
+graph_file = "mix-dependencies.json"
+resolver_inputs = [
+  "mix.exs",
+  "mix.lock",
+  "mix-dependencies.json",
+  "local_helper/mix.exs",
+]
+vendor_dir = "deps"
+
+[target.attrs.path_dependencies]
+local_helper = "./local_helper"
+
+[[target]]
+name = "local_helper"
+kind = "elixir_library"
+srcs = ["local_helper/lib/**/*.ex"]
+
+[target.attrs]
+app_name = "local_helper"
+
+[[target]]
+name = "greeting"
+kind = "elixir_library"
+srcs = ["lib/**/*.ex"]
+deps = ["./mix_dependencies"]
+
+[target.attrs]
+app_name = "greeting"

@@ -420,8 +420,8 @@ fn host_command_cache_reuses_identical_argv_results() {
     ];
 
     let env = BTreeMap::new();
-    assert_eq!(cache.command(&argv, &env, false).unwrap(), "done");
-    assert_eq!(cache.command(&argv, &env, false).unwrap(), "done");
+    assert_eq!(cache.command(&argv, &env, None, false).unwrap(), "done");
+    assert_eq!(cache.command(&argv, &env, None, false).unwrap(), "done");
 
     assert_eq!(std::fs::read_to_string(counter).unwrap(), "x");
 }
@@ -441,10 +441,10 @@ fn host_command_can_merge_stderr() {
     ];
     let env = BTreeMap::new();
 
-    let stdout_only = cache.command(&argv, &env, false).unwrap();
+    let stdout_only = cache.command(&argv, &env, None, false).unwrap();
     assert_eq!(stdout_only, "on-stdout");
 
-    let merged = cache.command(&argv, &env, true).unwrap();
+    let merged = cache.command(&argv, &env, None, true).unwrap();
     assert!(merged.contains("on-stdout"), "{merged:?}");
     assert!(merged.contains("on-stderr"), "{merged:?}");
 }
@@ -473,15 +473,56 @@ fn host_command_cache_keys_on_env() {
     // Distinct env values land in distinct cache slots and the
     // process is re-spawned for each, so the script's stdout
     // reflects each env's pin value.
-    assert_eq!(cache.command(&argv, &env_a, false).unwrap(), "a");
-    assert_eq!(cache.command(&argv, &env_b, false).unwrap(), "b");
+    assert_eq!(cache.command(&argv, &env_a, None, false).unwrap(), "a");
+    assert_eq!(cache.command(&argv, &env_b, None, false).unwrap(), "b");
     // Repeat the first call: the env_a slot is now warm and
     // reuses the cached stdout without spawning the process.
-    assert_eq!(cache.command(&argv, &env_a, false).unwrap(), "a");
+    assert_eq!(cache.command(&argv, &env_a, None, false).unwrap(), "a");
 
     // Counter increments once per spawn: env_a (cold), env_b
     // (cold), env_a (warm, no spawn) -> two ticks total.
     assert_eq!(std::fs::read_to_string(counter).unwrap(), "xx");
+}
+
+#[cfg(unix)]
+#[test]
+fn host_command_cache_keys_on_working_directory() {
+    let first = TempDir::new().unwrap();
+    let second = TempDir::new().unwrap();
+    let cache = HostCache::default();
+    let argv = vec!["/bin/pwd".to_string()];
+    let env = BTreeMap::new();
+
+    let first_output = cache
+        .command(&argv, &env, Some(first.path()), false)
+        .unwrap();
+    let second_output = cache
+        .command(&argv, &env, Some(second.path()), false)
+        .unwrap();
+
+    assert_eq!(
+        first_output.trim(),
+        first.path().canonicalize().unwrap().to_string_lossy()
+    );
+    assert_eq!(
+        second_output.trim(),
+        second.path().canonicalize().unwrap().to_string_lossy()
+    );
+}
+
+#[test]
+fn host_command_rejects_a_relative_working_directory() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "pkg");
+    let (_, result) = with_active_store(store, || {
+        run(r#"host_command(["unused"], cwd = "relative")"#)
+    });
+
+    let error = result.unwrap_err().to_string();
+    assert!(
+        error.contains("host_command cwd must be absolute"),
+        "{error}"
+    );
 }
 
 #[test]

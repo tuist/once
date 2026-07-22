@@ -153,6 +153,9 @@ pub struct TargetKindSchema {
     pub docs: String,
     /// Attribute schema for this target kind.
     pub attrs: Vec<AttrSchema>,
+    /// Whether this target kind expands locked graph data before validation.
+    #[serde(skip)]
+    pub(crate) has_resolver: bool,
     /// Dependency expectations for this target kind.
     pub deps: Vec<DepSchema>,
     /// Providers emitted by targets of this kind.
@@ -270,9 +273,21 @@ pub struct DepSchema {
 }
 
 pub fn load_graph_workspace(root: &Path) -> Result<Vec<GraphTarget>> {
-    let targets = load_workspace(root)?;
     let schemas = target_kind_schemas_for_workspace(root)?;
-    Ok(graph_from_owned_targets_with_schemas(targets, &schemas))
+    let mut expanded =
+        crate::resolution::expand_workspace_targets(root, load_workspace(root)?, &schemas)?;
+    let mut graph = graph_from_owned_targets_with_schemas(expanded.targets, &schemas);
+    for target in &mut graph {
+        let Some(diagnostics) = expanded.diagnostics.remove(&target.label.id) else {
+            continue;
+        };
+        for diagnostic in diagnostics {
+            if !target.diagnostics.contains(&diagnostic) {
+                target.diagnostics.push(diagnostic);
+            }
+        }
+    }
+    Ok(graph)
 }
 
 #[must_use]
@@ -363,7 +378,10 @@ impl From<&Target> for GraphTarget {
     }
 }
 
-fn graph_target_from_schema(target: &Target, schemas: &[TargetKindSchema]) -> GraphTarget {
+pub(crate) fn graph_target_from_schema(
+    target: &Target,
+    schemas: &[TargetKindSchema],
+) -> GraphTarget {
     let schema = schemas.iter().find(|schema| schema.kind == target.kind);
     let target_id = target.id();
     let mut diagnostics = if schema.is_some() {
@@ -668,6 +686,9 @@ fn target_kind_schema_from_value(
     source_context: &TargetKindSchemaSource,
 ) -> std::result::Result<TargetKindSchema, String> {
     let kind = crate::modules::target_kind(value, path)?;
+    let has_resolver = DictRef::from_value(value)
+        .and_then(|target_kind| target_kind.get_str("resolver"))
+        .is_some_and(|resolver| !resolver.is_none());
     let examples = field_list(value, path, "examples")?
         .iter()
         .enumerate()
@@ -682,6 +703,7 @@ fn target_kind_schema_from_value(
     Ok(TargetKindSchema {
         kind,
         docs: field_string(value, path, "docs")?,
+        has_resolver,
         attrs: field_list(value, path, "attrs")?
             .iter()
             .enumerate()
@@ -933,6 +955,7 @@ fn script_schema() -> TargetKindSchema {
     TargetKindSchema {
         kind: "script".to_string(),
         docs: "Adapter target that wraps existing executable automation.".to_string(),
+        has_resolver: false,
         attrs: vec![
             attr(
                 "script_path",
@@ -1414,6 +1437,7 @@ demo_kind = target_kind(
         let schemas = vec![TargetKindSchema {
             kind: "demo_kind".to_string(),
             docs: "Demo kind".to_string(),
+            has_resolver: false,
             attrs: vec![attr(
                 "fixed_name",
                 "string",

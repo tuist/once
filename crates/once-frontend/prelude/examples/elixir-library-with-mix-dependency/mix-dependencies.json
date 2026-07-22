@@ -1,0 +1,42 @@
+{
+  "manifest": "defmodule Greeting.MixProject do\n  use Mix.Project\n\n  def project do\n    [\n      app: :greeting,\n      version: \"0.1.0\",\n      elixir: \"~> 1.14\",\n      deps: [\n        {:locked_greeting, \"0.1.0\"},\n        {:local_helper, path: \"local_helper\"}\n      ]\n    ]\n  end\n\n  def application do\n    [extra_applications: [:logger]]\n  end\nend\n",
+  "lockfile": "%{\n  \"locked_greeting\" => {:hex, :locked_greeting, \"0.1.0\", \"0000000000000000000000000000000000000000000000000000000000000000\", [:mix], [], \"hexpm\", \"1111111111111111111111111111111111111111111111111111111111111111\"}\n}\n\n",
+  "mix_env": "prod",
+  "once_inputs": {
+    "local_helper/mix.exs": "defmodule LocalHelper.MixProject do\n  use Mix.Project\n\n  def project do\n    [\n      app: :local_helper,\n      version: \"0.1.0\",\n      elixir: \"~> 1.14\"\n    ]\n  end\nend\n",
+    "mix.exs": "defmodule Greeting.MixProject do\n  use Mix.Project\n\n  def project do\n    [\n      app: :greeting,\n      version: \"0.1.0\",\n      elixir: \"~> 1.14\",\n      deps: [\n        {:locked_greeting, \"0.1.0\"},\n        {:local_helper, path: \"local_helper\"}\n      ]\n    ]\n  end\n\n  def application do\n    [extra_applications: [:logger]]\n  end\nend\n",
+    "mix.lock": "%{\n  \"locked_greeting\" => {:hex, :locked_greeting, \"0.1.0\", \"0000000000000000000000000000000000000000000000000000000000000000\", [:mix], [], \"hexpm\", \"1111111111111111111111111111111111111111111111111111111111111111\"}\n}\n\n"
+  },
+  "lock": {
+    "locked_greeting": [
+      "hex",
+      "locked_greeting",
+      "0.1.0",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      ["mix"],
+      [],
+      "hexpm",
+      "1111111111111111111111111111111111111111111111111111111111111111"
+    ]
+  },
+  "dependencies": [
+    {
+      "app": "local_helper",
+      "dependencies": [],
+      "custom_compile": false,
+      "destination": "local_helper",
+      "manager": "mix",
+      "path_dependency": true,
+      "top_level": true
+    },
+    {
+      "app": "locked_greeting",
+      "dependencies": [],
+      "custom_compile": false,
+      "destination": "deps/locked_greeting",
+      "manager": "mix",
+      "path_dependency": false,
+      "top_level": true
+    }
+  ]
+}

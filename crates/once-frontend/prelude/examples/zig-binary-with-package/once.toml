@@ -1,0 +1,27 @@
+[[target]]
+name = "zig_dependencies"
+kind = "zig_dependencies"
+srcs = [
+  "build.zig.zon",
+  "third_party/zig/**/build.zig.zon",
+]
+
+[target.attrs]
+manifest = "build.zig.zon"
+resolver_inputs = ["build.zig.zon", "third_party/zig/**/build.zig.zon"]
+vendor_dir = "third_party/zig"
+
+[target.attrs.package_paths]
+"math-1.0.0-N3AjZe8AAAA_BHML9VFPGVQiHPOsQpQ9CpiaVtRYkACI" = "third_party/zig/math"
+
+[target.attrs.module_paths]
+math = "third_party/zig/math/source/entry.zig"
+
+[[target]]
+name = "hello"
+kind = "zig_binary"
+srcs = ["src/**/*.zig"]
+deps = ["zig_dependencies"]
+
+[target.attrs]
+main = "src/main.zig"

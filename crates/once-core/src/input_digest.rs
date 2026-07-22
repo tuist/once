@@ -169,6 +169,78 @@ mod tests {
     }
 
     #[test]
+    fn push_source_distinguishes_an_empty_file_from_an_empty_directory() {
+        let tmp = TempDir::new().unwrap();
+        let entry = tmp.path().join("entry");
+        std::fs::write(&entry, []).unwrap();
+        let file_digest = {
+            let mut builder = InputDigestBuilder::new(b"test.input.v1");
+            builder.push_source(tmp.path(), "entry").unwrap();
+            builder.finish()
+        };
+
+        std::fs::remove_file(&entry).unwrap();
+        std::fs::create_dir(&entry).unwrap();
+        let directory_digest = {
+            let mut builder = InputDigestBuilder::new(b"test.input.v1");
+            builder.push_source(tmp.path(), "entry").unwrap();
+            builder.finish()
+        };
+
+        assert_ne!(file_digest, directory_digest);
+    }
+
+    #[test]
+    fn push_source_hashes_directory_entries_and_contents() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("tree/nested")).unwrap();
+        std::fs::write(tmp.path().join("tree/nested/value.txt"), b"one").unwrap();
+
+        let digest = || {
+            let mut builder = InputDigestBuilder::new(b"test.directory.v1");
+            builder.push_source(tmp.path(), "tree").unwrap();
+            builder.finish()
+        };
+        let first = digest();
+        let second = digest();
+        assert_eq!(first, second);
+
+        std::fs::write(tmp.path().join("tree/nested/value.txt"), b"two").unwrap();
+        let changed_content = digest();
+        assert_ne!(first, changed_content);
+
+        std::fs::rename(
+            tmp.path().join("tree/nested/value.txt"),
+            tmp.path().join("tree/nested/renamed.txt"),
+        )
+        .unwrap();
+        assert_ne!(changed_content, digest());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn push_source_hashes_directory_symbolic_link_targets() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("tree")).unwrap();
+        std::fs::write(tmp.path().join("tree/one.txt"), b"same").unwrap();
+        std::fs::write(tmp.path().join("tree/two.txt"), b"same").unwrap();
+        symlink("one.txt", tmp.path().join("tree/current.txt")).unwrap();
+
+        let digest = || {
+            let mut builder = InputDigestBuilder::new(b"test.directory.v1");
+            builder.push_source(tmp.path(), "tree").unwrap();
+            builder.finish()
+        };
+        let first = digest();
+
+        std::fs::remove_file(tmp.path().join("tree/current.txt")).unwrap();
+        symlink("two.txt", tmp.path().join("tree/current.txt")).unwrap();
+        assert_ne!(first, digest());
+    }
+
+    #[test]
     fn push_source_propagates_io_errors() {
         let tmp = TempDir::new().unwrap();
         let mut b = InputDigestBuilder::new(b"d");

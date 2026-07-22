@@ -1140,6 +1140,557 @@ def _elixir_test_impl(ctx):
     )
     return provider
 
+def _mix_workspace_path(ctx, path):
+    if path.startswith("/"):
+        return path
+    package = ctx["label"]["package"]
+    if package:
+        return workspace_root() + "/" + package + "/" + path
+    return workspace_root() + "/" + path
+
+def _mix_package_path(ctx, path):
+    normalized = path.replace("\\", "/")
+    package_root = workspace_root().replace("\\", "/")
+    package = ctx["label"]["package"]
+    if package:
+        package_root += "/" + package
+    prefix = package_root + "/"
+    if normalized.startswith(prefix):
+        return normalized[len(prefix):]
+    if not normalized.startswith("/"):
+        if normalized == ".." or normalized.startswith("../") or "/../" in normalized:
+            fail(ctx["label"]["id"] + ": dependency source `" + normalized + "` is outside the package; vendor Mix dependencies inside the Once package")
+        return normalized
+    fail(ctx["label"]["id"] + ": dependency source `" + normalized + "` is outside the package; vendor Mix dependencies inside the Once package")
+
+def _mix_trim_slash(path):
+    return path[:-1] if len(path) > 1 and path.endswith("/") else path
+
+def _mix_lock_reader_source():
+    return """
+Mix.start()
+
+defmodule Once.MixLockedSource do
+  @behaviour Mix.SCM
+
+  @impl true
+  def fetchable?, do: true
+
+  @impl true
+  def format(opts), do: opts[:dest] || "locked dependency"
+
+  @impl true
+  def format_lock(opts), do: inspect(opts[:lock])
+
+  @impl true
+  def accepts_options(_app, opts), do: opts
+
+  @impl true
+  def checked_out?(opts), do: File.dir?(opts[:dest])
+
+  @impl true
+  def checkout(opts), do: opts[:lock]
+
+  @impl true
+  def update(opts), do: opts[:lock]
+
+  @impl true
+  def lock_status(opts), do: if(opts[:lock], do: :ok, else: :mismatch)
+
+  @impl true
+  def equal?(opts1, opts2), do: opts1[:dest] == opts2[:dest]
+
+  @impl true
+  def managers(opts) do
+    case opts[:lock] do
+      {:hex, _, _, _, managers, _, _, _} when is_list(managers) -> managers
+      _ -> []
+    end
+  end
+end
+
+Mix.SCM.append(Once.MixLockedSource)
+
+normalize = fn value, recur ->
+  cond do
+    is_atom(value) -> Atom.to_string(value)
+    is_binary(value) or is_number(value) or is_boolean(value) or is_nil(value) -> value
+    is_tuple(value) -> value |> Tuple.to_list() |> Enum.map(&recur.(&1, recur))
+    is_list(value) -> Enum.map(value, &recur.(&1, recur))
+    is_map(value) -> Map.new(value, fn {key, item} -> {to_string(key), recur.(item, recur)} end)
+    true -> inspect(value)
+  end
+end
+
+[project_file, lockfile, mix_env, package_root] = System.argv()
+project_dir = File.cd!(Path.dirname(project_file), fn -> File.cwd!() end)
+
+unless Code.ensure_loaded?(:json) and function_exported?(:json, :encode, 1) do
+  raise "Mix dependency resolution requires Erlang 27 or newer for :json.encode/1"
+end
+
+payload =
+  Mix.Project.in_project(:once_dependency_resolver, project_dir, [env: String.to_atom(mix_env)], fn _project ->
+    Mix.Dep.clear_cached()
+    lock = Mix.Dep.Lock.read(lockfile)
+
+    dependencies =
+      Mix.Dep.load_and_cache()
+      |> Enum.map(fn dependency ->
+        destination =
+          case dependency.opts[:dest] do
+            nil -> ""
+            path -> Path.relative_to(path, package_root)
+          end
+
+        %{
+          "app" => Atom.to_string(dependency.app),
+          "dependencies" => Enum.map(dependency.deps || [], &Atom.to_string(&1.app)),
+          "custom_compile" => dependency.opts[:compile] != nil,
+          "destination" => destination,
+          "manager" => normalize.(dependency.manager, normalize),
+          "path_dependency" => dependency.opts[:path] != nil,
+          "top_level" => dependency.top_level == true
+        }
+      end)
+
+    %{
+      "manifest" => File.read!(project_file),
+      "lockfile" => File.read!(lockfile),
+      "mix_env" => mix_env,
+      "lock" => normalize.(lock, normalize),
+      "dependencies" => dependencies
+    }
+  end)
+
+payload |> :json.encode() |> IO.binwrite()
+"""
+
+def _mix_read_locked_graph(ctx):
+    manifest = ctx["attrs"].get("manifest") or "mix.exs"
+    lockfile = ctx["attrs"].get("lockfile") or "mix.lock"
+    mix_env = ctx["attrs"].get("mix_env") or "prod"
+    if ctx["files"].get(manifest) == None:
+        fail(ctx["label"]["id"] + ": `" + manifest + "` must be declared in resolver_inputs, or srcs when resolver_inputs is omitted, so Mix project resolution is content-addressed")
+    if ctx["files"].get(lockfile) == None:
+        fail(ctx["label"]["id"] + ": `" + lockfile + "` must be declared in resolver_inputs, or srcs when resolver_inputs is omitted; mix.lock is required and authoritative")
+    if _basename(manifest) != "mix.exs":
+        fail(ctx["label"]["id"] + ": Mix project manifests must be named mix.exs")
+    graph_file = ctx["attrs"].get("graph_file") or ""
+    if graph_file:
+        graph_content = ctx["files"].get(graph_file)
+        if graph_content == None:
+            fail(ctx["label"]["id"] + ": Mix graph snapshot `" + graph_file + "` must be declared in resolver_inputs, or srcs when resolver_inputs is omitted")
+        graph = json_decode(graph_content)
+        if graph.get("manifest") == None:
+            fail(ctx["label"]["id"] + ": Mix graph snapshot `" + graph_file + "` does not contain its authoritative manifest binding")
+        if graph["manifest"] != ctx["files"][manifest]:
+            fail(ctx["label"]["id"] + ": Mix graph snapshot `" + graph_file + "` is stale relative to `" + manifest + "`; regenerate it from the committed manifest")
+        if graph.get("lockfile") == None:
+            fail(ctx["label"]["id"] + ": Mix graph snapshot `" + graph_file + "` does not contain its authoritative lockfile binding")
+        if graph["lockfile"] != ctx["files"][lockfile]:
+            fail(ctx["label"]["id"] + ": Mix graph snapshot `" + graph_file + "` is stale relative to `" + lockfile + "`; regenerate it from the committed lockfile")
+        if graph.get("mix_env") != mix_env:
+            fail(ctx["label"]["id"] + ": Mix graph snapshot `" + graph_file + "` was generated for MIX_ENV=" + (graph.get("mix_env") or "<missing>") + ", but this target selects MIX_ENV=" + mix_env + "; regenerate it for the selected environment")
+        expected_inputs = _resolver_snapshot_inputs(ctx["files"], [graph_file])
+        if graph.get("once_inputs") != expected_inputs:
+            fail(ctx["label"]["id"] + ": Mix graph snapshot `" + graph_file + "` input binding does not match resolver_inputs")
+        return graph
+    toolchain = _elixir_mix_toolchain()
+    resolver_home = workspace_root() + "/.once/tmp/mix-resolver"
+    env = _elixir_action_env(toolchain)
+    env["MIX_HOME"] = resolver_home + "/mix"
+    env["MIX_ARCHIVES"] = resolver_home + "/archives"
+    env["HEX_HOME"] = resolver_home + "/hex"
+    env["MIX_ENV"] = mix_env
+    env["HEX_OFFLINE"] = "true"
+    content = host_command([
+        toolchain["elixir"],
+        "-e",
+        _mix_lock_reader_source(),
+        "--",
+        _mix_workspace_path(ctx, manifest),
+        _mix_workspace_path(ctx, lockfile),
+        mix_env,
+        _mix_workspace_path(ctx, "."),
+    ], env = env, cwd = _mix_workspace_path(ctx, "."))
+    graph = json_decode(content)
+    graph["once_inputs"] = _resolver_snapshot_inputs(ctx["files"])
+    return graph
+
+def _mix_target_name(app):
+    return "mix-" + app.replace("_", "-").replace(".", "-").replace("+", "-")
+
+def _mix_lock_entry(lock, app):
+    entry = lock.get(app)
+    if entry == None:
+        fail("Mix selected dependency `" + app + "`, but mix.lock has no entry for it")
+    if type(entry) != type([]) or len(entry) == 0:
+        fail("mix.lock entry `" + app + "` has an unsupported shape")
+    return entry
+
+def _mix_lock_value(entry, index, default = ""):
+    if len(entry) <= index or entry[index] == None:
+        return default
+    return entry[index]
+
+def _mix_locked_identity(app, entry):
+    kind = _mix_lock_value(entry, 0)
+    if kind == "hex":
+        package_name = _mix_lock_value(entry, 1, app)
+        version = _mix_lock_value(entry, 2)
+        checksum = _mix_lock_value(entry, 3)
+        managers = _mix_lock_value(entry, 4, [])
+        repository = _mix_lock_value(entry, 6, "hexpm")
+        outer_checksum = _mix_lock_value(entry, 7)
+        return {
+            "package_name": package_name,
+            "version": version,
+            "source": "hex:" + repository + "/" + package_name,
+            "checksum": checksum,
+            "outer_checksum": outer_checksum,
+            "revision": "",
+            "repository": repository,
+            "managers": managers,
+        }
+    if kind == "git":
+        repository = _mix_lock_value(entry, 1)
+        revision = _mix_lock_value(entry, 2)
+        return {
+            "package_name": app,
+            "version": revision,
+            "source": "git:" + repository,
+            "checksum": "",
+            "outer_checksum": "",
+            "revision": revision,
+            "repository": repository,
+            "managers": [],
+        }
+    fail("mix.lock entry `" + app + "` uses unsupported source `" + kind + "`; supported locked sources are Hex and Git")
+
+def _mix_dependency_index(dependencies):
+    index = {}
+    for dependency in dependencies:
+        app = dependency.get("app") or ""
+        if app:
+            index[app] = dependency
+    return index
+
+def _mix_source_globs(source_root):
+    return [
+        source_root + "/mix.exs",
+        source_root + "/**/*",
+    ]
+
+def _mix_resolved_roots(ctx, dependencies, targets_by_app, identities):
+    requested = ctx["attrs"].get("roots") or []
+    if requested:
+        roots = []
+        for requested_name in requested:
+            target = targets_by_app.get(requested_name)
+            if target == None:
+                for app, identity in identities.items():
+                    if identity["package_name"] == requested_name:
+                        target = targets_by_app.get(app)
+                        break
+            if target == None:
+                fail(ctx["label"]["id"] + ": requested Mix dependency root `" + requested_name + "` is not present in the locked graph")
+            roots.append(target)
+        return _unique(roots)
+    roots = []
+    for dependency in dependencies:
+        if dependency.get("top_level"):
+            roots.append(targets_by_app[dependency["app"]])
+    if roots:
+        return _unique(roots)
+    return [targets_by_app[app] for app in sorted(targets_by_app.keys())]
+
+def _mix_dependencies_resolver(ctx):
+    resolved = _mix_read_locked_graph(ctx)
+    lock = resolved.get("lock") or {}
+    all_dependencies = resolved.get("dependencies") or []
+    path_dependency_targets = ctx["attrs"].get("path_dependencies") or {}
+    active_path_dependencies = {}
+    for dependency in all_dependencies:
+        if dependency.get("path_dependency"):
+            app = dependency.get("app") or ""
+            active_path_dependencies[app] = True
+            if not path_dependency_targets.get(app):
+                fail(ctx["label"]["id"] + ": Mix path dependency `" + app + "` must be mapped to a first-party target through path_dependencies")
+    for app in path_dependency_targets.keys():
+        if not active_path_dependencies.get(app):
+            fail(ctx["label"]["id"] + ": path_dependencies maps `" + app + "`, but that application is not an active Mix path dependency")
+    dependencies = [dependency for dependency in all_dependencies if not dependency.get("path_dependency")]
+    dependency_index = _mix_dependency_index(dependencies)
+    vendor_dir = _mix_trim_slash(ctx["attrs"].get("vendor_dir") or "deps")
+    manifest = ctx["attrs"].get("manifest") or "mix.exs"
+    lockfile = ctx["attrs"].get("lockfile") or "mix.lock"
+    mix_env = ctx["attrs"].get("mix_env") or "prod"
+    targets = []
+    targets_by_app = {}
+    identities = {}
+    for app in active_path_dependencies.keys():
+        targets_by_app[app] = path_dependency_targets[app]
+    for app in sorted(dependency_index.keys()):
+        dependency = dependency_index[app]
+        identity = _mix_locked_identity(app, _mix_lock_entry(lock, app))
+        targets_by_app[app] = "./" + _mix_target_name(app)
+        identities[app] = identity
+    for app in sorted(dependency_index.keys()):
+        dependency = dependency_index[app]
+        identity = identities[app]
+        source_root = dependency.get("destination") or (vendor_dir + "/" + app)
+        source_root = _mix_trim_slash(_mix_package_path(ctx, source_root))
+        target_name = _mix_target_name(app)
+        managers = identity["managers"]
+        if not managers and dependency.get("manager"):
+            managers = [dependency["manager"]]
+        attrs = {
+            "app_name": app,
+            "mix_env": mix_env,
+            "version": identity["version"],
+            "config": [],
+            "data": [source_root + "/**/*"],
+            "priv": [source_root + "/priv/**"],
+            "include": [source_root + "/include/**/*.hrl"],
+            "consolidate_protocols": False,
+            "_mix_locked": True,
+            "_mix_package_name": identity["package_name"],
+            "_mix_source": identity["source"],
+            "_mix_checksum": identity["checksum"],
+            "_mix_outer_checksum": identity["outer_checksum"],
+            "_mix_revision": identity["revision"],
+            "_mix_repository": identity["repository"],
+            "_mix_managers": managers,
+            "_mix_custom_compile": dependency.get("custom_compile") or False,
+            "_mix_source_root": source_root,
+            "_mix_manifest": manifest,
+            "_mix_lockfile": lockfile,
+        }
+        dependency_targets = []
+        for child in dependency.get("dependencies") or []:
+            target_ref = targets_by_app.get(child)
+            if target_ref == None:
+                fail(ctx["label"]["id"] + ": Mix dependency `" + app + "` references `" + child + "`, but the active graph contains no target for it")
+            dependency_targets.append(target_ref)
+        targets.append({
+            "name": target_name,
+            "kind": "mix_package",
+            "deps": dependency_targets,
+            "srcs": _mix_source_globs(source_root),
+            "attrs": attrs,
+        })
+    roots = _mix_resolved_roots(ctx, all_dependencies, targets_by_app, identities)
+    return {
+        "targets": targets,
+        "roots": roots,
+        "attrs": {
+            "_mix_resolved": True,
+            "_mix_locked_roots": roots,
+        },
+    }
+
+def _mix_compile_source():
+    return """
+Mix.start()
+
+[project_dir, app_name, mix_env, dependency_paths_file] = System.argv()
+System.put_env("MIX_BUILD_ROOT", System.fetch_env!("MIX_BUILD_ROOT") |> Path.expand())
+
+dependency_paths_file
+|> File.read!()
+|> String.split("\n", trim: true)
+|> Enum.map(&Path.expand/1)
+|> Enum.reverse()
+|> Enum.each(&Code.prepend_path/1)
+
+result =
+  Mix.Project.in_project(String.to_atom(app_name), Path.expand(project_dir), [env: String.to_atom(mix_env)], fn _project ->
+    Mix.Task.run("compile.all", [
+      "--force",
+      "--from-mix-deps-compile",
+      "--no-prune-code-paths",
+      "--no-optional-deps",
+      "--return-errors"
+    ])
+  end)
+
+case result do
+  {:error, diagnostics} ->
+    Enum.each(diagnostics, &Code.print_diagnostic/1)
+    System.halt(1)
+
+  {_status, diagnostics} ->
+    Enum.each(diagnostics, &Code.print_diagnostic/1)
+
+  _ ->
+    :ok
+end
+"""
+
+def _mix_supported_manager(ctx):
+    managers = _elixir_attr(ctx, "_mix_managers", [])
+    if _elixir_attr(ctx, "_mix_custom_compile", False):
+        fail(ctx["label"]["id"] + ": custom Mix dependency compile commands are not supported; model this package with a dedicated target kind")
+    if managers != ["mix"]:
+        rendered = ", ".join(managers) if managers else "unknown"
+        fail(ctx["label"]["id"] + ": Mix dependency build manager `" + rendered + "` is not supported; Rebar and Make packages require dedicated target kinds")
+    return managers[0]
+
+def _mix_locked_package_record(provider):
+    return {
+        "app_name": provider.get("app_name") or "",
+        "package_name": provider.get("package_name") or "",
+        "version": provider.get("version") or "",
+        "source": provider.get("source") or "",
+        "checksum": provider.get("checksum") or "",
+        "outer_checksum": provider.get("outer_checksum") or "",
+        "revision": provider.get("revision") or "",
+    }
+
+def _mix_collect_locked_packages(deps, own = None):
+    seen = {}
+    packages = []
+    for dependency in deps:
+        transitive = dependency.get("transitive_locked_packages") or []
+        if not transitive and dependency.get("locked"):
+            transitive = [_mix_locked_package_record(dependency)]
+        for package in transitive:
+            key = (package.get("app_name") or "") + "\x00" + (package.get("source") or "") + "\x00" + (package.get("version") or "")
+            if key and key not in seen:
+                seen[key] = True
+                packages.append(package)
+    if own != None:
+        key = (own.get("app_name") or "") + "\x00" + (own.get("source") or "") + "\x00" + (own.get("version") or "")
+        if key and key not in seen:
+            packages.append(own)
+    return packages
+
+def _mix_package_impl(ctx):
+    if not _elixir_attr(ctx, "_mix_locked", False):
+        fail(ctx["label"]["id"] + ": mix_package targets are generated by mix_dependencies and cannot be declared without locked metadata")
+    _mix_supported_manager(ctx)
+    toolchain = _elixir_mix_toolchain()
+    app_name = _elixir_app_name(ctx)
+    mix_env = _elixir_mix_env(ctx)
+    source_root = _elixir_attr(ctx, "_mix_source_root", "")
+    if not source_root:
+        fail(ctx["label"]["id"] + ": locked Mix package is missing its vendored source root")
+    apps = _elixir_collect_apps(ctx["deps"])
+    dep_code_paths = _elixir_app_code_paths(apps)
+    build_root = ctx["build_dir"] + "/mix"
+    app_dir = build_root + "/" + mix_env + "/lib/" + app_name
+    ebin_dir = app_dir + "/ebin"
+    priv_dir = app_dir + "/priv"
+    home_dir = ctx["scratch_dir"] + "/mix_home"
+    script_dir = ctx["scratch_dir"] + "/mix_compile"
+    dependency_paths_file = script_dir + "/dependency_paths.list"
+    compile_script = script_dir + "/compile.exs"
+    compile_log = ctx["build_dir"] + "/mix-compile.log"
+    compile_warnings = ctx["build_dir"] + "/mix-compile-warnings.log"
+    srcs = glob(ctx["srcs"])
+    root_manifest = _package_relative(ctx, _elixir_attr(ctx, "_mix_manifest", ""))
+    lockfile = _package_relative(ctx, _elixir_attr(ctx, "_mix_lockfile", ""))
+    inputs = _unique(_elixir_optional_inputs(srcs + [root_manifest, lockfile, dependency_paths_file, compile_script]))
+    write_path(dependency_paths_file, _elixir_lines(dep_code_paths))
+    write_path(compile_script, _mix_compile_source())
+    run_action(
+        argv = [
+            toolchain["elixir"],
+            _elixir_from_package(ctx, compile_script),
+            _elixir_from_package(ctx, source_root),
+            app_name,
+            mix_env,
+            _elixir_from_package(ctx, dependency_paths_file),
+        ],
+        inputs = inputs,
+        outputs = [ebin_dir, compile_log, compile_warnings],
+        clean_paths = [build_root, home_dir, compile_log, compile_warnings],
+        create_dirs = [home_dir],
+        cwd = _elixir_package_cwd(ctx),
+        env = _elixir_action_env_with(ctx, toolchain, {
+            "MIX_HOME": _elixir_from_package(ctx, home_dir + "/mix"),
+            "HEX_HOME": _elixir_from_package(ctx, home_dir + "/hex"),
+            "MIX_BUILD_ROOT": _elixir_from_package(ctx, build_root),
+            "MIX_ENV": mix_env,
+            "HEX_OFFLINE": "true",
+        }),
+        stdout = compile_log,
+        stderr = compile_warnings,
+        toolchain_identity = toolchain["identity"] + "\x00mix-package-compile.v1\x00" + mix_env,
+        identifier = ctx["label"]["id"] + ":mix-compile",
+    )
+    prepare_path(priv_dir, kind = "remove", identifier = ctx["label"]["id"] + ":mix-priv-clean")
+    source_priv = _package_relative(ctx, source_root + "/priv")
+    if host_file_exists(_mix_workspace_path(ctx, source_root + "/priv")):
+        priv_inputs = glob([source_root + "/priv/**"])
+        copy_path(
+            source_priv,
+            priv_dir,
+            kind = "tree",
+            inputs = priv_inputs,
+            toolchain_identity = toolchain["identity"] + "\x00mix-package-priv.v1",
+            identifier = ctx["label"]["id"] + ":mix-priv",
+        )
+    else:
+        prepare_path(priv_dir, kind = "directory", identifier = ctx["label"]["id"] + ":mix-priv")
+    app = {
+        "app_name": app_name,
+        "mix_env": mix_env,
+        "mix_config": source_root + "/mix.exs",
+        "ebin_dir": ebin_dir,
+        "priv_dir": priv_dir,
+        "compile_metadata": "",
+        "compile_warnings": compile_warnings,
+    }
+    package_record = {
+        "app_name": app_name,
+        "package_name": _elixir_attr(ctx, "_mix_package_name", app_name),
+        "version": _elixir_attr(ctx, "version", ""),
+        "source": _elixir_attr(ctx, "_mix_source", ""),
+        "checksum": _elixir_attr(ctx, "_mix_checksum", ""),
+        "outer_checksum": _elixir_attr(ctx, "_mix_outer_checksum", ""),
+        "revision": _elixir_attr(ctx, "_mix_revision", ""),
+    }
+    return {
+        "label_id": ctx["label"]["id"],
+        "target_kind": "mix_package",
+        "locked": True,
+        "app_name": app_name,
+        "package_name": package_record["package_name"],
+        "version": package_record["version"],
+        "source": package_record["source"],
+        "checksum": package_record["checksum"],
+        "outer_checksum": package_record["outer_checksum"],
+        "revision": package_record["revision"],
+        "repository": _elixir_attr(ctx, "_mix_repository", ""),
+        "managers": _elixir_attr(ctx, "_mix_managers", []),
+        "mix_env": mix_env,
+        "mix_config": source_root + "/mix.exs",
+        "ebin_dir": ebin_dir,
+        "priv_dir": priv_dir,
+        "compile_metadata": "",
+        "compile_warnings": compile_warnings,
+        "sources": srcs,
+        "transitive_sources": _elixir_collect_transitive_strings(ctx["deps"], "transitive_sources", srcs),
+        "transitive_elixir_apps": _elixir_transitive_apps(ctx["deps"], app),
+        "transitive_locked_packages": _mix_collect_locked_packages(ctx["deps"], package_record),
+    }
+
+def _mix_dependencies_impl(ctx):
+    apps = _elixir_collect_apps(ctx["deps"])
+    packages = _mix_collect_locked_packages(ctx["deps"])
+    return {
+        "label_id": ctx["label"]["id"],
+        "target_kind": "mix_dependencies",
+        "dependency_set": True,
+        "locked": _elixir_attr(ctx, "_mix_resolved", False),
+        "locked_roots": _elixir_attr(ctx, "_mix_locked_roots", []),
+        "locked_packages": packages,
+        "transitive_sources": _elixir_collect_transitive_strings(ctx["deps"], "transitive_sources", []),
+        "transitive_elixir_apps": apps,
+    }
+
 _ELIXIR_LIBRARY_ATTRS = [
     attr("app_name", "string", docs = "Elixir application name. Defaults to the target name with `-` and `.` rewritten as `_`.", configurable = False),
     attr("mix_env", "string", default = "prod", docs = "Mix environment exported while compiling and testing, such as `prod`, `test`, or `dev`.", configurable = False),
@@ -1194,6 +1745,89 @@ _ELIXIR_TEST_ATTRS = [
     attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
     attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
 ]
+
+_MIX_DEPENDENCIES_ATTRS = [
+    attr("manifest", "string", default = "mix.exs", docs = "Package-relative Mix project manifest used to select the active dependency graph.", configurable = False),
+    attr("lockfile", "string", default = "mix.lock", docs = "Package-relative Mix lockfile. Resolution fails when the file is absent, and never updates it.", configurable = False),
+    attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to the resolver. Defaults to srcs when empty or omitted; set this when build sources include binary or large files.", configurable = False),
+    attr("graph_file", "string", docs = "Optional checked-in JavaScript Object Notation snapshot of the active Mix dependency graph with exact manifest, lockfile, Mix environment, and resolver input bindings. When present, graph loading does not execute Mix.", configurable = False),
+    attr("vendor_dir", "string", default = "deps", docs = "Package-relative directory containing dependency source trees already fetched from Hex or Git.", configurable = False),
+    attr("path_dependencies", "map<string, string>", default = "{}", docs = "Map active Mix path dependency application names to first-party Once target references.", configurable = False),
+    attr("mix_env", "string", default = "prod", docs = "Mix environment used when evaluating dependency declarations.", configurable = False),
+    attr("roots", "list<string>", default = "[]", docs = "Optional application or Hex package names exposed as direct roots. Defaults to direct dependencies selected by Mix.", configurable = False),
+    attr("_mix_resolved", "bool", default = "false", docs = "Resolver-owned marker proving the dependency set came from mix.lock.", configurable = False),
+    attr("_mix_locked_roots", "list<string>", default = "[]", docs = "Resolver-owned synthetic target names attached to the aggregate provider.", configurable = False),
+]
+
+_MIX_PACKAGE_ATTRS = _ELIXIR_LIBRARY_ATTRS + [
+    attr("_mix_locked", "bool", default = "false", docs = "Resolver-owned marker proving the synthetic target has locked identity metadata.", configurable = False),
+    attr("_mix_package_name", "string", default = "", docs = "Resolver-owned registry package name.", configurable = False),
+    attr("_mix_source", "string", default = "", docs = "Resolver-owned stable source identity from mix.lock.", configurable = False),
+    attr("_mix_checksum", "string", default = "", docs = "Resolver-owned Hex package checksum from mix.lock.", configurable = False),
+    attr("_mix_outer_checksum", "string", default = "", docs = "Resolver-owned Hex registry checksum from mix.lock.", configurable = False),
+    attr("_mix_revision", "string", default = "", docs = "Resolver-owned Git revision from mix.lock.", configurable = False),
+    attr("_mix_repository", "string", default = "", docs = "Resolver-owned Hex repository or Git repository identity.", configurable = False),
+    attr("_mix_managers", "list<string>", default = "[]", docs = "Resolver-owned native build manager metadata.", configurable = False),
+    attr("_mix_custom_compile", "bool", default = "false", docs = "Resolver-owned marker for dependency declarations that override Mix compilation.", configurable = False),
+    attr("_mix_source_root", "string", default = "", docs = "Resolver-owned package-relative vendored source root.", configurable = False),
+    attr("_mix_manifest", "string", default = "", docs = "Resolver-owned root Mix manifest path.", configurable = False),
+    attr("_mix_lockfile", "string", default = "", docs = "Resolver-owned authoritative lockfile path.", configurable = False),
+]
+
+mix_dependencies = target_kind(
+    docs = "Locked Mix dependency graph consumed by Elixir targets. Mix evaluates the project in the selected environment, mix.lock supplies immutable package identities, and Once emits one cacheable target per vendored package.",
+    attrs = _MIX_DEPENDENCIES_ATTRS,
+    deps = [dep("deps", ["elixir_app"], "Locked package roots generated from the active Mix dependency graph.")],
+    providers = ["elixir_app", "mix_dependency_set"],
+    capabilities = [capability("build", [])],
+    examples = [
+        example(
+            "elixir-library-with-mix-dependency",
+            name = "Elixir library with a locked Mix dependency",
+            use_when = "Use this when Elixir code imports vendored packages selected by mix.exs and pinned by mix.lock.",
+        ),
+    ],
+    source_references = [
+        source_reference(
+            "Mix",
+            "mix deps",
+            "https://hexdocs.pm/mix/Mix.Tasks.Deps.html",
+            "Use this for the native dependency declaration, environment selection, and graph semantics.",
+        ),
+        source_reference(
+            "Hex",
+            "locked dependency fetching",
+            "https://hex.pm/docs/usage",
+            "Use this for Hex lockfile repeatability and registry package behavior.",
+        ),
+    ],
+    resolver = _mix_dependencies_resolver,
+    impl = _mix_dependencies_impl,
+)
+
+mix_package = target_kind(
+    docs = "Synthetic vendored Mix package emitted by mix_dependencies with source, version, checksums, and dependency edges preserved from mix.lock and Mix.",
+    attrs = _MIX_PACKAGE_ATTRS,
+    deps = [dep("deps", ["elixir_app"], "Locked Mix packages available on the compile path.")],
+    providers = ["elixir_app"],
+    capabilities = [capability("build", ["bytecode"])],
+    examples = [
+        example(
+            "elixir-library-with-mix-dependency",
+            name = "Generated locked Mix package",
+            use_when = "Inspect how mix_dependencies lowers a vendored package into the Once build graph.",
+        ),
+    ],
+    source_references = [
+        source_reference(
+            "Mix",
+            "mix compile",
+            "https://hexdocs.pm/mix/Mix.Tasks.Compile.html",
+            "Use this for native compiler selection and Mix project compilation behavior.",
+        ),
+    ],
+    impl = _mix_package_impl,
+)
 
 elixir_library = target_kind(
     docs = "Elixir code compiled with one target-level `elixirc` action and staged into cacheable bytecode plus OTP application metadata.",

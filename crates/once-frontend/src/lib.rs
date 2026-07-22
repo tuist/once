@@ -14,6 +14,7 @@ mod manifest;
 mod manifest_editor;
 mod module_contract;
 mod modules;
+mod resolution;
 mod script;
 mod target;
 mod target_ref;
@@ -61,4 +62,4 @@ pub use workspace::{
     load_cache_provider, load_cache_provider_override, load_file, load_infrastructure_config,
     load_workspace,
 };
-pub use workspace_validator::validate_workspace;
+pub use workspace_validator::{validate_workspace, validate_workspace_graph};

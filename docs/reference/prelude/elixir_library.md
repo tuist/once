@@ -34,6 +34,11 @@ Dependencies should come from `deps`, not from precompiled build directories
 passed through `compile_args`; otherwise Once cannot cache or rebuild them at
 target granularity.
 
+Use [`mix_dependencies`](/reference/prelude/mix_dependencies) for third-party
+packages selected by `mix.exs` and pinned by `mix.lock`. Its aggregate provider
+implements the same `elixir_app` contract, so an `elixir_library` receives the
+complete transitive bytecode path without knowing about Hex registry metadata.
+
 ## Development Model
 
 Use `once build <target>` for compile feedback and `once test <target>` for

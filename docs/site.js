@@ -60,6 +60,8 @@ export const site = {
               { text: "apple_framework", link: "/reference/prelude/apple_framework" },
               { text: "apple_application", link: "/reference/prelude/apple_application" },
               { text: "apple_test_bundle", link: "/reference/prelude/apple_test_bundle" },
+              { text: "swift_package_dependencies", link: "/reference/prelude/swift_package_dependencies" },
+              { text: "swift_package_pin", link: "/reference/prelude/swift_package_pin" },
             ],
           },
           {
@@ -101,6 +103,8 @@ export const site = {
             text: "Elixir",
             collapsed: true,
             items: [
+              { text: "mix_dependencies", link: "/reference/prelude/mix_dependencies" },
+              { text: "mix_package", link: "/reference/prelude/mix_package" },
               { text: "elixir_library", link: "/reference/prelude/elixir_library" },
               { text: "elixir_test", link: "/reference/prelude/elixir_test" },
             ],
@@ -145,6 +149,8 @@ export const site = {
             text: "Zig",
             collapsed: true,
             items: [
+              { text: "zig_dependencies", link: "/reference/prelude/zig_dependencies" },
+              { text: "zig_package", link: "/reference/prelude/zig_package" },
               { text: "zig_library", link: "/reference/prelude/zig_library" },
               { text: "zig_c_library", link: "/reference/prelude/zig_c_library" },
               { text: "zig_binary", link: "/reference/prelude/zig_binary" },
@@ -199,6 +205,7 @@ export const site = {
           { text: "Ecosystems", link: "/guide/graph/ecosystems" },
           { text: "Testing and Scheduling", link: "/guide/graph/testing" },
           { text: "Apple", link: "/guide/graph/apple" },
+          { text: "Swift Packages", link: "/guide/graph/swift-packages" },
           { text: "Android", link: "/guide/graph/android" },
           { text: "C and C++", link: "/guide/graph/c" },
           { text: "Elixir", link: "/guide/graph/elixir" },

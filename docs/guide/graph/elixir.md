@@ -119,16 +119,97 @@ project file should affect the build or when tests must run through `mix test`.
 In that mode, Once still uses bytecode compiled by the library target and runs
 Mix with dependency checks and compilation disabled.
 
-Third-party packages need to be represented as Elixir library dependencies if
-Once should cache and rebuild them at target granularity. Passing a
-precompiled build directory through compiler arguments leaves that work
-outside the graph.
+For third-party packages managed by Mix and Hex, declare one
+`mix_dependencies` target. Mix evaluates the active dependency graph from
+`mix.exs`, while the committed `mix.lock` supplies the exact version, source,
+and checksums. Once emits a synthetic `mix_package` target for each active
+locked package and preserves Mix's dependency edges.
+
+```toml
+[[target]]
+name = "mix_dependencies"
+kind = "mix_dependencies"
+srcs = ["mix.exs", "mix.lock", "mix-dependencies.json"]
+
+[target.attrs]
+graph_file = "mix-dependencies.json"
+resolver_inputs = [
+  "mix.exs",
+  "mix.lock",
+  "mix-dependencies.json",
+  "local_helper/mix.exs",
+]
+vendor_dir = "deps"
+
+[target.attrs.path_dependencies]
+local_helper = "./local_helper"
+
+[[target]]
+name = "local_helper"
+kind = "elixir_library"
+srcs = ["local_helper/lib/**/*.ex"]
+
+[target.attrs]
+app_name = "local_helper"
+
+[[target]]
+name = "greeting"
+kind = "elixir_library"
+srcs = ["lib/**/*.ex"]
+deps = ["./mix_dependencies"]
+```
+
+Fetch dependency sources before the Once build and keep them under the
+configured vendor directory. Graph loading never runs dependency fetching or
+updates the lockfile. With `graph_file`, ordinary graph loading also avoids
+executing Mix. Without it, Once evaluates the project with isolated Mix and Hex
+homes and Hex offline mode. Vendored locked packages do not require a Hex
+archive to be installed in that isolated home. The live graph path requires
+Erlang 27 or newer for its built-in JavaScript Object Notation encoder. The
+checked-in snapshot binds the exact `mix.exs` and `mix.lock` text together with
+the selected `mix_env`, so a manifest, lockfile, or environment change makes
+graph loading fail until the snapshot is regenerated. Its `once_inputs` map
+also binds every exact resolver input except the snapshot itself. Include path
+dependency manifests so their edges cannot become stale. Package compilation
+sets Hex offline mode and uses the registered Mix compiler pipeline, so Elixir
+and Erlang compilers declared by a Mix-managed package keep their native
+behavior.
+
+Map every active Mix path dependency through `path_dependencies`. Each value is
+an ordinary first-party Once target reference. Graph loading fails instead of
+silently dropping a path dependency when its application name is not mapped.
+
+The importer currently accepts locked Hex and Git sources whose build manager
+is Mix. Rebar, Make, and dependency declarations with a custom compile command
+fail with an explicit error. They need dedicated target kinds so their tools,
+inputs, and outputs remain visible to caching and scheduling.
+
+Inspect the imported packages before building the local application:
+
+```sh
+once query targets --kind mix_package
+once build greeting
+elixir \
+  -pa .once/out/mix-locked-greeting/mix/prod/lib/locked_greeting/ebin \
+  -pa .once/out/local_helper/ebin \
+  -pa .once/out/greeting/ebin \
+  -e 'IO.write(Greeting.message("Once"))'
+```
+
+The bundled dependency starter compiles a locked `locked_greeting` package and
+a mapped local helper, then compiles the first-party `Greeting` module against
+both. Evaluating `Greeting.message("Once")` returns `Hello, Once!`, which
+verifies both provider edges as well as the imported graph.
 
 ## Target References and Limitations
 
 - [`elixir_library`](/reference/prelude/elixir_library) documents application
   metadata, configuration, private files, environment, dependencies, and the
   `bytecode` output group.
+- [`mix_dependencies`](/reference/prelude/mix_dependencies) documents locked
+  Mix and Hex graph expansion, vendored sources, and root selection.
+- [`mix_package`](/reference/prelude/mix_package) documents the generated
+  package target and its locked identity provider fields.
 - [`elixir_test`](/reference/prelude/elixir_test) documents direct ExUnit and
   Mix test modes, test arguments, labels, timeouts, results, and logs.
 

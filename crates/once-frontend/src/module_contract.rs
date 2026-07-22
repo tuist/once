@@ -7,6 +7,7 @@ pub struct ModuleAuthoringContract {
     pub registration: &'static str,
     pub declaration_source: String,
     pub schema_invariants: Vec<&'static str>,
+    pub resolver_contract: Vec<ContractEntry>,
     pub context_fields: Vec<ContractEntry>,
     pub analysis_primitives: Vec<ContractEntry>,
     pub action_primitives: Vec<ContractEntry>,
@@ -42,6 +43,26 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             "Set configurable = False when analysis or output identity cannot safely vary through select.",
             "Dependency declarations name provider records accepted from ctx[\"deps\"] and ctx[\"deps_by_role\"], and implementations should consume provider fields instead of dependency target kind names.",
             "An implementation must return a JSON-shaped provider record whose fields satisfy the target kind's declared provider contract.",
+            "Resolver-owned attributes and synthetic target attributes must be declared in their target kind schemas.",
+            "Modules are trusted analysis code. Host commands must be deterministic, must not mutate workspace sources or the build output tree, and may keep resolver scratch state only under .once/tmp. Fetching and build work belong in explicit workflows and actions.",
+        ],
+        resolver_contract: vec![
+            entry(
+                "resolver(ctx)",
+                "Import an authoritative locked dependency graph before validation and scheduling.",
+            ),
+            entry(
+                "ctx[\"files\"]",
+                "Files selected by non-empty resolver_inputs, or srcs when resolver_inputs is empty or omitted, decoded as text and keyed relative to the owner package.",
+            ),
+            entry(
+                "[{name, kind, deps, dependencies, srcs, attrs}]",
+                "Compact resolver return form containing synthetic targets.",
+            ),
+            entry(
+                "{targets, roots, attrs}",
+                "Detailed resolver return form with owner dependency roots and typed owner metadata. Resolver attributes cannot replace values declared by the owner target.",
+            ),
         ],
         context_fields: vec![
             entry("ctx[\"label\"]", "Package, name, and stable target id."),
@@ -74,8 +95,8 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry("host_which(name)", "Resolve a required executable."),
             entry("host_which_optional(name)", "Resolve an optional executable."),
             entry(
-                "host_command(argv, env = {}, merge_stderr = False)",
-                "Run a discovery command whose arguments and environment participate in analysis caching.",
+                "host_command(argv, env = {}, cwd = None, merge_stderr = False)",
+                "Run a trusted discovery command whose arguments, environment, and working directory participate in analysis caching. It may write scratch state only under .once/tmp.",
             ),
             entry("host_file_exists(path)", "Test whether a host file exists."),
             entry("host_file_read(path)", "Read a host text file during analysis."),
@@ -328,6 +349,10 @@ mod tests {
             .schema_invariants
             .iter()
             .any(|invariant| invariant.contains("attr.default")));
+        assert!(contract
+            .resolver_contract
+            .iter()
+            .any(|entry| entry.signature == "{targets, roots, attrs}"));
         assert!(contract
             .test_contract
             .iter()

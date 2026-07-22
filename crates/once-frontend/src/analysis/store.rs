@@ -158,13 +158,13 @@ impl AnalysisStore {
 
 /// Key for cached command results.
 ///
-/// `env` is included so two calls with the same argv but different
-/// `DEVELOPER_DIR` (or any other override) get distinct cache slots,
-/// which is the whole point of accepting an env at all.
+/// Environment values and the working directory are included so commands with
+/// different host discovery contexts get distinct cache slots.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct CommandKey {
     argv: Vec<String>,
     env: BTreeMap<String, String>,
+    cwd: Option<PathBuf>,
     merge_stderr: bool,
 }
 
@@ -258,11 +258,13 @@ impl HostCache {
         &self,
         argv: &[String],
         env: &BTreeMap<String, String>,
+        cwd: Option<&Path>,
         merge_stderr: bool,
     ) -> Result<String> {
         let key = CommandKey {
             argv: argv.to_vec(),
             env: env.clone(),
+            cwd: cwd.map(Path::to_path_buf),
             merge_stderr,
         };
         if let Some(cached) = self.lock_commands()?.get(&key).cloned() {
@@ -275,6 +277,9 @@ impl HostCache {
         let command_args: Vec<&String> = iter.collect();
         let mut command = Command::new(program);
         command.args(&command_args);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
         for (key, value) in env {
             command.env(key, value);
         }
