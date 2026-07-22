@@ -289,12 +289,6 @@ def host_which(name):
         return "/toolchains/go/bin/go"
     fail("unexpected host_which: " + name)
 
-def host_os():
-    return "macos"
-
-def host_arch():
-    return "arm64"
-
 def host_command(argv, env = None, merge_stderr = None):
     if len(argv) == 2 and argv[1] == "version":
         return "go version go1.26.5 darwin/arm64\n"
@@ -375,6 +369,12 @@ def host_which(name):
     if name == "go":
         return "/toolchains/go/bin/go"
     fail("unexpected host_which: " + name)
+
+def host_os():
+    return "macos"
+
+def host_arch():
+    return "arm64"
 
 def host_command(argv, env = None, merge_stderr = None):
     if len(argv) == 2 and argv[1] == "version":
