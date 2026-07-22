@@ -19,7 +19,8 @@ Resolution does not fetch sources and never writes `mix.lock`.
 Dependency sources must already exist under `vendor_dir`, normally `deps`.
 This separates network and registry access from build execution. Package build
 actions enable Hex offline mode and use the locked source tree as declared
-inputs.
+inputs. Live graph loading uses the vendored source tree and committed lockfile
+without requiring a separately installed Hex archive.
 
 The aggregate target depends only on the direct roots selected by Mix. The
 synthetic targets carry transitive edges, so Once still sees and schedules the

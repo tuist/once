@@ -1170,6 +1170,47 @@ def _mix_lock_reader_source():
     return """
 Mix.start()
 
+defmodule Once.MixLockedSource do
+  @behaviour Mix.SCM
+
+  @impl true
+  def fetchable?, do: true
+
+  @impl true
+  def format(opts), do: opts[:dest] || "locked dependency"
+
+  @impl true
+  def format_lock(opts), do: inspect(opts[:lock])
+
+  @impl true
+  def accepts_options(_app, opts), do: opts
+
+  @impl true
+  def checked_out?(opts), do: File.dir?(opts[:dest])
+
+  @impl true
+  def checkout(opts), do: opts[:lock]
+
+  @impl true
+  def update(opts), do: opts[:lock]
+
+  @impl true
+  def lock_status(opts), do: if(opts[:lock], do: :ok, else: :mismatch)
+
+  @impl true
+  def equal?(opts1, opts2), do: opts1[:dest] == opts2[:dest]
+
+  @impl true
+  def managers(opts) do
+    case opts[:lock] do
+      {:hex, _, _, _, managers, _, _, _} when is_list(managers) -> managers
+      _ -> []
+    end
+  end
+end
+
+Mix.SCM.append(Once.MixLockedSource)
+
 normalize = fn value, recur ->
   cond do
     is_atom(value) -> Atom.to_string(value)
@@ -1259,6 +1300,7 @@ def _mix_read_locked_graph(ctx):
     resolver_home = workspace_root() + "/.once/tmp/mix-resolver"
     env = _elixir_action_env(toolchain)
     env["MIX_HOME"] = resolver_home + "/mix"
+    env["MIX_ARCHIVES"] = resolver_home + "/archives"
     env["HEX_HOME"] = resolver_home + "/hex"
     env["MIX_ENV"] = mix_env
     env["HEX_OFFLINE"] = "true"

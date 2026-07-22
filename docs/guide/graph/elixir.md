@@ -163,15 +163,17 @@ Fetch dependency sources before the Once build and keep them under the
 configured vendor directory. Graph loading never runs dependency fetching or
 updates the lockfile. With `graph_file`, ordinary graph loading also avoids
 executing Mix. Without it, Once evaluates the project with isolated Mix and Hex
-homes and Hex offline mode. The live graph path requires Erlang 27 or newer for
-its built-in JavaScript Object Notation encoder. The checked-in snapshot binds
-the exact `mix.exs` and `mix.lock` text together with the selected `mix_env`, so
-a manifest, lockfile, or environment change makes graph loading fail until the
-snapshot is regenerated. Its `once_inputs` map also binds every exact resolver
-input except the snapshot itself. Include path dependency manifests so their
-edges cannot become stale. Package compilation sets Hex offline mode and uses
-the registered Mix compiler pipeline, so Elixir and Erlang compilers declared
-by a Mix-managed package keep their native behavior.
+homes and Hex offline mode. Vendored locked packages do not require a Hex
+archive to be installed in that isolated home. The live graph path requires
+Erlang 27 or newer for its built-in JavaScript Object Notation encoder. The
+checked-in snapshot binds the exact `mix.exs` and `mix.lock` text together with
+the selected `mix_env`, so a manifest, lockfile, or environment change makes
+graph loading fail until the snapshot is regenerated. Its `once_inputs` map
+also binds every exact resolver input except the snapshot itself. Include path
+dependency manifests so their edges cannot become stale. Package compilation
+sets Hex offline mode and uses the registered Mix compiler pipeline, so Elixir
+and Erlang compilers declared by a Mix-managed package keep their native
+behavior.
 
 Map every active Mix path dependency through `path_dependencies`. Each value is
 an ordinary first-party Once target reference. Graph loading fails instead of
