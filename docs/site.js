@@ -133,6 +133,18 @@ export const site = {
             ],
           },
           {
+            text: "Go",
+            collapsed: true,
+            items: [
+              { text: "go_dependencies", link: "/reference/prelude/go_dependencies" },
+              { text: "go_module", link: "/reference/prelude/go_module" },
+              { text: "go_source", link: "/reference/prelude/go_source" },
+              { text: "go_library", link: "/reference/prelude/go_library" },
+              { text: "go_binary", link: "/reference/prelude/go_binary" },
+              { text: "go_test", link: "/reference/prelude/go_test" },
+            ],
+          },
+          {
             text: "Rust",
             collapsed: true,
             items: [
@@ -210,6 +222,7 @@ export const site = {
           { text: "C and C++", link: "/guide/graph/c" },
           { text: "Elixir", link: "/guide/graph/elixir" },
           { text: "Kotlin", link: "/guide/graph/kotlin" },
+          { text: "Go", link: "/guide/graph/go" },
           { text: "Rust", link: "/guide/graph/rust" },
           { text: "Zig", link: "/guide/graph/zig" },
         ],

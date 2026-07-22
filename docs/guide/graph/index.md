@@ -110,6 +110,7 @@ ecosystem-specific examples:
 - [C and C++](/guide/graph/c)
 - [Elixir](/guide/graph/elixir)
 - [Kotlin](/guide/graph/kotlin)
+- [Go](/guide/graph/go)
 - [Rust](/guide/graph/rust)
 - [Zig](/guide/graph/zig)
 

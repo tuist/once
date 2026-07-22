@@ -417,6 +417,11 @@ separate update workflow.
   sorted workspace-relative file paths.
 - `declare_output(name)` reserves an output under the target build
   directory.
+- `execution_path(path)` returns a stable command value for a
+  workspace-relative path. Once resolves it against the local, sandbox, or
+  remote execution root immediately before launching the process. Use it for
+  tools that require absolute paths without embedding a host workspace path in
+  the action digest.
 - `cmd_args(args, use_arg_file = None)` creates a structured
   command-line fragment. `args` is a list of strings. When
   `use_arg_file` is set, it is a dictionary with `path` plus optional

@@ -109,6 +109,21 @@ help choosing between typed target kinds and scripted automation.
 - [`rust_proc_macro`](/reference/prelude/rust_proc_macro): Rust
   procedural macro compiled for Rust targets
 
+## Go target kinds
+
+- [`go_dependencies`](/reference/prelude/go_dependencies): locked, vendored Go
+  module graph imported as queryable targets
+- [`go_module`](/reference/prelude/go_module): one generated checksum-bound Go
+  module and its complete vendored source tree
+- [`go_source`](/reference/prelude/go_source): reusable Go package sources,
+  embedded files, data, and dependency metadata
+- [`go_library`](/reference/prelude/go_library): Go package archive with cgo,
+  build constraint, sanitizer, coverage, and cross-compilation controls
+- [`go_binary`](/reference/prelude/go_binary): runnable Go executable or
+  exported native library
+- [`go_test`](/reference/prelude/go_test): compiled Go tests with exact
+  filtering, normalized results, native events, and coverage
+
 ## C target kinds
 
 - [`c_library`](/reference/prelude/c_library): C and C++ static
