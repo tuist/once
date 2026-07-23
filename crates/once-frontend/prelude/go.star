@@ -664,6 +664,10 @@ func main() {
 	}
 	absBinary, _ := filepath.Abs(binary)
 	listed := listTests(absBinary, runDir)
+	available := map[string]bool{}
+	for _, name := range listed {
+		available[name] = true
+	}
 	runArgs := append([]string{}, testArgs...)
 	runArgs = append(runArgs, "-test.v=test2json")
 	if coverage != "" {
@@ -701,6 +705,9 @@ func main() {
 		}
 	} else {
 		for _, name := range filters {
+			if !available[name] {
+				continue
+			}
 			if _, ok := statuses[name]; !ok && runErr == nil && !packageFailed {
 				statuses[name] = "passed"
 			}

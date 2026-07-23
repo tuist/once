@@ -30,6 +30,14 @@ Describe 'Go graph'
     once --format json query test-manifest GreetingTests > "$WORKSPACE/test-manifest.json" || return
     once --format json test GreetingTests \
       --test-unit 'GreetingTests::TestMessage' > "$WORKSPACE/exact-test.json" || return
+    manifest="$WORKSPACE/.once/test-manifests/GreetingTests/manifest.json"
+    jq '.units += [{"id":"GreetingTests::DoesNotExist","name":"DoesNotExist","suite":"./internal/greeting"}]' \
+      "$manifest" > "$WORKSPACE/manifest-with-missing-unit.json" || return
+    cp "$WORKSPACE/manifest-with-missing-unit.json" "$manifest" || return
+    missing_batch='0000000000000000000000000000000000000000000000000000000000000000'
+    once --format json test GreetingTests \
+      --batch-test-unit 'GreetingTests::DoesNotExist' \
+      --test-batch-id "$missing_batch" > "$WORKSPACE/missing-test.json" || return
     once --format json build HelloLinux > "$WORKSPACE/cross-build.json"
   }
 
@@ -53,6 +61,7 @@ Describe 'Go graph'
     The contents of file "$WORKSPACE/.once/out/GreetingTests/test/test_results.json" should include '"total":1'
     The contents of file "$WORKSPACE/.once/out/GreetingTests/test/test_results.json" should include 'GreetingTests::TestMessage'
     The contents of file "$WORKSPACE/.once/out/GreetingTests/test/test_results.json" should not include 'GreetingTests::TestEmptyName'
+    The contents of file "$WORKSPACE/.once/out/GreetingTests/test/batches/0000000000000000000000000000000000000000000000000000000000000000/test_results.json" should not include 'GreetingTests::DoesNotExist'
     The path "$WORKSPACE/.once/out/GreetingTests/test/coverage.out" should be file
     The path "$WORKSPACE/.once/out/GreetingTests/test/native_results.jsonl" should be file
     The path "$WORKSPACE/.once/out/HelloLinux/HelloLinux" should be file
