@@ -48,8 +48,13 @@ def _go_host_os():
 
 def _go_host_arch():
     value = host_arch()
-    if value == "arm64":
-        return "arm64"
+    aliases = {
+        "aarch64": "arm64",
+        "x86": "386",
+        "x86_64": "amd64",
+    }
+    if value in aliases:
+        return aliases[value]
     return value
 
 def _go_target_os(ctx):

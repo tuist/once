@@ -371,16 +371,16 @@ def host_which(name):
     fail("unexpected host_which: " + name)
 
 def host_os():
-    return "macos"
+    return "linux"
 
 def host_arch():
-    return "arm64"
+    return "x86_64"
 
 def host_command(argv, env = None, merge_stderr = None):
     if len(argv) == 2 and argv[1] == "version":
-        return "go version go1.26.5 darwin/arm64\n"
+        return "go version go1.26.5 linux/amd64\n"
     if len(argv) >= 3 and argv[1] == "env":
-        return "{{\"GOOS\":\"darwin\",\"GOARCH\":\"arm64\",\"GOROOT\":\"/toolchains/go\"}}"
+        return "{{\"GOOS\":\"linux\",\"GOARCH\":\"amd64\",\"GOROOT\":\"/toolchains/go\"}}"
     fail("unexpected host_command: " + str(argv))
 
 ctx = {{
