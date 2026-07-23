@@ -168,3 +168,10 @@ rustup target add aarch64-linux-android
 mise run kotlin-native:install
 mise run swift:install-android-sdk
 '''
+
+[tasks."examples:verify-portable"]
+description = "Build the release binary, materialize the portable starter examples, and execute their primary capability."
+run = '''
+mise exec -- cargo build --release --package once-cli
+mise exec -- shellspec spec/starter_examples_spec.sh
+'''

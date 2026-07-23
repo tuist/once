@@ -94,7 +94,7 @@ pub(crate) fn start_session(workspace: &Path, target: &str) -> Result<RuntimeSes
 }
 
 pub(crate) fn status_session(workspace: &Path, session: &str) -> Result<RuntimeSessionRecord> {
-    let dir = resolve_session_dir(workspace, session);
+    let dir = resolve_session_dir(workspace, session)?;
     read_session_record(&dir)
 }
 
@@ -111,7 +111,7 @@ pub(crate) fn logs_session(
             "runtime log source must be `stdout` or `stderr`"
         );
     }
-    let dir = resolve_session_dir(workspace, session);
+    let dir = resolve_session_dir(workspace, session)?;
     let session_id = read_session_record(&dir)?.session_id;
     let mut records = Vec::new();
     for stream in ["stdout", "stderr"] {
@@ -148,7 +148,7 @@ pub(crate) fn logs_session(
 }
 
 pub(crate) fn stop_session(workspace: &Path, session: &str) -> Result<RuntimeSessionRecord> {
-    let dir = resolve_session_dir(workspace, session);
+    let dir = resolve_session_dir(workspace, session)?;
     let mut record = read_session_record(&dir)?;
     if matches!(record.status.as_str(), "starting" | "running") {
         fs::write(dir.join(STOP_REQUEST_FILE), b"stop\n")
@@ -214,16 +214,15 @@ fn log_file(session_dir: &Path, source: &str) -> Result<File> {
         .with_context(|| format!("opening {}", path.display()))
 }
 
-fn resolve_session_dir(workspace: &Path, session: &str) -> PathBuf {
-    let raw = Path::new(session);
-    if raw.is_absolute() || session.contains('/') || session.contains('\\') {
-        return if raw.is_absolute() {
-            raw.to_path_buf()
-        } else {
-            workspace.join(raw)
-        };
-    }
-    workspace.join(CACHE_DIR).join("runtime").join(session)
+fn resolve_session_dir(workspace: &Path, session: &str) -> Result<PathBuf> {
+    anyhow::ensure!(
+        !session.is_empty()
+            && session.chars().all(
+                |character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            ),
+        "runtime session id must contain only letters, numbers, `-`, or `_`"
+    );
+    Ok(workspace.join(CACHE_DIR).join("runtime").join(session))
 }
 
 fn read_session_record(session_dir: &Path) -> Result<RuntimeSessionRecord> {
@@ -277,6 +276,26 @@ mod tests {
         assert!(id.starts_with("apps-ios-App-Tests-"));
         assert!(!id.contains('/'));
         assert!(!id.contains(' '));
+    }
+
+    #[test]
+    fn session_paths_reject_workspace_escapes() {
+        let workspace = Path::new("/workspace");
+
+        for session in [
+            "",
+            "../outside",
+            "nested/session",
+            r"nested\session",
+            "/absolute",
+            "with.dot",
+        ] {
+            assert!(resolve_session_dir(workspace, session).is_err());
+        }
+        assert_eq!(
+            resolve_session_dir(workspace, "safe-session_1").unwrap(),
+            Path::new("/workspace/.once/runtime/safe-session_1")
+        );
     }
 
     #[test]

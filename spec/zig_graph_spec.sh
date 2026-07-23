@@ -15,7 +15,8 @@ if [ "${1:-}" = "--version" ]; then
   printf '%s\n' 'cc mock'
   exit 0
 fi
-printf 'cc %s\n' "$*" >> "$PWD/cc-argv.log"
+log_root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+printf 'cc %s\n' "$*" >> "$log_root/cc-argv.log"
 out=''
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-o" ]; then
@@ -37,7 +38,8 @@ if [ "${1:-}" = "--version" ]; then
   printf '%s\n' 'cxx mock'
   exit 0
 fi
-printf 'cxx %s\n' "$*" >> "$PWD/cc-argv.log"
+log_root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+printf 'cxx %s\n' "$*" >> "$log_root/cc-argv.log"
 out=''
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-o" ]; then
@@ -67,7 +69,8 @@ SH
 set -eu
 cmd="${1:-}"
 shift || true
-printf '%s %s\n' "$cmd" "$*" >> "$PWD/zig-argv.log"
+log_root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+printf '%s %s\n' "$cmd" "$*" >> "$log_root/zig-argv.log"
 case "$cmd" in
   version)
     printf '%s\n' '0.15.1'
@@ -141,7 +144,8 @@ SH
     cat > "$WORKSPACE/bin/translate-c" <<'SH'
 #!/bin/sh
 set -eu
-printf '%s\n' "$*" >> "$PWD/translate-c-argv.log"
+log_root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+printf '%s\n' "$*" >> "$log_root/translate-c-argv.log"
 out=''
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-o" ]; then

@@ -36,7 +36,8 @@ versions back through `2024-11-05`. The expected sequence:
 1. Client → `initialize` request with its protocol version,
    capabilities, and client info.
 2. Server → `initialize` result with the negotiated protocol version,
-   the `tools` capability, server info, and cross-tool workflow instructions.
+   the `tools` capability, server info, the configured workspace root, and
+   cross-tool workflow instructions.
 3. Client → `notifications/initialized` (no reply).
 4. Client → `tools/list` to discover tools, then `tools/call` for
    each invocation.
@@ -83,16 +84,21 @@ A complete client/server exchange:
 → { "jsonrpc": "2.0", "id": 1, "method": "tools/list" }
 ← { "jsonrpc": "2.0", "id": 1, "result": { "tools": [ … ] } }
 → { "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-    "params": { "name": "once_query_targets", "arguments": {} } }
+    "params": { "name": "once_query_workspace", "arguments": {} } }
 ← { "jsonrpc": "2.0", "id": 2,
     "result": { "content": [ { "type": "text",
-                               "text": "[ … target list … ]" } ],
-                "structuredContent": { "result": [ … target list … ] } } }
+                               "text": "{ … workspace state … }" } ],
+                "structuredContent": { "result": { … workspace state … } } } }
 ```
 
 Every advertised tool includes behavioral annotations, a strict root input
 schema, and an output schema. Text content remains available for older clients;
 newer clients can consume `structuredContent` directly.
+
+When editing and execution are enabled, `once_materialize_example` can create a
+complete starter without returning every file through the model context. It is
+idempotent for identical files and rejects the complete operation before
+writing when any destination conflicts.
 
 Some hosts probe optional resource, resource-template, or prompt catalogs even
 when a server does not advertise them. Once returns valid empty catalogs for

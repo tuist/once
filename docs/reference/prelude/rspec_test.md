@@ -4,10 +4,9 @@
 
 ## Start Here
 
-The selected `ruby` interpreter must be able to load `rspec/core`. Use the
-Ruby environment already managed by the project. The interpreter may be a
-name on the executable search path, an absolute path, or a workspace-relative
-path. A common direct installation is:
+Once resolves the Ruby interpreter and the Ruby Specification runner as
+separate tools. Each may be a name on the executable search path, an absolute
+path, or a workspace-relative path. A common direct installation is:
 
 ```sh
 gem install rspec
@@ -37,10 +36,14 @@ batching, and exact unit commands.
 
 ## Description
 
-`rspec_test` invokes the Ruby Specification core runner with its structured
-formatter, converts examples into stable target-qualified identifiers, and
-writes normalized Once results. Exact execution passes the native example
-identifier back to the runner.
+`rspec_test` invokes the selected Ruby Specification command with its
+structured formatter, converts examples into stable target-qualified
+identifiers, and writes normalized Once results. Exact execution passes the
+native example identifier back to the runner.
+
+The target kind declares Ruby and Ruby Specification as tool requirements.
+The runner does not need to be loadable by an unrelated system Ruby
+installation.
 
 Automatic batching uses one batch per specification file by default. Set
 `batching` to `case` for individual examples, or `target` for one target batch.
@@ -50,7 +53,8 @@ A complete discovery run is required before smaller batches are planned.
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `ruby` | string | no | `ruby` | Ruby interpreter name, absolute path, or workspace-relative path that can load the Ruby Specification library |
+| `ruby` | string | no | `ruby` | Ruby interpreter name, absolute path, or workspace-relative path |
+| `runner` | string | no | `rspec` | Ruby Specification runner name, absolute path, or workspace-relative path |
 | `config` | list&lt;string&gt; | no | `Gemfile`, `Gemfile.lock` | Dependency and runner configuration inputs |
 | `data` | list&lt;string&gt; | no | `[]` | Runtime data and support inputs |
 | `args` | list&lt;string&gt; | no | `[]` | Additional runner arguments |

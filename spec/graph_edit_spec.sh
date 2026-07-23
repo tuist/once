@@ -100,6 +100,32 @@ Describe 'once query example'
   End
 End
 
+Describe 'once edit materialize-example'
+  BeforeEach 'setup_workspace'
+  AfterEach 'cleanup_workspace'
+
+  It 'creates a valid starter without printing file contents'
+    When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit materialize-example rust_library rust-library-minimal
+    The status should be success
+    The stdout should include '"materialized":true'
+    The stdout should include '"id":"crates/hello/hello"'
+    The stdout should include '"valid":true'
+    The stdout should not include 'pub fn'
+    The path "$WORKSPACE/crates/hello/once.toml" should be file
+    The path "$WORKSPACE/crates/hello/src/lib.rs" should be file
+  End
+
+  It 'keeps an identical retry idempotent'
+    "$ONCE_BIN" -C "$WORKSPACE" edit materialize-example rust_library rust-library-minimal >/dev/null
+
+    When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit materialize-example rust_library rust-library-minimal
+    The status should be success
+    The stdout should include '"materialized":true'
+    The stdout should include '"created_files":[]'
+    The stdout should include '"unchanged_files":'
+  End
+End
+
 Describe 'workspace custom module CLI surface'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'

@@ -9,8 +9,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
 use super::ast::{
-    Direction, MatchPattern, NodePattern, ParsedQuery, Predicate, Projection, RelationshipPattern,
-    ReturnItem,
+    Direction, MatchPattern, NodePattern, ParsedQuery, Predicate, PredicateOperator, Projection,
+    RelationshipPattern, ReturnItem,
 };
 use super::scan::{
     keyword_pos, matching_delimiter, split_top_level, split_top_level_keyword, starts_with_keyword,
@@ -59,7 +59,7 @@ pub(super) fn parse_query(raw: &str) -> Result<ParsedQuery> {
     let pattern_start = match_pos + "MATCH".len();
     let pattern_end = where_pos.unwrap_or(return_pos);
     let pattern = parse_match_pattern(query[pattern_start..pattern_end].trim())?;
-    let predicates = if let Some(where_pos) = where_pos {
+    let predicate_groups = if let Some(where_pos) = where_pos {
         parse_predicates(query[where_pos + "WHERE".len()..return_pos].trim())?
     } else {
         Vec::new()
@@ -67,7 +67,7 @@ pub(super) fn parse_query(raw: &str) -> Result<ParsedQuery> {
     let returns = parse_returns(query[return_pos + "RETURN".len()..].trim())?;
     Ok(ParsedQuery {
         pattern,
-        predicates,
+        predicate_groups,
         returns,
     })
 }
@@ -190,24 +190,66 @@ fn parse_property_map(raw: &str) -> Result<BTreeMap<String, Value>> {
     Ok(properties)
 }
 
-fn parse_predicates(raw: &str) -> Result<Vec<Predicate>> {
+fn parse_predicates(raw: &str) -> Result<Vec<Vec<Predicate>>> {
     if raw.is_empty() {
         return Ok(Vec::new());
     }
-    split_top_level_keyword(raw, "AND")
+    split_top_level_keyword(raw, "OR")
         .into_iter()
-        .map(|predicate| {
-            let eq = top_level_char(predicate, '=')
-                .ok_or_else(|| anyhow!("WHERE predicates must use equality"))?;
-            let (alias, property) = parse_property_ref(predicate[..eq].trim())?;
-            let value = parse_literal(predicate[eq + 1..].trim())?;
-            Ok(Predicate {
-                alias,
-                property,
-                value,
-            })
+        .map(|group| {
+            split_top_level_keyword(group, "AND")
+                .into_iter()
+                .map(parse_predicate)
+                .collect()
         })
         .collect()
+}
+
+fn parse_predicate(raw: &str) -> Result<Predicate> {
+    let operators = [
+        ("STARTS WITH", PredicateOperator::StartsWith),
+        ("ENDS WITH", PredicateOperator::EndsWith),
+        ("CONTAINS", PredicateOperator::Contains),
+        ("IN", PredicateOperator::In),
+    ];
+    for (keyword, operator) in operators {
+        if let Some(position) = keyword_pos(raw, keyword, 0) {
+            return predicate_from_parts(
+                &raw[..position],
+                &raw[position + keyword.len()..],
+                operator,
+            );
+        }
+    }
+    if let Some(position) = top_level_operator(raw, "<>") {
+        return predicate_from_parts(
+            &raw[..position],
+            &raw[position + 2..],
+            PredicateOperator::NotEqual,
+        );
+    }
+    if let Some(position) = top_level_char(raw, '=') {
+        return predicate_from_parts(
+            &raw[..position],
+            &raw[position + 1..],
+            PredicateOperator::Equal,
+        );
+    }
+    bail!("WHERE predicates must use =, <>, CONTAINS, IN, STARTS WITH, or ENDS WITH")
+}
+
+fn predicate_from_parts(
+    property: &str,
+    value: &str,
+    operator: PredicateOperator,
+) -> Result<Predicate> {
+    let (alias, property) = parse_property_ref(property.trim())?;
+    Ok(Predicate {
+        alias,
+        property,
+        operator,
+        value: parse_literal(value.trim())?,
+    })
 }
 
 fn parse_returns(raw: &str) -> Result<Vec<ReturnItem>> {
@@ -235,7 +277,7 @@ fn parse_projection(raw: &str) -> Result<Projection> {
     if let Some((alias, property)) = raw.split_once('.') {
         return Ok(Projection::Property {
             alias: identifier(alias.trim())?,
-            property: identifier(property.trim())?,
+            property: property_path(property.trim())?,
         });
     }
     Ok(Projection::Node {
@@ -247,10 +289,22 @@ fn parse_property_ref(raw: &str) -> Result<(String, String)> {
     let (alias, property) = raw
         .split_once('.')
         .ok_or_else(|| anyhow!("property references must use `alias.property`"))?;
-    Ok((identifier(alias.trim())?, identifier(property.trim())?))
+    Ok((identifier(alias.trim())?, property_path(property.trim())?))
 }
 
 fn parse_literal(raw: &str) -> Result<Value> {
+    if raw.starts_with('[') && raw.ends_with(']') {
+        let inner = &raw[1..raw.len() - 1];
+        if inner.trim().is_empty() {
+            return Ok(Value::Array(Vec::new()));
+        }
+        return Ok(Value::Array(
+            split_top_level(inner, ',')?
+                .into_iter()
+                .map(parse_literal)
+                .collect::<Result<Vec<_>>>()?,
+        ));
+    }
     if raw.starts_with('"') || raw.starts_with('\'') {
         return parse_string_literal(raw).map(Value::String);
     }
@@ -267,6 +321,27 @@ fn parse_literal(raw: &str) -> Result<Value> {
         return Ok(json!(value));
     }
     bail!("unsupported literal `{raw}`");
+}
+
+fn property_path(raw: &str) -> Result<String> {
+    raw.split('.')
+        .map(str::trim)
+        .map(identifier)
+        .collect::<Result<Vec<_>>>()
+        .map(|parts| parts.join("."))
+}
+
+fn top_level_operator(input: &str, operator: &str) -> Option<usize> {
+    let first = operator.chars().next()?;
+    let mut start = 0;
+    while let Some(relative) = top_level_char(&input[start..], first) {
+        let position = start + relative;
+        if input[position..].starts_with(operator) {
+            return Some(position);
+        }
+        start = position + first.len_utf8();
+    }
+    None
 }
 
 fn parse_string_literal(raw: &str) -> Result<String> {

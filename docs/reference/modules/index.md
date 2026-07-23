@@ -76,6 +76,13 @@ discovery.
 Attributes can be configurable unless their schema sets
 `configurable = False`. Non-configurable attributes reject `select`
 during validation before the implementation runs.
+Set `implemented = False` on compatibility attributes that should remain
+discoverable but are not available yet. Validation returns
+`unimplemented_attr` with an attribute-scoped repair before analysis starts.
+Values declared with the `target` type use the same package-relative target
+syntax as dependency references. Complete-workspace validation confirms that
+each referenced target exists and returns an attribute-scoped repair when it
+does not.
 
 ## Dependency Resolver Contract
 
@@ -89,6 +96,8 @@ The resolver receives a restricted context:
 - `ctx["label"]`: package, name, and stable target identifier.
 - `ctx["attr"]`: typed owner attributes. `ctx["attrs"]` is an equivalent
   spelling for resolver compatibility.
+- `ctx["configuration"]`: normalized target operating system, architecture,
+  and ordered selection tokens.
 - `ctx["srcs"]`: declared build source patterns.
 - `ctx["files"]`: resolver input files decoded as text, keyed by path relative
   to the owner package. Non-empty `resolver_inputs` patterns define this map.
@@ -135,14 +144,15 @@ def _resolve(ctx):
 ```
 
 Each target record accepts only `name`, `kind`, `deps`, `dependencies`, `srcs`,
-and `attrs`. Dependency references use the same syntax as a manifest, including
-`./name` for a target in the owner package. A bare root name that matches an
-emitted target is also package-local. When `roots` is omitted, every emitted
-target becomes an owner dependency. Resolver-owned and synthetic attributes
-must be declared in their target kind schemas, including internal bookkeeping
-attributes. A resolver attribute cannot replace a value declared by the owner
-target. Expansion stops at 100,000 workspace targets so a recursive resolver
-cannot grow the graph without bound.
+`visibility`, and `attrs`. Dependency references and exact visibility entries
+use the same syntax as a manifest, including `./name` for a target in the owner
+package. A bare root name that matches an emitted target is also package-local.
+When `roots` is omitted, every emitted target becomes an owner dependency.
+Resolver-owned and synthetic attributes must be declared in their target kind
+schemas, including internal bookkeeping attributes. A resolver attribute
+cannot replace a value declared by the owner target. Expansion stops at
+100,000 workspace targets so a recursive resolver cannot grow the graph
+without bound.
 
 Ordinary builds consume locked metadata and already materialized sources. A
 separate explicit update workflow should invoke the native package manager when
@@ -245,8 +255,14 @@ once query schema apple_library --format json
 }
 ```
 
-Agents should use `use_when` to pick the closest starter, then fetch its
-file bundle:
+Agents should use `use_when` to pick the closest starter, then materialize it
+without copying file payloads through model context:
+
+```sh
+once edit materialize-example apple_library apple-library-minimal
+```
+
+Fetch the file bundle only when the caller needs to inspect or adapt it:
 
 ```sh
 once query example apple_library apple-library-minimal --format json
@@ -268,7 +284,10 @@ once query example apple_library apple-library-minimal --format json
 
 [Model Context Protocol](https://modelcontextprotocol.io/) callers use
 `once_list_target_kinds` and `once_query_schema` for discovery, then
-`once_query_example` to fetch the file bundle for the chosen starter.
+`once_materialize_example` for direct setup or `once_query_example` to inspect
+the file bundle. Repository contributors can run
+`mise run examples:verify-portable` to materialize and execute the portable
+starter set.
 
 ## External Rule Assimilation
 

@@ -1,26 +1,27 @@
 # `once query validate-actions`
 
-Run scripted graph actions in an uncached isolated validation workspace and return structured filesystem contract repairs.
+Run scripted actions in a private validation sandbox and report filesystem contract repairs
 
 ## Synopsis
 
 ```text
-once query validate-actions <TARGET> [OPTIONS]
+once query validate-actions [OPTIONS] <TARGET>
 ```
 
-The probe runs the selected capability without consulting the action cache and does not materialize outputs. It checks changes in the isolated action workspace and the project workspace, reports input mutation, undeclared writes, missing outputs, and path escapes, and includes a repair for each diagnostic. Reads that leave no observable filesystem evidence cannot be reported by this validation mode.
+## Arguments
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `<TARGET>` | yes | Target id whose scripted capability should be probed |
 
 ## Options
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
-| `--capability` | `<CAPABILITY>` | `build` | Capability to validate. |
-| `--action` | `<INDEX>` |  | Validate one zero-based action index. |
-| `-C, --directory` | `<DIR>` |  | Project root. |
-| `--format` | `<FORMAT>` | `human` | Output format. Use `json` for agent consumers. |
-
-## Positional arguments
-
-| Name | Description |
-| --- | --- |
-| `TARGET` | Canonical target id whose scripted capability should be probed. |
+| `--capability` | `<CAPABILITY>` | `build` | Capability to validate |
+| `--action` | `<ACTION>` |  | Validate only one zero-based action index |
+| `-C, --directory` | `<DIR>` |  | Project root. Defaults to the current directory; the cache lives under `<project>/.once/`. Mirrors `make -C` |
+| `--format` | `<FORMAT>` | `human` | Output format for Once's structured data (`cache stats`, `run`/`exec` trailers). Defaults to a human-readable rendering; pass `json` or `toon` to get machine-parseable output for scripting and for agent consumers |
+| `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |
+| `-q, --quiet` | (flag) | `false` | Suppress human-mode success and progress trailers. Errors and the structured envelope of `--format json`/`toon` still print. Mirrors the `-q` flag of common build tools |
+| `--list` | (flag) | `false` | Print the command surface at the current command depth |

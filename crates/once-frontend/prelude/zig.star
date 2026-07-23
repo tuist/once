@@ -1,8 +1,5 @@
 def _zig_attr(ctx, key, default):
-    value = ctx["attr"].get(key)
-    if value == None:
-        return default
-    return value
+    return _configured_attr(ctx, key, default)
 
 def _zig_label_suffix(ctx):
     return _zig_safe_name(ctx["label"]["id"])

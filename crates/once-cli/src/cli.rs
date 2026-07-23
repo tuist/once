@@ -350,13 +350,14 @@ pub enum Cmd {
     /// ## Query Expressions
     ///
     /// `once query '<QUERY>'` accepts a read-only subset of Cypher backed
-    /// by the Cypher tree-sitter grammar. The first supported shape is a
-    /// single `MATCH` pattern with optional `WHERE` equality predicates
-    /// and explicit `RETURN` projections.
+    /// by the Cypher tree-sitter grammar. It accepts one `MATCH` pattern,
+    /// optional `WHERE` predicates joined with `AND` and `OR`, and explicit
+    /// `RETURN` projections.
     ///
     /// ```sh
     /// once query 'MATCH (app:Target {id: "services/api/Api"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
     /// once query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id'
+    /// once query 'MATCH (t:Target) WHERE t.visibility CONTAINS "public" OR t.attrs.tier IN ["core", "shared"] RETURN t.id, t.attrs.tier'
     /// ```
     ///
     /// Supported labels are `Target`, `Capability`, and `Provider`. Labels
@@ -366,6 +367,11 @@ pub enum Cmd {
     /// relationships are `DEPENDS_ON`, `EXPOSES`, and `EMITS`. The `*`
     /// suffix on a relationship performs transitive traversal, for example
     /// `[:DEPENDS_ON*]`.
+    ///
+    /// Predicates support `=`, `<>`, `CONTAINS`, `IN`, `STARTS WITH`, and
+    /// `ENDS WITH`. `CONTAINS` checks a string substring or array membership.
+    /// `IN` checks whether a scalar is present in an array literal. Property
+    /// paths can inspect nested maps, for example `t.attrs.bundle_id`.
     ///
     /// String literals can be quoted with single or double quotes and
     /// support `\n`, `\r`, `\t`, `\\`, `\"`, and `\'` escapes. Other
@@ -399,7 +405,9 @@ pub enum Cmd {
     /// `edit apply` runs a batch of `create` / `update` / `delete`
     /// operations against a single `once.toml` atomically. The CLI
     /// reads its input JSON from `--file` or stdin and emits
-    /// structured diagnostics for failed edits.
+    /// structured diagnostics for failed edits. `edit
+    /// materialize-example` copies a target kind starter without
+    /// printing its file contents and refuses conflicting paths.
     #[command(arg_required_else_help = true)]
     Edit {
         #[command(subcommand)]

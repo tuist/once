@@ -10,7 +10,7 @@ once edit [OPTIONS] <SUBCOMMAND>
 
 ## Description
 
-`edit apply` runs a batch of `create` / `update` / `delete` operations against a single `once.toml` atomically. The CLI reads its input JSON from `--file` or stdin and emits structured diagnostics for failed edits.
+`edit apply` runs a batch of `create` / `update` / `delete` operations against a single `once.toml` atomically. The CLI reads its input JSON from `--file` or stdin and emits structured diagnostics for failed edits. `edit materialize-example` copies a target kind starter without printing its file contents and refuses conflicting paths.
 
 ## Options
 
@@ -25,3 +25,4 @@ once edit [OPTIONS] <SUBCOMMAND>
 ## Subcommands
 
 - [`once edit apply`](/reference/cli/edit/apply)
+- [`once edit materialize-example`](/reference/cli/edit/materialize-example)

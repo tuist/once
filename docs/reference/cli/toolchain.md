@@ -10,7 +10,7 @@ once toolchain [OPTIONS] <SUBCOMMAND>
 
 ## Description
 
-Reports the toolchains a project pins (Rust, Swift, mise) and the resolved versions Once will use when running actions from script adapters or graph target kinds. Once downloads and verifies its own release-pinned mise executable when it is first needed, so the command does not depend on a developer-installed mise. Pair with `once query schema` when debugging "why did the cache miss?" questions where the toolchain identity is suspect.
+Reports the toolchains a project pins (Rust, Swift, mise) and the resolved versions Once will use when running actions from script adapters or graph target kinds. Pair with `once query schema` when debugging "why did the cache miss?" questions where the toolchain identity is suspect.
 
 ## Options
 

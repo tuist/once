@@ -223,7 +223,7 @@ def _swift_android_collect_linkopts(deps, own_values):
     return out
 
 def _swift_android_library_impl(ctx):
-    attrs = ctx["attr"]
+    attrs = _configured_attrs(ctx, ["android"])
     _swift_android_reject_unsupported_attrs(attrs, ctx["label"]["id"], ["always_include_developer_search_paths", "alwayslink", "generated_header_name", "generates_header", "linkstatic", "plugins", "private_deps"])
     module_name = _swift_android_attr(attrs, "module_name", "") or ctx["label"]["name"]
     package_name = _swift_android_attr(attrs, "package_name", "")
@@ -386,14 +386,14 @@ swift_android_library = target_kind(
         attr("linkopts", "list<string>", default = "[]", docs = "Additional linker flags appended after Once-managed flags.", configurable = False),
         attr("data", "list<string>", default = "[]", docs = "Package-relative runtime data file globs propagated to downstream consumers.", configurable = False),
         attr("swiftc_inputs", "list<string>", default = "[]", docs = "Bazel-compatible extra Swift compiler input globs.", configurable = False),
-        attr("always_include_developer_search_paths", "bool", default = "false", docs = "Reserved for Bazel-compatible developer search path handling.", configurable = False),
-        attr("alwayslink", "bool", default = "false", docs = "Reserved for Bazel-compatible always-link semantics.", configurable = False),
-        attr("generated_header_name", "string", docs = "Reserved for generated Objective-C header naming.", configurable = False),
-        attr("generates_header", "bool", default = "false", docs = "Reserved for generated Objective-C header emission.", configurable = False),
+        attr("always_include_developer_search_paths", "bool", default = "false", docs = "Reserved for Bazel-compatible developer search path handling.", configurable = False, implemented = False),
+        attr("alwayslink", "bool", default = "false", docs = "Reserved for Bazel-compatible always-link semantics.", configurable = False, implemented = False),
+        attr("generated_header_name", "string", docs = "Reserved for generated Objective-C header naming.", configurable = False, implemented = False),
+        attr("generates_header", "bool", default = "false", docs = "Reserved for generated Objective-C header emission.", configurable = False, implemented = False),
         attr("library_evolution", "bool", default = "false", docs = "Enable Swift library evolution and emit a textual module interface.", configurable = False),
-        attr("linkstatic", "bool", default = "false", docs = "Reserved for Bazel-compatible static link selection.", configurable = False),
-        attr("plugins", "list<string>", default = "[]", docs = "Reserved for Swift compiler plugins.", configurable = False),
-        attr("private_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-compatible private dependencies.", configurable = False),
+        attr("linkstatic", "bool", default = "false", docs = "Reserved for Bazel-compatible static link selection.", configurable = False, implemented = False),
+        attr("plugins", "list<string>", default = "[]", docs = "Reserved for Swift compiler plugins.", configurable = False, implemented = False),
+        attr("private_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-compatible private dependencies.", configurable = False, implemented = False),
     ],
     deps = [
         dep("deps", ["swift_module", "android_native_library"], "Swift modules and Android native libraries linked or packaged with this library."),

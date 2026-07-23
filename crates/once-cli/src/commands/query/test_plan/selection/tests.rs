@@ -84,15 +84,73 @@ fn test_plan_identity_is_stable_and_independent_of_changed_path_order() {
 }
 
 #[test]
-fn unmatched_paths_conservatively_select_every_test() {
+fn paths_outside_known_packages_conservatively_select_every_test() {
     let workspace = TempDir::new().unwrap();
-    let graph = vec![target("unit", "test", &["tests/**/*.rs"], &[], true)];
+    let graph = vec![target("tests/unit", "test", &["**/*.rs"], &[], true)];
 
-    let report = selection_report(workspace.path(), &graph, &["README.md".to_string()]).unwrap();
+    let report = selection_report(
+        workspace.path(),
+        &graph,
+        &["documentation/README.md".to_string()],
+    )
+    .unwrap();
 
     assert_eq!(report.tests.len(), 1);
     assert!(report.tests[0].reasons[0].contains("has no declared owner"));
-    assert_eq!(report.unmatched_paths, vec!["README.md"]);
+    assert_eq!(report.unmatched_paths, vec!["documentation/README.md"]);
+}
+
+#[test]
+fn package_manifest_changes_select_only_package_dependents() {
+    let workspace = TempDir::new().unwrap();
+    let graph = vec![
+        target("packages/core/Library", "library", &["src/**"], &[], false),
+        target(
+            "packages/core/UnitTests",
+            "test",
+            &["tests/**"],
+            &["packages/core/Library"],
+            true,
+        ),
+        target("apps/OtherTests", "test", &["tests/**"], &[], true),
+    ];
+
+    let report = selection_report(
+        workspace.path(),
+        &graph,
+        &["packages/core/once.toml".to_string()],
+    )
+    .unwrap();
+
+    assert_eq!(
+        report
+            .tests
+            .iter()
+            .map(|test| test.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["packages/core/UnitTests"]
+    );
+    assert!(report.unmatched_paths.is_empty());
+}
+
+#[test]
+fn unowned_files_use_the_nearest_package() {
+    let workspace = TempDir::new().unwrap();
+    let graph = vec![
+        target("packages/core/UnitTests", "test", &["tests/**"], &[], true),
+        target("apps/OtherTests", "test", &["tests/**"], &[], true),
+    ];
+
+    let report = selection_report(
+        workspace.path(),
+        &graph,
+        &["packages/core/README.md".to_string()],
+    )
+    .unwrap();
+
+    assert_eq!(report.tests[0].id, "packages/core/UnitTests");
+    assert_eq!(report.tests.len(), 1);
+    assert!(report.unmatched_paths.is_empty());
 }
 
 #[test]
@@ -135,16 +193,18 @@ fn configured_module_changes_select_every_test() {
 }
 
 fn target(id: &str, kind: &str, srcs: &[&str], deps: &[&str], test: bool) -> GraphTarget {
+    let (package, name) = id.rsplit_once('/').unwrap_or(("", id));
     GraphTarget {
         label: TargetLabel {
-            package: String::new(),
-            name: id.to_string(),
+            package: package.to_string(),
+            name: name.to_string(),
             id: id.to_string(),
         },
         kind: kind.to_string(),
         deps: deps.iter().map(ToString::to_string).collect(),
         dependency_edges: BTreeMap::new(),
         srcs: srcs.iter().map(ToString::to_string).collect(),
+        visibility: Vec::new(),
         attrs: BTreeMap::new(),
         capabilities: test
             .then(|| Capability {

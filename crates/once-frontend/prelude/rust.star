@@ -35,7 +35,7 @@ def _rust_attr(ctx, key, default):
     value = ctx["attr"].get(key)
     if value == None:
         return default
-    return _rust_resolve_select(value, _rust_config_tokens(_rust_target_raw(ctx)), ctx["label"]["id"], key)
+    return _rust_resolve_select(value, _rust_config_tokens(ctx, _rust_target_raw(ctx)), ctx["label"]["id"], key)
 
 def _rust_target_raw(ctx):
     value = ctx["attr"].get("target")
@@ -51,7 +51,7 @@ def _is_select_shape(value):
     inner = value.get("select")
     return type(inner) == type({})
 
-def _rust_config_tokens(target):
+def _rust_config_tokens(ctx, target):
     tokens = []
     if target:
         tokens.append(target)
@@ -74,8 +74,7 @@ def _rust_config_tokens(target):
         if arch == "arm64":
             tokens.append(os + "-aarch64")
             tokens.append("aarch64")
-    tokens.append("default")
-    return _unique(tokens)
+    return _configuration_tokens(ctx, tokens)
 
 def _rust_select_branch(branches, tokens, label_id, attr_name):
     for token in tokens:
@@ -2808,18 +2807,18 @@ _RUST_COMMON_ATTRS = [
     attr("cargo_package", "string", docs = "Cargo package name used to select direct external deps from a cargo_dependencies dependency set. Defaults to CARGO_PKG_NAME when present.", configurable = False),
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
     attr("default_deps", "string", docs = "Reserved Buck-compatible default dependency mode.", configurable = False),
-    attr("doc_deps", "list<string>", default = "[]", docs = "Reserved for Rust documentation-only dependencies.", configurable = False),
-    attr("doc_env", "map<string, string>", default = "{}", docs = "Reserved for Rust documentation action environments.", configurable = False),
-    attr("doc_link_style", "string", docs = "Reserved for Rust documentation link style selection.", configurable = False),
-    attr("doc_linker_flags", "list<string>", default = "[]", docs = "Reserved for Rust documentation linker flags.", configurable = False),
-    attr("doc_named_deps", "map<string, string>", default = "{}", docs = "Reserved for Rust documentation dependency aliases.", configurable = False),
-    attr("link_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-style native link dependencies.", configurable = False),
-    attr("link_style", "string", docs = "Reserved for Buck-compatible Rust link style selection.", configurable = False),
-    attr("mapped_srcs", "map<string, string>", default = "{}", docs = "Reserved for Buck-compatible mapped source inputs.", configurable = False),
-    attr("proc_macro_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-style procedural macro dependency separation.", configurable = False),
-    attr("rpath", "bool", default = "false", docs = "Reserved for runtime library search path handling.", configurable = False),
-    attr("runtime_dependency_handling", "string", docs = "Reserved for Buck-compatible runtime dependency handling.", configurable = False),
-    attr("rustdoc_flags", "list<string>", default = "[]", docs = "Reserved for Rust documentation compiler flags.", configurable = False),
+    attr("doc_deps", "list<string>", default = "[]", docs = "Reserved for Rust documentation-only dependencies.", configurable = False, implemented = False),
+    attr("doc_env", "map<string, string>", default = "{}", docs = "Reserved for Rust documentation action environments.", configurable = False, implemented = False),
+    attr("doc_link_style", "string", docs = "Reserved for Rust documentation link style selection.", configurable = False, implemented = False),
+    attr("doc_linker_flags", "list<string>", default = "[]", docs = "Reserved for Rust documentation linker flags.", configurable = False, implemented = False),
+    attr("doc_named_deps", "map<string, string>", default = "{}", docs = "Reserved for Rust documentation dependency aliases.", configurable = False, implemented = False),
+    attr("link_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-style native link dependencies.", configurable = False, implemented = False),
+    attr("link_style", "string", docs = "Reserved for Buck-compatible Rust link style selection.", configurable = False, implemented = False),
+    attr("mapped_srcs", "map<string, string>", default = "{}", docs = "Reserved for Buck-compatible mapped source inputs.", configurable = False, implemented = False),
+    attr("proc_macro_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-style procedural macro dependency separation.", configurable = False, implemented = False),
+    attr("rpath", "bool", default = "false", docs = "Reserved for runtime library search path handling.", configurable = False, implemented = False),
+    attr("runtime_dependency_handling", "string", docs = "Reserved for Buck-compatible runtime dependency handling.", configurable = False, implemented = False),
+    attr("rustdoc_flags", "list<string>", default = "[]", docs = "Reserved for Rust documentation compiler flags.", configurable = False, implemented = False),
 ]
 
 _RUST_MOBILE_ATTRS = [
@@ -2947,6 +2946,11 @@ rust_binary = target_kind(
     ],
     tools = [_RUST_TOOL],
     examples = [
+        example(
+            "rust-binary-minimal",
+            name = "Minimal Rust executable",
+            use_when = "Start here for a runnable first-party Rust executable with no external dependencies.",
+        ),
         example(
             "rust-binary-with-crate",
             name = "Rust binary with Cargo dependencies",

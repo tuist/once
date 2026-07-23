@@ -1,0 +1,7 @@
+[[target]]
+name = "Hello"
+kind = "go_binary"
+srcs = ["cmd/hello/main.go"]
+
+[target.attrs]
+package = "./cmd/hello"

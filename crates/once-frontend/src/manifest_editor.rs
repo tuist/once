@@ -46,6 +46,8 @@ pub struct TargetSpec {
     #[serde(default)]
     pub srcs: Vec<String>,
     #[serde(default)]
+    pub visibility: Vec<String>,
+    #[serde(default)]
     pub attrs: JsonMap<String, JsonValue>,
 }
 
@@ -60,6 +62,7 @@ pub struct TargetUpdate {
     pub deps: Option<Vec<String>>,
     pub dependencies: Option<BTreeMap<String, Vec<String>>>,
     pub srcs: Option<Vec<String>>,
+    pub visibility: Option<Vec<String>>,
     pub attrs: Option<JsonMap<String, JsonValue>>,
 }
 
@@ -263,6 +266,12 @@ fn apply_update(
     if let Some(srcs) = &set.srcs {
         table.insert("srcs", Item::Value(Value::Array(string_array(srcs))));
     }
+    if let Some(visibility) = &set.visibility {
+        table.insert(
+            "visibility",
+            Item::Value(Value::Array(string_array(visibility))),
+        );
+    }
     if let Some(attrs) = &set.attrs {
         let attrs_table = build_attrs_table(attrs, original_name)?;
         table.insert("attrs", Item::Table(attrs_table));
@@ -287,6 +296,12 @@ fn build_target_table(spec: &TargetSpec) -> Result<Table, Vec<Diagnostic>> {
     if !spec.srcs.is_empty() {
         table.insert("srcs", Item::Value(Value::Array(string_array(&spec.srcs))));
     }
+    if !spec.visibility.is_empty() {
+        table.insert(
+            "visibility",
+            Item::Value(Value::Array(string_array(&spec.visibility))),
+        );
+    }
     if !spec.attrs.is_empty() {
         let attrs_table = build_attrs_table(&spec.attrs, &spec.name)?;
         table.insert("attrs", Item::Table(attrs_table));
@@ -309,6 +324,7 @@ fn target_spec_from_table(table: &Table) -> TargetSpec {
         deps: string_vec_from_item(table.get("deps")),
         dependencies: dependencies_from_item(table.get("dependencies")),
         srcs: string_vec_from_item(table.get("srcs")),
+        visibility: string_vec_from_item(table.get("visibility")),
         attrs: attrs_from_item(table.get("attrs")),
     }
 }

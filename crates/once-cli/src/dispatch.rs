@@ -294,6 +294,9 @@ async fn run_query_command(
     command: Option<cli::QueryCmd>,
 ) -> Result<ExitCode> {
     match command {
+        Some(cli::QueryCmd::Workspace) => commands::query::workspace(workspace, output)
+            .await
+            .map(|()| ExitCode::SUCCESS),
         Some(cli::QueryCmd::Targets { kind }) => {
             commands::query::targets(workspace, output, kind.as_deref())
                 .await
@@ -422,6 +425,13 @@ async fn run_edit_command(
 ) -> Result<ExitCode> {
     match command {
         Some(cli::EditCmd::Apply { file }) => commands::edit::apply(workspace, output, file)
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Some(cli::EditCmd::MaterializeExample {
+            kind,
+            slug,
+            destination,
+        }) => commands::edit::materialize_example(workspace, output, &kind, &slug, &destination)
             .await
             .map(|()| ExitCode::SUCCESS),
         None => anyhow::bail!("edit subcommand required"),

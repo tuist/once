@@ -368,6 +368,14 @@ fn file_path_for(out: &Path, path: &[String]) -> PathBuf {
 /// `tools/list`. Stable prose (transport, handshake, Claude Desktop
 /// wiring) stays hand-authored in `docs/reference/mcp/index.md`.
 fn write_mcp_tools_page(out: &Path) -> Result<()> {
+    let body = render_mcp_tools_page();
+    let path = out.join("tools.md");
+    fs::write(&path, body)
+        .with_context(|| format!("writing reference mcp tools page `{}`", path.display()))?;
+    Ok(())
+}
+
+fn render_mcp_tools_page() -> String {
     let mut body = String::new();
     writeln!(&mut body, "# Model Context Protocol Tools\n").ok();
     writeln!(
@@ -388,10 +396,7 @@ fn write_mcp_tools_page(out: &Path) -> Result<()> {
         writeln!(&mut body, "**Example return**\n").ok();
         writeln!(&mut body, "```json\n{}\n```\n", tool.example_return).ok();
     }
-    let path = out.join("tools.md");
-    fs::write(&path, body)
-        .with_context(|| format!("writing reference mcp tools page `{}`", path.display()))?;
-    Ok(())
+    format!("{}\n", body.trim_end())
 }
 
 fn write_index(out: &Path, bin: &str, entries: &[CommandEntry]) -> Result<()> {
@@ -617,5 +622,11 @@ mod tests {
         let build_pos = index.find("once build").expect("build entry");
         let cache_pos = index.find("once cache").expect("cache entry");
         assert!(build_pos < cache_pos);
+    }
+
+    #[test]
+    fn committed_mcp_tools_reference_matches_the_server_catalog() {
+        let committed = include_str!("../../../docs/reference/mcp/tools.md");
+        assert_eq!(committed, render_mcp_tools_page());
     }
 }

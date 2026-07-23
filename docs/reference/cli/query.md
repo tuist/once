@@ -27,13 +27,14 @@ against the graph without scraping prose.
 ## Query Expressions
 
 `once query '<QUERY>'` accepts a read-only subset of Cypher backed
-by the Cypher tree-sitter grammar. The first supported shape is a
-single `MATCH` pattern with optional `WHERE` equality predicates
-and explicit `RETURN` projections.
+by the Cypher tree-sitter grammar. It accepts one `MATCH` pattern,
+optional `WHERE` predicates joined with `AND` and `OR`, and explicit
+`RETURN` projections.
 
 ```sh
 once query 'MATCH (app:Target {id: "services/api/Api"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
 once query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id'
+once query 'MATCH (t:Target) WHERE t.visibility CONTAINS "public" OR t.attrs.tier IN ["core", "shared"] RETURN t.id, t.attrs.tier'
 ```
 
 Supported labels are `Target`, `Capability`, and `Provider`. Labels
@@ -43,6 +44,11 @@ without a colon are aliases, so `(Target)` binds a variable named
 relationships are `DEPENDS_ON`, `EXPOSES`, and `EMITS`. The `*`
 suffix on a relationship performs transitive traversal, for example
 `[:DEPENDS_ON*]`.
+
+Predicates support `=`, `<>`, `CONTAINS`, `IN`, `STARTS WITH`, and
+`ENDS WITH`. `CONTAINS` checks a string substring or array membership.
+`IN` checks whether a scalar is present in an array literal. Property
+paths can inspect nested maps, for example `t.attrs.bundle_id`.
 
 String literals can be quoted with single or double quotes and
 support `\n`, `\r`, `\t`, `\\`, `\"`, and `\'` escapes. Other
@@ -66,6 +72,7 @@ escape forms, including Unicode escapes, are rejected.
 
 ## Subcommands
 
+- [`once query workspace`](/reference/cli/query/workspace)
 - [`once query targets`](/reference/cli/query/targets)
 - [`once query capabilities`](/reference/cli/query/capabilities)
 - [`once query schema`](/reference/cli/query/schema)

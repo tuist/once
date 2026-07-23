@@ -129,6 +129,13 @@ fn all_prelude_source() -> String {
 }
 
 #[test]
+fn built_in_target_kinds_do_not_hardcode_a_posix_shell_path() {
+    let source = all_prelude_source();
+    assert!(!source.contains("\"/bin/sh\""));
+    assert!(!source.contains("'/bin/sh'"));
+}
+
+#[test]
 fn go_target_kind_schemas_cover_bazel_buck_and_locked_modules() {
     for kind in [
         "go_dependencies",
@@ -442,6 +449,7 @@ fn apple_application_exposes_build_and_run() {
         deps: vec!["apps/ios/AppKit".to_string()],
         dependency_edges: BTreeMap::new(),
         srcs: Vec::new(),
+        visibility: Vec::new(),
         attrs: BTreeMap::new(),
         typed_attrs: BTreeMap::new(),
     };
@@ -1147,6 +1155,50 @@ fn dynamic_language_test_schemas_are_discoverable() {
             .unwrap();
         assert_eq!(runner.default.as_deref(), Some(expected));
     }
+
+    for (kind, executable) in [
+        ("pytest_test", "pytest"),
+        ("rspec_test", "rspec"),
+        ("vitest_test", "vitest"),
+        ("jest_test", "jest"),
+    ] {
+        let schema = built_in_target_kind_schema(kind).unwrap();
+        assert!(
+            schema
+                .tools
+                .iter()
+                .any(|tool| tool.executables.iter().any(|value| value == executable)),
+            "{kind} should declare its {executable} runner"
+        );
+    }
+}
+
+#[test]
+fn prelude_javascript_runner_uses_the_package_entry_behind_a_bin_shim() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let bin_dir = workspace.path().join("node_modules/.bin");
+    let entry_dir = workspace.path().join("node_modules/jest/bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    std::fs::create_dir_all(&entry_dir).unwrap();
+    let shim = bin_dir.join("jest");
+    let entry = entry_dir.join("jest.js");
+    std::fs::write(&shim, "package-manager shim\n").unwrap();
+    std::fs::write(&entry, "console.log('jest')\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+result = repr(_javascript_installed_package_entry(
+    "{}",
+    "node_modules/jest/bin/jest.js",
+))
+"#,
+        shim.to_string_lossy()
+    );
+    let store = store_for(workspace.path(), "");
+
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), format!("\"{}\"", entry.to_string_lossy()));
 }
 
 #[test]
@@ -9173,7 +9225,7 @@ fn prelude_serialize_hmap_lays_out_canonical_header_and_entries() {
 fn prelude_apple_config_tokens_rejects_select_on_platform() {
     let err = eval_prelude_function(
         "_apple_config_tokens",
-        r#"({"platform": {"select": {"default": "ios"}}}, "tgt")"#,
+        r#"({}, {"platform": {"select": {"default": "ios"}}}, "tgt")"#,
     )
     .unwrap_err();
     assert!(
@@ -9643,8 +9695,8 @@ result = repr(provider["archive"])
 #[test]
 fn prelude_resolve_attrs_rejects_select_on_non_configurable_attr() {
     let err = eval_prelude_function(
-            "_resolve_attrs",
-            r#"({"platform": "ios", "module_name": {"select": {"ios": "X", "default": "Y"}}}, "tgt", ["module_name"])"#,
+        "_resolve_attrs",
+            r#"({}, {"platform": "ios", "module_name": {"select": {"ios": "X", "default": "Y"}}}, "tgt", ["module_name"])"#,
         )
         .unwrap_err();
     assert!(

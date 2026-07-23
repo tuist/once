@@ -1,8 +1,8 @@
 _PYTHON_TOOL = tool("python", executables = ["python3", "python"])
+_PYTEST_TOOL = tool("pytest", executables = ["pytest"])
 
 def _python_attr(ctx, name, default):
-    value = ctx["attr"].get(name)
-    return default if value == None else value
+    return _configured_attr(ctx, name, default)
 
 def _python_executable(ctx):
     requested = ctx["attr"].get("python")
@@ -11,11 +11,36 @@ def _python_executable(ctx):
         if not resolved:
             fail(ctx["label"]["id"] + ": Python interpreter `" + requested + "` was not found")
         return resolved
-    for candidate in [".venv/bin/python", ".venv/Scripts/python.exe", "python3", "python"]:
+
+    for candidate in [".venv/bin/python", ".venv/Scripts/python.exe"]:
         resolved = _resolve_host_executable(candidate)
         if resolved:
             return resolved
-    fail(ctx["label"]["id"] + ": no Python interpreter was found; create `.venv/bin/python` or set the `python` attribute")
+
+    pytest = ""
+    for candidate in [".venv/bin/pytest", ".venv/Scripts/pytest.exe", "pytest"]:
+        pytest = _resolve_host_executable(candidate)
+        if pytest:
+            break
+    if not pytest:
+        fail(ctx["label"]["id"] + ": pytest was not found; install it in the workspace or make `pytest` available on PATH")
+
+    first_line = host_file_read(pytest).split("\n")[0] if host_file_exists(pytest) and not _ends_with(pytest.lower(), ".exe") else ""
+    if first_line.startswith("#!"):
+        command = first_line[2:].strip().split(" ")
+        if command and command[0] == "/usr/bin/env" and len(command) > 1:
+            resolved = _resolve_host_executable(command[1])
+        else:
+            resolved = _resolve_host_executable(command[0]) if command else ""
+        if resolved:
+            return resolved
+
+    runner_dir = _parent_dir(pytest)
+    for candidate in [runner_dir + "/python", runner_dir + "/python.exe", "python3", "python"]:
+        resolved = _resolve_host_executable(candidate)
+        if resolved:
+            return resolved
+    fail(ctx["label"]["id"] + ": no Python interpreter capable of loading pytest was found; set the `python` attribute")
 
 def _python_env(ctx, test_dir):
     env = {"HOME": test_dir + "/home", "PYTHONDONTWRITEBYTECODE": "1"}
@@ -182,6 +207,7 @@ def _python_pytest_impl(ctx):
     argv.append("--")
     argv.extend(_python_attr(ctx, "args", []))
     version = host_command([python, "--version"], merge_stderr = True).strip()
+    pytest_version = host_command([python, "-c", "import pytest; print(pytest.__version__)"]).strip()
     run_action(
         argv = argv,
         inputs = _unique(inputs + [adapter]),
@@ -191,7 +217,7 @@ def _python_pytest_impl(ctx):
         env = _python_env(ctx, test_dir),
         stdout = log,
         stderr = log,
-        toolchain_identity = "once.pytest.v1\x00" + python + "\x00" + version,
+        toolchain_identity = "once.pytest.v2\x00" + python + "\x00" + version + "\x00pytest\x00" + pytest_version,
         identifier = ctx["label"]["id"] + ":pytest",
     )
     return provider
@@ -212,7 +238,7 @@ pytest_test = target_kind(
     deps = [dep("deps", [], "Targets whose inputs should affect this test suite.")],
     providers = ["once_test_info"],
     capabilities = [capability("test", ["default", "test_results", "logs"])],
-    tools = [_PYTHON_TOOL],
+    tools = [_PYTHON_TOOL, _PYTEST_TOOL],
     examples = [example("pytest-test-minimal", name = "Minimal pytest suite", use_when = "You want Python tests with exact case execution and automatic file batching.")],
     impl = _python_pytest_impl,
 )

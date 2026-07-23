@@ -9,7 +9,7 @@ use crate::cache_provider::{CacheProviderConfig, InfrastructureConfig};
 use crate::error::{Error, Result};
 use crate::manifest::{
     load_cache_provider_toml_str, load_infrastructure_toml_str, load_toml_with,
-    load_workspace_toml_str,
+    load_toml_with_configuration, load_workspace_toml_str, BuildConfiguration,
 };
 use crate::target::Target;
 use crate::TOML_BUILD_FILE_NAME;
@@ -82,7 +82,8 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
         } else {
             format!("{pkg}/{filename}")
         };
-        let targets = load_toml_with(&display, &src, root, &pkg)?;
+        let targets =
+            load_toml_with_configuration(&display, &src, root, &pkg, &scan.configuration)?;
         all.extend(targets);
     }
     Ok(all)
@@ -92,6 +93,7 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
 struct WorkspaceScan {
     include: Vec<Pattern>,
     exclude: Vec<Pattern>,
+    configuration: BuildConfiguration,
 }
 
 impl WorkspaceScan {
@@ -108,7 +110,10 @@ fn load_workspace_scan(root: &Path) -> Result<WorkspaceScan> {
     let src = match std::fs::read_to_string(&path) {
         Ok(src) => src,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(WorkspaceScan::default());
+            return Ok(WorkspaceScan {
+                configuration: crate::manifest::load_workspace_configuration(root)?,
+                ..WorkspaceScan::default()
+            });
         }
         Err(source) => {
             return Err(Error::Read {
@@ -121,6 +126,7 @@ fn load_workspace_scan(root: &Path) -> Result<WorkspaceScan> {
     Ok(WorkspaceScan {
         include: compile_patterns(TOML_BUILD_FILE_NAME, "workspace.include", &raw.include)?,
         exclude: compile_patterns(TOML_BUILD_FILE_NAME, "workspace.exclude", &raw.exclude)?,
+        configuration: BuildConfiguration::from_toml(raw.configuration)?,
     })
 }
 

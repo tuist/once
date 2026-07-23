@@ -31,6 +31,7 @@ These tables are read only from the root manifest:
 | Table | Purpose |
 | --- | --- |
 | `[workspace]` | Limits manifest discovery with `include` and `exclude`. |
+| `[workspace.configuration]` | Selects the target operating system, architecture, and additional configuration tokens. |
 | `[modules]` | Loads project target-kind modules from `paths`. |
 | `[infrastructures.<name>]` | Declares a named infrastructure provider. |
 | `[infrastructure.cache]` | Chooses the shared cache provider. |
@@ -42,6 +43,23 @@ the same definitions.
 
 See [Modules](/reference/modules/) and [Infrastructure](/guide/infrastructure/)
 for the contracts owned by those tables.
+
+The target configuration defaults to the host. Set it explicitly when
+analysis and dependency selection should describe another platform:
+
+```toml
+[workspace.configuration]
+os = "linux"
+arch = "arm64"
+tokens = ["release"]
+```
+
+Once normalizes common operating system and architecture names. For example,
+`darwin` becomes `macos`, `arm64` becomes `aarch64`, and `amd64` becomes
+`x86_64`. The ordered selection tokens include the most specific
+operating-system and architecture combinations, their aliases, the individual
+values, the additional `tokens`, and `default`. Use `once query workspace` to
+inspect the exact configuration seen by target kinds.
 
 An execution-only provider can select a sandbox adapter and immutable tool
 environment:
@@ -99,6 +117,7 @@ Every target accepts these common fields:
 | `srcs` | no | Package-relative source paths or glob patterns. |
 | `deps` | no | Target identifiers consumed by this target. |
 | `dependencies` | no | Named dependency roles declared by the target kind. Each role contains target identifiers and validates its own provider contract. |
+| `visibility` | no | Consumers allowed to depend on this target. An empty list is public. |
 | `attrs` | no | Target-kind-specific values validated against the selected schema. |
 
 Unknown manifest fields are rejected. Use
@@ -139,10 +158,38 @@ Dependency references resolve as follows:
 Use one of these identifiers with `once query target`, `once build`, `once
 run`, and `once test`.
 
+Target-valued entries under `[target.attrs]` use the same normalization rules.
+`once query validate-workspace` checks that these references resolve to a
+declared target.
+
+## Visibility
+
+Targets are public unless `visibility` restricts them:
+
+```toml
+[[target]]
+name = "Core"
+kind = "rust_library"
+visibility = ["package:apps/client", "subtree:tools", "tests/CoreTests"]
+```
+
+Each entry grants access to one class of consumer:
+
+- `public` grants access to every target.
+- `private` grants access to targets in the same package.
+- `package:apps/client` grants access to targets in that exact package.
+- `subtree:tools` grants access to targets in `tools` and its child packages.
+- `tests/CoreTests` grants access to one exact target.
+
+Exact targets use the same workspace-relative and package-relative
+normalization as dependencies. Complete-workspace validation returns
+`invalid_visibility` for malformed entries and `dependency_not_visible` when a
+dependency edge crosses the declared boundary.
+
 ## Conditional Values
 
 Target kinds can accept `select` values for configurable attributes. A target
-can also select dependencies for the current host:
+can also select dependencies for the workspace target configuration:
 
 ```toml
 [target.deps.select]
@@ -151,8 +198,11 @@ linux = ["./linux_support"]
 default = ["./portable_support"]
 ```
 
-The target-kind schema determines which attribute values are configurable.
-Each ecosystem guide documents its selection tokens and restrictions.
+The target-kind schema reports both `configurable` and `implemented` for every
+attribute. Validation rejects `select` on a non-configurable attribute and
+rejects an unavailable compatibility attribute marked `implemented = false`.
+Generic target kinds use the tokens returned by `once query workspace`.
+Ecosystem target kinds can add their own tokens and restrictions.
 
 ## Inspect
 

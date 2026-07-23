@@ -11,6 +11,8 @@ use crate::cli::{Format, Output};
 use crate::commands::query;
 use crate::render;
 
+mod example;
+
 #[derive(Debug, Deserialize)]
 struct ApplyInput {
     package: String,
@@ -22,6 +24,7 @@ struct ApplyInput {
 enum ApplyResult {
     Applied {
         applied: bool,
+        changed: bool,
         path: String,
     },
     Rejected {
@@ -55,13 +58,17 @@ pub async fn apply(workspace: &Path, output: Output, file: Option<PathBuf>) -> R
         &schemas,
     ) {
         Ok(new_src) => {
-            std::fs::create_dir_all(&package_dir).with_context(|| {
-                format!("creating package directory `{}`", package_dir.display())
-            })?;
-            std::fs::write(&manifest_path, &new_src)
-                .with_context(|| format!("writing `{}`", manifest_path.display()))?;
+            let changed = new_src != existing;
+            if changed {
+                std::fs::create_dir_all(&package_dir).with_context(|| {
+                    format!("creating package directory `{}`", package_dir.display())
+                })?;
+                std::fs::write(&manifest_path, &new_src)
+                    .with_context(|| format!("writing `{}`", manifest_path.display()))?;
+            }
             ApplyResult::Applied {
                 applied: true,
+                changed,
                 path: manifest_path.to_string_lossy().into_owned(),
             }
         }
@@ -72,6 +79,24 @@ pub async fn apply(workspace: &Path, output: Output, file: Option<PathBuf>) -> R
     };
     write_body(output, || render_apply_human(&result), &result).await
 }
+
+pub async fn materialize_example(
+    workspace: &Path,
+    output: Output,
+    kind: &str,
+    slug: &str,
+    destination: &str,
+) -> Result<()> {
+    let result = example::materialize_example_value(workspace, kind, slug, destination)?;
+    write_body(
+        output,
+        || example::render_materialize_example_human(&result),
+        &result,
+    )
+    .await
+}
+
+pub(crate) use example::materialize_example_json;
 
 pub(crate) fn resolve_package_dir(workspace: &Path, package: &str) -> Result<PathBuf> {
     if package.is_empty() {

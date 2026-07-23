@@ -48,7 +48,7 @@ pub(super) fn selection_report(
             continue;
         }
 
-        let owners = target_patterns
+        let mut owners = target_patterns
             .iter()
             .filter_map(|(target_id, patterns)| {
                 patterns
@@ -57,6 +57,9 @@ pub(super) fn selection_report(
                     .then_some(target_id.as_str())
             })
             .collect::<Vec<_>>();
+        if owners.is_empty() {
+            owners = nearest_package_owners(path, graph);
+        }
         if owners.is_empty() {
             // Deliberately conservative: a path no target claims may still affect
             // any test (for example documentation compiled into doc-tests), so we
@@ -95,12 +98,45 @@ pub(super) fn selection_report(
         policy: TestSelectionPolicy {
             mode: "affected".to_string(),
             safety: "conservative".to_string(),
-            evidence: "declared_graph".to_string(),
+            evidence: "declared_graph_and_package_ownership".to_string(),
         },
         changed_paths,
         unmatched_paths,
         tests,
     })
+}
+
+fn nearest_package_owners<'a>(path: &str, graph: &'a [GraphTarget]) -> Vec<&'a str> {
+    let manifest_suffix = format!("/{}", once_frontend::TOML_BUILD_FILE_NAME);
+    let path_package = path
+        .strip_suffix(&manifest_suffix)
+        .unwrap_or_else(|| path.rsplit_once('/').map_or("", |(package, _)| package));
+    let longest = graph
+        .iter()
+        .filter(|target| package_contains_path(&target.label.package, path_package))
+        .map(|target| target.label.package.len())
+        .max();
+    let Some(longest) = longest else {
+        return Vec::new();
+    };
+    graph
+        .iter()
+        .filter(|target| {
+            target.label.package.len() == longest
+                && package_contains_path(&target.label.package, path_package)
+        })
+        .map(|target| target.label.id.as_str())
+        .collect()
+}
+
+fn package_contains_path(package: &str, path_package: &str) -> bool {
+    if package.is_empty() {
+        return path_package.is_empty();
+    }
+    path_package == package
+        || path_package
+            .strip_prefix(package)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn normalize_changed_paths(paths: &[String]) -> Vec<String> {

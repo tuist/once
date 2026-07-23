@@ -8,11 +8,6 @@ Print the toolchain contract derived from mise.toml
 once toolchain inspect [OPTIONS]
 ```
 
-## Description
-
-Shows the workspace tool requests, lock information, selected platform, and
-the mise version carried by this Once release.
-
 ## Options
 
 | Flag | Value | Default | Description |

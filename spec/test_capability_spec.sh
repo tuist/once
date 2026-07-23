@@ -100,6 +100,18 @@ TOML
   create_javascript_test_workspace() {
     runner_name="$1"
     runner_entry="$(realpath "$(command -v "$runner_name")")"
+    case "$runner_name" in
+      jest)
+        package_entry="jest/bin/jest.js"
+        ;;
+      vitest)
+        package_entry="vitest/vitest.mjs"
+        ;;
+    esac
+    node_modules_dir="$(dirname "$(dirname "$runner_entry")")"
+    if [ -f "$node_modules_dir/$package_entry" ]; then
+      runner_entry="$node_modules_dir/$package_entry"
+    fi
     cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/$runner_name-test-minimal/." "$WORKSPACE/"
     mkdir -p "$WORKSPACE/tools"
     ln -s "$(command -v node)" "$WORKSPACE/tools/node"

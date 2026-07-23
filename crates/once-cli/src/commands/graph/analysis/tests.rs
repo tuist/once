@@ -89,6 +89,7 @@ fn target_with_capabilities(
         deps: deps.iter().map(|dep| (*dep).to_string()).collect(),
         dependency_edges: BTreeMap::new(),
         srcs: srcs.iter().map(|src| (*src).to_string()).collect(),
+        visibility: Vec::new(),
         attrs: attrs.into_iter().collect(),
         capabilities: capabilities
             .iter()

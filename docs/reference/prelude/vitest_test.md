@@ -4,8 +4,9 @@ JavaScript and TypeScript tests run with Vitest.
 
 ## Start Here
 
-Install Vitest in the package with the project's JavaScript package manager.
-For example:
+Install Vitest in the package with the project's JavaScript package manager,
+or make the `vitest` command available on the executable search path. For
+example:
 
 ```sh
 npm install --save-dev vitest
@@ -34,10 +35,14 @@ batching, and exact unit commands.
 
 ## Description
 
-`vitest_test` invokes the package-local Vitest entry point with its structured
-reporter, records stable file and full-name identifiers, and writes normalized
-Once results. Exact execution selects the discovered file and an anchored test
-name pattern.
+`vitest_test` prefers the package-local Vitest entry point, then falls back to
+the installed `vitest` command. It uses Vitest's structured reporter, records
+stable file and full-name identifiers, and writes normalized Once results.
+Exact execution selects the discovered file and an anchored test name pattern.
+
+The target kind declares Node.js and Vitest as tool requirements. A
+workspace-relative `runner` is treated as an input, while an installed runner
+is identified as part of the toolchain.
 
 Automatic batching uses one batch per test file by default. Set `batching` to
 `case` for individual cases, or `target` for one target batch. A complete run
@@ -51,7 +56,7 @@ test results when those inputs have not changed.
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `node` | string | no | `node` | Node.js executable name, absolute path, or workspace-relative path |
-| `runner` | string | no | `node_modules/vitest/vitest.mjs` | Package-relative Vitest entry point |
+| `runner` | string | no | automatic | Package-relative Vitest entry point or installed command. Once prefers `node_modules/vitest/vitest.mjs`, then searches for `vitest` |
 | `config` | list&lt;string&gt; | no | package and lock files | Dependency and runner configuration inputs |
 | `dependencies` | list&lt;string&gt; | no | `node_modules/**/*` | Installed runner and package files required during execution |
 | `data` | list&lt;string&gt; | no | `[]` | Setup, transform, snapshot, and runtime inputs |

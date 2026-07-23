@@ -8,6 +8,10 @@ List test targets likely affected by changed workspace paths
 once query affected-tests [OPTIONS]
 ```
 
+## Description
+
+Uses declared target inputs, package ownership, and reverse dependency traversal. An otherwise unowned path belongs to its nearest package. The root manifest, configured graph modules, and paths outside every known package conservatively select every test.
+
 ## Options
 
 | Flag | Value | Default | Description |

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::{
-    load_graph_workspace, target_kind_schemas_for_workspace, Diagnostic, GraphTarget,
+    load_graph_workspace, target_kind_schemas_for_workspace, AttrValue, Diagnostic, GraphTarget,
     TargetKindSchema, TargetSpec,
 };
 
@@ -35,7 +35,9 @@ fn validate_graph(
 
     validate_unique_ids(graph, &mut diagnostics);
     validate_target_schemas(graph, schemas, &mut diagnostics);
+    validate_target_attributes(graph, schemas, &targets, &mut diagnostics);
     validate_dependencies(graph, schemas, &targets, &mut diagnostics);
+    validate_visibility(graph, &targets, &mut diagnostics);
     validate_sources(workspace, graph, &mut diagnostics);
     validate_cycles(graph, &targets, &mut diagnostics);
     diagnostics.sort_by(|left, right| {
@@ -48,6 +50,87 @@ fn validate_graph(
     });
     diagnostics.dedup();
     diagnostics
+}
+
+fn validate_target_attributes(
+    graph: &[GraphTarget],
+    schemas: &[TargetKindSchema],
+    targets: &BTreeMap<&str, &GraphTarget>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for target in graph {
+        let Some(schema) = schemas.iter().find(|schema| schema.kind == target.kind) else {
+            continue;
+        };
+        for attr in schema.attrs.iter().filter(|attr| attr.ty == "target") {
+            let Some(value) = target.attrs.get(&attr.name) else {
+                continue;
+            };
+            for raw in target_attribute_values(value) {
+                if raw.is_empty() {
+                    continue;
+                }
+                let normalized = match crate::normalize_manifest_target(&target.label.package, raw)
+                {
+                    Ok(normalized) => normalized,
+                    Err(error) => {
+                        diagnostics.push(
+                            Diagnostic::new(
+                                "invalid_target_attribute",
+                                format!(
+                                    "target `{}` attribute `{}` has invalid target reference `{raw}`: {error}",
+                                    target.label.id, attr.name
+                                ),
+                            )
+                            .with_target(&target.label.id)
+                            .with_attribute(&attr.name)
+                            .with_repair(format!(
+                                "Set `target.attrs.{}` to a valid workspace target",
+                                attr.name
+                            )),
+                        );
+                        continue;
+                    }
+                };
+                if !targets.contains_key(normalized.as_str()) {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            "missing_target_attribute",
+                            format!(
+                                "target `{}` attribute `{}` references missing target `{normalized}`",
+                                target.label.id, attr.name
+                            ),
+                        )
+                        .with_target(&target.label.id)
+                        .with_attribute(&attr.name)
+                        .with_repair(format!(
+                            "Declare target `{normalized}` or update `target.attrs.{}`",
+                            attr.name
+                        )),
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn target_attribute_values(value: &AttrValue) -> Vec<&str> {
+    match value {
+        AttrValue::String(value) => vec![value],
+        AttrValue::Map(outer) if outer.len() == 1 => outer
+            .get("select")
+            .and_then(|value| match value {
+                AttrValue::Map(branches) => Some(
+                    branches
+                        .values()
+                        .filter_map(AttrValue::as_str)
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
 }
 
 fn validate_target_schemas(
@@ -74,6 +157,7 @@ fn validate_target_schemas(
             deps: target.deps.clone(),
             dependencies: target.dependency_edges.clone(),
             srcs: target.srcs.clone(),
+            visibility: target.visibility.clone(),
             attrs,
         };
         diagnostics.extend(crate::validate_target(&spec, schemas).into_iter().map(
@@ -229,6 +313,135 @@ fn validate_dependency_role(
     }
 }
 
+fn validate_visibility(
+    graph: &[GraphTarget],
+    targets: &BTreeMap<&str, &GraphTarget>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for target in graph {
+        for entry in &target.visibility {
+            if visibility_entry_is_valid(&target.label.package, entry) {
+                continue;
+            }
+            diagnostics.push(
+                Diagnostic::new(
+                    "invalid_visibility",
+                    format!(
+                        "target `{}` has invalid visibility entry `{entry}`",
+                        target.label.id
+                    ),
+                )
+                .with_target(&target.label.id)
+                .with_attribute("visibility")
+                .with_repair(
+                    "Use `public`, `private`, an exact target such as `tools/Generator`, a package entry such as `package:apps`, or a subtree entry such as `subtree:apps`",
+                ),
+            );
+        }
+    }
+
+    for consumer in graph {
+        validate_visibility_edges(consumer, "deps", &consumer.deps, targets, diagnostics);
+        for (role, dependencies) in &consumer.dependency_edges {
+            validate_visibility_edges(
+                consumer,
+                &format!("dependencies.{role}"),
+                dependencies,
+                targets,
+                diagnostics,
+            );
+        }
+    }
+}
+
+fn validate_visibility_edges(
+    consumer: &GraphTarget,
+    attribute: &str,
+    dependency_ids: &[String],
+    targets: &BTreeMap<&str, &GraphTarget>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for dependency_id in dependency_ids {
+        let Some(dependency) = targets.get(dependency_id.as_str()) else {
+            continue;
+        };
+        if dependency_is_visible_to(dependency, consumer) {
+            continue;
+        }
+        diagnostics.push(
+            Diagnostic::new(
+                "dependency_not_visible",
+                format!(
+                    "target `{}` cannot depend on `{}` because the dependency is not visible to it",
+                    consumer.label.id, dependency.label.id
+                ),
+            )
+            .with_target(&consumer.label.id)
+            .with_attribute(attribute)
+            .with_repair(format!(
+                "Add `{}` to target `{}` visibility, or remove the dependency",
+                visibility_repair_for(consumer),
+                dependency.label.id
+            )),
+        );
+    }
+}
+
+pub(crate) fn visibility_entry_is_valid(package: &str, entry: &str) -> bool {
+    if matches!(entry, "public" | "private") {
+        return true;
+    }
+    if let Some(prefix) = entry.strip_prefix("subtree:") {
+        return !prefix.is_empty() && valid_package_pattern(prefix);
+    }
+    if let Some(prefix) = entry.strip_prefix("package:") {
+        return valid_package_pattern(prefix);
+    }
+    crate::normalize_manifest_target(package, entry).is_ok()
+}
+
+fn valid_package_pattern(value: &str) -> bool {
+    !value.starts_with('/')
+        && !value.ends_with('/')
+        && value
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..")
+}
+
+fn dependency_is_visible_to(dependency: &GraphTarget, consumer: &GraphTarget) -> bool {
+    if dependency.visibility.is_empty()
+        || dependency.visibility.iter().any(|entry| entry == "public")
+    {
+        return true;
+    }
+    dependency.visibility.iter().any(|entry| {
+        if entry == "private" {
+            return dependency.label.package == consumer.label.package;
+        }
+        if let Some(package) = entry.strip_prefix("package:") {
+            return consumer.label.package == package;
+        }
+        if let Some(package) = entry.strip_prefix("subtree:") {
+            return consumer.label.package == package
+                || consumer
+                    .label
+                    .package
+                    .strip_prefix(package)
+                    .is_some_and(|rest| rest.starts_with('/'));
+        }
+        crate::normalize_manifest_target(&dependency.label.package, entry)
+            .is_ok_and(|target| target == consumer.label.id)
+    })
+}
+
+fn visibility_repair_for(consumer: &GraphTarget) -> String {
+    if consumer.label.package.is_empty() {
+        consumer.label.name.clone()
+    } else {
+        format!("package:{}", consumer.label.package)
+    }
+}
+
 fn validate_sources(workspace: &Path, graph: &[GraphTarget], diagnostics: &mut Vec<Diagnostic>) {
     for target in graph {
         let package = workspace.join(&target.label.package);
@@ -333,6 +546,81 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    fn write_visibility_workspace(root: &Path, visibility: &str) {
+        std::fs::create_dir_all(root.join("modules")).unwrap();
+        std::fs::create_dir_all(root.join("packages/lib")).unwrap();
+        std::fs::create_dir_all(root.join("apps/client")).unwrap();
+        std::fs::write(
+            root.join("once.toml"),
+            "[modules]\npaths = [\"modules/*.star\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("modules/visibility.star"),
+            r#"library = target_kind(
+    docs = "Library",
+    providers = ["library"],
+)
+
+consumer = target_kind(
+    docs = "Consumer",
+    deps = [dep("deps", ["library"], "Libraries")],
+)
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("packages/lib/once.toml"),
+            format!(
+                r#"[[target]]
+name = "Library"
+kind = "library"
+visibility = [{visibility}]
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("apps/client/once.toml"),
+            r#"[[target]]
+name = "Client"
+kind = "consumer"
+deps = ["packages/lib/Library"]
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn private_targets_reject_cross_package_dependencies() {
+        let tmp = TempDir::new().unwrap();
+        write_visibility_workspace(tmp.path(), "\"private\"");
+
+        let diagnostics = validate_workspace(tmp.path()).unwrap();
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "dependency_not_visible")
+            .expect("visibility diagnostic");
+
+        assert_eq!(diagnostic.target.as_deref(), Some("apps/client/Client"));
+        assert!(diagnostic.repairs[0].contains("package:apps/client"));
+    }
+
+    #[test]
+    fn package_visibility_allows_matching_consumers() {
+        let tmp = TempDir::new().unwrap();
+        write_visibility_workspace(tmp.path(), "\"package:apps/client\"");
+
+        let diagnostics = validate_workspace(tmp.path()).unwrap();
+
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "dependency_not_visible"),
+            "{diagnostics:?}"
+        );
+    }
 
     #[test]
     fn reports_missing_dependencies_and_sources() {
@@ -524,5 +812,70 @@ consumer = target_kind(
             diagnostic.code == "unexpected_dependency"
                 && diagnostic.attribute.as_deref() == Some("dependencies.plugins")
         }));
+    }
+
+    #[test]
+    fn target_attributes_reference_existing_workspace_targets() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("modules")).unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            r#"[modules]
+paths = ["modules/*.star"]
+
+[[target]]
+name = "Present"
+kind = "plain"
+
+[[target]]
+name = "Valid"
+kind = "consumer"
+
+[target.attrs]
+peer = "./Present"
+
+[[target]]
+name = "Invalid"
+kind = "consumer"
+
+[target.attrs]
+peer = "./Missing"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("modules/targets.star"),
+            r#"plain = target_kind(
+    docs = "Plain target",
+    attrs = [],
+    deps = [],
+    providers = [],
+    capabilities = [],
+)
+
+consumer = target_kind(
+    docs = "References another target",
+    attrs = [attr("peer", "target", required = True, docs = "Referenced peer")],
+    deps = [],
+    providers = [],
+    capabilities = [],
+)
+"#,
+        )
+        .unwrap();
+
+        let diagnostics = validate_workspace(tmp.path()).unwrap();
+
+        let missing = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "missing_target_attribute")
+            .collect::<Vec<_>>();
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].target.as_deref(), Some("Invalid"));
+        assert_eq!(missing[0].attribute.as_deref(), Some("peer"));
+        assert_eq!(
+            missing[0].repairs,
+            vec!["Declare target `Missing` or update `target.attrs.peer`"]
+        );
     }
 }

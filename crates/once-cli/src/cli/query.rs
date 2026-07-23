@@ -4,6 +4,14 @@ use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum QueryCmd {
+    /// Describe the configured workspace and graph loading state.
+    ///
+    /// Reports the exact workspace root, root manifest state, normalized
+    /// target operating system and architecture, ordered selection tokens,
+    /// loaded packages, target count, graph loading errors, and suggested
+    /// discovery or validation calls.
+    Workspace,
+
     /// List declared graph targets.
     Targets {
         /// Only include targets with this target kind.
@@ -64,6 +72,11 @@ pub enum QueryCmd {
     Tests,
 
     /// List test targets likely affected by changed workspace paths.
+    ///
+    /// Uses declared target inputs, package ownership, and reverse dependency
+    /// traversal. An otherwise unowned path belongs to its nearest package.
+    /// The root manifest, configured graph modules, and paths outside every
+    /// known package conservatively select every test.
     AffectedTests {
         /// Changed workspace-relative path. Repeat for multiple paths.
         #[arg(long = "changed-path", value_name = "PATH")]
@@ -164,6 +177,7 @@ pub enum QueryCmd {
 impl QueryCmd {
     pub fn surface_path(&self) -> Vec<&'static str> {
         match self {
+            Self::Workspace => vec!["workspace"],
             Self::Targets { .. } => vec!["targets"],
             Self::Capabilities { .. } => vec!["capabilities"],
             Self::Schema { .. } => vec!["schema"],

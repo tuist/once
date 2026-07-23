@@ -46,6 +46,9 @@ pub struct GraphTarget {
     /// Source file patterns declared by the target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub srcs: Vec<String>,
+    /// Targets and packages allowed to depend on this target.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visibility: Vec<String>,
     /// Typed target attributes parsed from the manifest.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub attrs: BTreeMap<String, AttrValue>,
@@ -259,6 +262,8 @@ pub struct AttrSchema {
     pub docs: String,
     /// Whether the value can vary by configuration.
     pub configurable: bool,
+    /// Whether the target kind currently implements the attribute.
+    pub implemented: bool,
 }
 
 /// Dependency metadata exposed by a target kind schema.
@@ -427,6 +432,7 @@ pub(crate) fn graph_target_from_schema(
         deps: target.deps.clone(),
         dependency_edges: target.dependency_edges.clone(),
         srcs: target.srcs.clone(),
+        visibility: target.visibility.clone(),
         attrs,
         capabilities: schema
             .as_ref()
@@ -445,6 +451,7 @@ fn graph_target_from_owned_schema(target: Target, schemas: &[TargetKindSchema]) 
         deps,
         dependency_edges,
         srcs,
+        visibility,
         attrs,
         typed_attrs,
     } = target;
@@ -493,6 +500,7 @@ fn graph_target_from_owned_schema(target: Target, schemas: &[TargetKindSchema]) 
         deps,
         dependency_edges,
         srcs,
+        visibility,
         attrs,
         capabilities: schema
             .as_ref()
@@ -777,6 +785,7 @@ fn attr_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<A
         default: optional_field_string(value, path, "default")?,
         docs: field_string(value, path, "docs")?,
         configurable: field_bool(value, path, "configurable")?,
+        implemented: field_bool(value, path, "implemented")?,
     })
 }
 
@@ -998,6 +1007,7 @@ fn attr(
         default: default.map(str::to_string),
         docs: docs.to_string(),
         configurable,
+        implemented: true,
     }
 }
 
@@ -1305,6 +1315,7 @@ demo_kind = target_kind(
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
         };
@@ -1331,6 +1342,7 @@ demo_kind = target_kind(
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs,
             typed_attrs: BTreeMap::new(),
         };
@@ -1351,6 +1363,7 @@ demo_kind = target_kind(
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::from([("script_runtime".to_string(), "python".to_string())]),
             typed_attrs: BTreeMap::new(),
         };
@@ -1375,6 +1388,7 @@ demo_kind = target_kind(
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
         });
@@ -1405,6 +1419,7 @@ demo_kind = target_kind(
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs,
             typed_attrs,
         };
@@ -1431,6 +1446,7 @@ demo_kind = target_kind(
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
         };
