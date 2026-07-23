@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value as JsonValue;
@@ -21,6 +21,7 @@ use super::values::{
 };
 
 const CMD_ARGS_MARKER: &str = "_once_cmd_args";
+const EXECUTION_ROOT_MARKER: &str = "{{once.execution_root}}";
 
 /// Globals exposed to the prelude.
 ///
@@ -78,6 +79,34 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         with_store(|store| -> Result<String> {
             let store = store.ok_or_else(|| anyhow!("workspace_root called outside analysis"))?;
             Ok(store.workspace_root.to_string_lossy().into_owned())
+        })
+    }
+
+    /// Convert a workspace-relative path into a stable command value
+    /// that resolves against the actual local, sandbox, or remote
+    /// execution root immediately before process launch.
+    fn execution_path(path: &str) -> anyhow::Result<String> {
+        let mut parts = Vec::new();
+        for component in Path::new(path).components() {
+            match component {
+                Component::Normal(value) => parts.push(
+                    value
+                        .to_str()
+                        .ok_or_else(|| anyhow!("execution_path contains non-UTF-8 text"))?,
+                ),
+                Component::CurDir => {}
+                Component::ParentDir | Component::Prefix(_) | Component::RootDir => {
+                    return Err(anyhow!(
+                        "execution_path must stay inside the workspace, got `{path}`"
+                    ));
+                }
+            }
+        }
+        let normalized = parts.join("/");
+        Ok(if normalized.is_empty() {
+            EXECUTION_ROOT_MARKER.to_string()
+        } else {
+            format!("{EXECUTION_ROOT_MARKER}/{normalized}")
         })
     }
 

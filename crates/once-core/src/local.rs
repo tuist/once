@@ -10,7 +10,7 @@ use tokio::process::Command;
 use tracing::debug;
 
 use crate::stream::{self, Destination};
-use crate::{Error, Result, WorkspacePath};
+use crate::{resolve_execution_argv, resolve_execution_env, Error, Result, WorkspacePath};
 
 /// Optional per-stream file redirection for a command. When a stream is
 /// redirected, the child writes directly to the workspace-relative file
@@ -105,13 +105,15 @@ pub(crate) async fn execute_command(
     cache: &CacheProvider,
     redirect: Redirect<'_>,
 ) -> Result<ActionResult> {
+    let argv = resolve_execution_argv(argv, workspace_root);
+    let env = resolve_execution_env(env, workspace_root);
     let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
     tracing::Span::current().record("program", tracing::field::display(program));
 
     let mut command = Command::new(program);
     command.args(rest);
     command.env_clear();
-    for (k, v) in env {
+    for (k, v) in &env {
         command.env(k, v);
     }
     command.stdin(Stdio::null());
@@ -199,6 +201,8 @@ async fn execute_child_streaming(
     stream_to_parent: bool,
     inherit_parent_env: bool,
 ) -> Result<ActionResult> {
+    let argv = resolve_execution_argv(argv, workspace_root);
+    let env = resolve_execution_env(env, workspace_root);
     let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
     tracing::Span::current().record("program", tracing::field::display(program));
 
@@ -207,7 +211,7 @@ async fn execute_child_streaming(
     if !inherit_parent_env {
         command.env_clear();
     }
-    for (k, v) in env {
+    for (k, v) in &env {
         command.env(k, v);
     }
     command.stdin(Stdio::null());

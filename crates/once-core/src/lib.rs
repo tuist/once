@@ -12,6 +12,7 @@ mod env;
 mod error;
 mod evidence;
 mod execute;
+mod execution_path;
 mod file_blob;
 mod input_digest;
 mod local;
@@ -46,6 +47,9 @@ pub use env::{
 pub use error::{Error, Result};
 pub use evidence::{
     EvidenceCacheState, EvidenceRecord, EvidenceStatus, EvidenceStore, EvidenceSubject,
+};
+pub use execution_path::{
+    resolve_execution_argv, resolve_execution_env, resolve_execution_value, EXECUTION_ROOT_MARKER,
 };
 pub use input_digest::InputDigestBuilder;
 pub use path::{WorkspacePath, WorkspacePathError};

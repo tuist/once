@@ -108,6 +108,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
         ],
         action_primitives: vec![
             entry("declare_output(name)", "Reserve a durable target output path."),
+            entry(
+                "execution_path(path)",
+                "Resolve a workspace-relative path against the local, sandbox, or remote execution root immediately before process launch.",
+            ),
             entry("write_path(path, content)", "Declare a portable file-writing action."),
             entry(
                 "copy_path(source, destination, kind = \"file\", inputs = [], toolchain_identity = None, identifier = None, cacheable = True)",

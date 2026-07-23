@@ -33,6 +33,7 @@ and connects those targets to first-party consumers.
 
 | Ecosystem | Import target | Locked input | First-party consumer |
 | --- | --- | --- | --- |
+| Go | [`go_dependencies`](/reference/prelude/go_dependencies) | `go.mod`, `go.sum`, and `vendor/modules.txt` | `go_library`, `go_binary`, or `go_test` |
 | Rust | [`cargo_dependencies`](/reference/prelude/cargo_dependencies) | `Cargo.lock` and Cargo metadata | `rust_library`, `rust_binary`, or `rust_test` |
 | Elixir | [`mix_dependencies`](/reference/prelude/mix_dependencies) | `mix.lock` and the active Mix graph | `elixir_library` |
 | Swift | [`swift_package_dependencies`](/reference/prelude/swift_package_dependencies) | `Package.resolved` and a package graph snapshot | Apple libraries, frameworks, applications, or tests |
@@ -71,6 +72,8 @@ query-before-build workflow, current limitations, and follow-up steps:
 - [Elixir](/guide/graph/elixir) covers compiled applications and ExUnit tests.
 - [Kotlin](/guide/graph/kotlin) covers Java virtual machine libraries and
   binaries, Android Kotlin sources, and Kotlin/Native Apple frameworks.
+- [Go](/guide/graph/go) covers package archives, executables, tests, cgo,
+  cross-compilation, and locked vendored modules.
 - [Rust](/guide/graph/rust) covers libraries, binaries, tests, procedural
   macros, Cargo dependencies, and native mobile outputs.
 - [Zig](/guide/graph/zig) covers modules, binaries, tests, libraries, and C or

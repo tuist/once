@@ -2,6 +2,7 @@ PRELUDE_SOURCES = [
     "common.star",
     "apple.star",
     "android.star",
+    "go.star",
     "rust.star",
     "c.star",
     "zig.star",
