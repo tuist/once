@@ -507,6 +507,26 @@ body:has(.VPHome)::before {
   --sidebar-target-icon-color: var(--once-orange-600);
 }
 
+.sidebar-target-link-apple {
+  --sidebar-target-icon: url("/icons/apple.svg");
+  --sidebar-target-icon-color: var(--vp-c-text-1);
+}
+
+.sidebar-target-link-android {
+  --sidebar-target-icon: url("/icons/android.svg");
+  --sidebar-target-icon-color: var(--once-green-600);
+}
+
+.sidebar-target-link-c {
+  --sidebar-target-icon: url("/icons/c.svg");
+  --sidebar-target-icon-color: var(--once-blue-500);
+}
+
+.sidebar-target-link-cplusplus {
+  --sidebar-target-icon: url("/icons/cplusplus.svg");
+  --sidebar-target-icon-color: var(--once-azure-500);
+}
+
 .sidebar-target-link-ruby {
   --sidebar-target-icon: url("/icons/ruby.svg");
   --sidebar-target-icon-color: var(--once-red-500);
@@ -532,6 +552,16 @@ body:has(.VPHome)::before {
 .sidebar-target-link-elixir {
   --sidebar-target-icon: url("/icons/elixir.svg");
   --sidebar-target-icon-color: var(--once-purple-500);
+}
+
+.sidebar-target-link-kotlin {
+  --sidebar-target-icon: url("/icons/kotlin.svg");
+  --sidebar-target-icon-color: var(--once-purple-500);
+}
+
+.sidebar-target-link-zig {
+  --sidebar-target-icon: url("/icons/zig.svg");
+  --sidebar-target-icon-color: var(--once-orange-600);
 }
 
 .sidebar-target-link-tasks {
