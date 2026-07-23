@@ -429,14 +429,14 @@ def _go_replace_extension(path, extension):
 def _go_action_identifier(ctx, name):
     return ctx["label"]["id"] + ":go-" + name
 
-def _go_declared_build(ctx, mode):
+def _go_declared_build(ctx, mode, explicit_mode = True):
     module = _go_module_context(ctx)
     toolchain = _go_toolchain(ctx)
     output = declare_output(_go_output_name(ctx, mode))
     relative_output = _go_relative_to_module(module, output)
     scratch = ctx["scratch_dir"] + "/go-build"
     args = [toolchain["go"], "build"] + _go_common_build_args(ctx, module)
-    if mode != "exe":
+    if explicit_mode and mode != "exe":
         args.append("-buildmode=" + mode)
     if _go_attr(ctx, "link_style", "static") == "shared":
         args.append("-linkshared")
@@ -496,7 +496,7 @@ def _go_source_impl(ctx):
     return provider
 
 def _go_library_impl(ctx):
-    output, _, inputs, native, _, _ = _go_declared_build(ctx, "archive")
+    output, _, inputs, native, _, _ = _go_declared_build(ctx, "archive", explicit_mode = False)
     return _go_base_provider(ctx, "go_library", output, inputs, native)
 
 def _go_host_env(names):
