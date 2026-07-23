@@ -1174,6 +1174,34 @@ fn dynamic_language_test_schemas_are_discoverable() {
 }
 
 #[test]
+fn prelude_javascript_runner_uses_the_package_entry_behind_a_bin_shim() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let bin_dir = workspace.path().join("node_modules/.bin");
+    let entry_dir = workspace.path().join("node_modules/jest/bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    std::fs::create_dir_all(&entry_dir).unwrap();
+    let shim = bin_dir.join("jest");
+    let entry = entry_dir.join("jest.js");
+    std::fs::write(&shim, "package-manager shim\n").unwrap();
+    std::fs::write(&entry, "console.log('jest')\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+result = repr(_javascript_installed_package_entry(
+    "{}",
+    "node_modules/jest/bin/jest.js",
+))
+"#,
+        shim.to_string_lossy()
+    );
+    let store = store_for(workspace.path(), "");
+
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), format!("\"{}\"", entry.to_string_lossy()));
+}
+
+#[test]
 fn rust_schemas_cover_upstream_parity_fields() {
     for kind in [
         "rust_library",

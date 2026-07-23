@@ -25,6 +25,15 @@ def _javascript_env(ctx, test_dir, node):
         env[name] = value
     return env
 
+def _javascript_installed_package_entry(resolved, default):
+    normalized = resolved.replace("\\", "/")
+    bin_dir = _parent_dir(normalized)
+    node_modules_dir = _parent_dir(bin_dir)
+    prefix = "node_modules/"
+    if not bin_dir.endswith("/.bin") or not default.startswith(prefix):
+        return ""
+    return _resolve_host_executable(node_modules_dir + "/" + default[len(prefix):])
+
 def _javascript_runner(ctx, runner_type, default):
     requested = ctx["attr"].get("runner")
     if requested:
@@ -37,6 +46,9 @@ def _javascript_runner(ctx, runner_type, default):
         resolved = _resolve_host_executable(package_path)
         if not resolved:
             fail(ctx["label"]["id"] + ": " + runner_type + " runner `" + requested + "` was not found")
+        installed_entry = _javascript_installed_package_entry(resolved, default)
+        if installed_entry:
+            return (installed_entry, installed_entry.endswith(".js") or installed_entry.endswith(".mjs"), False)
         return (resolved if absolute else package_path, requested.endswith(".js") or requested.endswith(".mjs"), not absolute)
 
     package_path = _package_relative(ctx, default)
@@ -44,6 +56,9 @@ def _javascript_runner(ctx, runner_type, default):
         return (package_path, True, True)
     resolved = _resolve_host_executable(runner_type)
     if resolved:
+        installed_entry = _javascript_installed_package_entry(resolved, default)
+        if installed_entry:
+            return (installed_entry, installed_entry.endswith(".js") or installed_entry.endswith(".mjs"), False)
         return (resolved, False, False)
     fail(ctx["label"]["id"] + ": " + runner_type + " runner was not found; install it in the workspace or make `" + runner_type + "` available on PATH")
 
