@@ -1,3 +1,6 @@
+const sidebarTargetText = (label, icon) =>
+  `<span class="sidebar-target-link sidebar-target-link-${icon}"><span class="sidebar-target-icon" aria-hidden="true"></span><span>${label}</span></span>`;
+
 export const site = {
   description:
     "Once makes repository automation graph-aware, cacheable, observable, and remotely executable.",
@@ -216,15 +219,42 @@ export const site = {
           { text: "Overview", link: "/guide/graph/" },
           { text: "Ecosystems", link: "/guide/graph/ecosystems" },
           { text: "Testing and Scheduling", link: "/guide/graph/testing" },
-          { text: "Apple", link: "/guide/graph/apple" },
-          { text: "Swift Packages", link: "/guide/graph/swift-packages" },
-          { text: "Android", link: "/guide/graph/android" },
-          { text: "C and C++", link: "/guide/graph/c" },
-          { text: "Elixir", link: "/guide/graph/elixir" },
-          { text: "Kotlin", link: "/guide/graph/kotlin" },
-          { text: "Go", link: "/guide/graph/go" },
-          { text: "Rust", link: "/guide/graph/rust" },
-          { text: "Zig", link: "/guide/graph/zig" },
+          {
+            text: sidebarTargetText("Apple", "apple"),
+            link: "/guide/graph/apple",
+          },
+          {
+            text: sidebarTargetText("Swift Packages", "swift"),
+            link: "/guide/graph/swift-packages",
+          },
+          {
+            text: sidebarTargetText("Android", "android"),
+            link: "/guide/graph/android",
+          },
+          {
+            text: sidebarTargetText("C and C++", "cplusplus"),
+            link: "/guide/graph/c",
+          },
+          {
+            text: sidebarTargetText("Elixir", "elixir"),
+            link: "/guide/graph/elixir",
+          },
+          {
+            text: sidebarTargetText("Kotlin", "kotlin"),
+            link: "/guide/graph/kotlin",
+          },
+          {
+            text: sidebarTargetText("Go", "go"),
+            link: "/guide/graph/go",
+          },
+          {
+            text: sidebarTargetText("Rust", "rust"),
+            link: "/guide/graph/rust",
+          },
+          {
+            text: sidebarTargetText("Zig", "zig"),
+            link: "/guide/graph/zig",
+          },
         ],
       },
       {
@@ -253,22 +283,25 @@ export const site = {
         items: [
           { text: "Overview", link: "/guide/sdk/" },
           {
-            text: '<span class="sidebar-target-link sidebar-target-link-rust"><span class="sidebar-target-icon"></span><span>Rust</span></span>',
+            text: sidebarTargetText("Rust", "rust"),
             link: "/guide/sdk/rust",
           },
           {
-            text: '<span class="sidebar-target-link sidebar-target-link-swift"><span class="sidebar-target-icon"></span><span>Swift</span></span>',
+            text: sidebarTargetText("Swift", "swift"),
             link: "/guide/sdk/swift",
           },
           {
-            text: '<span class="sidebar-target-link sidebar-target-link-ruby"><span class="sidebar-target-icon"></span><span>Ruby</span></span>',
+            text: sidebarTargetText("Ruby", "ruby"),
             link: "/guide/sdk/ruby",
           },
           {
-            text: '<span class="sidebar-target-link sidebar-target-link-javascript"><span class="sidebar-target-icon"></span><span>JavaScript</span></span>',
+            text: sidebarTargetText("JavaScript", "javascript"),
             link: "/guide/sdk/javascript",
           },
-          { text: "C", link: "/guide/sdk/c" },
+          {
+            text: sidebarTargetText("C", "c"),
+            link: "/guide/sdk/c",
+          },
         ],
       },
     ],
