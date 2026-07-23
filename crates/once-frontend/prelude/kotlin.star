@@ -66,7 +66,7 @@ def _kotlin_apple_java_env(attrs):
     return env
 
 def _kotlin_apple_framework_impl(ctx):
-    attrs = ctx["attr"]
+    attrs = _configured_attrs(ctx)
     platform = _kotlin_apple_attr(attrs, "platform", "")
     if not platform:
         fail(ctx["label"]["id"] + ": `platform` is required")
@@ -175,10 +175,7 @@ kotlin_apple_framework = target_kind(
 )
 
 def _kotlin_jvm_attr(ctx, key, default):
-    value = ctx["attr"].get(key)
-    if value == None:
-        return default
-    return value
+    return _configured_attr(ctx, key, default)
 
 def _kotlin_jvm_dependency_role(ctx, name):
     return (ctx.get("deps_by_role") or {}).get(name) or []

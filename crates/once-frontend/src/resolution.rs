@@ -48,6 +48,8 @@ struct ResolvedTargetSpec {
     #[serde(default)]
     srcs: Vec<String>,
     #[serde(default)]
+    visibility: Vec<String>,
+    #[serde(default)]
     attrs: BTreeMap<String, AttrValue>,
 }
 
@@ -199,6 +201,7 @@ fn validate_resolver_owner(
         deps: target.deps.clone(),
         dependencies: target.dependency_edges.clone(),
         srcs: target.srcs.clone(),
+        visibility: target.visibility.clone(),
         attrs,
     };
     let mut diagnostics = crate::validate_target(&spec, schemas);
@@ -268,6 +271,7 @@ fn resolved_target(owner: &Target, spec: ResolvedTargetSpec) -> Result<Target> {
         deps,
         dependency_edges,
         srcs: spec.srcs,
+        visibility: spec.visibility,
         attrs: BTreeMap::new(),
         typed_attrs: spec.attrs,
     })
@@ -727,6 +731,7 @@ kind = "rust_library"
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: vec![source.to_string()],
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
         };
@@ -754,6 +759,7 @@ kind = "rust_library"
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: vec!["deps.lock".to_string(), "artifact.bin".to_string()],
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
         };
@@ -779,6 +785,7 @@ kind = "rust_library"
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: vec!["deps.lock".to_string()],
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
         };
@@ -803,6 +810,7 @@ kind = "rust_library"
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: vec!["declared.lock".to_string()],
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
         };
@@ -833,6 +841,7 @@ kind = "rust_library"
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
         };

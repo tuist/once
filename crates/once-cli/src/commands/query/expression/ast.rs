@@ -9,7 +9,7 @@ use serde_json::Value;
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct ParsedQuery {
     pub(super) pattern: MatchPattern,
-    pub(super) predicates: Vec<Predicate>,
+    pub(super) predicate_groups: Vec<Vec<Predicate>>,
     pub(super) returns: Vec<ReturnItem>,
 }
 
@@ -47,7 +47,18 @@ pub(super) enum Direction {
 pub(super) struct Predicate {
     pub(super) alias: String,
     pub(super) property: String,
+    pub(super) operator: PredicateOperator,
     pub(super) value: Value,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PredicateOperator {
+    Equal,
+    NotEqual,
+    Contains,
+    In,
+    StartsWith,
+    EndsWith,
 }
 
 #[derive(Debug, PartialEq, Eq)]

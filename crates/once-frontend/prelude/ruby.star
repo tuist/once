@@ -1,14 +1,21 @@
 _RUBY_TOOL = tool("ruby", executables = ["ruby"])
+_RSPEC_TOOL = tool("rspec", executables = ["rspec"])
 
 def _ruby_attr(ctx, name, default):
-    value = ctx["attr"].get(name)
-    return default if value == None else value
+    return _configured_attr(ctx, name, default)
 
 def _ruby_executable(ctx):
     requested = _ruby_attr(ctx, "ruby", "ruby")
     resolved = _resolve_host_executable(requested)
     if not resolved:
         fail(ctx["label"]["id"] + ": Ruby interpreter `" + requested + "` was not found")
+    return resolved
+
+def _ruby_rspec_executable(ctx):
+    requested = _ruby_attr(ctx, "runner", "rspec")
+    resolved = _resolve_host_executable(requested)
+    if not resolved:
+        fail(ctx["label"]["id"] + ": Ruby Specification runner `" + requested + "` was not found")
     return resolved
 
 def _ruby_env(ctx, test_dir):
@@ -27,12 +34,14 @@ def _ruby_test_inputs(ctx):
 def _ruby_rspec_adapter():
     return '''require "fileutils"
 require "json"
+require "open3"
 require "optparse"
 
 options = { sources: [], units: [] }
 parser = OptionParser.new do |opts|
   opts.on("--once-results PATH") { |value| options[:results] = value }
   opts.on("--once-native-results PATH") { |value| options[:native_results] = value }
+  opts.on("--once-runner PATH") { |value| options[:runner] = value }
   opts.on("--once-target TARGET") { |value| options[:target] = value }
   opts.on("--once-source PATH") { |value| options[:sources] << value }
   opts.on("--once-test-unit UNIT") { |value| options[:units] << value }
@@ -40,13 +49,6 @@ end
 parser.order!(ARGV)
 ARGV.shift if ARGV.first == "--"
 runner_args = ARGV
-
-begin
-  require "rspec/core"
-rescue LoadError => error
-  warn "unable to load Ruby Specification: #{error.message}"
-  exit 2
-end
 
 prefix = options.fetch(:target) + "::"
 selected = options[:units].map do |unit|
@@ -59,7 +61,10 @@ end
 selection = selected.empty? ? options[:sources] : selected
 native_results = options.fetch(:native_results)
 args = runner_args + selection + ["--format", "json", "--out", native_results]
-exit_code = RSpec::Core::Runner.run(args, $stderr, $stdout)
+stdout, stderr, status = Open3.capture3(options.fetch(:runner), *args)
+$stdout.write(stdout)
+$stderr.write(stderr)
+exit_code = status.exitstatus || 1
 native = File.exist?(native_results) ? JSON.parse(File.read(native_results)) : {"examples" => []}
 cases = native.fetch("examples", []).map do |example|
   id = example["id"] || "#{example["file_path"]}:#{example["line_number"]}"
@@ -178,7 +183,7 @@ def _ruby_test_info(ctx, runner_type, display_name, ruby, adapter, results, log,
         "metadata": {},
     }
 
-def _ruby_test_impl(ctx, runner_type, display_name, adapter_source, adapter_name, file_units):
+def _ruby_test_impl(ctx, runner_type, display_name, adapter_source, adapter_name, file_units, runner = None):
     ruby = _ruby_executable(ctx)
     inputs = _ruby_test_inputs(ctx)
     test_dir = _test_output_dir(ctx)
@@ -191,7 +196,10 @@ def _ruby_test_impl(ctx, runner_type, display_name, adapter_source, adapter_name
     if ctx["capability"] != "test":
         return provider
     write_path(adapter, adapter_source)
-    argv = [ruby, adapter, "--once-results", results, "--once-native-results", native_results, "--once-target", ctx["label"]["id"]]
+    argv = [ruby, adapter, "--once-results", results, "--once-native-results", native_results]
+    if runner:
+        argv.extend(["--once-runner", runner])
+    argv.extend(["--once-target", ctx["label"]["id"]])
     for source in glob(ctx["srcs"]):
         argv.extend(["--once-source", source])
     for unit in (ctx.get("test") or {}).get("filters") or []:
@@ -199,6 +207,9 @@ def _ruby_test_impl(ctx, runner_type, display_name, adapter_source, adapter_name
     argv.append("--")
     argv.extend(_ruby_attr(ctx, "args", []))
     version = host_command([ruby, "--version"]).strip()
+    runner_identity = ""
+    if runner:
+        runner_identity = "\x00runner\x00" + runner + "\x00" + host_command([runner, "--version"]).strip()
     run_action(
         argv = argv,
         inputs = _unique(inputs + [adapter]),
@@ -208,13 +219,13 @@ def _ruby_test_impl(ctx, runner_type, display_name, adapter_source, adapter_name
         env = _ruby_env(ctx, test_dir),
         stdout = log,
         stderr = log,
-        toolchain_identity = "once." + runner_type + ".v1\x00" + ruby + "\x00" + version,
+        toolchain_identity = "once." + runner_type + ".v2\x00" + ruby + "\x00" + version + runner_identity,
         identifier = ctx["label"]["id"] + ":" + runner_type,
     )
     return provider
 
 def _ruby_rspec_impl(ctx):
-    return _ruby_test_impl(ctx, "rspec", "Ruby Specification", _ruby_rspec_adapter(), "once_rspec_adapter.rb", False)
+    return _ruby_test_impl(ctx, "rspec", "Ruby Specification", _ruby_rspec_adapter(), "once_rspec_adapter.rb", False, _ruby_rspec_executable(ctx))
 
 def _ruby_minitest_impl(ctx):
     return _ruby_test_impl(ctx, "minitest", "Minitest", _ruby_minitest_adapter(), "once_minitest_adapter.rb", True)
@@ -233,11 +244,13 @@ _RUBY_TEST_ATTRS = [
 
 rspec_test = target_kind(
     docs = "Runs Ruby Specification examples through Once with exact example filtering, normalized results, and automatic batching.",
-    attrs = _RUBY_TEST_ATTRS,
+    attrs = _RUBY_TEST_ATTRS + [
+        attr("runner", "string", default = "\"rspec\"", docs = "Ruby Specification runner executable name, absolute path, or workspace-relative path.", configurable = False),
+    ],
     deps = [dep("deps", [], "Targets whose inputs should affect this test suite.")],
     providers = ["once_test_info"],
     capabilities = [capability("test", ["default", "test_results", "logs"])],
-    tools = [_RUBY_TOOL],
+    tools = [_RUBY_TOOL, _RSPEC_TOOL],
     examples = [example("rspec-test-minimal", name = "Minimal Ruby Specification suite", use_when = "You want Ruby examples with normalized results and automatic batching.")],
     impl = _ruby_rspec_impl,
 )

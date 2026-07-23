@@ -1,8 +1,10 @@
 def _elixir_attr(ctx, key, default):
-    value = ctx["attr"].get(key)
-    if value == None:
-        return default
-    return value
+    return _configured_attr(ctx, key, default)
+
+def _elixir_host_shell(ctx):
+    if host_os() == "windows":
+        fail(ctx["label"]["id"] + ": this Elixir action requires a POSIX-compatible shell provided by the configured toolchain")
+    return host_which("sh")
 
 def _elixir_app_name(ctx):
     return _elixir_attr(ctx, "app_name", ctx["label"]["name"].replace("-", "_").replace(".", "_"))
@@ -297,21 +299,14 @@ def _elixir_dep_symlink_script(apps, root_var, deps_root_var):
             lines.append("ln -s \"$" + root_var + "\"/" + _shell_quote(priv) + " " + app_dir + "/priv")
     return "\n".join(lines)
 
-def _elixir_copy_priv_script(ctx, priv_srcs, priv_dir):
-    if not priv_srcs:
-        return "mkdir -p \"$PRIV_OUT\""
-    lines = ["mkdir -p \"$PRIV_OUT\""]
+def _elixir_priv_destination(ctx, src, priv_dir):
     package = ctx["label"]["package"]
-    for src in priv_srcs:
-        rel = src
-        if package and rel.startswith(package + "/"):
-            rel = rel[len(package) + 1:]
-        if rel.startswith("priv/"):
-            rel = rel[len("priv/"):]
-        dest = "\"$PRIV_OUT\"/" + _shell_quote(rel)
-        lines.append("mkdir -p \"$(dirname " + dest + ")\"")
-        lines.append("cp \"$WORKSPACE_ROOT\"/" + _shell_quote(src) + " " + dest)
-    return "\n".join(lines)
+    rel = src
+    if package and rel.startswith(package + "/"):
+        rel = rel[len(package) + 1:]
+    if rel.startswith("priv/"):
+        rel = rel[len("priv/"):]
+    return priv_dir + "/" + rel
 
 def _elixir_erlang_atom(value):
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
@@ -322,35 +317,37 @@ def _elixir_erlang_string(value):
 def _elixir_erlang_atom_list(values):
     return "[" + ",".join([_elixir_erlang_atom(value) for value in values]) + "]"
 
-def _elixir_write_app_script(ctx, app_name, ebin_dir):
-    version = _elixir_attr(ctx, "version", "0.1.0")
-    description = _elixir_description(ctx)
-    applications = _elixir_applications(ctx)
-    included_applications = _elixir_attr(ctx, "included_applications", [])
-    registered = _elixir_attr(ctx, "registered", [])
-    app_file = app_name + ".app"
+def _elixir_app_writer_source():
+    return """
+defmodule Once.ElixirAppWriter do
+  def main do
+    ebin_dir = System.fetch_env!("ONCE_EBIN_DIR")
+    modules =
+      ebin_dir
+      |> Path.join("*.beam")
+      |> Path.wildcard()
+      |> Enum.map(&Path.basename(&1, ".beam"))
+      |> Enum.sort()
+      |> Enum.map(&("'" <> String.replace(&1, "'", "\\\\'") <> "'"))
+      |> Enum.join(",")
+
     lines = [
-        "MODULES_FILE=\"$STAGE_ROOT/modules.txt\"",
-        "find \"$EBIN_OUT\" -maxdepth 1 -type f -name '*.beam' | sort > \"$MODULES_FILE\"",
-        "modules=\"\"",
-        "while IFS= read -r beam; do",
-        "  name=$(basename \"$beam\" .beam)",
-        "  escaped=$(printf '%s' \"$name\" | sed \"s/'/\\\\'/g\")",
-        "  if [ -n \"$modules\" ]; then modules=\"$modules,\"; fi",
-        "  modules=\"$modules'$escaped'\"",
-        "done < \"$MODULES_FILE\"",
-        "{",
-        "  printf '%s\\n' " + _shell_quote("{application, " + _elixir_erlang_atom(app_name) + ","),
-        "  printf '%s\\n' " + _shell_quote(" [{description, " + _elixir_erlang_string(description) + "},"),
-        "  printf '%s\\n' " + _shell_quote("  {vsn, " + _elixir_erlang_string(version) + "},"),
-        "  printf '%s\\n' " + _shell_quote("  {registered, " + _elixir_erlang_atom_list(registered) + "},"),
-        "  printf '%s\\n' " + _shell_quote("  {applications, " + _elixir_erlang_atom_list(applications) + "},"),
-        "  printf '%s\\n' " + _shell_quote("  {included_applications, " + _elixir_erlang_atom_list(included_applications) + "},"),
-        "  printf '  {modules, [%s]},\\n' \"$modules\"",
-        "  printf '%s\\n' " + _shell_quote("  {env, []}]}." ),
-        "} > \"$EBIN_OUT\"/" + _shell_quote(app_file),
+      "{application, " <> System.fetch_env!("ONCE_APP_NAME") <> ",",
+      " [{description, " <> System.fetch_env!("ONCE_APP_DESCRIPTION") <> "},",
+      "  {vsn, " <> System.fetch_env!("ONCE_APP_VERSION") <> "},",
+      "  {registered, " <> System.fetch_env!("ONCE_APP_REGISTERED") <> "},",
+      "  {applications, " <> System.fetch_env!("ONCE_APP_APPLICATIONS") <> "},",
+      "  {included_applications, " <> System.fetch_env!("ONCE_APP_INCLUDED_APPLICATIONS") <> "},",
+      "  {modules, [" <> modules <> "]},",
+      "  {env, []}]}."
     ]
-    return "\n".join(lines)
+
+    File.write!(System.fetch_env!("ONCE_APP_FILE"), Enum.join(lines, "\\n") <> "\\n")
+  end
+end
+
+Once.ElixirAppWriter.main()
+"""
 
 def _elixir_stale_fingerprint_source():
     return """
@@ -702,46 +699,6 @@ end
 Once.ElixirCompiler.main()
 """
 
-def _elixir_stage_script(ctx, apps, module_dirs, priv_srcs, ebin_dir, priv_dir):
-    app_name = _elixir_app_name(ctx)
-    mix_env = _elixir_mix_env(ctx)
-    stage_root = ctx["scratch_dir"] + "/stage"
-    deps_root = ctx["scratch_dir"] + "/stage_deps"
-    user_env = _elixir_user_env(ctx)
-    copy_modules = []
-    for module_dir in module_dirs:
-        copy_modules.append("if [ -d \"$WORKSPACE_ROOT\"/" + _shell_quote(module_dir) + " ]; then find \"$WORKSPACE_ROOT\"/" + _shell_quote(module_dir) + " -maxdepth 1 -type f -name '*.beam' -exec cp {} \"$EBIN_OUT\"/ \\;; fi")
-    return """set -eu
-WORKSPACE_ROOT="$PWD"
-STAGE_ROOT={stage_root}
-DEPS_ROOT={deps_root}
-EBIN_OUT={ebin_dir}
-PRIV_OUT={priv_dir}
-rm -rf "$STAGE_ROOT" "$DEPS_ROOT" "$EBIN_OUT" "$PRIV_OUT"
-mkdir -p "$STAGE_ROOT" "$DEPS_ROOT" "$EBIN_OUT" "$PRIV_OUT"
-{dep_symlinks}
-cd {package}
-{user_env}
-export MIX_ENV={mix_env}
-export HEX_OFFLINE=true
-export ERL_LIBS="$WORKSPACE_ROOT/$DEPS_ROOT"
-{copy_modules}
-{write_app}
-{copy_priv}
-""".format(
-        stage_root = _shell_quote(stage_root),
-        deps_root = _shell_quote(deps_root),
-        ebin_dir = _shell_quote(ebin_dir),
-        priv_dir = _shell_quote(priv_dir),
-        dep_symlinks = _elixir_dep_symlink_script(apps, "WORKSPACE_ROOT", "DEPS_ROOT"),
-        package = _shell_quote(ctx["label"]["package"] or "."),
-        user_env = _elixir_export_env(user_env),
-        mix_env = _shell_quote(mix_env),
-        copy_modules = "\n".join(copy_modules),
-        write_app = _elixir_write_app_script(ctx, app_name, ebin_dir),
-        copy_priv = _elixir_copy_priv_script(ctx, priv_srcs, priv_dir),
-    )
-
 def _elixir_compile_args(ctx):
     return _elixir_attr(ctx, "compile_args", []) + _elixir_attr(ctx, "elixirc_opts", [])
 
@@ -887,13 +844,41 @@ def _elixir_library_impl(ctx):
         _elixir_stale_fingerprint_action(ctx, toolchain, metadata_path, config, ebin_dir, stale_fingerprint)
         compile_action_inputs = _unique(compile_action_inputs + [stale_fingerprint])
     _elixir_compile_action(ctx, toolchain, apps, srcs, static_compile_inputs, config, compile_args, compile_action_inputs, module_dir, metadata_path, warnings_path, consolidated_dir, compile_cacheable)
+    copy_path(
+        module_dirs,
+        ebin_dir,
+        kind = "tree",
+        toolchain_identity = toolchain["identity"] + "\x00elixir-stage-modules.v2",
+        identifier = ctx["label"]["id"] + ":elixir-stage-modules",
+    )
+    prepare_path(priv_dir, kind = "remove", identifier = ctx["label"]["id"] + ":elixir-stage-priv-clean")
+    prepare_path(priv_dir, kind = "directory", identifier = ctx["label"]["id"] + ":elixir-stage-priv")
+    for src in priv_srcs:
+        copy_path(
+            src,
+            _elixir_priv_destination(ctx, src, priv_dir),
+            inputs = [src],
+            toolchain_identity = toolchain["identity"] + "\x00elixir-stage-priv.v2",
+            identifier = ctx["label"]["id"] + ":elixir-stage-priv:" + src,
+        )
+    app_writer = ctx["scratch_dir"] + "/app_writer.exs"
+    app_file = ebin_dir + "/" + app_name + ".app"
+    write_path(app_writer, _elixir_app_writer_source())
     run_action(
-        argv = ["/bin/sh", "-c", _elixir_stage_script(ctx, apps, module_dirs, priv_srcs, ebin_dir, priv_dir)],
-        inputs = _unique(_elixir_optional_inputs(priv_srcs + [mix_config])),
-        outputs = [ebin_dir, priv_dir],
-        env = _elixir_action_env(toolchain),
-        toolchain_identity = toolchain["identity"] + "\x00elixir-stage.v1\x00mix_env\x00" + mix_env,
-        identifier = ctx["label"]["id"] + ":elixir-stage",
+        argv = [toolchain["elixir"], app_writer],
+        outputs = [app_file],
+        env = _elixir_action_env_with(ctx, toolchain, {
+            "ONCE_EBIN_DIR": ebin_dir,
+            "ONCE_APP_FILE": app_file,
+            "ONCE_APP_NAME": _elixir_erlang_atom(app_name),
+            "ONCE_APP_DESCRIPTION": _elixir_erlang_string(_elixir_description(ctx)),
+            "ONCE_APP_VERSION": _elixir_erlang_string(_elixir_attr(ctx, "version", "0.1.0")),
+            "ONCE_APP_REGISTERED": _elixir_erlang_atom_list(_elixir_attr(ctx, "registered", [])),
+            "ONCE_APP_APPLICATIONS": _elixir_erlang_atom_list(_elixir_applications(ctx)),
+            "ONCE_APP_INCLUDED_APPLICATIONS": _elixir_erlang_atom_list(_elixir_attr(ctx, "included_applications", [])),
+        }),
+        toolchain_identity = toolchain["identity"] + "\x00elixir-stage-app.v2\x00mix_env\x00" + mix_env,
+        identifier = ctx["label"]["id"] + ":elixir-stage-app",
     )
     app = {
         "app_name": app_name,
@@ -1131,7 +1116,7 @@ def _elixir_test_impl(ctx):
     provider["affected_inputs"] = _unique(_elixir_optional_inputs(input_srcs + config + data + tools + [mix_config]))
     provider["test_info"] = _elixir_test_info_for(ctx, toolchain["mix"] if mix_config else toolchain["elixir"], mix_config, srcs, results, log, native_results)
     run_action(
-        argv = ["/bin/sh", "-c", _elixir_test_script(ctx, toolchain, lib, apps, srcs, config, data, mix_config, results, log, native_results)],
+        argv = [_elixir_host_shell(ctx), "-c", _elixir_test_script(ctx, toolchain, lib, apps, srcs, config, data, mix_config, results, log, native_results)],
         inputs = provider["affected_inputs"],
         outputs = [test_dir, results, log, native_results],
         env = _elixir_action_env(toolchain),
@@ -1715,17 +1700,17 @@ _ELIXIR_LIBRARY_ATTRS = [
     attr("env", "map<string, string>", default = "{}", docs = "Environment variables exported before running Elixir compile and test commands.", configurable = False),
     attr("compile_args", "list<string>", default = "[]", docs = "Additional arguments appended to `elixirc`.", configurable = False),
     attr("elixirc_opts", "list<string>", default = "[]", docs = "Bazel-compatible alias for additional `elixirc` arguments.", configurable = False),
-    attr("app_src", "string", docs = "Reserved for Buck-compatible application source file generation.", configurable = False),
-    attr("app_src_vsn", "string", docs = "Reserved for Buck-compatible application source versions.", configurable = False),
-    attr("appup_src", "string", docs = "Reserved for Buck-compatible upgrade files.", configurable = False),
-    attr("erl_opts", "list<string>", default = "[]", docs = "Reserved for Erlang compiler options.", configurable = False),
-    attr("ez_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-compatible archive dependencies.", configurable = False),
-    attr("extra_includes", "list<string>", default = "[]", docs = "Reserved for Buck-compatible include directories.", configurable = False),
-    attr("extra_properties", "map<string, string>", default = "{}", docs = "Reserved for extra application metadata properties.", configurable = False),
-    attr("include_src", "bool", default = "false", docs = "Reserved for Buck-compatible source inclusion.", configurable = False),
-    attr("mod", "string", docs = "Reserved for application callback module metadata.", configurable = False),
-    attr("shell_configs", "list<string>", default = "[]", docs = "Reserved for Buck-compatible shell configuration files.", configurable = False),
-    attr("shell_libs", "list<string>", default = "[]", docs = "Reserved for Buck-compatible shell libraries.", configurable = False),
+    attr("app_src", "string", docs = "Reserved for Buck-compatible application source file generation.", configurable = False, implemented = False),
+    attr("app_src_vsn", "string", docs = "Reserved for Buck-compatible application source versions.", configurable = False, implemented = False),
+    attr("appup_src", "string", docs = "Reserved for Buck-compatible upgrade files.", configurable = False, implemented = False),
+    attr("erl_opts", "list<string>", default = "[]", docs = "Reserved for Erlang compiler options.", configurable = False, implemented = False),
+    attr("ez_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-compatible archive dependencies.", configurable = False, implemented = False),
+    attr("extra_includes", "list<string>", default = "[]", docs = "Reserved for Buck-compatible include directories.", configurable = False, implemented = False),
+    attr("extra_properties", "map<string, string>", default = "{}", docs = "Reserved for extra application metadata properties.", configurable = False, implemented = False),
+    attr("include_src", "bool", default = "false", docs = "Reserved for Buck-compatible source inclusion.", configurable = False, implemented = False),
+    attr("mod", "string", docs = "Reserved for application callback module metadata.", configurable = False, implemented = False),
+    attr("shell_configs", "list<string>", default = "[]", docs = "Reserved for Buck-compatible shell configuration files.", configurable = False, implemented = False),
+    attr("shell_libs", "list<string>", default = "[]", docs = "Reserved for Buck-compatible shell libraries.", configurable = False, implemented = False),
 ]
 
 _ELIXIR_TEST_ATTRS = [
@@ -1740,7 +1725,7 @@ _ELIXIR_TEST_ATTRS = [
     attr("elixir_opts", "list<string>", default = "[]", docs = "Bazel-compatible options passed to the direct Elixir interpreter before test files. Not supported with `mix_config`.", configurable = False),
     attr("setup", "string", default = "", docs = "Shell snippet run after the test environment is prepared and before ExUnit starts.", configurable = False),
     attr("no_start", "bool", default = "false", docs = "Pass `--no-start` to `mix test` when `mix_config` enables Mix mode.", configurable = False),
-    attr("ez_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-compatible archive dependencies.", configurable = False),
+    attr("ez_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-compatible archive dependencies.", configurable = False, implemented = False),
     attr("tools", "list<string>", default = "[]", docs = "Package-relative executable or support-file globs available to the test setup command.", configurable = False),
     attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
     attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),

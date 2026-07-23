@@ -270,6 +270,7 @@ mod tests {
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: vec!["scripts/build.sh".to_string(), "src/input.txt".to_string()],
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
         }

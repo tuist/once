@@ -4,10 +4,10 @@
 //! way that breaks one of the starter examples, this test fails and
 //! the example has to be updated alongside the target kind.
 //!
-//! Scope: parse + diagnostic check (cheap, runs anywhere). End-to-end
-//! build verification for examples whose target kind has an `impl` is
-//! intentional follow-up work; it needs an Apple toolchain in the test
-//! environment and a configured cache provider.
+//! Scope: this test performs the cheap parse and diagnostic checks that can
+//! run anywhere. The portable executable starter matrix runs through
+//! `mise run examples:verify-portable`. Platform-specific starters remain
+//! covered by their dedicated toolchain setup and action tests.
 
 use std::collections::BTreeMap;
 use std::fs;

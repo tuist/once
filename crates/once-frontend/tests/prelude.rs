@@ -129,6 +129,13 @@ fn all_prelude_source() -> String {
 }
 
 #[test]
+fn built_in_target_kinds_do_not_hardcode_a_posix_shell_path() {
+    let source = all_prelude_source();
+    assert!(!source.contains("\"/bin/sh\""));
+    assert!(!source.contains("'/bin/sh'"));
+}
+
+#[test]
 fn go_target_kind_schemas_cover_bazel_buck_and_locked_modules() {
     for kind in [
         "go_dependencies",
@@ -442,6 +449,7 @@ fn apple_application_exposes_build_and_run() {
         deps: vec!["apps/ios/AppKit".to_string()],
         dependency_edges: BTreeMap::new(),
         srcs: Vec::new(),
+        visibility: Vec::new(),
         attrs: BTreeMap::new(),
         typed_attrs: BTreeMap::new(),
     };
@@ -1146,6 +1154,22 @@ fn dynamic_language_test_schemas_are_discoverable() {
             .find(|attr| attr.name == "runner")
             .unwrap();
         assert_eq!(runner.default.as_deref(), Some(expected));
+    }
+
+    for (kind, executable) in [
+        ("pytest_test", "pytest"),
+        ("rspec_test", "rspec"),
+        ("vitest_test", "vitest"),
+        ("jest_test", "jest"),
+    ] {
+        let schema = built_in_target_kind_schema(kind).unwrap();
+        assert!(
+            schema
+                .tools
+                .iter()
+                .any(|tool| tool.executables.iter().any(|value| value == executable)),
+            "{kind} should declare its {executable} runner"
+        );
     }
 }
 
@@ -9173,7 +9197,7 @@ fn prelude_serialize_hmap_lays_out_canonical_header_and_entries() {
 fn prelude_apple_config_tokens_rejects_select_on_platform() {
     let err = eval_prelude_function(
         "_apple_config_tokens",
-        r#"({"platform": {"select": {"default": "ios"}}}, "tgt")"#,
+        r#"({}, {"platform": {"select": {"default": "ios"}}}, "tgt")"#,
     )
     .unwrap_err();
     assert!(
@@ -9643,8 +9667,8 @@ result = repr(provider["archive"])
 #[test]
 fn prelude_resolve_attrs_rejects_select_on_non_configurable_attr() {
     let err = eval_prelude_function(
-            "_resolve_attrs",
-            r#"({"platform": "ios", "module_name": {"select": {"ios": "X", "default": "Y"}}}, "tgt", ["module_name"])"#,
+        "_resolve_attrs",
+            r#"({}, {"platform": "ios", "module_name": {"select": {"ios": "X", "default": "Y"}}}, "tgt", ["module_name"])"#,
         )
         .unwrap_err();
     assert!(

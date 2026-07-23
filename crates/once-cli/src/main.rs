@@ -68,11 +68,19 @@ fn write_dispatch_error(format: cli::Format, error: &anyhow::Error) {
 }
 
 fn structured_dispatch_error(format: cli::Format, error: &anyhow::Error) -> String {
+    let analysis_diagnostic = error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<once_frontend::analysis::AnalysisFailure>()
+            .map(|failure| &failure.diagnostic)
+    });
+    let code =
+        analysis_diagnostic.map_or("operation_failed", |diagnostic| diagnostic.code.as_str());
     let envelope = serde_json::json!({
         "schema": "once.error.v1",
         "error": {
-            "code": "operation_failed",
+            "code": code,
             "message": format!("{error:#}"),
+            "diagnostics": analysis_diagnostic.into_iter().collect::<Vec<_>>(),
         }
     });
     render::structured(format, &envelope).unwrap_or_else(|render_error| {
@@ -119,5 +127,26 @@ mod tests {
         assert_eq!(value["schema"], "once.error.v1");
         assert_eq!(value["error"]["code"], "operation_failed");
         assert_eq!(value["error"]["message"], "unknown test unit");
+        assert_eq!(value["error"]["diagnostics"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn structured_dispatch_errors_preserve_analysis_diagnostics() {
+        let diagnostic = once_frontend::Diagnostic::new(
+            "target_kind_analysis_failed",
+            "target kind implementation failed",
+        )
+        .with_target("App")
+        .with_repair("Correct the target");
+        let error = anyhow::Error::new(once_frontend::analysis::AnalysisFailure { diagnostic });
+
+        let rendered = structured_dispatch_error(cli::Format::Json, &error);
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+        assert_eq!(value["error"]["code"], "target_kind_analysis_failed");
+        assert_eq!(
+            value["error"]["diagnostics"][0]["target"],
+            serde_json::json!("App")
+        );
     }
 }

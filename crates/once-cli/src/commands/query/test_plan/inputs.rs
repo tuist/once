@@ -57,11 +57,9 @@ pub(super) fn workspace_graph_input_patterns(workspace: &Path) -> Result<Vec<Inp
 }
 
 pub(super) fn is_graph_input(path: &str, configured_patterns: &[InputPattern]) -> bool {
-    path == once_frontend::TOML_BUILD_FILE_NAME
-        || path.ends_with(&format!("/{}", once_frontend::TOML_BUILD_FILE_NAME))
-        || configured_patterns
-            .iter()
-            .any(|pattern| pattern.matches(path))
+    configured_patterns
+        .iter()
+        .any(|pattern| pattern.matches(path))
 }
 
 #[derive(Debug)]

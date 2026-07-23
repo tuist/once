@@ -72,7 +72,7 @@ def _go_target_arch(ctx):
 def _go_config_tokens(ctx):
     goos = _go_target_os(ctx)
     goarch = _go_target_arch(ctx)
-    return [goos + "-" + goarch, goos, goarch, "default"]
+    return _configuration_tokens(ctx, [goos + "-" + goarch, goos, goarch])
 
 def _go_trim_slashes(value):
     out = value.replace("\\", "/")
@@ -1448,6 +1448,14 @@ _GO_EXAMPLE = [
     ),
 ]
 
+_GO_BINARY_EXAMPLES = [
+    example(
+        "go-binary-minimal",
+        name = "Minimal Go executable",
+        use_when = "Start here for a runnable Go command with no external dependencies.",
+    ),
+] + _GO_EXAMPLE
+
 go_dependencies = target_kind(
     docs = "Locked Go module graph read from go.mod or go.work checksum files and materialized from vendor sources.",
     attrs = [
@@ -1523,7 +1531,7 @@ go_binary = target_kind(
     deps = _GO_DEP_EDGES,
     providers = ["go_package", "go_binary", "c_provider", "native_linkable", "apple_linkable", "android_native_library"],
     capabilities = [capability("build", ["binary"]), capability("run", ["default"], ["binary"])],
-    examples = _GO_EXAMPLE,
+    examples = _GO_BINARY_EXAMPLES,
     source_references = _GO_BINARY_REFERENCES,
     tools = [_GO_TOOL],
     impl = _go_binary_impl,

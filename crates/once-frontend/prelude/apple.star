@@ -545,7 +545,7 @@ def _is_select_shape(value):
 # them is a select-shape dict instead of resolving to a misleading
 # empty token list.
 
-def _apple_config_tokens(attrs, label_id):
+def _apple_config_tokens(ctx, attrs, label_id):
     for input_key in ["platform", "sdk_variant", "archs", "mac_catalyst"]:
         if _is_select_shape(attrs.get(input_key)):
             fail(label_id + ": attribute `" + input_key + "` cannot use select() because the configuration depends on it")
@@ -566,7 +566,7 @@ def _apple_config_tokens(attrs, label_id):
                 tokens.append(arch)
     if attrs.get("mac_catalyst"):
         tokens.append("mac_catalyst")
-    return tokens
+    return _configuration_tokens(ctx, tokens)
 
 def _select_branch_for_tokens(branches, tokens, label_id, attr_name):
     matching = []
@@ -606,8 +606,8 @@ def _resolve_select(value, tokens, label_id, attr_name):
         return {k: _resolve_select(v, tokens, label_id, attr_name) for k, v in value.items()}
     return value
 
-def _resolve_attrs(attrs, label_id, non_configurable):
-    tokens = _apple_config_tokens(attrs, label_id)
+def _resolve_attrs(ctx, attrs, label_id, non_configurable):
+    tokens = _apple_config_tokens(ctx, attrs, label_id)
     out = {}
     for key, value in attrs.items():
         if key in non_configurable and _is_select_shape(value):
@@ -894,7 +894,7 @@ def _apple_test_info(ctx, runner_type, command_argv, command_env, labels, result
     }
 
 def _apple_library_impl(ctx):
-    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["module_name"])
+    attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["module_name"])
     platform = attrs["platform"]
     minimum_os = attrs.get("minimum_os") or "13.0"
     target_sdk_version = attrs.get("target_sdk_version") or minimum_os
@@ -1370,7 +1370,7 @@ def _apple_library_impl(ctx):
     }
 
 def _swift_macro_impl(ctx):
-    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["module_name"])
+    attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["module_name"])
     minimum_os = attrs.get("minimum_os") or "13.0"
     xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
     module_name = attrs.get("module_name") or ctx["label"]["name"]
@@ -1575,7 +1575,7 @@ def _collect_dep_compile_inputs(deps, build_dir):
     )
 
 def _apple_framework_impl(ctx):
-    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
+    attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["product_name"])
     _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["headers", "exported_headers", "resources", "asset_catalogs", "privacy_manifest"])
     platform = attrs["platform"]
     minimum_os = attrs.get("minimum_os") or "13.0"
@@ -1873,7 +1873,7 @@ printf '%s%s%s\\n' {record_prefix} "$simulator_id" {record_suffix} > {record}
     )
 
 def _apple_application_impl(ctx):
-    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
+    attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["product_name"])
     _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["resources", "asset_catalogs", "info_plist", "info_plist_substitutions", "entitlements", "provisioning_profile", "signing_identity"])
     if attrs.get("signing") and attrs.get("signing") != "ad_hoc":
         fail(ctx["label"]["id"] + ": attribute `signing` only supports `ad_hoc` today")
@@ -2072,7 +2072,7 @@ def _apple_application_impl(ctx):
     }
 
 def _apple_test_bundle_impl(ctx):
-    attrs = _resolve_attrs(ctx["attr"], ctx["label"]["id"], ["product_name"])
+    attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["product_name"])
     _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["test_host", "resources", "asset_catalogs", "info_plist", "entitlements", "destination", "test_plan"])
     platform = attrs["platform"]
     minimum_os = attrs.get("minimum_os") or "13.0"

@@ -14,7 +14,7 @@ def _android_is_select_shape(value):
     inner = value.get("select")
     return type(inner) == type({})
 
-def _android_config_tokens(attrs, label_id):
+def _android_config_tokens(ctx, attrs, label_id):
     for key in ["compile_sdk", "min_sdk_version", "build_type"]:
         if _android_is_select_shape(attrs.get(key)):
             fail(label_id + ": attribute `" + key + "` cannot use select() because the Android configuration depends on it")
@@ -27,8 +27,7 @@ def _android_config_tokens(attrs, label_id):
     if min_sdk:
         tokens.append("min_sdk_" + str(min_sdk))
     tokens.append(attrs.get("build_type") or "debug")
-    tokens.append("default")
-    return _unique(tokens)
+    return _configuration_tokens(ctx, tokens)
 
 def _android_select_branch(branches, tokens, label_id, attr_name):
     for token in tokens:
@@ -50,7 +49,7 @@ def _android_resolve_select(value, tokens, label_id, attr_name):
 def _android_resolve_attrs(ctx, non_configurable):
     attrs = ctx["attr"]
     label_id = ctx["label"]["id"]
-    tokens = _android_config_tokens(attrs, label_id)
+    tokens = _android_config_tokens(ctx, attrs, label_id)
     out = {}
     for key, value in attrs.items():
         if key in non_configurable and _android_is_select_shape(value):
@@ -2126,19 +2125,19 @@ _ANDROID_LOCAL_TEST_ATTRS = [
     attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited by the local test runner before explicit test environment values.", configurable = False),
     attr("test_env", "map<string,string>", default = "{}", docs = "Environment variables passed to the local test runner.", configurable = False),
     attr("args", "list<string>", default = "[]", docs = "Additional fully qualified class or `Class#method` filters passed to the local test runner.", configurable = False),
-    attr("custom_package", "string", docs = "Reserved for generated Android package overrides on local tests.", configurable = False),
-    attr("densities", "list<string>", default = "[]", docs = "Reserved for density filtering.", configurable = False),
-    attr("enable_data_binding", "bool", default = "false", docs = "Reserved for Android data binding support.", configurable = False),
+    attr("custom_package", "string", docs = "Reserved for generated Android package overrides on local tests.", configurable = False, implemented = False),
+    attr("densities", "list<string>", default = "[]", docs = "Reserved for density filtering.", configurable = False, implemented = False),
+    attr("enable_data_binding", "bool", default = "false", docs = "Reserved for Android data binding support.", configurable = False, implemented = False),
     attr("jvm_flags", "list<string>", default = "[]", docs = "Additional flags passed to the host Java virtual machine before the test classpath.", configurable = False),
-    attr("manifest", "string", docs = "Reserved for AndroidManifest.xml handling on local tests.", configurable = False),
-    attr("manifest_values", "map<string,string>", default = "{}", docs = "Reserved for manifest placeholder expansion.", configurable = False),
-    attr("nocompress_extensions", "list<string>", default = "[]", docs = "Reserved for no-compress packaging options.", configurable = False),
-    attr("plugins", "list<string>", default = "[]", docs = "Reserved for Java annotation processor support.", configurable = False),
-    attr("resource_configuration_filters", "list<string>", default = "[]", docs = "Reserved for resource filtering.", configurable = False),
-    attr("resource_jars", "list<string>", default = "[]", docs = "Reserved for resource jar inputs.", configurable = False),
-    attr("resource_strip_prefix", "string", docs = "Reserved for resource path prefix stripping.", configurable = False),
-    attr("runtime_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-style runtime-only dependencies.", configurable = False),
-    attr("stamp", "int", default = "0", docs = "Reserved for Bazel-style stamping.", configurable = False),
+    attr("manifest", "string", docs = "Reserved for AndroidManifest.xml handling on local tests.", configurable = False, implemented = False),
+    attr("manifest_values", "map<string,string>", default = "{}", docs = "Reserved for manifest placeholder expansion.", configurable = False, implemented = False),
+    attr("nocompress_extensions", "list<string>", default = "[]", docs = "Reserved for no-compress packaging options.", configurable = False, implemented = False),
+    attr("plugins", "list<string>", default = "[]", docs = "Reserved for Java annotation processor support.", configurable = False, implemented = False),
+    attr("resource_configuration_filters", "list<string>", default = "[]", docs = "Reserved for resource filtering.", configurable = False, implemented = False),
+    attr("resource_jars", "list<string>", default = "[]", docs = "Reserved for resource jar inputs.", configurable = False, implemented = False),
+    attr("resource_strip_prefix", "string", docs = "Reserved for resource path prefix stripping.", configurable = False, implemented = False),
+    attr("runtime_deps", "list<string>", default = "[]", docs = "Reserved for Bazel-style runtime-only dependencies.", configurable = False, implemented = False),
+    attr("stamp", "int", default = "0", docs = "Reserved for Bazel-style stamping.", configurable = False, implemented = False),
     attr("test_class", "string", docs = "Optional fully qualified test class or `Class#method` filter.", configurable = False),
     attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
     attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
@@ -2162,7 +2161,7 @@ _ANDROID_INSTRUMENTATION_TEST_ATTRS = [
     attr("test_env", "map<string,string>", default = "{}", docs = "Environment variables passed to the host instrumentation runner.", configurable = False),
     attr("args", "list<string>", default = "[]", docs = "Raw arguments appended to the Android instrumentation command before its component.", configurable = False),
     attr("support_apks", "list<string>", default = "[]", docs = "Package-relative application package globs installed before the instrumentation application.", configurable = False),
-    attr("target_device", "string", docs = "Reserved for Bazel-style device target selection.", configurable = False),
+    attr("target_device", "string", docs = "Reserved for Bazel-style device target selection.", configurable = False, implemented = False),
     attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
     attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
 ]
@@ -2263,13 +2262,13 @@ android_library = target_kind(
         attr("custom_package", "string", docs = "Alias for the generated R package.", configurable = False),
         attr("package", "string", docs = "Generated R package fallback when namespace and custom_package are omitted.", configurable = False),
         attr("neverlink", "bool", default = "false", docs = "Keep the library on compile classpaths while omitting its runtime dependency closure from application classpaths.", configurable = False),
-        attr("enable_data_binding", "bool", default = "false", docs = "Reserved for Android data binding support.", configurable = False),
-        attr("idl_srcs", "list<string>", default = "[]", docs = "Reserved for Android Interface Definition Language support.", configurable = False),
-        attr("idl_import_root", "string", docs = "Reserved for Android Interface Definition Language support.", configurable = False),
-        attr("idl_parcelables", "list<string>", default = "[]", docs = "Reserved for Android Interface Definition Language support.", configurable = False),
-        attr("idl_preprocessed", "list<string>", default = "[]", docs = "Reserved for Android Interface Definition Language support.", configurable = False),
-        attr("plugins", "list<string>", default = "[]", docs = "Reserved for Java annotation processor support.", configurable = False),
-        attr("proguard_specs", "list<string>", default = "[]", docs = "Reserved for consumer ProGuard specs.", configurable = False),
+        attr("enable_data_binding", "bool", default = "false", docs = "Reserved for Android data binding support.", configurable = False, implemented = False),
+        attr("idl_srcs", "list<string>", default = "[]", docs = "Reserved for Android Interface Definition Language support.", configurable = False, implemented = False),
+        attr("idl_import_root", "string", docs = "Reserved for Android Interface Definition Language support.", configurable = False, implemented = False),
+        attr("idl_parcelables", "list<string>", default = "[]", docs = "Reserved for Android Interface Definition Language support.", configurable = False, implemented = False),
+        attr("idl_preprocessed", "list<string>", default = "[]", docs = "Reserved for Android Interface Definition Language support.", configurable = False, implemented = False),
+        attr("plugins", "list<string>", default = "[]", docs = "Reserved for Java annotation processor support.", configurable = False, implemented = False),
+        attr("proguard_specs", "list<string>", default = "[]", docs = "Reserved for consumer ProGuard specs.", configurable = False, implemented = False),
     ],
     deps = [
         dep("deps", ["android_library", "android_resource", "android_native_library"], "Android libraries, resources, and native libraries consumed by this library."),
@@ -2346,15 +2345,15 @@ android_binary = target_kind(
         attr("emulator", "string", docs = "Override Android emulator path used by visible runs.", configurable = False),
         attr("emulator_device", "string", docs = "Android Virtual Device name started by `once run --visible` before installing the app.", configurable = False),
         attr("launch_activity", "string", docs = "Optional Android activity component launched by once run. Defaults to the launcher intent for application_id.", configurable = False),
-        attr("enable_data_binding", "bool", default = "false", docs = "Reserved for Android data binding support.", configurable = False),
+        attr("enable_data_binding", "bool", default = "false", docs = "Reserved for Android data binding support.", configurable = False, implemented = False),
         attr("instruments", "target", docs = "Application target this APK instruments when used by android_instrumentation_test.", configurable = False),
-        attr("manifest_values", "map<string,string>", default = "{}", docs = "Reserved for manifest placeholder expansion.", configurable = False),
-        attr("proguard_specs", "list<string>", default = "[]", docs = "Reserved for shrinking and obfuscation.", configurable = False),
-        attr("resource_configuration_filters", "list<string>", default = "[]", docs = "Reserved for resource filtering.", configurable = False),
-        attr("densities", "list<string>", default = "[]", docs = "Reserved for density filtering.", configurable = False),
-        attr("nocompress_extensions", "list<string>", default = "[]", docs = "Reserved for no-compress packaging options.", configurable = False),
-        attr("startup_profiles", "list<string>", default = "[]", docs = "Reserved for ART startup profile packaging.", configurable = False),
-        attr("native_target", "target", docs = "Reserved for native Android split support.", configurable = False),
+        attr("manifest_values", "map<string,string>", default = "{}", docs = "Reserved for manifest placeholder expansion.", configurable = False, implemented = False),
+        attr("proguard_specs", "list<string>", default = "[]", docs = "Reserved for shrinking and obfuscation.", configurable = False, implemented = False),
+        attr("resource_configuration_filters", "list<string>", default = "[]", docs = "Reserved for resource filtering.", configurable = False, implemented = False),
+        attr("densities", "list<string>", default = "[]", docs = "Reserved for density filtering.", configurable = False, implemented = False),
+        attr("nocompress_extensions", "list<string>", default = "[]", docs = "Reserved for no-compress packaging options.", configurable = False, implemented = False),
+        attr("startup_profiles", "list<string>", default = "[]", docs = "Reserved for ART startup profile packaging.", configurable = False, implemented = False),
+        attr("native_target", "target", docs = "Reserved for native Android split support.", configurable = False, implemented = False),
     ],
     deps = [
         dep("deps", ["android_library", "android_resource", "android_native_library"], "Android libraries, resources, and native shared libraries packaged into the APK."),

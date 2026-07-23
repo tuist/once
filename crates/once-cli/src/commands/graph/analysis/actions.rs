@@ -316,6 +316,7 @@ pub(super) fn run_declared_actions<'a>(
             aggregate_result.outputs.extend(outcome.result.outputs);
         }
 
+        deduplicate_outputs(&mut all_outputs);
         let cache_state = aggregate_cache_state.unwrap_or(EvidenceCacheState::Miss);
         Ok(BuildOutcome {
             provider,
@@ -327,6 +328,11 @@ pub(super) fn run_declared_actions<'a>(
             result: aggregate_result,
         })
     })
+}
+
+fn deduplicate_outputs(outputs: &mut Vec<String>) {
+    outputs.sort();
+    outputs.dedup();
 }
 
 async fn expose_target_tools(
@@ -1453,6 +1459,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn capability_outputs_are_sorted_and_deduplicated() {
+        let mut outputs = vec![
+            ".once/out/Root/run".to_string(),
+            ".once/out/Root/run/stdout.log".to_string(),
+            ".once/out/Root/run".to_string(),
+        ];
+
+        deduplicate_outputs(&mut outputs);
+
+        assert_eq!(
+            outputs,
+            [".once/out/Root/run", ".once/out/Root/run/stdout.log"]
+        );
+    }
+
+    #[test]
     fn tool_execution_wraps_command_actions_only() {
         let command: DeclaredAction = serde_json::from_value(serde_json::json!({
             "argv": ["rustc", "--version"],
@@ -2030,6 +2052,7 @@ mod tests {
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             capabilities: Vec::new(),
             providers: Vec::new(),
@@ -2128,6 +2151,7 @@ mod tests {
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             capabilities: Vec::new(),
             providers: Vec::new(),
@@ -2216,6 +2240,7 @@ mod tests {
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             capabilities: Vec::new(),
             providers: Vec::new(),
@@ -2301,6 +2326,7 @@ mod tests {
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             capabilities: Vec::new(),
             providers: Vec::new(),

@@ -7,6 +7,7 @@ pub(crate) mod test_plan;
 
 pub(crate) use script::script_validation_value;
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -30,6 +31,7 @@ struct TargetRecord {
     kind: String,
     deps: Vec<String>,
     dependency_edges: std::collections::BTreeMap<String, Vec<String>>,
+    visibility: Vec<String>,
     capabilities: Vec<String>,
     tools: Vec<once_frontend::ToolRequirement>,
 }
@@ -52,6 +54,25 @@ struct WorkspaceValidation {
 }
 
 #[derive(Debug, Serialize)]
+struct WorkspaceSummary {
+    root: String,
+    configuration: once_frontend::BuildConfiguration,
+    root_manifest: RootManifestSummary,
+    target_count: Option<usize>,
+    packages: Vec<String>,
+    empty: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    load_error: Option<String>,
+    suggested_calls: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct RootManifestSummary {
+    path: String,
+    exists: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct ModuleValidation {
     valid: bool,
     path: String,
@@ -70,6 +91,104 @@ pub async fn targets(workspace: &Path, output: Output, kind: Option<&str>) -> Re
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let records = target_records(graph, kind);
     write_body(output, || render_targets_human(&records), &records).await
+}
+
+pub async fn workspace(workspace: &Path, output: Output) -> Result<()> {
+    let summary = workspace_summary(workspace);
+    write_body(output, || render_workspace_summary(&summary), &summary).await
+}
+
+pub(crate) fn workspace_value(workspace: &Path) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(workspace_summary(workspace))?)
+}
+
+fn workspace_summary(workspace: &Path) -> WorkspaceSummary {
+    let root_manifest_path = workspace.join(once_frontend::TOML_BUILD_FILE_NAME);
+    let configuration = once_frontend::load_workspace_configuration(workspace).unwrap_or_default();
+    match once_frontend::load_graph_workspace(workspace) {
+        Ok(graph) => {
+            let packages = graph
+                .iter()
+                .map(|target| target.label.package.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let target_count = graph.len();
+            WorkspaceSummary {
+                root: workspace.to_string_lossy().into_owned(),
+                configuration,
+                root_manifest: RootManifestSummary {
+                    path: root_manifest_path.to_string_lossy().into_owned(),
+                    exists: root_manifest_path.is_file(),
+                },
+                target_count: Some(target_count),
+                packages,
+                empty: target_count == 0,
+                load_error: None,
+                suggested_calls: if target_count == 0 {
+                    vec![serde_json::json!({
+                        "tool": "once_list_target_kinds",
+                        "arguments": {},
+                        "reason": "Discover a target kind and starter for this empty workspace."
+                    })]
+                } else {
+                    vec![
+                        serde_json::json!({
+                            "tool": "once_query_targets",
+                            "arguments": {},
+                            "reason": "Inspect canonical target identifiers."
+                        }),
+                        serde_json::json!({
+                            "tool": "once_validate_workspace",
+                            "arguments": {},
+                            "reason": "Validate the complete loaded graph."
+                        }),
+                    ]
+                },
+            }
+        }
+        Err(error) => WorkspaceSummary {
+            root: workspace.to_string_lossy().into_owned(),
+            configuration,
+            root_manifest: RootManifestSummary {
+                path: root_manifest_path.to_string_lossy().into_owned(),
+                exists: root_manifest_path.is_file(),
+            },
+            target_count: None,
+            packages: Vec::new(),
+            empty: false,
+            load_error: Some(error.to_string()),
+            suggested_calls: vec![serde_json::json!({
+                "tool": "once_validate_workspace",
+                "arguments": {},
+                "reason": "Inspect the workspace loading or validation failure."
+            })],
+        },
+    }
+}
+
+fn render_workspace_summary(summary: &WorkspaceSummary) -> String {
+    let target_count = summary
+        .target_count
+        .map_or_else(|| "unavailable".to_string(), |count| count.to_string());
+    let mut text = format!(
+        "workspace: {}\nconfiguration: {}-{} [{}]\nroot manifest: {} ({})\ntargets: {}\n",
+        summary.root,
+        summary.configuration.os,
+        summary.configuration.arch,
+        summary.configuration.tokens.join(", "),
+        summary.root_manifest.path,
+        if summary.root_manifest.exists {
+            "present"
+        } else {
+            "absent"
+        },
+        target_count
+    );
+    if let Some(error) = &summary.load_error {
+        let _ = writeln!(text, "load error: {error}");
+    }
+    text
 }
 
 pub async fn expression(workspace: &Path, output: Output, query: &str) -> Result<()> {
@@ -198,8 +317,24 @@ fn module_validation(workspace: &Path, path: &str) -> Result<ModuleValidation> {
         anyhow::bail!("module path must name a Starlark file");
     }
     let source_path = relative.resolve(workspace);
-    let source = std::fs::read_to_string(&source_path)
-        .with_context(|| format!("reading module `{}`", source_path.display()))?;
+    let source = match std::fs::read_to_string(&source_path) {
+        Ok(source) => source,
+        Err(error) => {
+            return Ok(ModuleValidation {
+                valid: false,
+                path: relative.to_string(),
+                target_kinds: Vec::new(),
+                diagnostics: vec![ModuleDiagnostic {
+                    code: "module_read_failed",
+                    message: format!("reading module `{}`: {error}", source_path.display()),
+                    repairs: vec![
+                        "Create the module at the requested workspace-relative path.",
+                        "Ensure the module is readable UTF-8 text, then validate again.",
+                    ],
+                }],
+            });
+        }
+    };
     match once_frontend::validate_module_source(workspace, relative.as_str(), &source) {
         Ok(target_kinds) => Ok(ModuleValidation {
             valid: true,
@@ -278,6 +413,7 @@ fn target_records(graph: Vec<once_frontend::GraphTarget>, kind: Option<&str>) ->
             kind: target.kind,
             deps: target.deps,
             dependency_edges: target.dependency_edges,
+            visibility: target.visibility,
             capabilities: target
                 .capabilities
                 .into_iter()
@@ -379,6 +515,11 @@ pub(crate) fn matching_target_kind_schemas(
                 .any(|schema| target_kind_family(schema) == term.as_str())
         })
         .collect::<Vec<_>>();
+    if families.len() == 1 {
+        let family = families[0];
+        schemas.retain(|schema| target_kind_family(schema) == family.as_str());
+        return Ok(schemas);
+    }
     if !families.is_empty() {
         let specific_terms = terms
             .iter()
@@ -1045,9 +1186,14 @@ fn render_schema_human(schema: &once_frontend::TargetKindSchema) -> String {
             } else {
                 ""
             };
+            let availability = if attr.implemented {
+                ""
+            } else {
+                ", unavailable"
+            };
             writeln!(
                 out,
-                "  {}: {} ({required}{configurable})",
+                "  {}: {} ({required}{configurable}{availability})",
                 attr.name, attr.ty
             )
             .expect("writing to string cannot fail");
@@ -1502,6 +1648,7 @@ mod tests {
             deps: Vec::new(),
             dependency_edges: std::collections::BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             capabilities: capabilities
                 .iter()
@@ -1518,6 +1665,17 @@ mod tests {
     }
 
     #[test]
+    fn missing_modules_return_validation_diagnostics() {
+        let workspace = tempfile::TempDir::new().unwrap();
+
+        let validation = module_validation(workspace.path(), "modules/missing.star").unwrap();
+
+        assert!(!validation.valid);
+        assert_eq!(validation.diagnostics[0].code, "module_read_failed");
+        assert!(!validation.diagnostics[0].repairs.is_empty());
+    }
+
+    #[test]
     fn render_targets_human_reports_empty_and_populated() {
         assert_eq!(render_targets_human(&[]), "targets: none\n");
         let rendered = render_targets_human(&[TargetRecord {
@@ -1527,6 +1685,7 @@ mod tests {
             kind: "apple_application".to_string(),
             deps: Vec::new(),
             dependency_edges: std::collections::BTreeMap::new(),
+            visibility: Vec::new(),
             capabilities: vec!["build".to_string(), "run".to_string()],
             tools: Vec::new(),
         }]);
@@ -1589,6 +1748,7 @@ mod tests {
                 kind: "apple_application".to_string(),
                 deps: Vec::new(),
                 dependency_edges: std::collections::BTreeMap::new(),
+                visibility: Vec::new(),
                 capabilities: vec!["build".to_string(), "run".to_string()],
                 tools: Vec::new(),
             }]
@@ -1680,6 +1840,7 @@ mod tests {
             deps: Vec::new(),
             dependency_edges: std::collections::BTreeMap::new(),
             srcs: vec!["tests/*.py".to_string()],
+            visibility: Vec::new(),
             attrs: std::collections::BTreeMap::new(),
             capabilities: Vec::new(),
             providers: Vec::new(),

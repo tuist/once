@@ -1,8 +1,5 @@
 def _c_attr(ctx, key, default):
-    value = ctx["attr"].get(key)
-    if value == None:
-        return default
-    return value
+    return _configured_attr(ctx, key, default)
 
 def _c_parent_dirs(paths):
     out = []
@@ -152,7 +149,7 @@ def _c_object_output(src):
     return declare_output("objects/" + src + _c_output_extension("object"))
 
 def _c_library_impl(ctx):
-    attrs = ctx["attr"]
+    attrs = _configured_attrs(ctx)
     sources = _c_sources(ctx)
     headers = _c_headers(ctx)
     compile_context = _c_compile_context(ctx, headers)

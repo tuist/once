@@ -10,8 +10,8 @@ use once_frontend::GraphTarget;
 use serde_json::{json, Map, Value};
 
 use super::ast::{
-    Direction, MatchPattern, NodePattern, ParsedQuery, Predicate, Projection, RelationshipPattern,
-    ReturnItem,
+    Direction, MatchPattern, NodePattern, ParsedQuery, Predicate, PredicateOperator, Projection,
+    RelationshipPattern, ReturnItem,
 };
 
 #[derive(Debug)]
@@ -116,10 +116,12 @@ impl GraphModel {
         bindings
             .into_iter()
             .filter(|binding| {
-                query
-                    .predicates
-                    .iter()
-                    .all(|predicate| self.predicate_matches(binding, predicate))
+                query.predicate_groups.is_empty()
+                    || query.predicate_groups.iter().any(|group| {
+                        group
+                            .iter()
+                            .all(|predicate| self.predicate_matches(binding, predicate))
+                    })
             })
             .map(Ok)
             .collect()
@@ -196,7 +198,33 @@ impl GraphModel {
         let Some(node) = binding.nodes.get(&predicate.alias) else {
             return false;
         };
-        self.nodes[*node].properties.get(&predicate.property) == Some(&predicate.value)
+        let actual = property_value(&self.nodes[*node].properties, &predicate.property);
+        match predicate.operator {
+            PredicateOperator::Equal => actual == Some(&predicate.value),
+            PredicateOperator::NotEqual => actual != Some(&predicate.value),
+            PredicateOperator::Contains => actual.is_some_and(|actual| match actual {
+                Value::String(actual) => predicate
+                    .value
+                    .as_str()
+                    .is_some_and(|expected| actual.contains(expected)),
+                Value::Array(actual) => actual.contains(&predicate.value),
+                _ => false,
+            }),
+            PredicateOperator::In => predicate
+                .value
+                .as_array()
+                .is_some_and(|values| actual.is_some_and(|actual| values.contains(actual))),
+            PredicateOperator::StartsWith => {
+                string_predicate(actual, &predicate.value, |actual, expected| {
+                    actual.starts_with(expected)
+                })
+            }
+            PredicateOperator::EndsWith => {
+                string_predicate(actual, &predicate.value, |actual, expected| {
+                    actual.ends_with(expected)
+                })
+            }
+        }
     }
 
     pub(super) fn project(&self, binding: &Binding, item: &ReturnItem) -> Value {
@@ -207,11 +235,31 @@ impl GraphModel {
             Projection::Property { alias, property } => binding
                 .nodes
                 .get(alias)
-                .and_then(|index| self.nodes[*index].properties.get(property))
+                .and_then(|index| property_value(&self.nodes[*index].properties, property))
                 .cloned()
                 .unwrap_or(Value::Null),
         }
     }
+}
+
+fn property_value<'a>(properties: &'a BTreeMap<String, Value>, path: &str) -> Option<&'a Value> {
+    let mut parts = path.split('.');
+    let mut value = properties.get(parts.next()?)?;
+    for part in parts {
+        value = value.as_object()?.get(part)?;
+    }
+    Some(value)
+}
+
+fn string_predicate(
+    actual: Option<&Value>,
+    expected: &Value,
+    predicate: impl Fn(&str, &str) -> bool,
+) -> bool {
+    actual
+        .and_then(Value::as_str)
+        .zip(expected.as_str())
+        .is_some_and(|(actual, expected)| predicate(actual, expected))
 }
 
 fn target_properties(target: &GraphTarget) -> BTreeMap<String, Value> {
@@ -226,6 +274,7 @@ fn target_properties(target: &GraphTarget) -> BTreeMap<String, Value> {
             json!(target.dependency_edges),
         ),
         ("srcs".to_string(), json!(target.srcs)),
+        ("visibility".to_string(), json!(target.visibility)),
         ("attrs".to_string(), json!(target.attrs)),
         ("providers".to_string(), json!(target.providers)),
         (

@@ -18,6 +18,8 @@ pub struct Target {
     pub dependency_edges: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub srcs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visibility: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub attrs: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -80,6 +82,7 @@ mod tests {
             deps: vec![],
             dependency_edges: BTreeMap::new(),
             srcs: vec![],
+            visibility: vec![],
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
         };

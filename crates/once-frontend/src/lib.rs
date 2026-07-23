@@ -46,7 +46,10 @@ pub use graph::{
     TargetKindExampleFile, TargetKindExampleRoot, TargetKindExampleSource, TargetKindSchema,
     TargetLabel, ToolRequirement,
 };
-pub use manifest::{load_cache_provider_toml_str, load_infrastructure_toml_str, load_toml_str};
+pub use manifest::{
+    load_cache_provider_toml_str, load_infrastructure_toml_str, load_toml_str,
+    load_workspace_configuration, BuildConfiguration,
+};
 pub use manifest_editor::{
     apply_operations, apply_operations_with_schemas, EditOperation, TargetSpec, TargetUpdate,
 };

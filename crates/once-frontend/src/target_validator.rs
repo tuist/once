@@ -18,27 +18,10 @@ use crate::target_ref::validate_target_name;
 pub fn validate_target(target: &TargetSpec, schemas: &[TargetKindSchema]) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
-    if target.name.trim().is_empty() {
-        diagnostics.push(
-            Diagnostic::new("target_name_required", "target `name` must not be empty")
-                .with_attribute("name"),
-        );
-    } else if let Err(err) = validate_target_name(&target.name) {
-        diagnostics.push(
-            Diagnostic::new("invalid_target_name", err.to_string())
-                .with_target(target.name.as_str())
-                .with_attribute("name"),
-        );
-    }
-
-    if target.kind.trim().is_empty() {
-        diagnostics.push(
-            Diagnostic::new("target_kind_required", "target `kind` must not be empty")
-                .with_target(target.name.as_str())
-                .with_attribute("kind"),
-        );
+    if !validate_target_identity(target, &mut diagnostics) {
         return diagnostics;
     }
+    validate_target_visibility(target, &mut diagnostics);
 
     let Some(schema) = schemas.iter().find(|s| s.kind == target.kind) else {
         diagnostics.push(
@@ -53,38 +36,8 @@ pub fn validate_target(target: &TargetSpec, schemas: &[TargetKindSchema]) -> Vec
         return diagnostics;
     };
 
-    for role in target.dependencies.keys() {
-        if role == "deps" || !schema.deps.iter().any(|edge| &edge.name == role) {
-            diagnostics.push(
-                Diagnostic::new(
-                    "unknown_dependency_role",
-                    format!(
-                        "target kind `{}` does not declare dependency role `{role}`",
-                        schema.kind
-                    ),
-                )
-                .with_target(target.name.as_str())
-                .with_attribute(format!("dependencies.{role}"))
-                .with_repair(suggest_known_dependency_roles(schema)),
-            );
-        }
-    }
-
-    for attr_schema in &schema.attrs {
-        if attr_schema.required && !target.attrs.contains_key(&attr_schema.name) {
-            diagnostics.push(
-                Diagnostic::new(
-                    "missing_required_attr",
-                    format!(
-                        "target kind `{}` requires attribute `{}`",
-                        schema.kind, attr_schema.name
-                    ),
-                )
-                .with_target(target.name.as_str())
-                .with_attribute(attr_schema.name.as_str()),
-            );
-        }
-    }
+    validate_dependency_roles(target, schema, &mut diagnostics);
+    validate_required_attrs(target, schema, &mut diagnostics);
 
     for (attr_name, attr_value) in &target.attrs {
         let Some(attr_schema) = schema.attrs.iter().find(|a| &a.name == attr_name) else {
@@ -108,6 +61,99 @@ pub fn validate_target(target: &TargetSpec, schemas: &[TargetKindSchema]) -> Vec
     diagnostics
 }
 
+fn validate_target_identity(target: &TargetSpec, diagnostics: &mut Vec<Diagnostic>) -> bool {
+    if target.name.trim().is_empty() {
+        diagnostics.push(
+            Diagnostic::new("target_name_required", "target `name` must not be empty")
+                .with_attribute("name"),
+        );
+    } else if let Err(err) = validate_target_name(&target.name) {
+        diagnostics.push(
+            Diagnostic::new("invalid_target_name", err.to_string())
+                .with_target(target.name.as_str())
+                .with_attribute("name"),
+        );
+    }
+
+    if target.kind.trim().is_empty() {
+        diagnostics.push(
+            Diagnostic::new("target_kind_required", "target `kind` must not be empty")
+                .with_target(target.name.as_str())
+                .with_attribute("kind"),
+        );
+        return false;
+    }
+    true
+}
+
+fn validate_target_visibility(target: &TargetSpec, diagnostics: &mut Vec<Diagnostic>) {
+    for entry in &target.visibility {
+        if crate::workspace_validator::visibility_entry_is_valid("", entry) {
+            continue;
+        }
+        diagnostics.push(
+            Diagnostic::new(
+                "invalid_visibility",
+                format!("target `{}` has invalid visibility entry `{entry}`", target.name),
+            )
+            .with_target(target.name.as_str())
+            .with_attribute("visibility")
+            .with_repair(
+                "Use `public`, `private`, an exact target such as `tools/Generator`, a package entry such as `package:apps`, or a subtree entry such as `subtree:apps`",
+            ),
+        );
+    }
+}
+
+fn validate_dependency_roles(
+    target: &TargetSpec,
+    schema: &TargetKindSchema,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for role in target.dependencies.keys() {
+        if role == "deps" || !schema.deps.iter().any(|edge| &edge.name == role) {
+            diagnostics.push(
+                Diagnostic::new(
+                    "unknown_dependency_role",
+                    format!(
+                        "target kind `{}` does not declare dependency role `{role}`",
+                        schema.kind
+                    ),
+                )
+                .with_target(target.name.as_str())
+                .with_attribute(format!("dependencies.{role}"))
+                .with_repair(suggest_known_dependency_roles(schema)),
+            );
+        }
+    }
+}
+
+fn validate_required_attrs(
+    target: &TargetSpec,
+    schema: &TargetKindSchema,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for attr_schema in &schema.attrs {
+        if attr_schema.required && !target.attrs.contains_key(&attr_schema.name) {
+            diagnostics.push(
+                Diagnostic::new(
+                    "missing_required_attr",
+                    format!(
+                        "target kind `{}` requires attribute `{}`",
+                        schema.kind, attr_schema.name
+                    ),
+                )
+                .with_target(target.name.as_str())
+                .with_attribute(attr_schema.name.as_str())
+                .with_repair(format!(
+                    "Set `target.attrs.{}` to a value of type `{}`",
+                    attr_schema.name, attr_schema.ty
+                )),
+            );
+        }
+    }
+}
+
 fn suggest_known_dependency_roles(schema: &TargetKindSchema) -> String {
     let roles = schema
         .deps
@@ -128,6 +174,23 @@ fn validate_attr(
     attr_schema: &AttrSchema,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    if !attr_schema.implemented {
+        diagnostics.push(
+            Diagnostic::new(
+                "unimplemented_attr",
+                format!(
+                    "target kind `{}` declares attribute `{attr_name}` for discovery, but does not implement it yet",
+                    target.kind
+                ),
+            )
+            .with_target(target.name.as_str())
+            .with_attribute(attr_name)
+            .with_repair(format!(
+                "Remove `target.attrs.{attr_name}` until the target kind implements it"
+            )),
+        );
+        return;
+    }
     if let Some(branches) = select_branches(attr_value) {
         validate_select_attr(target, attr_name, attr_schema, branches, diagnostics);
     } else if let Err(err) = check_type(attr_value, &attr_schema.ty) {
@@ -149,7 +212,11 @@ fn validate_select_attr(
                 format!("attribute `{attr_name}` is not configurable but uses `select()`"),
             )
             .with_target(target.name.as_str())
-            .with_attribute(attr_name),
+            .with_attribute(attr_name)
+            .with_repair(format!(
+                "Replace the select value with one `{}` value",
+                attr_schema.ty
+            )),
         );
         return;
     }
@@ -172,6 +239,9 @@ fn type_mismatch(target: &TargetSpec, attr_name: &str, ty: &str, err: &str) -> D
     )
     .with_target(target.name.as_str())
     .with_attribute(attr_name)
+    .with_repair(format!(
+        "Set `target.attrs.{attr_name}` to a value of type `{ty}`"
+    ))
 }
 
 fn select_branches(value: &JsonValue) -> Option<&serde_json::Map<String, JsonValue>> {
@@ -225,6 +295,13 @@ fn check_type(value: &JsonValue, ty: &str) -> Result<(), String> {
         "int" | "integer" => match value {
             JsonValue::Number(n) if n.is_i64() => Ok(()),
             _ => Err(format!("expected an integer, got {}", json_type(value))),
+        },
+        "float" => match value {
+            JsonValue::Number(n) if n.is_f64() => Ok(()),
+            _ => Err(format!(
+                "expected a floating-point number, got {}",
+                json_type(value)
+            )),
         },
         other => Err(format!(
             "unknown attribute type `{other}` declared by target kind schema"
@@ -296,6 +373,28 @@ mod tests {
             .expect("target kind exists")
     }
 
+    #[test]
+    fn unimplemented_attributes_fail_static_validation() {
+        let mut target = target("Library", "rust_library");
+        target
+            .attrs
+            .insert("doc_deps".to_string(), json!(["DocumentationOnly"]));
+
+        let diagnostics = validate_target(&target, &built_in_target_kind_schemas());
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "unimplemented_attr")
+            .expect("unimplemented attribute diagnostic");
+
+        assert_eq!(diagnostic.attribute.as_deref(), Some("doc_deps"));
+        assert!(diagnostic.repairs[0].contains("Remove"));
+        assert!(schema_named("rust_library")
+            .attrs
+            .iter()
+            .find(|attr| attr.name == "doc_deps")
+            .is_some_and(|attr| !attr.implemented));
+    }
+
     fn target(name: &str, kind: &str) -> TargetSpec {
         TargetSpec {
             name: name.to_string(),
@@ -317,6 +416,8 @@ mod tests {
             })
             .expect("missing platform diagnostic");
         assert_eq!(missing.target.as_deref(), Some("Hello"));
+        assert!(missing.repairs[0].contains("target.attrs.platform"));
+        assert!(missing.repairs[0].contains("string"));
     }
 
     #[test]
@@ -384,6 +485,8 @@ mod tests {
             .expect("mismatch diagnostic");
         assert!(mismatch.message.contains("string"));
         assert!(mismatch.message.contains("number"));
+        assert!(mismatch.repairs[0].contains("target.attrs.platform"));
+        assert!(mismatch.repairs[0].contains("string"));
     }
 
     #[test]
@@ -470,6 +573,15 @@ mod tests {
             .find(|d| d.code == "select_on_non_configurable_attr")
             .expect("non-configurable select diagnostic");
         assert_eq!(diagnostic.attribute.as_deref(), Some("platform"));
+        assert!(!diagnostic.repairs.is_empty());
+    }
+
+    #[test]
+    fn float_types_match_the_public_module_contract() {
+        assert!(check_type(&json!(1.5), "float").is_ok());
+        assert!(check_type(&json!([1.5, 2.5]), "list<float>").is_ok());
+        assert!(check_type(&json!({ "ratio": 1.5 }), "map<string,float>").is_ok());
+        assert!(check_type(&json!(1), "float").is_err());
     }
 
     #[test]

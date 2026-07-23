@@ -1,4 +1,4 @@
-def attr(name, ty, required = False, default = None, docs = "", configurable = True):
+def attr(name, ty, required = False, default = None, docs = "", configurable = True, implemented = True):
     return {
         "name": name,
         "ty": ty,
@@ -6,6 +6,7 @@ def attr(name, ty, required = False, default = None, docs = "", configurable = T
         "default": default,
         "docs": docs,
         "configurable": configurable,
+        "implemented": implemented,
     }
 
 def dep(name, expected_providers, docs = ""):
@@ -157,6 +158,44 @@ def _unique(values):
             seen[value] = True
             out.append(value)
     return out
+
+def _configuration_tokens(ctx, extra = []):
+    configured = (ctx.get("configuration") or {}).get("tokens") or []
+    return _unique(extra + configured + ["default"])
+
+def _is_select_value(value):
+    return type(value) == type({}) and len(value) == 1 and type(value.get("select")) == type({})
+
+def _resolve_configured_value(value, tokens, label_id, attr_name):
+    if _is_select_value(value):
+        branches = value["select"]
+        for token in tokens:
+            if token in branches:
+                return _resolve_configured_value(branches[token], tokens, label_id, attr_name)
+        fail(label_id + ": attribute `" + attr_name + "` uses select() without a branch matching the target configuration or a `default` branch")
+    if type(value) == type([]):
+        return [_resolve_configured_value(item, tokens, label_id, attr_name) for item in value]
+    if type(value) == type({}):
+        return {key: _resolve_configured_value(item, tokens, label_id, attr_name) for key, item in value.items()}
+    return value
+
+def _configured_attr(ctx, name, default, extra_tokens = []):
+    value = ctx["attr"].get(name)
+    if value == None:
+        return default
+    return _resolve_configured_value(
+        value,
+        _configuration_tokens(ctx, extra_tokens),
+        ctx["label"]["id"],
+        name,
+    )
+
+def _configured_attrs(ctx, extra_tokens = []):
+    tokens = _configuration_tokens(ctx, extra_tokens)
+    return {
+        name: _resolve_configured_value(value, tokens, ctx["label"]["id"], name)
+        for name, value in ctx["attr"].items()
+    }
 
 def _test_unit_suffix(ctx, unit):
     prefix = ctx["label"]["id"] + "::"

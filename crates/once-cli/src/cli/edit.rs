@@ -16,12 +16,28 @@ pub enum EditCmd {
         #[arg(long, value_name = "PATH")]
         file: Option<PathBuf>,
     },
+
+    /// Materialize a target kind starter inside the workspace.
+    ///
+    /// Copies the complete example bundle without printing file contents.
+    /// Existing files with identical contents are kept. Any conflicting
+    /// file rejects the complete operation before Once writes anything.
+    MaterializeExample {
+        /// Target kind that owns the example.
+        kind: String,
+        /// Example slug from `once query schema`.
+        slug: String,
+        /// Workspace-relative directory that receives the example.
+        #[arg(long, default_value = "", value_name = "DIR")]
+        destination: String,
+    },
 }
 
 impl EditCmd {
     pub fn surface_path(&self) -> Vec<&'static str> {
         match self {
             Self::Apply { .. } => vec!["apply"],
+            Self::MaterializeExample { .. } => vec!["materialize-example"],
         }
     }
 }

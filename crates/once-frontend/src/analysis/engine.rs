@@ -15,7 +15,7 @@ use starlark::values::Value;
 use super::globals::globals_for_prelude;
 use super::store::{with_active_store, AnalysisStore, DeclaredAction, HostCache};
 use super::values::{attr_value_to_starlark, json_to_value, value_to_json};
-use crate::graph::GraphTarget;
+use crate::graph::{Diagnostic, GraphTarget};
 
 type ResolverCallback<'a> =
     dyn FnMut(&GraphTarget, &BTreeMap<String, String>) -> Result<Option<JsonValue>> + 'a;
@@ -43,6 +43,19 @@ pub struct AnalysisResult {
     pub declared_outputs: Vec<String>,
 }
 
+#[derive(Debug)]
+pub struct AnalysisFailure {
+    pub diagnostic: Diagnostic,
+}
+
+impl fmt::Display for AnalysisFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.diagnostic.message)
+    }
+}
+
+impl std::error::Error for AnalysisFailure {}
+
 /// Command-scoped analysis helper.
 ///
 /// Construct this once for a graph command and reuse it for every
@@ -56,6 +69,7 @@ pub struct AnalysisEngine {
     target_kind_callbacks: TargetKindCallbacks,
     host_cache: HostCache,
     options: AnalysisOptions,
+    configuration: crate::manifest::BuildConfiguration,
 }
 
 impl fmt::Debug for AnalysisEngine {
@@ -66,6 +80,7 @@ impl fmt::Debug for AnalysisEngine {
             .field("target_kind_callbacks", &self.target_kind_callbacks)
             .field("host_cache", &self.host_cache)
             .field("options", &self.options)
+            .field("configuration", &self.configuration)
             .finish()
     }
 }
@@ -93,13 +108,17 @@ impl AnalysisEngine {
             &source,
             root,
             &HostCache::default(),
+            &crate::manifest::load_workspace_configuration(root)?,
             operation,
         )
     }
 
     pub fn for_workspace_with_options(root: &Path, options: AnalysisOptions) -> Result<Self> {
         let source = crate::modules::combined_module_source_for_workspace(root)?;
-        Self::from_source_with_path(crate::modules::COMBINED_MODULE_PATH, source, options)
+        let mut engine =
+            Self::from_source_with_path(crate::modules::COMBINED_MODULE_PATH, source, options)?;
+        engine.configuration = crate::manifest::load_workspace_configuration(root)?;
+        Ok(engine)
     }
 
     pub fn for_workspace_with_options_and_tool_paths(
@@ -141,6 +160,7 @@ impl AnalysisEngine {
             target_kind_callbacks,
             host_cache: HostCache::default(),
             options,
+            configuration: crate::manifest::BuildConfiguration::default(),
         })
     }
 
@@ -201,6 +221,7 @@ impl AnalysisEngine {
             dependency_providers,
             capability,
             options: self.options.clone(),
+            configuration: &self.configuration,
         };
         analyze_target_with_host_cache(
             &self.source_path,
@@ -250,6 +271,7 @@ struct TargetAnalysis<'a> {
     dependency_providers: &'a BTreeMap<String, Vec<JsonValue>>,
     capability: &'a str,
     options: AnalysisOptions,
+    configuration: &'a crate::manifest::BuildConfiguration,
 }
 
 fn analyze_target_with_host_cache(
@@ -341,10 +363,7 @@ fn analyze_in_starlark(
         let provider = eval
             .eval_function(impl_value, &[ctx], &[])
             .map_err(|error| {
-                anyhow!(
-                    "impl eval failed for {}: {error:?}",
-                    analysis.target.label.id
-                )
+                analysis_failure(analysis.target, "implementation", &error.to_string())
             })?;
         Ok(value_to_json(provider))
     })
@@ -355,6 +374,7 @@ fn resolve_targets_in_starlark<T>(
     source: &str,
     workspace_root: &Path,
     host_cache: &HostCache,
+    configuration: &crate::manifest::BuildConfiguration,
     operation: impl FnOnce(&mut ResolverCallback<'_>) -> Result<T>,
 ) -> Result<T> {
     Module::with_temp_heap(|module| {
@@ -380,10 +400,10 @@ fn resolve_targets_in_starlark<T>(
                 host_cache.clone(),
             );
             let (store, result) = with_active_store(store, || -> Result<Option<JsonValue>> {
-                let ctx = build_resolver_ctx(&eval, target, files);
-                let graph_data = eval.eval_function(resolver, &[ctx], &[]).map_err(|error| {
-                    anyhow!("resolver eval failed for {}: {error:?}", target.label.id)
-                })?;
+                let ctx = build_resolver_ctx(&eval, target, files, configuration);
+                let graph_data = eval
+                    .eval_function(resolver, &[ctx], &[])
+                    .map_err(|error| analysis_failure(target, "resolver", &error.to_string()))?;
                 Ok(Some(value_to_json(graph_data)))
             });
             let value = result?;
@@ -397,6 +417,49 @@ fn resolve_targets_in_starlark<T>(
         };
         operation(&mut resolve)
     })
+}
+
+fn analysis_failure(target: &GraphTarget, stage: &str, message: &str) -> anyhow::Error {
+    let (code, repair) = if message.contains("select()") && message.contains("no") {
+        (
+            "select_no_matching_branch",
+            "Add a branch matching the target configuration or add a `default` branch",
+        )
+    } else if message.contains("not found on PATH") {
+        (
+            "required_tool_not_found",
+            "Install the required tool or configure the target kind to use an available executable",
+        )
+    } else if message.contains("not implemented") {
+        (
+            "unimplemented_attr",
+            "Remove the unavailable attribute or choose a target kind that implements it",
+        )
+    } else {
+        (
+            "target_kind_analysis_failed",
+            "Inspect the target kind schema, correct the target attributes or toolchain configuration, and retry",
+        )
+    };
+    let mut diagnostic = Diagnostic::new(
+        code,
+        format!(
+            "target kind {stage} failed for `{}`: {message}",
+            target.label.id
+        ),
+    )
+    .with_target(&target.label.id)
+    .with_repair(repair);
+    if let Some(attribute) = quoted_attribute(message) {
+        diagnostic = diagnostic.with_attribute(attribute);
+    }
+    anyhow!(AnalysisFailure { diagnostic })
+}
+
+fn quoted_attribute(message: &str) -> Option<String> {
+    let rest = message.split_once("attribute `")?.1;
+    let (attribute, _) = rest.split_once('`')?;
+    (!attribute.is_empty()).then(|| attribute.to_string())
 }
 
 fn find_impl_for_kind<'v>(
@@ -446,6 +509,7 @@ fn build_resolver_ctx<'v>(
     eval: &Evaluator<'v, '_, '_>,
     target: &GraphTarget,
     files: &BTreeMap<String, String>,
+    configuration: &crate::manifest::BuildConfiguration,
 ) -> Value<'v> {
     let heap = eval.heap();
     let label = heap.alloc(AllocDict([
@@ -464,12 +528,14 @@ fn build_resolver_ctx<'v>(
         .map(|(path, contents)| (path.clone(), heap.alloc(contents.clone())))
         .collect::<Vec<_>>();
     let file_values = heap.alloc(AllocDict(file_pairs));
+    let configuration = configuration_value(eval, configuration);
     heap.alloc(AllocDict([
         ("label", label),
         ("attr", attr),
         ("attrs", attr),
         ("srcs", heap.alloc(target.srcs.clone())),
         ("files", file_values),
+        ("configuration", configuration),
     ]))
 }
 
@@ -529,6 +595,7 @@ fn build_ctx<'v>(
                 .map_or(Value::new_none(), |id| heap.alloc(id.clone())),
         ),
     ]));
+    let configuration = configuration_value(eval, analysis.configuration);
     heap.alloc(AllocDict([
         ("label", label),
         ("attr", attr),
@@ -540,5 +607,18 @@ fn build_ctx<'v>(
         ("capability", heap.alloc(analysis.capability.to_string())),
         ("run", run),
         ("test", test),
+        ("configuration", configuration),
+    ]))
+}
+
+fn configuration_value<'v>(
+    eval: &Evaluator<'v, '_, '_>,
+    configuration: &crate::manifest::BuildConfiguration,
+) -> Value<'v> {
+    let heap = eval.heap();
+    heap.alloc(AllocDict([
+        ("os", heap.alloc(configuration.os.clone())),
+        ("arch", heap.alloc(configuration.arch.clone())),
+        ("tokens", heap.alloc(configuration.tokens.clone())),
     ]))
 }

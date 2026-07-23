@@ -471,6 +471,7 @@ mod tests {
             deps: Vec::new(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             capabilities: capabilities
                 .iter()

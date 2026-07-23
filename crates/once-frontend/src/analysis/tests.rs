@@ -801,6 +801,7 @@ fn target(kind: &str) -> GraphTarget {
         deps: Vec::new(),
         dependency_edges: BTreeMap::new(),
         srcs: Vec::new(),
+        visibility: Vec::new(),
         attrs: BTreeMap::new(),
         capabilities: vec![Capability {
             name: "build".to_string(),
@@ -886,6 +887,92 @@ fn analyze_target_errors_on_unknown_target_kind() {
     assert!(
         err.contains("no target kind found for kind `mystery_kind`"),
         "{err}"
+    );
+}
+
+#[test]
+fn target_kind_failures_preserve_structured_diagnostics() {
+    let engine = AnalysisEngine::from_source(
+        r#"
+def _impl(ctx):
+    fail(ctx["label"]["id"] + ": attribute `mode` has no matching select() branch")
+
+custom = {
+    "_once_target_kind": True,
+    "kind": "custom",
+    "impl": _impl,
+}
+"#,
+    )
+    .unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    let error = engine
+        .analyze_target(&target("custom"), tmp.path(), &[])
+        .unwrap_err();
+    let failure = error
+        .downcast_ref::<AnalysisFailure>()
+        .expect("structured analysis failure");
+
+    assert_eq!(failure.diagnostic.code, "select_no_matching_branch");
+    assert_eq!(
+        failure.diagnostic.target.as_deref(),
+        Some("apps/ios/Sample")
+    );
+    assert_eq!(failure.diagnostic.attribute.as_deref(), Some("mode"));
+    assert!(!failure.diagnostic.repairs.is_empty());
+}
+
+#[test]
+fn workspace_configuration_drives_common_select_resolution() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::create_dir_all(workspace.path().join("modules")).unwrap();
+    std::fs::write(
+        workspace.path().join("once.toml"),
+        r#"[workspace.configuration]
+os = "linux"
+arch = "arm64"
+tokens = ["release"]
+
+[modules]
+paths = ["modules/*.star"]
+
+[[target]]
+name = "Configured"
+kind = "configured"
+
+[target.attrs]
+mode = { select = { release = "fast", default = "safe" } }
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.path().join("modules/configured.star"),
+        r#"def _impl(ctx):
+    return {
+        "mode": _configured_attr(ctx, "mode", "missing"),
+        "os": ctx["configuration"]["os"],
+        "arch": ctx["configuration"]["arch"],
+    }
+
+configured = target_kind(
+    attrs = [attr("mode", "string")],
+    providers = ["configured"],
+    impl = _impl,
+)
+"#,
+    )
+    .unwrap();
+    let graph = crate::load_graph_workspace(workspace.path()).unwrap();
+    let engine = AnalysisEngine::for_workspace(workspace.path()).unwrap();
+
+    let result = engine
+        .analyze_target(&graph[0], workspace.path(), &[])
+        .unwrap();
+
+    assert_eq!(
+        result.provider,
+        serde_json::json!({"mode": "fast", "os": "linux", "arch": "aarch64"})
     );
 }
 

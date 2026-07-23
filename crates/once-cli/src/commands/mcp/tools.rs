@@ -39,6 +39,7 @@ pub(super) fn tool_requires_allow_run(name: &str) -> bool {
             | "once_runtime_logs"
             | "once_stop_runtime"
             | "once_apply_edit"
+            | "once_materialize_example"
     )
 }
 
@@ -60,7 +61,10 @@ fn tool_annotations(name: &str) -> Value {
     let idempotent = read_only
         || matches!(
             name,
-            "once_build_target" | "once_runtime_status" | "once_runtime_logs"
+            "once_build_target"
+                | "once_runtime_status"
+                | "once_runtime_logs"
+                | "once_materialize_example"
         );
     json!({
         "readOnlyHint": read_only,
@@ -90,9 +94,19 @@ pub struct ToolDefinition {
 pub fn tool_catalog() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
+            name: "once_query_workspace",
+            description: "Return the configured workspace root, root manifest state, graph loading state, and next calls.",
+            long_description: "Call this first when filesystem tools and the Once server may have different working directories. The result identifies the exact workspace every other Once tool uses, reports the target operating system, architecture, and ordered selection tokens, reports whether the root manifest exists, lists loaded packages and target count, preserves graph loading errors as data, and recommends the next discovery or validation call. The matching command-line operation is `once query workspace --format json`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {}
+            }),
+            example_return: "{\n  \"root\": \"/work/project\",\n  \"configuration\": {\n    \"os\": \"linux\",\n    \"arch\": \"aarch64\",\n    \"tokens\": [\"linux-arm64\", \"linux-aarch64\", \"linux\", \"arm64\", \"aarch64\", \"default\"]\n  },\n  \"root_manifest\": { \"path\": \"/work/project/once.toml\", \"exists\": false },\n  \"target_count\": 0,\n  \"packages\": [],\n  \"empty\": true,\n  \"suggested_calls\": [\n    { \"tool\": \"once_list_target_kinds\", \"arguments\": {}, \"reason\": \"Discover a target kind and starter for this empty workspace.\" }\n  ]\n}",
+        },
+        ToolDefinition {
             name: "once_query_targets",
             description: "List every declared target in the workspace, optionally filtered by target kind.",
-            long_description: "Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, target kind, default dependencies, named dependency roles, and exposed capabilities. The optional `kind` argument narrows results to one target kind.",
+            long_description: "Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, target kind, visibility rules, default dependencies, named dependency roles, and exposed capabilities. The optional `kind` argument narrows results to one target kind.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -102,7 +116,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                     }
                 }
             }),
-            example_return: "[\n  { \"id\": \"packages/core/Core\", \"package\": \"packages/core\", \"name\": \"Core\",\n    \"kind\": \"library\", \"deps\": [], \"dependency_edges\": {}, \"capabilities\": [\"build\"] },\n  { \"id\": \"apps/service/Service\", \"package\": \"apps/service\", \"name\": \"Service\",\n    \"kind\": \"application\", \"deps\": [\"packages/core/Core\"],\n    \"dependency_edges\": { \"plugins\": [\"tools/compiler/Plugin\"] },\n    \"capabilities\": [\"build\", \"run\"] }\n]",
+            example_return: "[\n  { \"id\": \"packages/core/Core\", \"package\": \"packages/core\", \"name\": \"Core\",\n    \"kind\": \"library\", \"visibility\": [\"subtree:apps\"], \"deps\": [],\n    \"dependency_edges\": {}, \"capabilities\": [\"build\"] },\n  { \"id\": \"apps/service/Service\", \"package\": \"apps/service\", \"name\": \"Service\",\n    \"kind\": \"application\", \"visibility\": [], \"deps\": [\"packages/core/Core\"],\n    \"dependency_edges\": { \"plugins\": [\"tools/compiler/Plugin\"] },\n    \"capabilities\": [\"build\", \"run\"] }\n]",
         },
         ToolDefinition {
             name: "once_query_capabilities",
@@ -123,7 +137,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_schema",
             description: "Return the typed contract for a target kind: attributes, dep edges, providers, capabilities, source references, and runnable starters.",
-            long_description: "Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, external source concepts that can guide partial adoption, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.",
+            long_description: "Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list with types and required, configurable, and implemented flags, expected dep providers, emitted providers, exposed capabilities, required tools, external source concepts that can guide partial adoption, and a lightweight list of runnable starter examples. Attributes marked `implemented: false` are discoverable compatibility fields that validation rejects until their target kind gives them behavior. Use `once_materialize_example` to create an unchanged starter without loading its contents into model context, or `once_query_example` when the caller needs to inspect and adapt the files.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -134,12 +148,12 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 },
                 "required": ["kind"]
             }),
-            example_return: "{\n  \"kind\": \"library\",\n  \"docs\": \"Reusable library target...\",\n  \"attrs\": [\n    { \"name\": \"visibility\", \"ty\": \"string\", \"required\": true, \"configurable\": false }\n  ],\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"linkable\", \"module\"],\n  \"source_references\": [\n    { \"system\": \"Example Build\", \"symbol\": \"example_library\",\n      \"url\": \"https://example.com/example_library\", \"use_when\": \"...\",\n      \"content_digest\": \"...\" }\n  ],\n  \"examples\": [\n    {\n      \"slug\": \"library-minimal\",\n      \"name\": \"Minimal library\",\n      \"use_when\": \"...\"\n    }\n  ]\n}",
+            example_return: "{\n  \"kind\": \"library\",\n  \"docs\": \"Reusable library target...\",\n  \"attrs\": [\n    { \"name\": \"mode\", \"ty\": \"string\", \"required\": false,\n      \"configurable\": true, \"implemented\": true }\n  ],\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"linkable\", \"module\"],\n  \"source_references\": [\n    { \"system\": \"Example Build\", \"symbol\": \"example_library\",\n      \"url\": \"https://example.com/example_library\", \"use_when\": \"...\",\n      \"content_digest\": \"...\" }\n  ],\n  \"examples\": [\n    {\n      \"slug\": \"library-minimal\",\n      \"name\": \"Minimal library\",\n      \"use_when\": \"...\"\n    }\n  ]\n}",
         },
         ToolDefinition {
             name: "once_query_example",
             description: "Return the complete file bundle for one target kind starter example.",
-            long_description: "Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every text file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`; this tool fetches the file payload only after a caller chooses one.",
+            long_description: "Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every text file a caller can inspect or adapt. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`. For direct setup, prefer `once_materialize_example`, which writes the bundle without sending large dependency payloads through model context.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -155,6 +169,31 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 "required": ["kind", "slug"]
             }),
             example_return: "{\n  \"slug\": \"library-minimal\",\n  \"name\": \"Minimal library\",\n  \"use_when\": \"...\",\n  \"files\": [\n    { \"path\": \"packages/core/once.toml\", \"contents\": \"[[target]]\\nname = \\\"Core\\\"\\nkind = \\\"library\\\"\\n...\" }\n  ]\n}",
+        },
+        ToolDefinition {
+            name: "once_materialize_example",
+            description: "Materialize a complete target kind starter directly inside the configured workspace.",
+            long_description: "This collision-safe setup tool is available only when the server starts with `once mcp --allow-run`. It copies the selected example without returning its file contents through model context. Existing files with identical contents are kept, making retries idempotent. If any path conflicts, Once reports every conflict and writes nothing. A successful result includes created and unchanged paths, canonical targets, complete-workspace validation, and exact suggested tool calls for targets of the requested kind. The matching command-line operation is `once edit materialize-example <kind> <slug> --destination <dir>`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "description": "Target kind that owns the example."
+                    },
+                    "slug": {
+                        "type": "string",
+                        "description": "Example slug from `once_list_target_kinds` or `once_query_schema`."
+                    },
+                    "destination": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Workspace-relative destination directory. Use an empty string for the workspace root."
+                    }
+                },
+                "required": ["kind", "slug"]
+            }),
+            example_return: "{\n  \"materialized\": true,\n  \"kind\": \"library\",\n  \"slug\": \"library-minimal\",\n  \"destination\": \"\",\n  \"created_files\": [\"packages/core/once.toml\", \"packages/core/src/core.txt\"],\n  \"unchanged_files\": [],\n  \"conflicts\": [],\n  \"targets\": [\n    { \"id\": \"packages/core/Core\", \"kind\": \"library\", \"capabilities\": [\"build\"] }\n  ],\n  \"workspace_validation\": { \"valid\": true, \"target_count\": 1, \"diagnostics\": [] },\n  \"suggested_calls\": [\n    { \"tool\": \"once_validate_workspace\", \"arguments\": {}, \"reason\": \"Confirm the complete workspace after any customization.\" },\n    { \"tool\": \"once_build_target\", \"arguments\": { \"target\": \"packages/core/Core\" }, \"reason\": \"Build the materialized `library` target.\" }\n  ]\n}",
         },
         ToolDefinition {
             name: "once_list_target_kinds",
@@ -234,7 +273,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 },
                 "required": ["target"]
             }),
-            example_return: "{\n  \"label\": { \"package\": \"packages/core\", \"name\": \"Core\", \"id\": \"packages/core/Core\" },\n  \"kind\": \"library\",\n  \"srcs\": [\"src/**/*.src\"],\n  \"deps\": [],\n  \"dependency_edges\": { \"plugins\": [\"tools/compiler/Plugin\"] },\n  \"attrs\": { \"visibility\": \"public\" },\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"linkable\", \"module\"]\n}",
+            example_return: "{\n  \"label\": { \"package\": \"packages/core\", \"name\": \"Core\", \"id\": \"packages/core/Core\" },\n  \"kind\": \"library\",\n  \"srcs\": [\"src/**/*.src\"],\n  \"visibility\": [\"subtree:apps\"],\n  \"deps\": [],\n  \"dependency_edges\": { \"plugins\": [\"tools/compiler/Plugin\"] },\n  \"attrs\": {},\n  \"capabilities\": [ { \"name\": \"build\", \"output_groups\": [\"default\"], \"requires_outputs\": [] } ],\n  \"providers\": [\"linkable\", \"module\"]\n}",
         },
         ToolDefinition {
             name: "once_query_tests",
@@ -249,7 +288,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_affected_tests",
             description: "Return test targets likely affected by a set of changed workspace paths.",
-            long_description: "Maps changed paths to test targets using graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. Declared source patterns are matched without requiring the changed file to still exist. Changes to manifests, configured graph modules, and paths without a declared owner conservatively select every test. Selection does not depend on a particular test runner.",
+            long_description: "Maps changed paths to test targets using graph relationships, declared inputs, and package ownership. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. Declared source patterns are matched without requiring the changed file to still exist. An otherwise unowned path, including a package manifest, belongs to the nearest package and selects only that package's reverse dependency closure. The root manifest, configured graph modules, and paths outside every known package conservatively select every test. Selection does not depend on a particular test runner.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -284,7 +323,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                     }
                 }
             }),
-            example_return: "{\n  \"schema\": \"once.test_plan.v1\",\n  \"id\": \"<stable digest>\",\n  \"selection\": {\n    \"schema\": \"once.test_selection.v1\",\n    \"policy\": { \"mode\": \"affected\", \"safety\": \"conservative\", \"evidence\": \"declared_graph\" },\n    \"changed_paths\": [\"src/lib.src\"],\n    \"unmatched_paths\": [],\n    \"tests\": [{ \"id\": \"tests/unit\", \"kind\": \"test_suite\", \"reasons\": [\"changed dependency `lib` input `src/lib.src`\"] }]\n  },\n  \"batches\": [{ \"id\": \"<stable digest>\", \"target\": \"tests/unit\", \"test_filters\": [] }]\n}",
+            example_return: "{\n  \"schema\": \"once.test_plan.v1\",\n  \"id\": \"<stable digest>\",\n  \"selection\": {\n    \"schema\": \"once.test_selection.v1\",\n    \"policy\": { \"mode\": \"affected\", \"safety\": \"conservative\", \"evidence\": \"declared_graph_and_package_ownership\" },\n    \"changed_paths\": [\"src/lib.src\"],\n    \"unmatched_paths\": [],\n    \"tests\": [{ \"id\": \"tests/unit\", \"kind\": \"test_suite\", \"reasons\": [\"changed dependency `lib` input `src/lib.src`\"] }]\n  },\n  \"batches\": [{ \"id\": \"<stable digest>\", \"target\": \"tests/unit\", \"test_filters\": [] }]\n}",
         },
         ToolDefinition {
             name: "once_run_tests",
@@ -437,7 +476,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_build_target",
             description: "Build a target by running its generic `build` capability.",
-            long_description: "This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once build <target> --format json`, including dependency traversal, target actions, cache policy, and output groups. The result includes the exit status, standard error, and standard output parsed as structured data when possible. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.",
+            long_description: "This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once build <target> --format json`, including dependency traversal, target actions, cache policy, and output groups. Because cache identity follows declared content rather than workspace history, a first build in a new workspace can reuse an equivalent action produced elsewhere. The result includes the exit status, command diagnostics under `stderr`, and bounded declared action logs under `captured_stdout` and `captured_stderr`. A captured field is null when the target did not declare that log. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -468,7 +507,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_run_target",
             description: "Run a target by executing its generic `run` capability.",
-            long_description: "This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes the exit status, standard error, and standard output parsed as structured data when possible.",
+            long_description: "This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes command diagnostics under `stderr` and up to 64 kibibytes of each declared `stdout.log` or `stderr.log` output under `captured_stdout` and `captured_stderr`, so an agent can verify ordinary command output without a separate filesystem read. A captured field is null when the target did not declare that log.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -565,7 +604,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_validate_workspace",
             description: "Validate the complete workspace graph before execution.",
-            long_description: "Loads every manifest and target kind schema, then checks target attributes, duplicate target ids, missing dependencies, dependency provider compatibility, source patterns, and dependency cycles. Returns stable diagnostics with target and attribute scope plus suggested repairs. Call this after materializing a starter or applying edits and before build, run, or test. The matching command-line operation is `once query validate-workspace`.",
+            long_description: "Loads every manifest and target kind schema, then checks target attributes, target-valued attribute references, duplicate target identifiers, missing dependencies, dependency visibility, dependency provider compatibility, source patterns, and dependency cycles. Returns stable diagnostics with target and attribute scope plus suggested repairs. Call this after materializing a starter or applying edits and before build, run, or test. The matching command-line operation is `once query validate-workspace`.",
             input_schema: json!({
                 "type": "object",
                 "properties": {}
@@ -591,7 +630,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_apply_edit",
             description: "Apply a batch of `create` / `update` / `delete` operations to one `once.toml` atomically.",
-            long_description: "Reads the manifest at `<workspace>/<package>/once.toml`, creating it if needed, and applies the operations only if every operation succeeds. Returns `{ applied: true, path: <manifest path> }` on success or `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `once_validate_target`. A failed batch leaves the original file unchanged.",
+            long_description: "Reads the manifest at `<workspace>/<package>/once.toml` and applies the operations only if every operation succeeds. Returns `{ applied: true, changed: <bool>, path: <manifest path> }` on success. `changed` is false when the requested state already exists, in which case no manifest is written. Returns `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `once_validate_target` when the edit is invalid. A failed batch leaves the original file unchanged.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -607,7 +646,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 },
                 "required": ["package", "operations"]
             }),
-            example_return: "{\n  \"applied\": true,\n  \"path\": \"packages/core/once.toml\"\n}",
+            example_return: "{\n  \"applied\": true,\n  \"changed\": true,\n  \"path\": \"packages/core/once.toml\"\n}",
         },
     ]
 }

@@ -1,8 +1,9 @@
 _JAVASCRIPT_TOOL = tool("node", executables = ["node"])
+_VITEST_TOOL = tool("vitest", executables = ["vitest"])
+_JEST_TOOL = tool("jest", executables = ["jest"])
 
 def _javascript_attr(ctx, name, default):
-    value = ctx["attr"].get(name)
-    return default if value == None else value
+    return _configured_attr(ctx, name, default)
 
 def _javascript_node(ctx):
     requested = _javascript_attr(ctx, "node", "node")
@@ -11,8 +12,11 @@ def _javascript_node(ctx):
         fail(ctx["label"]["id"] + ": Node.js executable `" + requested + "` was not found")
     return resolved
 
-def _javascript_env(ctx, test_dir):
+def _javascript_env(ctx, test_dir, node):
     env = {"HOME": test_dir + "/home", "CI": "1"}
+    node_dir = _parent_dir(node)
+    if node_dir:
+        env["PATH"] = node_dir
     for name in _javascript_attr(ctx, "env_inherit", []):
         value = host_env(name)
         if value:
@@ -21,15 +25,34 @@ def _javascript_env(ctx, test_dir):
         env[name] = value
     return env
 
-def _javascript_runner_path(ctx, default):
-    value = _javascript_attr(ctx, "runner", default)
-    return _package_relative(ctx, value)
+def _javascript_runner(ctx, runner_type, default):
+    requested = ctx["attr"].get("runner")
+    if requested:
+        if "/" not in requested and "\\" not in requested:
+            resolved = _resolve_host_executable(requested)
+            if resolved:
+                return (resolved, False, False)
+        absolute = requested.startswith("/") or (len(requested) > 2 and requested[1] == ":" and (requested[2] == "/" or requested[2] == "\\"))
+        package_path = requested if absolute else _package_relative(ctx, requested)
+        resolved = _resolve_host_executable(package_path)
+        if not resolved:
+            fail(ctx["label"]["id"] + ": " + runner_type + " runner `" + requested + "` was not found")
+        return (resolved if absolute else package_path, requested.endswith(".js") or requested.endswith(".mjs"), not absolute)
+
+    package_path = _package_relative(ctx, default)
+    if _resolve_host_executable(package_path):
+        return (package_path, True, True)
+    resolved = _resolve_host_executable(runner_type)
+    if resolved:
+        return (resolved, False, False)
+    fail(ctx["label"]["id"] + ": " + runner_type + " runner was not found; install it in the workspace or make `" + runner_type + "` available on PATH")
 
 def _javascript_discovery_inputs(ctx):
     return _unique(glob(ctx["srcs"]) + _file_globs(_javascript_attr(ctx, "config", [])) + _file_globs(_javascript_attr(ctx, "data", [])))
 
-def _javascript_test_inputs(ctx, runner, discovery_inputs):
-    return _unique(discovery_inputs + _file_globs(_javascript_attr(ctx, "dependencies", [])) + glob([runner]))
+def _javascript_test_inputs(ctx, runner, runner_is_workspace_input, discovery_inputs):
+    runner_inputs = glob([runner]) if runner_is_workspace_input else []
+    return _unique(discovery_inputs + _file_globs(_javascript_attr(ctx, "dependencies", [])) + runner_inputs)
 
 def _javascript_test_adapter():
     return '''import { spawnSync } from "node:child_process"
@@ -90,15 +113,17 @@ function main() {
   const files = units.length ? [...new Set(units.map(unit => unit.file))] : options.sources
   const names = units.map(unit => unit.name)
   const namePattern = names.length ? "^(?:" + names.map(escapePattern).join("|") + ")$" : null
-  let args
+  let runnerArgs
   if (options.runner_type === "vitest") {
-    args = [options.runner, "run", ...options.runnerArgs, "--no-cache", "--reporter=json", "--outputFile=" + options.native_results, ...files]
-    if (namePattern) args.push("--testNamePattern", namePattern)
+    runnerArgs = ["run", ...options.runnerArgs, "--no-cache", "--reporter=json", "--outputFile=" + options.native_results, ...files]
+    if (namePattern) runnerArgs.push("--testNamePattern", namePattern)
   } else {
-    args = [options.runner, ...options.runnerArgs, "--no-cache", "--runInBand", "--json", "--outputFile=" + options.native_results, "--runTestsByPath", ...files]
-    if (namePattern) args.push("--testNamePattern", namePattern)
+    runnerArgs = [...options.runnerArgs, "--no-cache", "--runInBand", "--json", "--outputFile=" + options.native_results, "--runTestsByPath", ...files]
+    if (namePattern) runnerArgs.push("--testNamePattern", namePattern)
   }
-  const execution = spawnSync(process.execPath, args, { encoding: "utf8", env: process.env })
+  const command = options.runner_via_node === "true" ? process.execPath : options.runner
+  const args = options.runner_via_node === "true" ? [options.runner, ...runnerArgs] : runnerArgs
+  const execution = spawnSync(command, args, { encoding: "utf8", env: process.env })
   if (execution.stdout) process.stdout.write(execution.stdout)
   if (execution.stderr) process.stderr.write(execution.stderr)
   const exitCode = execution.status ?? 1
@@ -177,7 +202,7 @@ def _javascript_test_info(ctx, runner_type, display_name, node, runner, adapter,
         "schema": "once.test_info.v1",
         "target": ctx["label"]["id"],
         "runner": {"type": runner_type, "display_name": display_name, "metadata": {}},
-        "command": {"argv": [node, adapter], "env": _javascript_env(ctx, test_dir), "cwd": "."},
+        "command": {"argv": [node, adapter], "env": _javascript_env(ctx, test_dir, node), "cwd": "."},
         "outputs": {"results": results, "logs": [log], "native_results": [native_results], "coverage": []},
         "listing": {"supported": True, "strategy": "normalized_results"},
         "filtering": {"case_filtering": "runner_args"},
@@ -190,9 +215,9 @@ def _javascript_test_info(ctx, runner_type, display_name, node, runner, adapter,
 
 def _javascript_test_impl(ctx, runner_type, display_name, default_runner):
     node = _javascript_node(ctx)
-    runner = _javascript_runner_path(ctx, default_runner)
+    runner, runner_via_node, runner_is_workspace_input = _javascript_runner(ctx, runner_type, default_runner)
     discovery_inputs = _javascript_discovery_inputs(ctx)
-    inputs = _javascript_test_inputs(ctx, runner, discovery_inputs)
+    inputs = _javascript_test_inputs(ctx, runner, runner_is_workspace_input, discovery_inputs)
     test_dir = _test_output_dir(ctx)
     results = test_dir + "/test_results.json"
     log = test_dir + "/" + runner_type + ".log"
@@ -203,7 +228,7 @@ def _javascript_test_impl(ctx, runner_type, display_name, default_runner):
     if ctx["capability"] != "test":
         return provider
     write_path(adapter, _javascript_test_adapter())
-    argv = [node, adapter, "--once-runner-type", runner_type, "--once-runner", runner, "--once-results", results, "--once-native-results", native_results, "--once-target", ctx["label"]["id"]]
+    argv = [node, adapter, "--once-runner-type", runner_type, "--once-runner", runner, "--once-runner-via-node", "true" if runner_via_node else "false", "--once-results", results, "--once-native-results", native_results, "--once-target", ctx["label"]["id"]]
     for source in glob(ctx["srcs"]):
         argv.extend(["--once-source", source])
     for unit in (ctx.get("test") or {}).get("filters") or []:
@@ -211,16 +236,18 @@ def _javascript_test_impl(ctx, runner_type, display_name, default_runner):
     argv.append("--")
     argv.extend(_javascript_attr(ctx, "args", []))
     version = host_command([node, "--version"]).strip()
+    runner_version_argv = ([node, runner] if runner_via_node else [runner]) + ["--version"]
+    runner_version = host_command(runner_version_argv, cwd = workspace_root()).strip() if runner_is_workspace_input else host_command(runner_version_argv).strip()
     run_action(
         argv = argv,
         inputs = _unique(inputs + [adapter]),
         outputs = [test_dir, results, log, native_results],
         clean_paths = [results, log, native_results],
         create_dirs = [test_dir, test_dir + "/home"],
-        env = _javascript_env(ctx, test_dir),
+        env = _javascript_env(ctx, test_dir, node),
         stdout = log,
         stderr = log,
-        toolchain_identity = "once." + runner_type + ".v1\x00" + node + "\x00" + version,
+        toolchain_identity = "once." + runner_type + ".v2\x00" + node + "\x00" + version + "\x00" + runner + "\x00" + runner_version,
         identifier = ctx["label"]["id"] + ":" + runner_type,
     )
     return provider
@@ -234,7 +261,7 @@ def _jest_impl(ctx):
 def _javascript_test_attrs(runner, display_name):
     return [
         attr("node", "string", default = "\"node\"", docs = "Node.js executable name, absolute path, or workspace-relative path.", configurable = False),
-        attr("runner", "string", default = "\"" + runner + "\"", docs = "Package-relative " + display_name + " entry point.", configurable = False),
+        attr("runner", "string", default = "\"" + runner + "\"", docs = "Package-relative " + display_name + " entry point or executable. When omitted, Once uses the package entry point when present, then searches PATH for the runner.", configurable = False),
         attr("config", "list<string>", default = "[\"package.json\", \"package-lock.json\", \"pnpm-lock.yaml\", \"yarn.lock\"]", docs = "Configuration and dependency inputs.", configurable = False),
         attr("dependencies", "list<string>", default = "[\"node_modules/**/*\"]", docs = "Installed runner and package files required during execution.", configurable = False),
         attr("data", "list<string>", default = "[]", docs = "Runtime data, setup, transform, snapshot, and runner package inputs.", configurable = False),
@@ -252,7 +279,7 @@ vitest_test = target_kind(
     deps = [dep("deps", [], "Targets whose inputs should affect this test suite.")],
     providers = ["once_test_info"],
     capabilities = [capability("test", ["default", "test_results", "logs"])],
-    tools = [_JAVASCRIPT_TOOL],
+    tools = [_JAVASCRIPT_TOOL, _VITEST_TOOL],
     examples = [example("vitest-test-minimal", name = "Minimal Vitest suite", use_when = "You want JavaScript or TypeScript tests scheduled by file through Once.")],
     impl = _vitest_impl,
 )
@@ -263,7 +290,7 @@ jest_test = target_kind(
     deps = [dep("deps", [], "Targets whose inputs should affect this test suite.")],
     providers = ["once_test_info"],
     capabilities = [capability("test", ["default", "test_results", "logs"])],
-    tools = [_JAVASCRIPT_TOOL],
+    tools = [_JAVASCRIPT_TOOL, _JEST_TOOL],
     examples = [example("jest-test-minimal", name = "Minimal Jest suite", use_when = "You want JavaScript or TypeScript Jest tests scheduled by file through Once.")],
     impl = _jest_impl,
 )

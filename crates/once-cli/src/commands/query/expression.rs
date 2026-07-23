@@ -98,6 +98,7 @@ mod tests {
             deps: deps.iter().map(|dep| (*dep).to_string()).collect(),
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
+            visibility: Vec::new(),
             attrs: BTreeMap::new(),
             capabilities: capabilities
                 .iter()
@@ -156,6 +157,45 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.columns, vec!["target"]);
+        assert_eq!(result.rows, vec![vec![json!("apps/AppTests")]]);
+    }
+
+    #[test]
+    fn evaluates_richer_predicates_and_nested_attributes() {
+        let mut app = target("apps/App", "apple_application", &[], &["build", "run"]);
+        app.visibility = vec!["//apps:*".to_string()];
+        app.attrs.insert(
+            "bundle_id".to_string(),
+            once_frontend::AttrValue::String("dev.once.app".to_string()),
+        );
+        let library = target("libs/Core", "apple_library", &[], &["build"]);
+        let graph = vec![app, library];
+
+        let result = evaluate(
+            r#"MATCH (t:Target) WHERE t.kind IN ["apple_application", "android_binary"] AND t.visibility CONTAINS "//apps:*" OR t.attrs.bundle_id STARTS WITH "dev.once" RETURN t.id, t.attrs.bundle_id"#,
+            &graph,
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.rows,
+            vec![vec![json!("apps/App"), json!("dev.once.app")]]
+        );
+    }
+
+    #[test]
+    fn evaluates_not_equal_and_suffix_predicates() {
+        let graph = vec![
+            target("apps/App", "apple_application", &[], &["build"]),
+            target("apps/AppTests", "apple_test_bundle", &[], &["test"]),
+        ];
+
+        let result = evaluate(
+            r#"MATCH (t:Target) WHERE t.kind <> "apple_application" AND t.id ENDS WITH "Tests" RETURN t.id"#,
+            &graph,
+        )
+        .unwrap();
+
         assert_eq!(result.rows, vec![vec![json!("apps/AppTests")]]);
     }
 

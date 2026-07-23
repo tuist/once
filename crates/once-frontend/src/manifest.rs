@@ -3,12 +3,13 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cache_provider::{CacheProviderToml, InfrastructureProviderToml, InfrastructureToml};
 use crate::error::{Error, Result};
 use crate::target::{AttrValue, Target};
 use crate::target_ref::{normalize_manifest_target, validate_target_name};
+use crate::TOML_BUILD_FILE_NAME;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -27,6 +28,77 @@ struct Manifest {
 pub(crate) struct WorkspaceToml {
     pub include: Vec<String>,
     pub exclude: Vec<String>,
+    pub configuration: ConfigurationToml,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ConfigurationToml {
+    os: Option<String>,
+    arch: Option<String>,
+    tokens: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BuildConfiguration {
+    pub os: String,
+    pub arch: String,
+    pub tokens: Vec<String>,
+}
+
+impl BuildConfiguration {
+    fn host() -> Self {
+        Self::new(std::env::consts::OS, std::env::consts::ARCH, Vec::new())
+    }
+
+    pub(crate) fn from_toml(configuration: ConfigurationToml) -> Result<Self> {
+        let os = configuration
+            .os
+            .unwrap_or_else(|| std::env::consts::OS.to_string());
+        let arch = configuration
+            .arch
+            .unwrap_or_else(|| std::env::consts::ARCH.to_string());
+        if os.trim().is_empty() || arch.trim().is_empty() {
+            return Err(Error::Eval {
+                path: TOML_BUILD_FILE_NAME.to_string(),
+                message:
+                    "workspace configuration operating system and architecture must be non-empty"
+                        .to_string(),
+            });
+        }
+        if configuration
+            .tokens
+            .iter()
+            .any(|token| token.trim().is_empty())
+        {
+            return Err(Error::Eval {
+                path: TOML_BUILD_FILE_NAME.to_string(),
+                message: "workspace configuration tokens must be non-empty".to_string(),
+            });
+        }
+        Ok(Self::new(&os, &arch, configuration.tokens))
+    }
+
+    fn new(os: &str, arch: &str, extra_tokens: Vec<String>) -> Self {
+        let os = normalize_os(os);
+        let arch = normalize_arch(arch);
+        let mut tokens = select_tokens_for(&os, &arch);
+        for token in extra_tokens {
+            if !tokens.contains(&token) {
+                tokens.push(token);
+            }
+        }
+        if !tokens.iter().any(|token| token == "default") {
+            tokens.push("default".to_string());
+        }
+        Self { os, arch, tokens }
+    }
+}
+
+impl Default for BuildConfiguration {
+    fn default() -> Self {
+        Self::host()
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -43,6 +115,7 @@ struct TargetToml {
     deps: Option<toml::Value>,
     dependencies: BTreeMap<String, toml::Value>,
     srcs: Vec<String>,
+    visibility: Vec<String>,
     attrs: BTreeMap<String, toml::Value>,
 }
 
@@ -53,8 +126,24 @@ pub fn load_toml_str(path: &str, src: &str) -> Result<Vec<Target>> {
 pub(crate) fn load_toml_with(
     display_name: &str,
     src: &str,
+    workspace_root: &Path,
+    package: &str,
+) -> Result<Vec<Target>> {
+    load_toml_with_configuration(
+        display_name,
+        src,
+        workspace_root,
+        package,
+        &BuildConfiguration::host(),
+    )
+}
+
+pub(crate) fn load_toml_with_configuration(
+    display_name: &str,
+    src: &str,
     _workspace_root: &Path,
     package: &str,
+    configuration: &BuildConfiguration,
 ) -> Result<Vec<Target>> {
     let manifest: Manifest = toml::from_str(src).map_err(|source| Error::Parse {
         path: display_name.to_string(),
@@ -69,7 +158,7 @@ pub(crate) fn load_toml_with(
     manifest
         .target
         .into_iter()
-        .map(|target| target.into_target(display_name, package))
+        .map(|target| target.into_target(display_name, package, configuration))
         .collect()
 }
 
@@ -140,8 +229,31 @@ pub(crate) fn load_workspace_toml_str(path: &str, src: &str) -> Result<Workspace
     Ok(manifest.workspace)
 }
 
+pub fn load_workspace_configuration(root: &Path) -> Result<BuildConfiguration> {
+    let path = root.join(TOML_BUILD_FILE_NAME);
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(BuildConfiguration::host());
+        }
+        Err(source) => {
+            return Err(Error::Read {
+                path: path.display().to_string(),
+                source,
+            });
+        }
+    };
+    let workspace = load_workspace_toml_str(TOML_BUILD_FILE_NAME, &source)?;
+    BuildConfiguration::from_toml(workspace.configuration)
+}
+
 impl TargetToml {
-    fn into_target(self, display_name: &str, package: &str) -> Result<Target> {
+    fn into_target(
+        self,
+        display_name: &str,
+        package: &str,
+        configuration: &BuildConfiguration,
+    ) -> Result<Target> {
         if self.name.is_empty() {
             return Err(Error::Eval {
                 path: display_name.to_string(),
@@ -158,9 +270,20 @@ impl TargetToml {
             path: display_name.to_string(),
             message: source.to_string(),
         })?;
-        let deps = deps_from_toml(display_name, &self.name, package, self.deps.as_ref())?;
-        let dependency_edges =
-            dependency_edges_from_toml(display_name, &self.name, package, &self.dependencies)?;
+        let deps = deps_from_toml(
+            display_name,
+            &self.name,
+            package,
+            self.deps.as_ref(),
+            configuration,
+        )?;
+        let dependency_edges = dependency_edges_from_toml(
+            display_name,
+            &self.name,
+            package,
+            &self.dependencies,
+            configuration,
+        )?;
         let mut attrs = BTreeMap::new();
         let mut typed_attrs = BTreeMap::new();
         for (key, value) in self.attrs {
@@ -176,6 +299,7 @@ impl TargetToml {
             deps,
             dependency_edges,
             srcs: self.srcs,
+            visibility: self.visibility,
             attrs,
             typed_attrs,
         })
@@ -187,6 +311,7 @@ fn dependency_edges_from_toml(
     target_name: &str,
     package: &str,
     values: &BTreeMap<String, toml::Value>,
+    configuration: &BuildConfiguration,
 ) -> Result<BTreeMap<String, Vec<String>>> {
     let mut edges = BTreeMap::new();
     for (name, value) in values {
@@ -203,6 +328,7 @@ fn dependency_edges_from_toml(
             &format!("{target_name}` dependency role `{name}"),
             package,
             Some(value),
+            configuration,
         )?;
         edges.insert(name.clone(), dependencies);
     }
@@ -214,11 +340,13 @@ fn deps_from_toml(
     target_name: &str,
     package: &str,
     value: Option<&toml::Value>,
+    configuration: &BuildConfiguration,
 ) -> Result<Vec<String>> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
-    let selected = select_dep_value(display_name, target_name, value)?;
+    let selected =
+        select_dep_value_for_tokens(display_name, target_name, value, &configuration.tokens)?;
     let toml::Value::Array(deps) = selected else {
         return Err(Error::Eval {
             path: display_name.to_string(),
@@ -241,20 +369,11 @@ fn deps_from_toml(
         .collect()
 }
 
-fn select_dep_value<'a>(
-    display_name: &str,
-    target_name: &str,
-    value: &'a toml::Value,
-) -> Result<&'a toml::Value> {
-    let tokens = host_select_tokens();
-    select_dep_value_for_tokens(display_name, target_name, value, &tokens)
-}
-
 fn select_dep_value_for_tokens<'a>(
     display_name: &str,
     target_name: &str,
     value: &'a toml::Value,
-    tokens: &[&str],
+    tokens: &[String],
 ) -> Result<&'a toml::Value> {
     let toml::Value::Table(table) = value else {
         return Ok(value);
@@ -269,7 +388,7 @@ fn select_dep_value_for_tokens<'a>(
         });
     };
     for token in tokens {
-        if let Some(value) = branches.get(*token) {
+        if let Some(value) = branches.get(token) {
             return Ok(value);
         }
     }
@@ -281,11 +400,7 @@ fn select_dep_value_for_tokens<'a>(
     })
 }
 
-fn host_select_tokens() -> Vec<&'static str> {
-    select_tokens_for(std::env::consts::OS, std::env::consts::ARCH)
-}
-
-fn select_tokens_for(os: &str, arch: &str) -> Vec<&'static str> {
+fn select_tokens_for(os: &str, arch: &str) -> Vec<String> {
     match (os, arch) {
         ("macos", "aarch64") => vec!["macos-arm64", "macos-aarch64", "macos", "arm64", "aarch64"],
         ("macos", "x86_64") => vec!["macos-x86_64", "macos", "x86_64"],
@@ -303,6 +418,24 @@ fn select_tokens_for(os: &str, arch: &str) -> Vec<&'static str> {
         ("linux", _) => vec!["linux"],
         ("windows", _) => vec!["windows"],
         _ => Vec::new(),
+    }
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn normalize_os(value: &str) -> String {
+    match value {
+        "darwin" | "mac" | "macosx" => "macos".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn normalize_arch(value: &str) -> String {
+    match value {
+        "arm64" => "aarch64".to_string(),
+        "amd64" => "x86_64".to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -673,6 +806,26 @@ default = ["./portable"]
         .unwrap();
 
         assert_eq!(selected.as_array().unwrap()[0].as_str(), Some("./portable"));
+    }
+
+    #[test]
+    fn explicit_target_configuration_selects_dependencies() {
+        let configuration = BuildConfiguration::new("linux", "arm64", vec!["release".to_string()]);
+        let source = r#"
+[[target]]
+name = "App"
+kind = "plain"
+deps = { select = { release = ["./Optimized"], default = ["./Portable"] } }
+"#;
+
+        let targets =
+            load_toml_with_configuration("once.toml", source, Path::new("."), "", &configuration)
+                .unwrap();
+
+        assert_eq!(targets[0].deps, vec!["Optimized"]);
+        assert_eq!(configuration.os, "linux");
+        assert_eq!(configuration.arch, "aarch64");
+        assert!(configuration.tokens.contains(&"linux-arm64".to_string()));
     }
 
     #[test]

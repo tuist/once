@@ -14,7 +14,7 @@
 //! build, test, run, or start persisted runtime sessions and return session ids
 //! agents can use to query status, read logs, or stop the process later.
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -28,7 +28,38 @@ use tools::{tool_definitions, tool_requires_allow_run};
 
 /// MCP protocol version we negotiate.
 const PROTOCOL_VERSION: &str = "2025-11-25";
-const SERVER_INSTRUCTIONS: &str = "Once is a self-describing build graph and cacheable automation server. For a new typed graph with no named upstream rule, start with once_list_target_kinds. Pass its optional query when the request names ecosystems, target-kind families, or intent; include every named native test runner in one query when adopting a mixed test repository, then call once_query_schema and once_query_example for each chosen kind. When the request already points to a specific external rule or plugin, skip the target-kind catalog: call once_query_module_contract, fetch its authoritative source with once_fetch_external_source, write a project-local module, and call once_validate_module. Model only the requested dependency closure. Record upstream source_references and the returned content digest when the source was not truncated, then re-fetch and compare the digest before future maintenance. Materialize target files, inspect canonical ids with once_query_targets, call once_validate_workspace, and use capability tools to build, run, or test. New test targets intentionally begin with one whole-target batch. Run each target completely once, then inspect next_plan in the completed once_run_tests response to see the automatic file or case batches established for later runs. The plan field always describes the work that just ran. Before change-scoped testing, inspect conservative selection, unmatched paths, and stable batches with once_query_test_plan; once_run_tests returns that execution plan, the refreshed next plan, a duration-informed dynamic schedule, and execution results. Pass one listed unit with one explicit target to plan or run an exact filtered test when the target kind declares filtering support. Use jobs only to cap local concurrency; it does not change plan or batch identity. For annotated automation, call once_validate_script before once_exec_script. Stateful tools require --allow-run. Evidence subjects are target ids with an optional capability suffix; script execution returns its evidence subject directly. once_validate_target checks one proposed table, once_validate_workspace checks the loaded graph, and successful execution remains the authoritative current check. Evidence is historical provenance, so do not treat an older record as proof that inputs are unchanged.";
+const SERVER_INSTRUCTIONS: &str = concat!(
+    "Once is a self-describing build graph and cacheable automation server. ",
+    "Call once_query_workspace first to confirm the exact configured root and current graph state. ",
+    "For a new typed graph with no named upstream rule, continue with once_list_target_kinds. ",
+    "Pass its optional query when the request names ecosystems, target-kind families, or intent; ",
+    "include every named native test runner in one query when adopting a mixed test repository, ",
+    "then call once_query_schema for each chosen kind. For an unchanged starter, call ",
+    "once_materialize_example when it is advertised; it keeps large file bundles out of model ",
+    "context and returns canonical targets, workspace validation, and suggested next calls. ",
+    "Use once_query_example only when you need to inspect or adapt the starter contents yourself. ",
+    "When the request already points to a specific external rule or plugin, skip the target-kind ",
+    "catalog: call once_query_module_contract, fetch its authoritative source with ",
+    "once_fetch_external_source, write a project-local module, and call once_validate_module. ",
+    "Model only the requested dependency closure. Record upstream source_references and the ",
+    "returned content digest when the source was not truncated, then re-fetch and compare the ",
+    "digest before future maintenance. After custom edits, inspect canonical ids with ",
+    "once_query_targets, call once_validate_workspace, and use capability tools to build, run, ",
+    "or test. New test targets intentionally begin with one whole-target batch. Run each target ",
+    "completely once, then inspect next_plan in the completed once_run_tests response to see the ",
+    "automatic file or case batches established for later runs. The plan field always describes ",
+    "the work that just ran. Before change-scoped testing, inspect conservative selection, ",
+    "unmatched paths, and stable batches with once_query_test_plan; once_run_tests returns that ",
+    "execution plan, the refreshed next plan, a duration-informed dynamic schedule, and execution ",
+    "results. Pass one listed unit with one explicit target to plan or run an exact filtered test ",
+    "when the target kind declares filtering support. Use jobs only to cap local concurrency; it ",
+    "does not change plan or batch identity. For annotated automation, call once_validate_script ",
+    "before once_exec_script. Stateful tools require --allow-run. Evidence subjects are target ids ",
+    "with an optional capability suffix; script execution returns its evidence subject directly. ",
+    "once_validate_target checks one proposed table, once_validate_workspace checks the loaded ",
+    "graph, and successful execution remains the authoritative current check. Evidence is ",
+    "historical provenance, so do not treat an older record as proof that inputs are unchanged."
+);
 
 fn negotiated_protocol_version(params: Option<&Value>) -> String {
     let requested = params
@@ -129,7 +160,10 @@ impl Server {
                         "protocolVersion": protocol_version,
                         "capabilities": { "tools": {} },
                         "serverInfo": { "name": "once-mcp", "version": env!("CARGO_PKG_VERSION") },
-                        "instructions": SERVER_INSTRUCTIONS,
+                        "instructions": format!(
+                            "{SERVER_INSTRUCTIONS} Configured workspace root: `{}`.",
+                            self.workspace.display()
+                        ),
                     }),
                 )
             }
@@ -173,6 +207,7 @@ impl Server {
             );
         }
         let result = match call.name.as_str() {
+            "once_query_workspace" => crate::commands::query::workspace_value(&self.workspace),
             "once_query_targets" => self.tool_query_targets(&call.arguments),
             "once_query_capabilities" => self.tool_query_capabilities(&call.arguments),
             "once_get_target" => self.tool_get_target(&call.arguments),
@@ -200,6 +235,7 @@ impl Server {
             "once_runtime_logs" => self.tool_runtime_logs(&call.arguments),
             "once_stop_runtime" => self.tool_stop_runtime(&call.arguments),
             "once_apply_edit" => self.tool_apply_edit(&call.arguments),
+            "once_materialize_example" => self.tool_materialize_example(&call.arguments),
             "once_query_schema" => tool_query_schema(&self.workspace, &call.arguments),
             "once_query_example" => tool_query_example(&self.workspace, &call.arguments),
             "once_list_target_kinds" | "once_list_rules" => {
@@ -216,7 +252,7 @@ impl Server {
                     "structuredContent": { "result": value },
                 }),
             ),
-            Err(error) => tool_error(id, &error.to_string()),
+            Err(error) => tool_error_from_error(id, &error),
         }
     }
 
@@ -271,6 +307,16 @@ impl Server {
         let operations: Vec<once_frontend::EditOperation> = serde_json::from_value(raw_ops.clone())
             .map_err(|err| anyhow::anyhow!("invalid `operations`: {err}"))?;
         apply_edit_to_package(&self.workspace, package, &operations)
+    }
+
+    fn tool_materialize_example(&self, args: &Value) -> Result<Value> {
+        let args: MaterializeExampleArgs = serde_json::from_value(tool_args(args))?;
+        crate::commands::edit::materialize_example_json(
+            &self.workspace,
+            &args.kind,
+            &args.slug,
+            &args.destination,
+        )
     }
 
     fn tool_query_tests(&self) -> Result<Value> {
@@ -553,6 +599,8 @@ fn run_graph_target_with_exe(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let (record, record_parse_error) = parse_json_record(&stdout);
+    let captured_stdout = captured_action_log(workspace, &record, "stdout.log");
+    let captured_stderr = captured_action_log(workspace, &record, "stderr.log");
     Ok(json!({
         "target": target,
         "capability": capability,
@@ -560,8 +608,77 @@ fn run_graph_target_with_exe(
         "success": output.status.success(),
         "record": record,
         "record_parse_error": record_parse_error,
+        "captured_stdout": captured_stdout,
+        "captured_stderr": captured_stderr,
         "stderr": stderr,
     }))
+}
+
+#[derive(Serialize)]
+struct CapturedActionLog {
+    path: String,
+    text: String,
+    byte_count: usize,
+    truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    read_error: Option<String>,
+}
+
+fn captured_action_log(
+    workspace: &std::path::Path,
+    record: &Value,
+    file_name: &str,
+) -> Option<CapturedActionLog> {
+    const MAX_CAPTURE_BYTES: usize = 64 * 1024;
+    let relative = record
+        .get("outputs")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|path| {
+            Path::new(path).file_name().and_then(|name| name.to_str()) == Some(file_name)
+        })?;
+    let workspace_path = match once_core::WorkspacePath::try_from(relative) {
+        Ok(path) => path,
+        Err(error) => {
+            return Some(CapturedActionLog {
+                path: relative.to_string(),
+                text: String::new(),
+                byte_count: 0,
+                truncated: false,
+                read_error: Some(error.to_string()),
+            });
+        }
+    };
+    let path = workspace_path.resolve(workspace);
+    let mut bytes = Vec::with_capacity(MAX_CAPTURE_BYTES + 1);
+    let read = std::fs::File::open(&path).and_then(|file| {
+        file.take((MAX_CAPTURE_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+    });
+    if let Err(error) = read {
+        return Some(CapturedActionLog {
+            path: relative.to_string(),
+            text: String::new(),
+            byte_count: 0,
+            truncated: false,
+            read_error: Some(error.to_string()),
+        });
+    }
+    let byte_count = std::fs::metadata(&path).map_or(bytes.len(), |metadata| {
+        usize::try_from(metadata.len()).unwrap_or(usize::MAX)
+    });
+    let truncated = bytes.len() > MAX_CAPTURE_BYTES;
+    if truncated {
+        bytes.truncate(MAX_CAPTURE_BYTES);
+    }
+    Some(CapturedActionLog {
+        path: relative.to_string(),
+        text: String::from_utf8_lossy(&bytes).into_owned(),
+        byte_count,
+        truncated,
+        read_error: None,
+    })
 }
 
 fn parse_json_record(stdout: &str) -> (Value, Option<String>) {
@@ -669,6 +786,15 @@ struct ValidateModuleArgs {
 struct TargetKindFilterArgs {
     #[serde(default)]
     query: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaterializeExampleArgs {
+    kind: String,
+    slug: String,
+    #[serde(default)]
+    destination: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -796,13 +922,17 @@ fn apply_edit_to_package(
         .context("loading target kind schemas")?;
     match once_frontend::apply_operations_with_schemas(&existing, operations, &schemas) {
         Ok(new_src) => {
-            std::fs::create_dir_all(&package_dir).with_context(|| {
-                format!("creating package directory `{}`", package_dir.display())
-            })?;
-            std::fs::write(&manifest_path, &new_src)
-                .with_context(|| format!("writing `{}`", manifest_path.display()))?;
+            let changed = new_src != existing;
+            if changed {
+                std::fs::create_dir_all(&package_dir).with_context(|| {
+                    format!("creating package directory `{}`", package_dir.display())
+                })?;
+                std::fs::write(&manifest_path, &new_src)
+                    .with_context(|| format!("writing `{}`", manifest_path.display()))?;
+            }
             Ok(json!({
                 "applied": true,
+                "changed": changed,
                 "path": manifest_path.to_string_lossy(),
             }))
         }
@@ -858,6 +988,32 @@ fn tool_error(id: Value, message: &str) -> JsonRpcResponse {
     )
 }
 
+fn tool_error_from_error(id: Value, error: &anyhow::Error) -> JsonRpcResponse {
+    let diagnostic = error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<once_frontend::analysis::AnalysisFailure>()
+            .map(|failure| failure.diagnostic.clone())
+    });
+    let Some(diagnostic) = diagnostic else {
+        return tool_error(id, &error.to_string());
+    };
+    let code = diagnostic.code.clone();
+    JsonRpcResponse::ok(
+        id,
+        json!({
+            "isError": true,
+            "content": [text_content_str(&diagnostic.message)],
+            "structuredContent": {
+                "error": {
+                    "code": code,
+                    "message": diagnostic.message,
+                    "diagnostics": [diagnostic],
+                }
+            },
+        }),
+    )
+}
+
 fn text_content(value: &Value) -> Value {
     text_content_str(&serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()))
 }
@@ -909,6 +1065,7 @@ struct TargetView {
     kind: String,
     deps: Vec<String>,
     dependency_edges: std::collections::BTreeMap<String, Vec<String>>,
+    visibility: Vec<String>,
     capabilities: Vec<String>,
 }
 
@@ -921,6 +1078,7 @@ impl From<once_frontend::GraphTarget> for TargetView {
             kind: target.kind,
             deps: target.deps,
             dependency_edges: target.dependency_edges,
+            visibility: target.visibility,
             capabilities: target
                 .capabilities
                 .into_iter()
@@ -1099,6 +1257,10 @@ demo_kind = target_kind(
             .as_str()
             .unwrap()
             .contains("once_list_target_kinds"));
+        assert!(result["instructions"]
+            .as_str()
+            .unwrap()
+            .contains(tmp.path().to_string_lossy().as_ref()));
     }
 
     #[test]
@@ -1157,6 +1319,7 @@ demo_kind = target_kind(
         assert_eq!(
             names,
             vec![
+                "once_query_workspace".to_string(),
                 "once_query_targets".to_string(),
                 "once_query_capabilities".to_string(),
                 "once_query_schema".to_string(),
@@ -1423,6 +1586,7 @@ script_runtime = "sh"
         assert!(names.contains(&"once_stop_runtime".to_string()));
         assert!(names.contains(&"once_run_tests".to_string()));
         assert!(names.contains(&"once_apply_edit".to_string()));
+        assert!(names.contains(&"once_materialize_example".to_string()));
         assert!(names.contains(&"once_exec_script".to_string()));
 
         for tool in result["tools"].as_array().unwrap() {
@@ -1459,6 +1623,7 @@ script_runtime = "sh"
             "once_run_tests",
             "once_exec_script",
             "once_apply_edit",
+            "once_materialize_example",
         ] {
             let response = server(tmp.path().to_path_buf()).dispatch(request(
                 "tools/call",
@@ -1472,6 +1637,89 @@ script_runtime = "sh"
                 .unwrap()
                 .contains("--allow-run"));
         }
+    }
+
+    #[test]
+    fn analysis_tool_errors_include_structured_diagnostics() {
+        let diagnostic = once_frontend::Diagnostic::new(
+            "target_kind_analysis_failed",
+            "target kind implementation failed",
+        )
+        .with_target("App")
+        .with_attribute("mode")
+        .with_repair("Set a supported mode");
+        let error = anyhow::Error::new(once_frontend::analysis::AnalysisFailure { diagnostic });
+
+        let response = tool_error_from_error(json!(1), &error);
+        let result = response.result.expect("tool result");
+
+        assert_eq!(
+            result["structuredContent"]["error"]["code"],
+            "target_kind_analysis_failed"
+        );
+        assert_eq!(
+            result["structuredContent"]["error"]["diagnostics"][0]["attribute"],
+            "mode"
+        );
+    }
+
+    #[test]
+    fn materialize_example_creates_a_valid_workspace_without_returning_contents() {
+        let tmp = TempDir::new().unwrap();
+        let response = run_server(tmp.path().to_path_buf()).dispatch(request(
+            "tools/call",
+            json!({
+                "name": "once_materialize_example",
+                "arguments": {
+                    "kind": "rust_library",
+                    "slug": "rust-library-minimal"
+                }
+            }),
+        ));
+
+        assert!(response.error.is_none());
+        let result = response.result.unwrap()["structuredContent"]["result"].clone();
+        assert_eq!(result["materialized"], true);
+        assert_eq!(result["workspace_validation"]["valid"], true);
+        assert!(result["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|target| target["id"] == "crates/hello/hello"));
+        assert!(!result.to_string().contains("pub fn"));
+        assert!(tmp.path().join("crates/hello/src/lib.rs").is_file());
+    }
+
+    #[test]
+    fn query_workspace_makes_an_empty_configured_root_explicit() {
+        let tmp = TempDir::new().unwrap();
+        let response = server(tmp.path().to_path_buf()).dispatch(request(
+            "tools/call",
+            json!({
+                "name": "once_query_workspace",
+                "arguments": {}
+            }),
+        ));
+
+        let result = response.result.unwrap()["structuredContent"]["result"].clone();
+        assert_eq!(result["root"], tmp.path().to_string_lossy().as_ref());
+        assert_eq!(result["target_count"], 0);
+        assert_eq!(result["empty"], true);
+        assert_eq!(
+            result["suggested_calls"][0]["tool"],
+            "once_list_target_kinds"
+        );
+    }
+
+    #[test]
+    fn an_empty_edit_does_not_create_a_manifest() {
+        let tmp = TempDir::new().unwrap();
+
+        let result = apply_edit_to_package(tmp.path(), "new/package", &[]).unwrap();
+
+        assert_eq!(result["applied"], true);
+        assert_eq!(result["changed"], false);
+        assert!(!tmp.path().join("new/package/once.toml").exists());
     }
 
     #[test]
@@ -1570,7 +1818,7 @@ srcs = ["unit_spec.sh"]
         let args_file = shell_literal(args_path.to_str().unwrap());
         let cwd_file = shell_literal(cwd_path.to_str().unwrap());
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {args_file}\npwd > {cwd_file}\ncapability=''\ntarget=''\nfor arg do\n  case \"$arg\" in build|run|test) capability=\"$arg\" ;;\n  *) target=\"$arg\" ;;\n  esac\ndone\nprintf '{{\"target\":\"%s\",\"capability\":\"%s\",\"status\":\"completed\"}}\\n' \"$target\" \"$capability\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {args_file}\npwd > {cwd_file}\ncapability=''\ntarget=''\nfor arg do\n  case \"$arg\" in build|run|test) capability=\"$arg\" ;;\n  *) target=\"$arg\" ;;\n  esac\ndone\nmkdir -p .once/out/mock/run\nprintf 'hello from target\\n' > .once/out/mock/run/stdout.log\nprintf '{{\"target\":\"%s\",\"capability\":\"%s\",\"status\":\"completed\",\"outputs\":[\".once/out/mock/run/stdout.log\"]}}\\n' \"$target\" \"$capability\"\n",
         );
         std::fs::write(&exe, script).unwrap();
         let mut permissions = std::fs::metadata(&exe).unwrap().permissions();
@@ -1589,6 +1837,7 @@ srcs = ["unit_spec.sh"]
         assert_eq!(run["success"], true);
         assert_eq!(run["record"]["target"], "apps/App");
         assert_eq!(run["record"]["capability"], "run");
+        assert_eq!(run["captured_stdout"]["text"], "hello from target\n");
 
         let args = std::fs::read_to_string(args_path).unwrap();
         assert!(args.contains("--format\njson\nrun\n--visible\napps/App\n"));
@@ -1779,7 +2028,7 @@ srcs = ["unit_spec.sh"]
         let tmp = TempDir::new().unwrap();
         let value = tool_list_target_kinds(
             tmp.path(),
-            &json!({ "query": "typed Rust library executable test" }),
+            &json!({ "query": "create a minimal runnable Rust command-line application" }),
         )
         .unwrap();
         let kinds = value
