@@ -69,6 +69,20 @@ root.
 Once validates each dependency against the contract declared by the target
 kind. This catches incompatible edges before a compiler or runner starts.
 
+Restrict a target when only selected packages should consume it:
+
+```toml
+[[target]]
+name = "InternalSupport"
+kind = "rust_library"
+visibility = ["package:apps/ios", "subtree:tests"]
+```
+
+An empty visibility list is public. `private` allows only the same package,
+`package:` grants one package, `subtree:` grants a package hierarchy, and an
+exact target grants one consumer. `once query validate-workspace` reports an
+attribute-scoped repair when a dependency crosses that boundary.
+
 ## Capabilities Become Actions
 
 A capability is an operation a target exposes:
@@ -118,17 +132,18 @@ The [Ecosystems guide](/guide/graph/ecosystems) compares these choices and
 helps you decide when a typed target is a better fit than a script.
 
 Every built-in target kind also ships a complete starter with manifests and
-source files. Discover the available slugs, then return one starter as
-structured data:
+source files. Discover the available slugs, then materialize one directly:
 
 ```sh
 once query target-kinds
-once query example apple_library apple-library-minimal --format json
+once edit materialize-example rust_binary rust-binary-minimal
+once build crates/hello/hello
 ```
 
-Use the starter when you want a complete copyable workspace. Use the guide
-when you want to understand how targets connect and which capability to invoke
-next.
+Use `once query example <kind> <slug> --format json` when a caller needs to
+inspect and adapt the files before writing them. Contributors can run
+`mise run examples:verify-portable` to materialize and execute every portable
+starter against the current release build.
 
 ## Select Configuration-Specific Values
 
@@ -141,9 +156,21 @@ platform without duplicating the target:
 sdk_frameworks = { select = { ios = ["UIKit"], macos = ["AppKit"] } }
 ```
 
-The target kind schema identifies configurable attributes and the tokens that
-are meaningful for that ecosystem. Attributes that determine the active
-configuration must remain literal so Once can select a branch unambiguously.
+The root manifest can describe a target platform independently of the host:
+
+```toml
+[workspace.configuration]
+os = "linux"
+arch = "arm64"
+tokens = ["release"]
+```
+
+`once query workspace` returns the normalized operating system, architecture,
+and ordered selection tokens used by dependency and attribute selection. The
+target kind schema identifies configurable attributes and any additional
+tokens meaningful for that ecosystem. Attributes marked `implemented: false`
+are compatibility fields that validation rejects until the target kind gives
+them behavior.
 
 ## Run Supported Targets
 

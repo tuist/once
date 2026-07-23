@@ -43,3 +43,10 @@ header and transitive native metadata.
 
 Only `exe` and `pie` can run. Other build modes remain buildable outputs.
 `once run` writes its log and result marker under `.once/out/<target>/run/`.
+
+## Starter
+
+The `go-binary-minimal` starter contains one executable and no external
+dependencies. Discover its descriptor through `once query schema go_binary`,
+then create it with `once edit materialize-example go_binary
+go-binary-minimal`.

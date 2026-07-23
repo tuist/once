@@ -67,8 +67,10 @@ build the target.
 ```
 
 The harness can discover `rust_binary`, fetch the `rust-binary-with-crate`
-starter with `once_query_example`, write the files, validate the complete graph
-with `once_validate_workspace`, and verify the result with `once_build_target`.
+starter metadata, materialize it with `once_materialize_example`, validate the
+complete graph with `once_validate_workspace`, and verify the result with
+`once_build_target`. The materialization call keeps vendored dependencies and
+other large starter files out of the model context.
 
 The same live discovery loop supports a request such as “build an Android app
 with Once.” See the [coding harness guide](https://once.tuist.dev/guide/harness)

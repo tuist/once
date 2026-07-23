@@ -4,8 +4,8 @@ JavaScript and TypeScript tests run with Jest.
 
 ## Start Here
 
-Install Jest in the package with the project's JavaScript package manager.
-For example:
+Install Jest in the package with the project's JavaScript package manager, or
+make the `jest` command available on the executable search path. For example:
 
 ```sh
 npm install --save-dev jest
@@ -34,10 +34,14 @@ batching, and exact unit commands.
 
 ## Description
 
-`jest_test` invokes the package-local Jest entry point with structured output,
-records stable file and full-name identifiers, and writes normalized Once
-results. Exact execution selects the discovered file and an anchored test name
-pattern.
+`jest_test` prefers the package-local Jest entry point, then falls back to the
+installed `jest` command. It uses structured output, records stable file and
+full-name identifiers, and writes normalized Once results. Exact execution
+selects the discovered file and an anchored test name pattern.
+
+The target kind declares Node.js and Jest as tool requirements. A
+workspace-relative `runner` is treated as an input, while an installed runner
+is identified as part of the toolchain.
 
 Automatic batching uses one batch per test file by default. Set `batching` to
 `case` for individual cases, or `target` for one target batch. A complete run
@@ -51,7 +55,7 @@ results when those inputs have not changed.
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `node` | string | no | `node` | Node.js executable name, absolute path, or workspace-relative path |
-| `runner` | string | no | `node_modules/jest/bin/jest.js` | Package-relative Jest entry point |
+| `runner` | string | no | automatic | Package-relative Jest entry point or installed command. Once prefers `node_modules/jest/bin/jest.js`, then searches for `jest` |
 | `config` | list&lt;string&gt; | no | package and lock files | Dependency and runner configuration inputs |
 | `dependencies` | list&lt;string&gt; | no | `node_modules/**/*` | Installed runner and package files required during execution |
 | `data` | list&lt;string&gt; | no | `[]` | Setup, transform, snapshot, and runtime inputs |

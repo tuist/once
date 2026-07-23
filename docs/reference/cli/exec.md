@@ -10,7 +10,7 @@ once exec [OPTIONS] [ARGV]
 
 ## Description
 
-Low-level action surface for direct commands and script adapters. The cache key is the full argument list, declared environment variables, optional working directory, optional timeout, declared input digest, and remote execution environment. A second invocation with the same key reuses the captured standard output, standard error, exit code, and declared outputs. With `--script`, or when the arguments look like `<runtime> <script> [args...]` and the file has `once` headers, Once applies script-aware parsing instead. Remote script actions receive only declared inputs and retrieve only declared outputs. Fresh hosted machines are deleted after success or failure.
+Low-level action surface for direct commands and script adapters. The cache key is the full argv, declared environment variables, optional working directory, and optional timeout. A second invocation with the same key reuses the captured stdout, stderr, and exit code. With `--script`, or when argv looks like `<runtime> <script> [args...]` and the file has `once` headers, Once applies script-aware parsing instead.
 
 ## Arguments
 

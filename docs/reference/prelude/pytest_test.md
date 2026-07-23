@@ -5,10 +5,11 @@ Python tests run with pytest.
 ## Start Here
 
 The selected `python` interpreter must be able to import pytest. When the
-attribute is omitted, Once first uses `.venv/bin/python` or the Windows virtual
-environment equivalent when present, then tries `python3` and `python` on the
-executable search path. You can also set an absolute or workspace-relative
-path explicitly. A common direct installation is:
+attribute is omitted, Once first uses the workspace virtual environment. It
+then finds the installed pytest command and uses the interpreter named by that
+command or a neighboring Python interpreter. You can also set an absolute or
+workspace-relative interpreter path explicitly. A common direct installation
+is:
 
 ```sh
 python3 -m pip install pytest
@@ -40,6 +41,10 @@ batching, and exact unit commands.
 `pytest_test` invokes pytest through the selected Python interpreter, records
 stable node identifiers, and writes normalized Once results. A complete run
 discovers cases for exact interactive execution and automatic scheduling.
+
+The target kind declares both Python and pytest as tool requirements. This
+lets schema discovery and toolchain setup explain the complete runtime
+requirement even when pytest is installed outside the workspace.
 
 Automatic batching uses one batch per test file by default. Set `batching` to
 `case` for one batch per discovered case, or `target` to keep one batch for the

@@ -2,23 +2,18 @@
 
 Every tool the [`once mcp`](/reference/cli/mcp) [Model Context Protocol](https://modelcontextprotocol.io/) server advertises in `tools/list`, with its input schema and a worked return example.
 
-## `once_validate_actions`
+## `once_query_workspace`
 
-Run scripted graph actions in an isolated validation workspace.
+Return the configured workspace root, root manifest state, graph loading state, and next calls.
 
-Runs the same declared action analysis as the graph, bypasses the action cache, checks isolated and project workspace changes, and returns structured input and output repairs. The matching command-line operation is `once query validate-actions <target> --capability <name>`. This tool requires `once mcp --allow-run` because it executes commands. Reads that leave no observable filesystem evidence remain a limitation of this validation mode.
+Call this first when filesystem tools and the Once server may have different working directories. The result identifies the exact workspace every other Once tool uses, reports the target operating system, architecture, and ordered selection tokens, reports whether the root manifest exists, lists loaded packages and target count, preserves graph loading errors as data, and recommends the next discovery or validation call. The matching command-line operation is `once query workspace --format json`.
 
 **Input schema**
 
 ```json
 {
-  "type": "object",
-  "properties": {
-    "target": { "type": "string" },
-    "capability": { "type": "string", "default": "build" },
-    "action": { "type": "integer", "minimum": 0 }
-  },
-  "required": ["target"]
+  "properties": {},
+  "type": "object"
 }
 ```
 
@@ -26,16 +21,19 @@ Runs the same declared action analysis as the graph, bypasses the action cache, 
 
 ```json
 {
-  "valid": false,
-  "target": "pkg/tool",
-  "capability": "build",
-  "actions_run": 1,
-  "diagnostics": [{
-    "code": "undeclared_write",
-    "target": "pkg/tool",
-    "attribute": "outputs",
-    "repairs": ["Declare this path as an output or stop writing it"]
-  }]
+  "root": "/work/project",
+  "configuration": {
+    "os": "linux",
+    "arch": "aarch64",
+    "tokens": ["linux-arm64", "linux-aarch64", "linux", "arm64", "aarch64", "default"]
+  },
+  "root_manifest": { "path": "/work/project/once.toml", "exists": false },
+  "target_count": 0,
+  "packages": [],
+  "empty": true,
+  "suggested_calls": [
+    { "tool": "once_list_target_kinds", "arguments": {}, "reason": "Discover a target kind and starter for this empty workspace." }
+  ]
 }
 ```
 
@@ -43,7 +41,7 @@ Runs the same declared action analysis as the graph, bypasses the action cache, 
 
 List every declared target in the workspace, optionally filtered by target kind.
 
-Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, target kind, default dependencies, named dependency roles, and exposed capabilities. The optional `kind` argument narrows results to one target kind.
+Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, target kind, visibility rules, default dependencies, named dependency roles, and exposed capabilities. The optional `kind` argument narrows results to one target kind.
 
 **Input schema**
 
@@ -64,9 +62,10 @@ Returns the same record shape as `once query targets --format json`: one entry p
 ```json
 [
   { "id": "packages/core/Core", "package": "packages/core", "name": "Core",
-    "kind": "library", "deps": [], "dependency_edges": {}, "capabilities": ["build"] },
+    "kind": "library", "visibility": ["subtree:apps"], "deps": [],
+    "dependency_edges": {}, "capabilities": ["build"] },
   { "id": "apps/service/Service", "package": "apps/service", "name": "Service",
-    "kind": "application", "deps": ["packages/core/Core"],
+    "kind": "application", "visibility": [], "deps": ["packages/core/Core"],
     "dependency_edges": { "plugins": ["tools/compiler/Plugin"] },
     "capabilities": ["build", "run"] }
 ]
@@ -114,7 +113,7 @@ Returns the same record `once query capabilities <target> --format json` emits: 
 
 Return the typed contract for a target kind: attributes, dep edges, providers, capabilities, source references, and runnable starters.
 
-Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list (with types, required flag, and whether the attribute is configurable), expected dep providers, emitted providers, exposed capabilities, external source concepts that can guide partial adoption, and a lightweight list of runnable starter examples. Use `once_query_example` to fetch the full file tree for a chosen example.
+Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list with types and required, configurable, and implemented flags, expected dep providers, emitted providers, exposed capabilities, required tools, external source concepts that can guide partial adoption, and a lightweight list of runnable starter examples. Attributes marked `implemented: false` are discoverable compatibility fields that validation rejects until their target kind gives them behavior. Use `once_materialize_example` to create an unchanged starter without loading its contents into model context, or `once_query_example` when the caller needs to inspect and adapt the files.
 
 **Input schema**
 
@@ -140,7 +139,8 @@ Returns the target kind schema (the typed contract a target of that kind must ma
   "kind": "library",
   "docs": "Reusable library target...",
   "attrs": [
-    { "name": "visibility", "ty": "string", "required": true, "configurable": false }
+    { "name": "mode", "ty": "string", "required": false,
+      "configurable": true, "implemented": true }
   ],
   "capabilities": [ { "name": "build", "output_groups": ["default"], "requires_outputs": [] } ],
   "providers": ["linkable", "module"],
@@ -163,7 +163,7 @@ Returns the target kind schema (the typed contract a target of that kind must ma
 
 Return the complete file bundle for one target kind starter example.
 
-Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every text file a caller can copy to create the starter workspace. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`; this tool fetches the file payload only after a caller chooses one.
+Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every text file a caller can inspect or adapt. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`. For direct setup, prefer `once_materialize_example`, which writes the bundle without sending large dependency payloads through model context.
 
 **Input schema**
 
@@ -196,6 +196,61 @@ Returns the same record as `once query example <kind> <slug> --format json`: the
   "use_when": "...",
   "files": [
     { "path": "packages/core/once.toml", "contents": "[[target]]\nname = \"Core\"\nkind = \"library\"\n..." }
+  ]
+}
+```
+
+## `once_materialize_example`
+
+Materialize a complete target kind starter directly inside the configured workspace.
+
+This collision-safe setup tool is available only when the server starts with `once mcp --allow-run`. It copies the selected example without returning its file contents through model context. Existing files with identical contents are kept, making retries idempotent. If any path conflicts, Once reports every conflict and writes nothing. A successful result includes created and unchanged paths, canonical targets, complete-workspace validation, and exact suggested tool calls for targets of the requested kind. The matching command-line operation is `once edit materialize-example <kind> <slug> --destination <dir>`.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "destination": {
+      "default": "",
+      "description": "Workspace-relative destination directory. Use an empty string for the workspace root.",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Target kind that owns the example.",
+      "type": "string"
+    },
+    "slug": {
+      "description": "Example slug from `once_list_target_kinds` or `once_query_schema`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "slug"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "materialized": true,
+  "kind": "library",
+  "slug": "library-minimal",
+  "destination": "",
+  "created_files": ["packages/core/once.toml", "packages/core/src/core.txt"],
+  "unchanged_files": [],
+  "conflicts": [],
+  "targets": [
+    { "id": "packages/core/Core", "kind": "library", "capabilities": ["build"] }
+  ],
+  "workspace_validation": { "valid": true, "target_count": 1, "diagnostics": [] },
+  "suggested_calls": [
+    { "tool": "once_validate_workspace", "arguments": {}, "reason": "Confirm the complete workspace after any customization." },
+    { "tool": "once_build_target", "arguments": { "target": "packages/core/Core" }, "reason": "Build the materialized `library` target." }
   ]
 }
 ```
@@ -381,9 +436,10 @@ Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one 
   "label": { "package": "packages/core", "name": "Core", "id": "packages/core/Core" },
   "kind": "library",
   "srcs": ["src/**/*.src"],
+  "visibility": ["subtree:apps"],
   "deps": [],
   "dependency_edges": { "plugins": ["tools/compiler/Plugin"] },
-  "attrs": { "visibility": "public" },
+  "attrs": {},
   "capabilities": [ { "name": "build", "output_groups": ["default"], "requires_outputs": [] } ],
   "providers": ["linkable", "module"]
 }
@@ -423,7 +479,7 @@ Returns every target with a `test` capability, including its target kind, depend
 
 Return test targets likely affected by a set of changed workspace paths.
 
-Maps changed paths to test targets using graph relationships and declared inputs. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. Declared source patterns are matched without requiring the changed file to still exist. Changes to manifests, configured graph modules, and paths without a declared owner conservatively select every test. Selection does not depend on a particular test runner.
+Maps changed paths to test targets using graph relationships, declared inputs, and package ownership. A test is affected when a changed path belongs to the test target itself or to one of its declared dependencies. Declared source patterns are matched without requiring the changed file to still exist. An otherwise unowned path, including a package manifest, belongs to the nearest package and selects only that package's reverse dependency closure. The root manifest, configured graph modules, and paths outside every known package conservatively select every test. Selection does not depend on a particular test runner.
 
 **Input schema**
 
@@ -493,7 +549,7 @@ Returns the selection policy, normalized changed paths, unmatched paths, selecte
   "id": "<stable digest>",
   "selection": {
     "schema": "once.test_selection.v1",
-    "policy": { "mode": "affected", "safety": "conservative", "evidence": "declared_graph" },
+    "policy": { "mode": "affected", "safety": "conservative", "evidence": "declared_graph_and_package_ownership" },
     "changed_paths": ["src/lib.src"],
     "unmatched_paths": [],
     "tests": [{ "id": "tests/unit", "kind": "test_suite", "reasons": ["changed dependency `lib` input `src/lib.src`"] }]
@@ -836,7 +892,7 @@ Opt-in tool exposed only when the Model Context Protocol server starts with `onc
 
 Build a target by running its generic `build` capability.
 
-This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once build <target> --format json`, including dependency traversal, target actions, cache policy, and output groups. The result includes the exit status, standard error, and standard output parsed as structured data when possible. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.
+This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once build <target> --format json`, including dependency traversal, target actions, cache policy, and output groups. Because cache identity follows declared content rather than workspace history, a first build in a new workspace can reuse an equivalent action produced elsewhere. The result includes the exit status, command diagnostics under `stderr`, and bounded declared action logs under `captured_stdout` and `captured_stderr`. A captured field is null when the target did not declare that log. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics.
 
 **Input schema**
 
@@ -876,9 +932,9 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
 
 ## `once_validate_actions`
 
-Run scripted graph actions in an isolated validation workspace.
+Run scripted graph actions in a private validation sandbox.
 
-Runs the same declared action analysis used by the graph, bypasses the action cache, checks isolated and project workspace changes, and returns structured input and output repairs. The matching command-line operation is `once query validate-actions <target> --capability <name>`. This tool requires `once mcp --allow-run` because it executes commands. Reads that leave no observable filesystem evidence remain a documented limitation of this validation mode.
+Runs the same declared action analysis used by the graph, bypasses the action cache, inventories private and real-workspace filesystem changes, and returns structured input and output repairs. The matching command-line operation is `once query validate-actions <target> --capability <name>`. This tool requires `once mcp --allow-run` because it executes commands. Successful reads that leave no filesystem evidence remain a documented limitation of symlink-only validation.
 
 **Input schema**
 
@@ -917,7 +973,7 @@ Runs the same declared action analysis used by the graph, bypasses the action ca
 
 Run a target by executing its generic `run` capability.
 
-This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes the exit status, standard error, and standard output parsed as structured data when possible.
+This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes command diagnostics under `stderr` and up to 64 kibibytes of each declared `stdout.log` or `stderr.log` output under `captured_stdout` and `captured_stderr`, so an agent can verify ordinary command output without a separate filesystem read. A captured field is null when the target did not declare that log.
 
 **Input schema**
 
@@ -1116,7 +1172,7 @@ Requests that the process stop and updates the session status as the request is 
 
 Validate the complete workspace graph before execution.
 
-Loads every manifest and target kind schema, then checks target attributes, duplicate target ids, missing dependencies, dependency provider compatibility, source patterns, and dependency cycles. Returns stable diagnostics with target and attribute scope plus suggested repairs. Call this after materializing a starter or applying edits and before build, run, or test. The matching command-line operation is `once query validate-workspace`.
+Loads every manifest and target kind schema, then checks target attributes, target-valued attribute references, duplicate target identifiers, missing dependencies, dependency visibility, dependency provider compatibility, source patterns, and dependency cycles. Returns stable diagnostics with target and attribute scope plus suggested repairs. Call this after materializing a starter or applying edits and before build, run, or test. The matching command-line operation is `once query validate-workspace`.
 
 **Input schema**
 
@@ -1188,7 +1244,7 @@ Schema-only validation: checks that the target declares a known target kind, eve
 
 Apply a batch of `create` / `update` / `delete` operations to one `once.toml` atomically.
 
-Reads the manifest at `<workspace>/<package>/once.toml`, creating it if needed, and applies the operations only if every operation succeeds. Returns `{ applied: true, path: <manifest path> }` on success or `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `once_validate_target`. A failed batch leaves the original file unchanged.
+Reads the manifest at `<workspace>/<package>/once.toml` and applies the operations only if every operation succeeds. Returns `{ applied: true, changed: <bool>, path: <manifest path> }` on success. `changed` is false when the requested state already exists, in which case no manifest is written. Returns `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `once_validate_target` when the edit is invalid. A failed batch leaves the original file unchanged.
 
 **Input schema**
 
@@ -1220,6 +1276,7 @@ Reads the manifest at `<workspace>/<package>/once.toml`, creating it if needed, 
 ```json
 {
   "applied": true,
+  "changed": true,
   "path": "packages/core/once.toml"
 }
 ```

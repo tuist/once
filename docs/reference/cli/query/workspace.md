@@ -1,25 +1,21 @@
-# `once query validate-actions`
+# `once query workspace`
 
-Run scripted actions in a private validation sandbox and report filesystem contract repairs
+Describe the configured workspace and graph loading state
 
 ## Synopsis
 
 ```text
-once query validate-actions [OPTIONS] <TARGET>
+once query workspace [OPTIONS]
 ```
 
-## Arguments
+## Description
 
-| Argument | Required | Description |
-| --- | --- | --- |
-| `<TARGET>` | yes | Target id whose scripted capability should be probed |
+Reports the exact workspace root, root manifest state, normalized target operating system and architecture, ordered selection tokens, loaded packages, target count, graph loading errors, and suggested discovery or validation calls.
 
 ## Options
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
-| `--capability` | `<CAPABILITY>` | `build` | Capability to validate |
-| `--action` | `<ACTION>` |  | Validate only one zero-based action index |
 | `-C, --directory` | `<DIR>` |  | Project root. Defaults to the current directory; the cache lives under `<project>/.once/`. Mirrors `make -C` |
 | `--format` | `<FORMAT>` | `human` | Output format for Once's structured data (`cache stats`, `run`/`exec` trailers). Defaults to a human-readable rendering; pass `json` or `toon` to get machine-parseable output for scripting and for agent consumers |
 | `-v, --verbose` | (flag) | `0` | Increase log verbosity. Repeat for more (-v: info, -vv: debug, -vvv: trace). Overridden by `RUST_LOG` |

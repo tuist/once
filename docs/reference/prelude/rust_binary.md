@@ -81,17 +81,14 @@ The target emits `rust_binary`.
 
 ```toml
 [[target]]
-name = "hello"
+name = "Hello"
 kind = "rust_binary"
-deps = ["cargo_dependencies"]
 srcs = ["src/**/*.rs"]
 
 [target.attrs]
 crate_name = "hello"
 edition = "2021"
-
-[target.attrs.rustc_env]
-CARGO_MANIFEST_DIR = "apps/hello"
-CARGO_PKG_NAME = "hello"
-CARGO_PKG_VERSION = "0.0.0"
 ```
+
+Discover the complete `rust-binary-minimal` starter through `once query schema
+rust_binary`.

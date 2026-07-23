@@ -61,6 +61,12 @@ Every advertised tool also carries a strict input schema, behavioral hints, an
 output schema, and structured content. A harness can therefore plan from the
 live protocol contract instead of scraping this guide.
 
+Call `once_query_workspace` before using filesystem tools. It returns the exact
+root configured for the server, whether the root manifest exists, the current
+target count, any graph loading error, and the next relevant calls. This avoids
+writing files under the harness working directory when the server was
+configured for a different directory.
+
 ## Run Headlessly with Codex and Claude
 
 Headless clients cannot stop to approve a tool call. Once marks
@@ -129,23 +135,31 @@ elsewhere.
 Use this loop for requests such as “build an Android app with Once” or “add a
 Rust command-line tool with Once”:
 
-1. Call `once_list_target_kinds` and choose a kind whose description and
+1. Call `once_query_workspace` and use its `root` for every filesystem
+   operation.
+2. Call `once_list_target_kinds` and choose a kind whose description and
    `use_when` text match the request. When the request names an ecosystem or
    target-kind family, include it in `query` so it takes priority over generic
    intent words and unrelated target kinds do not consume harness context.
-2. Call `once_query_schema` for its complete attribute, dependency, provider,
-   capability, and example contract.
-3. Call `once_query_example` for the best starter, then materialize every
-   returned file exactly as described.
-4. Call `once_query_targets` to obtain canonical target identifiers from the
+3. Call `once_query_schema` for its complete attribute, dependency, provider,
+   capability, and example contract. When several starters match, prefer the
+   narrowest `use_when` description that satisfies the request. Minimal
+   starters avoid unrelated targets and dependencies.
+4. For an unchanged starter, call `once_materialize_example`. It copies the
+   complete bundle without returning file contents through the model, refuses
+   all writes when any destination conflicts, and returns canonical targets,
+   workspace validation, and suggested next calls. Use `once_query_example`
+   only when the harness needs to inspect or adapt the starter files itself.
+5. Call `once_query_targets` to obtain canonical target identifiers from the
    loaded workspace.
-5. Call `once_validate_workspace`. Repair every structured diagnostic and
+6. Call `once_validate_workspace`. Repair every structured diagnostic and
    repeat until `valid` is `true`.
-6. Call `once_query_capabilities` for the chosen target and invoke
+7. Call `once_query_capabilities` for the chosen target and invoke
    `once_build_target`, `once_run_target`, or the testing tools as appropriate.
-7. Check `success`, `exit_code`, and the structured output record. Inspect any
-   output paths that matter to the user.
-8. Call `once_query_evidence` with the returned target or capability subject to
+8. Check `success`, `exit_code`, and the structured output record. Run calls
+   include bounded `captured_stdout` and `captured_stderr` records when the
+   target declares those logs.
+9. Call `once_query_evidence` with the returned target or capability subject to
    retain and inspect the durable result.
 
 Use `once_validate_target` before creating a proposed target table from
@@ -189,10 +203,11 @@ automatic batching.
 
 For an Android application, the live catalog leads the harness to
 `android_binary` and its runnable starter. The harness creates the returned
-manifest and sources, validates the complete graph, discovers the starter's
-canonical target identifier, builds it, and checks the Android application
-package output. Android-specific behavior remains in the target kind, so the
-harness follows the same loop for other ecosystems.
+manifest and sources with `once_materialize_example`, validates the complete
+graph, discovers the starter's canonical target identifier, builds it, and
+checks the Android application package output. Android-specific behavior
+remains in the target kind, so the harness follows the same loop for other
+ecosystems.
 
 ## Adopt an Unfamiliar External Rule
 
@@ -274,6 +289,7 @@ reused safely.
 A harness should report success only after all of these are true:
 
 - the requested workspace files exist;
+- the harness wrote them under the root returned by `once_query_workspace`;
 - every project-local module validates against the live authoring contract;
 - complete-workspace validation succeeds;
 - the requested capability returns `success: true` and exit code `0`;
