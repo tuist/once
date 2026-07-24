@@ -1,0 +1,124 @@
+{
+  "cmake": {
+    "cache": [
+      {
+        "name": "CMAKE_BUILD_TYPE",
+        "type": "STRING",
+        "value": "Release"
+      },
+      {
+        "name": "CMAKE_C_FLAGS",
+        "type": "STRING",
+        "value": ""
+      },
+      {
+        "name": "CMAKE_C_FLAGS_DEBUG",
+        "type": "STRING",
+        "value": "-g"
+      },
+      {
+        "name": "CMAKE_C_FLAGS_MINSIZEREL",
+        "type": "STRING",
+        "value": "-Os -DNDEBUG"
+      },
+      {
+        "name": "CMAKE_C_FLAGS_RELEASE",
+        "type": "STRING",
+        "value": "-O3 -DNDEBUG"
+      },
+      {
+        "name": "CMAKE_C_FLAGS_RELWITHDEBINFO",
+        "type": "STRING",
+        "value": "-O2 -g -DNDEBUG"
+      },
+      {
+        "name": "CMAKE_INSTALL_PREFIX",
+        "type": "PATH",
+        "value": "$host/local"
+      },
+      {
+        "name": "OnceCMakeExample_BINARY_DIR",
+        "type": "STATIC",
+        "value": "$build"
+      },
+      {
+        "name": "OnceCMakeExample_IS_TOP_LEVEL",
+        "type": "STATIC",
+        "value": "ON"
+      },
+      {
+        "name": "OnceCMakeExample_SOURCE_DIR",
+        "type": "STATIC",
+        "value": "$source"
+      }
+    ],
+    "configuration": "Release",
+    "configuration_inputs": [
+      "CMakeLists.txt"
+    ],
+    "generator": "Ninja",
+    "toolchains": [
+      {
+        "compiler": {
+          "id": "AppleClang",
+          "path": "cc",
+          "target": "",
+          "version": "21.0.0.21000101"
+        },
+        "language": "C"
+      }
+    ],
+    "version": "4.3.2"
+  },
+  "exports": [
+    "greeting"
+  ],
+  "once_snapshot": {
+    "fingerprint": "b1b7000e12c0184d88d202d6f53a154a0993fbb5a9f7431a5cd8bed2250cd441",
+    "inputs": {
+      "CMakeLists.txt": "cmake_minimum_required(VERSION 3.20)\nproject(OnceCMakeExample LANGUAGES C)\n\nadd_library(greeting STATIC src/greeting.c)\ntarget_include_directories(greeting PUBLIC include)\n\nenable_testing()\nadd_test(NAME greeting-configured COMMAND \"${CMAKE_COMMAND}\" -E echo \"greeting configured\")\n"
+    },
+    "selection": {
+      "build_type": "Release",
+      "generator": "Ninja",
+      "source_dir": "."
+    }
+  },
+  "schema": "once.cmake.snapshot.v1",
+  "targets": [
+    {
+      "artifacts": [
+        "libgreeting.a"
+      ],
+      "compile_definitions": [],
+      "deps": [],
+      "include_dirs": [
+        "include"
+      ],
+      "name": "greeting",
+      "once_name": "cmake-greeting",
+      "snapshot_fingerprint": "b1b7000e12c0184d88d202d6f53a154a0993fbb5a9f7431a5cd8bed2250cd441",
+      "sources": [
+        "src/greeting.c"
+      ],
+      "type": "STATIC_LIBRARY"
+    }
+  ],
+  "tests": [
+    {
+      "command": [
+        "$host/cmake",
+        "-E",
+        "echo",
+        "greeting configured"
+      ],
+      "name": "greeting-configured",
+      "properties": [
+        {
+          "name": "WORKING_DIRECTORY",
+          "value": "$build"
+        }
+      ]
+    }
+  ]
+}

@@ -5,6 +5,7 @@ PRELUDE_SOURCES = [
     "go.star",
     "rust.star",
     "c.star",
+    "cmake.star",
     "zig.star",
     "swift.star",
     "kotlin.star",

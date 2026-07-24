@@ -1,0 +1,30 @@
+[[target]]
+name = "CMakeProject"
+kind = "cmake_project"
+srcs = [
+  "CMakeLists.txt",
+  "include/**/*.h",
+  "src/**/*.c",
+]
+
+[target.attrs]
+source_dir = "."
+generator = "Ninja"
+build_type = "Release"
+build_targets = ["greeting"]
+products = ["{static_prefix}greeting{static_suffix}"]
+hdrs = ["include/greeting.h"]
+includes = ["include"]
+
+[[target]]
+name = "CMakeGraph"
+kind = "cmake_workspace"
+srcs = ["CMakeLists.txt", "cmake-snapshot.json"]
+
+[target.attrs]
+snapshot = "cmake-snapshot.json"
+resolver_inputs = ["CMakeLists.txt", "cmake-snapshot.json"]
+source_dir = "."
+generator = "Ninja"
+build_type = "Release"
+exports = ["greeting"]
