@@ -24,6 +24,12 @@ can remain the source of truth while a typed dependency target imports its
 locked result into Once. Scripts still participate in the graph, so a project
 can begin there and adopt typed targets one boundary at a time.
 
+An existing build system can use the same bridge. For CMake,
+[`cmake_project`](/reference/prelude/cmake_project) wraps configure and build
+as a typed coarse action, while
+[`cmake_workspace`](/reference/prelude/cmake_workspace) imports a checked
+configured graph for queries. CMake remains authoritative in both cases.
+
 ## Import Locked Third-Party Graphs
 
 Dependency targets do not replace package managers. The native manager owns
@@ -69,6 +75,8 @@ query-before-build workflow, current limitations, and follow-up steps:
   application packages, and host or device tests.
 - [C and C++](/guide/graph/c) covers headers, source compilation, static
   libraries, and native consumers.
+- [CMake](/guide/graph/cmake) covers coarse cached execution, exact products,
+  checked graph snapshots, and incremental adoption.
 - [Elixir](/guide/graph/elixir) covers compiled applications and ExUnit tests.
 - [Kotlin](/guide/graph/kotlin) covers Java virtual machine libraries and
   binaries, Android Kotlin sources, and Kotlin/Native Apple frameworks.

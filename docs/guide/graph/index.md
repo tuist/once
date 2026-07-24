@@ -122,6 +122,7 @@ ecosystem-specific examples:
 - [Apple](/guide/graph/apple)
 - [Android](/guide/graph/android)
 - [C and C++](/guide/graph/c)
+- [CMake](/guide/graph/cmake)
 - [Elixir](/guide/graph/elixir)
 - [Kotlin](/guide/graph/kotlin)
 - [Go](/guide/graph/go)

@@ -141,6 +141,15 @@ and action tests.
 - [`c_library`](/reference/prelude/c_library): C and C++ static
   library provider consumed by native target kinds
 
+## CMake target kinds
+
+- [`cmake_project`](/reference/prelude/cmake_project): coarse cacheable CMake
+  configure and build boundary with explicitly declared products
+- [`cmake_workspace`](/reference/prelude/cmake_workspace): checked configured
+  graph snapshot imported as queryable targets
+- [`cmake_target`](/reference/prelude/cmake_target): resolver-generated
+  logical CMake target metadata
+
 ## Zig target kinds
 
 - [`zig_dependencies`](/reference/prelude/zig_dependencies): locked Zig
