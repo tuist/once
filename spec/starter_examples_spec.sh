@@ -33,6 +33,7 @@ verify_portable_starter_examples() {
     verify_starter_example "$kind" "$slug" "$capability" || return
   done <<'EOF'
 c_library|c-library-minimal|build
+cmake_project|cmake-project-minimal|build
 elixir_library|elixir-library-minimal|build
 elixir_test|elixir-test-minimal|test
 go_binary|go-binary-minimal|build
@@ -73,6 +74,7 @@ Describe 'portable starter examples'
     When call verify_portable_starter_examples
     The status should be success
     The stdout should include 'verified c_library c-library-minimal with build'
+    The stdout should include 'verified cmake_project cmake-project-minimal with build'
     The stdout should include 'verified pytest_test pytest-test-minimal with test'
     The stdout should include 'verified rust_binary rust-binary-minimal with build'
     The stdout should include 'verified zig_test zig-test-minimal with build'
