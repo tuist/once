@@ -127,6 +127,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Snapshot a content-verified absolute host toolchain file into a workspace output.",
             ),
             entry(
+                "link_path(source, destination, identifier = None)",
+                "Declare an uncached relative workspace link from an existing source without copying or caching the linked contents.",
+            ),
+            entry(
                 "prepare_path(path, kind, identifier = None)",
                 "Declare uncached path removal or directory creation when standalone preparation is required.",
             ),

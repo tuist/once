@@ -758,6 +758,88 @@ mod tests {
         assert!(tmp.path().join("out/stale").is_dir());
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn link_path_replaces_the_destination_with_a_workspace_symlink() {
+        let (tmp, cas) = fresh_cas();
+        let cache = CacheProvider::Local(cas);
+        std::fs::create_dir_all(tmp.path().join("deps/node_modules/pkg")).unwrap();
+        std::fs::write(tmp.path().join("deps/node_modules/pkg/package.json"), "{}").unwrap();
+        std::fs::create_dir_all(tmp.path().join("app/node_modules")).unwrap();
+        std::fs::write(tmp.path().join("app/node_modules/stale.txt"), "stale").unwrap();
+        let action = Action::LinkPath {
+            source: WorkspacePath::try_from("deps/node_modules").unwrap(),
+            destination: WorkspacePath::try_from("app/node_modules").unwrap(),
+            input_digest: None,
+        };
+
+        run_uncached(&action, tmp.path(), &cache, false)
+            .await
+            .unwrap();
+
+        let destination = tmp.path().join("app/node_modules");
+        assert!(std::fs::symlink_metadata(&destination)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_link(&destination).unwrap(),
+            std::path::Path::new("../deps/node_modules")
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.join("pkg/package.json")).unwrap(),
+            "{}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn link_path_keeps_directory_input_digests_stable_across_workspace_roots() {
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let mut digests = Vec::new();
+        for workspace in [first.path(), second.path()] {
+            let cache = CacheProvider::Local(Cas::open(workspace.join(".cache")));
+            std::fs::create_dir_all(workspace.join("deps/node_modules/pkg")).unwrap();
+            std::fs::write(workspace.join("deps/node_modules/pkg/package.json"), "{}").unwrap();
+            let action = Action::LinkPath {
+                source: WorkspacePath::try_from("deps/node_modules").unwrap(),
+                destination: WorkspacePath::try_from("app/node_modules").unwrap(),
+                input_digest: None,
+            };
+            run_uncached(&action, workspace, &cache, false)
+                .await
+                .unwrap();
+            let mut digest = crate::input_digest::InputDigestBuilder::new(b"link-path-test");
+            digest.push_source(workspace, "app").unwrap();
+            digests.push(digest.finish());
+        }
+        assert_eq!(digests[0], digests[1]);
+    }
+
+    #[tokio::test]
+    async fn link_path_rejects_a_missing_source_without_removing_the_destination() {
+        let (tmp, cas) = fresh_cas();
+        let cache = CacheProvider::Local(cas);
+        std::fs::create_dir_all(tmp.path().join("app/node_modules")).unwrap();
+        std::fs::write(tmp.path().join("app/node_modules/keep.txt"), "keep").unwrap();
+        let action = Action::LinkPath {
+            source: WorkspacePath::try_from("deps/node_modules").unwrap(),
+            destination: WorkspacePath::try_from("app/node_modules").unwrap(),
+            input_digest: None,
+        };
+
+        let error = run_uncached(&action, tmp.path(), &cache, false)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, Error::FileAction { .. }));
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("app/node_modules/keep.txt")).unwrap(),
+            "keep"
+        );
+    }
+
     #[tokio::test]
     async fn env_is_part_of_the_cache_key() {
         let mut env_a = BTreeMap::new();

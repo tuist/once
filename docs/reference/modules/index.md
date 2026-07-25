@@ -461,6 +461,10 @@ separate update workflow.
   toolchain file into a workspace output. Analysis records its
   [256-bit Secure Hash Algorithm digest](https://csrc.nist.gov/pubs/fips/180-4/upd1/final),
   and execution verifies the digest before the output enters the cache.
+- `link_path(source, destination)` declares an uncached, relative workspace
+  link. The source must exist. Linked contents are not copied into the action
+  cache, while downstream actions still hash them when they declare the link
+  as an input. Windows hosts require permission to create symbolic links.
 - `prepare_path(path, kind = "remove")` and
   `prepare_path(path, kind = "directory")` declare uncached cleanup and
   setup actions for workspace paths.

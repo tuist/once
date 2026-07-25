@@ -579,6 +579,35 @@ fn write_path_records_byte_operation() {
 }
 
 #[test]
+fn link_path_records_an_uncached_portable_operation() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "p");
+    let (store, ()) = with_active_store(store, || {
+        run(
+            r#"link_path(".once/out/deps/node_modules", ".once/out/app/node_modules", identifier = "link-dependencies")"#,
+        )
+        .unwrap();
+    });
+
+    assert_eq!(store.actions.len(), 1);
+    let action = &store.actions[0];
+    assert_eq!(
+        action.operation,
+        Some(DeclaredActionOperation::LinkPath {
+            source: ".once/out/deps/node_modules".to_string(),
+            destination: ".once/out/app/node_modules".to_string(),
+        })
+    );
+    assert_eq!(
+        action.outputs,
+        vec![".once/out/app/node_modules".to_string()]
+    );
+    assert_eq!(action.identifier.as_deref(), Some("link-dependencies"));
+    assert!(action.inputs.is_empty());
+    assert!(!action.cacheable);
+}
+
+#[test]
 fn file_action_globals_record_portable_operations() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "p");

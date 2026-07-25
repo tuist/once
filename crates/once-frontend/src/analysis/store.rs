@@ -20,6 +20,10 @@ pub enum DeclaredActionOperation {
         destination: String,
         mode: DeclaredCopyPathMode,
     },
+    LinkPath {
+        source: String,
+        destination: String,
+    },
     MaterializeHostFile {
         source: String,
         source_sha256: String,

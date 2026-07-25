@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use once_cas::{ActionResult, CacheProvider};
 use sha2::Digest as ShaDigest;
@@ -62,6 +62,14 @@ pub(crate) async fn run(
             }
             capture_file_action_outputs(std::slice::from_ref(destination), workspace_root, cache)
                 .await
+        }
+        Action::LinkPath {
+            source,
+            destination,
+            ..
+        } => {
+            link_path(source, destination, workspace_root).await?;
+            Ok(empty_file_action_result())
         }
         Action::MaterializeHostFile {
             source,
@@ -619,6 +627,70 @@ async fn ensure_dir(path: &WorkspacePath, workspace_root: &Path) -> Result<()> {
             path: path.as_str().to_string(),
             source,
         })
+}
+
+async fn link_path(
+    source: &WorkspacePath,
+    destination: &WorkspacePath,
+    workspace_root: &Path,
+) -> Result<()> {
+    let relative_target = relative_workspace_link_target(source, destination);
+    let source = source.resolve(workspace_root);
+    let destination = destination.resolve(workspace_root);
+    let source_for_link = source.clone();
+    let destination_for_link = destination.clone();
+    tokio::task::spawn_blocking(move || {
+        std::fs::symlink_metadata(&source_for_link)?;
+        if let Some(parent) = destination_for_link.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        remove_path_blocking(&destination_for_link)?;
+        create_symlink_blocking(&relative_target, &destination_for_link, &source_for_link)
+    })
+    .await
+    .map_err(|source_error| Error::FileAction {
+        action: "link_path",
+        path: destination.display().to_string(),
+        source: std::io::Error::other(source_error.to_string()),
+    })?
+    .map_err(|source_error| Error::FileAction {
+        action: "link_path",
+        path: destination.display().to_string(),
+        source: source_error,
+    })
+}
+
+fn relative_workspace_link_target(source: &WorkspacePath, destination: &WorkspacePath) -> PathBuf {
+    let source_parts = source
+        .as_str()
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let destination_parent = Path::new(destination.as_str())
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
+    let destination_parts = destination_parent
+        .to_string_lossy()
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let common = source_parts
+        .iter()
+        .zip(&destination_parts)
+        .take_while(|(source, destination)| source == destination)
+        .count();
+    let mut relative = PathBuf::new();
+    for _ in common..destination_parts.len() {
+        relative.push("..");
+    }
+    for part in &source_parts[common..] {
+        relative.push(part);
+    }
+    if relative.as_os_str().is_empty() {
+        relative.push(".");
+    }
+    relative
 }
 
 async fn write_tree_digest(
