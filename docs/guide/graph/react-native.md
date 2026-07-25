@@ -8,11 +8,13 @@ Native 0.86 and its
 [Fabric](https://reactnative.dev/architecture/fabric-renderer),
 [Hermes](https://reactnative.dev/docs/hermes), and autolinked native modules.
 
-The native package managers remain authoritative. [npm](https://www.npmjs.com/)
-installs the exact JavaScript lockfile, [CocoaPods](https://cocoapods.org/)
-integrates Apple native dependencies, and [Gradle](https://gradle.org/)
-integrates Android native dependencies. Once places their work into explicit
-actions and cache keys without replacing their resolution semantics.
+The package managers remain authoritative.
+[npm](https://www.npmjs.com/), [pnpm](https://pnpm.io/),
+[Yarn](https://yarnpkg.com/), or [Bun](https://bun.sh/) installs the exact
+JavaScript lockfile. [CocoaPods](https://cocoapods.org/) integrates Apple
+native dependencies, and [Gradle](https://gradle.org/) integrates Android
+native dependencies. Once places their work into explicit actions and cache
+keys without replacing their resolution semantics.
 
 ## Start from the bundled application
 
@@ -121,40 +123,31 @@ once -vv build Dependencies
 once -vv build OnceBaseline
 ```
 
-## Current boundary
+## Boundaries
 
-- The dependency target supports npm with `package-lock.json`. It does not yet
-  support npm workspaces, [pnpm](https://pnpm.io/),
-  [Yarn](https://yarnpkg.com/), or [Bun](https://bun.sh/) lockfiles.
-- An `npmrc` may configure registries and installation behavior, but it must
-  not contain authentication tokens or passwords because declared inputs may
-  be stored in a shared cache. Authenticated private registries need a future
-  secret-input mechanism.
-- Package lifecycle scripts run as part of `npm ci`. Offline mode prevents npm
-  registry downloads, but it does not sandbox network or filesystem access
-  performed directly by a lifecycle script.
-- The first Apple or Android build can still need network access for missing
-  CocoaPods sources, a Gradle wrapper distribution, or Gradle artifacts.
-- Gradle uses the configured host Gradle cache. Its mutable contents are not
-  part of the action key, so the lockfiles and repository checksums remain the
-  authority for dependency identity.
-- `react_native_bundle` produces a standalone Metro and Hermes artifact for
-  distribution workflows. Native release builds continue to use the bundle
-  steps owned by their checked-in CocoaPods and Gradle projects.
-- Metro watches the application package and its locked dependency snapshot.
-  Monorepo packages outside the application package need to be included by a
-  project-specific Metro configuration.
-- Apple builds accept `iphonesimulator` and `iphoneos`. Once can build a signed
-  device product through the checked-in Xcode settings, but `once run` installs
-  simulator products only.
-- Android variants whose Gradle output does not follow the default
-  `app-debug.apk` layout must set `apk_path`.
-- React Native actions currently run locally. Remote sandbox execution will
-  require a portable dependency materialization strategy instead of workspace
-  links.
+### Package installation
 
-The native application targets intentionally use the checked-in CocoaPods and
-Gradle projects instead of attempting to synthesize those projects. This keeps
-current React Native behavior, third-party module scripts, CMake integration,
-and Apple prebuilt artifacts compatible while Once makes the important build
-and cache boundaries explicit.
+Once supports `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, and
+`bun.lock`. It detects the manager from the target attributes, the
+`packageManager` field, or the declared lockfile. The dependency target models
+one application package, so workspace-root installation is not yet
+synthesized. Package-manager configuration may be declared as an input, but it
+must not contain credentials because inputs can enter a shared cache.
+Lifecycle scripts still run with the package manager's normal permissions.
+
+### Native builds
+
+The application targets use the checked-in CocoaPods and Gradle projects.
+This preserves upstream React Native behavior and native-module integration.
+A first build may still fetch missing CocoaPods sources, a Gradle distribution,
+or Gradle artifacts. Native release builds use the bundling steps owned by
+those projects, while `react_native_bundle` produces a separate Metro and
+Hermes artifact for distribution workflows.
+
+### Development and execution
+
+Metro watches the application package and its locked dependencies. Packages
+outside that boundary require a project-specific Metro configuration. Once
+can build Apple simulator or signed-device products, but `once run` installs
+simulator products only. React Native actions currently run locally because
+remote execution needs a portable replacement for workspace dependency links.

@@ -1,9 +1,19 @@
 _REACT_NATIVE_NODE_TOOL = tool("node", executables = ["node"])
 _REACT_NATIVE_NPM_TOOL = tool("npm", executables = ["npm"])
+_REACT_NATIVE_PNPM_TOOL = tool("pnpm", executables = ["pnpm"])
+_REACT_NATIVE_YARN_TOOL = tool("yarn", executables = ["yarn"])
+_REACT_NATIVE_BUN_TOOL = tool("bun", executables = ["bun"])
 _REACT_NATIVE_XCODE_TOOL = tool("xcodebuild", executables = ["xcodebuild"])
 _REACT_NATIVE_BUNDLE_TOOL = tool("bundle", executables = ["bundle"])
 _REACT_NATIVE_JAVA_TOOL = tool("java", executables = ["java"])
 _REACT_NATIVE_ADB_TOOL = tool("adb", executables = ["adb"])
+
+_REACT_NATIVE_LOCKFILES = {
+    "npm": "package-lock.json",
+    "pnpm": "pnpm-lock.yaml",
+    "yarn": "yarn.lock",
+    "bun": "bun.lock",
+}
 
 def _react_native_attr(ctx, name, default):
     return _configured_attr(ctx, name, default)
@@ -31,18 +41,90 @@ def _react_native_safe_name(value):
 
 def _react_native_locked_package(lock, name):
     packages = lock.get("packages") or {}
-    return packages.get("node_modules/" + name) or {}
-
-def _react_native_hermes_package(lock):
-    packages = lock.get("packages") or {}
-    for path in [
-        "node_modules/hermes-compiler",
-        "node_modules/react-native/node_modules/hermes-compiler",
-    ]:
-        package = packages.get(path) or {}
-        if package:
-            return {"path": path, "package": package}
+    direct = packages.get("node_modules/" + name) or {}
+    if direct:
+        return direct
+    suffix = "/node_modules/" + name
+    for path, package in packages.items():
+        if path.endswith(suffix):
+            return package
     return {}
+
+def _react_native_package_manager_from_lockfile(path):
+    name = _basename(path)
+    for manager, lockfile in _REACT_NATIVE_LOCKFILES.items():
+        if name == lockfile:
+            return manager
+    return ""
+
+def _react_native_package_manager(ctx, attrs, package_json):
+    requested = attrs.get("package_manager") or "auto"
+    lockfile = attrs.get("lockfile") or ""
+    if requested != "auto" and requested not in _REACT_NATIVE_LOCKFILES:
+        fail(ctx["label"]["id"] + ": package_manager must be `auto`, `npm`, `pnpm`, `yarn`, or `bun`")
+    manager = requested if requested != "auto" else ""
+    if not manager and lockfile:
+        manager = _react_native_package_manager_from_lockfile(lockfile)
+    package_manager_field = package_json.get("packageManager") or ""
+    if not manager and package_manager_field:
+        manager = package_manager_field.split("@")[0]
+        if manager not in _REACT_NATIVE_LOCKFILES:
+            fail(ctx["label"]["id"] + ": package.json packageManager must select npm, pnpm, Yarn, or Bun")
+    if not manager:
+        candidates = []
+        files = ctx.get("files") or {}
+        for candidate_manager, candidate_lockfile in _REACT_NATIVE_LOCKFILES.items():
+            if files.get(candidate_lockfile) != None:
+                candidates.append(candidate_manager)
+        if len(candidates) != 1:
+            fail(ctx["label"]["id"] + ": declare one supported lockfile or set package_manager and lockfile explicitly")
+        manager = candidates[0]
+    if not lockfile:
+        lockfile = _REACT_NATIVE_LOCKFILES[manager]
+    inferred = _react_native_package_manager_from_lockfile(lockfile)
+    if inferred and inferred != manager:
+        fail(ctx["label"]["id"] + ": lockfile `" + lockfile + "` does not match package manager `" + manager + "`")
+    return {"manager": manager, "lockfile": lockfile}
+
+def _react_native_unquote_lock_value(value):
+    value = value.strip()
+    if value.endswith(":"):
+        value = value[:-1]
+    if len(value) >= 2 and ((value.startswith("\"") and value.endswith("\"")) or (value.startswith("'") and value.endswith("'"))):
+        return value[1:-1]
+    return value
+
+def _react_native_text_lock_version(lockfile, manager, name):
+    lines = lockfile.replace("\r", "").split("\n")
+    if manager == "pnpm":
+        prefix = "  " + name + "@"
+        for raw in lines:
+            if raw.startswith(prefix) and raw.endswith(":"):
+                version = _react_native_unquote_lock_value(raw[len(prefix):])
+                return version.split("(")[0]
+    elif manager == "yarn":
+        in_package = False
+        for raw in lines:
+            line = raw.strip()
+            if raw and not raw.startswith(" ") and line.endswith(":"):
+                header = _react_native_unquote_lock_value(line)
+                in_package = header.startswith(name + "@")
+            elif in_package and line.startswith("version:"):
+                return _react_native_unquote_lock_value(line[len("version:"):])
+            elif in_package and line.startswith("version "):
+                return _react_native_unquote_lock_value(line[len("version "):])
+    elif manager == "bun":
+        prefix = "\"" + name + "\": [\"" + name + "@"
+        for raw in lines:
+            line = raw.strip()
+            if line.startswith(prefix):
+                return line[len(prefix):].split("\"")[0]
+    return ""
+
+def _react_native_locked_version(lock, lockfile, manager, name):
+    if manager == "npm":
+        return (_react_native_locked_package(lock, name).get("version") or "")
+    return _react_native_text_lock_version(lockfile, manager, name)
 
 def _react_native_ascii_digits(value):
     if not value:
@@ -57,9 +139,20 @@ def _react_native_exact_version(value):
     parts = core.split(".")
     return len(parts) == 3 and all([_react_native_ascii_digits(part) for part in parts])
 
-def _react_native_npmrc_contains_credentials(value):
+def _react_native_configuration_contains_credentials(value):
     lowered = value.lower()
-    return "_authtoken" in lowered or "_password" in lowered or "_auth=" in lowered
+    markers = [
+        "_authtoken",
+        "_password",
+        "_auth=",
+        "npmauthtoken",
+        "npmauthident",
+        "token =",
+        "token=",
+        "password =",
+        "password=",
+    ]
+    return any([marker in lowered for marker in markers])
 
 def _react_native_module_target_name(name, version):
     return "react-native-module-" + _react_native_safe_name(name + "@" + (version or "local"))
@@ -93,27 +186,29 @@ def _react_native_module_spec(module):
 def _react_native_dependencies_resolver(ctx):
     attrs = ctx.get("attrs") or {}
     package_json_path = attrs.get("package_json") or "package.json"
-    lockfile_path = attrs.get("lockfile") or "package-lock.json"
     npmrc_path = attrs.get("npmrc") or ""
+    package_manager_files = attrs.get("package_manager_files") or []
     snapshot_path = attrs.get("modules_snapshot") or ""
     package_json = json_decode(_react_native_resolver_file(ctx, package_json_path, "JavaScript package manifest"))
-    lock = json_decode(_react_native_resolver_file(ctx, lockfile_path, "JavaScript package lockfile"))
-    react_native_locked = _react_native_locked_package(lock, "react-native")
-    hermes = _react_native_hermes_package(lock)
-    hermes_locked = hermes.get("package") or {}
-    react_native_version = react_native_locked.get("version") or ""
+    package_manager = _react_native_package_manager(ctx, attrs, package_json)
+    manager = package_manager["manager"]
+    lockfile_path = package_manager["lockfile"]
+    lockfile = _react_native_resolver_file(ctx, lockfile_path, manager + " lockfile")
+    lock = json_decode(lockfile) if manager == "npm" else {}
+    react_native_version = _react_native_locked_version(lock, lockfile, manager, "react-native")
     if not react_native_version:
-        fail(ctx["label"]["id"] + ": package-lock.json has no locked `react-native` package")
-    hermes_version = hermes_locked.get("version") or ""
+        fail(ctx["label"]["id"] + ": " + lockfile_path + " has no locked `react-native` package")
+    hermes_version = _react_native_locked_version(lock, lockfile, manager, "hermes-compiler")
     if not hermes_version:
-        fail(ctx["label"]["id"] + ": package-lock.json has no Hermes compiler paired with the locked React Native package")
+        fail(ctx["label"]["id"] + ": " + lockfile_path + " has no Hermes compiler paired with the locked React Native package")
     requested = (package_json.get("dependencies") or {}).get("react-native") or ""
     if requested and _react_native_exact_version(requested) and requested != react_native_version:
-        fail(ctx["label"]["id"] + ": package.json requests React Native `" + requested + "`, but package-lock.json selects `" + react_native_version + "`")
-    if npmrc_path:
-        npmrc = _react_native_resolver_file(ctx, npmrc_path, "npm configuration")
-        if _react_native_npmrc_contains_credentials(npmrc):
-            fail(ctx["label"]["id"] + ": npmrc must not contain authentication tokens or passwords because dependency inputs may be stored in a shared cache")
+        fail(ctx["label"]["id"] + ": package.json requests React Native `" + requested + "`, but " + lockfile_path + " selects `" + react_native_version + "`")
+    configuration_files = package_manager_files + ([npmrc_path] if npmrc_path else [])
+    for path in configuration_files:
+        configuration = _react_native_resolver_file(ctx, path, "package manager configuration")
+        if _react_native_configuration_contains_credentials(configuration):
+            fail(ctx["label"]["id"] + ": package manager configuration must not contain authentication tokens or passwords because dependency inputs may be stored in a shared cache")
 
     modules = []
     if snapshot_path:
@@ -122,7 +217,7 @@ def _react_native_dependencies_resolver(ctx):
             fail(ctx["label"]["id"] + ": React Native module snapshot must use schema `once.react_native.modules.v1`")
         snapshot_version = snapshot.get("react_native_version") or ""
         if snapshot_version != react_native_version:
-            fail(ctx["label"]["id"] + ": React Native module snapshot selects `" + snapshot_version + "`, but package-lock.json selects `" + react_native_version + "`")
+            fail(ctx["label"]["id"] + ": React Native module snapshot selects `" + snapshot_version + "`, but " + lockfile_path + " selects `" + react_native_version + "`")
         modules = snapshot.get("modules") or []
 
     targets = []
@@ -131,10 +226,9 @@ def _react_native_dependencies_resolver(ctx):
         module_name = module.get("name") or ""
         if not module_name:
             fail(ctx["label"]["id"] + ": React Native module snapshot contains a module without a name")
-        locked = _react_native_locked_package(lock, module_name)
-        if not locked:
-            fail(ctx["label"]["id"] + ": React Native module `" + module_name + "` is absent from package-lock.json")
-        version = locked.get("version") or ""
+        version = _react_native_locked_version(lock, lockfile, manager, module_name)
+        if not version:
+            fail(ctx["label"]["id"] + ": React Native module `" + module_name + "` is absent from " + lockfile_path)
         snapshot_module = dict(module)
         snapshot_module["version"] = version
         spec = _react_native_module_spec(snapshot_module)
@@ -146,14 +240,15 @@ def _react_native_dependencies_resolver(ctx):
         "roots": roots,
         "attrs": {
             "_react_native_resolved": True,
+            "_package_manager": manager,
+            "_lockfile": lockfile_path,
             "_react_native_version": react_native_version,
             "_hermes_version": hermes_version,
-            "_hermes_package_path": hermes.get("path") or "",
             "_react_native_module_targets": roots,
         },
     }
 
-def _react_native_tools(ctx, include_npm = False):
+def _react_native_tools(ctx, include_package_manager = False):
     node_name = _react_native_attr(ctx, "node", "node")
     node = _resolve_host_executable(node_name)
     if not node:
@@ -164,51 +259,108 @@ def _react_native_tools(ctx, include_npm = False):
         "node_version": node_version,
         "identity": "once.react-native.node.v1\x00" + node + "\x00" + node_version,
     }
-    if include_npm:
-        npm_name = _react_native_attr(ctx, "npm", "npm")
-        npm = _resolve_host_executable(npm_name)
-        if not npm:
-            fail(ctx["label"]["id"] + ": package installer `" + npm_name + "` was not found")
-        npm_version = host_command([npm, "--version"]).strip()
-        tools["npm"] = npm
-        tools["npm_version"] = npm_version
-        tools["identity"] = tools["identity"] + "\x00npm\x00" + npm + "\x00" + npm_version
+    if include_package_manager:
+        manager = _react_native_attr(ctx, "_package_manager", "npm")
+        executable_name = _react_native_attr(ctx, "package_manager_executable", "") or manager
+        executable = _resolve_host_executable(executable_name)
+        if not executable:
+            fail(ctx["label"]["id"] + ": " + manager + " executable `" + executable_name + "` was not found")
+        version = host_command([executable, "--version"]).strip()
+        tools["package_manager"] = executable
+        tools["package_manager_name"] = manager
+        tools["package_manager_version"] = version
+        tools["identity"] = tools["identity"] + "\x00" + manager + "\x00" + executable + "\x00" + version
     return tools
 
 def _react_native_path_env(tools, extra = []):
     dirs = []
-    for path in [tools.get("node") or "", tools.get("npm") or ""] + extra:
+    for path in [tools.get("node") or "", tools.get("package_manager") or ""] + extra:
         parent = _parent_dir(path)
         if parent and parent not in dirs:
             dirs.append(parent)
     dirs.extend(["/usr/bin", "/bin"])
     return ":".join(dirs)
 
+def _react_native_install_plan(tools, allow_network, action_cache):
+    manager = tools["package_manager_name"]
+    executable = tools["package_manager"]
+    version = tools["package_manager_version"]
+    env = {}
+    create_dirs = [action_cache]
+    if manager == "npm":
+        argv = [executable, "ci", "--no-audit", "--no-fund"]
+        env["npm_config_cache"] = execution_path(action_cache)
+        if not allow_network:
+            argv.append("--offline")
+    elif manager == "pnpm":
+        argv = [
+            executable,
+            "install",
+            "--frozen-lockfile",
+            "--public-hoist-pattern",
+            "@react-native/*",
+            "--store-dir",
+            execution_path(action_cache),
+        ]
+        if not allow_network:
+            argv.append("--offline")
+    elif manager == "yarn":
+        major = version.split(".")[0]
+        if major == "1":
+            argv = [executable, "install", "--frozen-lockfile", "--cache-folder", execution_path(action_cache)]
+            if not allow_network:
+                argv.append("--offline")
+        else:
+            argv = [executable, "install", "--immutable"]
+            env["YARN_CACHE_FOLDER"] = execution_path(action_cache)
+            env["YARN_ENABLE_GLOBAL_CACHE"] = "0"
+            env["YARN_NODE_LINKER"] = "node-modules"
+            if not allow_network:
+                env["YARN_ENABLE_NETWORK"] = "0"
+                env["YARN_ENABLE_OFFLINE_MODE"] = "1"
+    elif manager == "bun":
+        argv = [executable, "install", "--frozen-lockfile", "--linker", "hoisted", "--cache-dir", execution_path(action_cache)]
+        if not allow_network:
+            argv.append("--prefer-offline")
+    else:
+        fail("unsupported React Native package manager `" + manager + "`")
+    return {"argv": argv, "env": env, "create_dirs": create_dirs}
+
 def _react_native_dependencies_impl(ctx):
     if not _react_native_attr(ctx, "_react_native_resolved", False):
         fail(ctx["label"]["id"] + ": react_native_dependencies must be expanded through its locked resolver")
     tools = _react_native_tools(ctx, True)
     package_json = _package_relative(ctx, _react_native_attr(ctx, "package_json", "package.json"))
-    lockfile = _package_relative(ctx, _react_native_attr(ctx, "lockfile", "package-lock.json"))
+    lockfile = _package_relative(ctx, _react_native_attr(ctx, "_lockfile", "package-lock.json"))
     npmrc_attr = _react_native_attr(ctx, "npmrc", "")
-    npmrc = _package_relative(ctx, npmrc_attr) if npmrc_attr else ""
     snapshot_attr = _react_native_attr(ctx, "modules_snapshot", "")
     snapshot = _package_relative(ctx, snapshot_attr) if snapshot_attr else ""
     install_root = ctx["build_dir"] + "/javascript"
     node_modules = install_root + "/node_modules"
     installed_package_json = install_root + "/package.json"
-    installed_lockfile = install_root + "/package-lock.json"
+    installed_lockfile = install_root + "/" + _basename(lockfile)
     prepare_path(install_root, kind = "remove", identifier = ctx["label"]["id"] + ":javascript-clean")
     prepare_path(install_root, kind = "directory", identifier = ctx["label"]["id"] + ":javascript-prepare")
     copy_path(package_json, installed_package_json, inputs = [package_json], identifier = ctx["label"]["id"] + ":package-json")
     copy_path(lockfile, installed_lockfile, inputs = [lockfile], identifier = ctx["label"]["id"] + ":package-lock")
     install_inputs = [installed_package_json, installed_lockfile]
-    if npmrc:
-        installed_npmrc = install_root + "/.npmrc"
-        copy_path(npmrc, installed_npmrc, inputs = [npmrc], identifier = ctx["label"]["id"] + ":npmrc")
-        install_inputs.append(installed_npmrc)
+    configuration_sources = []
+    for configured in _react_native_attr(ctx, "package_manager_files", []) + ([npmrc_attr] if npmrc_attr else []):
+        source = _package_relative(ctx, configured)
+        if source in configuration_sources:
+            continue
+        configuration_sources.append(source)
+        relative = _react_native_relative_path(ctx, source)
+        installed_configuration = install_root + "/" + relative
+        copy_path(
+            source,
+            installed_configuration,
+            inputs = [source],
+            identifier = ctx["label"]["id"] + ":package-manager-config:" + relative,
+        )
+        install_inputs.append(installed_configuration)
     for source in glob(ctx["srcs"]):
-        if source in [package_json, lockfile, npmrc, snapshot]:
+        if source in [package_json, lockfile, snapshot] + configuration_sources:
             continue
         relative = _react_native_relative_path(ctx, source)
         installed_source = install_root + "/" + relative
@@ -219,27 +371,27 @@ def _react_native_dependencies_impl(ctx):
             identifier = ctx["label"]["id"] + ":local-package:" + relative,
         )
         install_inputs.append(installed_source)
-    argv = [tools["npm"], "ci", "--no-audit", "--no-fund"]
-    if not _react_native_attr(ctx, "allow_network", False):
-        argv.append("--offline")
-    argv.extend(_react_native_attr(ctx, "install_args", []))
     action_home = ctx["scratch_dir"] + "/home"
-    action_cache = ctx["scratch_dir"] + "/npm-cache"
+    action_cache = ctx["scratch_dir"] + "/" + tools["package_manager_name"] + "-cache"
+    install = _react_native_install_plan(tools, _react_native_attr(ctx, "allow_network", False), action_cache)
+    argv = install["argv"]
+    argv.extend(_react_native_attr(ctx, "install_args", []))
+    env = {
+        "CI": "1",
+        "HOME": execution_path(action_home),
+        "PATH": _react_native_path_env(tools),
+    }
+    env.update(install["env"])
     run_action(
         argv = argv,
         inputs = install_inputs,
         outputs = [node_modules],
         clean_paths = [node_modules],
-        create_dirs = [action_home, action_cache],
+        create_dirs = [action_home] + install["create_dirs"],
         cwd = install_root,
-        env = {
-            "CI": "1",
-            "HOME": execution_path(action_home),
-            "PATH": _react_native_path_env(tools),
-            "npm_config_cache": execution_path(action_cache),
-        },
+        env = env,
         toolchain_identity = tools["identity"] + "\x00react-native\x00" + _react_native_attr(ctx, "_react_native_version", "") + "\x00hermes\x00" + _react_native_attr(ctx, "_hermes_version", ""),
-        identifier = ctx["label"]["id"] + ":npm-ci",
+        identifier = ctx["label"]["id"] + ":package-install",
     )
     return {
         "label_id": ctx["label"]["id"],
@@ -248,9 +400,9 @@ def _react_native_dependencies_impl(ctx):
         "node_modules": node_modules,
         "package_json": package_json,
         "lockfile": lockfile,
+        "package_manager": _react_native_attr(ctx, "_package_manager", "npm"),
         "react_native_version": _react_native_attr(ctx, "_react_native_version", ""),
         "hermes_version": _react_native_attr(ctx, "_hermes_version", ""),
-        "hermes_package_path": _react_native_attr(ctx, "_hermes_package_path", ""),
         "module_targets": _react_native_attr(ctx, "_react_native_module_targets", []),
         "react_native_dependency_set": True,
         "javascript_dependency_set": True,
@@ -320,6 +472,29 @@ def _react_native_stage_project(ctx, dependency, files):
         identifier = ctx["label"]["id"] + ":stage-node-modules",
     )
     return stage
+
+def _react_native_hermes_runner_source():
+    return """const path = require("node:path");
+const {spawnSync} = require("node:child_process");
+const {createRequire} = require("node:module");
+const reactNativeManifest = require.resolve("react-native/package.json", {paths: [process.cwd()]});
+const requireFromReactNative = createRequire(reactNativeManifest);
+const hermesManifest = requireFromReactNative.resolve("hermes-compiler/package.json");
+let relative;
+if (process.platform === "darwin") {
+  relative = "hermesc/osx-bin/hermesc";
+} else if (process.platform === "linux" && process.arch === "x64") {
+  relative = "hermesc/linux64-bin/hermesc";
+} else if (process.platform === "win32" && process.arch === "x64") {
+  relative = "hermesc/win64-bin/hermesc.exe";
+} else {
+  throw new Error(`Hermes compilation is not supported on ${process.platform}/${process.arch}`);
+}
+const executable = path.join(path.dirname(hermesManifest), relative);
+const result = spawnSync(executable, process.argv.slice(2), {stdio: "inherit"});
+if (result.error) throw result.error;
+process.exit(result.status === null ? 1 : result.status);
+"""
 
 def _react_native_bundle_impl(ctx):
     tools = _react_native_tools(ctx)
@@ -393,21 +568,13 @@ def _react_native_bundle_impl(ctx):
         identifier = ctx["label"]["id"] + ":metro-bundle",
     )
     if hermes:
-        host = host_os()
-        arch = host_arch()
-        if host == "macos":
-            host_bin = "osx-bin/hermesc"
-        elif host == "linux" and arch == "x86_64":
-            host_bin = "linux64-bin/hermesc"
-        elif host == "windows" and arch == "x86_64":
-            host_bin = "win64-bin/hermesc.exe"
-        else:
-            fail(ctx["label"]["id"] + ": Hermes compilation is not supported on host `" + host + "/" + arch + "`")
-        hermesc = stage + "/" + dependency["hermes_package_path"] + "/hermesc/" + host_bin
+        hermes_runner = ctx["scratch_dir"] + "/run-hermes.js"
+        write_path(hermes_runner, _react_native_hermes_runner_source())
         compiler_map = final_bundle + ".compiler.map"
         run_action(
             argv = [
-                execution_path(hermesc),
+                tools["node"],
+                execution_path(hermes_runner),
                 "-w",
                 "-emit-binary",
                 "-max-diagnostic-width=80",
@@ -416,8 +583,14 @@ def _react_native_bundle_impl(ctx):
                 "-O",
                 "-output-source-map",
             ],
-            inputs = [hermesc, packager_bundle, dependency["node_modules"]],
+            inputs = [hermes_runner, packager_bundle, dependency["node_modules"]],
             outputs = [final_bundle, final_bundle + ".map"],
+            cwd = stage,
+            env = {
+                "HOME": execution_path(ctx["scratch_dir"] + "/home"),
+                "PATH": _react_native_path_env(tools),
+            },
+            create_dirs = [ctx["scratch_dir"] + "/home"],
             toolchain_identity = tools["identity"] + "\x00hermes-compiler\x00" + dependency["hermes_version"],
             identifier = ctx["label"]["id"] + ":hermes-compile",
         )
@@ -1034,30 +1207,63 @@ _REACT_NATIVE_DEPENDENCY_REFERENCES = [
         "https://reactnative.dev/docs/the-new-architecture/what-is-codegen",
         "Generate New Architecture native interfaces from JavaScript and TypeScript specifications.",
     ),
+    source_reference(
+        "npm",
+        "Clean installs",
+        "https://docs.npmjs.com/cli/commands/npm-ci",
+        "Install npm dependencies without changing the lockfile.",
+    ),
+    source_reference(
+        "pnpm",
+        "Frozen installs",
+        "https://pnpm.io/cli/install#--frozen-lockfile",
+        "Install pnpm dependencies without changing the lockfile.",
+    ),
+    source_reference(
+        "Yarn",
+        "Immutable installs",
+        "https://yarnpkg.com/cli/install",
+        "Install Yarn dependencies without changing the lockfile.",
+    ),
+    source_reference(
+        "Bun",
+        "Frozen installs",
+        "https://bun.sh/docs/pm/cli/install",
+        "Install Bun dependencies without changing the lockfile.",
+    ),
 ]
 
 react_native_dependencies = target_kind(
-    docs = "Installs the exact JavaScript dependency graph from package-lock.json and exposes locked React Native and Hermes identities.",
+    docs = "Installs the exact JavaScript dependency graph from npm, pnpm, Yarn, or Bun lockfiles and exposes locked React Native and Hermes identities.",
     attrs = [
         attr("package_json", "string", default = "\"package.json\"", docs = "Package-relative JavaScript package manifest.", configurable = False),
-        attr("lockfile", "string", default = "\"package-lock.json\"", docs = "Package-relative package lockfile consumed by npm ci.", configurable = False),
+        attr("package_manager", "string", default = "\"auto\"", docs = "`auto`, `npm`, `pnpm`, `yarn`, or `bun`. Auto uses packageManager, the lockfile name, or the only declared supported lockfile.", configurable = False),
+        attr("package_manager_executable", "string", default = "\"\"", docs = "Optional package manager executable override.", configurable = False),
+        attr("lockfile", "string", default = "\"\"", docs = "Package-relative lockfile. Auto-detected when omitted.", configurable = False),
         attr("npmrc", "string", docs = "Optional package-relative npm configuration file without authentication tokens or passwords.", configurable = False),
+        attr("package_manager_files", "list<string>", default = "[]", docs = "Additional package manager configuration files without authentication tokens or passwords.", configurable = False),
         attr("modules_snapshot", "string", docs = "Optional checked-in normalized react-native config snapshot.", configurable = False),
-        attr("resolver_inputs", "list<string>", default = "[]", docs = "Manifest, lockfile, npm configuration, and module snapshot text supplied to the resolver.", configurable = False),
+        attr("resolver_inputs", "list<string>", default = "[]", docs = "Manifest, lockfile, package manager configuration, and module snapshot text supplied to the resolver.", configurable = False),
         attr("node", "string", default = "\"node\"", docs = "Node.js executable.", configurable = False),
-        attr("npm", "string", default = "\"npm\"", docs = "npm executable.", configurable = False),
-        attr("allow_network", "bool", default = "false", docs = "Allow npm to fetch packages missing from its local cache.", configurable = False),
-        attr("install_args", "list<string>", default = "[]", docs = "Additional npm ci arguments.", configurable = False),
+        attr("allow_network", "bool", default = "false", docs = "Allow the package manager to fetch packages missing from its local cache.", configurable = False),
+        attr("install_args", "list<string>", default = "[]", docs = "Additional frozen-install arguments.", configurable = False),
         attr("_react_native_resolved", "bool", default = "false", docs = "Resolver-owned locked-graph marker.", configurable = False),
+        attr("_package_manager", "string", default = "\"npm\"", docs = "Resolver-owned package manager.", configurable = False),
+        attr("_lockfile", "string", default = "\"package-lock.json\"", docs = "Resolver-owned lockfile path.", configurable = False),
         attr("_react_native_version", "string", default = "\"\"", docs = "Resolver-owned React Native version.", configurable = False),
         attr("_hermes_version", "string", default = "\"\"", docs = "Resolver-owned Hermes compiler and runtime version.", configurable = False),
-        attr("_hermes_package_path", "string", default = "\"\"", docs = "Resolver-owned installed Hermes compiler package path.", configurable = False),
         attr("_react_native_module_targets", "list<string>", default = "[]", docs = "Resolver-owned synthetic module target names.", configurable = False),
     ],
     deps = [dep("deps", ["react_native_module"], "Locked native modules emitted by the resolver.")],
     providers = ["javascript_dependency_set", "react_native_dependency_set"],
     capabilities = [capability("build", ["node_modules"])],
-    tools = [_REACT_NATIVE_NODE_TOOL, _REACT_NATIVE_NPM_TOOL],
+    tools = [
+        _REACT_NATIVE_NODE_TOOL,
+        _REACT_NATIVE_NPM_TOOL,
+        _REACT_NATIVE_PNPM_TOOL,
+        _REACT_NATIVE_YARN_TOOL,
+        _REACT_NATIVE_BUN_TOOL,
+    ],
     examples = _REACT_NATIVE_EXAMPLE,
     source_references = _REACT_NATIVE_DEPENDENCY_REFERENCES,
     resolver = _react_native_dependencies_resolver,

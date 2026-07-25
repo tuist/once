@@ -175,8 +175,11 @@ fn react_native_schema_exposes_locked_and_live_development_inputs() {
         "react_native_dependencies",
         &[
             "package_json",
+            "package_manager",
+            "package_manager_executable",
             "lockfile",
             "npmrc",
+            "package_manager_files",
             "modules_snapshot",
             "allow_network",
         ],
@@ -220,13 +223,109 @@ result = repr(_react_native_dependencies_resolver(ctx))
 
     assert!(result.contains("\"_react_native_version\": \"0.86.0\""));
     assert!(result.contains("\"_hermes_version\": \"250829098.0.14\""));
-    assert!(result.contains(
-        "\"_hermes_package_path\": \"node_modules/react-native/node_modules/hermes-compiler\""
-    ));
+    assert!(result.contains("\"_package_manager\": \"npm\""));
+    assert!(result.contains("\"_lockfile\": \"package-lock.json\""));
 }
 
 #[test]
-fn react_native_resolver_rejects_credentials_in_npmrc() {
+fn react_native_resolver_supports_pnpm_yarn_and_bun_lockfiles() {
+    let cases = [
+        (
+            "pnpm",
+            "pnpm-lock.yaml",
+            "lockfileVersion: '9.0'\npackages:\n  hermes-compiler@250829098.0.14:\n    resolution: {}\n  react-native@0.86.0:\n    resolution: {}\n  react-native-safe-area-context@5.8.0:\n    resolution: {}\n",
+        ),
+        (
+            "yarn",
+            "yarn.lock",
+            "__metadata:\n  version: 8\n\"hermes-compiler@npm:250829098.0.14\":\n  version: 250829098.0.14\n\"react-native@npm:0.86.0\":\n  version: 0.86.0\n\"react-native-safe-area-context@npm:^5.5.2\":\n  version: 5.8.0\n",
+        ),
+        (
+            "bun",
+            "bun.lock",
+            "{\n  \"lockfileVersion\": 1,\n  \"packages\": {\n    \"hermes-compiler\": [\"hermes-compiler@250829098.0.14\", \"\", {}],\n    \"react-native\": [\"react-native@0.86.0\", \"\", {}],\n    \"react-native-safe-area-context\": [\"react-native-safe-area-context@5.8.0\", \"\", {}],\n  },\n}\n",
+        ),
+    ];
+    for (manager, lockfile, contents) in cases {
+        let source = format!(
+            r#"{}
+ctx = {{
+    "label": {{"id": "Dependencies"}},
+    "attrs": {{
+        "package_json": "package.json",
+        "lockfile": "{lockfile}",
+        "modules_snapshot": "react-native-modules.json",
+    }},
+    "files": {{
+        "package.json": "{{\"dependencies\":{{\"react-native\":\"^0.86.0\"}}}}",
+        "{lockfile}": {contents:?},
+        "react-native-modules.json": "{{\"schema\":\"once.react_native.modules.v1\",\"react_native_version\":\"0.86.0\",\"modules\":[{{\"name\":\"react-native-safe-area-context\"}}]}}",
+    }},
+}}
+result = repr(_react_native_dependencies_resolver(ctx))
+"#,
+            react_native_prelude_source()
+        );
+
+        let result = eval_prelude_source_to_repr(source).unwrap();
+
+        assert!(
+            result.contains(&format!("\"_package_manager\": \"{manager}\"")),
+            "{result}"
+        );
+        assert!(
+            result.contains("\"_react_native_version\": \"0.86.0\""),
+            "{result}"
+        );
+        assert!(
+            result.contains("\"_hermes_version\": \"250829098.0.14\""),
+            "{result}"
+        );
+        assert!(
+            result.contains("react-native-module-react-native-safe-area-context_x64_5.8.0"),
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn react_native_resolver_detects_yarn_classic_from_package_manager() {
+    let source = format!(
+        r#"{}
+ctx = {{
+    "label": {{"id": "Dependencies"}},
+    "attrs": {{
+        "package_json": "package.json",
+    }},
+    "files": {{
+        "package.json": "{{\"packageManager\":\"yarn@1.22.22\",\"dependencies\":{{\"react-native\":\"0.86.0\"}}}}",
+        "yarn.lock": "\"hermes-compiler@250829098.0.14\":\n  version \"250829098.0.14\"\n\"react-native@0.86.0\":\n  version \"0.86.0\"\n",
+    }},
+}}
+result = repr(_react_native_dependencies_resolver(ctx))
+"#,
+        react_native_prelude_source()
+    );
+
+    let result = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(
+        result.contains("\"_package_manager\": \"yarn\""),
+        "{result}"
+    );
+    assert!(result.contains("\"_lockfile\": \"yarn.lock\""), "{result}");
+    assert!(
+        result.contains("\"_react_native_version\": \"0.86.0\""),
+        "{result}"
+    );
+    assert!(
+        result.contains("\"_hermes_version\": \"250829098.0.14\""),
+        "{result}"
+    );
+}
+
+#[test]
+fn react_native_resolver_rejects_credentials_in_package_manager_configuration() {
     let source = format!(
         r#"{}
 ctx = {{
@@ -234,7 +333,7 @@ ctx = {{
     "attrs": {{
         "package_json": "package.json",
         "lockfile": "package-lock.json",
-        "npmrc": ".npmrc",
+        "package_manager_files": [".npmrc"],
     }},
     "files": {{
         "package.json": "{{\"dependencies\":{{\"react-native\":\"0.86.0\"}}}}",
@@ -270,12 +369,13 @@ fn react_native_dependency_install_does_not_stage_the_module_snapshot() {
     let prelude = react_native_prelude_source();
     let source = format!(
         r#"{prelude}
-def _react_native_tools(ctx, include_npm = False):
+def _react_native_tools(ctx, include_package_manager = False):
     return {{
         "node": "/tools/node",
         "node_version": "v24.0.0",
-        "npm": "/tools/npm",
-        "npm_version": "11.0.0",
+        "package_manager": "/tools/npm",
+        "package_manager_name": "npm",
+        "package_manager_version": "11.0.0",
         "identity": "node-v24-npm-v11",
     }}
 
@@ -283,9 +383,10 @@ ctx = {{
     "label": {{"package": "app", "name": "Dependencies", "id": "app/Dependencies"}},
     "attr": {{
         "_react_native_resolved": True,
+        "_package_manager": "npm",
+        "_lockfile": "package-lock.json",
         "_react_native_version": "0.86.0",
         "_hermes_version": "250829098.0.14",
-        "_hermes_package_path": "node_modules/hermes-compiler",
         "modules_snapshot": "react-native-modules.json",
         "allow_network": True,
     }},
@@ -316,11 +417,72 @@ result = repr(_react_native_dependencies_impl(ctx))
             .as_deref()
             .is_some_and(|identifier| identifier.contains("react-native-modules.json"))
     }));
-    let install = action_by_identifier(&store, "app/Dependencies:npm-ci");
+    let install = action_by_identifier(&store, "app/Dependencies:package-install");
     assert!(!install
         .inputs
         .iter()
         .any(|input| input.ends_with("react-native-modules.json")));
+}
+
+#[test]
+fn react_native_package_managers_use_frozen_offline_install_plans() {
+    let cases = [
+        ("npm", "11.0.0", &["\"ci\"", "\"--offline\""][..]),
+        (
+            "pnpm",
+            "11.0.0",
+            &[
+                "\"--frozen-lockfile\"",
+                "\"--public-hoist-pattern\"",
+                "\"@react-native/*\"",
+                "\"--store-dir\"",
+                "\"--offline\"",
+            ],
+        ),
+        (
+            "yarn",
+            "1.22.22",
+            &["\"--frozen-lockfile\"", "\"--offline\""],
+        ),
+        (
+            "yarn",
+            "4.17.1",
+            &[
+                "\"--immutable\"",
+                "\"YARN_NODE_LINKER\": \"node-modules\"",
+                "\"YARN_ENABLE_NETWORK\": \"0\"",
+            ],
+        ),
+        (
+            "bun",
+            "1.3.11",
+            &[
+                "\"--frozen-lockfile\"",
+                "\"--linker\"",
+                "\"hoisted\"",
+                "\"--prefer-offline\"",
+            ],
+        ),
+    ];
+    for (manager, version, expected) in cases {
+        let source = format!(
+            r#"{}
+tools = {{
+    "package_manager": "/tools/{manager}",
+    "package_manager_name": "{manager}",
+    "package_manager_version": "{version}",
+}}
+result = repr(_react_native_install_plan(tools, False, ".once/cache"))
+"#,
+            react_native_prelude_source()
+        );
+
+        let result = eval_prelude_source_to_repr(source).unwrap();
+
+        for value in expected {
+            assert!(result.contains(value), "{manager}: {result}");
+        }
+    }
 }
 
 #[test]
@@ -339,7 +501,7 @@ fn react_native_bundle_declares_metro_hermes_and_portable_staging_actions() {
     let prelude = react_native_prelude_source();
     let source = format!(
         r#"{prelude}
-def _react_native_tools(ctx, include_npm = False):
+def _react_native_tools(ctx, include_package_manager = False):
     return {{
         "node": "/tools/node",
         "node_version": "v24.0.0",
@@ -369,7 +531,6 @@ ctx = {{
         "lockfile": "app/package-lock.json",
         "react_native_version": "0.86.0",
         "hermes_version": "250829098.0.14",
-        "hermes_package_path": "node_modules/react-native/node_modules/hermes-compiler",
     }}],
     "srcs": ["index.js"],
     "build_dir": ".once/out/app/Bundle",
@@ -403,9 +564,12 @@ result = repr(_react_native_bundle_impl(ctx))
         )
     }));
     let hermes = action_by_identifier(&store, "app/Bundle:hermes-compile");
-    assert!(hermes.argv[0].contains(
-        "node_modules/react-native/node_modules/hermes-compiler/hermesc/osx-bin/hermesc"
-    ));
+    assert_eq!(hermes.argv[0], "/tools/node");
+    assert!(hermes.argv[1].contains("run-hermes.js"));
+    assert!(hermes
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("run-hermes.js")));
     action_by_identifier(&store, "app/Bundle:compose-source-maps");
 }
 
@@ -429,7 +593,7 @@ fn react_native_metro_uses_live_sources_and_an_immutable_dependency_snapshot() {
     let prelude = react_native_prelude_source();
     let source = format!(
         r#"{prelude}
-def _react_native_tools(ctx, include_npm = False):
+def _react_native_tools(ctx, include_package_manager = False):
     return {{
         "node": "/tools/node",
         "node_version": "v24.0.0",
@@ -509,7 +673,7 @@ fn react_native_android_build_uses_custom_application_output_and_exposes_logs() 
     let prelude = react_native_prelude_source();
     let source = format!(
         r#"{prelude}
-def _react_native_tools(ctx, include_npm = False):
+def _react_native_tools(ctx, include_package_manager = False):
     return {{
         "node": "/tools/node",
         "node_version": "v24.0.0",
@@ -670,7 +834,7 @@ fn react_native_apple_build_distinguishes_simulator_and_device_destinations() {
     let prelude = react_native_prelude_source();
     let source = format!(
         r#"{prelude}
-def _react_native_tools(ctx, include_npm = False):
+def _react_native_tools(ctx, include_package_manager = False):
     return {{
         "node": "/tools/node",
         "node_version": "v24.0.0",

@@ -25,9 +25,10 @@ Metro source maps into one final map.
 
 The `deps` edge accepts exactly one `react_native_dependency_set`.
 
-On macOS, x86-64 Linux, and x86-64 Windows, Once selects the Hermes compiler
-shipped with the locked React Native dependency graph. Other hosts fail during
-analysis with a clear unsupported-host message.
+On macOS, x86-64 Linux, and x86-64 Windows, Once resolves the Hermes compiler
+through the locked React Native package. This supports both hoisted and
+isolated dependency layouts. Other hosts fail during analysis with a clear
+unsupported-host message.
 
 ## Capabilities
 
