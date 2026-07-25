@@ -101,6 +101,15 @@ fn android_prelude_source() -> String {
     )
 }
 
+fn react_native_prelude_source() -> String {
+    format!(
+        "{}\n{}\n{}",
+        include_str!("../prelude/common.star"),
+        include_str!("../prelude/android.star"),
+        include_str!("../prelude/react_native.star")
+    )
+}
+
 fn go_prelude_source() -> String {
     format!(
         "{}\n{}",
@@ -111,7 +120,7 @@ fn go_prelude_source() -> String {
 
 fn all_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/android.star"),
@@ -124,7 +133,8 @@ fn all_prelude_source() -> String {
         include_str!("../prelude/elixir.star"),
         include_str!("../prelude/python.star"),
         include_str!("../prelude/ruby.star"),
-        include_str!("../prelude/javascript.star")
+        include_str!("../prelude/javascript.star"),
+        include_str!("../prelude/react_native.star")
     )
 }
 
@@ -133,6 +143,610 @@ fn built_in_target_kinds_do_not_hardcode_a_posix_shell_path() {
     let source = all_prelude_source();
     assert!(!source.contains("\"/bin/sh\""));
     assert!(!source.contains("'/bin/sh'"));
+}
+
+#[test]
+fn react_native_target_kinds_are_discoverable_with_implementations() {
+    let kinds = [
+        "react_native_dependencies",
+        "react_native_module",
+        "react_native_bundle",
+        "react_native_codegen",
+        "react_native_autolinking",
+        "react_native_apple_application",
+        "react_native_android_application",
+        "react_native_metro",
+    ];
+    for kind in kinds {
+        assert!(
+            built_in_target_kind_schema(kind).is_some(),
+            "missing target kind schema `{kind}`"
+        );
+        assert!(
+            target_kind_has_impl(kind).unwrap(),
+            "target kind `{kind}` should have an implementation"
+        );
+    }
+}
+
+#[test]
+fn react_native_schema_exposes_locked_and_live_development_inputs() {
+    assert_target_kind_attrs(
+        "react_native_dependencies",
+        &[
+            "package_json",
+            "lockfile",
+            "npmrc",
+            "modules_snapshot",
+            "allow_network",
+        ],
+    );
+    assert_target_kind_attrs(
+        "react_native_bundle",
+        &["platform", "entry", "metro_config", "hermes"],
+    );
+    assert_target_kind_attrs(
+        "react_native_metro",
+        &["port", "host", "metro_config", "reset_cache"],
+    );
+    assert_target_kind_attrs(
+        "react_native_android_application",
+        &["apk_path", "adb_serial", "exclude_srcs"],
+    );
+    assert_target_kind_attrs("react_native_apple_application", &["sdk", "exclude_srcs"]);
+}
+
+#[test]
+fn react_native_resolver_accepts_version_ranges_and_nested_hermes() {
+    let source = format!(
+        r#"{}
+ctx = {{
+    "label": {{"id": "Dependencies"}},
+    "attrs": {{
+        "package_json": "package.json",
+        "lockfile": "package-lock.json",
+    }},
+    "files": {{
+        "package.json": "{{\"dependencies\":{{\"react-native\":\"^0.86.0\"}}}}",
+        "package-lock.json": "{{\"packages\":{{\"node_modules/react-native\":{{\"version\":\"0.86.0\"}},\"node_modules/react-native/node_modules/hermes-compiler\":{{\"version\":\"250829098.0.14\"}}}}}}",
+    }},
+}}
+result = repr(_react_native_dependencies_resolver(ctx))
+"#,
+        react_native_prelude_source()
+    );
+
+    let result = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(result.contains("\"_react_native_version\": \"0.86.0\""));
+    assert!(result.contains("\"_hermes_version\": \"250829098.0.14\""));
+    assert!(result.contains(
+        "\"_hermes_package_path\": \"node_modules/react-native/node_modules/hermes-compiler\""
+    ));
+}
+
+#[test]
+fn react_native_resolver_rejects_credentials_in_npmrc() {
+    let source = format!(
+        r#"{}
+ctx = {{
+    "label": {{"id": "Dependencies"}},
+    "attrs": {{
+        "package_json": "package.json",
+        "lockfile": "package-lock.json",
+        "npmrc": ".npmrc",
+    }},
+    "files": {{
+        "package.json": "{{\"dependencies\":{{\"react-native\":\"0.86.0\"}}}}",
+        "package-lock.json": "{{\"packages\":{{\"node_modules/react-native\":{{\"version\":\"0.86.0\"}},\"node_modules/hermes-compiler\":{{\"version\":\"250829098.0.14\"}}}}}}",
+        ".npmrc": "//registry.example.com/:_authToken=secret",
+    }},
+}}
+result = repr(_react_native_dependencies_resolver(ctx))
+"#,
+        react_native_prelude_source()
+    );
+
+    let error = eval_prelude_source_to_repr(source).unwrap_err();
+
+    assert!(
+        error.contains("must not contain authentication tokens"),
+        "{error}"
+    );
+}
+
+#[test]
+fn react_native_dependency_install_does_not_stage_the_module_snapshot() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("app");
+    std::fs::create_dir_all(&package).unwrap();
+    for path in [
+        "package.json",
+        "package-lock.json",
+        "react-native-modules.json",
+    ] {
+        std::fs::write(package.join(path), "{}\n").unwrap();
+    }
+    let prelude = react_native_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _react_native_tools(ctx, include_npm = False):
+    return {{
+        "node": "/tools/node",
+        "node_version": "v24.0.0",
+        "npm": "/tools/npm",
+        "npm_version": "11.0.0",
+        "identity": "node-v24-npm-v11",
+    }}
+
+ctx = {{
+    "label": {{"package": "app", "name": "Dependencies", "id": "app/Dependencies"}},
+    "attr": {{
+        "_react_native_resolved": True,
+        "_react_native_version": "0.86.0",
+        "_hermes_version": "250829098.0.14",
+        "_hermes_package_path": "node_modules/hermes-compiler",
+        "modules_snapshot": "react-native-modules.json",
+        "allow_network": True,
+    }},
+    "configuration": {{"tokens": []}},
+    "deps": [],
+    "srcs": ["package.json", "package-lock.json", "react-native-modules.json"],
+    "build_dir": ".once/out/app/Dependencies",
+    "scratch_dir": ".once/tmp/analysis/app/Dependencies",
+    "capability": "build",
+}}
+result = repr(_react_native_dependencies_impl(ctx))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "app".to_string(),
+        ".once/out/app/Dependencies".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert!(result
+        .unwrap()
+        .contains("\"react_native_dependency_set\": True"));
+    assert!(!store.actions.iter().any(|action| {
+        action
+            .identifier
+            .as_deref()
+            .is_some_and(|identifier| identifier.contains("react-native-modules.json"))
+    }));
+    let install = action_by_identifier(&store, "app/Dependencies:npm-ci");
+    assert!(!install
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("react-native-modules.json")));
+}
+
+#[test]
+fn react_native_bundle_declares_metro_hermes_and_portable_staging_actions() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("app");
+    std::fs::create_dir_all(&package).unwrap();
+    for (path, contents) in [
+        ("index.js", "export default {};\n"),
+        ("metro.config.js", "module.exports = {};\n"),
+        ("package.json", "{}\n"),
+        ("package-lock.json", "{}\n"),
+    ] {
+        std::fs::write(package.join(path), contents).unwrap();
+    }
+    let prelude = react_native_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _react_native_tools(ctx, include_npm = False):
+    return {{
+        "node": "/tools/node",
+        "node_version": "v24.0.0",
+        "identity": "node-v24",
+    }}
+
+def host_os():
+    return "macos"
+
+def host_arch():
+    return "arm64"
+
+ctx = {{
+    "label": {{"package": "app", "name": "Bundle", "id": "app/Bundle"}},
+    "attr": {{
+        "platform": "ios",
+        "entry": "index.js",
+        "metro_config": "metro.config.js",
+        "hermes": True,
+    }},
+    "configuration": {{"tokens": []}},
+    "deps": [{{
+        "react_native_dependency_set": True,
+        "javascript_root": ".once/out/Dependencies/javascript",
+        "node_modules": ".once/out/Dependencies/javascript/node_modules",
+        "package_json": "app/package.json",
+        "lockfile": "app/package-lock.json",
+        "react_native_version": "0.86.0",
+        "hermes_version": "250829098.0.14",
+        "hermes_package_path": "node_modules/react-native/node_modules/hermes-compiler",
+    }}],
+    "srcs": ["index.js"],
+    "build_dir": ".once/out/app/Bundle",
+    "scratch_dir": ".once/tmp/analysis/app/Bundle",
+    "capability": "build",
+}}
+result = repr(_react_native_bundle_impl(ctx))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "app".to_string(),
+        ".once/out/app/Bundle".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert!(result.unwrap().contains("\"react_native_bundle\": True"));
+    let stage_link = action_by_identifier(&store, "app/Bundle:stage-node-modules");
+    assert!(matches!(
+        stage_link.operation,
+        Some(DeclaredActionOperation::LinkPath { .. })
+    ));
+    let metro = action_by_identifier(&store, "app/Bundle:metro-bundle");
+    assert!(metro.inputs.iter().any(|input| input.ends_with("project")));
+    assert!(store.actions.iter().any(|action| {
+        matches!(
+            &action.operation,
+            Some(DeclaredActionOperation::CopyPath { sources, .. })
+                if sources == &vec!["app/metro.config.js".to_string()]
+        )
+    }));
+    let hermes = action_by_identifier(&store, "app/Bundle:hermes-compile");
+    assert!(hermes.argv[0].contains(
+        "node_modules/react-native/node_modules/hermes-compiler/hermesc/osx-bin/hermesc"
+    ));
+    action_by_identifier(&store, "app/Bundle:compose-source-maps");
+}
+
+#[test]
+fn react_native_metro_uses_live_sources_and_an_immutable_dependency_snapshot() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("app");
+    std::fs::create_dir_all(&package).unwrap();
+    for (path, contents) in [
+        ("index.js", "export default {};\n"),
+        (
+            "metro.config.js",
+            "module.exports = require('./metro.shared');\n",
+        ),
+        ("metro.shared", "module.exports = {};\n"),
+        ("package.json", "{}\n"),
+        ("package-lock.json", "{}\n"),
+    ] {
+        std::fs::write(package.join(path), contents).unwrap();
+    }
+    let prelude = react_native_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _react_native_tools(ctx, include_npm = False):
+    return {{
+        "node": "/tools/node",
+        "node_version": "v24.0.0",
+        "identity": "node-v24",
+    }}
+
+ctx = {{
+    "label": {{"package": "app", "name": "Metro", "id": "app/Metro"}},
+    "attr": {{
+        "metro_config": "metro.config.js",
+        "port": 8081,
+        "host": "127.0.0.1",
+    }},
+    "configuration": {{"tokens": []}},
+    "deps": [{{
+        "react_native_dependency_set": True,
+        "javascript_root": ".once/out/Dependencies/javascript",
+        "node_modules": ".once/out/Dependencies/javascript/node_modules",
+        "package_json": "app/package.json",
+        "lockfile": "app/package-lock.json",
+        "react_native_version": "0.86.0",
+    }}],
+    "srcs": ["index.js", "metro.config.js", "metro.shared"],
+    "build_dir": ".once/out/app/Metro",
+    "scratch_dir": ".once/tmp/analysis/app/Metro",
+    "capability": "run",
+}}
+result = repr(_react_native_metro_impl(ctx))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "app".to_string(),
+        ".once/out/app/Metro".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert!(result.unwrap().contains("\"react_native_metro\": True"));
+    let metro = action_by_identifier(&store, "app/Metro:metro");
+    assert!(!metro.cacheable);
+    assert!(
+        metro
+            .argv
+            .windows(2)
+            .any(|args| args == ["--projectRoot", "{{once.execution_root}}/app"]),
+        "{:?}",
+        metro.argv
+    );
+    assert_eq!(
+        metro.env.get("ONCE_REACT_NATIVE_METRO_CONFIG"),
+        Some(&"{{once.execution_root}}/app/metro.config.js".to_string())
+    );
+    let snapshot = action_by_identifier(&store, "app/Metro:snapshot-dependencies");
+    assert!(matches!(
+        snapshot.operation,
+        Some(DeclaredActionOperation::CopyPath {
+            mode: DeclaredCopyPathMode::Tree,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn react_native_android_build_uses_custom_application_output_and_exposes_logs() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("app");
+    std::fs::create_dir_all(package.join("android/gradle/wrapper")).unwrap();
+    for (path, contents) in [
+        ("package.json", "{}\n"),
+        ("package-lock.json", "{}\n"),
+        ("android/settings.gradle", "rootProject.name = 'App'\n"),
+        ("android/gradle/wrapper/gradle-wrapper.jar", "jar"),
+    ] {
+        std::fs::write(package.join(path), contents).unwrap();
+    }
+    let prelude = react_native_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _react_native_tools(ctx, include_npm = False):
+    return {{
+        "node": "/tools/node",
+        "node_version": "v24.0.0",
+        "identity": "node-v24",
+    }}
+
+def _resolve_host_executable(name):
+    return "/tools/" + name
+
+def host_command(argv, env = None, merge_stderr = None):
+    return "tool version"
+
+def host_env(name):
+    if name == "HOME":
+        return "/home/test"
+    return ""
+
+ctx = {{
+    "label": {{"package": "app", "name": "Android", "id": "app/Android"}},
+    "attr": {{
+        "application_id": "com.example",
+        "native_root": "android",
+        "module": "app",
+        "configuration": "demoDebug",
+        "apk_path": "android/app/build/outputs/apk/demo/debug/app-demo-debug.apk",
+        "android_sdk": "/sdk",
+        "android_ndk": "/ndk",
+    }},
+    "configuration": {{"tokens": []}},
+    "deps": [{{
+        "react_native_dependency_set": True,
+        "javascript_root": ".once/out/Dependencies/javascript",
+        "node_modules": ".once/out/Dependencies/javascript/node_modules",
+        "package_json": "app/package.json",
+        "lockfile": "app/package-lock.json",
+        "react_native_version": "0.86.0",
+        "hermes_version": "250829098.0.14",
+    }}],
+    "srcs": ["android/**/*"],
+    "build_dir": ".once/out/app/Android",
+    "scratch_dir": ".once/tmp/analysis/app/Android",
+    "capability": "build",
+}}
+result = repr(_react_native_android_application_impl(ctx))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "app".to_string(),
+        ".once/out/app/Android".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let result = result.unwrap();
+    assert!(
+        result.contains("\"logs\": [\".once/out/app/Android/gradle.log\"]"),
+        "{result}"
+    );
+    let gradle = action_by_identifier(&store, "app/Android:gradle");
+    assert!(gradle.argv.iter().any(|arg| arg == "app:assembleDemoDebug"));
+    assert!(gradle
+        .outputs
+        .iter()
+        .any(|output| output
+            .ends_with("android/app/build/outputs/apk/demo/debug/app-demo-debug.apk")));
+    assert_eq!(
+        gradle.stdout.as_deref(),
+        Some(".once/out/app/Android/gradle.log")
+    );
+    assert_eq!(gradle.stderr, gradle.stdout);
+}
+
+#[test]
+fn react_native_android_run_waits_for_the_selected_device_and_orders_effects() {
+    let workspace = TempDir::new().unwrap();
+    let prelude = react_native_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _resolve_host_executable(name):
+    return "/tools/" + name
+
+def host_command(argv, env = None, merge_stderr = None):
+    return "Android Debug Bridge version"
+
+ctx = {{
+    "label": {{"package": "app", "name": "Android", "id": "app/Android"}},
+    "attr": {{
+        "application_id": "com.example",
+        "configuration": "debug",
+        "adb_serial": "emulator-5554",
+        "launch_activity": ".MainActivity",
+    }},
+    "configuration": {{"tokens": []}},
+    "deps": [{{"react_native_dependency_set": True}}],
+    "srcs": [],
+    "build_dir": ".once/out/app/Android",
+    "scratch_dir": ".once/tmp/analysis/app/Android",
+    "capability": "run",
+}}
+result = repr(_react_native_android_application_impl(ctx))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "app".to_string(),
+        ".once/out/app/Android".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert!(result
+        .unwrap()
+        .contains("\"application_id\": \"com.example\""));
+    let wait = action_by_identifier(&store, "app/Android:android-wait");
+    assert_eq!(
+        wait.argv,
+        ["/tools/adb", "-s", "emulator-5554", "wait-for-device"]
+    );
+    let install = action_by_identifier(&store, "app/Android:android-install");
+    assert!(install
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("run/device-ready")));
+    let reverse = action_by_identifier(&store, "app/Android:android-metro-reverse");
+    assert!(reverse
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("run/installed")));
+    let launch = action_by_identifier(&store, "app/Android:android-launch");
+    assert!(launch
+        .argv
+        .iter()
+        .any(|arg| arg == "com.example/.MainActivity"));
+    assert!(launch
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("run/metro-reversed")));
+    for action in [wait, install, reverse, launch] {
+        assert!(!action.cacheable);
+    }
+}
+
+#[test]
+fn react_native_apple_build_distinguishes_simulator_and_device_destinations() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("app");
+    std::fs::create_dir_all(package.join("ios")).unwrap();
+    for (path, contents) in [
+        ("package.json", "{}\n"),
+        ("package-lock.json", "{}\n"),
+        ("Gemfile", "source 'https://rubygems.org'\n"),
+        ("Gemfile.lock", "BUNDLED WITH\n   4.0.0\n"),
+        ("ios/Podfile", "platform :ios, '15.1'\n"),
+    ] {
+        std::fs::write(package.join(path), contents).unwrap();
+    }
+    let prelude = react_native_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _react_native_tools(ctx, include_npm = False):
+    return {{
+        "node": "/tools/node",
+        "node_version": "v24.0.0",
+        "identity": "node-v24",
+    }}
+
+def _resolve_host_executable(name):
+    return "/tools/" + name
+
+def host_command(argv, env = None, merge_stderr = None):
+    return "tool version"
+
+def host_which_optional(name):
+    return None
+
+ctx = {{
+    "label": {{"package": "app", "name": "Apple", "id": "app/Apple"}},
+    "attr": {{
+        "bundle_id": "com.example",
+        "product_name": "Example",
+        "native_root": "ios",
+        "workspace": "Example.xcworkspace",
+        "scheme": "Example",
+        "configuration": "Release",
+        "sdk": "iphoneos",
+        "allow_network": True,
+    }},
+    "configuration": {{"tokens": []}},
+    "deps": [{{
+        "react_native_dependency_set": True,
+        "javascript_root": ".once/out/Dependencies/javascript",
+        "node_modules": ".once/out/Dependencies/javascript/node_modules",
+        "package_json": "app/package.json",
+        "lockfile": "app/package-lock.json",
+        "react_native_version": "0.86.0",
+        "hermes_version": "250829098.0.14",
+    }}],
+    "srcs": ["Gemfile", "Gemfile.lock", "ios/**/*"],
+    "build_dir": ".once/out/app/Apple",
+    "scratch_dir": ".once/tmp/analysis/app/Apple",
+    "capability": "build",
+}}
+result = repr(_react_native_apple_application_impl(ctx))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "app".to_string(),
+        ".once/out/app/Apple".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let result = result.unwrap();
+    assert!(
+        result.contains("\"logs\": [\".once/out/app/Apple/xcodebuild.log\"]"),
+        "{result}"
+    );
+    let xcodebuild = action_by_identifier(&store, "app/Apple:xcodebuild");
+    assert!(xcodebuild
+        .argv
+        .windows(2)
+        .any(|args| args == ["-destination", "generic/platform=iOS"]));
+    assert!(!xcodebuild
+        .argv
+        .iter()
+        .any(|arg| arg == "CODE_SIGNING_ALLOWED=NO"));
+    assert!(xcodebuild
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("Release-iphoneos/Example.app")));
+    assert_eq!(
+        xcodebuild.stdout.as_deref(),
+        Some(".once/out/app/Apple/xcodebuild.log")
+    );
+    assert_eq!(xcodebuild.stderr, xcodebuild.stdout);
 }
 
 #[test]

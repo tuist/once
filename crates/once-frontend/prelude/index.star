@@ -12,4 +12,5 @@ PRELUDE_SOURCES = [
     "python.star",
     "ruby.star",
     "javascript.star",
+    "react_native.star",
 ]

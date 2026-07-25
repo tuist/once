@@ -1,0 +1,162 @@
+[[target]]
+name = "Dependencies"
+kind = "react_native_dependencies"
+srcs = [
+  "package.json",
+  "package-lock.json",
+  "react-native-modules.json",
+]
+
+[target.attrs]
+package_json = "package.json"
+lockfile = "package-lock.json"
+modules_snapshot = "react-native-modules.json"
+resolver_inputs = [
+  "package.json",
+  "package-lock.json",
+  "react-native-modules.json",
+]
+allow_network = true
+
+[[target]]
+name = "Autolinking"
+kind = "react_native_autolinking"
+srcs = [
+  "package.json",
+  "package-lock.json",
+  "app.json",
+]
+deps = ["./Dependencies"]
+
+[[target]]
+name = "CodegenApple"
+kind = "react_native_codegen"
+srcs = [
+  "package.json",
+  "package-lock.json",
+  "app.json",
+]
+deps = ["./Dependencies"]
+
+[target.attrs]
+platform = "ios"
+
+[[target]]
+name = "CodegenAndroid"
+kind = "react_native_codegen"
+srcs = [
+  "package.json",
+  "package-lock.json",
+  "app.json",
+]
+deps = ["./Dependencies"]
+
+[target.attrs]
+platform = "android"
+
+[[target]]
+name = "AppleBundle"
+kind = "react_native_bundle"
+srcs = [
+  "index.js",
+  "App.tsx",
+  "app.json",
+  "babel.config.js",
+  "metro.config.js",
+]
+deps = ["./Dependencies"]
+
+[target.attrs]
+platform = "ios"
+entry = "index.js"
+metro_config = "metro.config.js"
+hermes = true
+dev = false
+minify = true
+
+[[target]]
+name = "AndroidBundle"
+kind = "react_native_bundle"
+srcs = [
+  "index.js",
+  "App.tsx",
+  "app.json",
+  "babel.config.js",
+  "metro.config.js",
+]
+deps = ["./Dependencies"]
+
+[target.attrs]
+platform = "android"
+entry = "index.js"
+metro_config = "metro.config.js"
+hermes = true
+dev = false
+minify = true
+
+[[target]]
+name = "OnceBaseline"
+kind = "react_native_apple_application"
+srcs = [
+  "Gemfile",
+  "Gemfile.lock",
+  "package.json",
+  "package-lock.json",
+  "app.json",
+  "ios/**/*",
+]
+deps = [
+  "./Dependencies",
+  "./Autolinking",
+  "./CodegenApple",
+]
+
+[target.attrs]
+bundle_id = "org.reactjs.native.example.OnceBaseline"
+product_name = "OnceBaseline"
+native_root = "ios"
+workspace = "OnceBaseline.xcworkspace"
+scheme = "OnceBaseline"
+configuration = "Debug"
+allow_network = true
+
+[[target]]
+name = "OnceBaselineAndroid"
+kind = "react_native_android_application"
+srcs = [
+  "package.json",
+  "package-lock.json",
+  "app.json",
+  "android/**/*",
+]
+deps = [
+  "./Dependencies",
+  "./Autolinking",
+  "./CodegenAndroid",
+]
+
+[target.attrs]
+application_id = "com.oncebaseline"
+launch_activity = ".MainActivity"
+native_root = "android"
+module = "app"
+configuration = "debug"
+architectures = ["arm64-v8a"]
+allow_network = true
+
+[[target]]
+name = "Metro"
+kind = "react_native_metro"
+srcs = [
+  "index.js",
+  "App.tsx",
+  "app.json",
+  "babel.config.js",
+  "metro.config.js",
+]
+deps = ["./Dependencies"]
+
+[target.attrs]
+port = 8081
+host = "127.0.0.1"
+metro_config = "metro.config.js"
