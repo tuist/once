@@ -102,6 +102,25 @@ and action tests.
 - [`jest_test`](/reference/prelude/jest_test): Jest suites with exact case
   execution and automatic batching
 
+## React Native target kinds
+
+- [`react_native_dependencies`](/reference/prelude/react_native_dependencies):
+  locked JavaScript dependency graph and native-module identities
+- [`react_native_module`](/reference/prelude/react_native_module): one
+  resolver-generated native module
+- [`react_native_autolinking`](/reference/prelude/react_native_autolinking):
+  normalized native-module discovery
+- [`react_native_codegen`](/reference/prelude/react_native_codegen): New
+  Architecture native interface generation
+- [`react_native_bundle`](/reference/prelude/react_native_bundle): Metro
+  bundle, Hermes bytecode, assets, and source map
+- [`react_native_apple_application`](/reference/prelude/react_native_apple_application):
+  CocoaPods and Xcode application build and simulator launch
+- [`react_native_android_application`](/reference/prelude/react_native_android_application):
+  Gradle application build and emulator launch
+- [`react_native_metro`](/reference/prelude/react_native_metro): live
+  development server with Fast Refresh
+
 ## Rust target kinds
 
 - [`cargo_dependencies`](/reference/prelude/cargo_dependencies): cacheable

@@ -37,6 +37,7 @@ and connects those targets to first-party consumers.
 | Rust | [`cargo_dependencies`](/reference/prelude/cargo_dependencies) | `Cargo.lock` and Cargo metadata | `rust_library`, `rust_binary`, or `rust_test` |
 | Elixir | [`mix_dependencies`](/reference/prelude/mix_dependencies) | `mix.lock` and the active Mix graph | `elixir_library` |
 | Swift | [`swift_package_dependencies`](/reference/prelude/swift_package_dependencies) | `Package.resolved` and a package graph snapshot | Apple libraries, frameworks, applications, or tests |
+| React Native | [`react_native_dependencies`](/reference/prelude/react_native_dependencies) | `package.json`, `package-lock.json`, and an optional native-module snapshot | Metro bundles or Apple and Android applications |
 | Zig | [`zig_dependencies`](/reference/prelude/zig_dependencies) | `build.zig.zon` package records | Zig modules, binaries, libraries, or tests |
 
 The update workflow is deliberately separate from an ordinary build:
@@ -76,6 +77,9 @@ query-before-build workflow, current limitations, and follow-up steps:
   cross-compilation, and locked vendored modules.
 - [Rust](/guide/graph/rust) covers libraries, binaries, tests, procedural
   macros, Cargo dependencies, and native mobile outputs.
+- [React Native](/guide/graph/react-native) covers New Architecture
+  dependencies, native modules, JavaScript bundles, Apple and Android
+  applications, and Fast Refresh.
 - [Zig](/guide/graph/zig) covers modules, binaries, tests, libraries, and C or
   C++ dependencies.
 
