@@ -4,6 +4,7 @@
 //! This format stores the mode beside the contents while keeping directory
 //! output encoding separate.
 
+use std::io::{Read, Write};
 use std::path::Path;
 
 use once_cas::Digest;
@@ -45,18 +46,45 @@ pub(crate) fn digest_file_blob(path: &Path) -> std::io::Result<Digest> {
     Digest::of_parts_and_reader(&[FILE_BLOB_MAGIC, &mode], file)
 }
 
-pub(crate) fn restore_file_blob(logical_path: &str, abs: &Path, bytes: &[u8]) -> Result<()> {
-    let (mode, content) = decode_file_blob(logical_path, bytes)?;
+pub(crate) fn restore_file_blob_from_reader(
+    logical_path: &str,
+    abs: &Path,
+    mut reader: impl Read,
+) -> Result<()> {
+    let mut header = [0_u8; FILE_BLOB_MAGIC.len() + 4];
+    let mut filled = 0;
+    while filled < header.len() {
+        match reader.read(&mut header[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(source) => {
+                return Err(Error::RestoreOutput {
+                    path: logical_path.to_string(),
+                    source,
+                });
+            }
+        }
+    }
+    let (mode, _) = decode_file_blob(logical_path, &header[..filled])?;
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent).map_err(|source| Error::RestoreOutput {
             path: logical_path.to_string(),
             source,
         })?;
     }
-    std::fs::write(abs, content).map_err(|source| Error::RestoreOutput {
+    let mut output = std::fs::File::create(abs).map_err(|source| Error::RestoreOutput {
         path: logical_path.to_string(),
         source,
     })?;
+    std::io::copy(&mut reader, &mut output).map_err(|source| Error::RestoreOutput {
+        path: logical_path.to_string(),
+        source,
+    })?;
+    output.flush().map_err(|source| Error::RestoreOutput {
+        path: logical_path.to_string(),
+        source,
+    })?;
+    drop(output);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -143,5 +171,19 @@ mod tests {
                 Digest::of_bytes(&capture_file_blob(&path).unwrap())
             );
         }
+    }
+
+    #[test]
+    fn streaming_restore_matches_buffered_restore() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("source");
+        let restored = tmp.path().join("restored");
+        let bytes = vec![b'x'; 1024 * 1024];
+        std::fs::write(&source, &bytes).unwrap();
+        let blob = capture_file_blob(&source).unwrap();
+
+        restore_file_blob_from_reader("restored", &restored, blob.as_slice()).unwrap();
+
+        assert_eq!(std::fs::read(restored).unwrap(), bytes);
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -6,7 +7,9 @@ use once_cas::{ActionResult, CacheProvider, Digest};
 use tokio::task::JoinSet;
 
 use crate::directory_blob::{capture_directory_blob, is_directory_blob, restore_directory_blob};
-use crate::file_blob::{capture_file_blob, digest_file_blob, restore_file_blob, FILE_BLOB_MAGIC};
+use crate::file_blob::{
+    capture_file_blob, digest_file_blob, restore_file_blob_from_reader, FILE_BLOB_MAGIC,
+};
 use crate::{Error, OutputSymlinkMode, Result, WorkspacePath};
 
 const RESTORE_PREFETCH_CONCURRENCY: usize = 16;
@@ -27,24 +30,46 @@ pub(crate) async fn restore(
     let prefetched = prefetch_output_blobs(&outputs, cache, staging.path()).await?;
     for output in prefetched {
         let PrefetchedOutput { rel, blob_path, .. } = output;
-        let bytes = match tokio::fs::read(&blob_path).await {
-            Ok(bytes) => bytes,
-            Err(source) => return Err(Error::RestoreOutput { path: rel, source }),
-        };
         let abs = workspace_root.join(&rel);
-        if is_directory_blob(&bytes) {
-            restore_directory_blob(&rel, &abs, &bytes)?;
-            continue;
-        }
-        if bytes.starts_with(FILE_BLOB_MAGIC) {
-            restore_file_blob(&rel, &abs, &bytes)?;
-            continue;
-        }
-        // TODO: Remove this raw-blob compatibility branch only after an
-        // action cache version bump makes old file outputs unreachable.
-        restore_legacy_file(&rel, &abs, &bytes).await?;
+        restore_prefetched_output(&rel, &abs, &blob_path)?;
     }
     Ok(())
+}
+
+fn restore_prefetched_output(rel: &str, abs: &Path, blob_path: &Path) -> Result<()> {
+    let mut blob = std::fs::File::open(blob_path).map_err(|source| Error::RestoreOutput {
+        path: rel.to_string(),
+        source,
+    })?;
+    let mut prefix = [0_u8; 32];
+    let mut read = 0;
+    while read < prefix.len() {
+        match blob.read(&mut prefix[read..]) {
+            Ok(0) => break,
+            Ok(count) => read += count,
+            Err(source) => {
+                return Err(Error::RestoreOutput {
+                    path: rel.to_string(),
+                    source,
+                });
+            }
+        }
+    }
+    blob.rewind().map_err(|source| Error::RestoreOutput {
+        path: rel.to_string(),
+        source,
+    })?;
+    if is_directory_blob(&prefix[..read]) {
+        let bytes = std::fs::read(blob_path).map_err(|source| Error::RestoreOutput {
+            path: rel.to_string(),
+            source,
+        })?;
+        return restore_directory_blob(rel, abs, &bytes);
+    }
+    if prefix[..read].starts_with(FILE_BLOB_MAGIC) {
+        return restore_file_blob_from_reader(rel, abs, blob);
+    }
+    restore_legacy_file(rel, abs, blob)
 }
 
 async fn outputs_needing_restore(
@@ -231,42 +256,34 @@ impl Drop for RestoreStagingDir {
     }
 }
 
-async fn restore_legacy_file(rel: &str, abs: &Path, bytes: &[u8]) -> Result<()> {
-    use tokio::io::AsyncWriteExt;
-
+fn restore_legacy_file(rel: &str, abs: &Path, mut blob: impl Read) -> Result<()> {
     if let Some(parent) = abs.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|source| Error::RestoreOutput {
-                path: rel.to_string(),
-                source,
-            })?;
+        std::fs::create_dir_all(parent).map_err(|source| Error::RestoreOutput {
+            path: rel.to_string(),
+            source,
+        })?;
     }
-    let mut file = tokio::fs::File::create(&abs)
-        .await
-        .map_err(|source| Error::RestoreOutput {
-            path: rel.to_string(),
-            source,
-        })?;
-    file.write_all(bytes)
-        .await
-        .map_err(|source| Error::RestoreOutput {
-            path: rel.to_string(),
-            source,
-        })?;
-    file.flush().await.map_err(|source| Error::RestoreOutput {
+    let mut file = std::fs::File::create(abs).map_err(|source| Error::RestoreOutput {
+        path: rel.to_string(),
+        source,
+    })?;
+    std::io::copy(&mut blob, &mut file).map_err(|source| Error::RestoreOutput {
+        path: rel.to_string(),
+        source,
+    })?;
+    file.flush().map_err(|source| Error::RestoreOutput {
         path: rel.to_string(),
         source,
     })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        tokio::fs::set_permissions(&abs, std::fs::Permissions::from_mode(0o755))
-            .await
-            .map_err(|source| Error::RestoreOutput {
+        std::fs::set_permissions(abs, std::fs::Permissions::from_mode(0o755)).map_err(
+            |source| Error::RestoreOutput {
                 path: rel.to_string(),
                 source,
-            })?;
+            },
+        )?;
     }
     Ok(())
 }
