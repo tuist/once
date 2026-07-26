@@ -172,6 +172,15 @@ struct CommandKey {
     merge_stderr: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CachedToolCommand {
+    pub argv: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub cwd: Option<PathBuf>,
+    pub merge_stderr: bool,
+    pub output: String,
+}
+
 type HostEnvLookup = dyn Fn(&str) -> Option<String> + Send + Sync;
 
 pub(super) struct HostCache {
@@ -215,7 +224,29 @@ impl HostCache {
     }
 
     pub(super) fn with_tool_paths(tool_paths: BTreeMap<String, String>) -> Self {
+        Self::with_tool_cache(tool_paths, Vec::new())
+    }
+
+    pub(super) fn with_tool_cache(
+        tool_paths: BTreeMap<String, String>,
+        commands: Vec<CachedToolCommand>,
+    ) -> Self {
+        let commands = commands
+            .into_iter()
+            .map(|command| {
+                (
+                    CommandKey {
+                        argv: command.argv,
+                        env: command.env,
+                        cwd: command.cwd,
+                        merge_stderr: command.merge_stderr,
+                    },
+                    command.output,
+                )
+            })
+            .collect();
         Self {
+            commands: Arc::new(Mutex::new(commands)),
             tool_paths: Arc::new(tool_paths),
             ..Self::default()
         }
@@ -279,7 +310,8 @@ impl HostCache {
             .next()
             .ok_or_else(|| anyhow!("host_command requires a non-empty argv"))?;
         let command_args: Vec<&String> = iter.collect();
-        let mut command = Command::new(program);
+        let resolved_program = self.tool_paths.get(program).unwrap_or(program);
+        let mut command = Command::new(resolved_program);
         command.args(&command_args);
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
@@ -315,6 +347,45 @@ impl HostCache {
         }
         self.lock_commands()?.insert(key, combined.clone());
         Ok(combined)
+    }
+
+    pub(super) fn cacheable_tool_commands(&self) -> Result<Vec<CachedToolCommand>> {
+        let commands = self.lock_commands()?;
+        Ok(commands
+            .iter()
+            .filter(|(key, _)| self.is_cacheable_tool_command(key))
+            .map(|(key, output)| CachedToolCommand {
+                argv: key.argv.clone(),
+                env: key.env.clone(),
+                cwd: key.cwd.clone(),
+                merge_stderr: key.merge_stderr,
+                output: output.clone(),
+            })
+            .collect())
+    }
+
+    fn is_cacheable_tool_command(&self, key: &CommandKey) -> bool {
+        if !key.env.is_empty() || key.cwd.is_some() {
+            return false;
+        }
+        let Some(program) = key.argv.first() else {
+            return false;
+        };
+        if !self.tool_paths.contains_key(program)
+            && !self.tool_paths.values().any(|path| path == program)
+        {
+            return false;
+        }
+        let args = key
+            .argv
+            .iter()
+            .skip(1)
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        matches!(
+            args.as_slice(),
+            ["--version" | "-version" | "version"] | ["--version", "--verbose"]
+        )
     }
 
     fn lock_which(&self) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, Option<String>>>> {

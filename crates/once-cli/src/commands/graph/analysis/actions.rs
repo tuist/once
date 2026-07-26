@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
 use std::time::Duration;
@@ -11,9 +12,10 @@ use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     resolve_execution_argv, resolve_execution_env, validate_action_contract_with_options,
-    workspace_mise_command, workspace_tool_env_with_executables, Action, ActionContractOptions,
-    CopyPathMode, EvidenceCacheState, EvidenceSubject, FilesystemOperation, InputDigestBuilder,
-    OutputSymlinkMode, PreparePathMode, ResourceRequest, RunOpts, SandboxMode, WorkspacePath,
+    workspace_mise_command, workspace_prepared_tool_env, workspace_tool_env_with_executables,
+    Action, ActionContractOptions, CopyPathMode, EvidenceCacheState, EvidenceSubject,
+    FilesystemOperation, InputDigestBuilder, OutputSymlinkMode, PreparePathMode, ResourceRequest,
+    SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::{
     AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArgFile,
@@ -23,7 +25,7 @@ use once_frontend::GraphTarget;
 use serde::Serialize;
 use tokio::process::Command;
 
-use super::BuildOutcome;
+use super::{AvailableInput, BuildOutcome};
 
 const FAILURE_OUTPUT_LIMIT: usize = 16 * 1024;
 
@@ -36,6 +38,8 @@ struct DeclaredActionRun<'a> {
     index: usize,
     declared: DeclaredAction,
     input_action_digests: &'a [(String, Digest)],
+    available_inputs: &'a BTreeMap<String, AvailableInput>,
+    prior_cached_results: &'a [ActionResult],
     record_success_evidence: bool,
     sandbox: SandboxMode,
 }
@@ -50,6 +54,8 @@ struct DeclaredActionOutcome {
 struct DeclaredActionContext<'a> {
     workspace: &'a Path,
     cache: &'a CacheProvider,
+    available_inputs: &'a BTreeMap<String, AvailableInput>,
+    prior_cached_results: &'a [ActionResult],
     target_id: &'a str,
     capability: &'a str,
     index: usize,
@@ -92,7 +98,7 @@ pub(super) async fn validate_declared_actions(
     selected_index: Option<usize>,
 ) -> Result<Vec<DeclaredActionValidation>> {
     let mut actions = analysis.actions;
-    expose_target_tools(workspace, target, &mut actions).await?;
+    expose_target_tools(workspace, target, &mut actions, None).await?;
     if let Some(index) = selected_index {
         if index >= actions.len() {
             anyhow::bail!(
@@ -242,6 +248,8 @@ pub(super) fn run_declared_actions<'a>(
     capability: &'a str,
     analysis: AnalysisResult,
     dep_action_digests: &'a [(String, Digest)],
+    dependency_inputs: &'a BTreeMap<String, AvailableInput>,
+    tool_paths: &'a BTreeMap<String, String>,
     sandbox: SandboxMode,
 ) -> Pin<Box<dyn Future<Output = Result<BuildOutcome>> + Send + 'a>> {
     Box::pin(async move {
@@ -250,8 +258,8 @@ pub(super) fn run_declared_actions<'a>(
             provider,
             ..
         } = analysis;
-        expose_target_tools(workspace, target, &mut actions).await?;
-        tracing::debug!(
+        expose_target_tools(workspace, target, &mut actions, Some(tool_paths)).await?;
+        tracing::trace!(
             target = %target.label.id,
             declared_actions = actions.len(),
             dep_action_digests = dep_action_digests.len(),
@@ -259,6 +267,7 @@ pub(super) fn run_declared_actions<'a>(
         );
         let mut action_digests = Vec::new();
         let mut input_digests = Vec::new();
+        let mut available_inputs = dependency_inputs.clone();
         let mut aggregate_cache_state = None;
         let mut all_outputs = Vec::new();
         let mut aggregate_result = ActionResult {
@@ -267,6 +276,7 @@ pub(super) fn run_declared_actions<'a>(
             stderr: None,
             outputs: BTreeMap::new(),
         };
+        let mut cached_results = Vec::new();
         // A single-action target is fully represented by the caller's
         // capability-level record. Multi-action targets need per-action
         // success evidence so individual streams and outputs stay visible.
@@ -295,11 +305,23 @@ pub(super) fn run_declared_actions<'a>(
                 index,
                 declared,
                 input_action_digests: &input_action_digests,
+                available_inputs: &available_inputs,
+                prior_cached_results: &cached_results,
                 record_success_evidence,
                 sandbox,
             }))
             .await?;
             action_digests.push(outcome.digest);
+            available_inputs.extend(outcome.result.outputs.iter().map(|(path, digest)| {
+                (
+                    path.clone(),
+                    AvailableInput {
+                        blob_digest: *digest,
+                        producer_action_digest: outcome.digest,
+                        same_target: true,
+                    },
+                )
+            }));
             if let Some(input_digest) = outcome.input_digest {
                 input_digests.push(input_digest);
             }
@@ -313,7 +335,14 @@ pub(super) fn run_declared_actions<'a>(
                 aggregate_result.stdout = outcome.result.stdout;
                 aggregate_result.stderr = outcome.result.stderr;
             }
-            aggregate_result.outputs.extend(outcome.result.outputs);
+            aggregate_result.outputs.extend(
+                outcome
+                    .result
+                    .outputs
+                    .iter()
+                    .map(|(path, digest)| (path.clone(), *digest)),
+            );
+            track_cached_result(&mut cached_results, &outcome);
         }
 
         deduplicate_outputs(&mut all_outputs);
@@ -326,8 +355,19 @@ pub(super) fn run_declared_actions<'a>(
             cache_tag: cache_state.as_str(),
             cache_state,
             result: aggregate_result,
+            cached_results,
         })
     })
+}
+
+fn track_cached_result(cached_results: &mut Vec<ActionResult>, outcome: &DeclaredActionOutcome) {
+    if outcome.cache_state == EvidenceCacheState::Hit {
+        if !outcome.result.outputs.is_empty() {
+            cached_results.push(outcome.result.clone());
+        }
+        return;
+    }
+    cached_results.clear();
 }
 
 fn deduplicate_outputs(outputs: &mut Vec<String>) {
@@ -339,6 +379,7 @@ async fn expose_target_tools(
     workspace: &Path,
     target: &GraphTarget,
     actions: &mut [DeclaredAction],
+    resolved_paths: Option<&BTreeMap<String, String>>,
 ) -> Result<()> {
     let tools = target
         .tools
@@ -361,11 +402,63 @@ async fn expose_target_tools(
     };
     let tools = tools.into_iter().collect::<Vec<_>>();
     let executables = executables.into_iter().collect::<Vec<_>>();
-    let tool_env = workspace_tool_env_with_executables(workspace, &tools, &executables, &[])
-        .await
-        .context("building graph tool execution environment")?;
+    let tool_env = if let Some(resolved_paths) = resolved_paths {
+        let paths = executables
+            .iter()
+            .filter_map(|executable| {
+                resolved_paths
+                    .get(*executable)
+                    .map(PathBuf::from)
+                    .or_else(|| host_executable_path(executable))
+            })
+            .collect::<Vec<_>>();
+        workspace_prepared_tool_env(workspace, &tools, &paths)
+            .context("building prepared graph tool execution environment")?
+    } else {
+        workspace_tool_env_with_executables(workspace, &tools, &executables, &[])
+            .await
+            .context("building graph tool execution environment")?
+    };
     apply_tool_execution(&prefix, &tool_env, actions);
     Ok(())
+}
+
+fn host_executable_path(executable: &str) -> Option<PathBuf> {
+    let paths = env::var_os("PATH")?;
+    let path_ext = env::var_os("PATHEXT");
+    host_executable_path_in(executable, &paths, path_ext.as_deref())
+}
+
+fn host_executable_path_in(
+    executable: &str,
+    paths: &OsStr,
+    path_ext: Option<&OsStr>,
+) -> Option<PathBuf> {
+    let candidates = if cfg!(windows) && Path::new(executable).extension().is_none() {
+        let extensions = path_ext
+            .and_then(OsStr::to_str)
+            .unwrap_or(".COM;.EXE;.BAT;.CMD");
+        extensions
+            .split(';')
+            .map(str::trim)
+            .filter(|extension| !extension.is_empty())
+            .flat_map(|extension| {
+                [
+                    format!("{executable}{extension}"),
+                    format!("{executable}{}", extension.to_ascii_lowercase()),
+                ]
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![executable.to_string()]
+    };
+    env::split_paths(paths)
+        .flat_map(|directory| {
+            candidates
+                .iter()
+                .map(move |candidate| directory.join(candidate))
+        })
+        .find(|candidate| candidate.is_file())
 }
 
 fn apply_tool_execution(
@@ -452,6 +545,8 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         index,
         declared,
         input_action_digests,
+        available_inputs,
+        prior_cached_results,
         record_success_evidence,
         sandbox,
     } = run;
@@ -460,7 +555,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         .clone()
         .unwrap_or_else(|| "<anonymous>".to_string());
     let cacheable = declared.cacheable;
-    tracing::debug!(
+    tracing::trace!(
         target = %target_id,
         action_index = index,
         identifier = %identifier_for_error,
@@ -472,17 +567,20 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     materialize_declared_arg_files(workspace, &declared.arg_files).with_context(|| {
         format!("writing arg files for action {index} for {target_id} ({identifier_for_error})")
     })?;
-    let action = declared_to_action(
+    let action = declared_to_action_with_inputs(
         workspace,
         &declared,
         module_source_digest,
         input_action_digests,
+        available_inputs,
         sandbox,
     )
     .with_context(|| format!("building action {index} for {target_id} ({identifier_for_error})"))?;
     let context = DeclaredActionContext {
         workspace,
         cache,
+        available_inputs,
+        prior_cached_results,
         target_id,
         capability,
         index,
@@ -495,8 +593,14 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     if cacheable {
         run_cacheable_declared_action(context, action, &declared).await
     } else {
-        // An uncacheable action always runs its command, so its command
-        // setup always applies.
+        materialize_prior_cached_results(workspace, cache, prior_cached_results).await?;
+        materialize_available_inputs(workspace, cache, &declared, available_inputs)
+            .await
+            .with_context(|| {
+                format!(
+                    "materializing inputs for action {index} for {target_id} ({identifier_for_error})"
+                )
+            })?;
         prepare_declared_command_paths(workspace, &declared)
             .await
             .with_context(|| {
@@ -546,10 +650,8 @@ async fn run_cacheable_declared_action(
 ) -> Result<DeclaredActionOutcome> {
     // clean_paths and create_dirs model the command's own filesystem
     // setup, so they must only run when the command actually executes.
-    // On a cache hit the outputs are restored without running the
-    // command; removing a clean_paths entry that is not among the
-    // restored outputs would delete it with nothing left to regenerate
-    // it. Probe the cache first and prepare only on a miss.
+    // A cache hit does not run command setup. Removing a clean_paths entry on
+    // a hit could delete an unrelated path with no command left to recreate it.
     let cached = context
         .cache
         .get_action_result(&action.digest())
@@ -560,29 +662,20 @@ async fn run_cacheable_declared_action(
                 context.index, context.target_id, context.identifier
             )
         })?;
-    if cached.is_none() {
-        prepare_declared_command_paths(context.workspace, declared)
-            .await
-            .with_context(|| {
-                format!(
-                    "preparing action {} for {} ({})",
-                    context.index, context.target_id, context.identifier
-                )
-            })?;
-    }
-    let outcome = once_core::run_with_cache(
-        &action,
-        context.workspace,
-        context.cache,
-        RunOpts::default(),
-    )
-    .await
-    .with_context(|| {
-        format!(
-            "executing action {} for {} ({})",
-            context.index, context.target_id, context.identifier
-        )
-    })?;
+    let action_digest = action.digest();
+    let outcome = if let Some(result) = cached {
+        if action_result_blobs_present(&result, context.cache).await? {
+            once_core::Outcome {
+                action: action_digest,
+                result,
+                cache: once_core::CacheState::Hit,
+            }
+        } else {
+            execute_declared_cache_miss(&context, &action, declared).await?
+        }
+    } else {
+        execute_declared_cache_miss(&context, &action, declared).await?
+    };
     let exit_code = outcome.result.exit_code;
     if exit_code != 0 {
         record_declared_action_evidence(
@@ -638,6 +731,135 @@ async fn run_cacheable_declared_action(
         cache_state,
         result: outcome.result,
     })
+}
+
+async fn action_result_blobs_present(
+    result: &ActionResult,
+    cache: &CacheProvider,
+) -> once_cas::Result<bool> {
+    for digest in result
+        .stdout
+        .iter()
+        .chain(result.stderr.iter())
+        .chain(result.outputs.values())
+    {
+        if !cache.has_blob(digest).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn execute_declared_cache_miss(
+    context: &DeclaredActionContext<'_>,
+    action: &Action,
+    declared: &DeclaredAction,
+) -> Result<once_core::Outcome> {
+    materialize_prior_cached_results(
+        context.workspace,
+        context.cache,
+        context.prior_cached_results,
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "materializing prior outputs for action {} for {} ({})",
+            context.index, context.target_id, context.identifier
+        )
+    })?;
+    materialize_available_inputs(
+        context.workspace,
+        context.cache,
+        declared,
+        context.available_inputs,
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "materializing inputs for action {} for {} ({})",
+            context.index, context.target_id, context.identifier
+        )
+    })?;
+    prepare_declared_command_paths(context.workspace, declared)
+        .await
+        .with_context(|| {
+            format!(
+                "preparing action {} for {} ({})",
+                context.index, context.target_id, context.identifier
+            )
+        })?;
+    let result = once_core::run_uncached(action, context.workspace, context.cache, false)
+        .await
+        .with_context(|| {
+            format!(
+                "executing action {} for {} ({})",
+                context.index, context.target_id, context.identifier
+            )
+        })?;
+    let action_digest = action.digest();
+    if result.exit_code == 0 {
+        context
+            .cache
+            .put_action_result(&action_digest, &result)
+            .await
+            .with_context(|| {
+                format!(
+                    "caching action {} for {} ({})",
+                    context.index, context.target_id, context.identifier
+                )
+            })?;
+    }
+    Ok(once_core::Outcome {
+        action: action_digest,
+        result,
+        cache: once_core::CacheState::Miss,
+    })
+}
+
+async fn materialize_prior_cached_results(
+    workspace: &Path,
+    cache: &CacheProvider,
+    results: &[ActionResult],
+) -> Result<()> {
+    for result in results {
+        once_core::materialize_outputs(result, workspace, cache)
+            .await
+            .map_err(anyhow::Error::from)?;
+    }
+    Ok(())
+}
+
+async fn materialize_available_inputs(
+    workspace: &Path,
+    cache: &CacheProvider,
+    declared: &DeclaredAction,
+    available_inputs: &BTreeMap<String, AvailableInput>,
+) -> Result<()> {
+    let declared_inputs = declared
+        .inputs
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let outputs = available_inputs
+        .iter()
+        .filter(|(path, input)| !input.same_target && declared_inputs.contains(path.as_str()))
+        .map(|(path, input)| (path.clone(), input.blob_digest))
+        .collect::<BTreeMap<_, _>>();
+    if outputs.is_empty() {
+        return Ok(());
+    }
+    once_core::materialize_outputs(
+        &ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs,
+        },
+        workspace,
+        cache,
+    )
+    .await
+    .map_err(anyhow::Error::from)
 }
 
 async fn run_uncacheable_declared_action(
@@ -1136,6 +1358,24 @@ fn declared_to_action(
     dep_action_digests: &[(String, Digest)],
     sandbox_override: SandboxMode,
 ) -> Result<Action> {
+    declared_to_action_with_inputs(
+        workspace,
+        declared,
+        module_source_digest,
+        dep_action_digests,
+        &BTreeMap::new(),
+        sandbox_override,
+    )
+}
+
+fn declared_to_action_with_inputs(
+    workspace: &Path,
+    declared: &DeclaredAction,
+    module_source_digest: Digest,
+    dep_action_digests: &[(String, Digest)],
+    available_inputs: &BTreeMap<String, AvailableInput>,
+    sandbox_override: SandboxMode,
+) -> Result<Action> {
     let env_keys = declared.env.keys().cloned().collect::<Vec<_>>();
     tracing::trace!(
         identifier = ?declared.identifier,
@@ -1145,11 +1385,12 @@ fn declared_to_action(
         outputs = declared.outputs.len(),
         "declared graph action"
     );
-    let input_digest = compose_input_digest(
+    let input_digest = compose_input_digest_with_available(
         workspace,
         declared,
         module_source_digest,
         dep_action_digests,
+        available_inputs,
     )?;
     let inputs = declared_action_inputs(declared)?;
     let outputs = declared
@@ -1388,15 +1629,30 @@ fn ensure_output_parent_dirs(workspace: &Path, outputs: &[WorkspacePath]) -> Res
     Ok(())
 }
 
+#[cfg(test)]
 fn compose_input_digest(
     workspace: &Path,
     declared: &DeclaredAction,
     module_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
 ) -> Result<Digest> {
-    let mut builder = InputDigestBuilder::new(b"once.declared_action.input.v1\0");
-    // Keep the legacy namespace so terminology-only renames do not
-    // invalidate existing declared-action cache entries.
+    compose_input_digest_with_available(
+        workspace,
+        declared,
+        module_source_digest,
+        dep_action_digests,
+        &BTreeMap::new(),
+    )
+}
+
+fn compose_input_digest_with_available(
+    workspace: &Path,
+    declared: &DeclaredAction,
+    module_source_digest: Digest,
+    dep_action_digests: &[(String, Digest)],
+    available_inputs: &BTreeMap<String, AvailableInput>,
+) -> Result<Digest> {
+    let mut builder = InputDigestBuilder::new(b"once.declared_action.input.v2\0");
     builder.push_keyed(b"rules", &module_source_digest);
     if let Some(identity) = &declared.toolchain_identity {
         builder.push_bytes(identity.as_bytes());
@@ -1446,9 +1702,18 @@ fn compose_input_digest(
     sorted_inputs.sort_unstable();
     sorted_inputs.dedup();
     for input in &sorted_inputs {
-        builder
-            .push_source(workspace, input)
-            .with_context(|| format!("hashing declared input `{input}`"))?;
+        if let Some(available) = available_inputs.get(*input) {
+            let digest = if available.same_target {
+                &available.blob_digest
+            } else {
+                &available.producer_action_digest
+            };
+            builder.push_keyed(input.as_bytes(), digest);
+        } else {
+            builder
+                .push_source(workspace, input)
+                .with_context(|| format!("hashing declared input `{input}`"))?;
+        }
     }
 
     let mut dep_order = (0..dep_action_digests.len()).collect::<Vec<_>>();
@@ -1558,6 +1823,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn host_executable_fallback_resolves_the_relevant_path_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        let filename = if cfg!(windows) {
+            "fallback-tool.exe"
+        } else {
+            "fallback-tool"
+        };
+        let executable = directory.path().join(filename);
+        std::fs::write(&executable, b"tool").unwrap();
+        let paths = env::join_paths([directory.path()]).unwrap();
+
+        assert_eq!(
+            host_executable_path_in("fallback-tool", &paths, Some(OsStr::new(".COM;.EXE;.CMD"))),
+            Some(executable)
+        );
+    }
+
     fn module_digest() -> Digest {
         Digest::of_bytes(b"modules")
     }
@@ -1591,6 +1874,29 @@ mod tests {
         assert_eq!(
             missing_declared_inputs(workspace.path(), &declared),
             vec![".once/out/x/generated.rlib".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn same_target_outputs_materialize_before_a_later_miss() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let blob = cache.put_blob(b"generated").await.unwrap();
+        let path = ".once/tmp/analysis/generated.txt";
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::from([(path.to_string(), blob)]),
+        };
+
+        materialize_prior_cached_results(workspace.path(), &cache, &[result])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(workspace.path().join(path)).unwrap(),
+            b"generated"
         );
     }
 
@@ -2104,6 +2410,8 @@ mod tests {
             "build",
             analysis,
             &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             SandboxMode::default(),
         )
         .await
@@ -2145,12 +2453,8 @@ mod tests {
         assert_eq!(aggregate_declared_action_cache_state(Hit, Hit), Hit);
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn cache_hit_skips_command_setup_paths() {
-        let workspace = tempfile::tempdir().unwrap();
-        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
-        let target = GraphTarget {
+    fn cached_test_target() -> GraphTarget {
+        GraphTarget {
             label: once_frontend::TargetLabel {
                 package: "tools".to_string(),
                 name: "cached".to_string(),
@@ -2166,8 +2470,11 @@ mod tests {
             providers: Vec::new(),
             tools: Vec::new(),
             diagnostics: Vec::new(),
-        };
-        let analysis = || AnalysisResult {
+        }
+    }
+
+    fn cached_test_analysis(dependency_path: &str) -> AnalysisResult {
+        AnalysisResult {
             actions: vec![DeclaredAction {
                 operation: None,
                 argv: vec![
@@ -2176,9 +2483,8 @@ mod tests {
                     "printf ok > .once/out/out.txt".to_string(),
                 ],
                 arg_files: Vec::new(),
-                inputs: Vec::new(),
+                inputs: vec![dependency_path.to_string()],
                 outputs: vec![".once/out/out.txt".to_string()],
-                // A clean path that is not one of the action's outputs.
                 stdout: None,
                 stderr: None,
                 clean_paths: vec![".once/out/side.txt".to_string()],
@@ -2193,7 +2499,26 @@ mod tests {
             }],
             provider: serde_json::json!({}),
             declared_outputs: Vec::new(),
-        };
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cache_hit_skips_command_setup_and_input_materialization() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let dependency_path = ".once/out/dependency/input.txt";
+        let dependency_blob = cache.put_blob(b"dependency").await.unwrap();
+        let available_inputs = BTreeMap::from([(
+            dependency_path.to_string(),
+            AvailableInput {
+                blob_digest: dependency_blob,
+                producer_action_digest: Digest::of_bytes(b"dependency action"),
+                same_target: false,
+            },
+        )]);
+        let target = cached_test_target();
+        let analysis = || cached_test_analysis(dependency_path);
 
         // First run misses the cache and executes the command.
         let first = run_declared_actions(
@@ -2204,11 +2529,17 @@ mod tests {
             "build",
             analysis(),
             &[],
+            &available_inputs,
+            &BTreeMap::new(),
             SandboxMode::default(),
         )
         .await
         .unwrap();
         assert_eq!(first.cache_tag, "miss");
+        assert!(first.cached_results.is_empty());
+        let dependency = workspace.path().join(dependency_path);
+        assert_eq!(std::fs::read(&dependency).unwrap(), b"dependency");
+        std::fs::remove_file(&dependency).unwrap();
 
         // Stand in for content a prior uncached run left behind: it lives
         // under a clean path but is not one of the action's outputs, so a
@@ -2226,12 +2557,156 @@ mod tests {
             "build",
             analysis(),
             &[],
+            &available_inputs,
+            &BTreeMap::new(),
             SandboxMode::default(),
         )
         .await
         .unwrap();
         assert_eq!(second.cache_tag, "hit");
+        assert_eq!(
+            second
+                .cached_results
+                .iter()
+                .flat_map(|result| result.outputs.keys())
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [".once/out/out.txt"]
+        );
         assert_eq!(std::fs::read(&side).unwrap(), b"precious");
+        assert!(!dependency.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uncacheable_action_materializes_dependency_inputs() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let dependency_path = ".once/out/dependency/input.txt";
+        let dependency_blob = cache.put_blob(b"dependency").await.unwrap();
+        let available_inputs = BTreeMap::from([(
+            dependency_path.to_string(),
+            AvailableInput {
+                blob_digest: dependency_blob,
+                producer_action_digest: Digest::of_bytes(b"dependency action"),
+                same_target: false,
+            },
+        )]);
+        let target = cached_test_target();
+        let mut analysis = cached_test_analysis(dependency_path);
+        analysis.actions[0].cacheable = false;
+        analysis.actions[0].argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            format!("cat {dependency_path} > .once/out/out.txt"),
+        ];
+
+        let outcome = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis,
+            &[],
+            &available_inputs,
+            &BTreeMap::new(),
+            SandboxMode::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.cache_tag, "bypass");
+        assert_eq!(
+            std::fs::read(workspace.path().join(".once/out/out.txt")).unwrap(),
+            b"dependency"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn incomplete_direct_cache_hit_falls_back_to_execution() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cache")));
+        let target = cached_test_target();
+        let analysis = || {
+            let mut analysis = cached_test_analysis("unused");
+            analysis.actions[0].inputs.clear();
+            analysis
+        };
+
+        let first = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis(),
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            SandboxMode::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.cache_tag, "miss");
+
+        std::fs::remove_dir_all(cache.root().join("cas")).unwrap();
+        std::fs::remove_file(workspace.path().join(".once/out/out.txt")).unwrap();
+
+        let second = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis(),
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            SandboxMode::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.cache_tag, "miss");
+        assert_eq!(
+            std::fs::read(workspace.path().join(".once/out/out.txt")).unwrap(),
+            b"ok"
+        );
+
+        let third = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis(),
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            SandboxMode::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(third.cache_tag, "hit");
+    }
+
+    #[tokio::test]
+    async fn action_result_completeness_checks_stream_and_output_blobs() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cache")));
+        let present = cache.put_blob(b"present").await.unwrap();
+        let missing = Digest::of_bytes(b"missing");
+        let mut result = ActionResult {
+            exit_code: 0,
+            stdout: Some(present),
+            stderr: None,
+            outputs: BTreeMap::from([("out.txt".to_string(), present)]),
+        };
+
+        assert!(action_result_blobs_present(&result, &cache).await.unwrap());
+        result.stderr = Some(missing);
+        assert!(!action_result_blobs_present(&result, &cache).await.unwrap());
     }
 
     #[cfg(unix)]
@@ -2292,6 +2767,8 @@ mod tests {
             "build",
             analysis,
             &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             SandboxMode::default(),
         )
         .await
@@ -2403,6 +2880,8 @@ mod tests {
             "build",
             analysis("one"),
             &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             SandboxMode::default(),
         )
         .await
@@ -2417,6 +2896,8 @@ mod tests {
             "build",
             analysis("changed"),
             &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             SandboxMode::default(),
         )
         .await
@@ -2613,6 +3094,114 @@ mod tests {
         .unwrap();
 
         assert_ne!(one, two);
+    }
+
+    #[test]
+    fn same_target_generated_input_uses_its_content_digest() {
+        let workspace = tempfile::tempdir().unwrap();
+        let input = ".once/out/fingerprint.txt";
+        let declared = DeclaredAction {
+            operation: None,
+            argv: vec!["tool".to_string()],
+            arg_files: Vec::new(),
+            inputs: vec![input.to_string()],
+            outputs: vec![".once/out/result.txt".to_string()],
+            stdout: None,
+            stderr: None,
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
+            sandbox: None,
+            cacheable: true,
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: None,
+        };
+        let producer_action_digest = Digest::of_bytes(b"same producer action");
+        let available = |content| {
+            BTreeMap::from([(
+                input.to_string(),
+                AvailableInput {
+                    blob_digest: Digest::of_bytes(content),
+                    producer_action_digest,
+                    same_target: true,
+                },
+            )])
+        };
+
+        let first = compose_input_digest_with_available(
+            workspace.path(),
+            &declared,
+            module_digest(),
+            &[],
+            &available(b"false"),
+        )
+        .unwrap();
+        let second = compose_input_digest_with_available(
+            workspace.path(),
+            &declared,
+            module_digest(),
+            &[],
+            &available(b"true"),
+        )
+        .unwrap();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn dependency_generated_input_uses_its_action_digest() {
+        let workspace = tempfile::tempdir().unwrap();
+        let input = ".once/out/dependency.txt";
+        let declared = DeclaredAction {
+            operation: None,
+            argv: vec!["tool".to_string()],
+            arg_files: Vec::new(),
+            inputs: vec![input.to_string()],
+            outputs: vec![".once/out/result.txt".to_string()],
+            stdout: None,
+            stderr: None,
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
+            sandbox: None,
+            cacheable: true,
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: None,
+        };
+        let producer_action_digest = Digest::of_bytes(b"same producer action");
+        let available = |content| {
+            BTreeMap::from([(
+                input.to_string(),
+                AvailableInput {
+                    blob_digest: Digest::of_bytes(content),
+                    producer_action_digest,
+                    same_target: false,
+                },
+            )])
+        };
+
+        let first = compose_input_digest_with_available(
+            workspace.path(),
+            &declared,
+            module_digest(),
+            &[],
+            &available(b"first remote blob"),
+        )
+        .unwrap();
+        let second = compose_input_digest_with_available(
+            workspace.path(),
+            &declared,
+            module_digest(),
+            &[],
+            &available(b"second remote blob"),
+        )
+        .unwrap();
+
+        assert_eq!(first, second);
     }
 
     #[test]

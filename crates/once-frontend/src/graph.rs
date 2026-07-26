@@ -298,9 +298,43 @@ pub struct DepSchema {
 
 pub fn load_graph_workspace(root: &Path) -> Result<Vec<GraphTarget>> {
     let schemas = target_kind_schemas_for_workspace(root)?;
-    let mut expanded =
-        crate::resolution::expand_workspace_targets(root, load_workspace(root)?, &schemas)?;
-    let mut graph = graph_from_owned_targets_with_schemas(expanded.targets, &schemas);
+    load_graph_workspace_with_schemas(root, &schemas)
+}
+
+pub(crate) fn load_graph_workspace_with_compiled_schemas(
+    root: &Path,
+    compiled_schemas: &[TargetKindSchema],
+) -> Result<Vec<GraphTarget>> {
+    load_graph_workspace_with_compiled_schemas_and_targets(
+        root,
+        compiled_schemas,
+        load_workspace(root)?,
+    )
+}
+
+pub(crate) fn load_graph_workspace_with_compiled_schemas_and_targets(
+    root: &Path,
+    compiled_schemas: &[TargetKindSchema],
+    targets: Vec<Target>,
+) -> Result<Vec<GraphTarget>> {
+    let schemas = target_kind_schemas_for_workspace_from_compiled(root, compiled_schemas)?;
+    load_graph_workspace_with_targets_and_schemas(root, targets, &schemas)
+}
+
+fn load_graph_workspace_with_schemas(
+    root: &Path,
+    schemas: &[TargetKindSchema],
+) -> Result<Vec<GraphTarget>> {
+    load_graph_workspace_with_targets_and_schemas(root, load_workspace(root)?, schemas)
+}
+
+fn load_graph_workspace_with_targets_and_schemas(
+    root: &Path,
+    targets: Vec<Target>,
+    schemas: &[TargetKindSchema],
+) -> Result<Vec<GraphTarget>> {
+    let mut expanded = crate::resolution::expand_workspace_targets(root, targets, schemas)?;
+    let mut graph = graph_from_owned_targets_with_schemas(expanded.targets, schemas);
     for target in &mut graph {
         let Some(diagnostics) = expanded.diagnostics.remove(&target.label.id) else {
             continue;
@@ -361,6 +395,36 @@ pub fn built_in_target_kind_schemas_result() -> Result<Vec<TargetKindSchema>> {
 
 pub fn target_kind_schemas_for_workspace(root: &Path) -> Result<Vec<TargetKindSchema>> {
     let mut schemas = starlark_prelude_target_kind_schemas()?;
+    schemas.extend(workspace_module_target_kind_schemas(root)?);
+    validate_unique_target_kinds(&schemas)
+        .map_err(|message| prelude_message(crate::modules::COMBINED_MODULE_PATH, &message))?;
+    append_script_schema(&mut schemas)?;
+    Ok(schemas)
+}
+
+fn target_kind_schemas_for_workspace_from_compiled(
+    root: &Path,
+    compiled_schemas: &[TargetKindSchema],
+) -> Result<Vec<TargetKindSchema>> {
+    let workspace_schemas = workspace_module_target_kind_schemas(root)?;
+    let workspace_kinds = workspace_schemas
+        .iter()
+        .map(|schema| schema.kind.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut schemas = compiled_schemas
+        .iter()
+        .filter(|schema| !workspace_kinds.contains(schema.kind.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    schemas.extend(workspace_schemas);
+    validate_unique_target_kinds(&schemas)
+        .map_err(|message| prelude_message(crate::modules::COMBINED_MODULE_PATH, &message))?;
+    append_script_schema(&mut schemas)?;
+    Ok(schemas)
+}
+
+fn workspace_module_target_kind_schemas(root: &Path) -> Result<Vec<TargetKindSchema>> {
+    let mut schemas = Vec::new();
     let common = crate::modules::common_module_source();
     for module_file in crate::modules::load_module_files(root)? {
         let source_context = TargetKindSchemaSource::workspace(root, &module_file.display_path);
@@ -370,9 +434,6 @@ pub fn target_kind_schemas_for_workspace(root: &Path) -> Result<Vec<TargetKindSc
             &source_context,
         )?);
     }
-    validate_unique_target_kinds(&schemas)
-        .map_err(|message| prelude_message(crate::modules::COMBINED_MODULE_PATH, &message))?;
-    append_script_schema(&mut schemas)?;
     Ok(schemas)
 }
 
@@ -681,6 +742,12 @@ fn target_kind_schemas_from_exports(
         .collect::<std::result::Result<Vec<_>, _>>()?;
     validate_unique_target_kinds(&schemas)?;
     Ok(schemas)
+}
+
+pub(crate) fn target_kind_schemas_from_compiled_exports(
+    target_kinds: &[crate::modules::TargetKindExport<'_>],
+) -> std::result::Result<Vec<TargetKindSchema>, String> {
+    target_kind_schemas_from_exports(target_kinds, &TargetKindSchemaSource::built_in_prelude())
 }
 
 fn validate_unique_target_kinds(schemas: &[TargetKindSchema]) -> std::result::Result<(), String> {

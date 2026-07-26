@@ -1,0 +1,182 @@
+[workspace]
+include = ["once.toml"]
+
+[modules]
+paths = ["surface.star"]
+
+[infrastructure.cache]
+provider = "benchmark"
+
+[infrastructures.benchmark]
+kind = "tuist"
+url = "http://127.0.0.1:18081"
+account = "benchmark"
+project = "benchmark-once"
+
+[[target]]
+name = "rust_cas"
+kind = "surface_action"
+srcs = ["inputs/rust-cas.txt"]
+
+[target.attrs]
+out = "rust-cas.bin"
+bytes = 8388608
+delay_ms = 40
+
+[[target]]
+name = "rust_core"
+kind = "surface_action"
+srcs = ["inputs/rust-core.txt"]
+deps = ["rust_cas"]
+
+[target.attrs]
+out = "rust-core.bin"
+bytes = 8388608
+delay_ms = 40
+
+[[target]]
+name = "rust_frontend"
+kind = "surface_action"
+srcs = ["inputs/rust-frontend.txt"]
+
+[target.attrs]
+out = "rust-frontend.bin"
+bytes = 8388608
+delay_ms = 40
+
+[[target]]
+name = "rust_cli"
+kind = "surface_action"
+srcs = ["inputs/rust-cli.txt"]
+deps = ["rust_cas", "rust_core", "rust_frontend"]
+
+[target.attrs]
+out = "rust-cli.bin"
+bytes = 4194304
+delay_ms = 40
+
+[[target]]
+name = "sdk_native"
+kind = "surface_action"
+srcs = ["inputs/sdk-native.txt"]
+deps = ["rust_cas", "rust_core"]
+
+[target.attrs]
+out = "sdk-native.bin"
+bytes = 8388608
+delay_ms = 40
+
+[[target]]
+name = "sdk_javascript"
+kind = "surface_action"
+srcs = ["inputs/sdk-javascript.txt"]
+deps = ["sdk_native"]
+
+[target.attrs]
+out = "sdk-javascript.bin"
+bytes = 2097152
+delay_ms = 40
+
+[[target]]
+name = "sdk_ruby"
+kind = "surface_action"
+srcs = ["inputs/sdk-ruby.txt"]
+deps = ["sdk_native"]
+
+[target.attrs]
+out = "sdk-ruby.bin"
+bytes = 2097152
+delay_ms = 40
+
+[[target]]
+name = "docs_reference"
+kind = "surface_action"
+srcs = ["inputs/docs-reference.txt"]
+deps = ["rust_cli"]
+
+[target.attrs]
+out = "docs-reference.bin"
+bytes = 2097152
+delay_ms = 40
+
+[[target]]
+name = "docs_site"
+kind = "surface_action"
+srcs = ["inputs/docs-site.txt"]
+deps = ["docs_reference"]
+
+[target.attrs]
+out = "docs-site.bin"
+bytes = 4194304
+delay_ms = 40
+
+[[target]]
+name = "web_dependencies"
+kind = "surface_action"
+srcs = ["inputs/web-dependencies.txt"]
+
+[target.attrs]
+out = "web-dependencies.bin"
+bytes = 16777216
+delay_ms = 40
+
+[[target]]
+name = "web_compile"
+kind = "surface_action"
+srcs = ["inputs/web-compile.txt"]
+deps = ["web_dependencies"]
+
+[target.attrs]
+out = "web-compile.bin"
+bytes = 8388608
+delay_ms = 40
+
+[[target]]
+name = "web_assets"
+kind = "surface_action"
+srcs = ["inputs/web-assets.txt"]
+deps = ["web_compile"]
+
+[target.attrs]
+out = "web-assets.bin"
+bytes = 4194304
+delay_ms = 40
+
+[[target]]
+name = "web_release"
+kind = "surface_action"
+srcs = ["inputs/web-release.txt"]
+deps = ["web_assets", "web_compile"]
+
+[target.attrs]
+out = "web-release.bin"
+bytes = 8388608
+delay_ms = 40
+
+[[target]]
+name = "helm"
+kind = "surface_action"
+srcs = ["inputs/helm.txt"]
+
+[target.attrs]
+out = "helm.bin"
+bytes = 1048576
+delay_ms = 40
+
+[[target]]
+name = "distribution"
+kind = "surface_action"
+srcs = ["inputs/distribution.txt"]
+deps = [
+  "docs_site",
+  "helm",
+  "rust_cli",
+  "sdk_javascript",
+  "sdk_ruby",
+  "web_release",
+]
+
+[target.attrs]
+out = "distribution.bin"
+bytes = 1048576
+delay_ms = 40

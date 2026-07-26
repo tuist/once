@@ -1,0 +1,17 @@
+exports_files([
+    "distribution.txt",
+    "docs-reference.txt",
+    "docs-site.txt",
+    "helm.txt",
+    "rust-cas.txt",
+    "rust-cli.txt",
+    "rust-core.txt",
+    "rust-frontend.txt",
+    "sdk-javascript.txt",
+    "sdk-native.txt",
+    "sdk-ruby.txt",
+    "web-assets.txt",
+    "web-compile.txt",
+    "web-dependencies.txt",
+    "web-release.txt",
+])

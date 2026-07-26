@@ -121,7 +121,77 @@ async fn graph_tool_resolution_defers_to_host_path_without_mise_config() {
     // Without a mise config the workspace relies on the host toolchain.
     // Returning no resolved paths keeps `host_which` walking `PATH` (and
     // verifying existence) rather than short-circuiting to a bare name.
-    assert!(paths.is_empty());
+    assert!(paths.paths.is_empty());
+}
+
+#[test]
+fn graph_tool_cache_reuses_existing_paths_for_unchanged_configuration() {
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::write(
+        workspace.path().join("mise.toml"),
+        "[tools]\nnode = \"26\"\n",
+    )
+    .unwrap();
+    let executable = workspace.path().join("tools/node");
+    std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    std::fs::write(&executable, b"node").unwrap();
+    let tools = vec!["node".to_string()];
+    let executables = vec!["node".to_string()];
+    let fingerprint = graph_tool_cache_fingerprint(workspace.path(), &tools, &executables).unwrap();
+    let paths = BTreeMap::from([("node".to_string(), executable.display().to_string())]);
+    let commands = vec![CachedToolCommand {
+        argv: vec!["node".to_string(), "--version".to_string()],
+        env: BTreeMap::new(),
+        cwd: None,
+        merge_stderr: false,
+        output: "v26".to_string(),
+    }];
+
+    let cache_path = workspace.path().join("tool-cache.json");
+    write_graph_tool_cache_at(&cache_path, fingerprint, &paths, &commands).unwrap();
+
+    let cached = read_graph_tool_cache_at(&cache_path, fingerprint).unwrap();
+    assert_eq!(cached.paths, paths);
+    assert_eq!(cached.commands, commands);
+}
+
+#[test]
+fn graph_tool_cache_invalidates_configuration_and_missing_executables() {
+    let workspace = tempfile::tempdir().unwrap();
+    let config = workspace.path().join("mise.toml");
+    std::fs::write(&config, "[tools]\nnode = \"25\"\n").unwrap();
+    let executable = workspace.path().join("tools/node");
+    std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    std::fs::write(&executable, b"node").unwrap();
+    let tools = vec!["node".to_string()];
+    let executables = vec!["node".to_string()];
+    let first = graph_tool_cache_fingerprint(workspace.path(), &tools, &executables).unwrap();
+    let paths = BTreeMap::from([("node".to_string(), executable.display().to_string())]);
+    let cache_path = workspace.path().join("tool-cache.json");
+    write_graph_tool_cache_at(&cache_path, first, &paths, &[]).unwrap();
+
+    std::fs::write(&config, "[tools]\nnode = \"26\"\n").unwrap();
+    let second = graph_tool_cache_fingerprint(workspace.path(), &tools, &executables).unwrap();
+    assert_ne!(first, second);
+    assert!(read_graph_tool_cache_at(&cache_path, second).is_none());
+
+    write_graph_tool_cache_at(&cache_path, second, &paths, &[]).unwrap();
+    std::fs::write(executable, b"changed node binary").unwrap();
+    assert!(read_graph_tool_cache_at(&cache_path, second).is_none());
+}
+
+#[test]
+fn graph_tool_cache_path_is_host_cached_and_workspace_scoped() {
+    let cache_home = Path::new("/cache/once/toolchains");
+    let first = graph_tool_cache_path_from(cache_home, Path::new("/workspaces/first"));
+    let second = graph_tool_cache_path_from(cache_home, Path::new("/workspaces/second"));
+
+    assert!(first.starts_with(cache_home));
+    assert_eq!(
+        first.extension().and_then(|value| value.to_str()),
+        Some("json")
+    );
+    assert_ne!(first, second);
 }
 
 #[test]

@@ -4,11 +4,10 @@
 //! by an action digest supplied by the caller. Filesystem-backed via
 //! `tokio::fs`, no remote tier.
 //!
-//! Durability: writes go via a uniquely-named tmp file, are fsynced
-//! before rename, and the parent directory is fsynced after rename.
-//! This is enough to survive an OS crash on common journaled
-//! filesystems; for stricter expectations the caller should swap the
-//! substrate for a REAPI-backed store.
+//! Locally produced writes go through a uniquely named temporary file,
+//! synchronize before rename, and synchronize the parent directory.
+//! Remote mirrors retain atomic visibility but may use weaker durability
+//! because a lost mirror can be fetched again.
 
 use std::collections::HashMap;
 use std::io;
@@ -125,7 +124,24 @@ impl Cas {
             path: path.clone(),
             source,
         })?;
-        write_durably(&path, &stored).await?;
+        write_durably(&path, stored.as_ref()).await?;
+        Ok(digest)
+    }
+
+    pub(crate) async fn mirror_blob(&self, expected: &Digest, bytes: &[u8]) -> Result<Digest> {
+        let digest = Digest::of_bytes(bytes);
+        if digest != *expected {
+            return Ok(digest);
+        }
+        let path = self.blob_path(&digest);
+        if fs::try_exists(&path).await.unwrap_or(false) {
+            return Ok(digest);
+        }
+        let stored = blob::encode_bytes(bytes).map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+        write_with_durable_contents(&path, stored.as_ref()).await?;
         Ok(digest)
     }
 
@@ -274,6 +290,16 @@ impl Cas {
         let path = self.action_path(action);
         let bytes = serde_json::to_vec(result).expect("ActionResult is serializable");
         write_durably(&path, &bytes).await
+    }
+
+    pub(crate) async fn mirror_action_result(
+        &self,
+        action: &Digest,
+        result: &ActionResult,
+    ) -> Result<()> {
+        let path = self.action_path(action);
+        let bytes = serde_json::to_vec(result).expect("ActionResult is serializable");
+        write_atomically(&path, &bytes).await
     }
 
     pub async fn get_action_result(&self, action: &Digest) -> Result<Option<ActionResult>> {
@@ -647,6 +673,60 @@ async fn write_durably(path: &Path, bytes: &[u8]) -> Result<()> {
     fsync_dir(parent).await
 }
 
+async fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    ensure_dir(parent).await?;
+
+    let pid = process::id();
+    let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let basename = path
+        .file_name()
+        .map_or_else(|| std::borrow::Cow::Borrowed(""), |n| n.to_string_lossy());
+    let tmp = parent.join(format!(".tmp-{basename}-{pid}-{seq}"));
+
+    let mut file = File::create(&tmp).await.map_err(|source| Error::Io {
+        path: tmp.clone(),
+        source,
+    })?;
+    if let Err(source) = file.write_all(bytes).await {
+        let _ = fs::remove_file(&tmp).await;
+        return Err(Error::Io { path: tmp, source });
+    }
+    drop(file);
+
+    if let Err(source) = fs::rename(&tmp, path).await {
+        let _ = fs::remove_file(&tmp).await;
+        return Err(Error::Io {
+            path: path.to_path_buf(),
+            source,
+        });
+    }
+    Ok(())
+}
+
+async fn write_with_durable_contents(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    ensure_dir(parent).await?;
+
+    let pid = process::id();
+    let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let basename = path
+        .file_name()
+        .map_or_else(|| std::borrow::Cow::Borrowed(""), |n| n.to_string_lossy());
+    let tmp = parent.join(format!(".tmp-{basename}-{pid}-{seq}"));
+
+    write_and_sync(&tmp, bytes).await?;
+
+    if let Err(source) = fs::rename(&tmp, path).await {
+        let _ = fs::remove_file(&tmp).await;
+        return Err(Error::Io {
+            path: path.to_path_buf(),
+            source,
+        });
+    }
+    Ok(())
+}
+
 async fn write_and_sync(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut f = File::create(path).await.map_err(|source| Error::Io {
         path: path.to_path_buf(),
@@ -810,6 +890,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mirrored_blob_roundtrips() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let payload = b"mirrored content";
+        let digest = Digest::of_bytes(payload);
+
+        let mirrored = cas.mirror_blob(&digest, payload).await.unwrap();
+
+        assert_eq!(mirrored, digest);
+        assert_eq!(cas.get_blob(&digest).await.unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn mismatched_mirrored_blob_is_not_written() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let expected = Digest::of_bytes(b"expected");
+        let actual = Digest::of_bytes(b"actual");
+
+        let mirrored = cas.mirror_blob(&expected, b"actual").await.unwrap();
+
+        assert_eq!(mirrored, actual);
+        assert!(!cas.blob_path(&actual).exists());
+        assert!(!cas.blobs_dir().exists());
+    }
+
+    #[tokio::test]
     async fn concurrent_writers_of_identical_blob_do_not_race() {
         let tmp = TempDir::new().unwrap();
         let cas = Arc::new(Cas::open(tmp.path()));
@@ -842,6 +949,23 @@ mod tests {
             outputs: std::collections::BTreeMap::new(),
         };
         cas.put_action_result(&action, &result).await.unwrap();
+        assert_eq!(cas.get_action_result(&action).await.unwrap(), Some(result));
+    }
+
+    #[tokio::test]
+    async fn mirrored_action_result_roundtrips() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let action = Digest::of_bytes(b"mirrored-action");
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: std::collections::BTreeMap::new(),
+        };
+
+        cas.mirror_action_result(&action, &result).await.unwrap();
+
         assert_eq!(cas.get_action_result(&action).await.unwrap(), Some(result));
     }
 

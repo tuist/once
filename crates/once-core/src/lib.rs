@@ -41,7 +41,7 @@ pub use contract::{ContractViolation, ContractViolationKind};
 pub use env::{
     managed_mise, managed_mise_path, select_tool_env, tool_env, workspace_executable,
     workspace_has_mise_config, workspace_mise_command, workspace_mise_env, workspace_prepare_tools,
-    workspace_tool, workspace_tool_command, workspace_tool_env,
+    workspace_prepared_tool_env, workspace_tool, workspace_tool_command, workspace_tool_env,
     workspace_tool_env_with_executables, workspace_tool_var, ToolEnvError, MANAGED_MISE_VERSION,
 };
 pub use error::{Error, Result};
@@ -56,8 +56,8 @@ pub use path::{WorkspacePath, WorkspacePathError};
 pub use plan::{BuiltPlan, NodeInfo, Plan, PlanError, PlanNode, PlanOutcome};
 pub use resources::{ResourceLimits, ResourcePool, ResourceRequest};
 pub use runner::{
-    run, run_uncached, run_uncached_contract, run_with_cache, run_with_cache_streaming, CacheState,
-    Outcome, RunOpts, Runner,
+    materialize_outputs, run, run_uncached, run_uncached_contract, run_with_cache,
+    run_with_cache_streaming, CacheState, Outcome, RunOpts, Runner,
 };
 pub use store::WorkspaceStore;
 pub use test_manifest::{TestManifest, TestSharding, TestUnit, TEST_MANIFEST_SCHEMA};

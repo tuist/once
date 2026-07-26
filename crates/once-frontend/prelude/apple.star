@@ -405,24 +405,6 @@ def _resolve_dep_ref(ref, package):
     # shape; the same convention applies here.
     return ref
 
-# Accumulate a transitive list of strings from a field that every dep
-# provider exposes. Preserves order while removing duplicates: the
-# first occurrence wins. Mirrors the Swift and Buck2 convention of
-# propagating SwiftInfo / CcInfo fields up the graph.
-def _collect_transitive(deps, key, own_values):
-    seen = {}
-    out = []
-    for value in own_values:
-        if value not in seen:
-            seen[value] = True
-            out.append(value)
-    for dep in deps:
-        for value in dep.get(key) or []:
-            if value not in seen:
-                seen[value] = True
-                out.append(value)
-    return out
-
 def _apple_framework_bundle(path, module_name, files, label_id, absorbed_static_archives = []):
     return {
         "path": path,
