@@ -105,14 +105,14 @@ impl Runner {
 
     pub async fn run(&self, action: &Action) -> Result<Outcome> {
         let key = action.digest();
-        if let Some(hit) = lookup_cached(&self.cache, &self.workspace_root, &key).await? {
+        if let Some(hit) = lookup_cached(action, &self.cache, &self.workspace_root, &key).await? {
             return Ok(hit);
         }
         let _permit = self
             .resources
             .acquire(action.resource_request().clone())
             .await;
-        if let Some(hit) = lookup_cached(&self.cache, &self.workspace_root, &key).await? {
+        if let Some(hit) = lookup_cached(action, &self.cache, &self.workspace_root, &key).await? {
             return Ok(hit);
         }
         Box::pin(produce(
@@ -151,7 +151,7 @@ pub async fn run_with_cache(
     opts: RunOpts,
 ) -> Result<Outcome> {
     let key = action.digest();
-    if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
+    if let Some(hit) = lookup_cached(action, cache, workspace_root, &key).await? {
         return Ok(hit);
     }
     Box::pin(produce(action, workspace_root, cache, opts, key)).await
@@ -164,13 +164,16 @@ pub async fn run_with_cache_streaming(
     opts: RunOpts,
 ) -> Result<Outcome> {
     let key = action.digest();
-    if let Some(hit) = lookup_cached(cache, workspace_root, &key).await? {
+    if let Some(hit) = lookup_cached(action, cache, workspace_root, &key).await? {
         return Ok(hit);
     }
     let result = Box::pin(execute::run(action, workspace_root, cache, true, false)).await?;
-    let cacheable = result.exit_code == 0 || opts.cache_failures;
+    let uses_cache = action_uses_cache(action);
+    let cacheable = uses_cache && (result.exit_code == 0 || opts.cache_failures);
     if cacheable {
         cache.put_action_result(&key, &result).await?;
+    } else if !uses_cache {
+        debug!("skipping action cache for non-cacheable action");
     } else {
         debug!(
             exit_code = result.exit_code,
@@ -221,10 +224,14 @@ pub async fn run_uncached_contract(
 
 #[instrument(skip(cache), fields(action_digest = %key))]
 async fn lookup_cached(
+    action: &Action,
     cache: &CacheProvider,
     workspace_root: &Path,
     key: &Digest,
 ) -> Result<Option<Outcome>> {
+    if !action_uses_cache(action) {
+        return Ok(None);
+    }
     if let Some(result) = cache.get_action_result(key).await? {
         debug!("cache hit");
         outputs::restore(&result, workspace_root, cache).await?;
@@ -246,9 +253,12 @@ async fn produce(
     key: Digest,
 ) -> Result<Outcome> {
     let result = Box::pin(execute::run(action, workspace_root, cache, false, false)).await?;
-    let cacheable = result.exit_code == 0 || opts.cache_failures;
+    let uses_cache = action_uses_cache(action);
+    let cacheable = uses_cache && (result.exit_code == 0 || opts.cache_failures);
     if cacheable {
         cache.put_action_result(&key, &result).await?;
+    } else if !uses_cache {
+        debug!("skipping action cache for non-cacheable action");
     } else {
         debug!(
             exit_code = result.exit_code,
@@ -260,6 +270,10 @@ async fn produce(
         result,
         cache: CacheState::Miss,
     })
+}
+
+fn action_uses_cache(action: &Action) -> bool {
+    !matches!(action, Action::LinkPath { .. })
 }
 
 #[cfg(test)]
@@ -837,6 +851,86 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(tmp.path().join("app/node_modules/keep.txt")).unwrap(),
             "keep"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn link_path_rejects_a_destination_that_would_remove_the_source() {
+        let (tmp, cas) = fresh_cas();
+        let cache = CacheProvider::Local(cas);
+        std::fs::create_dir_all(tmp.path().join("deps/node_modules/pkg")).unwrap();
+        std::fs::write(tmp.path().join("deps/node_modules/pkg/package.json"), "{}").unwrap();
+        let action = Action::LinkPath {
+            source: WorkspacePath::try_from("deps/node_modules").unwrap(),
+            destination: WorkspacePath::try_from("deps").unwrap(),
+            input_digest: None,
+        };
+
+        let error = run_uncached(&action, tmp.path(), &cache, false)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, Error::InvalidLinkPath { .. }));
+        assert!(tmp
+            .path()
+            .join("deps/node_modules/pkg/package.json")
+            .is_file());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn link_path_rejects_logically_equal_normalized_paths() {
+        let (tmp, cas) = fresh_cas();
+        let cache = CacheProvider::Local(cas);
+        std::fs::create_dir_all(tmp.path().join("deps/node_modules")).unwrap();
+        let action = Action::LinkPath {
+            source: WorkspacePath::try_from("deps/./node_modules").unwrap(),
+            destination: WorkspacePath::try_from("deps/node_modules").unwrap(),
+            input_digest: None,
+        };
+
+        let error = run_uncached(&action, tmp.path(), &cache, false)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, Error::InvalidLinkPath { .. }));
+        assert!(tmp.path().join("deps/node_modules").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn runner_recreates_workspace_links_instead_of_caching_them() {
+        let workspace = TempDir::new().unwrap();
+        let cache_root = TempDir::new().unwrap();
+        std::fs::create_dir_all(workspace.path().join("deps/node_modules/pkg")).unwrap();
+        std::fs::write(
+            workspace.path().join("deps/node_modules/pkg/package.json"),
+            "{}",
+        )
+        .unwrap();
+        let action = Action::LinkPath {
+            source: WorkspacePath::try_from("deps/node_modules").unwrap(),
+            destination: WorkspacePath::try_from("app/node_modules").unwrap(),
+            input_digest: None,
+        };
+        let runner = Runner::new(
+            Cas::open(cache_root.path()),
+            workspace.path(),
+            RunOpts::default(),
+        );
+
+        let first = runner.run(&action).await.unwrap();
+        std::fs::remove_file(workspace.path().join("app/node_modules")).unwrap();
+        let second = runner.run(&action).await.unwrap();
+
+        assert_eq!(first.cache, CacheState::Miss);
+        assert_eq!(second.cache, CacheState::Miss);
+        assert!(
+            std::fs::symlink_metadata(workspace.path().join("app/node_modules"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
         );
     }
 

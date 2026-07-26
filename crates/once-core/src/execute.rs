@@ -634,6 +634,13 @@ async fn link_path(
     destination: &WorkspacePath,
     workspace_root: &Path,
 ) -> Result<()> {
+    if Path::new(source.as_str()).starts_with(Path::new(destination.as_str())) {
+        return Err(Error::InvalidLinkPath {
+            reason: format!(
+                "destination `{destination}` must not equal or contain source `{source}`"
+            ),
+        });
+    }
     let relative_target = relative_workspace_link_target(source, destination);
     let source = source.resolve(workspace_root);
     let destination = destination.resolve(workspace_root);
