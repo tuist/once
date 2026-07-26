@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -9,7 +10,7 @@ pub(crate) const ZSTD_BLOB_HEADER_LEN: usize = ZSTD_BLOB_MAGIC.len() + RAW_SIZE_
 const ZSTD_LEVEL: i32 = 3;
 const RAW_SIZE_LEN: usize = 8;
 
-pub(crate) fn encode_bytes(raw: &[u8]) -> io::Result<Vec<u8>> {
+pub(crate) fn encode_bytes(raw: &[u8]) -> io::Result<Cow<'_, [u8]>> {
     let compressed = encode_all(raw, ZSTD_LEVEL)?;
     let wrapped_len = checked_wrapped_len(compressed.len())?;
     if raw.starts_with(ZSTD_BLOB_MAGIC) || wrapped_len < raw.len() {
@@ -17,9 +18,9 @@ pub(crate) fn encode_bytes(raw: &[u8]) -> io::Result<Vec<u8>> {
         out.extend_from_slice(ZSTD_BLOB_MAGIC);
         out.extend_from_slice(&raw_len_header(raw.len())?);
         out.extend_from_slice(&compressed);
-        Ok(out)
+        Ok(Cow::Owned(out))
     } else {
-        Ok(raw.to_vec())
+        Ok(Cow::Borrowed(raw))
     }
 }
 
@@ -128,8 +129,9 @@ mod tests {
 
         let encoded = encode_bytes(raw).unwrap();
 
-        assert_eq!(encoded, raw);
-        assert_eq!(decode_bytes(encoded).unwrap(), raw);
+        assert_eq!(encoded.as_ref(), raw);
+        assert!(matches!(encoded, Cow::Borrowed(_)));
+        assert_eq!(decode_bytes(encoded.into_owned()).unwrap(), raw);
     }
 
     #[test]
@@ -140,7 +142,8 @@ mod tests {
 
         assert!(encoded.starts_with(ZSTD_BLOB_MAGIC));
         assert!(encoded.len() < raw.len());
-        assert_eq!(decode_bytes(encoded).unwrap(), raw);
+        assert!(matches!(encoded, Cow::Owned(_)));
+        assert_eq!(decode_bytes(encoded.into_owned()).unwrap(), raw);
     }
 
     #[test]
@@ -151,7 +154,8 @@ mod tests {
         let encoded = encode_bytes(&raw).unwrap();
 
         assert!(encoded.starts_with(ZSTD_BLOB_MAGIC));
-        assert_eq!(decode_bytes(encoded).unwrap(), raw);
+        assert!(matches!(encoded, Cow::Owned(_)));
+        assert_eq!(decode_bytes(encoded.into_owned()).unwrap(), raw);
     }
 
     #[test]

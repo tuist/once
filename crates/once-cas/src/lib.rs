@@ -125,7 +125,7 @@ impl Cas {
             path: path.clone(),
             source,
         })?;
-        write_durably(&path, &stored).await?;
+        write_durably(&path, stored.as_ref()).await?;
         Ok(digest)
     }
 
@@ -274,6 +274,16 @@ impl Cas {
         let path = self.action_path(action);
         let bytes = serde_json::to_vec(result).expect("ActionResult is serializable");
         write_durably(&path, &bytes).await
+    }
+
+    pub(crate) async fn mirror_action_result(
+        &self,
+        action: &Digest,
+        result: &ActionResult,
+    ) -> Result<()> {
+        let path = self.action_path(action);
+        let bytes = serde_json::to_vec(result).expect("ActionResult is serializable");
+        write_atomically(&path, &bytes).await
     }
 
     pub async fn get_action_result(&self, action: &Digest) -> Result<Option<ActionResult>> {
@@ -647,6 +657,37 @@ async fn write_durably(path: &Path, bytes: &[u8]) -> Result<()> {
     fsync_dir(parent).await
 }
 
+async fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    ensure_dir(parent).await?;
+
+    let pid = process::id();
+    let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let basename = path
+        .file_name()
+        .map_or_else(|| std::borrow::Cow::Borrowed(""), |n| n.to_string_lossy());
+    let tmp = parent.join(format!(".tmp-{basename}-{pid}-{seq}"));
+
+    let mut file = File::create(&tmp).await.map_err(|source| Error::Io {
+        path: tmp.clone(),
+        source,
+    })?;
+    if let Err(source) = file.write_all(bytes).await {
+        let _ = fs::remove_file(&tmp).await;
+        return Err(Error::Io { path: tmp, source });
+    }
+    drop(file);
+
+    if let Err(source) = fs::rename(&tmp, path).await {
+        let _ = fs::remove_file(&tmp).await;
+        return Err(Error::Io {
+            path: path.to_path_buf(),
+            source,
+        });
+    }
+    Ok(())
+}
+
 async fn write_and_sync(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut f = File::create(path).await.map_err(|source| Error::Io {
         path: path.to_path_buf(),
@@ -842,6 +883,23 @@ mod tests {
             outputs: std::collections::BTreeMap::new(),
         };
         cas.put_action_result(&action, &result).await.unwrap();
+        assert_eq!(cas.get_action_result(&action).await.unwrap(), Some(result));
+    }
+
+    #[tokio::test]
+    async fn mirrored_action_result_roundtrips() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let action = Digest::of_bytes(b"mirrored-action");
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: std::collections::BTreeMap::new(),
+        };
+
+        cas.mirror_action_result(&action, &result).await.unwrap();
+
         assert_eq!(cas.get_action_result(&action).await.unwrap(), Some(result));
     }
 

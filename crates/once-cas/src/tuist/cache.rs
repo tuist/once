@@ -91,7 +91,7 @@ impl CachedRemoteError {
         }
     }
 
-    fn into_error(&self) -> Error {
+    fn to_error(&self) -> Error {
         Error::Remote {
             provider: PROVIDER_NAME,
             operation: self.operation,
@@ -201,7 +201,7 @@ impl TuistCache {
         match self.get_action_result_remote(action).await {
             Ok(Some(result)) => {
                 tracing::debug!(action_digest = %action, tier = "remote", "action cache hit");
-                if let Err(error) = self.local.put_action_result(action, &result).await {
+                if let Err(error) = self.local.mirror_action_result(action, &result).await {
                     tracing::warn!(
                         action_digest = %action,
                         error = %error,
@@ -773,7 +773,13 @@ impl TuistCache {
             Err(status) if status.code() == Code::NotFound => return Ok(None),
             Err(status) => return Err(grpc_error(operation, &status)),
         };
-        let mut transferred = Vec::new();
+        let expected = usize::try_from(digest.size_bytes).unwrap_or(0);
+        let initial_capacity = if compressor == reapi::compressor::Value::Identity as i32 {
+            expected.min(BYTE_STREAM_MESSAGE_LIMIT)
+        } else {
+            expected.min(BYTE_STREAM_CHUNK_SIZE)
+        };
+        let mut transferred = Vec::with_capacity(initial_capacity);
         let mut stream = response.into_inner();
         while let Some(response) = stream
             .message()
@@ -1026,7 +1032,7 @@ impl TuistCache {
                 .await;
         match result {
             Ok(channel) => Ok(channel.clone()),
-            Err(error) => Err(error.into_error()),
+            Err(error) => Err(error.to_error()),
         }
     }
 
@@ -1050,7 +1056,7 @@ impl TuistCache {
             .await;
         match result {
             Ok(token) => Ok(token),
-            Err(error) => Err(error.into_error()),
+            Err(error) => Err(error.to_error()),
         }
     }
 

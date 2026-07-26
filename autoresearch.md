@@ -71,6 +71,12 @@ client cache.
   from 176.89 to 173.55 milliseconds.
 - Retaining validated host tool identity outside disposable action state reduced
   the stable clean-client remote median further to 148.71 milliseconds.
+- Mirroring remotely sourced action results through atomic, recoverable writes
+  instead of forcing each cache file and directory to stable storage reduced the
+  stable clean-client remote median to 41.57 milliseconds.
+- Local blob encoding now borrows incompressible input bytes instead of copying
+  them before the write. Large streamed remote reads reserve bounded capacity
+  from their declared size to avoid repeated buffer-growth copies.
 
 ## Primary Research
 
