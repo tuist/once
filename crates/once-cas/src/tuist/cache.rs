@@ -13,7 +13,7 @@ use bazel_remote_apis::{
 use futures::future::try_join_all;
 use reqwest::{Method, Url};
 use sha2::{Digest as _, Sha256};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio::time::Instant;
 use tonic::metadata::MetadataValue;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
@@ -23,6 +23,14 @@ use super::{
     join_url, remote_status_message, TuistAuth, TuistCacheConfig, ENDPOINTS_PATH, PROVIDER_NAME,
 };
 use crate::{ActionResult, Cas, Digest, Error, Result};
+
+/// Ceiling on blobs transferred to or from the remote cache at once. The
+/// number of outputs comes from a remote `ActionResult` (untrusted), and
+/// each transfer buffers a whole blob, so an unbounded fan-out would let
+/// a single response spike memory and open a connection per blob. This
+/// caps the in-flight transfers regardless of how many the response
+/// declares.
+const MAX_CONCURRENT_BLOB_TRANSFERS: usize = 16;
 
 const ENDPOINT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const GRPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -243,15 +251,23 @@ impl TuistCache {
     async fn put_action_result_remote(&self, action: &Digest, result: &ActionResult) -> Result<()> {
         let stdout_upload = self.upload_local_blob(result.stdout.as_ref(), "put action result");
         let stderr_upload = self.upload_local_blob(result.stderr.as_ref(), "put action result");
-        let output_uploads = try_join_all(result.outputs.iter().map(|(path, digest)| async move {
-            let reapi_digest = self
-                .upload_local_blob(Some(digest), "put action result")
-                .await?;
-            Ok::<_, Error>(reapi::OutputFile {
-                path: path.clone(),
-                digest: reapi_digest,
-                ..Default::default()
-            })
+        let upload_permits = Arc::new(Semaphore::new(MAX_CONCURRENT_BLOB_TRANSFERS));
+        let output_uploads = try_join_all(result.outputs.iter().map(|(path, digest)| {
+            let upload_permits = Arc::clone(&upload_permits);
+            async move {
+                let _permit = upload_permits
+                    .acquire()
+                    .await
+                    .expect("blob transfer semaphore is never closed");
+                let reapi_digest = self
+                    .upload_local_blob(Some(digest), "put action result")
+                    .await?;
+                Ok::<_, Error>(reapi::OutputFile {
+                    path: path.clone(),
+                    digest: reapi_digest,
+                    ..Default::default()
+                })
+            }
         }));
         let (stdout_digest, stderr_digest, output_files) =
             tokio::try_join!(stdout_upload, stderr_upload, output_uploads)?;
@@ -343,8 +359,14 @@ impl TuistCache {
             &result.stderr_raw,
             "get action result",
         );
-        let output_mirrors =
-            try_join_all(result.output_files.iter().map(|output_file| async move {
+        let mirror_permits = Arc::new(Semaphore::new(MAX_CONCURRENT_BLOB_TRANSFERS));
+        let output_mirrors = try_join_all(result.output_files.iter().map(|output_file| {
+            let mirror_permits = Arc::clone(&mirror_permits);
+            async move {
+                let _permit = mirror_permits
+                    .acquire()
+                    .await
+                    .expect("blob transfer semaphore is never closed");
                 let digest = match output_file.digest.as_ref() {
                     Some(reapi_digest) => Some(
                         self.mirror_reapi_blob(reapi_digest, "get action result")
@@ -356,7 +378,8 @@ impl TuistCache {
                     None => None,
                 };
                 Ok::<_, Error>(digest.map(|digest| (output_file.path.clone(), digest)))
-            }));
+            }
+        }));
         let (stdout, stderr, output_pairs) =
             tokio::try_join!(stdout_mirror, stderr_mirror, output_mirrors)?;
         let outputs: BTreeMap<String, Digest> = output_pairs.into_iter().flatten().collect();
