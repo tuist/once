@@ -10,10 +10,11 @@ contract from the command line. See [Ecosystems](/guide/graph/ecosystems) for
 help choosing between typed target kinds and scripted automation.
 
 Each schema reports whether an attribute is required, configurable, and
-implemented. An attribute marked as not implemented remains discoverable for
-compatibility, but validation rejects it with a focused repair before
-analysis. Tool requirements list the executable alternatives Once can use, so
-an agent can discover missing setup without reading prose documentation.
+implemented, plus any fixed set of allowed values. An attribute marked as not
+implemented remains discoverable for compatibility, but validation rejects it
+with a focused repair before analysis. Tool requirements list the executable
+alternatives Once can use, so an agent can discover missing setup without
+reading prose documentation.
 
 Every target kind includes at least one materializable starter. Repository
 contributors can run `mise run examples:verify-portable` to materialize and
@@ -101,6 +102,25 @@ and action tests.
   case execution and automatic batching
 - [`jest_test`](/reference/prelude/jest_test): Jest suites with exact case
   execution and automatic batching
+
+## React Native target kinds
+
+- [`react_native_dependencies`](/reference/prelude/react_native_dependencies):
+  locked JavaScript dependency graph and native-module identities
+- [`react_native_module`](/reference/prelude/react_native_module): one
+  resolver-generated native module
+- [`react_native_autolinking`](/reference/prelude/react_native_autolinking):
+  normalized native-module discovery
+- [`react_native_codegen`](/reference/prelude/react_native_codegen): New
+  Architecture native interface generation
+- [`react_native_bundle`](/reference/prelude/react_native_bundle): Metro
+  bundle, Hermes bytecode, assets, and source map
+- [`react_native_apple_application`](/reference/prelude/react_native_apple_application):
+  CocoaPods and Xcode application build and simulator launch
+- [`react_native_android_application`](/reference/prelude/react_native_android_application):
+  Gradle application build and emulator launch
+- [`react_native_metro`](/reference/prelude/react_native_metro): live
+  development server with Fast Refresh
 
 ## Rust target kinds
 

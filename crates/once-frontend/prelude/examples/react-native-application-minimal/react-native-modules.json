@@ -1,0 +1,25 @@
+{
+  "schema": "once.react_native.modules.v1",
+  "react_native_version": "0.86.0",
+  "modules": [
+    {
+      "name": "react-native-safe-area-context",
+      "root": "node_modules/react-native-safe-area-context",
+      "platforms": {
+        "ios": {
+          "podspec": "node_modules/react-native-safe-area-context/react-native-safe-area-context.podspec"
+        },
+        "android": {
+          "source_dir": "node_modules/react-native-safe-area-context/android",
+          "library_name": "safeareacontext",
+          "cmake_lists": "node_modules/react-native-safe-area-context/android/src/main/jni/CMakeLists.txt",
+          "component_descriptors": [
+            "RNCSafeAreaProviderComponentDescriptor",
+            "RNCSafeAreaViewComponentDescriptor"
+          ],
+          "pure_cxx": false
+        }
+      }
+    }
+  ]
+}

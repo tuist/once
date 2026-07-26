@@ -51,7 +51,7 @@ struct SuggestedCall {
 struct PendingFile {
     relative_path: String,
     path: PathBuf,
-    contents: String,
+    contents: Vec<u8>,
 }
 
 struct ExamplePreparation {
@@ -184,6 +184,10 @@ fn prepare_example(
     for file in files {
         let relative_path = join_display_path(&destination_label, &file.path);
         let path = resolve_example_path(workspace, &destination_dir, &file.path)?;
+        let contents = file
+            .decoded_contents()
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("decoding example file `{}`", file.path))?;
         if let Some(reason) = unsafe_path_reason(workspace, &path)? {
             conflicts.push(FileConflict {
                 path: relative_path,
@@ -192,7 +196,7 @@ fn prepare_example(
             continue;
         }
         match std::fs::read(&path) {
-            Ok(existing) if existing == file.contents.as_bytes() => {
+            Ok(existing) if existing == contents => {
                 unchanged_files.push(relative_path);
             }
             Ok(_) => conflicts.push(FileConflict {
@@ -203,7 +207,7 @@ fn prepare_example(
                 pending.push(PendingFile {
                     relative_path,
                     path,
-                    contents: file.contents,
+                    contents,
                 });
             }
             Err(error) => conflicts.push(FileConflict {

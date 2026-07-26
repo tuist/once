@@ -193,8 +193,15 @@ fn validate_attr(
     }
     if let Some(branches) = select_branches(attr_value) {
         validate_select_attr(target, attr_name, attr_schema, branches, diagnostics);
-    } else if let Err(err) = check_type(attr_value, &attr_schema.ty) {
-        diagnostics.push(type_mismatch(target, attr_name, &attr_schema.ty, &err));
+    } else {
+        validate_attr_value(
+            target,
+            attr_name,
+            attr_value,
+            attr_schema,
+            None,
+            diagnostics,
+        );
     }
 }
 
@@ -221,15 +228,63 @@ fn validate_select_attr(
         return;
     }
     for (branch, branch_value) in branches {
-        if let Err(err) = check_type(branch_value, &attr_schema.ty) {
-            diagnostics.push(type_mismatch(
-                target,
-                attr_name,
-                &attr_schema.ty,
-                &format!("select branch `{branch}`: {err}"),
-            ));
-        }
+        validate_attr_value(
+            target,
+            attr_name,
+            branch_value,
+            attr_schema,
+            Some(branch),
+            diagnostics,
+        );
     }
+}
+
+fn validate_attr_value(
+    target: &TargetSpec,
+    attr_name: &str,
+    value: &JsonValue,
+    attr_schema: &AttrSchema,
+    select_branch: Option<&str>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if let Err(err) = check_type(value, &attr_schema.ty) {
+        let detail = select_branch
+            .map(|branch| format!("select branch `{branch}`: {err}"))
+            .unwrap_or(err);
+        diagnostics.push(type_mismatch(target, attr_name, &attr_schema.ty, &detail));
+        return;
+    }
+    if attr_schema.allowed_values.is_empty() {
+        return;
+    }
+    let Some(value) = value.as_str() else {
+        return;
+    };
+    if attr_schema
+        .allowed_values
+        .iter()
+        .any(|allowed| allowed == value)
+    {
+        return;
+    }
+    let location = select_branch
+        .map(|branch| format!(" in select branch `{branch}`"))
+        .unwrap_or_default();
+    diagnostics.push(
+        Diagnostic::new(
+            "attr_value_not_allowed",
+            format!(
+                "attribute `{attr_name}`{location} must be one of: {}; got `{value}`",
+                attr_schema.allowed_values.join(", ")
+            ),
+        )
+        .with_target(target.name.as_str())
+        .with_attribute(attr_name)
+        .with_repair(format!(
+            "Set `target.attrs.{attr_name}` to one of: {}",
+            attr_schema.allowed_values.join(", ")
+        )),
+    );
 }
 
 fn type_mismatch(target: &TargetSpec, attr_name: &str, ty: &str, err: &str) -> Diagnostic {
@@ -557,6 +612,31 @@ mod tests {
             .find(|d| d.code == "attr_type_mismatch")
             .expect("branch mismatch diagnostic");
         assert!(mismatch.message.contains("select branch `ios`"));
+    }
+
+    #[test]
+    fn constrained_string_value_reports_structured_diagnostic() {
+        let mut schema = schema_named("react_native_bundle");
+        schema
+            .attrs
+            .iter_mut()
+            .find(|attr| attr.name == "platform")
+            .unwrap()
+            .allowed_values = vec!["ios".to_string(), "android".to_string()];
+        let schemas = vec![schema];
+        let mut target = target("Bundle", "react_native_bundle");
+        target.attrs.insert("platform".to_string(), json!("web"));
+
+        let diagnostics = validate_target(&target, &schemas);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "attr_value_not_allowed")
+            .expect("allowed-value diagnostic");
+
+        assert_eq!(diagnostic.target.as_deref(), Some("Bundle"));
+        assert_eq!(diagnostic.attribute.as_deref(), Some("platform"));
+        assert!(diagnostic.message.contains("ios, android"));
+        assert!(diagnostic.repairs[0].contains("target.attrs.platform"));
     }
 
     #[test]

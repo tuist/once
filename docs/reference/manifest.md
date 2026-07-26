@@ -201,6 +201,8 @@ default = ["./portable_support"]
 The target-kind schema reports both `configurable` and `implemented` for every
 attribute. Validation rejects `select` on a non-configurable attribute and
 rejects an unavailable compatibility attribute marked `implemented = false`.
+Schemas can also report `allowed_values` for string attributes. Validation
+rejects other values with the target, attribute, and accepted replacements.
 Generic target kinds use the tokens returned by `once query workspace`.
 Ecosystem target kinds can add their own tokens and restrictions.
 

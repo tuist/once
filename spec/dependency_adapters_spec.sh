@@ -15,7 +15,7 @@ Describe 'locked dependency adapters'
   }
 
   enable_cargo_snapshot() {
-    host_triple=$(rustc --version --verbose | sed -n 's/^host: //p') || return
+    host_triple=$(rustc --version --verbose 2>/dev/null | sed -n 's/^host: //p') || return
     [ -n "$host_triple" ] || return 1
     sed -i.bak \
       "s/\"host_triple\": \"[^\"]*\"/\"host_triple\": \"$host_triple\"/" \

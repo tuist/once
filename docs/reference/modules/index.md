@@ -83,6 +83,9 @@ Values declared with the `target` type use the same package-relative target
 syntax as dependency references. Complete-workspace validation confirms that
 each referenced target exists and returns an attribute-scoped repair when it
 does not.
+Use `allowed_values = ["first", "second"]` on a `string` or `target` attribute
+when the schema accepts a fixed set. Validation reports an attribute-scoped
+repair before analysis when a manifest supplies another value.
 
 ## Dependency Resolver Contract
 
@@ -282,6 +285,9 @@ once query example apple_library apple-library-minimal --format json
 }
 ```
 
+Text files use `contents`. Binary files use `contents_base64` so direct
+materialization preserves their exact bytes.
+
 [Model Context Protocol](https://modelcontextprotocol.io/) callers use
 `once_list_target_kinds` and `once_query_schema` for discovery, then
 `once_materialize_example` for direct setup or `once_query_example` to inspect
@@ -461,6 +467,10 @@ separate update workflow.
   toolchain file into a workspace output. Analysis records its
   [256-bit Secure Hash Algorithm digest](https://csrc.nist.gov/pubs/fips/180-4/upd1/final),
   and execution verifies the digest before the output enters the cache.
+- `link_path(source, destination)` declares an uncached, relative workspace
+  link. The source must exist. Linked contents are not copied into the action
+  cache, while downstream actions still hash them when they declare the link
+  as an input. Windows hosts require permission to create symbolic links.
 - `prepare_path(path, kind = "remove")` and
   `prepare_path(path, kind = "directory")` declare uncached cleanup and
   setup actions for workspace paths.

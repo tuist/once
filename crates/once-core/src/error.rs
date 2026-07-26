@@ -42,6 +42,8 @@ pub enum Error {
     InvalidPath(#[from] WorkspacePathError),
     #[error("invalid copy path action: {reason}")]
     InvalidCopyPath { reason: String },
+    #[error("invalid link path action: {reason}")]
+    InvalidLinkPath { reason: String },
     #[error("invalid host file materialization: {reason}")]
     InvalidHostFile { reason: String },
     #[error("invalid action contract validation: {reason}")]

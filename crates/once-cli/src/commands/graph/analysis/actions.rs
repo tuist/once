@@ -912,6 +912,7 @@ async fn run_uncached_action(
         }
         Action::WriteFile { .. }
         | Action::CopyPath { .. }
+        | Action::LinkPath { .. }
         | Action::MaterializeHostFile { .. }
         | Action::PreparePath { .. }
         | Action::WriteTreeDigest { .. } => {
@@ -1272,6 +1273,14 @@ fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest)
                 DeclaredCopyPathMode::File => CopyPathMode::File,
                 DeclaredCopyPathMode::Tree => CopyPathMode::Tree,
             },
+            input_digest: Some(input_digest),
+        },
+        DeclaredActionOperation::LinkPath {
+            source,
+            destination,
+        } => Action::LinkPath {
+            source: workspace_path(&source, "link_path source")?,
+            destination: workspace_path(&destination, "link_path destination")?,
             input_digest: Some(input_digest),
         },
         DeclaredActionOperation::MaterializeHostFile {

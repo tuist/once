@@ -416,6 +416,51 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
+    /// Link one workspace path to another without copying or caching
+    /// the linked contents. Downstream actions still hash the linked
+    /// tree when they declare it as an input.
+    fn link_path(
+        source: &str,
+        destination: &str,
+        identifier: Option<String>,
+    ) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        if source == destination {
+            return Err(anyhow!("link_path source and destination must differ"));
+        }
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::LinkPath {
+                source: source.to_string(),
+                destination: destination.to_string(),
+            }),
+            argv: Vec::new(),
+            arg_files: Vec::new(),
+            inputs: Vec::new(),
+            outputs: vec![destination.to_string()],
+            stdout: None,
+            stderr: None,
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
+            sandbox: None,
+            cacheable: false,
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: Some(
+                identifier.unwrap_or_else(|| format!("link_path:{source}:{destination}")),
+            ),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
     /// Declare an uncached portable path preparation action. `kind`
     /// must be `"remove"` or `"directory"`.
     fn prepare_path(
