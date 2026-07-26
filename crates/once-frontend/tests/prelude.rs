@@ -119,8 +119,7 @@ fn go_prelude_source() -> String {
 }
 
 fn all_prelude_source() -> String {
-    format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+    [
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/android.star"),
@@ -135,8 +134,9 @@ fn all_prelude_source() -> String {
         include_str!("../prelude/python.star"),
         include_str!("../prelude/ruby.star"),
         include_str!("../prelude/javascript.star"),
-        include_str!("../prelude/react_native.star")
-    )
+        include_str!("../prelude/react_native.star"),
+    ]
+    .join("\n")
 }
 
 #[test]
