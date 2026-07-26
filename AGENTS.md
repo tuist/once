@@ -132,7 +132,7 @@ surfaces. Keep them centered on cache access unless an explicit product
 decision expands them. Do not expose script execution, runtime sessions,
 frontend parsing, or provider internals through the SDK by accident.
 
-When changing the Rust or Swift SDK API, update `docs/guide/sdk/` in the
+When changing the Rust or Swift SDK API, update `web/priv/docs/guide/sdk/` in the
 same change. Treat method names, return types, default cache behavior,
 memory ownership, and async behavior as compatibility-sensitive. Avoid
 regressions in the public API and call out deliberate breaking changes in

@@ -9,6 +9,11 @@ fullnameOverride: "once"
 
 host: buildonce.dev
 
+# Legacy documentation host. The docs now live in the app under /docs; the app
+# 301-redirects this host to buildonce.dev/docs. Kept on the ingress so
+# cert-manager issues its certificate and external-dns publishes it.
+docsHost: docs.buildonce.dev
+
 image:
   repository: ghcr.io/tuist/once-web
   tag: ""
