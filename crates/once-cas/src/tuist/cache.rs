@@ -16,7 +16,7 @@ use bazel_remote_apis::{
 use futures::{future::try_join_all, stream};
 use reqwest::{Method, Url};
 use sha2::{Digest as _, Sha256};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tokio::time::Instant;
 use tonic::metadata::MetadataValue;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
@@ -58,18 +58,46 @@ pub struct TuistCache {
     local: Cas,
     client: reqwest::Client,
     config: TuistCacheConfig,
-    endpoint_cache: Arc<Mutex<Option<String>>>,
-    grpc_channel_cache: Arc<Mutex<Option<(String, Channel)>>>,
+    grpc_channel_cache: Arc<OnceCell<std::result::Result<Channel, CachedRemoteError>>>,
     capabilities_cache: Arc<Mutex<Option<RemoteCapabilities>>>,
     known_remote_blobs: Arc<Mutex<HashMap<Digest, reapi::Digest>>>,
     transfer_limit: Arc<Semaphore>,
     auth: TuistAuth,
+    auth_token_cache: Arc<OnceCell<std::result::Result<String, CachedRemoteError>>>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 struct RemoteCapabilities {
     zstd_streams: bool,
     zstd_batches: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CachedRemoteError {
+    operation: &'static str,
+    message: String,
+}
+
+impl CachedRemoteError {
+    fn from_error(error: Error, operation: &'static str) -> Self {
+        match error {
+            Error::Remote {
+                operation, message, ..
+            } => Self { operation, message },
+            error => Self {
+                operation,
+                message: error.to_string(),
+            },
+        }
+    }
+
+    fn into_error(&self) -> Error {
+        Error::Remote {
+            provider: PROVIDER_NAME,
+            operation: self.operation,
+            message: self.message.clone(),
+        }
+    }
 }
 
 impl TuistCache {
@@ -105,12 +133,12 @@ impl TuistCache {
             local,
             client,
             config,
-            endpoint_cache: Arc::new(Mutex::new(None)),
-            grpc_channel_cache: Arc::new(Mutex::new(None)),
+            grpc_channel_cache: Arc::new(OnceCell::new()),
             capabilities_cache: Arc::new(Mutex::new(None)),
             known_remote_blobs: Arc::new(Mutex::new(HashMap::new())),
             transfer_limit: Arc::new(Semaphore::new(MAX_PARALLEL_TRANSFERS)),
             auth,
+            auth_token_cache: Arc::new(OnceCell::new()),
         })
     }
 
@@ -867,29 +895,23 @@ impl TuistCache {
     }
 
     async fn data_plane_endpoint(&self) -> Result<String> {
-        let mut cached = self.endpoint_cache.lock().await;
-        if let Some(endpoint) = cached.as_ref() {
-            return Ok(endpoint.clone());
-        }
         let endpoints = self.fetch_endpoints().await?;
-        let endpoint = match endpoints.len() {
-            0 => {
-                return Err(Error::Remote {
-                    provider: PROVIDER_NAME,
-                    operation: "discover endpoints",
-                    message: "Tuist returned no Kura cache endpoints".to_string(),
-                });
-            }
-            _ => self.pick_fastest_endpoint(&endpoints).await?,
-        };
-        *cached = Some(endpoint.clone());
-        Ok(endpoint)
+        match endpoints.as_slice() {
+            [] => Err(Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "discover endpoints",
+                message: "Tuist returned no Kura cache endpoints".to_string(),
+            }),
+            [endpoint] => Ok(endpoint.clone()),
+            _ => self.pick_fastest_endpoint(&endpoints).await,
+        }
     }
 
     async fn fetch_endpoints(&self) -> Result<Vec<String>> {
         let url = self.endpoints_url()?;
+        let token = self.auth_token().await?;
         let response = self
-            .authorized_request(Method::GET, url, &self.auth_token().await?)
+            .authorized_request(Method::GET, url, token)
             .header(KURA_FEATURE_FLAGS_HEADER, KURA_FEATURE_FLAG)
             .send()
             .await
@@ -988,35 +1010,48 @@ impl TuistCache {
     }
 
     async fn grpc_channel(&self) -> Result<Channel> {
-        let endpoint = self.data_plane_endpoint().await?;
-        {
-            let cached = self.grpc_channel_cache.lock().await;
-            if let Some((cached_endpoint, channel)) = cached.as_ref() {
-                if cached_endpoint == &endpoint {
-                    return Ok(channel.clone());
-                }
-            }
+        let result =
+            self.grpc_channel_cache
+                .get_or_init(|| async {
+                    let endpoint = self.data_plane_endpoint().await.map_err(|error| {
+                        CachedRemoteError::from_error(error, "discover endpoints")
+                    })?;
+                    connect_grpc_endpoint(&endpoint)
+                        .await
+                        .map_err(|message| CachedRemoteError {
+                            operation: "connect endpoint",
+                            message,
+                        })
+                })
+                .await;
+        match result {
+            Ok(channel) => Ok(channel.clone()),
+            Err(error) => Err(error.into_error()),
         }
-        let channel = connect_grpc_endpoint(&endpoint)
-            .await
-            .map_err(|message| Error::Remote {
-                provider: PROVIDER_NAME,
-                operation: "connect endpoint",
-                message,
-            })?;
-        *self.grpc_channel_cache.lock().await = Some((endpoint, channel.clone()));
-        Ok(channel)
     }
 
-    async fn auth_token(&self) -> Result<String> {
-        let auth = self.auth.clone();
-        tokio::task::spawn_blocking(move || auth.token())
-            .await
-            .map_err(|source| Error::Remote {
-                provider: PROVIDER_NAME,
-                operation: "load auth token",
-                message: source.to_string(),
-            })?
+    /// Resolve authentication once per command. Tokens are proactively
+    /// refreshed during this first lookup. A single command that outlives
+    /// the resulting token's lifetime must be retried to resolve a new token.
+    async fn auth_token(&self) -> Result<&str> {
+        let result = self
+            .auth_token_cache
+            .get_or_init(|| async {
+                let auth = self.auth.clone();
+                match tokio::task::spawn_blocking(move || auth.token()).await {
+                    Ok(result) => result
+                        .map_err(|error| CachedRemoteError::from_error(error, "load auth token")),
+                    Err(source) => Err(CachedRemoteError {
+                        operation: "load auth token",
+                        message: source.to_string(),
+                    }),
+                }
+            })
+            .await;
+        match result {
+            Ok(token) => Ok(token),
+            Err(error) => Err(error.into_error()),
+        }
     }
 
     fn authorized_request(&self, method: Method, url: Url, token: &str) -> reqwest::RequestBuilder {
@@ -1029,7 +1064,7 @@ impl TuistCache {
         operation: &'static str,
     ) -> Result<Request<T>> {
         let token = self.auth_token().await?;
-        authorized_grpc_request_with_token(message, &token, Some(self.account())).map_err(
+        authorized_grpc_request_with_token(message, token, Some(self.account())).map_err(
             |message| Error::Remote {
                 provider: PROVIDER_NAME,
                 operation,
