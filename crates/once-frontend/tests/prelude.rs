@@ -127,6 +127,7 @@ fn all_prelude_source() -> String {
         include_str!("../prelude/go.star"),
         include_str!("../prelude/rust.star"),
         include_str!("../prelude/c.star"),
+        include_str!("../prelude/cmake.star"),
         include_str!("../prelude/zig.star"),
         include_str!("../prelude/swift.star"),
         include_str!("../prelude/kotlin.star"),

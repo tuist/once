@@ -103,6 +103,15 @@ export const site = {
             ],
           },
           {
+            text: "CMake",
+            collapsed: true,
+            items: [
+              { text: "cmake_project", link: "/reference/prelude/cmake_project" },
+              { text: "cmake_workspace", link: "/reference/prelude/cmake_workspace" },
+              { text: "cmake_target", link: "/reference/prelude/cmake_target" },
+            ],
+          },
+          {
             text: "Elixir",
             collapsed: true,
             items: [
@@ -234,6 +243,10 @@ export const site = {
           {
             text: sidebarTargetText("C and C++", "cplusplus"),
             link: "/guide/graph/c",
+          },
+          {
+            text: sidebarTargetText("CMake", "cplusplus"),
+            link: "/guide/graph/cmake",
           },
           {
             text: sidebarTargetText("Elixir", "elixir"),
