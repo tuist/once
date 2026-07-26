@@ -56,7 +56,7 @@ const SHA256_DIGEST_FUNCTION: i32 = reapi::digest_function::Value::Sha256 as i32
 #[derive(Debug, Clone)]
 pub struct TuistCache {
     local: Cas,
-    client: reqwest::Client,
+    client: Arc<OnceCell<std::result::Result<reqwest::Client, CachedRemoteError>>>,
     config: TuistCacheConfig,
     grpc_channel_cache: Arc<OnceCell<std::result::Result<Channel, CachedRemoteError>>>,
     capabilities_cache: Arc<Mutex<Option<RemoteCapabilities>>>,
@@ -120,18 +120,10 @@ impl TuistCache {
                 message: "cache provider `tuist` requires non-empty `project` when set".to_string(),
             });
         }
-        let client = reqwest::Client::builder()
-            .timeout(GRPC_REQUEST_TIMEOUT)
-            .build()
-            .map_err(|source| Error::Remote {
-                provider: PROVIDER_NAME,
-                operation: "build client",
-                message: source.to_string(),
-            })?;
         let auth = TuistAuth::new(auth_root, &config);
         Ok(Self {
             local,
-            client,
+            client: Arc::new(OnceCell::new()),
             config,
             grpc_channel_cache: Arc::new(OnceCell::new()),
             capabilities_cache: Arc::new(Mutex::new(None)),
@@ -918,6 +910,7 @@ impl TuistCache {
         let token = self.auth_token().await?;
         let response = self
             .authorized_request(Method::GET, url, token)
+            .await?
             .header(KURA_FEATURE_FLAGS_HEADER, KURA_FEATURE_FLAG)
             .send()
             .await
@@ -1060,8 +1053,28 @@ impl TuistCache {
         }
     }
 
-    fn authorized_request(&self, method: Method, url: Url, token: &str) -> reqwest::RequestBuilder {
-        self.client.request(method, url).bearer_auth(token)
+    async fn authorized_request(
+        &self,
+        method: Method,
+        url: Url,
+        token: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        let client = self
+            .client
+            .get_or_init(|| async {
+                reqwest::Client::builder()
+                    .timeout(GRPC_REQUEST_TIMEOUT)
+                    .build()
+                    .map_err(|source| CachedRemoteError {
+                        operation: "build client",
+                        message: source.to_string(),
+                    })
+            })
+            .await;
+        match client {
+            Ok(client) => Ok(client.request(method, url).bearer_auth(token)),
+            Err(error) => Err(error.to_error()),
+        }
     }
 
     async fn authorized_grpc_request<T>(
