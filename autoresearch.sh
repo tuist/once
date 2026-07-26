@@ -18,24 +18,22 @@ cd "$root"
 mise exec -- cargo build --quiet --release -p once-cli
 "$benchmark/verify-fixtures.sh"
 
-if ! curl -fsS http://127.0.0.1:18080/status >/dev/null 2>&1; then
+if ! "$benchmark/run-once.sh" >/dev/null 2>&1; then
     "$benchmark/server.sh" start >/dev/null
     started_server=1
+    "$benchmark/run-once.sh" >/dev/null
 fi
-"$benchmark/reset-clients.sh" once
-"$benchmark/run-once.sh" >/dev/null
 
 mise exec -- hyperfine \
-  --runs 20 \
-  --warmup 0 \
-  --prepare "$benchmark/reset-clients.sh once" \
+  --runs 40 \
+  --warmup 5 \
   --export-json "$result" \
   "$benchmark/run-once.sh" \
   >/dev/null
 
 mise exec -- jq -r '
   .results[0] |
-  "METRIC remote_hit_ms=\(.median * 1000)",
+  "METRIC local_hit_ms=\(.median * 1000)",
   "METRIC mean_ms=\(.mean * 1000)",
   "METRIC stddev_ms=\(.stddev * 1000)"
 ' "$result"

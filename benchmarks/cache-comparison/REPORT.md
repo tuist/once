@@ -36,26 +36,27 @@ runs per client.
 
 | Client | Mean | Median | Range | Remote action hits |
 | --- | ---: | ---: | ---: | ---: |
-| Bazel | 2.284 s | 2.080 s | 1.828 to 2.921 s | 15 of 15 |
-| Buck2 | 0.474 s | 0.445 s | 0.423 to 0.630 s | 15 of 15 |
-| Once | 0.192 s | 0.192 s | 0.169 to 0.208 s | 15 of 15 |
+| Bazel | 2.152 s | 2.129 s | 1.934 to 2.394 s | 15 of 15 |
+| Buck2 | 0.637 s | 0.591 s | 0.492 to 0.983 s | 15 of 15 |
+| Once | 0.070 s | 0.047 s | 0.043 to 0.277 s | 15 of 15 |
 
 The Bazel and Buck2 results include a fresh daemon after each clean. Their
 ranges therefore include daemon startup. Once starts a fresh process on every
-invocation and is 2.5 times faster than Buck2 and 11.9 times faster than Bazel
-by mean in this clean-client scenario.
+invocation and is 9.1 times faster than Buck2 and 30.6 times faster than Bazel
+by mean in this clean-client scenario. Once's first sample was a 277-millisecond
+outlier; its other nine samples were between 43 and 50 milliseconds.
 
 ### Local hit
 
 | Client | Mean | Median | Range |
 | --- | ---: | ---: | ---: |
-| Bazel | 0.863 s | 0.833 s | 0.611 to 1.391 s |
-| Buck2 | 0.065 s | 0.062 s | 0.057 to 0.090 s |
-| Once | 0.030 s | 0.029 s | 0.027 to 0.036 s |
+| Bazel | 0.845 s | 0.878 s | 0.582 to 1.434 s |
+| Buck2 | 0.058 s | 0.057 s | 0.055 to 0.076 s |
+| Once | 0.025 s | 0.024 s | 0.023 to 0.031 s |
 
-Once is 28.4 times faster than Bazel and 2.12 times faster than Buck2 by mean
+Once is 33.9 times faster than Bazel and 2.33 times faster than Buck2 by mean
 on a local hit. Buck2 uses a long-lived process, while Once starts a fresh
-process for every build. Once's 30-millisecond mean covers process startup,
+process for every build. Once's 25-millisecond mean covers process startup,
 graph loading, analysis, 15 local action-cache probes, validation of the
 requested output, and no output rewrite when its digest and permissions still
 match.
@@ -68,8 +69,8 @@ and [`results/local-hit.json`](results/local-hit.json).
 
 | Scenario | Before | After | Improvement |
 | --- | ---: | ---: | ---: |
-| Clean-client remote hit | 2.475 s | 0.192 s | 12.9 times faster |
-| Local hit | 2.398 s | 0.030 s | 78.9 times faster |
+| Clean-client remote hit | 2.475 s | 0.070 s | 35.2 times faster |
+| Local hit | 2.398 s | 0.025 s | 96.3 times faster |
 | Clean-client output materialization | 84 mebibytes | 1 mebibyte | 84 times less |
 
 The before measurements used the same graph, host, remote server, and release
@@ -132,6 +133,11 @@ The remote provider now:
   [Secure Hash Algorithm 256-bit](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
   digest
 - remembers the native-to-remote digest mapping within the process
+- mirrors remotely sourced action results with an atomic recoverable write,
+  while locally produced results retain crash-survivable durability
+- borrows incompressible blob input during local storage instead of copying it
+- reserves bounded capacity for streamed remote reads to avoid repeated buffer
+  growth copies
 - avoids fetching the canonical empty blob
 - logs remote action and blob upload failures instead of discarding them
 
@@ -188,7 +194,8 @@ large-blob transfers first, make write failures observable, add missing-blob
 checks and compression, then move action lookups earlier and make output
 materialization lazy. The review also highlighted that production round-trip
 latency makes the current dependency-by-dependency lookup order more expensive
-than this loopback benchmark shows.
+than this loopback benchmark shows. A follow-up ownership review identified the
+raw local-storage copy and streamed-read growth copies that are now removed.
 
 ## Validation
 
