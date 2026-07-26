@@ -21,6 +21,7 @@ tonic.workspace = true
 tracing.workspace = true
 reqwest.workspace = true
 schlussel.workspace = true
+uuid.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]

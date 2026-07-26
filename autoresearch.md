@@ -1,56 +1,80 @@
-# Autoresearch: validate scripted action filesystem contracts
+# Autoresearch: reduce Once local-hit latency
 
 ## Objective
 
-Improve Once's ability to report whether a scripted graph action's declared workspace inputs and outputs match its filesystem behavior. Retain only changes that improve detection without introducing false positives in the control corpus.
+Reduce end-to-end local cache-hit latency for the 15-target cache-comparison
+workspace. Retain only changes that improve repeated release-build measurements
+without weakening correctness, portability, structured logging, or graph
+semantics.
 
 ## Metrics
 
-- Primary: detection harmonic mean of precision and recall (`detection_f1_pct`, percentage, higher is better)
-- Secondary: `precision_pct`, `recall_pct`, `actionable_diagnostic_rate_pct`, `false_positive_rate_pct`, `runtime_overhead_pct`, and `benchmark_ms`
-
-Precision is true positives divided by all reported violations. Recall is true positives divided by all seeded violations. Actionable-diagnostic rate is seeded violations that produce a path-specific structured repair divided by all seeded violations. False-positive rate is compliant cases reported as violations divided by all compliant cases. Runtime overhead is the median contract-validation runtime relative to the existing private-input sandbox across nine paired runs.
+- Primary: median local-hit latency (`local_hit_ms`, milliseconds, lower is better)
+- Secondary: mean latency (`mean_ms`) and standard deviation (`stddev_ms`)
 
 ## How to Run
 
 `./autoresearch.sh`
 
-## Workload
-
-The fast corpus contains eight adversarial actions and four compliant controls. The adversarial set covers a relative undeclared read, an extra write, declared-input mutation and deletion, absolute workspace read and write, a declared symbolic-link escape, and an output symbolic-link escape. The controls include the vendored open-source Rust `itoa` source, a JavaScript test source, a declared source directory, and a nested declared output.
+The script builds the release executable before measurement, warms the existing
+local action cache, and measures 40 fresh command invocations after five warmup
+runs. It starts the local benchmark server only when needed to populate an empty
+client cache.
 
 ## Files in Scope
 
-- `crates/once-core/src/execute.rs`: private execution root staging and output copy-back
-- `crates/once-core/src/contract.rs`: generic contract observations
-- `crates/once-core/src/runner.rs`: uncached validation entry point
-- `crates/once-cli/src/commands/graph/`: declared-action validation orchestration
-- `crates/once-cli/src/commands/query.rs`: matching command-line query
-- `crates/once-cli/src/commands/mcp.rs`: agent tool transport
-- `crates/once-frontend/src/analysis/`: public Starlark declaration contract
-- `docs/reference/`: public command, tool, and Starlark module references
+- `crates/once-cli/src/main.rs`: process runtime and command dispatch
+- `crates/once-cli/src/logging.rs`: per-invocation logging setup and writes
+- `crates/once-cli/src/commands/graph/`: graph analysis and scheduling
+- `crates/once-frontend/src/`: manifest, module, and graph loading
+- workspace manifests: allocator and release profile experiments
 
 ## Off Limits
 
-- Ecosystem-specific branches in Rust execution code
-- Treating dependency files as complete access evidence
-- Claiming successful undeclared reads are observed by a symbolic-link tree
-- Remote execution behavior
+- A persistent background process unless measurements show process startup is
+  still the dominant controllable cost
+- Platform-specific behavior in generic graph or cache interfaces
+- Skipping required session logs
+- Benchmark-only shortcuts that do not improve normal Once workspaces
 
 ## Constraints
 
-- Keep correctness checks separate in `autoresearch.checks.sh`.
 - Use `mise exec --` for every Rust command.
-- Return stable diagnostics with target, attribute, and repairs.
-- Give every Model Context Protocol tool a matching `once query` or `once edit` command.
+- Keep the public command and graph behavior compatible.
+- Keep expensive filesystem and analysis work eligible for parallel execution.
+- Run focused checks after every measured experiment and the full suite before
+  handoff.
 - Do not use em dashes in user-facing text.
 
 ## What's Been Tried
 
-- The initial baseline scores only action failure as a detected contract violation. It intentionally measures the existing symbolic-link sandbox before adding post-run observation.
+- Reusing one compiled Starlark program per invocation was a large improvement.
+- Loading only built-in modules required by the workspace reduced the rebased
+  local-hit mean from 61.6 milliseconds to about 30 milliseconds.
+- A current-thread Tokio asynchronous runtime removed unnecessary kernel worker
+  creation while the existing blocking pool retained parallel file and analysis
+  work.
+- Direct synchronized log writes removed the dedicated logging thread with a
+  small stable improvement.
+- Stripping the release executable did not improve latency.
+- Research on Arachne and scheduler activations supports avoiding short-lived
+  kernel threads. Once now creates no asynchronous worker pool for this command.
+- Research on mimalloc, snmalloc, and Hoard motivates testing a sharded allocator,
+  but their largest gains target concurrent allocation. This workload is mostly
+  single-threaded after the runtime change, so the allocator must earn its place
+  in direct measurements.
 
-## Prior Art
+## Primary Research
 
-Primary Bazel references show that a symbolic-link sandbox makes undeclared relative reads fail, but does not observe successful absolute reads. Bazel also checks input metadata after execution for mutation. See the [sandboxing reference](https://github.com/bazelbuild/bazel/blob/e9e7d623a3d2d41803564b03a2e051a9f1c912d9/docs/docs/sandboxing.mdx#L68-L86), [input mutation check](https://github.com/bazelbuild/bazel/blob/e9e7d623a3d2d41803564b03a2e051a9f1c912d9/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxedSpawnRunner.java#L455-L514), and [hermetic escape tests](https://github.com/bazelbuild/bazel/blob/e9e7d623a3d2d41803564b03a2e051a9f1c912d9/src/test/shell/bazel/bazel_hermetic_sandboxing_test.sh#L296-L355).
-
-Buck2 likewise relies on declared materialization and output allowlists for local actions, while its structured action errors provide a useful model for repairs. See the [local executor](https://github.com/facebook/buck2/blob/main/app/buck2_execute_impl/src/executors/local.rs#L180-L248), [action interface](https://buck2.build/docs/api/build/AnalysisActions/#analysisactionsrun), [structured action errors](https://buck2.build/docs/api/build/ActionSubError/), and [local hermetic builds discussion](https://github.com/facebook/buck2/issues/358). These systems motivate the generic post-run inventory and explicit limitation for successful absolute reads used here.
+- [Mimalloc: Free List Sharding in Action](https://www.microsoft.com/en-us/research/publication/mimalloc-free-list-sharding-in-action/)
+  uses page-local free-list sharding to improve locality and reduce contention.
+- [snmalloc: A Message Passing Allocator](https://www.microsoft.com/en-us/research/publication/issm-2019-proceedings-of-the-2019-acm-sigplan-international-symposium-on-memory-management/)
+  batches cross-thread deallocation without locks.
+- [Hoard: A Scalable Memory Allocator](https://people.cs.umass.edu/~emery/pubs/berger-asplos2000.pdf)
+  uses per-processor heaps to reduce false sharing and bounds memory blowup.
+- [Arachne: Core-Aware Thread Management](https://www.usenix.org/conference/osdi18/presentation/qin)
+  demonstrates the latency cost of kernel-managed short-lived threads and uses
+  one long-lived kernel thread per assigned core.
+- [An Implementation of Scheduler Activations on NetBSD](https://www.usenix.org/conference/2002-usenix-annual-technical-conference/implementation-scheduler-activations-netbsd)
+  distinguishes cheap user-level scheduling from more expensive kernel thread
+  creation, synchronization, and disposal.

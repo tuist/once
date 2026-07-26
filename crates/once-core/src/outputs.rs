@@ -19,8 +19,12 @@ pub(crate) async fn restore(
     workspace_root: &Path,
     cache: &CacheProvider,
 ) -> Result<()> {
+    let outputs = outputs_needing_restore(result, workspace_root).await?;
+    if outputs.outputs.is_empty() {
+        return Ok(());
+    }
     let staging = RestoreStagingDir::create(workspace_root)?;
-    let prefetched = prefetch_output_blobs(result, cache, staging.path()).await?;
+    let prefetched = prefetch_output_blobs(&outputs, cache, staging.path()).await?;
     for output in prefetched {
         let PrefetchedOutput { rel, blob_path, .. } = output;
         let bytes = match tokio::fs::read(&blob_path).await {
@@ -41,6 +45,69 @@ pub(crate) async fn restore(
         restore_legacy_file(&rel, &abs, &bytes).await?;
     }
     Ok(())
+}
+
+async fn outputs_needing_restore(
+    result: &ActionResult,
+    workspace_root: &Path,
+) -> Result<ActionResult> {
+    let mut pending = result
+        .outputs
+        .iter()
+        .map(|(path, digest)| (path.clone(), *digest))
+        .collect::<VecDeque<_>>();
+    let mut tasks = JoinSet::new();
+    while tasks.len() < RESTORE_PREFETCH_CONCURRENCY {
+        let Some((path, digest)) = pending.pop_front() else {
+            break;
+        };
+        spawn_output_validation(&mut tasks, workspace_root, path, digest);
+    }
+    let mut outputs = BTreeMap::new();
+    while let Some(joined) = tasks.join_next().await {
+        let (path, digest, matches) = joined.map_err(|source| Error::RestoreOutput {
+            path: "cached output validation".to_string(),
+            source: std::io::Error::other(source.to_string()),
+        })?;
+        if !matches {
+            outputs.insert(path, digest);
+        }
+        if let Some((path, digest)) = pending.pop_front() {
+            spawn_output_validation(&mut tasks, workspace_root, path, digest);
+        }
+    }
+    Ok(ActionResult {
+        exit_code: result.exit_code,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        outputs,
+    })
+}
+
+fn spawn_output_validation(
+    tasks: &mut JoinSet<(String, Digest, bool)>,
+    workspace_root: &Path,
+    path: String,
+    digest: Digest,
+) {
+    let absolute = workspace_root.join(&path);
+    tasks.spawn_blocking(move || {
+        let matches = existing_file_matches_digest(&absolute, digest);
+        (path, digest, matches)
+    });
+}
+
+fn existing_file_matches_digest(path: &Path, expected: Digest) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    if capture_file_blob(path).is_ok_and(|bytes| Digest::of_bytes(&bytes) == expected) {
+        return true;
+    }
+    std::fs::read(path).is_ok_and(|bytes| Digest::of_bytes(&bytes) == expected)
 }
 
 async fn prefetch_output_blobs(
@@ -316,6 +383,38 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o640);
+    }
+
+    #[tokio::test]
+    async fn restore_does_not_rewrite_an_unchanged_file_output() {
+        let (_tmp, workspace, cache) = workspace_and_cache();
+        std::fs::create_dir(workspace.join("out")).unwrap();
+        let output_path = workspace.join("out/data.txt");
+        std::fs::write(&output_path, b"payload").unwrap();
+        let output = WorkspacePath::try_from("out/data.txt").unwrap();
+        let outputs = capture(
+            std::slice::from_ref(&output),
+            &workspace,
+            &cache,
+            OutputSymlinkMode::default(),
+        )
+        .await
+        .unwrap();
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs,
+        };
+        let modified = std::fs::metadata(&output_path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        restore(&result, &workspace, &cache).await.unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&output_path).unwrap().modified().unwrap(),
+            modified
+        );
     }
 
     #[cfg(unix)]

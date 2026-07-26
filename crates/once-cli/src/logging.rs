@@ -1,7 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
-use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 use uuid::Uuid;
 
@@ -13,7 +13,6 @@ const STDERR_ONCE_TARGETS: &[&str] =
 pub struct Logging {
     session_id: Uuid,
     log_path: Option<PathBuf>,
-    _guard: Option<WorkerGuard>,
 }
 
 impl Logging {
@@ -30,7 +29,7 @@ pub fn init(verbose: u8) -> Logging {
     let session_id = Uuid::now_v7();
     let stderr_filter = stderr_filter(verbose);
 
-    if let Ok((dir, (writer, guard))) =
+    if let Ok((dir, writer)) =
         log_dir().and_then(|dir| file_writer(&dir, session_id).map(|writer| (dir, writer)))
     {
         let log_path = dir.join(format!("{session_id}.log"));
@@ -57,7 +56,6 @@ pub fn init(verbose: u8) -> Logging {
         return Logging {
             session_id,
             log_path: Some(log_path),
-            _guard: Some(guard),
         };
     }
 
@@ -69,20 +67,16 @@ pub fn init(verbose: u8) -> Logging {
     Logging {
         session_id,
         log_path: None,
-        _guard: None,
     }
 }
 
-fn file_writer(
-    dir: &Path,
-    session_id: Uuid,
-) -> std::io::Result<(tracing_appender::non_blocking::NonBlocking, WorkerGuard)> {
+fn file_writer(dir: &Path, session_id: Uuid) -> std::io::Result<Mutex<std::fs::File>> {
     std::fs::create_dir_all(dir)?;
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(dir.join(format!("{session_id}.log")))?;
-    Ok(tracing_appender::non_blocking(file))
+    Ok(Mutex::new(file))
 }
 
 fn file_filter() -> EnvFilter {

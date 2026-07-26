@@ -1,0 +1,3 @@
+bazel/bazel-*
+buck2/buck-out/
+.state/

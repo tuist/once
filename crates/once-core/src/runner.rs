@@ -222,6 +222,14 @@ pub async fn run_uncached_contract(
     .await
 }
 
+pub async fn materialize_outputs(
+    result: &ActionResult,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+) -> Result<()> {
+    outputs::restore(result, workspace_root, cache).await
+}
+
 #[instrument(skip(cache), fields(action_digest = %key))]
 async fn lookup_cached(
     action: &Action,

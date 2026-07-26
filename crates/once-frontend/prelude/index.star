@@ -15,3 +15,7 @@ PRELUDE_SOURCES = [
     "javascript.star",
     "react_native.star",
 ]
+
+PRELUDE_DEPENDENCIES = {
+    "react_native.star": ["android.star"],
+}

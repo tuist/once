@@ -1356,15 +1356,6 @@ def _rust_rlib_deps(deps):
     # identically named rlibs and fails to load the dependent crate.
     return [dep for dep in deps if dep.get("rlib")]
 
-def _collect_transitive(deps, key, own_values):
-    out = []
-    for value in own_values:
-        out.append(value)
-    for dep in deps:
-        for value in dep.get(key) or []:
-            out.append(value)
-    return _unique(out)
-
 def _rust_android_abi_for_target(target):
     if "android" not in target:
         return ""

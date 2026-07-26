@@ -30,7 +30,6 @@ tokio.workspace = true
 tree-sitter.workspace = true
 tree-sitter-cypher.workspace = true
 tracing.workspace = true
-tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 walkdir.workspace = true

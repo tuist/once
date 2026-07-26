@@ -18,7 +18,7 @@ use tracing::Instrument;
 
 use cli::Cli;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,

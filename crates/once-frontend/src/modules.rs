@@ -1,6 +1,6 @@
 //! Loading and composing Starlark graph modules.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -21,6 +21,12 @@ const PRELUDE_INDEX_PATH: &str = "index.star";
 const COMMON_PRELUDE_PATH: &str = "common.star";
 static PRELUDE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/prelude");
 static BUILT_IN_MODULE_SOURCE: LazyLock<String> = LazyLock::new(load_built_in_module_source);
+static PRELUDE_INDEX: LazyLock<PreludeIndex> = LazyLock::new(load_prelude_index);
+
+struct PreludeIndex {
+    sources: Vec<String>,
+    dependencies: BTreeMap<String, Vec<String>>,
+}
 
 pub(crate) fn built_in_module_source() -> &'static str {
     BUILT_IN_MODULE_SOURCE.as_str()
@@ -36,6 +42,15 @@ pub(crate) fn combined_module_source_for_workspace(root: &Path) -> Result<String
         built_in_module_source(),
         &module_files,
     ))
+}
+
+pub(crate) fn combined_analysis_module_source_for_workspace(
+    root: &Path,
+    required_target_kinds: &BTreeSet<String>,
+) -> Result<String> {
+    let module_files = load_module_files(root)?;
+    let built_in = built_in_analysis_module_source(required_target_kinds);
+    Ok(combine_module_sources(&built_in, &module_files))
 }
 
 pub(crate) fn combine_module_sources(built_in: &str, module_files: &[ModuleFile]) -> String {
@@ -263,13 +278,56 @@ fn is_target_kind_value(value: Value<'_>) -> bool {
 }
 
 fn load_built_in_module_source() -> String {
-    let sources = prelude_sources_from_index();
     let mut source = String::new();
-    for path in sources {
-        source.push_str(prelude_source(&path));
+    for path in &PRELUDE_INDEX.sources {
+        source.push_str(prelude_source(path));
         source.push('\n');
     }
     source
+}
+
+fn built_in_analysis_module_source(required_target_kinds: &BTreeSet<String>) -> String {
+    let mut selected = BTreeSet::from([COMMON_PRELUDE_PATH.to_string()]);
+    for path in &PRELUDE_INDEX.sources {
+        if target_kind_exports(prelude_source(path))
+            .any(|kind| required_target_kinds.contains(kind))
+        {
+            selected.insert(path.clone());
+        }
+    }
+    let mut pending = selected.iter().cloned().collect::<Vec<_>>();
+    while let Some(path) = pending.pop() {
+        for dependency in PRELUDE_INDEX.dependencies.get(&path).into_iter().flatten() {
+            if selected.insert(dependency.clone()) {
+                pending.push(dependency.clone());
+            }
+        }
+    }
+    let mut source = String::new();
+    for path in &PRELUDE_INDEX.sources {
+        if selected.contains(path) {
+            source.push_str(prelude_source(path));
+            source.push('\n');
+        }
+    }
+    source
+}
+
+fn target_kind_exports(source: &str) -> impl Iterator<Item = &str> {
+    source.lines().filter_map(|line| {
+        let (name, expression) = line.split_once('=')?;
+        let name = name.trim();
+        (valid_identifier(name) && expression.trim_start().starts_with("target_kind("))
+            .then_some(name)
+    })
+}
+
+fn valid_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    chars
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|char| char == '_' || char.is_ascii_alphanumeric())
 }
 
 fn prelude_source(path: &str) -> &'static str {
@@ -280,7 +338,7 @@ fn prelude_source(path: &str) -> &'static str {
         .unwrap_or_else(|| panic!("built-in prelude source `{path}` is not UTF-8"))
 }
 
-fn prelude_sources_from_index() -> Vec<String> {
+fn load_prelude_index() -> PreludeIndex {
     let index = PRELUDE_DIR
         .get_file(PRELUDE_INDEX_PATH)
         .unwrap_or_else(|| panic!("built-in prelude index `{PRELUDE_INDEX_PATH}` is missing"));
@@ -294,12 +352,13 @@ fn prelude_sources_from_index() -> Vec<String> {
         let mut eval = starlark::eval::Evaluator::new(&module);
         eval.eval_module(ast, &globals)
             .unwrap_or_else(|error| panic!("built-in prelude index eval failed: {error:?}"));
-        let value = module
+        let sources_value = module
             .get("PRELUDE_SOURCES")
             .unwrap_or_else(|| panic!("built-in prelude index is missing PRELUDE_SOURCES"));
-        let list = ListRef::from_value(value)
+        let list = ListRef::from_value(sources_value)
             .unwrap_or_else(|| panic!("built-in prelude PRELUDE_SOURCES is not a list"));
-        list.iter()
+        let sources = list
+            .iter()
             .map(|value| {
                 let path = Value::unpack_str(value).unwrap_or_else(|| {
                     panic!("built-in prelude PRELUDE_SOURCES entries must be strings")
@@ -307,7 +366,48 @@ fn prelude_sources_from_index() -> Vec<String> {
                 validate_built_in_prelude_source_path(path);
                 path.to_string()
             })
-            .collect()
+            .collect::<Vec<_>>();
+        let dependencies_value = module
+            .get("PRELUDE_DEPENDENCIES")
+            .unwrap_or_else(|| panic!("built-in prelude index is missing PRELUDE_DEPENDENCIES"));
+        let dependencies_dict = DictRef::from_value(dependencies_value)
+            .unwrap_or_else(|| panic!("built-in prelude PRELUDE_DEPENDENCIES is not a dict"));
+        let mut dependencies = BTreeMap::new();
+        for (path, values) in dependencies_dict.iter() {
+            let path = Value::unpack_str(path).unwrap_or_else(|| {
+                panic!("built-in prelude PRELUDE_DEPENDENCIES keys must be strings")
+            });
+            let values = ListRef::from_value(values).unwrap_or_else(|| {
+                panic!("built-in prelude PRELUDE_DEPENDENCIES values must be lists")
+            });
+            let dependencies_for_path = values
+                .iter()
+                .map(|value| {
+                    Value::unpack_str(value)
+                        .unwrap_or_else(|| {
+                            panic!("built-in prelude PRELUDE_DEPENDENCIES entries must be strings")
+                        })
+                        .to_string()
+                })
+                .collect::<Vec<_>>();
+            dependencies.insert(path.to_string(), dependencies_for_path);
+        }
+        for (path, dependencies_for_path) in &dependencies {
+            assert!(
+                sources.contains(path),
+                "built-in prelude dependency owner `{path}` is not in PRELUDE_SOURCES"
+            );
+            for dependency in dependencies_for_path {
+                assert!(
+                    sources.contains(dependency),
+                    "built-in prelude dependency `{dependency}` is not in PRELUDE_SOURCES"
+                );
+            }
+        }
+        PreludeIndex {
+            sources,
+            dependencies,
+        }
     })
 }
 
@@ -348,6 +448,35 @@ demo_kind = target_kind(docs = "Demo")
         assert!(source.contains("# once module file: modules/demo.star"));
         assert!(source.contains("demo_kind = target_kind"));
         assert!(!source.contains("_ONCE_BUILT_IN_TARGET_KINDS"));
+    }
+
+    #[test]
+    fn analysis_module_selects_only_required_target_kind_sources() {
+        let source =
+            built_in_analysis_module_source(&BTreeSet::from(["apple_library".to_string()]));
+
+        assert!(source.contains("apple_library = target_kind("));
+        assert!(!source.contains("android_library = target_kind("));
+        assert!(!source.contains("react_native_bundle = target_kind("));
+    }
+
+    #[test]
+    fn analysis_module_includes_declared_source_dependencies() {
+        let source =
+            built_in_analysis_module_source(&BTreeSet::from(["react_native_metro".to_string()]));
+
+        assert!(source.contains("react_native_metro = target_kind("));
+        assert!(source.contains("def _android_device_ready_script():"));
+        assert!(!source.contains("apple_library = target_kind("));
+    }
+
+    #[test]
+    fn custom_only_analysis_module_uses_common_prelude() {
+        let source = built_in_analysis_module_source(&BTreeSet::from(["custom_kind".to_string()]));
+
+        assert!(source.contains("def target_kind("));
+        assert!(!source.contains("apple_library = target_kind("));
+        assert!(!source.contains("rust_library = target_kind("));
     }
 
     #[test]
