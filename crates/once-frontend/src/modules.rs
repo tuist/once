@@ -1,5 +1,6 @@
 //! Loading and composing Starlark graph modules.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
@@ -39,7 +40,7 @@ pub(crate) fn common_module_source() -> &'static str {
     prelude_source(COMMON_PRELUDE_PATH)
 }
 
-pub(crate) fn combined_module_source_for_workspace(root: &Path) -> Result<String> {
+pub(crate) fn combined_module_source_for_workspace(root: &Path) -> Result<Cow<'static, str>> {
     let module_files = load_module_files(root)?;
     Ok(combine_module_sources(
         built_in_module_source(),
@@ -52,13 +53,30 @@ pub(crate) fn combined_analysis_module_source_for_workspace(
     required_target_kinds: &BTreeSet<String>,
 ) -> Result<String> {
     let module_files = load_module_files(root)?;
-    let built_in = built_in_analysis_module_source(required_target_kinds);
-    Ok(combine_module_sources(&built_in, &module_files))
+    let mut source = built_in_analysis_module_source(required_target_kinds);
+    append_module_sources(&mut source, &module_files);
+    Ok(source)
 }
 
-pub(crate) fn combine_module_sources(built_in: &str, module_files: &[ModuleFile]) -> String {
-    let mut source = String::new();
+pub(crate) fn combine_module_sources<'a>(
+    built_in: &'a str,
+    module_files: &[ModuleFile],
+) -> Cow<'a, str> {
+    if module_files.is_empty() {
+        return Cow::Borrowed(built_in);
+    }
+    let mut source = String::with_capacity(
+        built_in
+            .len()
+            .saturating_add(module_source_suffix_len(module_files)),
+    );
     source.push_str(built_in);
+    append_module_sources(&mut source, module_files);
+    Cow::Owned(source)
+}
+
+fn append_module_sources(source: &mut String, module_files: &[ModuleFile]) {
+    source.reserve_exact(module_source_suffix_len(module_files));
     for module_file in module_files {
         source.push_str("\n# once module file: ");
         source.push_str(&module_file.display_path);
@@ -66,7 +84,17 @@ pub(crate) fn combine_module_sources(built_in: &str, module_files: &[ModuleFile]
         source.push_str(&module_file.source);
         source.push('\n');
     }
-    source
+}
+
+fn module_source_suffix_len(module_files: &[ModuleFile]) -> usize {
+    module_files.iter().fold(0, |length, module_file| {
+        length
+            .saturating_add("\n# once module file: ".len())
+            .saturating_add(module_file.display_path.len())
+            .saturating_add(1)
+            .saturating_add(module_file.source.len())
+            .saturating_add(1)
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -476,6 +504,13 @@ demo_kind = target_kind(docs = "Demo")
         assert!(source.contains("# once module file: modules/demo.star"));
         assert!(source.contains("demo_kind = target_kind"));
         assert!(!source.contains("_ONCE_BUILT_IN_TARGET_KINDS"));
+    }
+
+    #[test]
+    fn combined_source_borrows_built_in_source_without_modules() {
+        let source = combine_module_sources("built-in", &[]);
+
+        assert!(matches!(source, Cow::Borrowed("built-in")));
     }
 
     #[test]
