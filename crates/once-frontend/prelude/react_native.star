@@ -618,6 +618,7 @@ def _react_native_bundle_impl(ctx):
         "label_id": ctx["label"]["id"],
         "target_kind": "react_native_bundle",
         "platform": platform,
+        "sources": files,
         "bundle": final_bundle,
         "source_map": source_map,
         "assets": assets,
@@ -790,6 +791,13 @@ def _react_native_native_deps(ctx):
         "bundles": bundles,
     }
 
+def _react_native_bundle_sources(deps, platform):
+    sources = []
+    for bundle in deps["bundles"]:
+        if bundle.get("platform") == platform:
+            sources.extend(bundle.get("sources") or [])
+    return _unique(sources)
+
 def _react_native_apple_application_impl(ctx):
     deps = _react_native_native_deps(ctx)
     dependency = deps["dependency"]
@@ -830,10 +838,11 @@ def _react_native_apple_application_impl(ctx):
             "app": app,
             "bundle_id": bundle_id,
         }
+    bundle_sources = _react_native_bundle_sources(deps, "ios") if "debug" not in configuration.lower() else []
     files = _unique(_react_native_source_files(ctx, [
         native_root + "/Pods/**/*",
         native_root + "/build/**/*",
-    ]) + [dependency["package_json"], dependency["lockfile"]])
+    ]) + bundle_sources + [dependency["package_json"], dependency["lockfile"]])
     stage = _react_native_stage_project(ctx, dependency, files)
     staged_native_root = stage + "/" + native_root
     tools = _react_native_tools(ctx)
@@ -1023,11 +1032,12 @@ def _react_native_android_application_impl(ctx):
             "apk": apk,
             "application_id": application_id,
         }
+    bundle_sources = _react_native_bundle_sources(deps, "android") if "debug" not in configuration.lower() else []
     files = _unique(_react_native_source_files(ctx, [
         native_root + "/.gradle/**/*",
         native_root + "/build/**/*",
         native_root + "/**/build/**/*",
-    ]) + [dependency["package_json"], dependency["lockfile"]])
+    ]) + bundle_sources + [dependency["package_json"], dependency["lockfile"]])
     stage = _react_native_stage_project(ctx, dependency, files)
     staged_native_root = stage + "/" + native_root
     apk_path_attr = _react_native_attr(ctx, "apk_path", "")
@@ -1294,7 +1304,7 @@ react_native_module = target_kind(
 react_native_bundle = target_kind(
     docs = "Bundles JavaScript and platform assets with Metro, then compiles the release bundle with the Hermes compiler paired to React Native.",
     attrs = [
-        attr("platform", "string", required = True, docs = "`ios` or `android`.", configurable = False),
+        attr("platform", "string", required = True, docs = "`ios` or `android`.", configurable = False, allowed_values = ["ios", "android"]),
         attr("entry", "string", default = "\"index.js\"", docs = "Package-relative JavaScript entry file.", configurable = False),
         attr("bundle_name", "string", default = "\"main.jsbundle\"", docs = "Final bundle filename.", configurable = False),
         attr("metro_config", "string", docs = "Package-relative Metro configuration.", configurable = False),
@@ -1315,7 +1325,7 @@ react_native_bundle = target_kind(
 react_native_codegen = target_kind(
     docs = "Runs the React Native New Architecture code generator for application and native-module specifications.",
     attrs = [
-        attr("platform", "string", required = True, docs = "`ios`, `android`, or `all`.", configurable = False),
+        attr("platform", "string", required = True, docs = "`ios`, `android`, or `all`.", configurable = False, allowed_values = ["ios", "android", "all"]),
         attr("node", "string", default = "\"node\"", docs = "Node.js executable.", configurable = False),
     ],
     deps = [dep("deps", ["react_native_dependency_set"], "Locked React Native packages containing the code generator.")],
@@ -1350,7 +1360,7 @@ react_native_apple_application = target_kind(
         attr("workspace", "string", docs = "Workspace filename. Defaults to product_name.xcworkspace.", configurable = False),
         attr("scheme", "string", docs = "Xcode scheme. Defaults to product_name.", configurable = False),
         attr("configuration", "string", default = "\"Debug\"", docs = "Xcode build configuration.", configurable = True),
-        attr("sdk", "string", default = "\"iphonesimulator\"", docs = "Apple software development kit identifier.", configurable = False),
+        attr("sdk", "string", default = "\"iphonesimulator\"", docs = "Apple software development kit identifier.", configurable = False, allowed_values = ["iphonesimulator", "iphoneos"]),
         attr("simulator", "string", default = "\"booted\"", docs = "Simulator identifier used by the run capability.", configurable = False),
         attr("exclude_srcs", "list<string>", default = "[]", docs = "Additional source patterns excluded while staging the native project.", configurable = False),
         attr("node", "string", default = "\"node\"", docs = "Node.js executable.", configurable = False),

@@ -30,7 +30,9 @@ release package. Generated Gradle build directories are excluded while staging;
 `exclude_srcs` adds project-specific exclusions.
 
 The `deps` edge accepts a React Native dependency set plus optional code
-generation, autolinking, and release-bundle providers.
+generation, autolinking, and release-bundle providers. Non-debug variants stage
+the JavaScript sources from the matching Android bundle provider before the
+checked-in Gradle bundling task runs.
 
 ## Capabilities
 

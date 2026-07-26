@@ -78,10 +78,13 @@ Set `adb_serial` when more than one Android device is connected. Once waits for
 the selected device to become ready before installation.
 
 JavaScript and TypeScript sources belong to the Metro and bundle targets, not
-the native application target. Editing those sources therefore triggers Fast
-Refresh without invalidating the cached native application. Native project,
-lockfile, module-discovery, or generated-interface changes do invalidate the
-relevant native build.
+the native application target. The Apple and Android application targets
+consume the matching bundle provider to stage those sources when their native
+release build runs its own bundling step. Editing the live sources triggers
+Fast Refresh without rebuilding a debug native application. A release
+application build includes those source changes in its cache key. Native
+project, lockfile, module-discovery, or generated-interface changes also
+invalidate the relevant native build.
 
 ## Native modules
 
@@ -140,8 +143,9 @@ Lifecycle scripts still run with the package manager's normal permissions.
 The application targets use the checked-in CocoaPods and Gradle projects.
 This preserves upstream React Native behavior and native-module integration.
 A first build may still fetch missing CocoaPods sources, a Gradle distribution,
-or Gradle artifacts. Native release builds use the bundling steps owned by
-those projects, while `react_native_bundle` produces a separate Metro and
+or Gradle artifacts. Native release builds stage the source boundary from their
+matching `react_native_bundle` dependency and use the bundling steps owned by
+the native project. The same dependency also produces a separate Metro and
 Hermes artifact for distribution workflows.
 
 ### Development and execution

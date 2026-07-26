@@ -109,6 +109,7 @@ deps = [
   "./Dependencies",
   "./Autolinking",
   "./CodegenApple",
+  "./AppleBundle",
 ]
 
 [target.attrs]
@@ -133,6 +134,7 @@ deps = [
   "./Dependencies",
   "./Autolinking",
   "./CodegenAndroid",
+  "./AndroidBundle",
 ]
 
 [target.attrs]

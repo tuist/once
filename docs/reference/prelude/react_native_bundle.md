@@ -24,6 +24,8 @@ Metro source maps into one final map.
 | `node` | string | no | `node` | Node.js executable |
 
 The `deps` edge accepts exactly one `react_native_dependency_set`.
+Apple and Android application targets can consume the provider to stage this
+target's declared JavaScript sources for native non-debug bundling.
 
 On macOS, x86-64 Linux, and x86-64 Windows, Once resolves the Hermes compiler
 through the locked React Native package. This supports both hoisted and

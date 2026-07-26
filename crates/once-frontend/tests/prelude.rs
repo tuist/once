@@ -549,7 +549,9 @@ result = repr(_react_native_bundle_impl(ctx))
 
     let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
-    assert!(result.unwrap().contains("\"react_native_bundle\": True"));
+    let result = result.unwrap();
+    assert!(result.contains("\"react_native_bundle\": True"));
+    assert!(result.contains("\"sources\": [\"app/index.js\", \"app/metro.config.js\"]"));
     let stage_link = action_by_identifier(&store, "app/Bundle:stage-node-modules");
     assert!(matches!(
         stage_link.operation,
@@ -666,6 +668,8 @@ fn react_native_android_build_uses_custom_application_output_and_exposes_logs() 
     for (path, contents) in [
         ("package.json", "{}\n"),
         ("package-lock.json", "{}\n"),
+        ("index.js", "export default {};\n"),
+        ("App.tsx", "export default function App() {}\n"),
         ("android/settings.gradle", "rootProject.name = 'App'\n"),
         ("android/gradle/wrapper/gradle-wrapper.jar", "jar"),
     ] {
@@ -698,8 +702,8 @@ ctx = {{
         "application_id": "com.example",
         "native_root": "android",
         "module": "app",
-        "configuration": "demoDebug",
-        "apk_path": "android/app/build/outputs/apk/demo/debug/app-demo-debug.apk",
+        "configuration": "demoRelease",
+        "apk_path": "android/app/build/outputs/apk/demo/release/app-demo-release.apk",
         "android_sdk": "/sdk",
         "android_ndk": "/ndk",
     }},
@@ -712,6 +716,10 @@ ctx = {{
         "lockfile": "app/package-lock.json",
         "react_native_version": "0.86.0",
         "hermes_version": "250829098.0.14",
+    }}, {{
+        "react_native_bundle": True,
+        "platform": "android",
+        "sources": ["app/index.js", "app/App.tsx"],
     }}],
     "srcs": ["android/**/*"],
     "build_dir": ".once/out/app/Android",
@@ -735,17 +743,19 @@ result = repr(_react_native_android_application_impl(ctx))
         "{result}"
     );
     let gradle = action_by_identifier(&store, "app/Android:gradle");
-    assert!(gradle.argv.iter().any(|arg| arg == "app:assembleDemoDebug"));
     assert!(gradle
-        .outputs
+        .argv
         .iter()
-        .any(|output| output
-            .ends_with("android/app/build/outputs/apk/demo/debug/app-demo-debug.apk")));
+        .any(|arg| arg == "app:assembleDemoRelease"));
+    assert!(gradle.outputs.iter().any(|output| output
+        .ends_with("android/app/build/outputs/apk/demo/release/app-demo-release.apk")));
     assert_eq!(
         gradle.stdout.as_deref(),
         Some(".once/out/app/Android/gradle.log")
     );
     assert_eq!(gradle.stderr, gradle.stdout);
+    action_by_identifier(&store, "app/Android:stage:index.js");
+    action_by_identifier(&store, "app/Android:stage:App.tsx");
 }
 
 #[test]
@@ -826,6 +836,8 @@ fn react_native_apple_build_distinguishes_simulator_and_device_destinations() {
     for (path, contents) in [
         ("package.json", "{}\n"),
         ("package-lock.json", "{}\n"),
+        ("index.js", "export default {};\n"),
+        ("App.tsx", "export default function App() {}\n"),
         ("Gemfile", "source 'https://rubygems.org'\n"),
         ("Gemfile.lock", "BUNDLED WITH\n   4.0.0\n"),
         ("ios/Podfile", "platform :ios, '15.1'\n"),
@@ -872,6 +884,10 @@ ctx = {{
         "lockfile": "app/package-lock.json",
         "react_native_version": "0.86.0",
         "hermes_version": "250829098.0.14",
+    }}, {{
+        "react_native_bundle": True,
+        "platform": "ios",
+        "sources": ["app/index.js", "app/App.tsx"],
     }}],
     "srcs": ["Gemfile", "Gemfile.lock", "ios/**/*"],
     "build_dir": ".once/out/app/Apple",
@@ -912,6 +928,8 @@ result = repr(_react_native_apple_application_impl(ctx))
         Some(".once/out/app/Apple/xcodebuild.log")
     );
     assert_eq!(xcodebuild.stderr, xcodebuild.stdout);
+    action_by_identifier(&store, "app/Apple:stage:index.js");
+    action_by_identifier(&store, "app/Apple:stage:App.tsx");
 }
 
 #[test]
