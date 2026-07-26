@@ -494,13 +494,15 @@ impl TuistCache {
             ));
         }
 
-        let mut mappings = self.known_remote_blobs.lock().await;
+        let mut mappings = HashMap::new();
+        let mut remote_digests = Vec::with_capacity(native.outputs.len() + 2);
         for (path, native_digest) in &native.outputs {
             let remote_digest = remote_outputs.get(path.as_str()).ok_or_else(|| {
                 remote_action_metadata_error(&format!(
                     "remote action result is missing native output `{path}`"
                 ))
             })?;
+            remote_digests.push((*remote_digest).clone());
             mappings.insert(*native_digest, (*remote_digest).clone());
         }
         remember_optional_remote_blob(
@@ -515,6 +517,10 @@ impl TuistCache {
             remote.stderr_digest.as_ref(),
             "stderr",
         )?;
+        remote_digests.extend(remote.stdout_digest.iter().cloned());
+        remote_digests.extend(remote.stderr_digest.iter().cloned());
+        self.ensure_reapi_blobs_present(remote_digests).await?;
+        self.known_remote_blobs.lock().await.extend(mappings);
         Ok(())
     }
 
@@ -845,6 +851,35 @@ impl TuistCache {
             .map_err(|source| grpc_error("head blob", &source))?
             .into_inner();
         Ok(response.missing_blob_digests.is_empty())
+    }
+
+    async fn ensure_reapi_blobs_present(&self, digests: Vec<reapi::Digest>) -> Result<()> {
+        if digests.is_empty() {
+            return Ok(());
+        }
+        let channel = self.grpc_channel().await?;
+        let mut client = ContentAddressableStorageClient::new(channel);
+        let request = reapi::FindMissingBlobsRequest {
+            instance_name: self.instance_name(),
+            blob_digests: digests,
+            digest_function: SHA256_DIGEST_FUNCTION,
+        };
+        let response = client
+            .find_missing_blobs(
+                self.authorized_grpc_request(request, "get action result")
+                    .await?,
+            )
+            .await
+            .map_err(|source| grpc_error("get action result", &source))?
+            .into_inner();
+        if let Some(missing) = response.missing_blob_digests.first() {
+            return Err(remote_action_metadata_error(&format!(
+                "remote action result points at {} missing blob(s), including {}",
+                response.missing_blob_digests.len(),
+                digest_key(missing)
+            )));
+        }
+        Ok(())
     }
 
     async fn get_reapi_action_result(
