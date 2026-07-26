@@ -9,17 +9,17 @@ semantics.
 
 ## Metrics
 
-- Primary: median local-hit latency (`local_hit_ms`, milliseconds, lower is better)
+- Primary: median clean-client remote-hit latency (`remote_hit_ms`,
+  milliseconds, lower is better)
 - Secondary: mean latency (`mean_ms`) and standard deviation (`stddev_ms`)
 
 ## How to Run
 
 `./autoresearch.sh`
 
-The script builds the release executable before measurement, warms the existing
-local action cache, and measures 40 fresh command invocations after five warmup
-runs. It starts the local benchmark server only when needed to populate an empty
-client cache.
+The script builds the release executable before measurement, populates the
+remote cache, clears local client state before every sample, and measures 20
+fresh command invocations against the local benchmark server.
 
 ## Files in Scope
 
@@ -60,9 +60,12 @@ client cache.
 - Research on Arachne and scheduler activations supports avoiding short-lived
   kernel threads. Once now creates no asynchronous worker pool for this command.
 - Research on mimalloc, snmalloc, and Hoard motivates testing a sharded allocator,
-  but their largest gains target concurrent allocation. This workload is mostly
-  single-threaded after the runtime change, so the allocator must earn its place
-  in direct measurements.
+  but their largest gains target concurrent allocation. Mimalloc measured 25.75
+  milliseconds in its stable repeat while the system allocator measured 25.13
+  milliseconds, so the system allocator remains.
+- The remote provider loads the authentication token through a blocking task for
+  every request. The first wave can also establish duplicate data-plane channels
+  because connection initialization is not single-flight.
 
 ## Primary Research
 
