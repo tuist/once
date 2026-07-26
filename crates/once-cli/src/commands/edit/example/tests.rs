@@ -95,3 +95,34 @@ fn suggested_execution_calls_exclude_helper_target_kinds() {
         .collect::<Vec<_>>();
     assert_eq!(execution_targets, ["apps/hello/hello", "apps/hello/hello"]);
 }
+
+#[test]
+fn materializes_binary_files_without_corrupting_them() {
+    let temporary = TempDir::new().unwrap();
+
+    let result = materialize_example_value(
+        temporary.path(),
+        "react_native_android_application",
+        "react-native-application-minimal",
+        "",
+    )
+    .unwrap();
+
+    assert!(result.materialized);
+    let wrapper = std::fs::read(
+        temporary
+            .path()
+            .join("android/gradle/wrapper/gradle-wrapper.jar"),
+    )
+    .unwrap();
+    let icon = std::fs::read(
+        temporary
+            .path()
+            .join("android/app/src/main/res/mipmap-mdpi/ic_launcher.png"),
+    )
+    .unwrap();
+    let key_store = std::fs::read(temporary.path().join("android/app/debug.keystore")).unwrap();
+    assert!(wrapper.starts_with(b"PK"));
+    assert!(icon.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(!key_store.is_empty());
+}

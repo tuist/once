@@ -137,7 +137,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_schema",
             description: "Return the typed contract for a target kind: attributes, dep edges, providers, capabilities, source references, and runnable starters.",
-            long_description: "Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list with types and required, configurable, and implemented flags, expected dep providers, emitted providers, exposed capabilities, required tools, external source concepts that can guide partial adoption, and a lightweight list of runnable starter examples. Attributes marked `implemented: false` are discoverable compatibility fields that validation rejects until their target kind gives them behavior. Use `once_materialize_example` to create an unchanged starter without loading its contents into model context, or `once_query_example` when the caller needs to inspect and adapt the files.",
+            long_description: "Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list with types and required, configurable, implemented, and allowed-value fields, expected dep providers, emitted providers, exposed capabilities, required tools, external source concepts that can guide partial adoption, and a lightweight list of runnable starter examples. Attributes marked `implemented: false` are discoverable compatibility fields that validation rejects until their target kind gives them behavior. Use `once_materialize_example` to create an unchanged starter without loading its contents into model context, or `once_query_example` when the caller needs to inspect and adapt the files.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -153,7 +153,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_example",
             description: "Return the complete file bundle for one target kind starter example.",
-            long_description: "Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every text file a caller can inspect or adapt. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`. For direct setup, prefer `once_materialize_example`, which writes the bundle without sending large dependency payloads through model context.",
+            long_description: "Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every file a caller can inspect or adapt. Text files use `contents`; binary files use `contents_base64`. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`. For direct setup, prefer `once_materialize_example`, which writes the bundle without sending large dependency payloads through model context.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

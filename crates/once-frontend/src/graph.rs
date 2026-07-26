@@ -244,6 +244,22 @@ pub struct TargetKindExampleFile {
     pub path: String,
     /// File contents as a UTF-8 string.
     pub contents: String,
+    /// Binary file contents encoded as Base64. This is absent for text files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contents_base64: Option<String>,
+}
+
+impl TargetKindExampleFile {
+    pub fn decoded_contents(&self) -> std::result::Result<Vec<u8>, String> {
+        use base64::Engine as _;
+
+        match &self.contents_base64 {
+            Some(contents) => base64::engine::general_purpose::STANDARD
+                .decode(contents)
+                .map_err(|error| format!("invalid Base64 contents for `{}`: {error}", self.path)),
+            None => Ok(self.contents.as_bytes().to_vec()),
+        }
+    }
 }
 
 /// Attribute metadata exposed by a target kind schema.
@@ -264,6 +280,9 @@ pub struct AttrSchema {
     pub configurable: bool,
     /// Whether the target kind currently implements the attribute.
     pub implemented: bool,
+    /// Accepted string values. An empty list accepts every value of the type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_values: Vec<String>,
 }
 
 /// Dependency metadata exposed by a target kind schema.
@@ -778,7 +797,7 @@ fn source_reference_from_value(
 }
 
 fn attr_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<AttrSchema, String> {
-    Ok(AttrSchema {
+    let schema = AttrSchema {
         name: field_string(value, path, "name")?,
         ty: field_string(value, path, "ty")?,
         required: field_bool(value, path, "required")?,
@@ -786,7 +805,14 @@ fn attr_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<A
         docs: field_string(value, path, "docs")?,
         configurable: field_bool(value, path, "configurable")?,
         implemented: field_bool(value, path, "implemented")?,
-    })
+        allowed_values: field_string_list(value, path, "allowed_values")?,
+    };
+    if !schema.allowed_values.is_empty() && schema.ty != "string" && schema.ty != "target" {
+        return Err(format!(
+            "{path}.allowed_values is supported only for string and target attributes"
+        ));
+    }
+    Ok(schema)
 }
 
 fn dep_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<DepSchema, String> {
@@ -1008,6 +1034,7 @@ fn attr(
         docs: docs.to_string(),
         configurable,
         implemented: true,
+        allowed_values: Vec::new(),
     }
 }
 
@@ -1099,6 +1126,42 @@ mod tests {
                 executables: vec!["rustc".to_string(), "cargo".to_string()],
             }]
         );
+    }
+
+    #[test]
+    fn parse_target_kind_schemas_exposes_allowed_attribute_values() {
+        let source = source_with_common(
+            r#"demo = target_kind(
+    docs = "Demo kind",
+    attrs = [
+        attr("mode", "string", allowed_values = ["fast", "small"]),
+    ],
+)"#,
+        );
+        let schemas = parse_target_kind_schemas("test.star", &source).unwrap();
+
+        assert_eq!(
+            schemas[0].attrs[0].allowed_values,
+            vec!["fast".to_string(), "small".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_target_kind_schemas_rejects_allowed_values_on_non_string_attributes() {
+        let source = source_with_common(
+            r#"demo = target_kind(
+    docs = "Demo kind",
+    attrs = [
+        attr("count", "int", allowed_values = ["1", "2"]),
+    ],
+)"#,
+        );
+
+        let error = parse_target_kind_schemas("test.star", &source).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("supported only for string and target attributes"));
     }
 
     #[test]

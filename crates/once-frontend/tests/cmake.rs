@@ -154,7 +154,7 @@ fn materialize(root: &Path, example: &TargetKindExampleBundle) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create example directory");
         }
-        fs::write(path, &file.contents).expect("write example file");
+        fs::write(path, file.decoded_contents().unwrap()).expect("write example file");
     }
 }
 

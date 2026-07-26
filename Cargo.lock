@@ -3464,6 +3464,7 @@ name = "once-frontend"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64",
  "glob",
  "include_dir",
  "serde",

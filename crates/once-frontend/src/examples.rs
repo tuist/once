@@ -4,6 +4,7 @@
 
 use std::path::{Component, Path};
 
+use base64::Engine as _;
 use include_dir::{include_dir, Dir};
 use walkdir::WalkDir;
 
@@ -92,10 +93,7 @@ fn collect_included_files(dir: &Dir<'_>, root: &Path, out: &mut Vec<TargetKindEx
         if path_has_runtime_state(relative) {
             continue;
         }
-        out.push(TargetKindExampleFile {
-            path: display_path(relative),
-            contents: file.contents_utf8().unwrap_or_default().to_string(),
-        });
+        out.push(example_file(display_path(relative), file.contents()));
     }
     for sub in dir.dirs() {
         collect_included_files(sub, root, out);
@@ -120,14 +118,11 @@ fn load_workspace_files(root: &Path, path: &str) -> Result<Vec<TargetKindExample
         if path_has_runtime_state(relative) {
             continue;
         }
-        let contents = std::fs::read_to_string(entry.path()).map_err(|source| Error::Read {
+        let contents = std::fs::read(entry.path()).map_err(|source| Error::Read {
             path: entry.path().display().to_string(),
             source,
         })?;
-        files.push(TargetKindExampleFile {
-            path: display_path(relative),
-            contents,
-        });
+        files.push(example_file(display_path(relative), &contents));
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
@@ -160,6 +155,21 @@ fn validate_workspace_source(root: &Path, path: &str) -> std::result::Result<(),
         ));
     }
     Ok(())
+}
+
+fn example_file(path: String, contents: &[u8]) -> TargetKindExampleFile {
+    match std::str::from_utf8(contents) {
+        Ok(contents) => TargetKindExampleFile {
+            path,
+            contents: contents.to_string(),
+            contents_base64: None,
+        },
+        Err(_) => TargetKindExampleFile {
+            path,
+            contents: String::new(),
+            contents_base64: Some(base64::engine::general_purpose::STANDARD.encode(contents)),
+        },
+    }
 }
 
 fn validate_relative_path(path: &str) -> std::result::Result<(), String> {

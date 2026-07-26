@@ -83,6 +83,9 @@ Values declared with the `target` type use the same package-relative target
 syntax as dependency references. Complete-workspace validation confirms that
 each referenced target exists and returns an attribute-scoped repair when it
 does not.
+Use `allowed_values = ["first", "second"]` on a `string` or `target` attribute
+when the schema accepts a fixed set. Validation reports an attribute-scoped
+repair before analysis when a manifest supplies another value.
 
 ## Dependency Resolver Contract
 
@@ -281,6 +284,9 @@ once query example apple_library apple-library-minimal --format json
   ]
 }
 ```
+
+Text files use `contents`. Binary files use `contents_base64` so direct
+materialization preserves their exact bytes.
 
 [Model Context Protocol](https://modelcontextprotocol.io/) callers use
 `once_list_target_kinds` and `once_query_schema` for discovery, then

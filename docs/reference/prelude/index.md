@@ -10,10 +10,11 @@ contract from the command line. See [Ecosystems](/guide/graph/ecosystems) for
 help choosing between typed target kinds and scripted automation.
 
 Each schema reports whether an attribute is required, configurable, and
-implemented. An attribute marked as not implemented remains discoverable for
-compatibility, but validation rejects it with a focused repair before
-analysis. Tool requirements list the executable alternatives Once can use, so
-an agent can discover missing setup without reading prose documentation.
+implemented, plus any fixed set of allowed values. An attribute marked as not
+implemented remains discoverable for compatibility, but validation rejects it
+with a focused repair before analysis. Tool requirements list the executable
+alternatives Once can use, so an agent can discover missing setup without
+reading prose documentation.
 
 Every target kind includes at least one materializable starter. Repository
 contributors can run `mise run examples:verify-portable` to materialize and

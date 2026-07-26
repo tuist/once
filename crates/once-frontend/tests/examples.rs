@@ -465,7 +465,7 @@ fn materialize(root: &Path, example: &once_frontend::TargetKindExampleBundle) {
                 )
             });
         }
-        fs::write(&path, &file.contents).unwrap_or_else(|err| {
+        fs::write(&path, file.decoded_contents().unwrap()).unwrap_or_else(|err| {
             panic!(
                 "writing {} for example `{}`: {err}",
                 path.display(),
