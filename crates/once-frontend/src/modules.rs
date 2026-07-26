@@ -26,6 +26,9 @@ static PRELUDE_INDEX: LazyLock<PreludeIndex> = LazyLock::new(load_prelude_index)
 struct PreludeIndex {
     sources: Vec<String>,
     dependencies: BTreeMap<String, Vec<String>>,
+    #[cfg(test)]
+    target_kinds: BTreeMap<String, Vec<String>>,
+    source_by_target_kind: BTreeMap<String, String>,
 }
 
 pub(crate) fn built_in_module_source() -> &'static str {
@@ -288,10 +291,8 @@ fn load_built_in_module_source() -> String {
 
 fn built_in_analysis_module_source(required_target_kinds: &BTreeSet<String>) -> String {
     let mut selected = BTreeSet::from([COMMON_PRELUDE_PATH.to_string()]);
-    for path in &PRELUDE_INDEX.sources {
-        if target_kind_exports(prelude_source(path))
-            .any(|kind| required_target_kinds.contains(kind))
-        {
+    for kind in required_target_kinds {
+        if let Some(path) = PRELUDE_INDEX.source_by_target_kind.get(kind) {
             selected.insert(path.clone());
         }
     }
@@ -313,6 +314,7 @@ fn built_in_analysis_module_source(required_target_kinds: &BTreeSet<String>) -> 
     source
 }
 
+#[cfg(test)]
 fn target_kind_exports(source: &str) -> impl Iterator<Item = &str> {
     source.lines().filter_map(|line| {
         let (name, expression) = line.split_once('=')?;
@@ -367,31 +369,8 @@ fn load_prelude_index() -> PreludeIndex {
                 path.to_string()
             })
             .collect::<Vec<_>>();
-        let dependencies_value = module
-            .get("PRELUDE_DEPENDENCIES")
-            .unwrap_or_else(|| panic!("built-in prelude index is missing PRELUDE_DEPENDENCIES"));
-        let dependencies_dict = DictRef::from_value(dependencies_value)
-            .unwrap_or_else(|| panic!("built-in prelude PRELUDE_DEPENDENCIES is not a dict"));
-        let mut dependencies = BTreeMap::new();
-        for (path, values) in dependencies_dict.iter() {
-            let path = Value::unpack_str(path).unwrap_or_else(|| {
-                panic!("built-in prelude PRELUDE_DEPENDENCIES keys must be strings")
-            });
-            let values = ListRef::from_value(values).unwrap_or_else(|| {
-                panic!("built-in prelude PRELUDE_DEPENDENCIES values must be lists")
-            });
-            let dependencies_for_path = values
-                .iter()
-                .map(|value| {
-                    Value::unpack_str(value)
-                        .unwrap_or_else(|| {
-                            panic!("built-in prelude PRELUDE_DEPENDENCIES entries must be strings")
-                        })
-                        .to_string()
-                })
-                .collect::<Vec<_>>();
-            dependencies.insert(path.to_string(), dependencies_for_path);
-        }
+        let dependencies = prelude_index_string_lists(&module, "PRELUDE_DEPENDENCIES");
+        let target_kinds = prelude_index_string_lists(&module, "PRELUDE_TARGET_KINDS");
         for (path, dependencies_for_path) in &dependencies {
             assert!(
                 sources.contains(path),
@@ -404,11 +383,60 @@ fn load_prelude_index() -> PreludeIndex {
                 );
             }
         }
+        let mut source_by_target_kind = BTreeMap::new();
+        for (path, kinds) in &target_kinds {
+            assert!(
+                sources.contains(path),
+                "built-in prelude target kind owner `{path}` is not in PRELUDE_SOURCES"
+            );
+            for kind in kinds {
+                assert!(
+                    valid_identifier(kind),
+                    "built-in prelude target kind `{kind}` is not an identifier"
+                );
+                let prior = source_by_target_kind.insert(kind.clone(), path.clone());
+                assert!(
+                    prior.is_none(),
+                    "built-in target kind `{kind}` is indexed by both `{}` and `{path}`",
+                    prior.unwrap_or_default()
+                );
+            }
+        }
         PreludeIndex {
             sources,
             dependencies,
+            #[cfg(test)]
+            target_kinds,
+            source_by_target_kind,
         }
     })
+}
+
+fn prelude_index_string_lists(module: &Module<'_>, name: &str) -> BTreeMap<String, Vec<String>> {
+    let value = module
+        .get(name)
+        .unwrap_or_else(|| panic!("built-in prelude index is missing {name}"));
+    let dict = DictRef::from_value(value)
+        .unwrap_or_else(|| panic!("built-in prelude {name} is not a dict"));
+    dict.iter()
+        .map(|(key, values)| {
+            let key = Value::unpack_str(key)
+                .unwrap_or_else(|| panic!("built-in prelude {name} keys must be strings"));
+            let values = ListRef::from_value(values)
+                .unwrap_or_else(|| panic!("built-in prelude {name} values must be lists"));
+            let values = values
+                .iter()
+                .map(|value| {
+                    Value::unpack_str(value)
+                        .unwrap_or_else(|| {
+                            panic!("built-in prelude {name} entries must be strings")
+                        })
+                        .to_string()
+                })
+                .collect();
+            (key.to_string(), values)
+        })
+        .collect()
 }
 
 fn validate_built_in_prelude_source_path(path: &str) {
@@ -477,6 +505,51 @@ demo_kind = target_kind(docs = "Demo")
         assert!(source.contains("def target_kind("));
         assert!(!source.contains("apple_library = target_kind("));
         assert!(!source.contains("rust_library = target_kind("));
+    }
+
+    #[test]
+    fn prelude_target_kind_index_matches_source_exports() {
+        for path in &PRELUDE_INDEX.sources {
+            let actual = target_kind_exports(prelude_source(path))
+                .map(ToOwned::to_owned)
+                .collect::<BTreeSet<_>>();
+            let expected = PRELUDE_INDEX
+                .target_kinds
+                .get(path)
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+
+            assert_eq!(actual, expected, "target kinds indexed for `{path}`");
+        }
+    }
+
+    #[test]
+    fn prelude_target_kind_index_matches_compiled_kinds() {
+        let actual = Module::with_temp_heap(|module| {
+            let ast = AstModule::parse(
+                BUILT_IN_MODULE_PATH,
+                built_in_module_source().to_string(),
+                &Dialect::Standard,
+            )
+            .unwrap();
+            let globals = crate::analysis::globals_for_prelude();
+            let mut eval = starlark::eval::Evaluator::new(&module);
+            eval.eval_module(ast, &globals).unwrap();
+            exported_target_kind_values(&module)
+                .into_iter()
+                .map(|export| target_kind(export.value, export.name).unwrap())
+                .collect::<BTreeSet<_>>()
+        });
+        let expected = PRELUDE_INDEX
+            .target_kinds
+            .values()
+            .flatten()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]

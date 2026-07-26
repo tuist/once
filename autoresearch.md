@@ -9,17 +9,17 @@ semantics.
 
 ## Metrics
 
-- Primary: median clean-client remote-hit latency (`remote_hit_ms`,
-  milliseconds, lower is better)
+- Primary: median local-hit latency (`local_hit_ms`, milliseconds, lower is better)
 - Secondary: mean latency (`mean_ms`) and standard deviation (`stddev_ms`)
 
 ## How to Run
 
 `./autoresearch.sh`
 
-The script builds the release executable before measurement, populates the
-remote cache, clears local client state before every sample, and measures 20
-fresh command invocations against the local benchmark server.
+The script builds the release executable before measurement, warms the existing
+local action cache, and measures 40 fresh command invocations after five warmup
+runs. It starts the local benchmark server only when needed to populate an empty
+client cache.
 
 ## Files in Scope
 
@@ -66,6 +66,11 @@ fresh command invocations against the local benchmark server.
 - The remote provider loads the authentication token through a blocking task for
   every request. The first wave can also establish duplicate data-plane channels
   because connection initialization is not single-flight.
+- Resolving authentication once, single-flight channel setup, and skipping a
+  throwaway single-endpoint probe reduced the stable clean-client remote median
+  from 176.89 to 173.55 milliseconds.
+- Retaining validated host tool identity outside disposable action state reduced
+  the stable clean-client remote median further to 148.71 milliseconds.
 
 ## Primary Research
 
