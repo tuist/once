@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -404,8 +405,12 @@ async fn expose_target_tools(
     let tool_env = if let Some(resolved_paths) = resolved_paths {
         let paths = executables
             .iter()
-            .filter_map(|executable| resolved_paths.get(*executable))
-            .map(PathBuf::from)
+            .filter_map(|executable| {
+                resolved_paths
+                    .get(*executable)
+                    .map(PathBuf::from)
+                    .or_else(|| host_executable_path(executable))
+            })
             .collect::<Vec<_>>();
         workspace_prepared_tool_env(workspace, &tools, &paths)
             .context("building prepared graph tool execution environment")?
@@ -416,6 +421,44 @@ async fn expose_target_tools(
     };
     apply_tool_execution(&prefix, &tool_env, actions);
     Ok(())
+}
+
+fn host_executable_path(executable: &str) -> Option<PathBuf> {
+    let paths = env::var_os("PATH")?;
+    let path_ext = env::var_os("PATHEXT");
+    host_executable_path_in(executable, &paths, path_ext.as_deref())
+}
+
+fn host_executable_path_in(
+    executable: &str,
+    paths: &OsStr,
+    path_ext: Option<&OsStr>,
+) -> Option<PathBuf> {
+    let candidates = if cfg!(windows) && Path::new(executable).extension().is_none() {
+        let extensions = path_ext
+            .and_then(OsStr::to_str)
+            .unwrap_or(".COM;.EXE;.BAT;.CMD");
+        extensions
+            .split(';')
+            .map(str::trim)
+            .filter(|extension| !extension.is_empty())
+            .flat_map(|extension| {
+                [
+                    format!("{executable}{extension}"),
+                    format!("{executable}{}", extension.to_ascii_lowercase()),
+                ]
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![executable.to_string()]
+    };
+    env::split_paths(paths)
+        .flat_map(|directory| {
+            candidates
+                .iter()
+                .map(move |candidate| directory.join(candidate))
+        })
+        .find(|candidate| candidate.is_file())
 }
 
 fn apply_tool_execution(
@@ -550,9 +593,14 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     if cacheable {
         run_cacheable_declared_action(context, action, &declared).await
     } else {
-        // An uncacheable action always runs its command, so its command
-        // setup always applies.
         materialize_prior_cached_results(workspace, cache, prior_cached_results).await?;
+        materialize_available_inputs(workspace, cache, &declared, available_inputs)
+            .await
+            .with_context(|| {
+                format!(
+                    "materializing inputs for action {index} for {target_id} ({identifier_for_error})"
+                )
+            })?;
         prepare_declared_command_paths(workspace, &declared)
             .await
             .with_context(|| {
@@ -616,10 +664,14 @@ async fn run_cacheable_declared_action(
         })?;
     let action_digest = action.digest();
     let outcome = if let Some(result) = cached {
-        once_core::Outcome {
-            action: action_digest,
-            result,
-            cache: once_core::CacheState::Hit,
+        if action_result_blobs_present(&result, context.cache).await? {
+            once_core::Outcome {
+                action: action_digest,
+                result,
+                cache: once_core::CacheState::Hit,
+            }
+        } else {
+            execute_declared_cache_miss(&context, &action, declared).await?
         }
     } else {
         execute_declared_cache_miss(&context, &action, declared).await?
@@ -679,6 +731,23 @@ async fn run_cacheable_declared_action(
         cache_state,
         result: outcome.result,
     })
+}
+
+async fn action_result_blobs_present(
+    result: &ActionResult,
+    cache: &CacheProvider,
+) -> once_cas::Result<bool> {
+    for digest in result
+        .stdout
+        .iter()
+        .chain(result.stderr.iter())
+        .chain(result.outputs.values())
+    {
+        if !cache.has_blob(digest).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 async fn execute_declared_cache_miss(
@@ -1754,6 +1823,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn host_executable_fallback_resolves_the_relevant_path_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        let filename = if cfg!(windows) {
+            "fallback-tool.exe"
+        } else {
+            "fallback-tool"
+        };
+        let executable = directory.path().join(filename);
+        std::fs::write(&executable, b"tool").unwrap();
+        let paths = env::join_paths([directory.path()]).unwrap();
+
+        assert_eq!(
+            host_executable_path_in("fallback-tool", &paths, Some(OsStr::new(".COM;.EXE;.CMD"))),
+            Some(executable)
+        );
+    }
+
     fn module_digest() -> Digest {
         Digest::of_bytes(b"modules")
     }
@@ -2488,6 +2575,138 @@ mod tests {
         );
         assert_eq!(std::fs::read(&side).unwrap(), b"precious");
         assert!(!dependency.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uncacheable_action_materializes_dependency_inputs() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let dependency_path = ".once/out/dependency/input.txt";
+        let dependency_blob = cache.put_blob(b"dependency").await.unwrap();
+        let available_inputs = BTreeMap::from([(
+            dependency_path.to_string(),
+            AvailableInput {
+                blob_digest: dependency_blob,
+                producer_action_digest: Digest::of_bytes(b"dependency action"),
+                same_target: false,
+            },
+        )]);
+        let target = cached_test_target();
+        let mut analysis = cached_test_analysis(dependency_path);
+        analysis.actions[0].cacheable = false;
+        analysis.actions[0].argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            format!("cat {dependency_path} > .once/out/out.txt"),
+        ];
+
+        let outcome = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis,
+            &[],
+            &available_inputs,
+            &BTreeMap::new(),
+            SandboxMode::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.cache_tag, "bypass");
+        assert_eq!(
+            std::fs::read(workspace.path().join(".once/out/out.txt")).unwrap(),
+            b"dependency"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn incomplete_direct_cache_hit_falls_back_to_execution() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cache")));
+        let target = cached_test_target();
+        let analysis = || {
+            let mut analysis = cached_test_analysis("unused");
+            analysis.actions[0].inputs.clear();
+            analysis
+        };
+
+        let first = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis(),
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            SandboxMode::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.cache_tag, "miss");
+
+        std::fs::remove_dir_all(cache.root().join("cas")).unwrap();
+        std::fs::remove_file(workspace.path().join(".once/out/out.txt")).unwrap();
+
+        let second = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis(),
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            SandboxMode::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.cache_tag, "miss");
+        assert_eq!(
+            std::fs::read(workspace.path().join(".once/out/out.txt")).unwrap(),
+            b"ok"
+        );
+
+        let third = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis(),
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            SandboxMode::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(third.cache_tag, "hit");
+    }
+
+    #[tokio::test]
+    async fn action_result_completeness_checks_stream_and_output_blobs() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cache")));
+        let present = cache.put_blob(b"present").await.unwrap();
+        let missing = Digest::of_bytes(b"missing");
+        let mut result = ActionResult {
+            exit_code: 0,
+            stdout: Some(present),
+            stderr: None,
+            outputs: BTreeMap::from([("out.txt".to_string(), present)]),
+        };
+
+        assert!(action_result_blobs_present(&result, &cache).await.unwrap());
+        result.stderr = Some(missing);
+        assert!(!action_result_blobs_present(&result, &cache).await.unwrap());
     }
 
     #[cfg(unix)]
