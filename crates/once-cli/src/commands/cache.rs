@@ -27,6 +27,16 @@ struct CacheStats {
 }
 
 #[derive(Serialize)]
+struct CacheGcRecord {
+    bytes_before: u64,
+    bytes_after: u64,
+    bytes_reclaimed: u64,
+    removed: u64,
+    max_size: u64,
+    dry_run: bool,
+}
+
+#[derive(Serialize)]
 struct BlobPutRecord {
     digest: Digest,
 }
@@ -116,6 +126,31 @@ pub async fn print_stats(cache: &CacheProvider, output: Output) -> Result<()> {
     out.write_all(body.as_bytes()).await?;
     out.flush().await?;
     Ok(())
+}
+
+pub async fn gc(cache: &CacheProvider, max_size: u64, dry_run: bool, output: Output) -> Result<()> {
+    let report = cache.gc(max_size, dry_run).await?;
+    let reclaimed = report.bytes_before.saturating_sub(report.bytes_after);
+    let record = CacheGcRecord {
+        bytes_before: report.bytes_before,
+        bytes_after: report.bytes_after,
+        bytes_reclaimed: reclaimed,
+        removed: report.removed,
+        max_size,
+        dry_run: report.dry_run,
+    };
+    let body = match output.format {
+        Format::Human if report.dry_run => format!(
+            "would reclaim {reclaimed} bytes ({} entries); {} bytes would remain, budget {max_size} bytes\n",
+            report.removed, report.bytes_after,
+        ),
+        Format::Human => format!(
+            "reclaimed {reclaimed} bytes ({} entries removed); {} bytes cached, budget {max_size} bytes\n",
+            report.removed, report.bytes_after,
+        ),
+        Format::Json | Format::Toon => render::structured(output.format, &record)?,
+    };
+    write_stdout(body.as_bytes()).await
 }
 
 pub async fn put_blob(cache: &CacheProvider, path: Option<&Path>, output: Output) -> Result<()> {

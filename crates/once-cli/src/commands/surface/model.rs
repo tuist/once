@@ -182,6 +182,7 @@ mod tests {
             &["once", "exec", "true"],
             &["once", "test", "apps/ios/AppTests"],
             &["once", "cache", "stats"],
+            &["once", "cache", "gc", "--max-size", "1GB"],
             &["once", "cache", "blob", "put", "-"],
             &[
                 "once",

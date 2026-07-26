@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use tokio::io::AsyncRead;
 
 use crate::tuist::{TuistCache, TuistCacheConfig};
-use crate::{ActionResult, Cas, Digest, Result, Stats};
+use crate::{ActionResult, Cas, Digest, GcReport, Result, Stats};
 
 const TUIST_STREAM_REMOTE_UPLOAD_LIMIT: u64 = 8 * 1024 * 1024;
 
@@ -101,6 +101,17 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.stats().await,
             Self::Tuist(cache) => cache.local().stats().await,
+        }
+    }
+
+    /// Reclaim local disk space until it fits within `max_bytes`.
+    ///
+    /// Only the local tier is collected: the Tuist remote tier is shared
+    /// and managed server-side, so `gc` never deletes from it.
+    pub async fn gc(&self, max_bytes: u64, dry_run: bool) -> Result<GcReport> {
+        match self {
+            Self::Local(cas) => cas.gc(max_bytes, dry_run).await,
+            Self::Tuist(cache) => cache.local().gc(max_bytes, dry_run).await,
         }
     }
 }

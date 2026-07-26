@@ -519,6 +519,12 @@ async fn run_cache_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
+        Some(cli::CacheCmd::Gc { max_size, dry_run }) => {
+            let cache = crate::cache_provider::resolve(workspace, xdg)?;
+            commands::cache::gc(&cache, max_size, dry_run, output)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
         Some(cli::CacheCmd::Blob { cmd }) => {
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
             match cmd {
