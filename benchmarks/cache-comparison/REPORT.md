@@ -66,6 +66,28 @@ The raw hyperfine data is in
 [`results/remote-hit-clean-client.json`](results/remote-hit-clean-client.json)
 and [`results/local-hit.json`](results/local-hit.json).
 
+### Memory and workspace traversal
+
+Streaming validation of an unchanged one-mebibyte requested output reduced
+median maximum resident memory from 23,166,976 to 21,610,496 bytes across
+warmed samples. That is 1,556,480 bytes, or 6.7 percent of total process
+resident memory. A version-only invocation uses about 10.16 to 10.21
+megabytes, so the reduction is about 12 percent of the working memory above the
+executable floor.
+
+Cold materialization also streams the staged file into its destination instead
+of allocating a second full blob buffer. Its maximum resident memory stayed
+flat at about 27.84 megabytes because the allocator reused pages retained from
+the preceding cache fetch, but the second one-mebibyte allocation and copy no
+longer occur.
+
+Workspace includes now prune top-level trees only when their first path
+component is provably literal. A same-executable comparison with 5,000
+temporary unrelated directory branches measured 11.36 milliseconds median
+across 40 runs with literal-root pruning, versus 127.61 milliseconds when an
+equivalent wildcard forced full traversal. Wildcard-first patterns keep the
+previous complete scan.
+
 ### Once before and after
 
 | Scenario | Before | After | Improvement |
@@ -155,6 +177,12 @@ The graph executor now:
 - materializes a cached dependency only when a downstream action must execute
 - validates an existing requested file and skips rewriting it when its digest
   and permissions still match
+- hashes existing file outputs as a stream instead of building raw and encoded
+  full-file buffers
+- streams staged file restoration instead of reading the blob into another
+  full-size buffer
+- prunes unrelated top-level directory trees when workspace include patterns
+  have provably literal roots
 - resolves the workspace toolchain once instead of spawning toolchain-manager
   processes for every target
 - persists validated graph tool paths and only installs tools when resolution
@@ -167,6 +195,8 @@ The graph executor now:
   of evaluating the built-in module twice
 - compiles only the built-in Starlark modules needed by target kinds present in
   the workspace, with module dependencies declared by the prelude index
+- borrows unchanged built-in module source through clone-on-write and reserves
+  exact capacity when custom module files are appended
 - loads workspace manifests once for targeted analysis and graph construction
 - analyzes independent ready targets concurrently
 

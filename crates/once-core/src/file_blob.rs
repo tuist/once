@@ -31,8 +31,10 @@ pub(crate) fn capture_file_blob(path: &Path) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
-pub(crate) fn digest_file_blob(path: &Path) -> std::io::Result<Digest> {
-    let metadata = std::fs::metadata(path)?;
+pub(crate) fn digest_file_blob(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> std::io::Result<Digest> {
     #[cfg(unix)]
     let mode = {
         use std::os::unix::fs::PermissionsExt;
@@ -165,9 +167,29 @@ mod tests {
         ] {
             let path = tmp.path().join(name);
             std::fs::write(&path, bytes).unwrap();
+            let metadata = std::fs::metadata(&path).unwrap();
 
             assert_eq!(
-                digest_file_blob(&path).unwrap(),
+                digest_file_blob(&path, &metadata).unwrap(),
+                Digest::of_bytes(&capture_file_blob(&path).unwrap())
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn streaming_digest_matches_non_default_file_modes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("mode");
+        std::fs::write(&path, b"content").unwrap();
+        for mode in [0o600, 0o755] {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            let metadata = std::fs::metadata(&path).unwrap();
+
+            assert_eq!(
+                digest_file_blob(&path, &metadata).unwrap(),
                 Digest::of_bytes(&capture_file_blob(&path).unwrap())
             );
         }

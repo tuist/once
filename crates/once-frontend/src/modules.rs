@@ -54,6 +54,7 @@ pub(crate) fn combined_analysis_module_source_for_workspace(
 ) -> Result<String> {
     let module_files = load_module_files(root)?;
     let mut source = built_in_analysis_module_source(required_target_kinds);
+    source.reserve_exact(module_source_suffix_len(&module_files));
     append_module_sources(&mut source, &module_files);
     Ok(source)
 }
@@ -76,7 +77,6 @@ pub(crate) fn combine_module_sources<'a>(
 }
 
 fn append_module_sources(source: &mut String, module_files: &[ModuleFile]) {
-    source.reserve_exact(module_source_suffix_len(module_files));
     for module_file in module_files {
         source.push_str("\n# once module file: ");
         source.push_str(&module_file.display_path);
@@ -309,7 +309,9 @@ fn is_target_kind_value(value: Value<'_>) -> bool {
 }
 
 fn load_built_in_module_source() -> String {
-    let mut source = String::new();
+    let mut source = String::with_capacity(PRELUDE_INDEX.sources.iter().fold(0, |length, path| {
+        length.saturating_add(prelude_source(path).len() + 1)
+    }));
     for path in &PRELUDE_INDEX.sources {
         source.push_str(prelude_source(path));
         source.push('\n');
@@ -318,23 +320,31 @@ fn load_built_in_module_source() -> String {
 }
 
 fn built_in_analysis_module_source(required_target_kinds: &BTreeSet<String>) -> String {
-    let mut selected = BTreeSet::from([COMMON_PRELUDE_PATH.to_string()]);
+    let mut selected = BTreeSet::from([COMMON_PRELUDE_PATH]);
     for kind in required_target_kinds {
         if let Some(path) = PRELUDE_INDEX.source_by_target_kind.get(kind) {
-            selected.insert(path.clone());
+            selected.insert(path.as_str());
         }
     }
-    let mut pending = selected.iter().cloned().collect::<Vec<_>>();
+    let mut pending = selected.iter().copied().collect::<Vec<_>>();
     while let Some(path) = pending.pop() {
-        for dependency in PRELUDE_INDEX.dependencies.get(&path).into_iter().flatten() {
-            if selected.insert(dependency.clone()) {
-                pending.push(dependency.clone());
+        for dependency in PRELUDE_INDEX.dependencies.get(path).into_iter().flatten() {
+            if selected.insert(dependency.as_str()) {
+                pending.push(dependency);
             }
         }
     }
-    let mut source = String::new();
+    let mut source = String::with_capacity(
+        PRELUDE_INDEX
+            .sources
+            .iter()
+            .filter(|path| selected.contains(path.as_str()))
+            .fold(0, |length, path| {
+                length.saturating_add(prelude_source(path).len() + 1)
+            }),
+    );
     for path in &PRELUDE_INDEX.sources {
-        if selected.contains(path) {
+        if selected.contains(path.as_str()) {
             source.push_str(prelude_source(path));
             source.push('\n');
         }

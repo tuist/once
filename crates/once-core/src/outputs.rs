@@ -129,7 +129,7 @@ fn existing_file_matches_digest(path: &Path, expected: Digest) -> bool {
     if !metadata.is_file() {
         return false;
     }
-    if digest_file_blob(path).is_ok_and(|digest| digest == expected) {
+    if digest_file_blob(path, &metadata).is_ok_and(|digest| digest == expected) {
         return true;
     }
     std::fs::read(path).is_ok_and(|bytes| Digest::of_bytes(&bytes) == expected)

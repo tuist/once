@@ -83,6 +83,22 @@ client cache.
   their recoverable directory entry skips a parent-directory durability
   barrier. Two clean-client repeats measured 37.77 and 36.27 milliseconds
   median versus the 39.99-millisecond control.
+- Cached file validation now hashes the file-blob header and file contents as a
+  stream. Nine warmed samples measured 21.61 megabytes median maximum resident
+  memory versus 23.17 megabytes before the change, a 6.7 percent reduction.
+- Staged file restoration now streams into the declared output. Maximum
+  resident memory stayed flat because allocator pages from the preceding cache
+  fetch were reused, but the second full output allocation and copy are gone.
+- Workspace include patterns with a literal first component now prune unrelated
+  top-level trees. With 5,000 temporary unrelated branches, 40 runs measured
+  11.36 milliseconds median with pruning versus 127.61 milliseconds when an
+  equivalent wildcard forced full traversal.
+- Module source composition uses clone-on-write. It borrows the built-in source
+  when no custom files exist and reserves the exact combined capacity when
+  appending custom files.
+- Sharing immutable analysis metadata through atomic reference counting removed
+  only about 75 allocations in the 15-target fixture and did not improve its
+  timing, so the existing ownership layout remains.
 - Reducing the workspace database synchronization level regressed the local
   median to 19.65 milliseconds. The immediate reverted control returned to
   18.98 milliseconds, so full synchronization remains.
@@ -101,3 +117,20 @@ client cache.
 - [An Implementation of Scheduler Activations on NetBSD](https://www.usenix.org/conference/2002-usenix-annual-technical-conference/implementation-scheduler-activations-netbsd)
   distinguishes cheap user-level scheduling from more expensive kernel thread
   creation, synchronization, and disposal.
+- [Rust `Vec` documentation](https://doc.rust-lang.org/stable/std/vec/struct.Vec.html)
+  describes contiguous allocation, capacity reservation, and the reallocation
+  required when length exceeds capacity.
+- [Rust clone-on-write documentation](https://doc.rust-lang.org/std/borrow/enum.Cow.html)
+  provides the borrowed-or-owned primitive used for unchanged module source.
+- [Rust atomic reference counting documentation](https://doc.rust-lang.org/std/sync/struct.Arc.html)
+  documents shared ownership and its atomic reference-count cost.
+- [The Slab Allocator](https://www.usenix.org/conference/usenix-summer-1994-technical-conference/slab-allocator-object-caching-kernel)
+  motivates object reuse for stable kernel allocation workloads. Once's
+  short-lived, size-varying command allocations did not justify a custom slab.
+- [Magazines and vmem](https://www.usenix.org/legacy/event/usenix01/full_papers/bonwick/bonwick_html/)
+  shows how per-processor object caches reduce allocator contention. Once's
+  current-hit path is primarily single-threaded, so removing allocations had
+  more value than adding another allocator layer.
+- [Linux zero-copy receive documentation](https://www.kernel.org/doc/html/next/networking/iou-zcrx.html)
+  describes a specialized network receive path with kernel and hardware
+  requirements. It is not portable enough for Once's generic cache client.
