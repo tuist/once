@@ -66,7 +66,22 @@ pub(super) fn json_to_value<'v>(eval: &Evaluator<'v, '_, '_>, json: &JsonValue) 
     }
 }
 
+/// Deepest Starlark nesting `value_to_json` will follow before it stops
+/// recursing. A Starlark value can be nested arbitrarily deep with a
+/// trivial loop (`x = []; for _ in range(1_000_000): x = [x]`); following
+/// that with native recursion overflows the stack and aborts the
+/// process. The limit is far above any legitimate provider or attribute
+/// shape, so real graphs are unaffected.
+const MAX_JSON_DEPTH: usize = 256;
+
 pub(super) fn value_to_json(value: Value<'_>) -> JsonValue {
+    value_to_json_at(value, 0)
+}
+
+fn value_to_json_at(value: Value<'_>, depth: usize) -> JsonValue {
+    if depth >= MAX_JSON_DEPTH {
+        return JsonValue::String("<once: value nested too deeply to serialize>".to_string());
+    }
     if value.is_none() {
         return JsonValue::Null;
     }
@@ -80,7 +95,11 @@ pub(super) fn value_to_json(value: Value<'_>) -> JsonValue {
         return JsonValue::String(string.to_string());
     }
     if let Some(list) = ListRef::from_value(value) {
-        return JsonValue::Array(list.iter().map(value_to_json).collect());
+        return JsonValue::Array(
+            list.iter()
+                .map(|item| value_to_json_at(item, depth + 1))
+                .collect(),
+        );
     }
     if let Some(dict) = DictRef::from_value(value) {
         let mut map = serde_json::Map::new();
@@ -88,7 +107,7 @@ pub(super) fn value_to_json(value: Value<'_>) -> JsonValue {
             let Some(key_str) = key.unpack_str() else {
                 continue;
             };
-            map.insert(key_str.to_string(), value_to_json(child));
+            map.insert(key_str.to_string(), value_to_json_at(child, depth + 1));
         }
         return JsonValue::Object(map);
     }

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use once_cas::{ActionResult, CacheProvider, Cas, Digest};
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use crate::{execute, outputs, Action, ResourceLimits, ResourcePool, Result};
 
@@ -226,15 +226,61 @@ async fn lookup_cached(
     key: &Digest,
 ) -> Result<Option<Outcome>> {
     if let Some(result) = cache.get_action_result(key).await? {
-        debug!("cache hit");
-        outputs::restore(&result, workspace_root, cache).await?;
-        return Ok(Some(Outcome {
-            action: *key,
-            result,
-            cache: CacheState::Hit,
-        }));
+        // A partially-evicted or partially-synced entry can have its
+        // action result present while a blob it points at is gone. The
+        // captured stdout/stderr blobs are not restored to the workspace
+        // here, but downstream consumers read them straight from the CAS,
+        // so a "hit" that references a missing stream blob would crash
+        // them. Verify those blobs exist before reporting a hit, and if
+        // either is gone treat the entry as absent and re-execute.
+        if !stream_blobs_present(&result, cache).await? {
+            warn!("cached action is missing a captured stdout/stderr blob; re-executing");
+            return Ok(None);
+        }
+        match outputs::restore(&result, workspace_root, cache).await {
+            Ok(()) => {
+                debug!("cache hit");
+                return Ok(Some(Outcome {
+                    action: *key,
+                    result,
+                    cache: CacheState::Hit,
+                }));
+            }
+            // An action result survived but an output blob it references
+            // is gone (evicted by `once cache gc`, or never synced from a
+            // remote tier). Treat the entry as absent and let the caller
+            // re-execute rather than failing the build. `restore` stages
+            // every output blob before materializing any of them, so a
+            // missing blob leaves no partial output on disk.
+            Err(err) if is_incomplete_cache_entry(&err) => {
+                warn!(error = %err, "cached action outputs are unrestorable; re-executing");
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        }
     }
     Ok(None)
+}
+
+/// True when every captured stdout/stderr blob an action result
+/// references is still present in the cache. A `false` here means the
+/// entry is incomplete and the action should be re-executed rather than
+/// returned as a hit a consumer cannot fully read.
+async fn stream_blobs_present(result: &ActionResult, cache: &CacheProvider) -> Result<bool> {
+    for digest in [result.stdout, result.stderr].into_iter().flatten() {
+        if !cache.has_blob(&digest).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// True when a restore failed only because the cache is missing a blob
+/// the action result points at - a recoverable "the cache lost data"
+/// condition, distinct from a real I/O or corruption error the caller
+/// should see.
+fn is_incomplete_cache_entry(err: &crate::Error) -> bool {
+    matches!(err, crate::Error::Cas(once_cas::Error::BlobNotFound(_)))
 }
 
 #[instrument(skip(action, cache), fields(action_digest = %key))]
@@ -526,6 +572,90 @@ mod tests {
             std::fs::read_to_string(tmp.path().join("out/generated.txt")).unwrap(),
             "generated"
         );
+    }
+
+    #[tokio::test]
+    async fn cache_hit_with_evicted_output_blob_falls_back_to_execution() {
+        let (tmp, cas) = fresh_cas();
+        let action = Action::WriteFile {
+            path: WorkspacePath::try_from("out/generated.txt").unwrap(),
+            bytes: b"generated".to_vec(),
+            input_digest: Some(Digest::of_bytes(b"evicted-blob")),
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+
+        // Simulate `once cache gc` reclaiming the blob tier while the
+        // action result survives, plus the materialized output being
+        // removed from the workspace.
+        std::fs::remove_dir_all(tmp.path().join("cas")).unwrap();
+        std::fs::remove_file(tmp.path().join("out/generated.txt")).unwrap();
+        assert!(
+            cas.get_action_result(&action.digest())
+                .await
+                .unwrap()
+                .is_some(),
+            "the stale action result must still be present"
+        );
+
+        // The stale result points at a now-missing blob. The lookup must
+        // degrade to a miss and re-execute rather than erroring.
+        let second = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.cache, CacheState::Miss);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/generated.txt")).unwrap(),
+            "generated"
+        );
+
+        // And the cache is self-healed: a third run hits cleanly.
+        let third = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(third.cache, CacheState::Hit);
+    }
+
+    #[tokio::test]
+    async fn cache_hit_with_evicted_stdout_blob_falls_back_to_execution() {
+        let (tmp, cas) = fresh_cas();
+        let action = echo_action("streamed-hello");
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        assert!(first.result.stdout.is_some());
+
+        // Evict the blob tier (as `once cache gc` cascading, or a remote
+        // tier that never synced the stream blobs) while the action
+        // result survives and still references the stdout/stderr blobs.
+        std::fs::remove_dir_all(tmp.path().join("cas")).unwrap();
+        assert!(cas
+            .get_action_result(&action.digest())
+            .await
+            .unwrap()
+            .is_some());
+
+        // The referenced stdout blob is gone, so the lookup must decline
+        // the hit and re-execute rather than return a result whose stdout
+        // a consumer cannot read.
+        let second = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.cache, CacheState::Miss);
+        assert_eq!(
+            cas.get_blob(&second.result.stdout.unwrap()).await.unwrap(),
+            b"streamed-hello"
+        );
+
+        let third = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(third.cache, CacheState::Hit);
     }
 
     #[tokio::test]

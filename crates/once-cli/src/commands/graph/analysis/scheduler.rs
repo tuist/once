@@ -22,6 +22,13 @@ pub(super) struct BuildScheduler<'a> {
     reachable: &'a HashSet<String>,
     retained: &'a HashSet<String>,
     sandbox: SandboxMode,
+    /// Ceiling on build tasks in flight at once. A wide graph can have
+    /// thousands of independently-ready targets; spawning a task (and its
+    /// subprocess) for every one at once is how a build system exhausts
+    /// memory and file descriptors. Ready targets past this many wait in
+    /// the queue until a slot frees. Action-level CPU concurrency is
+    /// bounded separately by the core runner's resource pool.
+    max_in_flight: usize,
 }
 
 impl<'a> BuildScheduler<'a> {
@@ -37,6 +44,8 @@ impl<'a> BuildScheduler<'a> {
         sandbox: SandboxMode,
     ) -> Self {
         let module_source_digest = Digest::of_bytes(analyzer.module_source().as_bytes());
+        let max_in_flight =
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
         Self {
             root_id,
             workspace,
@@ -47,6 +56,7 @@ impl<'a> BuildScheduler<'a> {
             reachable,
             retained,
             sandbox,
+            max_in_flight,
         }
     }
 
@@ -88,7 +98,10 @@ impl<'a> BuildScheduler<'a> {
         state: &mut BuildState,
         running: &mut JoinSet<Result<(String, BuildOutcome)>>,
     ) -> Result<()> {
-        while let Some(target_id) = state.ready.pop_front() {
+        while running.len() < self.max_in_flight {
+            let Some(target_id) = state.ready.pop_front() else {
+                break;
+            };
             let target = Arc::clone(
                 self.targets
                     .get(&target_id)
