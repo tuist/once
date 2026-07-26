@@ -26,6 +26,15 @@ impl Digest {
         Ok(Self(*hasher.finalize().as_bytes()))
     }
 
+    pub fn of_parts_and_reader(parts: &[&[u8]], mut reader: impl Read) -> io::Result<Self> {
+        let mut hasher = blake3::Hasher::new();
+        for part in parts {
+            hasher.update(part);
+        }
+        hasher.update_reader(&mut reader)?;
+        Ok(Self(*hasher.finalize().as_bytes()))
+    }
+
     pub fn from_bytes(bytes: [u8; Self::LEN]) -> Self {
         Self(bytes)
     }
@@ -114,6 +123,16 @@ mod tests {
     fn of_reader_handles_empty_input() {
         let empty: &[u8] = &[];
         assert_eq!(Digest::of_reader(empty).unwrap(), Digest::of_bytes(empty));
+    }
+
+    #[test]
+    fn parts_and_reader_match_contiguous_bytes() {
+        let body = b"body";
+        let expected = Digest::of_bytes(b"prefix-metadata-body");
+        let actual =
+            Digest::of_parts_and_reader(&[b"prefix-", b"metadata-"], body.as_slice()).unwrap();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]

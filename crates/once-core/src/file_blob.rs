@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use once_cas::Digest;
+
 use crate::{Error, Result};
 
 pub(crate) const FILE_BLOB_MAGIC: &[u8] = b"once.file.v1\0";
@@ -26,6 +28,21 @@ pub(crate) fn capture_file_blob(path: &Path) -> std::io::Result<Vec<u8>> {
     out.extend_from_slice(&mode.to_le_bytes());
     out.extend_from_slice(&content);
     Ok(out)
+}
+
+pub(crate) fn digest_file_blob(path: &Path) -> std::io::Result<Digest> {
+    let metadata = std::fs::metadata(path)?;
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o777
+    };
+    #[cfg(not(unix))]
+    let mode = 0o644_u32;
+
+    let mode = mode.to_le_bytes();
+    let file = std::fs::File::open(path)?;
+    Digest::of_parts_and_reader(&[FILE_BLOB_MAGIC, &mode], file)
 }
 
 pub(crate) fn restore_file_blob(logical_path: &str, abs: &Path, bytes: &[u8]) -> Result<()> {
@@ -89,6 +106,7 @@ fn decode_file_blob<'a>(logical_path: &str, bytes: &'a [u8]) -> Result<(u32, &'a
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn decode_rejects_missing_magic() {
@@ -107,5 +125,23 @@ mod tests {
 
         assert!(matches!(error, Error::InvalidFileOutput { .. }));
         assert!(error.to_string().contains("truncated file mode"));
+    }
+
+    #[test]
+    fn streaming_digest_matches_captured_file_blob() {
+        let tmp = TempDir::new().unwrap();
+        for (name, bytes) in [
+            ("empty", Vec::new()),
+            ("small", b"x".to_vec()),
+            ("large", vec![b'x'; 1024 * 1024]),
+        ] {
+            let path = tmp.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+
+            assert_eq!(
+                digest_file_blob(&path).unwrap(),
+                Digest::of_bytes(&capture_file_blob(&path).unwrap())
+            );
+        }
     }
 }

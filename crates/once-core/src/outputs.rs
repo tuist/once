@@ -6,7 +6,7 @@ use once_cas::{ActionResult, CacheProvider, Digest};
 use tokio::task::JoinSet;
 
 use crate::directory_blob::{capture_directory_blob, is_directory_blob, restore_directory_blob};
-use crate::file_blob::{capture_file_blob, restore_file_blob, FILE_BLOB_MAGIC};
+use crate::file_blob::{capture_file_blob, digest_file_blob, restore_file_blob, FILE_BLOB_MAGIC};
 use crate::{Error, OutputSymlinkMode, Result, WorkspacePath};
 
 const RESTORE_PREFETCH_CONCURRENCY: usize = 16;
@@ -104,7 +104,7 @@ fn existing_file_matches_digest(path: &Path, expected: Digest) -> bool {
     if !metadata.is_file() {
         return false;
     }
-    if capture_file_blob(path).is_ok_and(|bytes| Digest::of_bytes(&bytes) == expected) {
+    if digest_file_blob(path).is_ok_and(|digest| digest == expected) {
         return true;
     }
     std::fs::read(path).is_ok_and(|bytes| Digest::of_bytes(&bytes) == expected)
