@@ -1,0 +1,156 @@
+<nav id="docs-nav" aria-label="Main navigation">
+  <div data-part="header">
+    <.link navigate="/docs" data-part="logo-link">
+      <img data-part="logo" src="/docs/nav-logo.png" alt="Once" />
+      <span data-part="logo-divider"></span>
+      <span data-part="logo-text">Docs</span>
+    </.link>
+    <.button_group size="large" id="docs-nav-tabs">
+      <.button_group_item
+        label="Guide"
+        href="/docs/guide/getting-started"
+        data-tab="guides"
+        data-selected={@tab == :guides}
+      />
+      <.button_group_item
+        label="Reference"
+        href="/docs/reference"
+        data-tab="reference"
+        data-selected={@tab == :reference}
+      />
+    </.button_group>
+  </div>
+  <div data-part="cta">
+    <div data-part="socials">
+      <a
+        href="https://x.com/buildoncedev"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="X"
+        data-part="social-link"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="currentColor"
+          xmlns="http://www.w3.org/2000/svg"
+          aria-hidden="true"
+        >
+          <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+        </svg>
+      </a>
+      <a
+        href="https://github.com/tuist/once"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="GitHub"
+        data-part="social-link"
+      >
+        <.icon name="brand_github" />
+      </a>
+    </div>
+  </div>
+</nav>
+<main id="docs-page-layout" data-part="page">
+  <textarea :if={@markdown != ""} id="docs-page-markdown" hidden readonly>{@markdown}</textarea>
+  <div
+    :if={@headings != []}
+    id="docs-mobile-toc"
+    data-state="closed"
+    data-part="mobile-toc"
+    role="navigation"
+    aria-label="Table of contents"
+  >
+    <.link_button
+      label="Return to top"
+      variant="primary"
+      size="small"
+      href="#"
+      phx-click={JS.set_attribute({"data-state", "closed"}, to: "#docs-mobile-toc")}
+    />
+    <.line_divider />
+    <a
+      :for={heading <- @headings}
+      href={"##{heading.id}"}
+      data-part="mobile-toc-item"
+      data-level={heading.level}
+      phx-click={JS.set_attribute({"data-state", "closed"}, to: "#docs-mobile-toc")}
+    >
+      {heading.text}
+    </a>
+  </div>
+  <div id="docs-layout">
+    <nav id="docs-sidebar" aria-label="Documentation navigation">
+      <div data-part="sidebar-scroll">
+        <.link :if={@tab == :guides} patch="/docs" data-part="nav-link">
+          <.tab_menu_vertical label="Overview" data-selected={@current_slug == "/docs"}>
+            <:icon_left>
+              <.icon name="smart_home" />
+            </:icon_left>
+          </.tab_menu_vertical>
+        </.link>
+        <.link :if={@tab == :reference} patch="/docs/reference" data-part="nav-link">
+          <.tab_menu_vertical
+            label="Overview"
+            data-selected={@current_slug == "/docs/reference"}
+          >
+            <:icon_left>
+              <.icon name="devices_browser" />
+            </:icon_left>
+          </.tab_menu_vertical>
+        </.link>
+        <div :for={group <- @tree} data-part="nav-section">
+          <.line_divider />
+          <div :if={group.label} data-part="content-divider">
+            <.icon name={group_icon(group.label)} />
+            <span>{group.label}</span>
+          </div>
+          <div data-part="nav-items">
+            <.nav_items items={group.items} current_slug={@current_slug} />
+          </div>
+        </div>
+      </div>
+    </nav>
+    <div id="docs-content">
+      <div :if={@markdown != ""} id="docs-mobile-copy" data-part="mobile-copy">
+        <.button_dropdown
+          id="docs-mobile-copy-dropdown"
+          label="Copy page"
+          size="medium"
+          phx-hook="DocsCopyPageButton"
+          data-default-label="Copy page"
+          data-copied-label="Copied"
+          data-markdown-source-id="docs-page-markdown"
+          align="end"
+        >
+          <:icon_left><.copy /></:icon_left>
+          <.dropdown_item
+            label="Copy page"
+            description="Copy page as markdown for LLMs"
+            value="copy-markdown"
+            size="large"
+            on_click="copy-page-markdown"
+          >
+            <:left_icon><.copy /></:left_icon>
+          </.dropdown_item>
+          <.dropdown_item
+            label="View as Markdown"
+            description="View this page as plain text"
+            value="view-markdown"
+            href={docs_markdown_path(@current_slug)}
+            size="large"
+          >
+            <:left_icon><.icon name="markdown" /></:left_icon>
+            <:right_icon><.external_link /></:right_icon>
+          </.dropdown_item>
+        </.button_dropdown>
+      </div>
+      {render_slot(@inner_block)}
+    </div>
+    <.toc
+      :if={@headings != []}
+      headings={@headings}
+      current_slug={@current_slug}
+      markdown={@markdown}
+    />
+  </div>
+</main>

@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn committed_mcp_tools_reference_matches_the_server_catalog() {
-        let committed = include_str!("../../../docs/reference/mcp/tools.md");
+        let committed = include_str!("../../../web/priv/docs/reference/mcp/tools.md");
         assert_eq!(committed, render_mcp_tools_page());
     }
 }

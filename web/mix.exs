@@ -10,7 +10,7 @@ defmodule OnceSite.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      compilers: [:phoenix_live_view] ++ Mix.compilers(),
+      compilers: [:phoenix_live_view] ++ Mix.compilers() ++ [:once_reference],
       listeners: [Phoenix.CodeReloader]
     ]
   end
@@ -55,6 +55,14 @@ defmodule OnceSite.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
+      {:mdex, "~> 0.9"},
+      {:lumis, "~> 0.6"},
+      {:floki, ">= 0.30.0"},
+      {:noora, "~> 0.84"},
+      {:carta, "~> 0.2"},
+      {:browse_chrome, "~> 0.4"},
+      {:briefly, "~> 0.5"},
+      {:hammer, "~> 7.0"},
       {:mimic, "~> 2.0", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:quokka, "~> 2.12", only: [:dev, :test], runtime: false}
@@ -71,9 +79,13 @@ defmodule OnceSite.MixProject do
     [
       setup: ["deps.get", "assets.setup", "assets.build"],
       "assets.setup": ["esbuild.install --if-missing"],
-      "assets.build": ["compile", "esbuild once_site"],
+      "assets.build": ["compile", "esbuild once_site", "esbuild docs"],
       "assets.deploy": [
+        "compile",
+        "docs.gen.og_images",
+        "marketing.gen.og_images",
         "esbuild once_site --minify",
+        "esbuild docs --minify",
         "phx.digest"
       ],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],

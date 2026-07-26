@@ -1,13 +1,16 @@
 defmodule OnceSiteWeb.PageController do
   use OnceSiteWeb, :controller
 
-  alias OnceSite.Registry
-
   def home(conn, _params) do
-    render(conn, :home)
+    conn
+    |> assign(:page_title, "Build once. Reuse everywhere.")
+    |> assign(:meta_description, meta_description())
+    |> assign(:og_image, "/images/og/home.jpg")
+    |> render(:home)
   end
 
-  def registry(conn, _params) do
-    render(conn, :registry, entries: Registry.list_entries())
+  defp meta_description do
+    "Once gives every action explicit inputs, outputs, and environment, so results are " <>
+      "content-addressed, cached, and reusable across developers, coding agents, CI, and machines."
   end
 end

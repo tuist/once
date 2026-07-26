@@ -32,6 +32,20 @@ const liveSocket = new LiveSocket("/live", Socket, {
   hooks: {...colocatedHooks},
 })
 
+// Home page terminal tabs: activate the tab and matching panel by index.
+document.addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-part='terminal-tab']")
+  if (!tab) return
+  const terminal = tab.closest("[data-part='terminal']")
+  const index = tab.dataset.index
+  terminal.querySelectorAll("[data-part='terminal-tab']").forEach((el) => {
+    el.setAttribute("data-active", String(el === tab))
+  })
+  terminal.querySelectorAll("[data-part='terminal-panel']").forEach((el) => {
+    el.setAttribute("data-active", String(el.dataset.index === index))
+  })
+})
+
 // Show progress bar on live navigation and form submits
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))

@@ -11,6 +11,12 @@ defmodule OnceSiteWeb.Layouts do
   # and other static content.
   embed_templates "layouts/*"
 
+  @doc "Default meta description used when a page does not set its own."
+  def default_description do
+    "Build once, reuse everywhere. Once makes repository automation cacheable, " <>
+      "remotely executable, and reusable across developers, coding agents, and machines."
+  end
+
   @doc """
   Renders your app layout.
 
@@ -38,15 +44,17 @@ defmodule OnceSiteWeb.Layouts do
     <div data-part="site-shell">
       <header data-part="site-header">
         <a href={~p"/"} data-part="brand" aria-label="Once home">
-          <span data-part="brand-mark">1</span>
+          <img data-part="brand-logo" src="/docs/nav-logo.png" alt="" />
           <span data-part="brand-name">Once</span>
         </a>
 
         <nav data-part="site-nav" aria-label="Primary navigation">
-          <a href={~p"/registry"}>Registry</a>
-          <a href="/guide/why">Docs</a>
+          <a href="/docs">Docs</a>
+          <a href={~p"/changelog"}>Changelog</a>
           <a href="https://github.com/tuist/once">GitHub</a>
         </nav>
+
+        <a data-part="site-cta" href="/docs/guide/getting-started">Get started</a>
       </header>
 
       <main data-part="site-main">
@@ -54,8 +62,20 @@ defmodule OnceSiteWeb.Layouts do
       </main>
 
       <footer data-part="site-footer">
-        <span>Once</span>
-        <span>Cacheable scripts, remote execution, and typed build graph foundations.</span>
+        <div data-part="footer-brand">
+          <img data-part="brand-logo" src="/docs/nav-logo.png" alt="" />
+          <span>Once</span>
+        </div>
+        <p>
+          Build once, reuse everywhere. Built with <span data-part="heart">♥</span>
+          by <a href="https://tuist.dev" target="_blank" rel="noopener">Tuist</a>.
+        </p>
+        <nav data-part="footer-nav" aria-label="Footer navigation">
+          <a href="/docs">Documentation</a>
+          <a href={~p"/changelog"}>Changelog</a>
+          <a href={~p"/changelog/feed.xml"}>RSS</a>
+          <a href="https://github.com/tuist/once">GitHub</a>
+        </nav>
       </footer>
 
       <.flash_group flash={@flash} />

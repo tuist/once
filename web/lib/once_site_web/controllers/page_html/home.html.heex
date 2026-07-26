@@ -1,47 +1,87 @@
 <Layouts.app flash={@flash}>
-  <section id="home" data-part="home-page">
-    <div data-part="hero">
-      <p data-part="eyebrow">Build once. Reuse everywhere.</p>
-      <h1>Once turns scripts into cacheable, remotely executable building blocks.</h1>
-      <p data-part="hero-copy">
-        Keep the shell scripts teams already trust, then add content-addressed caching,
-        remote execution, and a path toward a typed build graph.
-      </p>
-      <div data-part="hero-actions">
-        <a data-part="primary-action" href="/guide/scripts/">Read the script guide</a>
-        <a data-part="secondary-action" href={~p"/registry"}>Browse the registry</a>
+  <section data-part="hero">
+    <div data-part="hero-glow"></div>
+    <a
+      data-part="oss-badge"
+      href="https://github.com/tuist/once"
+      target="_blank"
+      rel="noopener"
+    >
+      <span data-part="oss-icon">{Phoenix.HTML.raw(github_icon())}</span>
+      <span>Open source</span>
+      <span data-part="oss-sep"></span>
+      <span data-part="oss-muted">MIT licensed</span>
+    </a>
+    <h1>Build once.<br />Reuse everywhere.</h1>
+    <p data-part="lede">
+      Once gives every action explicit inputs, outputs, and environment, so results are
+      content-addressed, cached, and reusable across developers, coding agents, CI, and
+      machines. Build it once, and never build it again.
+    </p>
+    <div data-part="hero-actions">
+      <a data-part="button" data-variant="primary" href="/docs/guide/getting-started">
+        Get started
+      </a>
+      <a data-part="button" data-variant="secondary" href="/docs">Read the docs</a>
+    </div>
+
+    <div data-part="terminal" id="home-terminal" aria-label="Once build examples">
+      <div data-part="terminal-bar">
+        <span data-part="terminal-dot"></span>
+        <span data-part="terminal-dot"></span>
+        <span data-part="terminal-dot"></span>
+        <div data-part="terminal-tabs" role="tablist">
+          <button
+            :for={{term, index} <- Enum.with_index(terminals())}
+            type="button"
+            data-part="terminal-tab"
+            data-index={index}
+            data-active={to_string(index == 0)}
+          >
+            <span data-part="tab-icon" data-lang={term.icon} aria-hidden="true"></span>
+            {term.label}
+          </button>
+        </div>
+      </div>
+      <div data-part="terminal-panels">
+        <pre
+          :for={{term, index} <- Enum.with_index(terminals())}
+          data-part="terminal-panel"
+          data-index={index}
+          data-active={to_string(index == 0)}
+        ><code><span data-part="prompt">$</span> {term.command}
+target     {term.target}
+cache key  {term.cache}
+result     <span data-part={term.result}>{term.result}</span>
+duration   {term.duration}</code></pre>
       </div>
     </div>
+  </section>
 
-    <div data-part="terminal-panel" aria-label="Once command example">
-      <span data-part="terminal-dot"></span>
-      <span data-part="terminal-dot"></span>
-      <span data-part="terminal-dot"></span>
-      <pre phx-no-curly-interpolation><code>$ once exec -- cargo check --workspace
-cache key  b3f9d0...
-result     hit
-duration   117ms</code></pre>
+  <section data-part="features" aria-label="How Once works">
+    <a :for={feature <- features()} data-part="feature-card" href={feature.link}>
+      <div data-part="image">
+        <span data-part="title">{feature.title}</span>
+        <div data-part="icon">{Phoenix.HTML.raw(feature.icon)}</div>
+      </div>
+      <div data-part="body">
+        <p>{feature.details}</p>
+        <span data-part="feature-cta">Learn more →</span>
+      </div>
+    </a>
+  </section>
+
+  <section data-part="languages" aria-label="Supported languages">
+    <p data-part="section-eyebrow">Works with your stack</p>
+    <h2>Natively supported languages and ecosystems</h2>
+    <p data-part="section-copy">
+      Cache and reuse builds and tests across the tools your teams already ship with.
+    </p>
+    <div data-part="language-grid">
+      <a :for={lang <- languages()} data-part="language-chip" href={lang.link}>
+        <span data-part="lang-icon" data-lang={lang.icon} aria-hidden="true"></span>
+        <span>{lang.name}</span>
+      </a>
     </div>
-
-    <section data-part="value-grid" aria-label="Once capabilities">
-      <article data-part="value-item">
-        <h2>Cache primitives</h2>
-        <p>
-          Use the CAS and action cache from the CLI or SDKs without adopting a new build system all at once.
-        </p>
-      </article>
-      <article data-part="value-item">
-        <h2>Script migration ramp</h2>
-        <p>
-          Declare execution metadata in script headers, then run those scripts locally or remotely with stable cache keys.
-        </p>
-      </article>
-      <article data-part="value-item">
-        <h2>Registry ready</h2>
-        <p>
-          Publish reusable target kinds and scripts so agents and humans can discover the right workflow for a workspace.
-        </p>
-      </article>
-    </section>
   </section>
 </Layouts.app>

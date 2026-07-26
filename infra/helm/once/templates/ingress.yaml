@@ -12,6 +12,9 @@ spec:
   tls:
     - hosts:
         - {{ .Values.host }}
+        {{- if .Values.docsHost }}
+        - {{ .Values.docsHost }}
+        {{- end }}
       secretName: {{ include "once.fullname" . }}-tls
   rules:
     - host: {{ .Values.host }}
@@ -24,3 +27,15 @@ spec:
                 name: {{ include "once.fullname" . }}
                 port:
                   name: http
+    {{- if .Values.docsHost }}
+    - host: {{ .Values.docsHost }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "once.fullname" . }}
+                port:
+                  name: http
+    {{- end }}
