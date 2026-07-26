@@ -184,6 +184,7 @@ kind = "rust_library"
 deps = [
   "crates/once-cas/once_cas_${suffix}",
   "crates/once-core/once_core_${suffix}",
+  "crates/once-frontend/once_frontend_${suffix}",
   "${dependency_target}",
 ]
 srcs = ["src/**/*.rs", "include/**/*", "swift/**/*.swift"]
@@ -208,6 +209,7 @@ kind = "rust_library"
 deps = [
   "crates/once-cas/once_cas_${suffix}",
   "crates/once-core/once_core_${suffix}",
+  "crates/once-frontend/once_frontend_${suffix}",
   "${dependency_target}",
 ]
 srcs = ["src/**/*.rs", "include/**/*", "swift/**/*.swift"]
