@@ -1,5 +1,7 @@
 //! Disk-side loaders for single manifests and recursive workspace scans.
 
+use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use glob::Pattern;
@@ -38,10 +40,14 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
             if entry.depth() == 0 {
                 return true;
             }
-            entry
+            let visible = entry
                 .file_name()
                 .to_str()
-                .is_none_or(|name| !name.starts_with('.'))
+                .is_none_or(|name| !name.starts_with('.'));
+            visible
+                && (!entry.file_type().is_dir()
+                    || entry.depth() != 1
+                    || scan.includes_top_level_dir(entry.file_name()))
         });
     let mut entries: Vec<(String, PathBuf)> = Vec::new();
     for entry in walker {
@@ -92,6 +98,7 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
 #[derive(Debug, Default)]
 struct WorkspaceScan {
     include: Vec<Pattern>,
+    include_roots: Option<BTreeSet<String>>,
     exclude: Vec<Pattern>,
     configuration: BuildConfiguration,
 }
@@ -102,6 +109,12 @@ impl WorkspaceScan {
             return false;
         }
         self.include.is_empty() || self.include.iter().any(|pattern| pattern.matches(path))
+    }
+
+    fn includes_top_level_dir(&self, name: &OsStr) -> bool {
+        self.include_roots
+            .as_ref()
+            .is_none_or(|roots| name.to_str().is_none_or(|name| roots.contains(name)))
     }
 }
 
@@ -124,10 +137,40 @@ fn load_workspace_scan(root: &Path) -> Result<WorkspaceScan> {
     };
     let raw = load_workspace_toml_str(TOML_BUILD_FILE_NAME, &src)?;
     Ok(WorkspaceScan {
+        include_roots: literal_include_roots(&raw.include),
         include: compile_patterns(TOML_BUILD_FILE_NAME, "workspace.include", &raw.include)?,
         exclude: compile_patterns(TOML_BUILD_FILE_NAME, "workspace.exclude", &raw.exclude)?,
         configuration: BuildConfiguration::from_toml(raw.configuration)?,
     })
+}
+
+fn literal_include_roots(patterns: &[String]) -> Option<BTreeSet<String>> {
+    if patterns.is_empty() {
+        return None;
+    }
+    let mut roots = BTreeSet::new();
+    for pattern in patterns {
+        let Some((root, _)) = pattern.split_once('/') else {
+            if has_glob_syntax(pattern) {
+                return None;
+            }
+            continue;
+        };
+        if root.is_empty()
+            || root == "."
+            || root == ".."
+            || root.contains('\\')
+            || has_glob_syntax(root)
+        {
+            return None;
+        }
+        roots.insert(root.to_string());
+    }
+    Some(roots)
+}
+
+fn has_glob_syntax(value: &str) -> bool {
+    value.bytes().any(|byte| matches!(byte, b'*' | b'?' | b'['))
 }
 
 fn compile_patterns(path: &str, field: &str, values: &[String]) -> Result<Vec<Pattern>> {
@@ -241,5 +284,30 @@ kind = "custom_library"
         let targets = load_workspace(tmp.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id(), "crates/keep/keep");
+    }
+
+    #[test]
+    fn literal_include_roots_prune_unrelated_top_level_directories() {
+        assert_eq!(
+            literal_include_roots(&[
+                "crates/*/once.toml".to_string(),
+                "tools/generator/once.toml".to_string(),
+            ]),
+            Some(BTreeSet::from(["crates".to_string(), "tools".to_string(),]))
+        );
+        assert_eq!(
+            literal_include_roots(&["once.toml".to_string()]),
+            Some(BTreeSet::new())
+        );
+    }
+
+    #[test]
+    fn wildcard_include_roots_preserve_full_traversal() {
+        assert_eq!(literal_include_roots(&[]), None);
+        assert_eq!(literal_include_roots(&["*/once.toml".to_string()]), None);
+        assert_eq!(
+            literal_include_roots(&["crates*/once.toml".to_string()]),
+            None
+        );
     }
 }
