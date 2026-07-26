@@ -147,9 +147,10 @@ fn graph_tool_cache_reuses_existing_paths_for_unchanged_configuration() {
         output: "v26".to_string(),
     }];
 
-    write_graph_tool_cache(workspace.path(), fingerprint, &paths, &commands).unwrap();
+    let cache_path = workspace.path().join("tool-cache.json");
+    write_graph_tool_cache_at(&cache_path, fingerprint, &paths, &commands).unwrap();
 
-    let cached = read_graph_tool_cache(workspace.path(), fingerprint).unwrap();
+    let cached = read_graph_tool_cache_at(&cache_path, fingerprint).unwrap();
     assert_eq!(cached.paths, paths);
     assert_eq!(cached.commands, commands);
 }
@@ -166,16 +167,31 @@ fn graph_tool_cache_invalidates_configuration_and_missing_executables() {
     let executables = vec!["node".to_string()];
     let first = graph_tool_cache_fingerprint(workspace.path(), &tools, &executables).unwrap();
     let paths = BTreeMap::from([("node".to_string(), executable.display().to_string())]);
-    write_graph_tool_cache(workspace.path(), first, &paths, &[]).unwrap();
+    let cache_path = workspace.path().join("tool-cache.json");
+    write_graph_tool_cache_at(&cache_path, first, &paths, &[]).unwrap();
 
     std::fs::write(&config, "[tools]\nnode = \"26\"\n").unwrap();
     let second = graph_tool_cache_fingerprint(workspace.path(), &tools, &executables).unwrap();
     assert_ne!(first, second);
-    assert!(read_graph_tool_cache(workspace.path(), second).is_none());
+    assert!(read_graph_tool_cache_at(&cache_path, second).is_none());
 
-    write_graph_tool_cache(workspace.path(), second, &paths, &[]).unwrap();
+    write_graph_tool_cache_at(&cache_path, second, &paths, &[]).unwrap();
     std::fs::write(executable, b"changed node binary").unwrap();
-    assert!(read_graph_tool_cache(workspace.path(), second).is_none());
+    assert!(read_graph_tool_cache_at(&cache_path, second).is_none());
+}
+
+#[test]
+fn graph_tool_cache_path_is_host_cached_and_workspace_scoped() {
+    let cache_home = Path::new("/cache/once/toolchains");
+    let first = graph_tool_cache_path_from(cache_home, Path::new("/workspaces/first"));
+    let second = graph_tool_cache_path_from(cache_home, Path::new("/workspaces/second"));
+
+    assert!(first.starts_with(cache_home));
+    assert_eq!(
+        first.extension().and_then(|value| value.to_str()),
+        Some("json")
+    );
+    assert_ne!(first, second);
 }
 
 #[test]

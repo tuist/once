@@ -15,6 +15,7 @@
 //!
 //! - `<workspace>/.once/out/...` - build outputs, runtime sessions
 //! - `<XDG_CACHE_HOME>/once/cas` - CAS blobs and action results
+//! - `<XDG_CACHE_HOME>/once/toolchains` - validated host tool identities
 //! - `<XDG_RUNTIME_DIR>/once` - daemon sockets and ephemeral runtime
 //! - `<XDG_DATA_HOME>/once` - long-lived materialized assets like
 //!   the embedded elixir daemon script
@@ -64,6 +65,11 @@ impl Xdg {
     /// from the source graph plus the toolchain.
     pub fn once_cas(&self) -> PathBuf {
         self.cache_home.join("once").join("cas")
+    }
+
+    /// Validated host executable paths and safe identity probes.
+    pub fn once_toolchains(&self) -> PathBuf {
+        self.cache_home.join("once").join("toolchains")
     }
 
     /// Long-lived, non-reproducible Once state. Empty for now;
@@ -199,6 +205,7 @@ mod tests {
             || {
                 let xdg = Xdg::from_env();
                 assert_eq!(xdg.once_cas(), PathBuf::from("/c/once/cas"));
+                assert_eq!(xdg.once_toolchains(), PathBuf::from("/c/once/toolchains"));
                 assert_eq!(xdg.once_state(), PathBuf::from("/s/once"));
                 assert_eq!(xdg.once_data(), PathBuf::from("/d/once"));
                 assert_eq!(xdg.once_runtime(), PathBuf::from("/r/once"));

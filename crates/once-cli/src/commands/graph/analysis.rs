@@ -36,7 +36,6 @@ use self::actions::{run_declared_actions, validate_declared_actions, DeclaredAct
 use self::scheduler::BuildScheduler;
 
 const GRAPH_TOOL_CACHE_SCHEMA: &str = "once.graph-tool-paths.v4";
-const GRAPH_TOOL_CACHE_PATH: &str = ".once/toolchains/graph-tool-paths.json";
 const GRAPH_TOOL_ENVIRONMENT_KEYS: &[&str] = &[
     "DEVELOPER_DIR",
     "ELIXIR_ERL_OPTIONS",
@@ -720,8 +719,11 @@ fn push_fingerprint_part(bytes: &mut Vec<u8>, part: &[u8]) {
 }
 
 fn read_graph_tool_cache(workspace: &Path, expected_fingerprint: Digest) -> Option<GraphToolCache> {
-    let path = workspace.join(GRAPH_TOOL_CACHE_PATH);
-    let raw = match std::fs::read(&path) {
+    read_graph_tool_cache_at(&graph_tool_cache_path(workspace), expected_fingerprint)
+}
+
+fn read_graph_tool_cache_at(path: &Path, expected_fingerprint: Digest) -> Option<GraphToolCache> {
+    let raw = match std::fs::read(path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
         Err(error) => {
@@ -752,7 +754,20 @@ fn write_graph_tool_cache(
     paths: &BTreeMap<String, String>,
     commands: &[CachedToolCommand],
 ) -> Result<()> {
-    let path = workspace.join(GRAPH_TOOL_CACHE_PATH);
+    write_graph_tool_cache_at(
+        &graph_tool_cache_path(workspace),
+        fingerprint,
+        paths,
+        commands,
+    )
+}
+
+fn write_graph_tool_cache_at(
+    path: &Path,
+    fingerprint: Digest,
+    paths: &BTreeMap<String, String>,
+    commands: &[CachedToolCommand],
+) -> Result<()> {
     let parent = path
         .parent()
         .expect("graph tool cache path always has a parent");
@@ -771,17 +786,27 @@ fn write_graph_tool_cache(
     let raw = serde_json::to_vec(&record).context("serializing graph tool paths")?;
     std::fs::write(&temporary, raw)
         .with_context(|| format!("writing graph tool cache `{}`", temporary.display()))?;
-    if let Err(error) = std::fs::rename(&temporary, &path) {
+    if let Err(error) = std::fs::rename(&temporary, path) {
         if !path.is_file() {
             return Err(error)
                 .with_context(|| format!("activating graph tool cache `{}`", path.display()));
         }
-        std::fs::remove_file(&path)
+        std::fs::remove_file(path)
             .with_context(|| format!("replacing graph tool cache `{}`", path.display()))?;
-        std::fs::rename(&temporary, &path)
+        std::fs::rename(&temporary, path)
             .with_context(|| format!("activating graph tool cache `{}`", path.display()))?;
     }
     Ok(())
+}
+
+fn graph_tool_cache_path(workspace: &Path) -> PathBuf {
+    graph_tool_cache_path_from(&once_core::Xdg::from_env().once_toolchains(), workspace)
+}
+
+fn graph_tool_cache_path_from(toolchain_root: &Path, workspace: &Path) -> PathBuf {
+    let workspace = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let workspace_id = Digest::of_bytes(workspace.to_string_lossy().as_bytes());
+    toolchain_root.join(format!("{workspace_id}.json"))
 }
 
 fn graph_tool_paths_fingerprint(paths: &BTreeMap<String, String>) -> Option<Digest> {
