@@ -4,9 +4,47 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <.live_title default="Once" suffix=" | Build cache and script execution">
+    <link rel="icon" type="image/png" href="/docs/favicon.png" />
+    <.live_title default="Once" suffix=" · Once">
       {assigns[:page_title]}
     </.live_title>
+
+    <meta name="description" content={assigns[:meta_description] || default_description()} />
+    <link rel="canonical" href={OnceSiteWeb.Endpoint.url() <> @conn.request_path} />
+    <link
+      rel="alternate"
+      type="application/rss+xml"
+      title="Once changelog"
+      href={OnceSiteWeb.Endpoint.url() <> "/changelog/feed.xml"}
+    />
+    <link
+      rel="alternate"
+      type="application/atom+xml"
+      title="Once changelog"
+      href={OnceSiteWeb.Endpoint.url() <> "/changelog/feed.atom"}
+    />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Once" />
+    <meta property="og:title" content={assigns[:page_title] || "Once"} />
+    <meta property="og:description" content={assigns[:meta_description] || default_description()} />
+    <meta property="og:url" content={OnceSiteWeb.Endpoint.url() <> @conn.request_path} />
+    <meta
+      property="og:image"
+      content={OnceSiteWeb.Endpoint.url() <> (assigns[:og_image] || "/images/og/home.jpg")}
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@buildoncedev" />
+    <meta name="twitter:title" content={assigns[:page_title] || "Once"} />
+    <meta
+      name="twitter:description"
+      content={assigns[:meta_description] || default_description()}
+    />
+    <meta
+      name="twitter:image"
+      content={OnceSiteWeb.Endpoint.url() <> (assigns[:og_image] || "/images/og/home.jpg")}
+    />
+
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>
