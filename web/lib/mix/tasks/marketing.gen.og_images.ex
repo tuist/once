@@ -33,7 +33,6 @@ defmodule Mix.Tasks.Marketing.Gen.OgImages do
 
   @impl true
   def run(_args) do
-    Mix.Task.run("app.config")
     {:ok, _} = Application.ensure_all_started(:briefly)
 
     case OgImageRenderer.start() do
