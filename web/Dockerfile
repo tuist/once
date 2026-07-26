@@ -15,6 +15,10 @@ ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
 # ---- Rust stage: build the `once` binary used to generate the CLI reference ----
 FROM rust:${RUST_VERSION}-slim-bookworm AS once-builder
 
+# libcap-ng is required to link the `once` binary (via the microsandbox deps).
+RUN apt-get update -y && apt-get install -y libcap-ng-dev \
+    && apt-get clean && rm -f /var/lib/apt/lists/*_*
+
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
@@ -23,8 +27,9 @@ RUN cargo build --release -p once-cli
 # ---- Elixir builder ----
 FROM ${BUILDER_IMAGE} AS builder
 
-# chromium is used at build time to render documentation Open Graph images.
-RUN apt-get update -y && apt-get install -y build-essential git chromium \
+# chromium renders Open Graph images at build time; libcap-ng0 is the runtime
+# library the `once` binary (used to generate the CLI reference) links against.
+RUN apt-get update -y && apt-get install -y build-essential git chromium libcap-ng0 \
     && apt-get clean && rm -f /var/lib/apt/lists/*_*
 
 WORKDIR /app

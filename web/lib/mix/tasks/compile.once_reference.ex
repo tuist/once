@@ -44,7 +44,7 @@ defmodule Mix.Tasks.Compile.OnceReference do
 
         {:noop, []}
 
-      {cmd, args} ->
+      {source, cmd, args} ->
         File.rm_rf!(Path.join(out, "cli"))
         Mix.shell().info("Generating CLI reference (#{cmd})")
 
@@ -52,8 +52,20 @@ defmodule Mix.Tasks.Compile.OnceReference do
           {_output, 0} ->
             {:ok, []}
 
-          {output, status} ->
+          {output, status} when source == :binary ->
+            # An explicit binary (ONCE_BIN / target/) is expected to work, e.g.
+            # in the release image, so a failure is fatal.
             Mix.raise("`once reference` failed with status #{status}:\n#{output}")
+
+          {output, _status} ->
+            # The cargo fallback is a convenience; if the workspace can't build
+            # (e.g. missing system libraries in a CI job that doesn't need the
+            # generated pages), skip rather than fail the build.
+            Mix.shell().error(
+              "[once_reference] cargo build failed; skipping CLI reference generation:\n#{output}"
+            )
+
+            {:noop, []}
         end
     end
   end
@@ -63,13 +75,13 @@ defmodule Mix.Tasks.Compile.OnceReference do
   defp command(out) do
     case once_binary() do
       {:binary, bin} ->
-        {bin, ["reference", "--out", out]}
+        {:binary, bin, ["reference", "--out", out]}
 
       :unavailable ->
         :unavailable
 
       :cargo ->
-        {"cargo",
+        {:cargo, "cargo",
          [
            "run",
            "--quiet",
