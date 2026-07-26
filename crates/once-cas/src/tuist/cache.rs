@@ -150,7 +150,7 @@ impl TuistCache {
         }
 
         let bytes = self.get_blob_remote(digest).await?;
-        let mirrored = self.local.put_blob(&bytes).await?;
+        let mirrored = self.local.mirror_blob(digest, &bytes).await?;
         if mirrored != *digest {
             return Err(Error::Remote {
                 provider: PROVIDER_NAME,
@@ -540,7 +540,8 @@ impl TuistCache {
     ) -> Result<Digest> {
         if digest.size_bytes == 0 {
             validate_sha256_digest(digest, &[], operation)?;
-            let local_digest = self.local.put_blob(&[]).await?;
+            let local_digest = Digest::of_bytes(&[]);
+            self.local.mirror_blob(&local_digest, &[]).await?;
             self.known_remote_blobs
                 .lock()
                 .await
@@ -557,7 +558,8 @@ impl TuistCache {
                 ),
             });
         };
-        let local_digest = self.local.put_blob(&bytes).await?;
+        let local_digest = Digest::of_bytes(&bytes);
+        self.local.mirror_blob(&local_digest, &bytes).await?;
         self.known_remote_blobs
             .lock()
             .await
