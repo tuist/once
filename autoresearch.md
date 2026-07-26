@@ -77,6 +77,15 @@ client cache.
 - Local blob encoding now borrows incompressible input bytes instead of copying
   them before the write. Large streamed remote reads reserve bounded capacity
   from their declared size to avoid repeated buffer-growth copies.
+- Deferring construction of the remote network client until the first remote
+  request reduced the stable local-hit median from 22.02 to 18.37 milliseconds.
+- Remotely fetched blob contents stay synchronized before atomic rename, while
+  their recoverable directory entry skips a parent-directory durability
+  barrier. Two clean-client repeats measured 37.77 and 36.27 milliseconds
+  median versus the 39.99-millisecond control.
+- Reducing the workspace database synchronization level regressed the local
+  median to 19.65 milliseconds. The immediate reverted control returned to
+  18.98 milliseconds, so full synchronization remains.
 
 ## Primary Research
 

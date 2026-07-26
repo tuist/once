@@ -20,7 +20,7 @@ bazel_remote_disk_cache_evicted_bytes_total 0
 bazel_remote_disk_cache_logical_bytes 1.77283072e+08
 # HELP bazel_remote_disk_cache_longest_item_idle_time_seconds The idle time (now - atime) of the last item in the LRU cache, updated once per minute. Depending on filesystem mount options (e.g. relatime), the resolution may be measured in 'days' and not accurate to the second. If using noatime this will be 0.
 # TYPE bazel_remote_disk_cache_longest_item_idle_time_seconds gauge
-bazel_remote_disk_cache_longest_item_idle_time_seconds 88339.880019814
+bazel_remote_disk_cache_longest_item_idle_time_seconds 101026.198924814
 # HELP bazel_remote_disk_cache_overwritten_bytes_total The total number of bytes removed from disk backend, due to put of already existing key
 # TYPE bazel_remote_disk_cache_overwritten_bytes_total counter
 bazel_remote_disk_cache_overwritten_bytes_total 0
@@ -52,13 +52,13 @@ bazel_remote_s3_cache_hits 0
 bazel_remote_s3_cache_misses 0
 # HELP go_gc_duration_seconds A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.
 # TYPE go_gc_duration_seconds summary
-go_gc_duration_seconds{quantile="0"} 3.9041e-05
-go_gc_duration_seconds{quantile="0.25"} 5.8125e-05
-go_gc_duration_seconds{quantile="0.5"} 6.9417e-05
-go_gc_duration_seconds{quantile="0.75"} 9.45e-05
-go_gc_duration_seconds{quantile="1"} 0.000165958
-go_gc_duration_seconds_sum 0.001098001
-go_gc_duration_seconds_count 13
+go_gc_duration_seconds{quantile="0"} 2.6416e-05
+go_gc_duration_seconds{quantile="0.25"} 4.6791e-05
+go_gc_duration_seconds{quantile="0.5"} 6e-05
+go_gc_duration_seconds{quantile="0.75"} 9.8709e-05
+go_gc_duration_seconds{quantile="1"} 0.000259708
+go_gc_duration_seconds_sum 0.001274332
+go_gc_duration_seconds_count 15
 # HELP go_gc_gogc_percent Heap size target percentage configured by the user, otherwise 100. This value is set by the GOGC environment variable, and the runtime/debug.SetGCPercent function. Sourced from /gc/gogc:percent.
 # TYPE go_gc_gogc_percent gauge
 go_gc_gogc_percent 100
@@ -67,49 +67,49 @@ go_gc_gogc_percent 100
 go_gc_gomemlimit_bytes 9.223372036854776e+18
 # HELP go_goroutines Number of goroutines that currently exist.
 # TYPE go_goroutines gauge
-go_goroutines 14
+go_goroutines 13
 # HELP go_info Information about the Go environment.
 # TYPE go_info gauge
 go_info{version="go1.26.5"} 1
 # HELP go_memstats_alloc_bytes Number of bytes allocated in heap and currently in use. Equals to /memory/classes/heap/objects:bytes.
 # TYPE go_memstats_alloc_bytes gauge
-go_memstats_alloc_bytes 2.5694608e+07
+go_memstats_alloc_bytes 2.6438808e+07
 # HELP go_memstats_alloc_bytes_total Total number of bytes allocated in heap until now, even if released already. Equals to /gc/heap/allocs:bytes.
 # TYPE go_memstats_alloc_bytes_total counter
-go_memstats_alloc_bytes_total 1.23059904e+08
+go_memstats_alloc_bytes_total 1.21883504e+08
 # HELP go_memstats_buck_hash_sys_bytes Number of bytes used by the profiling bucket hash table. Equals to /memory/classes/profiling/buckets:bytes.
 # TYPE go_memstats_buck_hash_sys_bytes gauge
-go_memstats_buck_hash_sys_bytes 1.460903e+06
+go_memstats_buck_hash_sys_bytes 1.460951e+06
 # HELP go_memstats_frees_total Total number of heap objects frees. Equals to /gc/heap/frees:objects + /gc/heap/tiny/allocs:objects.
 # TYPE go_memstats_frees_total counter
-go_memstats_frees_total 106379
+go_memstats_frees_total 109738
 # HELP go_memstats_gc_sys_bytes Number of bytes used for garbage collection system metadata. Equals to /memory/classes/metadata/other:bytes.
 # TYPE go_memstats_gc_sys_bytes gauge
-go_memstats_gc_sys_bytes 3.791616e+06
+go_memstats_gc_sys_bytes 3.85152e+06
 # HELP go_memstats_heap_alloc_bytes Number of heap bytes allocated and currently in use, same as go_memstats_alloc_bytes. Equals to /memory/classes/heap/objects:bytes.
 # TYPE go_memstats_heap_alloc_bytes gauge
-go_memstats_heap_alloc_bytes 2.5694608e+07
+go_memstats_heap_alloc_bytes 2.6438808e+07
 # HELP go_memstats_heap_idle_bytes Number of heap bytes waiting to be used. Equals to /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
 # TYPE go_memstats_heap_idle_bytes gauge
-go_memstats_heap_idle_bytes 2.8434432e+07
+go_memstats_heap_idle_bytes 2.7623424e+07
 # HELP go_memstats_heap_inuse_bytes Number of heap bytes that are in use. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes
 # TYPE go_memstats_heap_inuse_bytes gauge
-go_memstats_heap_inuse_bytes 2.904064e+07
+go_memstats_heap_inuse_bytes 2.9687808e+07
 # HELP go_memstats_heap_objects Number of currently allocated objects. Equals to /gc/heap/objects:objects.
 # TYPE go_memstats_heap_objects gauge
-go_memstats_heap_objects 8867
+go_memstats_heap_objects 8288
 # HELP go_memstats_heap_released_bytes Number of heap bytes released to OS. Equals to /memory/classes/heap/released:bytes.
 # TYPE go_memstats_heap_released_bytes gauge
-go_memstats_heap_released_bytes 7.364608e+06
+go_memstats_heap_released_bytes 5.464064e+06
 # HELP go_memstats_heap_sys_bytes Number of heap bytes obtained from system. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes + /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
 # TYPE go_memstats_heap_sys_bytes gauge
-go_memstats_heap_sys_bytes 5.7475072e+07
+go_memstats_heap_sys_bytes 5.7311232e+07
 # HELP go_memstats_last_gc_time_seconds Number of seconds since 1970 of last garbage collection.
 # TYPE go_memstats_last_gc_time_seconds gauge
-go_memstats_last_gc_time_seconds 1.7850714378021991e+09
+go_memstats_last_gc_time_seconds 1.785084130222393e+09
 # HELP go_memstats_mallocs_total Total number of heap objects allocated, both live and gc-ed. Semantically a counter version for go_memstats_heap_objects gauge. Equals to /gc/heap/allocs:objects + /gc/heap/tiny/allocs:objects.
 # TYPE go_memstats_mallocs_total counter
-go_memstats_mallocs_total 115246
+go_memstats_mallocs_total 118026
 # HELP go_memstats_mcache_inuse_bytes Number of bytes in use by mcache structures. Equals to /memory/classes/metadata/mcache/inuse:bytes.
 # TYPE go_memstats_mcache_inuse_bytes gauge
 go_memstats_mcache_inuse_bytes 41328
@@ -118,31 +118,31 @@ go_memstats_mcache_inuse_bytes 41328
 go_memstats_mcache_sys_bytes 48216
 # HELP go_memstats_mspan_inuse_bytes Number of bytes in use by mspan structures. Equals to /memory/classes/metadata/mspan/inuse:bytes.
 # TYPE go_memstats_mspan_inuse_bytes gauge
-go_memstats_mspan_inuse_bytes 233600
+go_memstats_mspan_inuse_bytes 236320
 # HELP go_memstats_mspan_sys_bytes Number of bytes used for mspan structures obtained from system. Equals to /memory/classes/metadata/mspan/inuse:bytes + /memory/classes/metadata/mspan/free:bytes.
 # TYPE go_memstats_mspan_sys_bytes gauge
 go_memstats_mspan_sys_bytes 277440
 # HELP go_memstats_next_gc_bytes Number of heap bytes when next garbage collection will take place. Equals to /gc/heap/goal:bytes.
 # TYPE go_memstats_next_gc_bytes gauge
-go_memstats_next_gc_bytes 4.6786586e+07
+go_memstats_next_gc_bytes 5.3188298e+07
 # HELP go_memstats_other_sys_bytes Number of bytes used for other system allocations. Equals to /memory/classes/other:bytes.
 # TYPE go_memstats_other_sys_bytes gauge
-go_memstats_other_sys_bytes 3.750745e+06
+go_memstats_other_sys_bytes 3.199273e+06
 # HELP go_memstats_stack_inuse_bytes Number of bytes obtained from system for stack allocator in non-CGO environments. Equals to /memory/classes/heap/stacks:bytes.
 # TYPE go_memstats_stack_inuse_bytes gauge
-go_memstats_stack_inuse_bytes 1.245184e+06
+go_memstats_stack_inuse_bytes 1.409024e+06
 # HELP go_memstats_stack_sys_bytes Number of bytes obtained from system for stack allocator. Equals to /memory/classes/heap/stacks:bytes + /memory/classes/os-stacks:bytes.
 # TYPE go_memstats_stack_sys_bytes gauge
-go_memstats_stack_sys_bytes 1.245184e+06
+go_memstats_stack_sys_bytes 1.409024e+06
 # HELP go_memstats_sys_bytes Number of bytes obtained from system. Equals to /memory/classes/total:byte.
 # TYPE go_memstats_sys_bytes gauge
-go_memstats_sys_bytes 6.8049176e+07
+go_memstats_sys_bytes 6.7557656e+07
 # HELP go_sched_gomaxprocs_threads The current runtime.GOMAXPROCS setting, or the number of operating system threads that can execute user-level Go code simultaneously. Sourced from /sched/gomaxprocs:threads.
 # TYPE go_sched_gomaxprocs_threads gauge
 go_sched_gomaxprocs_threads 18
 # HELP go_threads Number of OS threads created.
 # TYPE go_threads gauge
-go_threads 26
+go_threads 29
 # HELP grpc_server_handled_total Total number of RPCs completed on the server, regardless of success or failure.
 # TYPE grpc_server_handled_total counter
 grpc_server_handled_total{grpc_code="OK",grpc_method="BatchReadBlobs",grpc_service="build.bazel.remote.execution.v2.ContentAddressableStorage",grpc_type="unary"} 23
@@ -162,7 +162,7 @@ grpc_server_handling_seconds_bucket{grpc_method="BatchReadBlobs",grpc_service="b
 grpc_server_handling_seconds_bucket{grpc_method="BatchReadBlobs",grpc_service="build.bazel.remote.execution.v2.ContentAddressableStorage",grpc_type="unary",le="160"} 23
 grpc_server_handling_seconds_bucket{grpc_method="BatchReadBlobs",grpc_service="build.bazel.remote.execution.v2.ContentAddressableStorage",grpc_type="unary",le="320"} 23
 grpc_server_handling_seconds_bucket{grpc_method="BatchReadBlobs",grpc_service="build.bazel.remote.execution.v2.ContentAddressableStorage",grpc_type="unary",le="+Inf"} 23
-grpc_server_handling_seconds_sum{grpc_method="BatchReadBlobs",grpc_service="build.bazel.remote.execution.v2.ContentAddressableStorage",grpc_type="unary"} 0.005289042999999999
+grpc_server_handling_seconds_sum{grpc_method="BatchReadBlobs",grpc_service="build.bazel.remote.execution.v2.ContentAddressableStorage",grpc_type="unary"} 0.005723455
 grpc_server_handling_seconds_count{grpc_method="BatchReadBlobs",grpc_service="build.bazel.remote.execution.v2.ContentAddressableStorage",grpc_type="unary"} 23
 grpc_server_handling_seconds_bucket{grpc_method="GetActionResult",grpc_service="build.bazel.remote.execution.v2.ActionCache",grpc_type="unary",le="0.5"} 525
 grpc_server_handling_seconds_bucket{grpc_method="GetActionResult",grpc_service="build.bazel.remote.execution.v2.ActionCache",grpc_type="unary",le="1"} 525
@@ -175,7 +175,7 @@ grpc_server_handling_seconds_bucket{grpc_method="GetActionResult",grpc_service="
 grpc_server_handling_seconds_bucket{grpc_method="GetActionResult",grpc_service="build.bazel.remote.execution.v2.ActionCache",grpc_type="unary",le="160"} 525
 grpc_server_handling_seconds_bucket{grpc_method="GetActionResult",grpc_service="build.bazel.remote.execution.v2.ActionCache",grpc_type="unary",le="320"} 525
 grpc_server_handling_seconds_bucket{grpc_method="GetActionResult",grpc_service="build.bazel.remote.execution.v2.ActionCache",grpc_type="unary",le="+Inf"} 525
-grpc_server_handling_seconds_sum{grpc_method="GetActionResult",grpc_service="build.bazel.remote.execution.v2.ActionCache",grpc_type="unary"} 0.09029920300000001
+grpc_server_handling_seconds_sum{grpc_method="GetActionResult",grpc_service="build.bazel.remote.execution.v2.ActionCache",grpc_type="unary"} 0.09644646200000007
 grpc_server_handling_seconds_count{grpc_method="GetActionResult",grpc_service="build.bazel.remote.execution.v2.ActionCache",grpc_type="unary"} 525
 grpc_server_handling_seconds_bucket{grpc_method="GetCapabilities",grpc_service="build.bazel.remote.execution.v2.Capabilities",grpc_type="unary",le="0.5"} 45
 grpc_server_handling_seconds_bucket{grpc_method="GetCapabilities",grpc_service="build.bazel.remote.execution.v2.Capabilities",grpc_type="unary",le="1"} 45
@@ -188,7 +188,7 @@ grpc_server_handling_seconds_bucket{grpc_method="GetCapabilities",grpc_service="
 grpc_server_handling_seconds_bucket{grpc_method="GetCapabilities",grpc_service="build.bazel.remote.execution.v2.Capabilities",grpc_type="unary",le="160"} 45
 grpc_server_handling_seconds_bucket{grpc_method="GetCapabilities",grpc_service="build.bazel.remote.execution.v2.Capabilities",grpc_type="unary",le="320"} 45
 grpc_server_handling_seconds_bucket{grpc_method="GetCapabilities",grpc_service="build.bazel.remote.execution.v2.Capabilities",grpc_type="unary",le="+Inf"} 45
-grpc_server_handling_seconds_sum{grpc_method="GetCapabilities",grpc_service="build.bazel.remote.execution.v2.Capabilities",grpc_type="unary"} 0.0012105850000000001
+grpc_server_handling_seconds_sum{grpc_method="GetCapabilities",grpc_service="build.bazel.remote.execution.v2.Capabilities",grpc_type="unary"} 0.0009645789999999999
 grpc_server_handling_seconds_count{grpc_method="GetCapabilities",grpc_service="build.bazel.remote.execution.v2.Capabilities",grpc_type="unary"} 45
 grpc_server_handling_seconds_bucket{grpc_method="Read",grpc_service="google.bytestream.ByteStream",grpc_type="server_stream",le="0.5"} 12
 grpc_server_handling_seconds_bucket{grpc_method="Read",grpc_service="google.bytestream.ByteStream",grpc_type="server_stream",le="1"} 12
@@ -201,7 +201,7 @@ grpc_server_handling_seconds_bucket{grpc_method="Read",grpc_service="google.byte
 grpc_server_handling_seconds_bucket{grpc_method="Read",grpc_service="google.bytestream.ByteStream",grpc_type="server_stream",le="160"} 12
 grpc_server_handling_seconds_bucket{grpc_method="Read",grpc_service="google.bytestream.ByteStream",grpc_type="server_stream",le="320"} 12
 grpc_server_handling_seconds_bucket{grpc_method="Read",grpc_service="google.bytestream.ByteStream",grpc_type="server_stream",le="+Inf"} 12
-grpc_server_handling_seconds_sum{grpc_method="Read",grpc_service="google.bytestream.ByteStream",grpc_type="server_stream"} 0.015753209
+grpc_server_handling_seconds_sum{grpc_method="Read",grpc_service="google.bytestream.ByteStream",grpc_type="server_stream"} 0.013333919
 grpc_server_handling_seconds_count{grpc_method="Read",grpc_service="google.bytestream.ByteStream",grpc_type="server_stream"} 12
 # HELP grpc_server_msg_received_total Total number of RPC stream messages received on the server.
 # TYPE grpc_server_msg_received_total counter
@@ -234,7 +234,7 @@ http_request_duration_seconds_bucket{code="200",handler="status",method="GET",se
 http_request_duration_seconds_bucket{code="200",handler="status",method="GET",service="",le="160"} 2
 http_request_duration_seconds_bucket{code="200",handler="status",method="GET",service="",le="320"} 2
 http_request_duration_seconds_bucket{code="200",handler="status",method="GET",service="",le="+Inf"} 2
-http_request_duration_seconds_sum{code="200",handler="status",method="GET",service=""} 0.00017958299999999998
+http_request_duration_seconds_sum{code="200",handler="status",method="GET",service=""} 4.8291e-05
 http_request_duration_seconds_count{code="200",handler="status",method="GET",service=""} 2
 # HELP http_requests_inflight The number of inflight requests being handled at the same time.
 # TYPE http_requests_inflight gauge
@@ -255,7 +255,7 @@ http_response_size_bytes_sum{code="200",handler="status",method="GET",service=""
 http_response_size_bytes_count{code="200",handler="status",method="GET",service=""} 2
 # HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
 # TYPE process_cpu_seconds_total counter
-process_cpu_seconds_total 0.464168
+process_cpu_seconds_total 0.392972
 # HELP process_max_fds Maximum number of open file descriptors.
 # TYPE process_max_fds gauge
 process_max_fds 245760
@@ -264,13 +264,13 @@ process_max_fds 245760
 process_open_fds 10
 # HELP process_resident_memory_bytes Resident memory size in bytes.
 # TYPE process_resident_memory_bytes gauge
-process_resident_memory_bytes 7.6791808e+07
+process_resident_memory_bytes 7.3056256e+07
 # HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
 # TYPE process_start_time_seconds gauge
-process_start_time_seconds 1.785071335e+09
+process_start_time_seconds 1.785084022e+09
 # HELP process_virtual_memory_bytes Virtual memory size in bytes.
 # TYPE process_virtual_memory_bytes gauge
-process_virtual_memory_bytes 4.54453182464e+11
+process_virtual_memory_bytes 4.54482591744e+11
 # HELP process_virtual_memory_max_bytes Maximum amount of virtual memory available in bytes.
 # TYPE process_virtual_memory_max_bytes gauge
 process_virtual_memory_max_bytes 9.223372036854776e+18

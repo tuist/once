@@ -36,27 +36,28 @@ runs per client.
 
 | Client | Mean | Median | Range | Remote action hits |
 | --- | ---: | ---: | ---: | ---: |
-| Bazel | 2.152 s | 2.129 s | 1.934 to 2.394 s | 15 of 15 |
-| Buck2 | 0.637 s | 0.591 s | 0.492 to 0.983 s | 15 of 15 |
-| Once | 0.070 s | 0.047 s | 0.043 to 0.277 s | 15 of 15 |
+| Bazel | 2.016 s | 2.071 s | 1.761 to 2.311 s | 15 of 15 |
+| Buck2 | 0.697 s | 0.509 s | 0.452 to 1.854 s | 15 of 15 |
+| Once | 0.061 s | 0.042 s | 0.037 to 0.241 s | 15 of 15 |
 
 The Bazel and Buck2 results include a fresh daemon after each clean. Their
 ranges therefore include daemon startup. Once starts a fresh process on every
-invocation and is 9.1 times faster than Buck2 and 30.6 times faster than Bazel
-by mean in this clean-client scenario. Once's first sample was a 277-millisecond
-outlier; its other nine samples were between 43 and 50 milliseconds.
+invocation and is 11.4 times faster than Buck2 and 33.0 times faster than Bazel
+by mean in this clean-client scenario. Once's first sample was a 241-millisecond
+outlier; its other nine samples were between 37 and 45 milliseconds. A separate
+30-run stable repeat measured a 36.27-millisecond median.
 
 ### Local hit
 
 | Client | Mean | Median | Range |
 | --- | ---: | ---: | ---: |
-| Bazel | 0.845 s | 0.878 s | 0.582 to 1.434 s |
-| Buck2 | 0.058 s | 0.057 s | 0.055 to 0.076 s |
-| Once | 0.025 s | 0.024 s | 0.023 to 0.031 s |
+| Bazel | 0.868 s | 0.786 s | 0.570 to 1.491 s |
+| Buck2 | 0.059 s | 0.058 s | 0.054 to 0.068 s |
+| Once | 0.021 s | 0.020 s | 0.019 to 0.026 s |
 
-Once is 33.9 times faster than Bazel and 2.33 times faster than Buck2 by mean
+Once is 41.4 times faster than Bazel and 2.83 times faster than Buck2 by mean
 on a local hit. Buck2 uses a long-lived process, while Once starts a fresh
-process for every build. Once's 25-millisecond mean covers process startup,
+process for every build. Once's 21-millisecond mean covers process startup,
 graph loading, analysis, 15 local action-cache probes, validation of the
 requested output, and no output rewrite when its digest and permissions still
 match.
@@ -69,8 +70,8 @@ and [`results/local-hit.json`](results/local-hit.json).
 
 | Scenario | Before | After | Improvement |
 | --- | ---: | ---: | ---: |
-| Clean-client remote hit | 2.475 s | 0.070 s | 35.2 times faster |
-| Local hit | 2.398 s | 0.025 s | 96.3 times faster |
+| Clean-client remote hit | 2.475 s | 0.061 s | 40.5 times faster |
+| Local hit | 2.398 s | 0.021 s | 114.2 times faster |
 | Clean-client output materialization | 84 mebibytes | 1 mebibyte | 84 times less |
 
 The before measurements used the same graph, host, remote server, and release
@@ -133,8 +134,12 @@ The remote provider now:
   [Secure Hash Algorithm 256-bit](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
   digest
 - remembers the native-to-remote digest mapping within the process
+- defers remote network client construction until a request misses the local
+  tier
 - mirrors remotely sourced action results with an atomic recoverable write,
   while locally produced results retain crash-survivable durability
+- validates remotely fetched blob content before writing it, synchronizes the
+  file contents, and treats the directory entry as a recoverable mirror
 - borrows incompressible blob input during local storage instead of copying it
 - reserves bounded capacity for streamed remote reads to avoid repeated buffer
   growth copies
@@ -176,12 +181,12 @@ dedicated logging thread.
 
 ## Next opportunities
 
-Once is now more than twice as fast as Buck2 on this local-hit workload without
-keeping a process alive. The remaining fixed work is dominated by process and
-benchmark-wrapper startup. Once itself runs from session start to finish in
-about 11 milliseconds on a stable local hit. A persistent Once service could
-remove more startup work, but it now has a small payoff and would add lifecycle
-and invalidation complexity.
+Once is now nearly three times as fast as Buck2 on this local-hit workload
+without keeping a process alive. The benchmark shell wrapper alone measures
+about 6 milliseconds, while the full local hit measures about 18 to 20
+milliseconds on a quiet repeat. A persistent Once service could remove more
+startup work, but it now has a small payoff and would add lifecycle and
+invalidation complexity.
 
 The scheduler can also move downstream cache lookups earlier when their
 dependency metadata is already known, reducing round trips on deeper graphs
@@ -194,8 +199,9 @@ large-blob transfers first, make write failures observable, add missing-blob
 checks and compression, then move action lookups earlier and make output
 materialization lazy. The review also highlighted that production round-trip
 latency makes the current dependency-by-dependency lookup order more expensive
-than this loopback benchmark shows. A follow-up ownership review identified the
-raw local-storage copy and streamed-read growth copies that are now removed.
+than this loopback benchmark shows. Follow-up reviews identified the eager
+remote-client construction, raw local-storage copy, streamed-read growth
+copies, and recoverable directory synchronization that are now removed.
 
 ## Validation
 
