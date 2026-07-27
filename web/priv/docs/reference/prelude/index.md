@@ -49,6 +49,8 @@ required analyzer is not built in.
   Apple framework bundle
 - [`apple_application`](/reference/prelude/apple_application): Apple
   application bundle
+- [`apple_thinned_package`](/reference/prelude/apple_thinned_package):
+  device-specific archive for application size analysis
 - [`apple_test_bundle`](/reference/prelude/apple_test_bundle): XCTest
   bundle assembled for an external runner
 

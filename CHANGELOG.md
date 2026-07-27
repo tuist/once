@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Added `apple_thinned_package` for producing ad-hoc signed, device-specific
+  application archives before uploading builds to size-analysis services such
+  as Sentry. Device application bundles now include the supported-platform
+  metadata required by Xcode's thinning tool.
+
 ### Breaking Changes
 
 - Script actions now live under `[[target]]` with `kind = "script"` and

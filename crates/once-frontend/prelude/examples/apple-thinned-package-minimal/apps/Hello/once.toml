@@ -1,0 +1,19 @@
+[[target]]
+name = "Hello"
+kind = "apple_application"
+srcs = ["Sources/**/*.swift"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "device"
+bundle_id = "dev.once.Hello"
+minimum_os = "17.0"
+families = ["iphone"]
+
+[[target]]
+name = "HelloThinned"
+kind = "apple_thinned_package"
+deps = ["./Hello"]
+
+[target.attrs]
+device_model = "iPhone17,1"

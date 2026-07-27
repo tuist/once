@@ -1,0 +1,19 @@
+[[target]]
+name = "App"
+kind = "apple_application"
+srcs = ["Sources/App/**/*.swift"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "device"
+bundle_id = "dev.once.App"
+minimum_os = "17.0"
+families = ["iphone"]
+
+[[target]]
+name = "AppThinned"
+kind = "apple_thinned_package"
+deps = ["./App"]
+
+[target.attrs]
+device_model = "iPhone17,1"
