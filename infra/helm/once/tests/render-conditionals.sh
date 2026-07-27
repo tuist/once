@@ -68,11 +68,23 @@ render \
   >"$tmpdir/external-secrets-enabled-pull-secret-enabled-no-name.yaml"
 expect_external_secret_count "$tmpdir/external-secrets-enabled-pull-secret-enabled-no-name.yaml" 1
 
-# The DNS-01 issuer renders its token ExternalSecret and a namespaced Issuer
-# independently of the app secrets, and disappears entirely when disabled.
-render --set dnsIssuer.enabled=true --set externalSecrets.enabled=false >"$tmpdir/dns-issuer-enabled.yaml"
-expect_external_secret_count "$tmpdir/dns-issuer-enabled.yaml" 1
-if ! grep -q '^kind: Issuer$' "$tmpdir/dns-issuer-enabled.yaml"; then
+# The namespaced Issuer renders whenever dnsIssuer.enabled, but its Cloudflare
+# token ExternalSecret is gated on externalSecrets.enabled like the rest of the
+# chart's secret syncing, so it stays installable on clusters without the
+# External Secrets CRD.
+render --set dnsIssuer.enabled=true --set externalSecrets.enabled=false >"$tmpdir/dns-issuer-no-es.yaml"
+expect_external_secret_count "$tmpdir/dns-issuer-no-es.yaml" 0
+if ! grep -q '^kind: Issuer$' "$tmpdir/dns-issuer-no-es.yaml"; then
+  echo "namespaced Issuer not rendered when dnsIssuer.enabled and externalSecrets disabled" >&2
+  exit 1
+fi
+
+render --set dnsIssuer.enabled=true --set externalSecrets.enabled=true >"$tmpdir/dns-issuer-with-es.yaml"
+if ! grep -q 'name: cloudflare-buildonce-token' "$tmpdir/dns-issuer-with-es.yaml"; then
+  echo "token ExternalSecret not rendered when dnsIssuer and externalSecrets enabled" >&2
+  exit 1
+fi
+if ! grep -q '^kind: Issuer$' "$tmpdir/dns-issuer-with-es.yaml"; then
   echo "namespaced Issuer not rendered when dnsIssuer.enabled=true" >&2
   exit 1
 fi
