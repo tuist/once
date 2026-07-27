@@ -14,13 +14,13 @@ function copySourceText(container) {
 }
 
 function setupCodeCopy(el) {
-  el.querySelectorAll('.code-window [data-part="copy"]').forEach((button) => {
+  el.querySelectorAll('[data-part="code-window"] [data-part="copy"]').forEach((button) => {
     button.setAttribute("role", "button");
     button.setAttribute("tabindex", "0");
     button.setAttribute("aria-label", "Copy code");
 
     button.addEventListener("click", () => {
-      const codeWindow = button.closest(".code-window");
+      const codeWindow = button.closest('[data-part="code-window"]');
       const codeBlock = codeWindow?.querySelector('[data-part="code"]');
       if (!codeBlock) return;
       copyTextToClipboard(copySourceText(codeWindow) ?? codeBlock.textContent.trim())

@@ -56,7 +56,7 @@ defmodule OnceSite.BlogTest do
       """)
 
     assert html =~ "<code>once exec</code>"
-    assert html =~ ~s(class="code-window")
+    assert html =~ ~s(data-part="code-window")
     assert html =~ ~s(data-part="language")
     assert html =~ ~s(data-part="copy-source")
     assert html =~ ~s(data-part="copy-icon")

@@ -21,7 +21,7 @@ defmodule OnceSiteWeb.Docs.MarkdownTest do
   test "wraps code blocks in the Noora code-window" do
     %{html: html} = Markdown.render("```sh\nls\n```")
 
-    assert html =~ ~s(class="code-window")
+    assert html =~ ~s(data-part="code-window")
     assert html =~ ~s(data-part="language")
     assert html =~ ~s(data-part="copy-source")
   end

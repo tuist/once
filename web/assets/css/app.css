@@ -1146,7 +1146,7 @@ a {
 [data-part="blog-prose"] ul,
 [data-part="blog-prose"] ol,
 [data-part="blog-prose"] blockquote,
-[data-part="blog-prose"] .code-window,
+[data-part="blog-prose"] [data-part="code-window"],
 [data-part="blog-prose"] table {
   margin: 0 0 24px;
 }
@@ -1168,7 +1168,7 @@ a {
   color: var(--noora-surface-label-secondary);
 }
 
-[data-part="blog-prose"] :not(pre, .code-window, [data-part="code"]) > code {
+[data-part="blog-prose"] :not(pre, [data-part="code-window"], [data-part="code"]) > code {
   border-radius: 4px;
   background: var(--noora-surface-background-secondary);
   padding: 2px 6px;
