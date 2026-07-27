@@ -20,8 +20,13 @@ if System.get_env("PHX_SERVER") do
   config :once_site, OnceSiteWeb.Endpoint, server: true
 end
 
-config :once_site, OnceSiteWeb.Endpoint,
-  http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+# In dev and test, config/dev.exs and config/test.exs assign a per-worktree
+# port (see OnceSite.Config.DevInstance) so parallel worktrees never collide.
+# Only prod and release builds take the port from the PORT variable.
+if config_env() not in [:dev, :test] do
+  config :once_site, OnceSiteWeb.Endpoint,
+    http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+end
 
 if config_env() == :prod do
   database_url =
