@@ -83,8 +83,8 @@ jobs:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
         run: |
           mkdir -p "$(dirname "$KUBECONFIG")"
-          op document get "kubeconfig: once-production" \
-            --vault once-k8s-production --output "$KUBECONFIG"
+          op document get "kubeconfig: tuist-production" \
+            --vault tuist-k8s-production --output "$KUBECONFIG"
           chmod 600 "$KUBECONFIG"
       - name: Verify cluster reachability
         run: |

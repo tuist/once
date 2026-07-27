@@ -18,7 +18,8 @@ image:
   repository: ghcr.io/tuist/once-web
   tag: ""
   pullPolicy: IfNotPresent
-  pullSecretName: ghcr-pull
+  # The image is published publicly on GHCR, so no pull secret is needed.
+  pullSecretName: ""
 
 # Single replica: the site is static and runs on a single-node cluster, so
 # horizontal scaling and HA are not achievable or needed right now.
@@ -51,7 +52,20 @@ service:
 
 ingress:
   className: nginx
-  clusterIssuer: letsencrypt-prod
+  # A namespaced Issuer (created by templates/dns-issuer.yaml) that can solve
+  # the DNS-01 challenge for buildonce.dev. When set, it takes precedence over
+  # clusterIssuer, which the shared cluster only scopes to the tuist.dev zone.
+  issuer: letsencrypt-buildonce
+  clusterIssuer: letsencrypt-cloudflare
+
+# Namespaced ACME issuer for buildonce.dev. Its Cloudflare token is synced from
+# 1Password into the namespace and grants edit access to the buildonce.dev zone.
+dnsIssuer:
+  enabled: true
+  email: ops@tuist.dev
+  acmeServer: https://acme-v02.api.letsencrypt.org/directory
+  tokenSecretName: cloudflare-buildonce-token
+  tokenRemoteRef: "cloudflare-buildonce-dns/credential"
 
 env: {}
 
@@ -81,8 +95,9 @@ externalSecrets:
   items:
     SECRET_KEY_BASE:
       remoteRef: "once-secret-key-base/password"
+  # The image is public, so no registry pull secret is synced.
   pullSecret:
-    enabled: true
+    enabled: false
     item: "once-ghcr-pull"
     field: "notesPlain"
 

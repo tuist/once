@@ -34,29 +34,63 @@ if [[ -n "$rendered_manifest" ]]; then
 else
   render >"$tmpdir/default.yaml"
 fi
-grep -q '^[[:space:]]*imagePullSecrets:' "$tmpdir/default.yaml"
-
-render --set-string image.pullSecretName= >"$tmpdir/no-image-pull-secret.yaml"
-if grep -q '^[[:space:]]*imagePullSecrets:' "$tmpdir/no-image-pull-secret.yaml"; then
-  echo "imagePullSecrets rendered when image.pullSecretName was empty" >&2
+# The image is public, so the default values render no imagePullSecrets.
+if grep -q '^[[:space:]]*imagePullSecrets:' "$tmpdir/default.yaml"; then
+  echo "imagePullSecrets rendered with the default (empty) image.pullSecretName" >&2
   exit 1
 fi
 
-render --set externalSecrets.enabled=true --set externalSecrets.pullSecret.enabled=true >"$tmpdir/external-secrets-enabled-pull-secret-enabled.yaml"
+render --set-string image.pullSecretName=ghcr-pull >"$tmpdir/image-pull-secret.yaml"
+if ! grep -q '^[[:space:]]*imagePullSecrets:' "$tmpdir/image-pull-secret.yaml"; then
+  echo "imagePullSecrets not rendered when image.pullSecretName was set" >&2
+  exit 1
+fi
+
+# The DNS-01 issuer contributes its own ExternalSecret (for the Cloudflare
+# token); disable it here so the counts isolate the app/pull-secret matrix.
+render --set dnsIssuer.enabled=false --set externalSecrets.enabled=true --set externalSecrets.pullSecret.enabled=true --set-string image.pullSecretName=ghcr-pull >"$tmpdir/external-secrets-enabled-pull-secret-enabled.yaml"
 expect_external_secret_count "$tmpdir/external-secrets-enabled-pull-secret-enabled.yaml" 2
 
-render --set externalSecrets.enabled=true --set externalSecrets.pullSecret.enabled=false >"$tmpdir/external-secrets-enabled-pull-secret-disabled.yaml"
+render --set dnsIssuer.enabled=false --set externalSecrets.enabled=true --set externalSecrets.pullSecret.enabled=false >"$tmpdir/external-secrets-enabled-pull-secret-disabled.yaml"
 expect_external_secret_count "$tmpdir/external-secrets-enabled-pull-secret-disabled.yaml" 1
 
-render --set externalSecrets.enabled=false --set externalSecrets.pullSecret.enabled=true >"$tmpdir/external-secrets-disabled-pull-secret-enabled.yaml"
+render --set dnsIssuer.enabled=false --set externalSecrets.enabled=false --set externalSecrets.pullSecret.enabled=true >"$tmpdir/external-secrets-disabled-pull-secret-enabled.yaml"
 expect_external_secret_count "$tmpdir/external-secrets-disabled-pull-secret-enabled.yaml" 0
 
-render --set externalSecrets.enabled=false --set externalSecrets.pullSecret.enabled=false >"$tmpdir/external-secrets-disabled-pull-secret-disabled.yaml"
+render --set dnsIssuer.enabled=false --set externalSecrets.enabled=false --set externalSecrets.pullSecret.enabled=false >"$tmpdir/external-secrets-disabled-pull-secret-disabled.yaml"
 expect_external_secret_count "$tmpdir/external-secrets-disabled-pull-secret-disabled.yaml" 0
 
 render \
+  --set dnsIssuer.enabled=false \
   --set externalSecrets.enabled=true \
   --set externalSecrets.pullSecret.enabled=true \
   --set-string image.pullSecretName= \
   >"$tmpdir/external-secrets-enabled-pull-secret-enabled-no-name.yaml"
 expect_external_secret_count "$tmpdir/external-secrets-enabled-pull-secret-enabled-no-name.yaml" 1
+
+# The namespaced Issuer renders whenever dnsIssuer.enabled, but its Cloudflare
+# token ExternalSecret is gated on externalSecrets.enabled like the rest of the
+# chart's secret syncing, so it stays installable on clusters without the
+# External Secrets CRD.
+render --set dnsIssuer.enabled=true --set externalSecrets.enabled=false >"$tmpdir/dns-issuer-no-es.yaml"
+expect_external_secret_count "$tmpdir/dns-issuer-no-es.yaml" 0
+if ! grep -q '^kind: Issuer$' "$tmpdir/dns-issuer-no-es.yaml"; then
+  echo "namespaced Issuer not rendered when dnsIssuer.enabled and externalSecrets disabled" >&2
+  exit 1
+fi
+
+render --set dnsIssuer.enabled=true --set externalSecrets.enabled=true >"$tmpdir/dns-issuer-with-es.yaml"
+if ! grep -q 'name: cloudflare-buildonce-token' "$tmpdir/dns-issuer-with-es.yaml"; then
+  echo "token ExternalSecret not rendered when dnsIssuer and externalSecrets enabled" >&2
+  exit 1
+fi
+if ! grep -q '^kind: Issuer$' "$tmpdir/dns-issuer-with-es.yaml"; then
+  echo "namespaced Issuer not rendered when dnsIssuer.enabled=true" >&2
+  exit 1
+fi
+
+render --set dnsIssuer.enabled=false --set externalSecrets.enabled=false >"$tmpdir/dns-issuer-disabled.yaml"
+if grep -q '^kind: Issuer$' "$tmpdir/dns-issuer-disabled.yaml"; then
+  echo "namespaced Issuer rendered when dnsIssuer.enabled=false" >&2
+  exit 1
+fi

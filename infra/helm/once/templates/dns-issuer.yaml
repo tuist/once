@@ -1,0 +1,53 @@
+{{- if .Values.dnsIssuer.enabled }}
+# A namespaced ACME issuer that solves the DNS-01 challenge for buildonce.dev
+# through Cloudflare. The cluster's shared ClusterIssuer only has credentials
+# for the tuist.dev zone, so buildonce.dev needs its own issuer scoped to a
+# Cloudflare token that can edit the buildonce.dev zone.
+{{- if .Values.externalSecrets.enabled }}
+# The Cloudflare token is synced from 1Password only when external-secrets is
+# enabled, mirroring the app secret. Clusters that disable external-secrets are
+# expected to provide the token secret ({{ .Values.dnsIssuer.tokenSecretName }})
+# by other means.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .Values.dnsIssuer.tokenSecretName }}
+  labels:
+    {{- include "once.labels" . | nindent 4 }}
+spec:
+  refreshInterval: {{ .Values.externalSecrets.refreshInterval | quote }}
+  secretStoreRef:
+    name: {{ .Values.externalSecrets.storeRef.name }}
+    kind: {{ .Values.externalSecrets.storeRef.kind }}
+  target:
+    name: {{ .Values.dnsIssuer.tokenSecretName }}
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      data:
+        api-token: "{{ `{{ .apiToken | trim }}` }}"
+  data:
+    - secretKey: apiToken
+      remoteRef:
+        key: {{ .Values.dnsIssuer.tokenRemoteRef | quote }}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.ingress.issuer }}
+  labels:
+    {{- include "once.labels" . | nindent 4 }}
+spec:
+  acme:
+    server: {{ .Values.dnsIssuer.acmeServer | quote }}
+    email: {{ .Values.dnsIssuer.email | quote }}
+    privateKeySecretRef:
+      name: {{ .Values.ingress.issuer }}-account
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: {{ .Values.dnsIssuer.tokenSecretName }}
+              key: api-token
+{{- end }}
