@@ -15,6 +15,7 @@ defmodule OnceSiteWeb.Docs.OgImage do
   attr :description, :string, default: nil
   attr :category, :string, default: "Docs"
   attr :subtitle, :string, default: "Docs"
+  attr :avatars, :list, default: []
   attr :font_data_uri, :string, required: true
   attr :logo_data_uri, :string, required: true
 
@@ -87,7 +88,7 @@ defmodule OnceSiteWeb.Docs.OgImage do
             height: 80px;
             background-color: #c0c8cf;
           }
-          .category {
+          [data-part="category"] {
             position: absolute;
             right: 67px;
             bottom: 67px;
@@ -96,6 +97,33 @@ defmodule OnceSiteWeb.Docs.OgImage do
             letter-spacing: -2.9px;
             color: #171a1c;
             line-height: 80px;
+          }
+          [data-part="author-meta"] {
+            position: absolute;
+            right: 67px;
+            bottom: 67px;
+            display: flex;
+            align-items: center;
+            gap: 24px;
+          }
+          [data-part="author-meta"] [data-part="category"] {
+            position: static;
+          }
+          [data-part="author-avatars"] {
+            display: flex;
+            flex-direction: row-reverse;
+          }
+          [data-part="author-avatar"] {
+            width: 80px;
+            height: 80px;
+            margin-right: -16px;
+            border: 4px solid #f4f5fe;
+            border-radius: 50%;
+            background: #e4e7ec;
+            object-fit: cover;
+          }
+          [data-part="author-avatar"]:last-child {
+            margin-right: 0;
           }
         </style>
       </head>
@@ -110,7 +138,13 @@ defmodule OnceSiteWeb.Docs.OgImage do
         <div class="logo-once">Once</div>
         <div :if={@subtitle} class="logo-divider"></div>
         <div :if={@subtitle} class="logo-docs">{@subtitle}</div>
-        <div :if={@category} class="category">{@category}</div>
+        <div :if={@avatars != []} data-part="author-meta">
+          <div data-part="author-avatars">
+            <img :for={avatar <- @avatars} data-part="author-avatar" src={avatar} />
+          </div>
+          <div :if={@category} data-part="category">{@category}</div>
+        </div>
+        <div :if={@avatars == [] && @category} data-part="category">{@category}</div>
       </body>
     </html>
     """
@@ -129,6 +163,7 @@ defmodule OnceSiteWeb.Docs.OgImage do
       description: Keyword.get(opts, :description),
       category: Keyword.get(opts, :category, "Docs"),
       subtitle: Keyword.get(opts, :subtitle, "Docs"),
+      avatars: Keyword.get(opts, :avatars, []),
       font_data_uri: "data:font/woff2;base64,#{font_base64}",
       logo_data_uri: "data:image/png;base64,#{logo_base64}",
       max_title_length: @max_title_length,

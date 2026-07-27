@@ -40,7 +40,7 @@ defmodule OnceSiteWeb.Docs.HTML do
   @doc "Wrap `<pre><code>` blocks in the Noora code-window chrome."
   def wrap_code_blocks(html) do
     Regex.replace(@code_block_regex, html, fn _full, language, code ->
-      ~s(<div class="code-window"><div data-part="bar">) <>
+      ~s(<div data-part="code-window"><div data-part="bar">) <>
         ~s(<div data-part="language">#{language}</div>) <>
         ~s(<div data-part="copy"><span data-part="copy-icon">#{@copy_icon}</span>) <>
         ~s(<span data-part="copy-check-icon">#{@copy_check_icon}</span></div></div>) <>

@@ -128,7 +128,7 @@
         display: none;
       }
 
-      & > .code-window {
+      & > [data-part="code-window"] {
         box-shadow: none;
         border-radius: 0;
         padding: 0;

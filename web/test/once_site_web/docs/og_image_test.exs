@@ -34,6 +34,23 @@ defmodule OnceSiteWeb.Docs.OgImageTest do
     assert html =~ "..."
   end
 
+  test "render_html embeds multiple author avatars" do
+    avatar = "data:image/png;base64,avatar"
+
+    html =
+      OgImage.render_html(
+        title: "A post",
+        category: "One, Two",
+        avatars: [avatar, avatar],
+        fonts_dir: fonts(),
+        logo_path: logo()
+      )
+
+    assert html =~ ~s(data-part="author-meta")
+    assert length(Regex.scan(~r/<img data-part="author-avatar"/, html)) == 2
+    assert html =~ avatar
+  end
+
   defp fonts, do: Application.app_dir(:once_site, "priv/static/fonts")
   defp logo, do: Application.app_dir(:once_site, "priv/static/docs/nav-logo.png")
 end
