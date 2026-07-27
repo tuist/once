@@ -203,6 +203,9 @@ attribute. Validation rejects `select` on a non-configurable attribute and
 rejects an unavailable compatibility attribute marked `implemented = false`.
 Schemas can also report `allowed_values` for string attributes. Validation
 rejects other values with the target, attribute, and accepted replacements.
+Schemas can report `disallowed_values` when only a small reserved set should
+be rejected. Validation ignores surrounding whitespace for those comparisons
+and reports an attribute-scoped replacement before analysis.
 Generic target kinds use the tokens returned by `once query workspace`.
 Ecosystem target kinds can add their own tokens and restrictions.
 

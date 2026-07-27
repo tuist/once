@@ -1372,10 +1372,14 @@ fn apple_thinned_package_schema_exposes_device_model_and_example() {
     let schema =
         built_in_target_kind_schema("apple_thinned_package").expect("thinned package schema");
 
-    assert!(schema
+    let device_model = schema
         .attrs
         .iter()
-        .any(|attr| attr.name == "device_model" && attr.required && !attr.configurable));
+        .find(|attr| attr.name == "device_model")
+        .expect("device model attribute");
+    assert!(device_model.required);
+    assert!(!device_model.configurable);
+    assert_eq!(device_model.disallowed_values, vec!["", "all"]);
     assert_eq!(schema.deps.len(), 1);
     assert_eq!(schema.deps[0].expected_providers, vec!["apple_application"]);
     assert!(schema
@@ -5956,6 +5960,58 @@ result = repr(provider["app_path"])
 }
 
 #[cfg(unix)]
+fn assert_apple_thinning_adapter(store: &AnalysisStore) {
+    let adapter = action_by_identifier(
+        store,
+        "write_path:.once/out/packages/AppThinned/apple-thinning-package.rb",
+    );
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &adapter.operation else {
+        panic!("expected generated thinning adapter");
+    };
+    let adapter = String::from_utf8(bytes.clone()).unwrap();
+    assert!(adapter.contains("--create-thinned=#{options.fetch(:device)}"));
+    assert!(adapter.contains("--validate-output-zero-variants"));
+    assert!(adapter.contains("Open3.capture3(*ipatool_argv)"));
+    assert!(adapter.contains("archive_entries.sort!"));
+    assert!(adapter.contains("stdin_data: input"));
+    assert!(adapter.contains("\"-X\""));
+    assert!(!adapter.contains("puts _stdout"));
+}
+
+#[cfg(unix)]
+fn assert_apple_thinning_package_action(store: &AnalysisStore) {
+    let package = action_by_identifier(store, "apple_thinned_package:packages/AppThinned");
+    assert_eq!(package.argv[0], "/usr/bin/ruby");
+    assert!(package.argv.iter().any(|arg| arg == "iPhone17,1"));
+    assert!(package.argv.iter().any(|arg| {
+        arg == "/Applications/TestXcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr"
+    }));
+    assert!(package
+        .argv
+        .iter()
+        .any(|arg| { arg == "/Applications/TestXcode.app/Contents/Developer/Platforms" }));
+    assert!(package
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("/ipas")));
+    assert!(package
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("/thinned-packages.json")));
+    assert_eq!(package.env.get("TZ").map(String::as_str), Some("UTC"));
+    assert_eq!(package.env.get("LC_ALL").map(String::as_str), Some("C"));
+    assert_eq!(
+        package.env.get("PATH").map(String::as_str),
+        Some(
+            "/Applications/TestXcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin:/usr/bin:/bin"
+        )
+    );
+    let identity = package.toolchain_identity.as_deref().unwrap();
+    assert!(identity.contains("Xcode 26.0"));
+    assert!(identity.contains("\u{0}device\u{0}iPhone17,1"));
+}
+
+#[cfg(unix)]
 #[test]
 fn prelude_apple_thinned_package_stages_and_packages_one_device_application() {
     let prelude = all_prelude_source();
@@ -6044,51 +6100,8 @@ result = repr(provider)
             ".once/out/apps/App/App.app/_CodeSignature/CodeResources",
         ]
     );
-    let adapter = action_by_identifier(
-        &store,
-        "write_path:.once/out/packages/AppThinned/apple-thinning-package.rb",
-    );
-    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &adapter.operation else {
-        panic!("expected generated thinning adapter");
-    };
-    let adapter = String::from_utf8(bytes.clone()).unwrap();
-    assert!(adapter.contains("--create-thinned=#{options.fetch(:device)}"));
-    assert!(adapter.contains("--validate-output-zero-variants"));
-    assert!(adapter.contains("Open3.capture3(*ipatool_argv)"));
-    assert!(adapter.contains("archive_entries.sort!"));
-    assert!(adapter.contains("stdin_data: input"));
-    assert!(adapter.contains("\"-X\""));
-    assert!(!adapter.contains("puts _stdout"));
-
-    let package = action_by_identifier(&store, "apple_thinned_package:packages/AppThinned");
-    assert_eq!(package.argv[0], "/usr/bin/ruby");
-    assert!(package.argv.iter().any(|arg| arg == "iPhone17,1"));
-    assert!(package.argv.iter().any(|arg| {
-        arg == "/Applications/TestXcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr"
-    }));
-    assert!(package
-        .argv
-        .iter()
-        .any(|arg| { arg == "/Applications/TestXcode.app/Contents/Developer/Platforms" }));
-    assert!(package
-        .outputs
-        .iter()
-        .any(|output| output.ends_with("/ipas")));
-    assert!(package
-        .outputs
-        .iter()
-        .any(|output| output.ends_with("/thinned-packages.json")));
-    assert_eq!(package.env.get("TZ").map(String::as_str), Some("UTC"));
-    assert_eq!(package.env.get("LC_ALL").map(String::as_str), Some("C"));
-    assert_eq!(
-        package.env.get("PATH").map(String::as_str),
-        Some(
-            "/Applications/TestXcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin:/usr/bin:/bin"
-        )
-    );
-    let identity = package.toolchain_identity.as_deref().unwrap();
-    assert!(identity.contains("Xcode 26.0"));
-    assert!(identity.contains("\u{0}device\u{0}iPhone17,1"));
+    assert_apple_thinning_adapter(&store);
+    assert_apple_thinning_package_action(&store);
 }
 
 #[test]

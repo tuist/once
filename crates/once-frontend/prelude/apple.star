@@ -3384,7 +3384,14 @@ apple_thinned_package = target_kind(
     docs = "Produces an ad-hoc signed, device-specific application archive for Apple application size analysis.",
     impl = _apple_thinned_package_impl,
     attrs = [
-        attr("device_model", "string", required = True, docs = "One Apple device model identifier, such as `iPhone17,1`", configurable = False),
+        attr(
+            "device_model",
+            "string",
+            required = True,
+            docs = "One Apple device model identifier, such as `iPhone17,1`",
+            configurable = False,
+            disallowed_values = ["", "all"],
+        ),
     ],
     deps = [
         dep("deps", ["apple_application"], "Exactly one device application to thin and package"),

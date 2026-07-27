@@ -190,6 +190,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
         schema_invariants: vec![
             "Supported attribute types are string, bool, int, float, list<string>, map<string,string>, target, and select values for configurable attributes.",
             "Set allowed_values on string or target attributes when validation must reject values outside a fixed set before analysis.",
+            "Set disallowed_values on string or target attributes when validation must reject a small reserved set before analysis. Surrounding whitespace is ignored when comparing values.",
             "Set implemented = False only for discoverable compatibility attributes that validation must reject until the target kind gives them behavior.",
             "attr.default is optional schema documentation and must be a string; it does not insert a runtime value. Implementations must use ctx[\"attr\"].get(...) when an optional attribute needs a fallback.",
             "Set configurable = False when analysis or output identity cannot safely vary through select.",

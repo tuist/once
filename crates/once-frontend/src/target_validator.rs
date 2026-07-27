@@ -254,37 +254,73 @@ fn validate_attr_value(
         diagnostics.push(type_mismatch(target, attr_name, &attr_schema.ty, &detail));
         return;
     }
-    if attr_schema.allowed_values.is_empty() {
-        return;
-    }
     let Some(value) = value.as_str() else {
         return;
     };
-    if attr_schema
-        .allowed_values
-        .iter()
-        .any(|allowed| allowed == value)
+    if !attr_schema.allowed_values.is_empty()
+        && !attr_schema
+            .allowed_values
+            .iter()
+            .any(|allowed| allowed == value)
     {
+        let location = select_branch
+            .map(|branch| format!(" in select branch `{branch}`"))
+            .unwrap_or_default();
+        diagnostics.push(
+            Diagnostic::new(
+                "attr_value_not_allowed",
+                format!(
+                    "attribute `{attr_name}`{location} must be one of: {}; got `{value}`",
+                    attr_schema.allowed_values.join(", ")
+                ),
+            )
+            .with_target(target.name.as_str())
+            .with_attribute(attr_name)
+            .with_repair(format!(
+                "Set `target.attrs.{attr_name}` to one of: {}",
+                attr_schema.allowed_values.join(", ")
+            )),
+        );
         return;
     }
-    let location = select_branch
-        .map(|branch| format!(" in select branch `{branch}`"))
-        .unwrap_or_default();
-    diagnostics.push(
-        Diagnostic::new(
-            "attr_value_not_allowed",
-            format!(
-                "attribute `{attr_name}`{location} must be one of: {}; got `{value}`",
-                attr_schema.allowed_values.join(", ")
-            ),
-        )
-        .with_target(target.name.as_str())
-        .with_attribute(attr_name)
-        .with_repair(format!(
-            "Set `target.attrs.{attr_name}` to one of: {}",
-            attr_schema.allowed_values.join(", ")
-        )),
-    );
+    if attr_schema
+        .disallowed_values
+        .iter()
+        .any(|disallowed| disallowed == value.trim())
+    {
+        let location = select_branch
+            .map(|branch| format!(" in select branch `{branch}`"))
+            .unwrap_or_default();
+        diagnostics.push(
+            Diagnostic::new(
+                "attr_value_disallowed",
+                format!(
+                    "attribute `{attr_name}`{location} must not be {}; got `{value}`",
+                    describe_disallowed_values(&attr_schema.disallowed_values)
+                ),
+            )
+            .with_target(target.name.as_str())
+            .with_attribute(attr_name)
+            .with_repair(format!(
+                "Set `target.attrs.{attr_name}` to a value other than {}",
+                describe_disallowed_values(&attr_schema.disallowed_values)
+            )),
+        );
+    }
+}
+
+fn describe_disallowed_values(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| {
+            if value.is_empty() {
+                "empty".to_string()
+            } else {
+                format!("`{value}`")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" or ")
 }
 
 fn type_mismatch(target: &TargetSpec, attr_name: &str, ty: &str, err: &str) -> Diagnostic {
@@ -637,6 +673,28 @@ mod tests {
         assert_eq!(diagnostic.attribute.as_deref(), Some("platform"));
         assert!(diagnostic.message.contains("ios, android"));
         assert!(diagnostic.repairs[0].contains("target.attrs.platform"));
+    }
+
+    #[test]
+    fn disallowed_string_value_reports_structured_diagnostic() {
+        let schemas = vec![schema_named("apple_thinned_package")];
+        for value in ["", "  ", "all", " all "] {
+            let mut target = target("AppThinned", "apple_thinned_package");
+            target
+                .attrs
+                .insert("device_model".to_string(), json!(value));
+
+            let diagnostics = validate_target(&target, &schemas);
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "attr_value_disallowed")
+                .expect("disallowed-value diagnostic");
+
+            assert_eq!(diagnostic.target.as_deref(), Some("AppThinned"));
+            assert_eq!(diagnostic.attribute.as_deref(), Some("device_model"));
+            assert!(diagnostic.message.contains("empty or `all`"));
+            assert!(diagnostic.repairs[0].contains("target.attrs.device_model"));
+        }
     }
 
     #[test]

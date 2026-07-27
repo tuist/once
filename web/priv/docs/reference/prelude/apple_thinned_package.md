@@ -18,7 +18,7 @@ variants for one device model so each model has an independent cache key.
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `device_model` | string | yes |  | One Apple device model identifier, such as `iPhone17,1` (not configurable) |
+| `device_model` | string | yes |  | One non-empty Apple device model identifier, such as `iPhone17,1`; `all` is reserved (not configurable) |
 
 ## Dependency Edges
 

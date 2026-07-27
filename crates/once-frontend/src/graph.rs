@@ -283,6 +283,9 @@ pub struct AttrSchema {
     /// Accepted string values. An empty list accepts every value of the type.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_values: Vec<String>,
+    /// Rejected string values. Surrounding whitespace is ignored during validation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disallowed_values: Vec<String>,
 }
 
 /// Dependency metadata exposed by a target kind schema.
@@ -873,10 +876,16 @@ fn attr_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<A
         configurable: field_bool(value, path, "configurable")?,
         implemented: field_bool(value, path, "implemented")?,
         allowed_values: field_string_list(value, path, "allowed_values")?,
+        disallowed_values: field_string_list(value, path, "disallowed_values")?,
     };
     if !schema.allowed_values.is_empty() && schema.ty != "string" && schema.ty != "target" {
         return Err(format!(
             "{path}.allowed_values is supported only for string and target attributes"
+        ));
+    }
+    if !schema.disallowed_values.is_empty() && schema.ty != "string" && schema.ty != "target" {
+        return Err(format!(
+            "{path}.disallowed_values is supported only for string and target attributes"
         ));
     }
     Ok(schema)
@@ -1102,6 +1111,7 @@ fn attr(
         configurable,
         implemented: true,
         allowed_values: Vec::new(),
+        disallowed_values: Vec::new(),
     }
 }
 
@@ -1214,12 +1224,48 @@ mod tests {
     }
 
     #[test]
+    fn parse_target_kind_schemas_exposes_disallowed_attribute_values() {
+        let source = source_with_common(
+            r#"demo = target_kind(
+    docs = "Demo kind",
+    attrs = [
+        attr("mode", "string", disallowed_values = ["", "all"]),
+    ],
+)"#,
+        );
+        let schemas = parse_target_kind_schemas("test.star", &source).unwrap();
+
+        assert_eq!(
+            schemas[0].attrs[0].disallowed_values,
+            vec![String::new(), "all".to_string()]
+        );
+    }
+
+    #[test]
     fn parse_target_kind_schemas_rejects_allowed_values_on_non_string_attributes() {
         let source = source_with_common(
             r#"demo = target_kind(
     docs = "Demo kind",
     attrs = [
         attr("count", "int", allowed_values = ["1", "2"]),
+    ],
+)"#,
+        );
+
+        let error = parse_target_kind_schemas("test.star", &source).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("supported only for string and target attributes"));
+    }
+
+    #[test]
+    fn parse_target_kind_schemas_rejects_disallowed_values_on_non_string_attributes() {
+        let source = source_with_common(
+            r#"demo = target_kind(
+    docs = "Demo kind",
+    attrs = [
+        attr("count", "int", disallowed_values = ["0"]),
     ],
 )"#,
         );

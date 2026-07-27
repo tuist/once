@@ -86,6 +86,10 @@ does not.
 Use `allowed_values = ["first", "second"]` on a `string` or `target` attribute
 when the schema accepts a fixed set. Validation reports an attribute-scoped
 repair before analysis when a manifest supplies another value.
+Use `disallowed_values = ["", "reserved"]` when the schema accepts arbitrary
+strings except for a small reserved set. Validation ignores surrounding
+whitespace when comparing these values and reports an attribute-scoped repair
+before analysis.
 
 ## Dependency Resolver Contract
 

@@ -636,6 +636,24 @@ kind = "apple_library"
     }
 
     #[test]
+    fn create_rejects_disallowed_attribute_values() {
+        for value in ["", "all"] {
+            let mut spec = TargetSpec {
+                name: "HelloThinned".to_string(),
+                kind: "apple_thinned_package".to_string(),
+                deps: vec!["./Hello".to_string()],
+                ..Default::default()
+            };
+            spec.attrs.insert("device_model".to_string(), json!(value));
+
+            let diagnostics = apply_operations("", &[EditOperation::Create { target: spec }])
+                .expect_err("disallowed device model must fail");
+            assert_eq!(diagnostics[0].code, "attr_value_disallowed");
+            assert_eq!(diagnostics[0].attribute.as_deref(), Some("device_model"));
+        }
+    }
+
+    #[test]
     fn update_replaces_only_set_fields() {
         let src = r#"
 [[target]]
@@ -740,6 +758,37 @@ platform = "ios"
         .expect_err("removing required platform must fail");
         assert_eq!(diagnostics[0].code, "missing_required_attr");
         assert_eq!(diagnostics[0].attribute.as_deref(), Some("platform"));
+    }
+
+    #[test]
+    fn update_rejects_disallowed_attribute_values() {
+        let src = r#"
+[[target]]
+name = "HelloThinned"
+kind = "apple_thinned_package"
+deps = ["./Hello"]
+
+[target.attrs]
+device_model = "iPhone17,1"
+"#;
+        let diagnostics = apply_operations(
+            src,
+            &[EditOperation::Update {
+                target_name: "HelloThinned".to_string(),
+                set: TargetUpdate {
+                    attrs: Some(JsonMap::from_iter([(
+                        "device_model".to_string(),
+                        json!("all"),
+                    )])),
+                    ..Default::default()
+                },
+            }],
+        )
+        .expect_err("disallowed device model must fail");
+
+        assert_eq!(diagnostics[0].code, "attr_value_disallowed");
+        assert_eq!(diagnostics[0].target.as_deref(), Some("HelloThinned"));
+        assert_eq!(diagnostics[0].attribute.as_deref(), Some("device_model"));
     }
 
     #[test]
