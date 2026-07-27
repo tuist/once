@@ -27,6 +27,21 @@ defmodule OnceSiteWeb.BlogControllerTest do
     assert html_response(conn, 404) =~ "Not Found"
   end
 
+  test "GET /blog/:slug includes complete social image metadata", %{conn: conn} do
+    response =
+      conn
+      |> get(~p"/blog/automation-needs-a-git")
+      |> html_response(200)
+
+    assert response =~ ~s(property="og:image:type" content="image/jpeg")
+    assert response =~ ~s(property="og:image:width" content="1920")
+    assert response =~ ~s(property="og:image:height" content="960")
+    assert response =~ ~s(property="og:image:alt" content="Automation needs a git")
+    assert response =~ ~s(name="twitter:image:width" content="1920")
+    assert response =~ ~s(name="twitter:image:height" content="960")
+    assert response =~ ~s(name="twitter:image:alt" content="Automation needs a git")
+  end
+
   test "GET /blog/feed.xml returns the Really Simple Syndication feed", %{conn: conn} do
     conn = get(conn, ~p"/blog/feed.xml")
     response = response(conn, 200)

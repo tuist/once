@@ -10,6 +10,11 @@ defmodule OnceSiteWeb.Docs.OgImage do
 
   @max_title_length 60
   @max_description_length 120
+  @width 1920
+  @height 960
+
+  def width, do: @width
+  def height, do: @height
 
   attr :title, :string, required: true
   attr :description, :string, default: nil
@@ -33,8 +38,8 @@ defmodule OnceSiteWeb.Docs.OgImage do
           }
           * { margin: 0; padding: 0; box-sizing: border-box; }
           html, body {
-            width: 1920px;
-            height: 1080px;
+            width: <%= @image_width %>px;
+            height: <%= @image_height %>px;
             overflow: hidden;
             font-family: 'Inter Variable', sans-serif;
             color-scheme: light;
@@ -166,6 +171,8 @@ defmodule OnceSiteWeb.Docs.OgImage do
       avatars: Keyword.get(opts, :avatars, []),
       font_data_uri: "data:font/woff2;base64,#{font_base64}",
       logo_data_uri: "data:image/png;base64,#{logo_base64}",
+      image_width: @width,
+      image_height: @height,
       max_title_length: @max_title_length,
       max_description_length: @max_description_length
     }
