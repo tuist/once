@@ -72,7 +72,9 @@ or its declared input causes the work to run again.
 - Continue with [Scripted automation](/guide/scripted/) when you want to
   cache existing repository scripts with minimal changes.
 - Continue with the [Graph guide](/guide/graph/) when you want typed targets,
-  dependencies, and capabilities that Once and coding agents can query.
+  dependencies, and capabilities that Once and coding agents can query. Its
+  [Linting guide](/guide/graph/linting) turns analyzer reports into cacheable,
+  normalized findings with an explicit failure policy.
 - Continue with the [software development kit overview](/guide/sdk/) when an
   application needs direct access to Once cache primitives.
 - Read [Infrastructure](/guide/infrastructure/) after the local flow works

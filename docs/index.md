@@ -29,5 +29,5 @@ features:
   - title: Run somewhere else
     details: Send only declared inputs to a fresh local or hosted sandbox, retrieve declared outputs, and delete the machine.
   - title: Grow into a graph
-    details: Move workflows into typed targets and capabilities when they need richer dependencies, queries, and diagnostics.
+    details: Move builds, tests, and linting into typed targets when they need richer dependencies, queries, normalized results, and diagnostics.
 ---

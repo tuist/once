@@ -6,7 +6,7 @@ export const site = {
     "Once makes repository automation graph-aware, cacheable, observable, and remotely executable.",
   nav: [
     { text: "Get Started", link: "/guide/getting-started" },
-    { text: "Guides", link: "/guide/scripted/" },
+    { text: "Guides", link: "/guide/" },
     { text: "Reference", link: "/reference/" },
     {
       text: "Links",
@@ -36,6 +36,7 @@ export const site = {
           { text: "cache", link: "/reference/cli/cache" },
           { text: "edit", link: "/reference/cli/edit" },
           { text: "exec", link: "/reference/cli/exec" },
+          { text: "lint", link: "/reference/cli/lint" },
           { text: "mcp", link: "/reference/cli/mcp" },
           { text: "query", link: "/reference/cli/query" },
           { text: "run", link: "/reference/cli/run" },
@@ -47,13 +48,32 @@ export const site = {
       {
         text: "Modules",
         collapsed: false,
-        items: [{ text: "Overview", link: "/reference/modules/" }],
+        items: [
+          { text: "Overview", link: "/reference/modules/" },
+          {
+            text: "Custom Lint Targets",
+            link: "/reference/modules/linting",
+          },
+        ],
       },
       {
         text: "Target Kinds",
         collapsed: false,
         items: [
           { text: "Overview", link: "/reference/prelude/" },
+          {
+            text: "Linting",
+            collapsed: true,
+            items: [
+              { text: "ruff_lint", link: "/reference/prelude/ruff_lint" },
+              { text: "eslint_lint", link: "/reference/prelude/eslint_lint" },
+              { text: "golangci_lint", link: "/reference/prelude/golangci_lint" },
+              { text: "swiftlint_lint", link: "/reference/prelude/swiftlint_lint" },
+              { text: "detekt_lint", link: "/reference/prelude/detekt_lint" },
+              { text: "credo_lint", link: "/reference/prelude/credo_lint" },
+              { text: "rubocop_lint", link: "/reference/prelude/rubocop_lint" },
+            ],
+          },
           {
             text: "Apple",
             collapsed: true,
@@ -228,6 +248,7 @@ export const site = {
           { text: "Overview", link: "/guide/graph/" },
           { text: "Ecosystems", link: "/guide/graph/ecosystems" },
           { text: "Testing and Scheduling", link: "/guide/graph/testing" },
+          { text: "Linting", link: "/guide/graph/linting" },
           {
             text: sidebarTargetText("Apple", "apple"),
             link: "/guide/graph/apple",
