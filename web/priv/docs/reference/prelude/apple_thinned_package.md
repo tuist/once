@@ -43,8 +43,14 @@ The target emits `apple_thinned_package`.
 
 | Output | Location |
 | --- | --- |
-| Device-specific archives | `.once/out/<target>/ipas/<product>-<device_model>.ipa` |
+| Device-specific archives | `.once/out/<target>/ipas/*.ipa` |
 | Package manifest | `.once/out/<target>/thinned-packages.json` |
+
+Archive names contain the product and device model. Runs of characters outside
+English letters, numbers, `.`, `_`, and `-` become one `-`, and leading or
+trailing hyphens are removed. For example, `iPhone17,1` becomes `iPhone17-1`.
+When Xcode returns multiple records, every archive receives a one-based suffix
+such as `-1` or `-2`.
 
 The manifest uses the `once.apple.thinned-package.v1` schema. It records the
 requested device model, every generated archive, and the installation targets
