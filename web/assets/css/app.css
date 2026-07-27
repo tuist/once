@@ -926,6 +926,25 @@ a {
   list-style: none;
 }
 
+[data-part="blog-empty"] {
+  border: 1px dashed var(--noora-surface-border-primary);
+  border-radius: 8px;
+  padding: 40px;
+  text-align: center;
+}
+
+[data-part="blog-empty"] h2 {
+  margin: 0 0 8px;
+  color: var(--noora-surface-label-primary);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+[data-part="blog-empty"] p {
+  margin: 0;
+  color: var(--noora-surface-label-secondary);
+}
+
 [data-part="blog-entry"] {
   border: 1px solid var(--noora-surface-border-primary);
   border-radius: 8px;

@@ -4,47 +4,36 @@ defmodule OnceSite.BlogTest do
   alias OnceSite.Blog
   alias OnceSite.Blog.Authors
   alias OnceSite.Blog.MarkdownConverter
+  alias OnceSite.Blog.Post
 
-  test "loads and sorts posts at compile time" do
-    posts = Blog.all_posts()
-
-    assert Enum.map(posts, & &1.slug) == [
-             "why-we-are-building-once",
-             "build-graphs-that-explain-themselves",
-             "scripts-are-a-feature"
-           ]
-
-    assert Enum.all?(posts, &String.starts_with?(&1.body, "<p>"))
-    assert Enum.all?(posts, &(Enum.map(&1.authors, fn author -> author.id end) == ["pedro"]))
+  test "starts without placeholder posts" do
+    assert Blog.all_posts() == []
   end
 
-  test "paginates the compiled posts with Flop metadata" do
-    {first_page, first_meta} = Blog.paginate(%{"page" => "1"})
-    {second_page, second_meta} = Blog.paginate(%{"page" => "2"})
+  test "paginates an empty publication" do
+    {posts, meta} = Blog.paginate(%{"page" => "2"})
 
-    assert length(first_page) == 2
-    assert first_meta.current_page == 1
-    assert first_meta.next_page == 2
-    assert first_meta.total_count == 3
-    assert first_meta.total_pages == 2
-
-    assert Enum.map(second_page, & &1.slug) == ["scripts-are-a-feature"]
-    assert second_meta.current_page == 2
-    assert second_meta.previous_page == 1
+    assert posts == []
+    assert meta.current_page == 1
+    assert meta.total_count == 0
   end
 
-  test "normalizes invalid and out-of-range pages" do
-    {invalid_page, invalid_meta} = Blog.paginate(%{"page" => "unknown"})
-    {last_page, last_meta} = Blog.paginate(%{"page" => "99"})
+  test "uses today as the feed date before the first post" do
+    assert Blog.last_updated() == Date.utc_today()
+  end
 
-    assert Enum.map(invalid_page, & &1.slug) == [
-             "why-we-are-building-once",
-             "build-graphs-that-explain-themselves"
-           ]
+  test "builds post metadata from Markdown frontmatter" do
+    post =
+      Post.build(
+        "2026/07-27-an-example.md",
+        %{title: "An example", description: "A description", authors: ["pedro"]},
+        "<p>Body</p>"
+      )
 
-    assert invalid_meta.current_page == 1
-    assert Enum.map(last_page, & &1.slug) == ["scripts-are-a-feature"]
-    assert last_meta.current_page == 2
+    assert post.slug == "an-example"
+    assert post.date == ~D[2026-07-27]
+    assert Enum.map(post.authors, & &1.id) == ["pedro"]
+    assert post.reading_minutes == 1
   end
 
   test "builds a Gravatar URL without exposing the email address" do

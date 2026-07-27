@@ -50,7 +50,7 @@ defmodule OnceSite.Blog do
   def last_updated do
     all_posts()
     |> Enum.map(& &1.date)
-    |> Enum.max(Date)
+    |> List.first(Date.utc_today())
   end
 
   defp clamp_page(flop, count) do

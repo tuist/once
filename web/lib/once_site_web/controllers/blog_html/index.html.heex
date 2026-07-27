@@ -47,6 +47,11 @@
       </li>
     </ol>
 
+    <div :if={@posts == []} data-part="blog-empty">
+      <h2>Writing in progress</h2>
+      <p>Posts from the Once team will appear here soon.</p>
+    </div>
+
     <nav :if={@meta.total_pages > 1} data-part="pagination" aria-label="Blog pages">
       <a
         :if={@meta.has_previous_page?}
