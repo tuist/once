@@ -1,0 +1,42 @@
+<Layouts.app flash={@flash}>
+  <article data-part="blog-detail">
+    <a data-part="back-link" href={~p"/blog"}>← Blog</a>
+
+    <header data-part="post-header">
+      <div data-part="blog-entry-meta">
+        <time datetime={Date.to_iso8601(@post.date)}>{format_date(@post.date)}</time>
+        <span aria-hidden="true">·</span>
+        <span>{reading_time(@post.reading_minutes)}</span>
+      </div>
+      <h1>{@post.title}</h1>
+      <p data-part="post-description">{@post.description}</p>
+
+      <div data-part="post-authors" aria-label={"Written by #{author_names(@post.authors)}"}>
+        <div data-part="author-avatars">
+          <img
+            :for={author <- @post.authors}
+            data-part="author-avatar"
+            src={avatar_url(author, 128)}
+            alt=""
+            width="56"
+            height="56"
+          />
+        </div>
+        <div data-part="author-copy">
+          <span>Written by</span>
+          <strong>{author_names(@post.authors)}</strong>
+        </div>
+      </div>
+    </header>
+
+    <div data-part="blog-prose">{raw(@post.body)}</div>
+
+    <footer data-part="post-footer">
+      <p>Get the next post in your feed.</p>
+      <div data-part="subscribe">
+        <a href={~p"/blog/feed.xml"}>RSS</a>
+        <a href={~p"/blog/feed.atom"}>Atom</a>
+      </div>
+    </footer>
+  </article>
+</Layouts.app>

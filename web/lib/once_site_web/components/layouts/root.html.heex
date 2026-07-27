@@ -10,28 +10,50 @@
     </.live_title>
 
     <meta name="description" content={assigns[:meta_description] || default_description()} />
-    <link rel="canonical" href={OnceSiteWeb.Endpoint.url() <> @conn.request_path} />
+    <link
+      rel="canonical"
+      href={assigns[:canonical_url] || OnceSiteWeb.Endpoint.url() <> @conn.request_path}
+    />
     <link
       rel="alternate"
       type="application/rss+xml"
-      title="Once changelog"
-      href={OnceSiteWeb.Endpoint.url() <> "/changelog/feed.xml"}
+      title={assigns[:alternate_feed_title] || "Once changelog"}
+      href={
+        OnceSiteWeb.Endpoint.url() <>
+          (assigns[:alternate_feed_path] || "/changelog") <> "/feed.xml"
+      }
     />
     <link
       rel="alternate"
       type="application/atom+xml"
-      title="Once changelog"
-      href={OnceSiteWeb.Endpoint.url() <> "/changelog/feed.atom"}
+      title={assigns[:alternate_feed_title] || "Once changelog"}
+      href={
+        OnceSiteWeb.Endpoint.url() <>
+          (assigns[:alternate_feed_path] || "/changelog") <> "/feed.atom"
+      }
     />
 
-    <meta property="og:type" content="website" />
+    <meta property="og:type" content={assigns[:og_type] || "website"} />
     <meta property="og:site_name" content="Once" />
     <meta property="og:title" content={assigns[:page_title] || "Once"} />
     <meta property="og:description" content={assigns[:meta_description] || default_description()} />
-    <meta property="og:url" content={OnceSiteWeb.Endpoint.url() <> @conn.request_path} />
+    <meta
+      property="og:url"
+      content={assigns[:canonical_url] || OnceSiteWeb.Endpoint.url() <> @conn.request_path}
+    />
     <meta
       property="og:image"
       content={OnceSiteWeb.Endpoint.url() <> (assigns[:og_image] || "/images/og/home.jpg")}
+    />
+    <meta
+      :if={published_time = assigns[:published_time]}
+      property="article:published_time"
+      content={published_time}
+    />
+    <meta
+      :for={author <- assigns[:authors] || []}
+      property="article:author"
+      content={author.name}
     />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:site" content="@buildoncedev" />

@@ -46,7 +46,8 @@ config :once_site, OnceSiteWeb.Endpoint,
       ~r"lib/once_site_web/router\.ex$",
       ~r"lib/once_site_web/(controllers|live|components)/.*\.(ex|heex)$",
       ~r"lib/once_site_web/docs/.*\.(ex|heex)$",
-      ~r"priv/docs/.*\.md$"
+      ~r"priv/docs/.*\.md$",
+      ~r"priv/posts/.*\.md$"
     ]
   ]
 

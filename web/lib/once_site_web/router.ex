@@ -30,6 +30,8 @@ defmodule OnceSiteWeb.Router do
 
     get "/changelog/feed.xml", ChangelogController, :rss
     get "/changelog/feed.atom", ChangelogController, :atom
+    get "/blog/feed.xml", BlogController, :rss
+    get "/blog/feed.atom", BlogController, :atom
   end
 
   scope "/", OnceSiteWeb do
@@ -39,6 +41,8 @@ defmodule OnceSiteWeb.Router do
 
     get "/changelog", ChangelogController, :index
     get "/changelog/:slug", ChangelogController, :show
+    get "/blog", BlogController, :index
+    get "/blog/:slug", BlogController, :show
 
     get "/docs-markdown/*path", DocsMarkdownController, :show
 

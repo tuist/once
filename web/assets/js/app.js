@@ -24,6 +24,7 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/once_site"
 import topbar from "../vendor/topbar"
+import {setupCodeCopy} from "../docs/shared/hooks/code-copy.js"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
@@ -60,6 +61,8 @@ liveSocket.connect()
 // >> liveSocket.disableLatencySim()
 window.liveSocket = liveSocket
 
+setupCodeCopy(document)
+
 // The lines below enable quality of life phoenix_live_reload
 // development features:
 //
@@ -94,4 +97,3 @@ if (process.env.NODE_ENV === "development") {
     window.liveReloader = reloader
   })
 }
-
