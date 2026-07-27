@@ -475,7 +475,7 @@ def _go_base_provider(ctx, kind, output, source_inputs, native):
     transitive_sources = _go_collect(_go_all_deps(ctx), "transitive_sources", sources)
     data = _go_runtime_data(ctx)
     importpath = _go_attr(ctx, "importpath", "") or _go_attr(ctx, "package_name", "")
-    return {
+    provider = {
         "go_package": True,
         "label_id": ctx["label"]["id"],
         "target_kind": kind,
@@ -492,6 +492,15 @@ def _go_base_provider(ctx, kind, output, source_inputs, native):
         "cgo": _go_cgo_enabled(ctx),
         "default_output": output,
     }
+    if kind == "go_binary":
+        provider.update(_once_executable_fields(
+            output,
+            runtime_files = data,
+            os = _once_normalize_os(_go_target_os(ctx)),
+            architecture = _once_normalize_architecture(_go_target_arch(ctx)),
+            linkage = "dynamic" if _go_cgo_enabled(ctx) or _go_attr(ctx, "link_style", "static") == "shared" else "static",
+        ))
+    return provider
 
 def _go_source_impl(ctx):
     module = _go_module_context(ctx)
@@ -1529,7 +1538,7 @@ go_binary = target_kind(
         attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited by once run.", configurable = False),
     ],
     deps = _GO_DEP_EDGES,
-    providers = ["go_package", "go_binary", "c_provider", "native_linkable", "apple_linkable", "android_native_library"],
+    providers = ["go_package", "go_binary", "once_executable", "c_provider", "native_linkable", "apple_linkable", "android_native_library"],
     capabilities = [capability("build", ["binary"]), capability("run", ["default"], ["binary"])],
     examples = _GO_BINARY_EXAMPLES,
     source_references = _GO_BINARY_REFERENCES,

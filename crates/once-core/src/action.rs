@@ -13,7 +13,7 @@ use crate::{ResourceRequest, WorkspacePath};
 /// that should invalidate the cache. Older action result JSON still
 /// deserializes through serde defaults; the domain only partitions new
 /// action lookups.
-pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v9\0";
+pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v11\0";
 
 static DEFAULT_RESOURCE_REQUEST: LazyLock<ResourceRequest> =
     LazyLock::new(ResourceRequest::default);
@@ -60,6 +60,7 @@ pub enum SandboxMode {
     #[default]
     Off,
     Inputs,
+    CopiedInputs,
 }
 
 impl SandboxMode {
@@ -80,7 +81,10 @@ impl FromStr for SandboxMode {
         match raw {
             "off" => Ok(Self::Off),
             "inputs" => Ok(Self::Inputs),
-            _ => Err(format!("expected `off` or `inputs`, got `{raw}`")),
+            "copied-inputs" => Ok(Self::CopiedInputs),
+            _ => Err(format!(
+                "expected `off`, `inputs`, or `copied-inputs`, got `{raw}`"
+            )),
         }
     }
 }
@@ -185,6 +189,42 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input_digest: Option<Digest>,
     },
+    WriteArchive {
+        entries: Vec<ArchiveEntry>,
+        output: WorkspacePath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha256_output: Option<WorkspacePath>,
+        format: ArchiveFormat,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveFormat {
+    Tar,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArchiveEntry {
+    pub kind: ArchiveEntryKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<WorkspacePath>,
+    pub path: String,
+    pub mode: u32,
+    pub directory_mode: u32,
+    pub owner_id: u64,
+    pub group_id: u64,
+    pub mtime: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveEntryKind {
+    File,
+    Directory,
+    Tree,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -233,7 +273,8 @@ impl Action {
             | Action::LinkPath { .. }
             | Action::MaterializeHostFile { .. }
             | Action::PreparePath { .. }
-            | Action::WriteTreeDigest { .. } => &DEFAULT_RESOURCE_REQUEST,
+            | Action::WriteTreeDigest { .. }
+            | Action::WriteArchive { .. } => &DEFAULT_RESOURCE_REQUEST,
         }
     }
 
@@ -245,7 +286,8 @@ impl Action {
             | Action::LinkPath { input_digest, .. }
             | Action::MaterializeHostFile { input_digest, .. }
             | Action::PreparePath { input_digest, .. }
-            | Action::WriteTreeDigest { input_digest, .. } => *input_digest,
+            | Action::WriteTreeDigest { input_digest, .. }
+            | Action::WriteArchive { input_digest, .. } => *input_digest,
         }
     }
 }
@@ -308,6 +350,13 @@ mod tests {
             action(OutputSymlinkMode::MaterializeExternal).digest(),
             action(OutputSymlinkMode::Preserve).digest()
         );
+    }
+
+    #[test]
+    fn sandbox_modes_parse_from_their_public_names() {
+        assert_eq!("off".parse(), Ok(SandboxMode::Off));
+        assert_eq!("inputs".parse(), Ok(SandboxMode::Inputs));
+        assert_eq!("copied-inputs".parse(), Ok(SandboxMode::CopiedInputs));
     }
 
     #[test]

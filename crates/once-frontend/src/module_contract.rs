@@ -244,6 +244,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
         ],
         analysis_primitives: vec![
             entry("glob(patterns)", "Expand package source patterns into sorted workspace paths."),
+            entry(
+                "walk_files(root, excluded_paths = [], excluded_names = [])",
+                "Walk a package-relative directory into sorted workspace file and symbolic-link paths while pruning exact root-relative paths and names.",
+            ),
             entry("host_arch()", "Read the normalized host architecture."),
             entry("host_os()", "Read the normalized host operating system."),
             entry("host_env(name)", "Read one host environment variable."),
@@ -288,6 +292,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry(
                 "write_tree_digest(root, output, include_suffixes = [], inputs = [], identifier = None, cacheable = True)",
                 "Declare a deterministic workspace tree digest action.",
+            ),
+            entry(
+                "write_archive(entries, output, sha256_output = None, format = \"tar\", inputs = [], identifier = None, cacheable = True)",
+                "Declare a deterministic archive from explicit file, directory, and tree entries with fixed metadata.",
             ),
             entry(
                 "cmd_args(args, use_arg_file = None)",

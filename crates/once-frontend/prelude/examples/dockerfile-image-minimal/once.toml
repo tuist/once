@@ -1,0 +1,6 @@
+[[target]]
+name = "hello_image"
+kind = "dockerfile_image"
+
+[target.attrs]
+tag = "once-dockerfile-hello:latest"

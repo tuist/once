@@ -11,10 +11,12 @@ use starlark::values::dict::{AllocDict, DictRef};
 use starlark::values::list::ListRef;
 use starlark::values::none::NoneType;
 use starlark::values::Value;
+use walkdir::WalkDir;
 
 use super::store::{
     analysis_active, with_store, with_store_mut, DeclaredAction, DeclaredActionOperation,
-    DeclaredArgFile, DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
+    DeclaredArchiveEntry, DeclaredArchiveEntryKind, DeclaredArchiveFormat, DeclaredArgFile,
+    DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
 use super::values::{
     json_to_value, toml_value_to_starlark, unpack_byte_list, unpack_string_dict, unpack_string_list,
@@ -260,6 +262,42 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let resolved = with_store(|store| -> Result<Vec<String>> {
             let store = store.ok_or_else(|| anyhow!("glob called outside analysis"))?;
             expand_globs(&store.workspace_root, &store.package, &patterns)
+        })?;
+        Ok(heap.alloc(resolved))
+    }
+
+    /// Walk a package-relative directory and return sorted,
+    /// deduplicated, workspace-relative file and symbolic-link paths.
+    /// `excluded_paths` names root-relative paths whose trees should
+    /// not be traversed. `excluded_names` prunes entries with an exact
+    /// file name at any depth. Schema parsing returns an empty list.
+    fn walk_files<'v>(
+        root: &str,
+        excluded_paths: Option<Value<'v>>,
+        excluded_names: Option<Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let heap = eval.heap();
+        if !analysis_active() {
+            return Ok(heap.alloc(Vec::<String>::new()));
+        }
+        let excluded_paths = excluded_paths
+            .map(|value| unpack_string_list(value, "excluded_paths"))
+            .transpose()?
+            .unwrap_or_default();
+        let excluded_names = excluded_names
+            .map(|value| unpack_string_list(value, "excluded_names"))
+            .transpose()?
+            .unwrap_or_default();
+        let resolved = with_store(|store| -> Result<Vec<String>> {
+            let store = store.ok_or_else(|| anyhow!("walk_files called outside analysis"))?;
+            walk_package_files(
+                &store.workspace_root,
+                &store.package,
+                root,
+                &excluded_paths,
+                &excluded_names,
+            )
         })?;
         Ok(heap.alloc(resolved))
     }
@@ -563,6 +601,67 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
+    /// Declare a portable deterministic archive action. Each entry is
+    /// a dict with `kind`, `path`, optional `source`, and explicit
+    /// metadata. The initial `tar` format supports files, directories,
+    /// and recursively expanded trees.
+    fn write_archive<'v>(
+        entries: Value<'v>,
+        output: &str,
+        sha256_output: Option<String>,
+        format: Option<String>,
+        inputs: Option<Value<'v>>,
+        identifier: Option<String>,
+        cacheable: Option<bool>,
+    ) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let entries = unpack_archive_entries(entries)?;
+        let format = parse_archive_format(format.as_deref())?;
+        let mut inputs = inputs
+            .map(|value| unpack_string_list(value, "inputs"))
+            .transpose()?
+            .unwrap_or_default();
+        inputs.extend(entries.iter().filter_map(|entry| entry.source.clone()));
+        inputs.sort();
+        inputs.dedup();
+        let mut outputs = vec![output.to_string()];
+        if let Some(path) = &sha256_output {
+            outputs.push(path.clone());
+        }
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::WriteArchive {
+                entries,
+                output: output.to_string(),
+                sha256_output,
+                format,
+            }),
+            argv: Vec::new(),
+            arg_files: Vec::new(),
+            inputs,
+            outputs,
+            stdout: None,
+            stderr: None,
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
+            sandbox: None,
+            success_exit_codes: vec![0],
+            cacheable: cacheable.unwrap_or(true),
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: Some(identifier.unwrap_or_else(|| format!("write_archive:{output}"))),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
     /// Build a structured command-line fragment. `args` is a list of
     /// string arguments. When `use_arg_file` is set, it must be a dict
     /// with `path` plus optional `format` and `arg_format`. The supported
@@ -611,8 +710,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// string->string dict; `cacheable`:
     /// optional bool, default true;
     /// `sandbox`: optional local filesystem sandbox policy, `"off"`,
-    /// `"inputs"`, or `"validate"`; validation runs uncached and returns
-    /// filesystem contract diagnostics without materializing outputs;
+    /// `"inputs"`, or `"copied-inputs"`; the copied mode materializes
+    /// private input copies for tools that cannot consume links;
     /// `success_exit_codes`: optional integer list, default `[0]`, whose
     /// members mean the command completed and its outputs are valid;
     /// `toolchain_identity`: optional string folded into the input
@@ -786,11 +885,113 @@ fn parse_prepare_path_mode(kind: &str) -> Result<DeclaredPreparePathMode> {
     }
 }
 
+fn parse_archive_format(format: Option<&str>) -> Result<DeclaredArchiveFormat> {
+    match format.unwrap_or("tar") {
+        "tar" => Ok(DeclaredArchiveFormat::Tar),
+        other => Err(anyhow!(
+            "expected `write_archive.format` to be `tar`, got `{other}`"
+        )),
+    }
+}
+
+fn unpack_archive_entries(value: Value<'_>) -> Result<Vec<DeclaredArchiveEntry>> {
+    let entries = ListRef::from_value(value).ok_or_else(|| {
+        anyhow!(
+            "expected `write_archive.entries` to be a list of dicts, got `{}`",
+            value.get_type()
+        )
+    })?;
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, value)| unpack_archive_entry(value, index))
+        .collect()
+}
+
+fn unpack_archive_entry(value: Value<'_>, index: usize) -> Result<DeclaredArchiveEntry> {
+    let field = format!("write_archive.entries[{index}]");
+    let dict = DictRef::from_value(value).ok_or_else(|| {
+        anyhow!(
+            "expected `{field}` to be a dict, got `{}`",
+            value.get_type()
+        )
+    })?;
+    let kind = match required_string_field(&dict, &field, "kind")?.as_str() {
+        "file" => DeclaredArchiveEntryKind::File,
+        "directory" => DeclaredArchiveEntryKind::Directory,
+        "tree" => DeclaredArchiveEntryKind::Tree,
+        other => {
+            return Err(anyhow!(
+                "expected `{field}.kind` to be `file`, `directory`, or `tree`, got `{other}`"
+            ));
+        }
+    };
+    let source = optional_string_field(&dict, "source")?;
+    match kind {
+        DeclaredArchiveEntryKind::File | DeclaredArchiveEntryKind::Tree if source.is_none() => {
+            return Err(anyhow!("expected `{field}` to contain `source`"));
+        }
+        DeclaredArchiveEntryKind::Directory if source.is_some() => {
+            return Err(anyhow!(
+                "expected `{field}.source` to be omitted for a directory"
+            ));
+        }
+        _ => {}
+    }
+    let mode = optional_nonnegative_int_field(&dict, &field, "mode")?.unwrap_or(
+        if kind == DeclaredArchiveEntryKind::Directory {
+            0o755
+        } else {
+            0o644
+        },
+    );
+    let directory_mode =
+        optional_nonnegative_int_field(&dict, &field, "directory_mode")?.unwrap_or(0o755);
+    if mode > 0o7777 {
+        return Err(anyhow!("expected `{field}.mode` to be at most 4095"));
+    }
+    if directory_mode > 0o7777 {
+        return Err(anyhow!(
+            "expected `{field}.directory_mode` to be at most 4095"
+        ));
+    }
+    Ok(DeclaredArchiveEntry {
+        kind,
+        source,
+        path: required_string_field(&dict, &field, "path")?,
+        mode,
+        directory_mode,
+        owner_id: u64::from(
+            optional_nonnegative_int_field(&dict, &field, "owner_id")?.unwrap_or(0),
+        ),
+        group_id: u64::from(
+            optional_nonnegative_int_field(&dict, &field, "group_id")?.unwrap_or(0),
+        ),
+        mtime: u64::from(optional_nonnegative_int_field(&dict, &field, "mtime")?.unwrap_or(0)),
+    })
+}
+
+fn optional_nonnegative_int_field(
+    dict: &DictRef<'_>,
+    field: &str,
+    name: &str,
+) -> Result<Option<u32>> {
+    dict.get_str(name)
+        .map(|value| {
+            let value = value
+                .unpack_i32()
+                .ok_or_else(|| anyhow!("expected `{field}.{name}` to be an integer"))?;
+            u32::try_from(value)
+                .map_err(|_| anyhow!("expected `{field}.{name}` to be non-negative"))
+        })
+        .transpose()
+}
+
 fn validate_sandbox(value: Option<&str>) -> Result<()> {
     match value {
-        None | Some("off" | "inputs") => Ok(()),
+        None | Some("off" | "inputs" | "copied-inputs") => Ok(()),
         Some(other) => Err(anyhow!(
-            "expected `sandbox` to be `off` or `inputs`, got `{other}`"
+            "expected `sandbox` to be `off`, `inputs`, or `copied-inputs`, got `{other}`"
         )),
     }
 }
@@ -1086,4 +1287,121 @@ pub(super) fn expand_globs(
     out.sort();
     out.dedup();
     Ok(out)
+}
+
+pub(super) fn walk_package_files(
+    workspace_root: &Path,
+    package: &str,
+    root: &str,
+    excluded_paths: &[String],
+    excluded_names: &[String],
+) -> Result<Vec<String>> {
+    let package_dir = if package.is_empty() {
+        workspace_root.to_path_buf()
+    } else {
+        workspace_root.join(package)
+    };
+    let root = normalize_walk_path(root, "root", true)?;
+    let exclusions = excluded_paths
+        .iter()
+        .map(|path| normalize_walk_path(path, "excluded path", false))
+        .collect::<Result<Vec<_>>>()?;
+    let excluded_names = excluded_names
+        .iter()
+        .map(|name| normalize_walk_name(name))
+        .collect::<Result<Vec<_>>>()?;
+    let canonical_workspace = std::fs::canonicalize(workspace_root)
+        .with_context(|| format!("canonicalizing workspace `{}`", workspace_root.display()))?;
+    let requested_root = package_dir.join(root);
+    let canonical_root = std::fs::canonicalize(&requested_root)
+        .with_context(|| format!("canonicalizing walk root `{}`", requested_root.display()))?;
+    canonical_root
+        .strip_prefix(&canonical_workspace)
+        .with_context(|| {
+            format!(
+                "walk root `{}` is outside the workspace `{}`",
+                canonical_root.display(),
+                canonical_workspace.display()
+            )
+        })?;
+    if !canonical_root.is_dir() {
+        return Err(anyhow!(
+            "walk root `{}` is not a directory",
+            requested_root.display()
+        ));
+    }
+
+    let walker = WalkDir::new(&canonical_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            let relative = entry
+                .path()
+                .strip_prefix(&canonical_root)
+                .unwrap_or(entry.path());
+            relative.as_os_str().is_empty()
+                || (!excluded_names
+                    .iter()
+                    .any(|excluded| entry.file_name() == excluded)
+                    && !exclusions
+                        .iter()
+                        .any(|excluded| relative == excluded || relative.starts_with(excluded)))
+        });
+    let mut out = Vec::new();
+    for entry in walker {
+        let entry =
+            entry.with_context(|| format!("walking directory `{}`", requested_root.display()))?;
+        let file_type = entry.file_type();
+        if !file_type.is_file() && !file_type.is_symlink() {
+            continue;
+        }
+        let workspace_relative = entry
+            .path()
+            .strip_prefix(&canonical_workspace)
+            .with_context(|| {
+                format!(
+                    "walk result `{}` is outside the workspace `{}`",
+                    entry.path().display(),
+                    canonical_workspace.display()
+                )
+            })?
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        if !workspace_relative.is_empty() {
+            out.push(workspace_relative);
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+fn normalize_walk_path(path: &str, field: &str, allow_empty: bool) -> Result<std::path::PathBuf> {
+    let mut normalized = std::path::PathBuf::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(value) => normalized.push(value),
+            Component::CurDir => {}
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir => {
+                return Err(anyhow!(
+                    "walk_files {field} must stay inside its package, got `{path}`"
+                ));
+            }
+        }
+    }
+    if !allow_empty && normalized.as_os_str().is_empty() {
+        return Err(anyhow!("walk_files {field} must not be empty"));
+    }
+    Ok(normalized)
+}
+
+fn normalize_walk_name(name: &str) -> Result<std::ffi::OsString> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || matches!(name, "." | "..") {
+        return Err(anyhow!(
+            "walk_files excluded name must be one file name, got `{name}`"
+        ));
+    }
+    Ok(std::ffi::OsString::from(name))
 }
