@@ -121,6 +121,7 @@ fn go_prelude_source() -> String {
 fn all_prelude_source() -> String {
     [
         include_str!("../prelude/common.star"),
+        include_str!("../prelude/lint.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/android.star"),
         include_str!("../prelude/go.star"),
@@ -137,6 +138,109 @@ fn all_prelude_source() -> String {
         include_str!("../prelude/react_native.star"),
     ]
     .join("\n")
+}
+
+#[test]
+fn ruff_lint_declares_a_cacheable_report_for_finding_exit_codes() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("quality");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("main.py"), "import os\n").unwrap();
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _lint_executable(ctx, name, default, workspace_candidates = []):
+    return "/tools/" + default
+
+def host_command(argv, env = None, merge_stderr = None):
+    return "ruff 1.0.0"
+
+ctx = {{
+    "label": {{"package": "quality", "name": "lint", "id": "quality/lint"}},
+    "attr": {{}},
+    "configuration": {{"tokens": []}},
+    "deps": [],
+    "srcs": ["*.py"],
+    "build_dir": ".once/out/quality/lint",
+    "scratch_dir": ".once/tmp/analysis/quality/lint",
+    "capability": "lint",
+}}
+result = repr(_ruff_lint_impl(ctx))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "quality".to_string(),
+        ".once/out/quality/lint".to_string(),
+    );
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let provider = result.unwrap();
+    assert!(provider.contains("\"schema\": \"once.lint_info.v1\""));
+    let action = action_by_identifier(&store, "quality/lint:ruff");
+    assert_eq!(action.success_exit_codes, vec![0, 1]);
+    assert!(action
+        .outputs
+        .iter()
+        .any(|path| path.ends_with("/lint/report.sarif")));
+    assert!(action.inputs.iter().any(|path| path == "quality/main.py"));
+}
+
+#[test]
+fn credo_lint_passes_every_declared_source_to_the_analyzer() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("quality/elixir/lib");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("greeter.ex"), "defmodule Greeter do\nend\n").unwrap();
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _lint_executable(ctx, name, default, workspace_candidates = []):
+    return "/tools/" + default
+
+def host_command(argv, env = None, merge_stderr = None):
+    return "Credo 1.7.0"
+
+ctx = {{
+    "label": {{"package": "quality/elixir", "name": "lint", "id": "quality/elixir/lint"}},
+    "attr": {{}},
+    "configuration": {{"tokens": []}},
+    "deps": [],
+    "srcs": ["lib/**/*.ex"],
+    "build_dir": ".once/out/quality/elixir/lint",
+    "scratch_dir": ".once/tmp/analysis/quality/elixir/lint",
+    "capability": "lint",
+}}
+result = repr(_credo_impl(ctx))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "quality/elixir".to_string(),
+        ".once/out/quality/elixir/lint".to_string(),
+    );
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    result.unwrap();
+    let action = action_by_identifier(&store, "quality/elixir/lint:credo");
+    assert!(action
+        .argv
+        .iter()
+        .any(|arg| arg.ends_with("/quality/elixir/lib/greeter.ex")));
+    assert!(action_has_input_suffix(
+        action,
+        "quality/elixir/lib/greeter.ex"
+    ));
+}
+
+#[test]
+fn rubocop_lint_declares_ruby_for_its_report_adapter() {
+    let schema = built_in_target_kind_schema("rubocop_lint").unwrap();
+
+    assert!(schema
+        .tools
+        .iter()
+        .any(|tool| tool.name == "ruby" && tool.executables == ["ruby"]));
 }
 
 #[test]

@@ -1,0 +1,7 @@
+[[target]]
+name = "lint"
+kind = "golangci_lint"
+srcs = ["**/*.go"]
+
+[target.attrs]
+cwd = "."

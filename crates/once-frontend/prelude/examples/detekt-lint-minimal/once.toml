@@ -1,0 +1,4 @@
+[[target]]
+name = "lint"
+kind = "detekt_lint"
+srcs = ["src/**/*.kt"]

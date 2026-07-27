@@ -302,6 +302,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -353,6 +354,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: cacheable.unwrap_or(true),
             depends_on_prior_actions: true,
             toolchain_identity,
@@ -403,6 +405,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -446,6 +449,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -492,6 +496,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -544,6 +549,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: cacheable.unwrap_or(true),
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -607,6 +613,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// `sandbox`: optional local filesystem sandbox policy, `"off"`,
     /// `"inputs"`, or `"validate"`; validation runs uncached and returns
     /// filesystem contract diagnostics without materializing outputs;
+    /// `success_exit_codes`: optional integer list, default `[0]`, whose
+    /// members mean the command completed and its outputs are valid;
     /// `toolchain_identity`: optional string folded into the input
     /// digest; `identifier`: optional label for diagnostics.
     #[allow(
@@ -628,6 +636,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         stdout: Option<String>,
         stderr: Option<String>,
         sandbox: Option<String>,
+        success_exit_codes: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
         validate_sandbox(sandbox.as_deref())?;
         let argv = unpack_action_argv(argv, "argv")?;
@@ -661,6 +670,15 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .map(|value| unpack_string_dict(value, "env"))
             .transpose()?
             .unwrap_or_default();
+        let mut success_exit_codes = success_exit_codes
+            .map(|value| unpack_i32_list(value, "success_exit_codes"))
+            .transpose()?
+            .unwrap_or_else(|| vec![0]);
+        if success_exit_codes.is_empty() {
+            anyhow::bail!("success_exit_codes must contain at least one exit code");
+        }
+        success_exit_codes.sort_unstable();
+        success_exit_codes.dedup();
         let action = DeclaredAction {
             operation: None,
             argv: argv.args,
@@ -674,6 +692,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd,
             env,
             sandbox,
+            success_exit_codes,
             cacheable: cacheable.unwrap_or(true),
             depends_on_prior_actions: depends_on_prior_actions.unwrap_or(true),
             toolchain_identity,
@@ -774,6 +793,27 @@ fn validate_sandbox(value: Option<&str>) -> Result<()> {
             "expected `sandbox` to be `off` or `inputs`, got `{other}`"
         )),
     }
+}
+
+fn unpack_i32_list(value: Value<'_>, field: &str) -> anyhow::Result<Vec<i32>> {
+    let list = ListRef::from_value(value).ok_or_else(|| {
+        anyhow!(
+            "expected `{field}` to be a list of integers, got `{}`",
+            value.get_type()
+        )
+    })?;
+    list.iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let value = item
+                .unpack_i32()
+                .ok_or_else(|| anyhow!("expected `{field}` entry {index} to be an integer"))?;
+            if value < 0 {
+                anyhow::bail!("expected `{field}` entry {index} to be non-negative");
+            }
+            Ok(value)
+        })
+        .collect()
 }
 
 fn unpack_action_argv(value: Value<'_>, field: &str) -> anyhow::Result<ActionArgv> {

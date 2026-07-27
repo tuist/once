@@ -50,7 +50,7 @@ pub enum QueryCmd {
         query: Option<String>,
     },
 
-    /// Return the project-module authoring contract and starter.
+    /// Return the project-module authoring contract, starters, and result examples.
     ModuleContract,
 
     /// Fetch public external rule, plugin, or build-system source text.
@@ -123,11 +123,11 @@ pub enum QueryCmd {
     /// List durable evidence records, optionally filtered by subject.
     ///
     /// Evidence records are provenance for action outcomes. They record
-    /// what happened after `once exec`, `once run`, `once build`, or
-    /// `once test`: the subject, status, action digest, input digest
-    /// when available, cache state, exit code, and captured output
-    /// digests when available. Evidence is queryable history; it does
-    /// not change action-cache reuse rules.
+    /// what happened after `once exec`, `once run`, `once build`, `once lint`,
+    /// or `once test`: the subject, status, action digest, input digest when
+    /// available, cache state, exit code, and captured output digests when
+    /// available. Evidence is queryable history; it does not change
+    /// action-cache reuse rules.
     Evidence {
         /// Subject id, e.g. `cli` or `cli:test`.
         subject: Option<String>,

@@ -135,7 +135,7 @@ pub(super) async fn execute_command(
         };
 
         match result {
-            Ok(result) if result.exit_code == 0 => output::retrieve_outputs(
+            Ok(result) if command.accepts_exit_code(result.exit_code) => output::retrieve_outputs(
                 &sandbox.fs(),
                 workspace_root,
                 &guest_root,

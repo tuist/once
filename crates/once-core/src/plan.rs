@@ -361,6 +361,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(10_000),
+            success_exit_codes: vec![0],
             remote: None,
         }
     }
@@ -421,6 +422,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let mut plan = Plan::new();
@@ -474,6 +476,7 @@ mod tests {
                 resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
                 timeout_ms: Some(5_000),
+                success_exit_codes: vec![0],
                 remote: None,
             }
         };
@@ -541,6 +544,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let consumer = Action::RunCommand {
@@ -556,6 +560,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let mut plan = Plan::new();

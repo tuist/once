@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use once_core::{SandboxMode, WorkspacePath};
+use once_core::{LintSeverity, SandboxMode, WorkspacePath};
 
 mod auth;
 mod cache;
@@ -131,6 +131,25 @@ pub enum Cmd {
         sandbox: SandboxMode,
 
         /// Target id, such as `services/api/Api` or `./Api`.
+        #[arg(required_unless_present = "list")]
+        target: Option<String>,
+    },
+
+    /// Run static analysis for a declared target.
+    ///
+    /// Executes the target's `lint` capability, normalizes its report,
+    /// and returns a failing status when a finding meets `--fail-on`.
+    #[command(arg_required_else_help = true)]
+    Lint {
+        /// Local filesystem sandbox policy for command actions.
+        #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
+        sandbox: SandboxMode,
+
+        /// Lowest finding severity that makes this command fail.
+        #[arg(long, value_parser = parse_lint_severity, default_value = "warning")]
+        fail_on: LintSeverity,
+
+        /// Target id, such as `quality/python` or `./python`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
     },
@@ -336,7 +355,7 @@ pub enum Cmd {
     /// Inspectable-first surface for humans and agents. `query
     /// targets` lists every declared target id with its target kind
     /// and capabilities; `query capabilities` shows what a specific
-    /// target exposes (`build`, `run`, `test`); `query schema`
+    /// target exposes (`build`, `lint`, `run`, `test`); `query schema`
     /// returns the typed attribute and provider shape for a target kind;
     /// `query example` returns the files in a chosen starter; `query script` validates
     /// an annotated script contract; `query validate-workspace` checks the
@@ -459,6 +478,7 @@ impl Cmd {
     pub fn surface_path(&self) -> Vec<&'static str> {
         match self {
             Self::Build { .. } => vec!["build"],
+            Self::Lint { .. } => vec!["lint"],
             Self::Run { .. } => vec!["run"],
             Self::Exec { .. } => vec!["exec"],
             Self::Test { .. } => vec!["test"],
@@ -523,6 +543,17 @@ fn parse_workspace_path(raw: &str) -> std::result::Result<WorkspacePath, String>
 
 fn parse_sandbox_mode(raw: &str) -> std::result::Result<SandboxMode, String> {
     raw.parse()
+}
+
+fn parse_lint_severity(raw: &str) -> std::result::Result<LintSeverity, String> {
+    match raw {
+        "note" => Ok(LintSeverity::Note),
+        "warning" => Ok(LintSeverity::Warning),
+        "error" => Ok(LintSeverity::Error),
+        _ => Err(format!(
+            "expected `note`, `warning`, or `error`, got `{raw}`"
+        )),
+    }
 }
 
 /// Map a subprocess exit code to a CLI [`ExitCode`].

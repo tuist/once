@@ -208,6 +208,34 @@ run_action(
     assert_eq!(store.actions[0].outputs, vec!["AppCore.a".to_string()]);
     assert_eq!(store.actions[0].identifier.as_deref(), Some("compile"));
     assert!(store.actions[0].cacheable);
+    assert_eq!(store.actions[0].success_exit_codes, vec![0]);
+}
+
+#[test]
+fn run_action_records_success_exit_codes() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "quality/python");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+run_action(
+    argv = ["ruff", "check"],
+    outputs = [".once/out/quality/python/report.sarif"],
+    success_exit_codes = [0, 1],
+)
+"#)
+        .unwrap();
+    });
+    assert_eq!(store.actions[0].success_exit_codes, vec![0, 1]);
+}
+
+#[test]
+fn run_action_rejects_empty_success_exit_codes() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "quality/python");
+    let (_, error) = with_active_store(store, || {
+        run(r#"run_action(argv = ["ruff"], success_exit_codes = [])"#).unwrap_err()
+    });
+    assert!(format!("{error:?}").contains("must contain at least one exit code"));
 }
 
 #[test]

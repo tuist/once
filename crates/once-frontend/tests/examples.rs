@@ -163,6 +163,22 @@ fn every_impl_backed_target_kind_has_a_schema_example() {
 }
 
 #[test]
+fn eslint_starter_includes_a_flat_configuration() {
+    let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
+    let schema = schemas
+        .iter()
+        .find(|schema| schema.kind == "eslint_lint")
+        .expect("eslint_lint schema");
+    let bundle =
+        load_target_kind_example(schema, "eslint-lint-minimal").expect("example materializes");
+
+    assert!(bundle
+        .files
+        .iter()
+        .any(|file| file.path == "eslint.config.mjs"));
+}
+
+#[test]
 fn native_mobile_shared_code_example_wires_cross_platform_apps() {
     let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
     for kind in [

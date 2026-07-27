@@ -1,0 +1,4 @@
+[[target]]
+name = "lint"
+kind = "eslint_lint"
+srcs = ["src/**/*.js"]

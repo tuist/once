@@ -325,6 +325,7 @@ impl Server {
             "once_validate_script" => script::validate(&self.workspace, &call.arguments),
             "once_exec_script" => script::execute(&self.workspace, &call.arguments),
             "once_build_target" => self.tool_build_target(&call.arguments),
+            "once_lint_target" => self.tool_lint_target(&call.arguments),
             "once_validate_actions" => self.tool_validate_actions(&call.arguments),
             "once_run_target" => self.tool_run_target(&call.arguments),
             "once_start_target" => self.tool_start_target(&call.arguments),
@@ -525,6 +526,11 @@ impl Server {
         run_graph_target(&self.workspace, "build", &args.target, false)
     }
 
+    fn tool_lint_target(&self, args: &Value) -> Result<Value> {
+        let args: TargetExecutionArgs = serde_json::from_value(tool_args(args))?;
+        run_graph_target(&self.workspace, "lint", &args.target, false)
+    }
+
     fn tool_validate_actions(&self, args: &Value) -> Result<Value> {
         let args: ValidateActionsArgs = serde_json::from_value(tool_args(args))?;
         let workspace = self.workspace.clone();
@@ -696,6 +702,9 @@ fn run_graph_target_with_exe(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let (record, record_parse_error) = parse_json_record(&stdout);
+    let error = (!output.status.success())
+        .then(|| parse_structured_dispatch_error(&stderr))
+        .flatten();
     let captured_stdout = captured_action_log(workspace, &record, "stdout.log");
     let captured_stderr = captured_action_log(workspace, &record, "stderr.log");
     Ok(json!({
@@ -705,10 +714,20 @@ fn run_graph_target_with_exe(
         "success": output.status.success(),
         "record": record,
         "record_parse_error": record_parse_error,
+        "error": error,
         "captured_stdout": captured_stdout,
         "captured_stderr": captured_stderr,
         "stderr": stderr,
     }))
+}
+
+fn parse_structured_dispatch_error(stderr: &str) -> Option<Value> {
+    stderr.lines().rev().find_map(|line| {
+        serde_json::from_str::<Value>(line)
+            .ok()?
+            .get("error")
+            .cloned()
+    })
 }
 
 #[derive(Serialize)]
@@ -1731,6 +1750,7 @@ script_runtime = "sh"
             .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect();
         assert!(names.contains(&"once_build_target".to_string()));
+        assert!(names.contains(&"once_lint_target".to_string()));
         assert!(names.contains(&"once_run_target".to_string()));
         assert!(names.contains(&"once_start_target".to_string()));
         assert!(names.contains(&"once_runtime_status".to_string()));
@@ -1770,6 +1790,7 @@ script_runtime = "sh"
         let tmp = TempDir::new().unwrap();
         for tool in [
             "once_build_target",
+            "once_lint_target",
             "once_run_target",
             "once_start_target",
             "once_run_tests",
@@ -1997,6 +2018,34 @@ srcs = ["unit_spec.sh"]
         assert_eq!(
             std::fs::canonicalize(cwd.trim()).unwrap(),
             std::fs::canonicalize(tmp.path()).unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn graph_target_runner_preserves_structured_command_diagnostics() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("once-mock");
+        let script = r#"#!/bin/sh
+printf '%s\n' 'ERROR once: session failed' >&2
+printf '%s\n' '{"schema":"once.error.v1","error":{"code":"invalid_lint_provider_output","message":"invalid lint provider","diagnostics":[{"code":"invalid_lint_provider_output","message":"invalid lint provider","target":"quality/lint","attribute":"lint_info.outputs.results","repairs":["Return the results path"]}]}}' >&2
+exit 2
+"#;
+        std::fs::write(&exe, script).unwrap();
+        let mut permissions = std::fs::metadata(&exe).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&exe, permissions).unwrap();
+
+        let result =
+            run_graph_target_with_exe(&exe, tmp.path(), "lint", "quality/lint", false).unwrap();
+
+        assert_eq!(result["success"], false);
+        assert_eq!(result["error"]["code"], "invalid_lint_provider_output");
+        assert_eq!(
+            result["error"]["diagnostics"][0]["attribute"],
+            "lint_info.outputs.results"
         );
     }
 

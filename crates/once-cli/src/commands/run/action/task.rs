@@ -34,6 +34,7 @@ pub(super) fn task_action(workspace: &Path, target: &once_frontend::Target) -> R
             resources: task_resources(target)?,
             sandbox: SandboxMode::default(),
             timeout_ms: parse_attr::<u64>(target, "timeout_ms")?,
+            success_exit_codes: vec![0],
             remote: None,
         },
         output: String::new(),

@@ -1,5 +1,6 @@
 PRELUDE_SOURCES = [
     "common.star",
+    "lint.star",
     "apple.star",
     "android.star",
     "go.star",
@@ -21,6 +22,15 @@ PRELUDE_DEPENDENCIES = {
 }
 
 PRELUDE_TARGET_KINDS = {
+    "lint.star": [
+        "ruff_lint",
+        "golangci_lint",
+        "swiftlint_lint",
+        "detekt_lint",
+        "credo_lint",
+        "eslint_lint",
+        "rubocop_lint",
+    ],
     "android.star": [
         "android_resource",
         "android_library",

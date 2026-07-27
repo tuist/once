@@ -32,6 +32,7 @@ pub(super) fn tool_requires_allow_run(name: &str) -> bool {
         "once_run_tests"
             | "once_exec_script"
             | "once_build_target"
+            | "once_lint_target"
             | "once_validate_actions"
             | "once_run_target"
             | "once_start_target"
@@ -62,6 +63,7 @@ fn tool_annotations(name: &str) -> Value {
         || matches!(
             name,
             "once_build_target"
+                | "once_lint_target"
                 | "once_runtime_status"
                 | "once_runtime_logs"
                 | "once_materialize_example"
@@ -120,7 +122,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_query_capabilities",
-            description: "Return the capabilities (`build`, `run`, `test`) a target exposes, with their output groups and required inputs.",
+            description: "Return the capabilities (`build`, `lint`, `run`, `test`) a target exposes, with their output groups and required inputs.",
             long_description: "Returns the same record `once query capabilities <target> --format json` emits: the target's id and kind plus one entry per capability with its output groups (what running the capability produces) and required outputs (what it depends on having built).",
             input_schema: json!({
                 "type": "object",
@@ -212,13 +214,13 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "once_query_module_contract",
-            description: "Return the complete project-module authoring contract, generic analysis and action primitives, maintenance invariants, and a starter module.",
-            long_description: "Use this when no discovered target kind covers an external rule or plugin. The result contains the exact Starlark declaration helpers, schema invariants, implementation context fields, generic host-analysis and action primitives, module registration snippet, maintenance loop, and a runnable starter. A coding harness can use it to author and maintain a project-local target kind without waiting for a built-in integration. The matching command-line operation is `once query module-contract --format json`.",
+            description: "Return the complete project-module authoring contract, primitives, invariants, capability starters, and normalized result examples.",
+            long_description: "Use this when no discovered target kind covers an external rule or plugin. The result contains the exact Starlark declaration helpers, schema invariants, implementation context fields, generic host-analysis and action primitives, module registration snippet, maintenance loop, and runnable generic, lint, and test starters with normalized result examples. A coding harness can use it to author and maintain a project-local target kind without waiting for a built-in integration. The matching command-line operation is `once query module-contract --format json`.",
             input_schema: json!({
                 "type": "object",
                 "properties": {}
             }),
-            example_return: "{\n  \"language\": \"Starlark\",\n  \"registration\": \"[modules]\\npaths = [\\\"modules/*.star\\\"]\\n\",\n  \"schema_invariants\": [\"attr.default is optional schema documentation and must be a string...\"],\n  \"context_fields\": [\n    { \"signature\": \"ctx[\\\"attr\\\"]\", \"purpose\": \"Typed target attributes.\" }\n  ],\n  \"action_primitives\": [\n    { \"signature\": \"write_path(path, content)\", \"purpose\": \"Declare a portable file-writing action.\" },\n    { \"signature\": \"materialize_host_file(source, destination)\", \"purpose\": \"Snapshot a content-verified absolute host toolchain file into a workspace output.\" }\n  ],\n  \"starter\": \"def _generated_text_impl(ctx): ...\"\n}",
+            example_return: "{\n  \"language\": \"Starlark\",\n  \"registration\": \"[modules]\\npaths = [\\\"modules/*.star\\\"]\\n\",\n  \"schema_invariants\": [\"attr.default is optional schema documentation and must be a string...\"],\n  \"context_fields\": [\n    { \"signature\": \"ctx[\\\"attr\\\"]\", \"purpose\": \"Typed target attributes.\" }\n  ],\n  \"action_primitives\": [\n    { \"signature\": \"write_path(path, content)\", \"purpose\": \"Declare a portable file-writing action.\" },\n    { \"signature\": \"materialize_host_file(source, destination)\", \"purpose\": \"Snapshot a content-verified absolute host toolchain file into a workspace output.\" }\n  ],\n  \"starter\": \"def _generated_text_impl(ctx): ...\",\n  \"lint_starter\": \"def _scripted_lint_impl(ctx): ...\",\n  \"lint_target_starter\": \"[[target]]\\nname = \\\"lint\\\"\\nkind = \\\"scripted_lint\\\"\\n...\",\n  \"lint_adapter_starter\": \"import argparse\\nimport json\\n...\",\n  \"normalized_lint_result_example\": {\n    \"schema\": \"once.lint_results.v1\",\n    \"status\": \"completed\"\n  },\n  \"test_starter\": \"def _scripted_test_impl(ctx): ...\"\n}",
         },
         ToolDefinition {
             name: "once_fetch_external_source",
@@ -417,7 +419,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_evidence",
             description: "List durable evidence records, optionally filtered by subject.",
-            long_description: "Returns the same record shape as `once query evidence --format json`: durable action evidence captured after `once exec`, `once run`, `once build`, or `once test`. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`. The tool returns the newest five matching records by default; set `limit` from 1 through 100 when more or fewer are useful. The matching command-line option is `once query evidence --limit <count>`. Evidence is historical provenance, not proof that inputs remain unchanged; run the relevant capability when a current result is required.",
+            long_description: "Returns the same record shape as `once query evidence --format json`: durable action evidence captured after `once exec`, `once run`, `once build`, `once lint`, or `once test`. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`. The tool returns the newest five matching records by default; set `limit` from 1 through 100 when more or fewer are useful. The matching command-line option is `once query evidence --limit <count>`. Evidence is historical provenance, not proof that inputs remain unchanged; run the relevant capability when a current result is required.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -488,6 +490,22 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 "required": ["target"]
             }),
             example_return: "{\n  \"target\": \"apps/service/Service\",\n  \"capability\": \"build\",\n  \"exit_code\": 0,\n  \"success\": true,\n  \"record\": {\n    \"target\": \"apps/service/Service\",\n    \"kind\": \"application\",\n    \"capability\": \"build\",\n    \"cache\": \"miss\",\n    \"outputs\": [\".once/out/apps/service/Service/package\"]\n  },\n  \"stderr\": \"\"\n}",
+        },
+        ToolDefinition {
+            name: "once_lint_target",
+            description: "Run a target's lint capability and return normalized findings.",
+            long_description: "This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once lint <target> --format json`: analyzer output is cached in Static Analysis Results Interchange Format, then projected into the tool-neutral `once.lint_results.v1` record. The command reports failure when warning or error findings exist, while still returning the complete finding list for repair. Native analyzer configuration remains authoritative.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Target id whose lint capability should run."
+                    }
+                },
+                "required": ["target"]
+            }),
+            example_return: "{\n  \"target\": \"quality/python/lint\",\n  \"capability\": \"lint\",\n  \"exit_code\": 1,\n  \"success\": false,\n  \"record\": {\n    \"schema\": \"once.lint_results.v1\",\n    \"target\": \"quality/python/lint\",\n    \"status\": \"completed\",\n    \"complete\": true,\n    \"summary\": {\"total\": 1, \"errors\": 0, \"warnings\": 1, \"notes\": 0},\n    \"findings\": [{\"analyzer\": \"ruff\", \"rule_id\": \"F401\", \"severity\": \"warning\", \"message\": \"imported but unused\"}]\n  },\n  \"stderr\": \"\"\n}",
         },
         ToolDefinition {
             name: "once_validate_actions",

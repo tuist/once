@@ -60,7 +60,7 @@ discovery.
 - `deps`: `dep(...)` declarations that name expected providers.
 - `providers`: provider names this target kind can return.
 - `capabilities`: command surfaces this target kind supports, such as
-  `build`, `run`, `test`, or `metadata`.
+  `build`, `lint`, `run`, `test`, or `metadata`.
 - `tools`: `tool(...)` declarations for workspace tools the implementation
   needs during analysis or execution.
 - `examples`: `example(...)` declarations for starter workspaces exposed
@@ -506,6 +506,9 @@ layout.
   contract investigation that checks created, modified, and deleted paths
   and returns structured repairs. Reads that leave no observable filesystem
   evidence remain a limitation of this investigation.
+- `success_exit_codes`: integer list whose members mean the command completed
+  and its declared outputs are valid. Defaults to `[0]`. Use this for tools
+  that report valid findings with a nonzero process code.
 - `cacheable`: `True` by default. Set `False` for interactive or local
   side-effect actions.
 - `depends_on_prior_actions`: `True` by default. When true, each action key
@@ -517,6 +520,29 @@ layout.
 Actions inside one target run in declaration order because later actions
 may consume earlier outputs. Independent graph targets run concurrently
 once their analysis-backed dependencies are complete.
+
+## Lint Target Kinds
+
+A lint target declares the reserved `once_lint_info` provider and generic
+lint capability:
+
+```python
+providers = ["once_lint_info"]
+capabilities = [capability("lint", ["default", "lint_results"])]
+```
+
+Its `lint_info` record names the analyzer, requested source scope, command,
+portable report path, normalized result path, native artifacts, logs, and
+execution policy. The report uses
+[Static Analysis Results Interchange Format](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html).
+Tool-specific invocation and native configuration remain in the target kind.
+The Rust execution and result layers stay ecosystem-neutral.
+
+`once query module-contract --format json` returns a complete `lint_starter`,
+matching target and adapter starters, and a normalized result example. See
+[Custom lint target kinds](/reference/modules/linting) for a complete direct
+reporter, native report conversion, validation, execution, and cache
+verification workflow.
 
 ## Script-backed Test Target Kinds
 
