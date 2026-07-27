@@ -205,13 +205,75 @@ fn update(
         .expect("find_target_index returned a valid index");
     let mut updated = table.clone();
     apply_update(&mut updated, set, target_name)?;
-    validate_spec(&target_spec_from_table(&updated), schemas)?;
+    validate_table(&updated, schemas)?;
     *table = updated;
     Ok(())
 }
 
 fn validate_spec(spec: &TargetSpec, schemas: &[TargetKindSchema]) -> Result<(), Vec<Diagnostic>> {
     let diagnostics = validate_target(spec, schemas);
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(diagnostics)
+    }
+}
+
+fn validate_table(table: &Table, schemas: &[TargetKindSchema]) -> Result<(), Vec<Diagnostic>> {
+    let spec = target_spec_from_table(table);
+    let mut diagnostics = validate_target(&spec, schemas);
+    let Some(schema) = schemas.iter().find(|schema| schema.kind == spec.kind) else {
+        return if diagnostics.is_empty() {
+            Ok(())
+        } else {
+            Err(diagnostics)
+        };
+    };
+
+    for edge in &schema.deps {
+        let (attribute, item) = if edge.name == "deps" {
+            ("deps".to_string(), table.get("deps"))
+        } else {
+            (
+                format!("dependencies.{}", edge.name),
+                table
+                    .get("dependencies")
+                    .and_then(Item::as_table)
+                    .and_then(|dependencies| dependencies.get(&edge.name)),
+            )
+        };
+        let Some(branches) = dependency_select_branches(item) else {
+            continue;
+        };
+
+        diagnostics.retain(|diagnostic| {
+            diagnostic.code != "dependency_count_mismatch"
+                || diagnostic.attribute.as_deref() != Some(attribute.as_str())
+        });
+        for dependencies in branches {
+            let mut branch_spec = spec.clone();
+            if edge.name == "deps" {
+                branch_spec.deps = dependencies;
+            } else {
+                branch_spec
+                    .dependencies
+                    .insert(edge.name.clone(), dependencies);
+            }
+            for diagnostic in
+                validate_target(&branch_spec, schemas)
+                    .into_iter()
+                    .filter(|diagnostic| {
+                        diagnostic.code == "dependency_count_mismatch"
+                            && diagnostic.attribute.as_deref() == Some(attribute.as_str())
+                    })
+            {
+                if !diagnostics.contains(&diagnostic) {
+                    diagnostics.push(diagnostic);
+                }
+            }
+        }
+    }
+
     if diagnostics.is_empty() {
         Ok(())
     } else {
@@ -357,6 +419,40 @@ fn string_vec_from_item(item: Option<&Item>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn dependency_select_branches(item: Option<&Item>) -> Option<Vec<Vec<String>>> {
+    match item? {
+        Item::Table(table) if table.len() == 1 => {
+            let branches = table.get("select")?.as_table()?;
+            Some(
+                branches
+                    .iter()
+                    .map(|(_, item)| string_vec_from_item(Some(item)))
+                    .collect(),
+            )
+        }
+        Item::Value(Value::InlineTable(table)) if table.len() == 1 => {
+            let branches = table.get("select")?.as_inline_table()?;
+            Some(
+                branches
+                    .iter()
+                    .map(|(_, value)| {
+                        value
+                            .as_array()
+                            .map(|array| {
+                                array
+                                    .iter()
+                                    .filter_map(|value| value.as_str().map(ToString::to_string))
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    })
+                    .collect(),
+            )
+        }
+        _ => None,
+    }
 }
 
 fn attrs_from_item(item: Option<&Item>) -> JsonMap<String, JsonValue> {
@@ -700,6 +796,67 @@ platform = "ios"
         assert!(out.contains("deps = [\"./Other\"]"));
         assert!(out.contains("srcs = [\"Sources/**/*.swift\"]"));
         assert!(out.contains("platform = \"ios\""));
+    }
+
+    #[test]
+    fn update_preserves_dependency_select_counts() {
+        let src = r#"
+[[target]]
+name = "HelloThinned"
+kind = "apple_thinned_package"
+
+[target.deps.select]
+macos = ["./Hello"]
+default = ["./Portable"]
+
+[target.attrs]
+device_model = "iPhone17,1"
+"#;
+        let out = apply_operations(
+            src,
+            &[EditOperation::Update {
+                target_name: "HelloThinned".to_string(),
+                set: TargetUpdate {
+                    visibility: Some(vec!["public".to_string()]),
+                    ..Default::default()
+                },
+            }],
+        )
+        .expect("update target with selected dependencies");
+
+        assert!(out.contains("[target.deps.select]"));
+        assert!(out.contains("macos = [\"./Hello\"]"));
+        assert!(out.contains("visibility = [\"public\"]"));
+    }
+
+    #[test]
+    fn update_rejects_invalid_dependency_select_branch_counts() {
+        let src = r#"
+[[target]]
+name = "HelloThinned"
+kind = "apple_thinned_package"
+
+[target.deps.select]
+macos = ["./Hello"]
+default = ["./Portable", "./OtherPortable"]
+
+[target.attrs]
+device_model = "iPhone17,1"
+"#;
+        let diagnostics = apply_operations(
+            src,
+            &[EditOperation::Update {
+                target_name: "HelloThinned".to_string(),
+                set: TargetUpdate {
+                    visibility: Some(vec!["public".to_string()]),
+                    ..Default::default()
+                },
+            }],
+        )
+        .expect_err("invalid dependency select branch must fail");
+
+        assert_eq!(diagnostics[0].code, "dependency_count_mismatch");
+        assert_eq!(diagnostics[0].attribute.as_deref(), Some("deps"));
     }
 
     #[test]
