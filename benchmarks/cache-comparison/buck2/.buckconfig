@@ -1,0 +1,34 @@
+[cells]
+  root = .
+  prelude = prelude
+  toolchains = toolchains
+  none = none
+
+[cell_aliases]
+  config = prelude
+  ovr_config = prelude
+  fbcode = none
+  fbsource = none
+  fbcode_macros = none
+  buck = none
+
+[external_cells]
+  prelude = bundled
+
+[parser]
+  target_platform_detector_spec = target:root//...->prelude//platforms:default \
+    target:prelude//...->prelude//platforms:default \
+    target:toolchains//...->prelude//platforms:default
+
+[build]
+  execution_platforms = root//platforms:platforms
+
+[buck2_re_client]
+  action_cache_address = grpc://127.0.0.1:19092
+  cas_address = grpc://127.0.0.1:19092
+  engine_address = grpc://127.0.0.1:19092
+  tls = false
+  instance_name = benchmark-buck2
+
+[project]
+  ignore = .git

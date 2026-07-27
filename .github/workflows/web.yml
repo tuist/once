@@ -149,7 +149,7 @@ jobs:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
       - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
         with:
-          context: ./web
+          context: .
           file: ./web/Dockerfile
           push: false
           platforms: linux/amd64
@@ -167,8 +167,8 @@ jobs:
           install_args: "helm@3.21.0"
           cache: "false"
 
-      - run: mise exec -- helm lint infra/helm/once
-      - run: mise exec -- helm template once infra/helm/once --namespace once-production >/tmp/once-helm-rendered.yaml
-      - run: mise exec -- bash infra/helm/once/tests/render-conditionals.sh
+      - run: mise --no-config exec helm@3.21.0 -- helm lint infra/helm/once
+      - run: mise --no-config exec helm@3.21.0 -- helm template once infra/helm/once --namespace once-production >/tmp/once-helm-rendered.yaml
+      - run: mise --no-config exec helm@3.21.0 -- bash infra/helm/once/tests/render-conditionals.sh
         env:
           RENDERED_MANIFEST: /tmp/once-helm-rendered.yaml

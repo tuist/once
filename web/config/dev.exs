@@ -31,7 +31,8 @@ config :once_site, OnceSiteWeb.Endpoint,
   debug_errors: true,
   secret_key_base: "xIP+ebBfEfZbAUAeURLpV6gFSg9Wom9oi0fa+/JnP+Ll1sOZPOOmoDYEHZqmOBLK",
   watchers: [
-    esbuild: {Esbuild, :install_and_run, [:once_site, ~w(--sourcemap=inline --watch)]}
+    esbuild: {Esbuild, :install_and_run, [:once_site, ~w(--sourcemap=inline --watch)]},
+    esbuild_docs: {Esbuild, :install_and_run, [:docs, ~w(--sourcemap=inline --watch)]}
   ]
 
 # Reload browser tabs when matching files change.
@@ -43,7 +44,9 @@ config :once_site, OnceSiteWeb.Endpoint,
       ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$",
       # Router, Controllers, LiveViews and LiveComponents
       ~r"lib/once_site_web/router\.ex$",
-      ~r"lib/once_site_web/(controllers|live|components)/.*\.(ex|heex)$"
+      ~r"lib/once_site_web/(controllers|live|components)/.*\.(ex|heex)$",
+      ~r"lib/once_site_web/docs/.*\.(ex|heex)$",
+      ~r"priv/docs/.*\.md$"
     ]
   ]
 

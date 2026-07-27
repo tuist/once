@@ -1,0 +1,133 @@
+load("//:surface.bzl", "surface_action")
+
+surface_action(
+    name = "rust_cas",
+    srcs = ["//inputs:rust-cas.txt"],
+    bytes = 8388608,
+)
+
+surface_action(
+    name = "rust_core",
+    srcs = [
+        "//inputs:rust-core.txt",
+        ":rust_cas",
+    ],
+    bytes = 8388608,
+)
+
+surface_action(
+    name = "rust_frontend",
+    srcs = ["//inputs:rust-frontend.txt"],
+    bytes = 8388608,
+)
+
+surface_action(
+    name = "rust_cli",
+    srcs = [
+        "//inputs:rust-cli.txt",
+        ":rust_cas",
+        ":rust_core",
+        ":rust_frontend",
+    ],
+    bytes = 4194304,
+)
+
+surface_action(
+    name = "sdk_native",
+    srcs = [
+        "//inputs:sdk-native.txt",
+        ":rust_cas",
+        ":rust_core",
+    ],
+    bytes = 8388608,
+)
+
+surface_action(
+    name = "sdk_javascript",
+    srcs = [
+        "//inputs:sdk-javascript.txt",
+        ":sdk_native",
+    ],
+    bytes = 2097152,
+)
+
+surface_action(
+    name = "sdk_ruby",
+    srcs = [
+        "//inputs:sdk-ruby.txt",
+        ":sdk_native",
+    ],
+    bytes = 2097152,
+)
+
+surface_action(
+    name = "docs_reference",
+    srcs = [
+        "//inputs:docs-reference.txt",
+        ":rust_cli",
+    ],
+    bytes = 2097152,
+)
+
+surface_action(
+    name = "docs_site",
+    srcs = [
+        "//inputs:docs-site.txt",
+        ":docs_reference",
+    ],
+    bytes = 4194304,
+)
+
+surface_action(
+    name = "web_dependencies",
+    srcs = ["//inputs:web-dependencies.txt"],
+    bytes = 16777216,
+)
+
+surface_action(
+    name = "web_compile",
+    srcs = [
+        "//inputs:web-compile.txt",
+        ":web_dependencies",
+    ],
+    bytes = 8388608,
+)
+
+surface_action(
+    name = "web_assets",
+    srcs = [
+        "//inputs:web-assets.txt",
+        ":web_compile",
+    ],
+    bytes = 4194304,
+)
+
+surface_action(
+    name = "web_release",
+    srcs = [
+        "//inputs:web-release.txt",
+        ":web_assets",
+        ":web_compile",
+    ],
+    bytes = 8388608,
+)
+
+surface_action(
+    name = "helm",
+    srcs = ["//inputs:helm.txt"],
+    bytes = 1048576,
+)
+
+surface_action(
+    name = "distribution",
+    srcs = [
+        "//inputs:distribution.txt",
+        ":docs_site",
+        ":helm",
+        ":rust_cli",
+        ":sdk_javascript",
+        ":sdk_ruby",
+        ":web_release",
+    ],
+    bytes = 1048576,
+)

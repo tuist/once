@@ -27,12 +27,52 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{EvidenceCacheState, SandboxMode};
-use once_frontend::analysis::{AnalysisEngine, AnalysisOptions};
+use once_frontend::analysis::{AnalysisEngine, AnalysisOptions, CachedToolCommand};
 use once_frontend::GraphTarget;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use self::actions::{run_declared_actions, validate_declared_actions, DeclaredActionValidation};
 use self::scheduler::BuildScheduler;
+
+const GRAPH_TOOL_CACHE_SCHEMA: &str = "once.graph-tool-paths.v4";
+const GRAPH_TOOL_ENVIRONMENT_KEYS: &[&str] = &[
+    "DEVELOPER_DIR",
+    "ELIXIR_ERL_OPTIONS",
+    "ERL_AFLAGS",
+    "ERL_FLAGS",
+    "GEM_HOME",
+    "GEM_PATH",
+    "GOENV",
+    "GOFLAGS",
+    "GOROOT",
+    "HOME",
+    "JAVA_HOME",
+    "JAVA_TOOL_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "MISE_CACHE_DIR",
+    "MISE_CONFIG_DIR",
+    "MISE_DATA_DIR",
+    "MISE_ENABLE_TOOLS",
+    "MISE_ENV",
+    "MISE_PROFILE",
+    "MIX_ENV",
+    "NODE_OPTIONS",
+    "PATH",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONWARNINGS",
+    "RUBYOPT",
+    "RUSTFLAGS",
+    "RUSTUP_TOOLCHAIN",
+    "SDKROOT",
+    "USERPROFILE",
+    "ZIG_GLOBAL_CACHE_DIR",
+    "_JAVA_OPTIONS",
+];
 
 /// Per-target outcome cached during a single command invocation.
 ///
@@ -50,11 +90,20 @@ pub(super) struct BuildOutcome {
     pub cache_tag: &'static str,
     pub cache_state: EvidenceCacheState,
     pub result: ActionResult,
+    pub cached_results: Vec<ActionResult>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct AvailableInput {
+    pub blob_digest: Digest,
+    pub producer_action_digest: Digest,
+    pub same_target: bool,
 }
 
 pub(super) struct AnalyzedCapability {
     pub analysis: once_frontend::analysis::AnalysisResult,
     pub dep_action_digests: Vec<(String, Digest)>,
+    pub available_inputs: BTreeMap<String, AvailableInput>,
 }
 
 /// Command-scoped graph build session.
@@ -73,10 +122,44 @@ pub(super) struct BuildSession {
     targets: HashMap<String, Arc<GraphTarget>>,
     analyzer: AnalysisEngine,
     module_source_digest: Digest,
+    tool_paths: Arc<BTreeMap<String, String>>,
+    tool_cache_fingerprint: Option<Digest>,
+    cached_tool_commands: Arc<[CachedToolCommand]>,
     sandbox: SandboxMode,
 }
 
 impl BuildSession {
+    pub(super) async fn load_workspace(
+        workspace: &Path,
+        cache: &CacheProvider,
+        sandbox: SandboxMode,
+    ) -> Result<Self> {
+        let workspace_targets =
+            once_frontend::load_workspace(workspace).context("loading workspace")?;
+        let target_kinds = workspace_targets
+            .iter()
+            .map(|target| target.kind.clone())
+            .collect::<BTreeSet<_>>();
+        let analyzer = AnalysisEngine::for_workspace_with_options_and_target_kinds(
+            workspace,
+            AnalysisOptions::default(),
+            &target_kinds,
+        )?;
+        let graph = analyzer
+            .load_graph_workspace_from_targets(workspace, workspace_targets)
+            .context("loading graph")?;
+        let resolved_tools = resolve_graph_tools(workspace, &graph).await?;
+        let analyzer = analyzer.with_tool_cache(
+            resolved_tools.paths.clone(),
+            resolved_tools.commands.clone(),
+        );
+        let mut session = Self::new_with_analyzer(workspace, cache, graph, analyzer, sandbox);
+        session.tool_paths = Arc::new(resolved_tools.paths);
+        session.tool_cache_fingerprint = resolved_tools.fingerprint;
+        session.cached_tool_commands = resolved_tools.commands.into();
+        Ok(session)
+    }
+
     pub(super) async fn new(
         workspace: &Path,
         cache: &CacheProvider,
@@ -93,16 +176,17 @@ impl BuildSession {
         options: AnalysisOptions,
         sandbox: SandboxMode,
     ) -> Result<Self> {
-        let tool_paths = resolve_graph_tools(workspace, &graph).await?;
-        Ok(Self::new_with_analyzer(
-            workspace,
-            cache,
-            graph,
-            AnalysisEngine::for_workspace_with_options_and_tool_paths(
-                workspace, options, tool_paths,
-            )?,
-            sandbox,
-        ))
+        let resolved_tools = resolve_graph_tools(workspace, &graph).await?;
+        let analyzer = AnalysisEngine::for_workspace_with_options(workspace, options)?
+            .with_tool_cache(
+                resolved_tools.paths.clone(),
+                resolved_tools.commands.clone(),
+            );
+        let mut session = Self::new_with_analyzer(workspace, cache, graph, analyzer, sandbox);
+        session.tool_paths = Arc::new(resolved_tools.paths);
+        session.tool_cache_fingerprint = resolved_tools.fingerprint;
+        session.cached_tool_commands = resolved_tools.commands.into();
+        Ok(session)
     }
 
     fn new_with_analyzer(
@@ -125,6 +209,9 @@ impl BuildSession {
                 .collect(),
             analyzer,
             module_source_digest,
+            tool_paths: Arc::new(BTreeMap::new()),
+            tool_cache_fingerprint: None,
+            cached_tool_commands: Arc::from([]),
             sandbox,
         }
     }
@@ -159,6 +246,10 @@ impl BuildSession {
             "building graph target through Starlark analysis"
         );
         let outcome = self.build_reachable(&target.label.id, &reachable).await?;
+        materialize_cached_outputs(&outcome, &self.workspace, &self.cache)
+            .await
+            .with_context(|| format!("materializing outputs for {}", target.label.id))?;
+        self.persist_graph_tool_cache();
         Ok(Some(outcome))
     }
 
@@ -185,6 +276,7 @@ impl BuildSession {
             let AnalyzedCapability {
                 analysis,
                 dep_action_digests,
+                available_inputs,
             } = self.analyze_capability(target, capability).await?;
             let outcome = run_declared_actions(
                 &self.workspace,
@@ -194,10 +286,18 @@ impl BuildSession {
                 capability,
                 analysis,
                 &dep_action_digests,
+                &available_inputs,
+                &self.tool_paths,
                 self.sandbox,
             )
             .await
             .with_context(|| format!("executing {capability} for {}", target.label.id))?;
+            materialize_cached_outputs(&outcome, &self.workspace, &self.cache)
+                .await
+                .with_context(|| {
+                    format!("materializing {capability} outputs for {}", target.label.id)
+                })?;
+            self.persist_graph_tool_cache();
             Ok(Some(outcome))
         })
     }
@@ -222,8 +322,19 @@ impl BuildSession {
         );
         let mut providers_by_id = HashMap::with_capacity(dep_outcomes.len());
         let mut dep_action_digests = Vec::with_capacity(dep_outcomes.len());
+        let mut available_inputs = BTreeMap::new();
         for (dep_id, outcome) in dep_outcomes {
             dep_action_digests.push((dep_id.clone(), outcome.action_digest));
+            available_inputs.extend(outcome.result.outputs.iter().map(|(path, digest)| {
+                (
+                    path.clone(),
+                    AvailableInput {
+                        blob_digest: *digest,
+                        producer_action_digest: outcome.action_digest,
+                        same_target: false,
+                    },
+                )
+            }));
             providers_by_id.insert(dep_id, outcome.provider);
         }
         let dep_providers = target
@@ -255,6 +366,7 @@ impl BuildSession {
         Ok(AnalyzedCapability {
             analysis,
             dep_action_digests,
+            available_inputs,
         })
     }
 
@@ -267,6 +379,7 @@ impl BuildSession {
         let AnalyzedCapability {
             analysis,
             dep_action_digests,
+            available_inputs: _,
         } = self.analyze_capability(target, capability).await?;
         validate_declared_actions(
             &self.workspace,
@@ -379,6 +492,7 @@ impl BuildSession {
             &self.cache,
             &self.targets,
             &self.analyzer,
+            &self.tool_paths,
             reachable,
             retained,
             self.sandbox,
@@ -386,6 +500,40 @@ impl BuildSession {
         .run()
         .await
     }
+
+    fn persist_graph_tool_cache(&self) {
+        let Some(fingerprint) = self.tool_cache_fingerprint else {
+            return;
+        };
+        let commands = match self.analyzer.cacheable_tool_commands() {
+            Ok(commands) => commands,
+            Err(error) => {
+                tracing::debug!(%error, "failed to read cached graph tool commands");
+                return;
+            }
+        };
+        if commands.as_slice() == self.cached_tool_commands.as_ref() {
+            return;
+        }
+        if let Err(error) =
+            write_graph_tool_cache(&self.workspace, fingerprint, &self.tool_paths, &commands)
+        {
+            tracing::debug!(%error, "failed to persist graph tool commands");
+        }
+    }
+}
+
+async fn materialize_cached_outputs(
+    outcome: &BuildOutcome,
+    workspace: &Path,
+    cache: &CacheProvider,
+) -> Result<()> {
+    for result in &outcome.cached_results {
+        once_core::materialize_outputs(result, workspace, cache)
+            .await
+            .map_err(anyhow::Error::from)?;
+    }
+    Ok(())
 }
 
 /// Resolve the executables declared by the graph's tools to concrete
@@ -405,9 +553,9 @@ impl BuildSession {
 async fn resolve_graph_tools(
     workspace: &Path,
     graph: &[GraphTarget],
-) -> Result<BTreeMap<String, String>> {
+) -> Result<ResolvedGraphTools> {
     if !once_core::workspace_has_mise_config(workspace) {
-        return Ok(BTreeMap::new());
+        return Ok(ResolvedGraphTools::default());
     }
 
     let tool_names = graph
@@ -420,25 +568,72 @@ async fn resolve_graph_tools(
             target
                 .tools
                 .iter()
-                .flat_map(|tool| tool.executables.iter().map(String::as_str))
+                .flat_map(|tool| tool.executables.iter().cloned())
         })
         .collect::<BTreeSet<_>>();
     let tool_names = tool_names.into_iter().collect::<Vec<_>>();
-    let tool_name_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
-    if let Err(error) = once_core::workspace_prepare_tools(workspace, &tool_name_refs).await {
+    let executable_names = executable_names.into_iter().collect::<Vec<_>>();
+    let fingerprint = graph_tool_cache_fingerprint(workspace, &tool_names, &executable_names)?;
+    if let Some(cached) = read_graph_tool_cache(workspace, fingerprint) {
         tracing::debug!(
-            %error,
-            "preparing graph tools through mise failed; falling back to the host toolchain"
+            tools = cached.paths.len(),
+            commands = cached.commands.len(),
+            "reused validated graph tool paths"
         );
+        return Ok(ResolvedGraphTools {
+            paths: cached.paths,
+            fingerprint: Some(fingerprint),
+            commands: cached.commands,
+        });
     }
 
-    // Shared across every resolution task instead of cloned per executable.
     let tool_names = Arc::<[String]>::from(tool_names);
+    let (mut paths, mut failures) =
+        resolve_graph_tool_executables(workspace, &tool_names, &executable_names).await?;
+    if !failures.is_empty() {
+        let tool_name_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
+        if let Err(error) = once_core::workspace_prepare_tools(workspace, &tool_name_refs).await {
+            tracing::debug!(
+                %error,
+                "preparing graph tools through mise failed; falling back to the host toolchain"
+            );
+        } else {
+            (paths, failures) =
+                resolve_graph_tool_executables(workspace, &tool_names, &executable_names).await?;
+        }
+    }
+    for (executable, error) in failures {
+        tracing::trace!(
+            executable,
+            %error,
+            "graph tool executable is not ready"
+        );
+    }
+    if paths.len() == executable_names.len() {
+        if let Err(error) = write_graph_tool_cache(workspace, fingerprint, &paths, &[]) {
+            tracing::debug!(%error, "failed to persist graph tool paths");
+        }
+    }
+    Ok(ResolvedGraphTools {
+        paths,
+        fingerprint: Some(fingerprint),
+        commands: Vec::new(),
+    })
+}
+
+async fn resolve_graph_tool_executables(
+    workspace: &Path,
+    tool_names: &Arc<[String]>,
+    executable_names: &[String],
+) -> Result<(
+    BTreeMap<String, String>,
+    Vec<(String, once_core::ToolEnvError)>,
+)> {
     let mut tasks = tokio::task::JoinSet::new();
     for executable in executable_names {
         let workspace = workspace.to_path_buf();
-        let executable = executable.to_string();
-        let tool_names = Arc::clone(&tool_names);
+        let executable = executable.clone();
+        let tool_names = Arc::clone(tool_names);
         tasks.spawn(async move {
             let tool_name_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
             let path =
@@ -448,6 +643,7 @@ async fn resolve_graph_tools(
     }
 
     let mut paths = BTreeMap::new();
+    let mut failures = Vec::new();
     while let Some(result) = tasks.join_next().await {
         let (executable, path) = result.context("joining graph tool resolution")?;
         match path {
@@ -455,15 +651,182 @@ async fn resolve_graph_tools(
                 paths.insert(executable, path);
             }
             Err(error) => {
-                tracing::debug!(
-                    executable,
-                    %error,
-                    "resolving graph tool executable through mise failed; falling back to the host PATH"
-                );
+                failures.push((executable, error));
             }
         }
     }
-    Ok(paths)
+    Ok((paths, failures))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GraphToolCache {
+    schema: String,
+    fingerprint: String,
+    paths_fingerprint: String,
+    paths: BTreeMap<String, String>,
+    commands: Vec<CachedToolCommand>,
+}
+
+#[derive(Debug, Default)]
+struct ResolvedGraphTools {
+    paths: BTreeMap<String, String>,
+    fingerprint: Option<Digest>,
+    commands: Vec<CachedToolCommand>,
+}
+
+fn graph_tool_cache_fingerprint(
+    workspace: &Path,
+    tool_names: &[String],
+    executable_names: &[String],
+) -> Result<Digest> {
+    let mut bytes = Vec::new();
+    push_fingerprint_part(&mut bytes, GRAPH_TOOL_CACHE_SCHEMA.as_bytes());
+    push_fingerprint_part(&mut bytes, once_core::MANAGED_MISE_VERSION.as_bytes());
+    push_fingerprint_part(&mut bytes, std::env::consts::OS.as_bytes());
+    push_fingerprint_part(&mut bytes, std::env::consts::ARCH.as_bytes());
+    for path in ["mise.toml", "mise.lock"] {
+        push_fingerprint_part(&mut bytes, path.as_bytes());
+        match std::fs::read(workspace.join(path)) {
+            Ok(contents) => push_fingerprint_part(&mut bytes, &contents),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                push_fingerprint_part(&mut bytes, b"missing");
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reading graph tool configuration `{path}`"));
+            }
+        }
+    }
+    for tool in tool_names {
+        push_fingerprint_part(&mut bytes, tool.as_bytes());
+    }
+    for executable in executable_names {
+        push_fingerprint_part(&mut bytes, executable.as_bytes());
+    }
+    for key in GRAPH_TOOL_ENVIRONMENT_KEYS {
+        push_fingerprint_part(&mut bytes, key.as_bytes());
+        match std::env::var_os(key) {
+            Some(value) => push_fingerprint_part(&mut bytes, value.to_string_lossy().as_bytes()),
+            None => push_fingerprint_part(&mut bytes, b"missing"),
+        }
+    }
+    Ok(Digest::of_bytes(&bytes))
+}
+
+fn push_fingerprint_part(bytes: &mut Vec<u8>, part: &[u8]) {
+    bytes.extend_from_slice(&(part.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(part);
+}
+
+fn read_graph_tool_cache(workspace: &Path, expected_fingerprint: Digest) -> Option<GraphToolCache> {
+    read_graph_tool_cache_at(&graph_tool_cache_path(workspace), expected_fingerprint)
+}
+
+fn read_graph_tool_cache_at(path: &Path, expected_fingerprint: Digest) -> Option<GraphToolCache> {
+    let raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            tracing::debug!(%error, path = %path.display(), "failed to read graph tool paths");
+            return None;
+        }
+    };
+    let cached = match serde_json::from_slice::<GraphToolCache>(&raw) {
+        Ok(cached) => cached,
+        Err(error) => {
+            tracing::debug!(%error, path = %path.display(), "failed to parse graph tool paths");
+            return None;
+        }
+    };
+    if cached.schema != GRAPH_TOOL_CACHE_SCHEMA
+        || cached.fingerprint != expected_fingerprint.to_string()
+        || graph_tool_paths_fingerprint(&cached.paths)
+            .is_none_or(|fingerprint| fingerprint.to_string() != cached.paths_fingerprint)
+    {
+        return None;
+    }
+    Some(cached)
+}
+
+fn write_graph_tool_cache(
+    workspace: &Path,
+    fingerprint: Digest,
+    paths: &BTreeMap<String, String>,
+    commands: &[CachedToolCommand],
+) -> Result<()> {
+    write_graph_tool_cache_at(
+        &graph_tool_cache_path(workspace),
+        fingerprint,
+        paths,
+        commands,
+    )
+}
+
+fn write_graph_tool_cache_at(
+    path: &Path,
+    fingerprint: Digest,
+    paths: &BTreeMap<String, String>,
+    commands: &[CachedToolCommand],
+) -> Result<()> {
+    let parent = path
+        .parent()
+        .expect("graph tool cache path always has a parent");
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("creating graph tool cache directory `{}`", parent.display()))?;
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let paths_fingerprint =
+        graph_tool_paths_fingerprint(paths).context("fingerprinting graph tool paths")?;
+    let record = GraphToolCache {
+        schema: GRAPH_TOOL_CACHE_SCHEMA.to_string(),
+        fingerprint: fingerprint.to_string(),
+        paths_fingerprint: paths_fingerprint.to_string(),
+        paths: paths.clone(),
+        commands: commands.to_vec(),
+    };
+    let raw = serde_json::to_vec(&record).context("serializing graph tool paths")?;
+    std::fs::write(&temporary, raw)
+        .with_context(|| format!("writing graph tool cache `{}`", temporary.display()))?;
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        if !path.is_file() {
+            return Err(error)
+                .with_context(|| format!("activating graph tool cache `{}`", path.display()));
+        }
+        std::fs::remove_file(path)
+            .with_context(|| format!("replacing graph tool cache `{}`", path.display()))?;
+        std::fs::rename(&temporary, path)
+            .with_context(|| format!("activating graph tool cache `{}`", path.display()))?;
+    }
+    Ok(())
+}
+
+fn graph_tool_cache_path(workspace: &Path) -> PathBuf {
+    graph_tool_cache_path_from(&once_core::Xdg::from_env().once_toolchains(), workspace)
+}
+
+fn graph_tool_cache_path_from(toolchain_root: &Path, workspace: &Path) -> PathBuf {
+    let workspace = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let workspace_id = Digest::of_bytes(workspace.to_string_lossy().as_bytes());
+    toolchain_root.join(format!("{workspace_id}.json"))
+}
+
+fn graph_tool_paths_fingerprint(paths: &BTreeMap<String, String>) -> Option<Digest> {
+    let mut bytes = Vec::new();
+    for (name, path) in paths {
+        let metadata = std::fs::metadata(path).ok()?;
+        if !metadata.is_file() {
+            return None;
+        }
+        let modified = metadata
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        push_fingerprint_part(&mut bytes, name.as_bytes());
+        push_fingerprint_part(&mut bytes, path.as_bytes());
+        push_fingerprint_part(&mut bytes, &metadata.len().to_le_bytes());
+        push_fingerprint_part(&mut bytes, &modified.as_nanos().to_le_bytes());
+    }
+    Some(Digest::of_bytes(&bytes))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -476,10 +839,12 @@ async fn build_one(
     dep_providers: Vec<JsonValue>,
     dependency_providers: BTreeMap<String, Vec<JsonValue>>,
     dep_action_digests: Vec<(String, Digest)>,
+    available_inputs: BTreeMap<String, AvailableInput>,
+    tool_paths: Arc<BTreeMap<String, String>>,
     sandbox: SandboxMode,
 ) -> Result<(String, BuildOutcome)> {
     let target_id = target.label.id.clone();
-    tracing::debug!(
+    tracing::trace!(
         target = %target_id,
         dep_providers = dep_providers.len(),
         dependency_roles = dependency_providers.len(),
@@ -503,7 +868,7 @@ async fn build_one(
     })
     .await
     .context("joining graph analysis task")??;
-    tracing::debug!(
+    tracing::trace!(
         target = %target_id,
         declared_actions = analysis.actions.len(),
         declared_outputs = analysis.declared_outputs.len(),
@@ -518,6 +883,8 @@ async fn build_one(
         "build",
         analysis,
         &dep_action_digests,
+        &available_inputs,
+        &tool_paths,
         sandbox,
     )
     .await?;

@@ -171,6 +171,22 @@ pub async fn workspace_tool_env_with_executables(
     Ok(selected)
 }
 
+pub fn workspace_prepared_tool_env(
+    workspace: &Path,
+    tools: &[&str],
+    executable_paths: &[PathBuf],
+) -> Result<BTreeMap<String, String>, ToolEnvError> {
+    if !has_mise_config(workspace) {
+        return Ok(tool_env(&[]));
+    }
+    let mut selected = workspace_mise_env(workspace, tools);
+    selected.insert(
+        "PATH".into(),
+        build_action_path(executable_paths, &BTreeMap::new())?,
+    );
+    Ok(selected)
+}
+
 /// Read one variable from the workspace's pinned toolchain environment.
 ///
 /// This is used for cache-key material such as `RUSTUP_TOOLCHAIN`, so

@@ -160,6 +160,15 @@ def _unique(values):
             out.append(value)
     return out
 
+def _collect_transitive(deps, key, own_values):
+    out = []
+    for value in own_values:
+        out.append(value)
+    for dep in deps:
+        for value in dep.get(key) or []:
+            out.append(value)
+    return _unique(out)
+
 def _configuration_tokens(ctx, extra = []):
     configured = (ctx.get("configuration") or {}).get("tokens") or []
     return _unique(extra + configured + ["default"])

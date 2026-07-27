@@ -12,8 +12,8 @@ defmodule OnceSite.Application do
       OnceSite.Repo,
       {DNSCluster, query: Application.get_env(:once_site, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: OnceSite.PubSub},
-      # Start a worker by calling: OnceSite.Worker.start_link(arg)
-      # {OnceSite.Worker, arg},
+      {OnceSite.RateLimit, [clean_period: :timer.minutes(1)]},
+      OnceSiteWeb.Docs.Cache,
       # Start to serve requests, typically the last entry
       OnceSiteWeb.Endpoint
     ]

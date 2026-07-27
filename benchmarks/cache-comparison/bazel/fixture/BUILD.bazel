@@ -1,0 +1,7 @@
+exports_files(["action.mjs"])
+
+filegroup(
+    name = "action",
+    srcs = ["action.mjs"],
+    visibility = ["//visibility:public"],
+)

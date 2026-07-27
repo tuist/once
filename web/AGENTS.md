@@ -1,10 +1,17 @@
-This is a Phoenix application for the Once marketing site and registry.
+This is a Phoenix application that serves the Once marketing site and the documentation (under `/docs`).
 
 ## CSS And Styling
 
 - Use `data-part` attributes as CSS selectors instead of classes.
 - Keep cards at 8px radius or less.
 - Do not add a new styling framework unless the project needs it.
+- The docs and marketing surfaces both build on the Noora design system and its tokens.
+
+## Changelog
+
+- When you ship a user-facing change, add an entry under `priv/changelog/` as a
+  markdown file named `YYYY-MM-DD-short-slug.md` with `title` and `date`
+  frontmatter. Entries appear on `/changelog` and in the RSS/Atom feeds.
 
 ## Running
 

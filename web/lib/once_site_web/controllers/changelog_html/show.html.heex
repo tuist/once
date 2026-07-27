@@ -1,0 +1,10 @@
+<Layouts.app flash={@flash}>
+  <article data-part="changelog-detail">
+    <a data-part="back-link" href={~p"/changelog"}>← Changelog</a>
+    <time data-part="detail-date" datetime={Date.to_iso8601(@entry.date)}>
+      {format_date(@entry.date)}
+    </time>
+    <h1>{@entry.title}</h1>
+    <div data-part="entry-prose">{raw(@entry.html)}</div>
+  </article>
+</Layouts.app>

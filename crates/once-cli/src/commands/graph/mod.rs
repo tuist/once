@@ -61,8 +61,7 @@ pub async fn build(
     target_id: &str,
     sandbox: SandboxMode,
 ) -> Result<ExitCode> {
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let session = analysis::BuildSession::new(workspace, cache, graph, sandbox).await?;
+    let session = analysis::BuildSession::load_workspace(workspace, cache, sandbox).await?;
     let target = session.target(target_id)?;
     let record = build_target(workspace, cache, target, &session, sandbox).await?;
     record_capability_run(workspace, &record).await;

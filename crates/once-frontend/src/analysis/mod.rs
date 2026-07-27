@@ -25,8 +25,8 @@ pub use engine::{
 };
 pub use globals::globals_for_prelude;
 pub use store::{
-    with_active_store, AnalysisStore, DeclaredAction, DeclaredActionOperation, DeclaredArgFile,
-    DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
+    with_active_store, AnalysisStore, CachedToolCommand, DeclaredAction, DeclaredActionOperation,
+    DeclaredArgFile, DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
 
 /// If `value` is the canonical select-shape Map (`{ "select": { ... }

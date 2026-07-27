@@ -1,0 +1,30 @@
+<Layouts.app flash={@flash}>
+  <section data-part="changelog">
+    <div data-part="changelog-header">
+      <p data-part="eyebrow">Changelog</p>
+      <h1>What's new in Once</h1>
+      <p data-part="page-copy">
+        Every user-facing change to Once, newest first. Subscribe to keep up.
+      </p>
+      <div data-part="subscribe">
+        <a href={~p"/changelog/feed.xml"}>RSS</a>
+        <a href={~p"/changelog/feed.atom"}>Atom</a>
+      </div>
+    </div>
+
+    <ol data-part="changelog-list">
+      <li :for={entry <- @entries} id={entry.slug} data-part="changelog-entry">
+        <div data-part="entry-meta">
+          <time datetime={Date.to_iso8601(entry.date)}>{format_date(entry.date)}</time>
+        </div>
+        <div data-part="entry-content">
+          <h2>
+            <a href={~p"/changelog/#{entry.slug}"}>{entry.title}</a>
+          </h2>
+          <div data-part="entry-prose">{raw(entry.html)}</div>
+          <a data-part="entry-permalink" href={~p"/changelog/#{entry.slug}"}>Permalink →</a>
+        </div>
+      </li>
+    </ol>
+  </section>
+</Layouts.app>

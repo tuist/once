@@ -10,7 +10,7 @@ use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 
-use super::{build_one, BuildOutcome};
+use super::{build_one, AvailableInput, BuildOutcome};
 
 pub(super) struct BuildScheduler<'a> {
     root_id: &'a str,
@@ -18,6 +18,7 @@ pub(super) struct BuildScheduler<'a> {
     cache: &'a CacheProvider,
     targets: &'a HashMap<String, Arc<GraphTarget>>,
     analyzer: &'a AnalysisEngine,
+    tool_paths: &'a Arc<BTreeMap<String, String>>,
     module_source_digest: Digest,
     reachable: &'a HashSet<String>,
     retained: &'a HashSet<String>,
@@ -39,6 +40,7 @@ impl<'a> BuildScheduler<'a> {
         cache: &'a CacheProvider,
         targets: &'a HashMap<String, Arc<GraphTarget>>,
         analyzer: &'a AnalysisEngine,
+        tool_paths: &'a Arc<BTreeMap<String, String>>,
         reachable: &'a HashSet<String>,
         retained: &'a HashSet<String>,
         sandbox: SandboxMode,
@@ -52,6 +54,7 @@ impl<'a> BuildScheduler<'a> {
             cache,
             targets,
             analyzer,
+            tool_paths,
             module_source_digest,
             reachable,
             retained,
@@ -78,7 +81,7 @@ impl<'a> BuildScheduler<'a> {
                 .await
                 .context("build task set ended unexpectedly")?;
             let (target_id, outcome) = joined.context("joining graph build task")??;
-            tracing::debug!(
+            tracing::trace!(
                 target = %target_id,
                 cache = outcome.cache_tag,
                 outputs = outcome.outputs.len(),
@@ -108,7 +111,7 @@ impl<'a> BuildScheduler<'a> {
                     .with_context(|| format!("target `{target_id}` vanished from graph"))?,
             );
             let inputs = state.dependency_inputs(&target, self.reachable)?;
-            tracing::debug!(
+            tracing::trace!(
                 target = %target_id,
                 deps = inputs.providers.len(),
                 running_after_spawn = running.len() + 1,
@@ -124,6 +127,8 @@ impl<'a> BuildScheduler<'a> {
                 inputs.providers,
                 inputs.providers_by_role,
                 inputs.action_digests,
+                inputs.available_inputs,
+                Arc::clone(self.tool_paths),
                 self.sandbox,
             ));
         }
@@ -135,6 +140,7 @@ struct DependencyInputs {
     providers: Vec<JsonValue>,
     providers_by_role: BTreeMap<String, Vec<JsonValue>>,
     action_digests: Vec<(String, Digest)>,
+    available_inputs: BTreeMap<String, AvailableInput>,
 }
 
 struct BuildState {
@@ -223,21 +229,42 @@ impl BuildState {
         let mut providers = Vec::new();
         let mut providers_by_role = BTreeMap::new();
         let mut action_digests = Vec::new();
+        let mut available_inputs = BTreeMap::new();
         for dep_id in target
             .deps
             .iter()
             .filter(|dep_id| reachable.contains(*dep_id))
         {
-            let (provider, action_digest) = self.read_dependency(dep_id)?;
+            let (provider, action_digest, outputs) = self.read_dependency(dep_id)?;
             providers.push(provider);
             action_digests.push((dep_id.clone(), action_digest));
+            available_inputs.extend(outputs.into_iter().map(|(path, blob_digest)| {
+                (
+                    path,
+                    AvailableInput {
+                        blob_digest,
+                        producer_action_digest: action_digest,
+                        same_target: false,
+                    },
+                )
+            }));
         }
         for (role, dep_ids) in &target.dependency_edges {
             let mut role_providers = Vec::new();
             for dep_id in dep_ids.iter().filter(|dep_id| reachable.contains(*dep_id)) {
-                let (provider, action_digest) = self.read_dependency(dep_id)?;
+                let (provider, action_digest, outputs) = self.read_dependency(dep_id)?;
                 role_providers.push(provider);
                 action_digests.push((dep_id.clone(), action_digest));
+                available_inputs.extend(outputs.into_iter().map(|(path, blob_digest)| {
+                    (
+                        path,
+                        AvailableInput {
+                            blob_digest,
+                            producer_action_digest: action_digest,
+                            same_target: false,
+                        },
+                    )
+                }));
             }
             providers_by_role.insert(role.clone(), role_providers);
         }
@@ -245,10 +272,14 @@ impl BuildState {
             providers,
             providers_by_role,
             action_digests,
+            available_inputs,
         })
     }
 
-    fn read_dependency(&mut self, dep_id: &str) -> Result<(JsonValue, Digest)> {
+    fn read_dependency(
+        &mut self,
+        dep_id: &str,
+    ) -> Result<(JsonValue, Digest, BTreeMap<String, Digest>)> {
         let remaining = self
             .remaining_readers
             .get_mut(dep_id)
@@ -262,13 +293,21 @@ impl BuildState {
                 .outcomes
                 .remove(dep_id)
                 .with_context(|| format!("missing build outcome for dependency `{dep_id}`"))?;
-            Ok((outcome.provider, outcome.action_digest))
+            Ok((
+                outcome.provider,
+                outcome.action_digest,
+                outcome.result.outputs,
+            ))
         } else {
             let outcome = self
                 .outcomes
                 .get(dep_id)
                 .with_context(|| format!("missing build outcome for dependency `{dep_id}`"))?;
-            Ok((outcome.provider.clone(), outcome.action_digest))
+            Ok((
+                outcome.provider.clone(),
+                outcome.action_digest,
+                outcome.result.outputs.clone(),
+            ))
         }
     }
 }

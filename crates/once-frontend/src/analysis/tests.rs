@@ -8,7 +8,7 @@ use crate::target::AttrValue;
 use starlark::environment::Module;
 use starlark::eval::Evaluator;
 use starlark::syntax::{AstModule, Dialect};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -462,6 +462,31 @@ fn host_command_cache_reuses_identical_argv_results() {
     assert_eq!(cache.command(&argv, &env, None, false).unwrap(), "done");
 
     assert_eq!(std::fs::read_to_string(counter).unwrap(), "x");
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_version_commands_can_seed_a_later_analysis_engine() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let tool = tmp.path().join("demo-tool");
+    std::fs::write(&tool, "#!/bin/sh\nprintf 'demo 1.0'\n").unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let paths = BTreeMap::from([("demo".to_string(), tool.display().to_string())]);
+    let argv = vec!["demo".to_string(), "--version".to_string()];
+    let env = BTreeMap::new();
+    let first = HostCache::with_tool_cache(paths.clone(), Vec::new());
+
+    assert_eq!(first.command(&argv, &env, None, false).unwrap(), "demo 1.0");
+    let commands = first.cacheable_tool_commands().unwrap();
+    assert_eq!(commands.len(), 1);
+
+    let seeded = HostCache::with_tool_cache(paths, commands);
+    assert_eq!(
+        seeded.command(&argv, &env, None, false).unwrap(),
+        "demo 1.0"
+    );
 }
 
 /// `merge_stderr` folds stderr into the returned output so version probes
@@ -1136,7 +1161,13 @@ fn workspace_analysis_engine_runs_custom_target_kind_impl() {
     std::fs::create_dir(tmp.path().join("modules")).unwrap();
     std::fs::write(
         tmp.path().join("once.toml"),
-        "[modules]\npaths = [\"modules/*.star\"]\n",
+        r#"[modules]
+paths = ["modules/*.star"]
+
+[[target]]
+name = "Sample"
+kind = "demo_kind"
+"#,
     )
     .unwrap();
     std::fs::write(
@@ -1164,7 +1195,23 @@ demo_kind = target_kind(
 "#,
     )
     .unwrap();
-    let engine = AnalysisEngine::for_workspace(tmp.path()).unwrap();
+    let targets = crate::load_workspace(tmp.path()).unwrap();
+    let target_kinds = targets
+        .iter()
+        .map(|target| target.kind.clone())
+        .collect::<BTreeSet<_>>();
+    let engine = AnalysisEngine::for_workspace_with_options_and_target_kinds(
+        tmp.path(),
+        AnalysisOptions::default(),
+        &target_kinds,
+    )
+    .unwrap();
+    assert!(!engine
+        .module_source()
+        .contains("apple_library = target_kind("));
+    assert!(!engine
+        .module_source()
+        .contains("rust_library = target_kind("));
 
     let result = engine
         .analyze_target(&target("demo_kind"), tmp.path(), &[])
@@ -1180,6 +1227,12 @@ demo_kind = target_kind(
         result.provider["scratch"],
         ".once/tmp/analysis/apps/ios/Sample"
     );
+    let compiled_graph = engine
+        .load_graph_workspace_from_targets(tmp.path(), targets)
+        .unwrap();
+    let regular_graph = crate::load_graph_workspace(tmp.path()).unwrap();
+    assert_eq!(compiled_graph, regular_graph);
+    assert_eq!(compiled_graph[0].kind, "demo_kind");
 }
 
 #[test]

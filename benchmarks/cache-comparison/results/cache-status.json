@@ -1,0 +1,11 @@
+{
+ "CurrSize": 1069056,
+ "UncompressedSize": 177283072,
+ "ReservedSize": 0,
+ "MaxSize": 2147483648,
+ "NumFiles": 259,
+ "ServerTime": 1785084131,
+ "GitCommit": "3cb3084b57542c260860a484afcfe69557f6b27c",
+ "GitTags": "v2.6.2",
+ "NumGoroutines": 10
+}

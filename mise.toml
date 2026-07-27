@@ -25,6 +25,10 @@ aube = "1.26.0"
 helm = "4.2.3"
 kubectl = "1.36.2"
 jq = "1.8.2"
+hyperfine = "1.20.0"
+"github:bazelbuild/bazelisk" = "1.29.0"
+"github:buchgr/bazel-remote" = "2.6.2"
+"github:facebook/buck2" = { version = "2026-07-15", rename_exe = "buck2" }
 "1password-cli" = "2.32.0"
 
 [env]
