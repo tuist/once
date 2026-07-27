@@ -208,15 +208,20 @@ fn lint_location(value: &Value, workspace: &Path) -> LintLocation {
 }
 
 fn normalize_path(uri: &str, workspace: &Path) -> String {
-    let decoded = uri.strip_prefix("file://").unwrap_or(uri);
-    let path = PathBuf::from(decoded);
+    let path = reqwest::Url::parse(uri)
+        .ok()
+        .filter(|url| url.scheme() == "file")
+        .and_then(|url| url.to_file_path().ok())
+        .unwrap_or_else(|| PathBuf::from(uri.strip_prefix("file://").unwrap_or(uri)));
     if path.is_absolute() {
         path.strip_prefix(workspace)
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/")
     } else {
-        decoded.trim_start_matches("./").replace('\\', "/")
+        path.to_string_lossy()
+            .trim_start_matches("./")
+            .replace('\\', "/")
     }
 }
 
@@ -271,5 +276,17 @@ mod tests {
             Some("src/main.rs")
         );
         assert!(results.fails_at(LintSeverity::Warning));
+    }
+
+    #[test]
+    fn decodes_file_uri_paths_before_making_them_relative() {
+        let workspace = tempfile::tempdir().unwrap();
+        let file = workspace.path().join("src dir/main.rs");
+        let uri = reqwest::Url::from_file_path(&file).unwrap();
+
+        assert_eq!(
+            normalize_path(uri.as_str(), workspace.path()),
+            "src dir/main.rs"
+        );
     }
 }
