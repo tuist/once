@@ -3,6 +3,11 @@ defmodule OnceSite.Blog.MarkdownConverter do
 
   alias OnceSiteWeb.Docs.HTML
 
+  # NimblePublisher runs this converter while `OnceSite.Blog` compiles, so the
+  # web HTML helper must already be compiled. Calling it here at compile time
+  # pins it as a compile-time dependency, so it is built first.
+  _ = OnceSiteWeb.Docs.HTML.wrap_code_blocks("")
+
   @syntax_highlight (if Mix.env() == :test do
                        [syntax_highlight: nil]
                      else
