@@ -1287,6 +1287,24 @@ a {
 }
 
 @media (max-width: 520px) {
+  [data-part="site-header"] {
+    gap: 12px;
+  }
+
+  [data-part="site-actions"] {
+    gap: 4px;
+  }
+
+  [data-part="site-social-link"] {
+    width: 32px;
+    height: 32px;
+  }
+
+  [data-part="site-cta"] {
+    padding: 8px 10px;
+    white-space: nowrap;
+  }
+
   [data-part="hero-actions"] {
     max-width: 320px;
   }
