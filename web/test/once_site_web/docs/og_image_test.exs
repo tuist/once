@@ -46,8 +46,8 @@ defmodule OnceSiteWeb.Docs.OgImageTest do
         logo_path: logo()
       )
 
-    assert html =~ ~s(class="author-meta")
-    assert length(Regex.scan(~r/class="author-avatar"/, html)) == 2
+    assert html =~ ~s(data-part="author-meta")
+    assert length(Regex.scan(~r/<img data-part="author-avatar"/, html)) == 2
     assert html =~ avatar
   end
 

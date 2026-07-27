@@ -88,7 +88,7 @@ defmodule OnceSiteWeb.Docs.OgImage do
             height: 80px;
             background-color: #c0c8cf;
           }
-          .category {
+          [data-part="category"] {
             position: absolute;
             right: 67px;
             bottom: 67px;
@@ -98,7 +98,7 @@ defmodule OnceSiteWeb.Docs.OgImage do
             color: #171a1c;
             line-height: 80px;
           }
-          .author-meta {
+          [data-part="author-meta"] {
             position: absolute;
             right: 67px;
             bottom: 67px;
@@ -106,14 +106,14 @@ defmodule OnceSiteWeb.Docs.OgImage do
             align-items: center;
             gap: 24px;
           }
-          .author-meta .category {
+          [data-part="author-meta"] [data-part="category"] {
             position: static;
           }
-          .author-avatars {
+          [data-part="author-avatars"] {
             display: flex;
             flex-direction: row-reverse;
           }
-          .author-avatar {
+          [data-part="author-avatar"] {
             width: 80px;
             height: 80px;
             margin-right: -16px;
@@ -122,7 +122,7 @@ defmodule OnceSiteWeb.Docs.OgImage do
             background: #e4e7ec;
             object-fit: cover;
           }
-          .author-avatar:last-child {
+          [data-part="author-avatar"]:last-child {
             margin-right: 0;
           }
         </style>
@@ -138,13 +138,13 @@ defmodule OnceSiteWeb.Docs.OgImage do
         <div class="logo-once">Once</div>
         <div :if={@subtitle} class="logo-divider"></div>
         <div :if={@subtitle} class="logo-docs">{@subtitle}</div>
-        <div :if={@avatars != []} class="author-meta">
-          <div class="author-avatars">
-            <img :for={avatar <- @avatars} class="author-avatar" src={avatar} />
+        <div :if={@avatars != []} data-part="author-meta">
+          <div data-part="author-avatars">
+            <img :for={avatar <- @avatars} data-part="author-avatar" src={avatar} />
           </div>
-          <div :if={@category} class="category">{@category}</div>
+          <div :if={@category} data-part="category">{@category}</div>
         </div>
-        <div :if={@avatars == [] && @category} class="category">{@category}</div>
+        <div :if={@avatars == [] && @category} data-part="category">{@category}</div>
       </body>
     </html>
     """
