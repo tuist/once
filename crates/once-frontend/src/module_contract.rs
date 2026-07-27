@@ -195,6 +195,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             "attr.default is optional schema documentation and must be a string; it does not insert a runtime value. Implementations must use ctx[\"attr\"].get(...) when an optional attribute needs a fallback.",
             "Set configurable = False when analysis or output identity cannot safely vary through select.",
             "Dependency declarations name provider records accepted from ctx[\"deps\"] and ctx[\"deps_by_role\"], and implementations should consume provider fields instead of dependency target kind names.",
+            "Set dep.min_count and dep.max_count when validation must reject a dependency role with too few or too many targets before analysis.",
             "An implementation must return a JSON-shaped provider record whose fields satisfy the target kind's declared provider contract.",
             "Resolver-owned attributes and synthetic target attributes must be declared in their target kind schemas.",
             "Modules are trusted analysis code. Host commands must be deterministic, must not mutate workspace sources or the build output tree, and may keep resolver scratch state only under .once/tmp. Fetching and build work belong in explicit workflows and actions.",

@@ -142,6 +142,9 @@ Validation checks each role against its matching schema entry. Analysis keeps
 `deps` in declared order and exposes the other roles separately, so a target
 kind can distinguish compiler plug-ins, runtime-only dependencies, native
 links, and other semantics without hardcoding them in Once.
+Target kinds can also set minimum and maximum counts for each role. Validation
+reports an attribute-scoped repair before an edit can commit too few or too
+many dependencies.
 
 ## Target Identifiers
 

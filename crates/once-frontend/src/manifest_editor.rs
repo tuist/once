@@ -654,6 +654,28 @@ kind = "apple_library"
     }
 
     #[test]
+    fn create_rejects_invalid_dependency_counts() {
+        for deps in [
+            Vec::new(),
+            vec!["./Hello".to_string(), "./OtherHello".to_string()],
+        ] {
+            let mut spec = TargetSpec {
+                name: "HelloThinned".to_string(),
+                kind: "apple_thinned_package".to_string(),
+                deps,
+                ..Default::default()
+            };
+            spec.attrs
+                .insert("device_model".to_string(), json!("iPhone17,1"));
+
+            let diagnostics = apply_operations("", &[EditOperation::Create { target: spec }])
+                .expect_err("invalid dependency count must fail");
+            assert_eq!(diagnostics[0].code, "dependency_count_mismatch");
+            assert_eq!(diagnostics[0].attribute.as_deref(), Some("deps"));
+        }
+    }
+
+    #[test]
     fn update_replaces_only_set_fields() {
         let src = r#"
 [[target]]

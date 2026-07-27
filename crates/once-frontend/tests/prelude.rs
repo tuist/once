@@ -1382,6 +1382,8 @@ fn apple_thinned_package_schema_exposes_device_model_and_example() {
     assert_eq!(device_model.disallowed_values, vec!["", "all"]);
     assert_eq!(schema.deps.len(), 1);
     assert_eq!(schema.deps[0].expected_providers, vec!["apple_application"]);
+    assert_eq!(schema.deps[0].min_count, 1);
+    assert_eq!(schema.deps[0].max_count, Some(1));
     assert!(schema
         .examples
         .iter()

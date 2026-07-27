@@ -3394,7 +3394,13 @@ apple_thinned_package = target_kind(
         ),
     ],
     deps = [
-        dep("deps", ["apple_application"], "Exactly one device application to thin and package"),
+        dep(
+            "deps",
+            ["apple_application"],
+            "Exactly one device application to thin and package",
+            min_count = 1,
+            max_count = 1,
+        ),
     ],
     providers = ["apple_thinned_package"],
     capabilities = [
