@@ -6,20 +6,25 @@ defmodule OnceSite.BlogTest do
   alias OnceSite.Blog.MarkdownConverter
   alias OnceSite.Blog.Post
 
-  test "starts without placeholder posts" do
-    assert Blog.all_posts() == []
+  test "includes the published posts" do
+    slugs = Enum.map(Blog.all_posts(), & &1.slug)
+
+    refute slugs == []
+    assert "automation-needs-a-git" in slugs
   end
 
-  test "paginates an empty publication" do
-    {posts, meta} = Blog.paginate(%{"page" => "2"})
+  test "clamps pages beyond the last available page" do
+    count = length(Blog.all_posts())
+    {posts, meta} = Blog.paginate(%{"page" => "999"})
 
-    assert posts == []
-    assert meta.current_page == 1
-    assert meta.total_count == 0
+    assert meta.total_count == count
+    assert meta.current_page == meta.total_pages
+    assert length(posts) <= 2
+    refute posts == []
   end
 
-  test "uses today as the feed date before the first post" do
-    assert Blog.last_updated() == Date.utc_today()
+  test "reports the most recent post date as the last update" do
+    assert Blog.last_updated() == hd(Blog.all_posts()).date
   end
 
   test "builds post metadata from Markdown frontmatter" do
