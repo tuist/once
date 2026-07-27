@@ -6,6 +6,7 @@ _DETEKT_TOOL = tool("detekt", executables = ["detekt"])
 _CREDO_TOOL = tool("mix", executables = ["mix"])
 _RUBOCOP_TOOL = tool("rubocop", executables = ["rubocop"])
 _LINT_NODE_TOOL = tool("node", executables = ["node"])
+_LINT_RUBY_TOOL = tool("ruby", executables = ["ruby"])
 
 def _lint_attr(ctx, name, default):
     return _configured_attr(ctx, name, default)
@@ -158,7 +159,8 @@ def _credo_impl(ctx):
     executable = _lint_executable(ctx, "mix", "mix")
     paths = _lint_paths(ctx)
     inputs = _lint_sources(ctx)
-    argv = [executable, "credo", "--format", "sarif", "--mute-exit-status"] + _lint_attr(ctx, "args", [])
+    sources = glob(ctx["srcs"])
+    argv = [executable, "credo", "--format", "sarif", "--mute-exit-status"] + _lint_attr(ctx, "args", []) + [execution_path(source) for source in sources]
     cwd = _lint_attr(ctx, "cwd", ctx["label"]["package"] or ".")
     provider = _lint_provider(ctx, "credo", paths, inputs, {"argv": argv, "env": {}, "cwd": cwd})
     if ctx["capability"] == "lint":
@@ -387,7 +389,7 @@ rubocop_lint = target_kind(
     ],
     providers = ["once_lint_info"],
     capabilities = [capability("lint", ["default", "lint_results"])],
-    tools = [_RUBOCOP_TOOL],
+    tools = [_RUBOCOP_TOOL, _LINT_RUBY_TOOL],
     source_references = [source_reference("RuboCop", "formatters", "https://docs.rubocop.org/rubocop/formatters.html", "Confirm machine-readable formatter behavior.")],
     examples = [example("rubocop-lint-minimal", name = "Minimal RuboCop target", use_when = "You want cacheable Ruby lint findings.")],
     impl = _rubocop_impl,

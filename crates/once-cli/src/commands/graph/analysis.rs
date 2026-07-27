@@ -262,6 +262,15 @@ impl BuildSession {
         target: &'a GraphTarget,
         capability: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<BuildOutcome>>> + Send + 'a>> {
+        self.run_with_analysis_and_provider_validation(target, capability, |_, _| Ok(()))
+    }
+
+    pub(super) fn run_with_analysis_and_provider_validation<'a>(
+        &'a self,
+        target: &'a GraphTarget,
+        capability: &'a str,
+        validate_provider: fn(&GraphTarget, &JsonValue) -> Result<()>,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<BuildOutcome>>> + Send + 'a>> {
         Box::pin(async move {
             if !self.analyzer.target_kind_has_impl(&target.kind) {
                 tracing::debug!(
@@ -278,6 +287,7 @@ impl BuildSession {
                 dep_action_digests,
                 available_inputs,
             } = self.analyze_capability(target, capability).await?;
+            validate_provider(target, &analysis.provider)?;
             let outcome = run_declared_actions(
                 &self.workspace,
                 &self.cache,

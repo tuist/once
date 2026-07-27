@@ -702,6 +702,9 @@ fn run_graph_target_with_exe(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let (record, record_parse_error) = parse_json_record(&stdout);
+    let error = (!output.status.success())
+        .then(|| parse_structured_dispatch_error(&stderr))
+        .flatten();
     let captured_stdout = captured_action_log(workspace, &record, "stdout.log");
     let captured_stderr = captured_action_log(workspace, &record, "stderr.log");
     Ok(json!({
@@ -711,10 +714,20 @@ fn run_graph_target_with_exe(
         "success": output.status.success(),
         "record": record,
         "record_parse_error": record_parse_error,
+        "error": error,
         "captured_stdout": captured_stdout,
         "captured_stderr": captured_stderr,
         "stderr": stderr,
     }))
+}
+
+fn parse_structured_dispatch_error(stderr: &str) -> Option<Value> {
+    stderr.lines().rev().find_map(|line| {
+        serde_json::from_str::<Value>(line)
+            .ok()?
+            .get("error")
+            .cloned()
+    })
 }
 
 #[derive(Serialize)]
@@ -2005,6 +2018,34 @@ srcs = ["unit_spec.sh"]
         assert_eq!(
             std::fs::canonicalize(cwd.trim()).unwrap(),
             std::fs::canonicalize(tmp.path()).unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn graph_target_runner_preserves_structured_command_diagnostics() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("once-mock");
+        let script = r#"#!/bin/sh
+printf '%s\n' 'ERROR once: session failed' >&2
+printf '%s\n' '{"schema":"once.error.v1","error":{"code":"invalid_lint_provider_output","message":"invalid lint provider","diagnostics":[{"code":"invalid_lint_provider_output","message":"invalid lint provider","target":"quality/lint","attribute":"lint_info.outputs.results","repairs":["Return the results path"]}]}}' >&2
+exit 2
+"#;
+        std::fs::write(&exe, script).unwrap();
+        let mut permissions = std::fs::metadata(&exe).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&exe, permissions).unwrap();
+
+        let result =
+            run_graph_target_with_exe(&exe, tmp.path(), "lint", "quality/lint", false).unwrap();
+
+        assert_eq!(result["success"], false);
+        assert_eq!(result["error"]["code"], "invalid_lint_provider_output");
+        assert_eq!(
+            result["error"]["diagnostics"][0]["attribute"],
+            "lint_info.outputs.results"
         );
     }
 

@@ -64,3 +64,65 @@ exit 1
         Value::String("main.py".to_string())
     );
 }
+
+#[test]
+fn invalid_lint_provider_returns_diagnostics_before_actions_run() {
+    let workspace = tempfile::tempdir().unwrap();
+    let modules = workspace.path().join("modules");
+    std::fs::create_dir_all(&modules).unwrap();
+    std::fs::write(
+        modules.join("lint.star"),
+        r#"
+def _invalid_lint_impl(ctx):
+    write_path(ctx["build_dir"] + "/action-ran.txt", "ran")
+    return {
+        "lint_info": {
+            "outputs": {
+                "sarif": ctx["build_dir"] + "/report.sarif",
+            },
+        },
+    }
+
+invalid_lint = target_kind(
+    providers = ["once_lint_info"],
+    capabilities = [capability("lint", ["default", "lint_results"])],
+    impl = _invalid_lint_impl,
+)
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.path().join("once.toml"),
+        "[modules]\npaths = [\"modules/*.star\"]\n\n[[target]]\nname = \"lint\"\nkind = \"invalid_lint\"\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_once"))
+        .arg("-C")
+        .arg(workspace.path())
+        .arg("--format")
+        .arg("json")
+        .arg("lint")
+        .arg("lint")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let error_line = stderr.lines().last().expect("structured error line");
+    let error: Value = serde_json::from_str(error_line).unwrap_or_else(|error| {
+        panic!("structured lint error did not decode: {error}; stderr: {stderr}")
+    });
+    assert_eq!(
+        error["error"]["code"],
+        Value::String("invalid_lint_provider_output".to_string())
+    );
+    assert_eq!(
+        error["error"]["diagnostics"][0]["attribute"],
+        Value::String("lint_info.outputs.results".to_string())
+    );
+    assert!(!workspace
+        .path()
+        .join(".once/out/lint/action-ran.txt")
+        .exists());
+}

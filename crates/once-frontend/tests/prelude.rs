@@ -187,6 +187,63 @@ result = repr(_ruff_lint_impl(ctx))
 }
 
 #[test]
+fn credo_lint_passes_every_declared_source_to_the_analyzer() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("quality/elixir/lib");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("greeter.ex"), "defmodule Greeter do\nend\n").unwrap();
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _lint_executable(ctx, name, default, workspace_candidates = []):
+    return "/tools/" + default
+
+def host_command(argv, env = None, merge_stderr = None):
+    return "Credo 1.7.0"
+
+ctx = {{
+    "label": {{"package": "quality/elixir", "name": "lint", "id": "quality/elixir/lint"}},
+    "attr": {{}},
+    "configuration": {{"tokens": []}},
+    "deps": [],
+    "srcs": ["lib/**/*.ex"],
+    "build_dir": ".once/out/quality/elixir/lint",
+    "scratch_dir": ".once/tmp/analysis/quality/elixir/lint",
+    "capability": "lint",
+}}
+result = repr(_credo_impl(ctx))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "quality/elixir".to_string(),
+        ".once/out/quality/elixir/lint".to_string(),
+    );
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    result.unwrap();
+    let action = action_by_identifier(&store, "quality/elixir/lint:credo");
+    assert!(action
+        .argv
+        .iter()
+        .any(|arg| arg.ends_with("/quality/elixir/lib/greeter.ex")));
+    assert!(action_has_input_suffix(
+        action,
+        "quality/elixir/lib/greeter.ex"
+    ));
+}
+
+#[test]
+fn rubocop_lint_declares_ruby_for_its_report_adapter() {
+    let schema = built_in_target_kind_schema("rubocop_lint").unwrap();
+
+    assert!(schema
+        .tools
+        .iter()
+        .any(|tool| tool.name == "ruby" && tool.executables == ["ruby"]));
+}
+
+#[test]
 fn built_in_target_kinds_do_not_hardcode_a_posix_shell_path() {
     let source = all_prelude_source();
     assert!(!source.contains("\"/bin/sh\""));

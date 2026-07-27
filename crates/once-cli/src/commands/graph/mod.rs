@@ -18,6 +18,7 @@ use anyhow::{anyhow, Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     EvidenceCacheState, EvidenceSubject, LintResults, LintSeverity, RunOpts, SandboxMode,
+    WorkspacePath,
 };
 use once_frontend::analysis::AnalysisOptions;
 use once_frontend::GraphTarget;
@@ -82,29 +83,11 @@ pub async fn lint(
     let target = session.target(target_id)?;
     let capability = ensure_capability(target, "lint")?;
     let outcome = session
-        .run_with_analysis(target, "lint")
+        .run_with_analysis_and_provider_validation(target, "lint", validate_lint_provider)
         .await?
         .ok_or_else(|| anyhow!("{} does not implement its lint capability", target.label.id))?;
-    let report_path = outcome
-        .provider
-        .pointer("/lint_info/outputs/sarif")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            anyhow!(
-                "{} lint provider does not declare `lint_info.outputs.sarif`",
-                target.label.id
-            )
-        })?;
-    let results_path = outcome
-        .provider
-        .pointer("/lint_info/outputs/results")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            anyhow!(
-                "{} lint provider does not declare `lint_info.outputs.results`",
-                target.label.id
-            )
-        })?;
+    let report_path = lint_provider_output_path(target, &outcome.provider, "sarif")?;
+    let results_path = lint_provider_output_path(target, &outcome.provider, "results")?;
     let results = once_core::read_sarif_results(target.label.id.as_str(), report_path, workspace)?;
     persist_lint_results(workspace, results_path, &results).await?;
     let record = CapabilityRunRecord {
@@ -129,6 +112,45 @@ pub async fn lint(
     } else {
         ExitCode::SUCCESS
     })
+}
+
+fn validate_lint_provider(target: &GraphTarget, provider: &serde_json::Value) -> Result<()> {
+    lint_provider_output_path(target, provider, "sarif")?;
+    lint_provider_output_path(target, provider, "results")?;
+    Ok(())
+}
+
+fn lint_provider_output_path<'a>(
+    target: &GraphTarget,
+    provider: &'a serde_json::Value,
+    output_name: &str,
+) -> Result<&'a str> {
+    let attribute = format!("lint_info.outputs.{output_name}");
+    let pointer = format!("/lint_info/outputs/{output_name}");
+    let path = provider
+        .pointer(&pointer)
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| !path.is_empty());
+    if let Some(path) = path {
+        if WorkspacePath::try_from(path).is_ok() {
+            return Ok(path);
+        }
+    }
+    let diagnostic = once_frontend::Diagnostic::new(
+        "invalid_lint_provider_output",
+        format!(
+            "lint provider for `{}` must return a non-empty workspace-relative path at `{attribute}`",
+            target.label.id
+        ),
+    )
+    .with_target(&target.label.id)
+    .with_attribute(&attribute)
+    .with_repair(format!(
+        "Return the declared {output_name} output path at `{attribute}`"
+    ));
+    Err(anyhow::Error::new(
+        once_frontend::analysis::AnalysisFailure { diagnostic },
+    ))
 }
 
 async fn persist_lint_results(workspace: &Path, path: &str, results: &LintResults) -> Result<()> {
@@ -603,6 +625,31 @@ mod tests {
             tools: Vec::new(),
             diagnostics: Vec::new(),
         }
+    }
+
+    #[test]
+    fn lint_provider_requires_structured_output_paths() {
+        let target = graph_target("custom_lint", &["lint"]);
+        let provider = serde_json::json!({
+            "lint_info": {
+                "outputs": {
+                    "sarif": ".once/out/lint/report.sarif"
+                }
+            }
+        });
+
+        let error = validate_lint_provider(&target, &provider).unwrap_err();
+        let failure = error
+            .downcast_ref::<once_frontend::analysis::AnalysisFailure>()
+            .expect("structured analysis failure");
+
+        assert_eq!(failure.diagnostic.code, "invalid_lint_provider_output");
+        assert_eq!(failure.diagnostic.target.as_deref(), Some("apps/ios/App"));
+        assert_eq!(
+            failure.diagnostic.attribute.as_deref(),
+            Some("lint_info.outputs.results")
+        );
+        assert!(!failure.diagnostic.repairs.is_empty());
     }
 
     #[test]

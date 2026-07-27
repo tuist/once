@@ -12,6 +12,8 @@ srcs = ["lib/**/*.rb"]
 
 Optional attributes are `rubocop`, `ruby`, `config`, `data`, and `args`. The
 target emits `once_lint_info` and exposes the `lint` capability.
+Once prepares both RuboCop and Ruby because the portable report adapter runs
+with Ruby after RuboCop writes its native result.
 
 Use `once query schema rubocop_lint` for the complete contract and
 `once query example rubocop_lint rubocop-lint-minimal` for the starter files.

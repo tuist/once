@@ -151,6 +151,9 @@ Important parts of this contract:
 - `lint_info.outputs.sarif` names the portable report produced by the action.
 - `lint_info.outputs.results` reserves the normalized result written by
   `once lint` after it reads the portable report.
+- Both output fields must contain non-empty workspace-relative paths. Once
+  validates them before running the target actions and returns a structured
+  repair diagnostic when the provider contract is incomplete.
 
 ## Register and declare the target
 
