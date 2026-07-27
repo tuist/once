@@ -47,6 +47,10 @@ fn resolve_workspace(directory: Option<PathBuf>) -> Result<PathBuf> {
     Ok(workspace)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exhaustive command dispatch keeps every top-level route visible in one match"
+)]
 async fn run_command(
     workspace: &Path,
     xdg: &Xdg,
@@ -58,6 +62,11 @@ async fn run_command(
         Cmd::Build { target, sandbox } => {
             dispatch_build(workspace, xdg, output, target, sandbox).await
         }
+        Cmd::Lint {
+            target,
+            sandbox,
+            fail_on,
+        } => dispatch_lint(workspace, xdg, output, target, sandbox, fail_on).await,
         Cmd::Run {
             target,
             sandbox,
@@ -200,6 +209,22 @@ async fn dispatch_build(
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     Box::pin(commands::graph::build(
         workspace, &cache, output, &target, sandbox,
+    ))
+    .await
+}
+
+async fn dispatch_lint(
+    workspace: &Path,
+    xdg: &Xdg,
+    output: Output,
+    target: Option<String>,
+    sandbox: SandboxMode,
+    fail_on: once_core::LintSeverity,
+) -> Result<ExitCode> {
+    let target = resolve_required_target(workspace, target)?;
+    let cache = crate::cache_provider::resolve(workspace, xdg)?;
+    Box::pin(commands::graph::lint(
+        workspace, &cache, output, &target, sandbox, fail_on,
     ))
     .await
 }

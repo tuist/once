@@ -13,7 +13,7 @@ once query [OPTIONS] [QUERY] <SUBCOMMAND>
 Inspectable-first surface for humans and agents. `query
 targets` lists every declared target id with its target kind
 and capabilities; `query capabilities` shows what a specific
-target exposes (`build`, `run`, `test`); `query schema`
+target exposes (`build`, `lint`, `run`, `test`); `query schema`
 returns the typed attribute and provider shape for a target kind;
 `query example` returns the files in a chosen starter; `query script` validates
 an annotated script contract; `query validate-workspace` checks the

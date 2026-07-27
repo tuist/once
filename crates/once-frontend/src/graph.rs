@@ -74,7 +74,7 @@ impl GraphTarget {
     }
 }
 
-/// Operation exposed by a target kind, such as build, run, or test.
+/// Operation exposed by a target kind, such as build, lint, run, or test.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Capability {
     /// Capability name.

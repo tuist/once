@@ -325,6 +325,7 @@ impl Server {
             "once_validate_script" => script::validate(&self.workspace, &call.arguments),
             "once_exec_script" => script::execute(&self.workspace, &call.arguments),
             "once_build_target" => self.tool_build_target(&call.arguments),
+            "once_lint_target" => self.tool_lint_target(&call.arguments),
             "once_validate_actions" => self.tool_validate_actions(&call.arguments),
             "once_run_target" => self.tool_run_target(&call.arguments),
             "once_start_target" => self.tool_start_target(&call.arguments),
@@ -523,6 +524,11 @@ impl Server {
     fn tool_build_target(&self, args: &Value) -> Result<Value> {
         let args: TargetExecutionArgs = serde_json::from_value(tool_args(args))?;
         run_graph_target(&self.workspace, "build", &args.target, false)
+    }
+
+    fn tool_lint_target(&self, args: &Value) -> Result<Value> {
+        let args: TargetExecutionArgs = serde_json::from_value(tool_args(args))?;
+        run_graph_target(&self.workspace, "lint", &args.target, false)
     }
 
     fn tool_validate_actions(&self, args: &Value) -> Result<Value> {
@@ -1731,6 +1737,7 @@ script_runtime = "sh"
             .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect();
         assert!(names.contains(&"once_build_target".to_string()));
+        assert!(names.contains(&"once_lint_target".to_string()));
         assert!(names.contains(&"once_run_target".to_string()));
         assert!(names.contains(&"once_start_target".to_string()));
         assert!(names.contains(&"once_runtime_status".to_string()));
@@ -1770,6 +1777,7 @@ script_runtime = "sh"
         let tmp = TempDir::new().unwrap();
         for tool in [
             "once_build_target",
+            "once_lint_target",
             "once_run_target",
             "once_start_target",
             "once_run_tests",

@@ -1,0 +1,4 @@
+[[target]]
+name = "lint"
+kind = "rubocop_lint"
+srcs = ["lib/**/*.rb"]

@@ -905,8 +905,9 @@ async fn run_uncached_action(
                     outputs: BTreeMap::new(),
                 }
             };
-            if result.exit_code == 0 {
+            if action.accepts_exit_code(result.exit_code) {
                 result.outputs = capture_uncached_outputs(outputs, workspace, cache).await?;
+                result.exit_code = 0;
             }
             Ok(result)
         }
@@ -1191,6 +1192,7 @@ fn declared_to_action(
             resources: ResourceRequest::default(),
             sandbox: effective_sandbox(declared.sandbox.as_deref(), sandbox_override)?,
             timeout_ms: None,
+            success_exit_codes: declared.success_exit_codes.clone(),
             remote: None,
         }),
         Some(operation) => operation_to_action(operation.clone(), input_digest),
@@ -1582,6 +1584,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -1613,6 +1616,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -1665,6 +1669,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -1866,6 +1871,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -1904,6 +1910,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         std::fs::create_dir_all(workspace.path().join(".once/out")).unwrap();
@@ -1942,6 +1949,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -1976,6 +1984,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -2087,6 +2096,7 @@ mod tests {
                 cwd: None,
                 env: BTreeMap::new(),
                 sandbox: None,
+                success_exit_codes: vec![0],
                 cacheable: true,
                 depends_on_prior_actions: true,
                 toolchain_identity: None,
@@ -2186,6 +2196,7 @@ mod tests {
                 cwd: None,
                 env: BTreeMap::new(),
                 sandbox: None,
+                success_exit_codes: vec![0],
                 cacheable: true,
                 depends_on_prior_actions: true,
                 toolchain_identity: None,
@@ -2273,6 +2284,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -2362,6 +2374,7 @@ mod tests {
                     cwd: None,
                     env: BTreeMap::new(),
                     sandbox: None,
+                    success_exit_codes: vec![0],
                     cacheable: true,
                     depends_on_prior_actions: true,
                     toolchain_identity: None,
@@ -2385,6 +2398,7 @@ mod tests {
                     cwd: None,
                     env: BTreeMap::new(),
                     sandbox: None,
+                    success_exit_codes: vec![0],
                     cacheable: true,
                     depends_on_prior_actions: false,
                     toolchain_identity: None,
@@ -2455,6 +2469,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -2488,6 +2503,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: Some("id-1".to_string()),
@@ -2518,6 +2534,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -2556,6 +2573,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -2592,6 +2610,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,
@@ -2632,6 +2651,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             depends_on_prior_actions: true,
             toolchain_identity: None,

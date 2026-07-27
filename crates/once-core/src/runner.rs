@@ -356,6 +356,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         }
     }
@@ -406,6 +407,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::Inputs,
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -443,6 +445,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::Inputs,
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -481,6 +484,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -531,6 +535,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -1084,6 +1089,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         let b = Action::RunCommand {
@@ -1099,6 +1105,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         assert_ne!(a.digest(), b.digest());
@@ -1120,6 +1127,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         let first = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -1149,6 +1157,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         let opts = RunOpts {
@@ -1177,6 +1186,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(100),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let err = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -1204,6 +1214,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -1232,6 +1243,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -1262,6 +1274,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(10_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -1289,6 +1302,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -1323,6 +1337,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: Some(Box::new(RemoteExecution::provider("unknown-remote"))),
         };
 
@@ -1358,6 +1373,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let started = std::time::Instant::now();
@@ -1395,6 +1411,7 @@ mod tests {
             resources: ResourceRequest::new(2, 0),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -1426,6 +1443,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         let expected = {
@@ -1453,6 +1471,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: t,
+            success_exit_codes: vec![0],
             remote: None,
         };
         assert_ne!(mk(None).digest(), mk(Some(1000)).digest());
@@ -1474,6 +1493,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         let a = mk(None);
@@ -1498,6 +1518,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         let a = mk(Some(Digest::of_bytes(b"a")));
@@ -1550,6 +1571,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         let err = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -1574,6 +1596,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         let err = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -1598,6 +1621,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(2_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
@@ -1630,6 +1654,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let action_b = Action::RunCommand {
@@ -1645,6 +1670,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let started = std::time::Instant::now();
@@ -1678,6 +1704,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let outcome = runner.run(&action).await.unwrap();
@@ -1744,6 +1771,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(5_000),
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -1783,6 +1811,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: Some(50),
+            success_exit_codes: vec![0],
             remote: None,
         };
         let _ = run(&action, tmp.path(), &cas, RunOpts::default()).await;

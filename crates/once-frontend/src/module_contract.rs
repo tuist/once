@@ -11,9 +11,14 @@ pub struct ModuleAuthoringContract {
     pub context_fields: Vec<ContractEntry>,
     pub analysis_primitives: Vec<ContractEntry>,
     pub action_primitives: Vec<ContractEntry>,
+    pub lint_contract: Vec<ContractEntry>,
     pub test_contract: Vec<ContractEntry>,
     pub maintenance_invariants: Vec<&'static str>,
     pub starter: &'static str,
+    pub lint_starter: &'static str,
+    pub lint_target_starter: &'static str,
+    pub lint_adapter_starter: &'static str,
+    pub normalized_lint_result_example: Value,
     pub test_starter: &'static str,
     pub test_target_starter: &'static str,
     pub normalized_test_result_example: Value,
@@ -24,6 +29,151 @@ pub struct ContractEntry {
     pub signature: &'static str,
     pub purpose: &'static str,
 }
+
+const LINT_STARTER: &str = r#"def _package_path(ctx, path):
+    package = ctx["label"]["package"]
+    if package:
+        return package + "/" + path
+    return path
+
+def _scripted_lint_impl(ctx):
+    lint_dir = ctx["build_dir"] + "/lint"
+    report = lint_dir + "/report.sarif"
+    results = lint_dir + "/lint_results.json"
+    sources = glob(ctx["srcs"])
+    config = glob(ctx["attr"].get("config") or [])
+    data = glob(ctx["attr"].get("data") or [])
+    program = _package_path(ctx, ctx["attr"]["program"])
+    python = host_which(ctx["attr"].get("python") or "python3")
+    identity = (
+        "scripted_lint.v1\x00" +
+        python + "\x00" +
+        host_command([python, "--version"], merge_stderr = True).strip()
+    )
+    argv = [
+        python,
+        program,
+        "--report", execution_path(report),
+        "--analyzer", ctx["attr"]["analyzer"],
+    ] + (ctx["attr"].get("args") or []) + sources
+    findings_exit_code = ctx["attr"].get("findings_exit_code")
+    if findings_exit_code == None:
+        findings_exit_code = 1
+    success_codes = [0]
+    if findings_exit_code != 0:
+        success_codes.append(findings_exit_code)
+    inputs = sources + config + data + [program]
+
+    if ctx["capability"] == "lint":
+        run_action(
+            argv = argv,
+            inputs = inputs,
+            outputs = [report],
+            clean_paths = [report],
+            create_dirs = [lint_dir],
+            success_exit_codes = success_codes,
+            toolchain_identity = identity,
+            identifier = "scripted_lint:" + ctx["label"]["id"],
+        )
+
+    return {
+        "label_id": ctx["label"]["id"],
+        "target_kind": "scripted_lint",
+        "affected_inputs": inputs,
+        "lint_info": {
+            "schema": "once.lint_info.v1",
+            "target": ctx["label"]["id"],
+            "analyzer": {
+                "type": ctx["attr"]["analyzer"],
+                "display_name": ctx["attr"]["analyzer"],
+                "metadata": {},
+            },
+            "command": {"argv": argv, "env": {}, "cwd": "."},
+            "outputs": {
+                "sarif": report,
+                "results": results,
+                "native_results": [],
+                "logs": [],
+            },
+            "scope": {"requested": sources},
+            "execution": {
+                "cacheable": True,
+                "run_from_workspace_root": True,
+            },
+            "metadata": {},
+        },
+    }
+
+scripted_lint = target_kind(
+    docs = "Runs a project-owned lint adapter and exposes normalized findings.",
+    attrs = [
+        attr("analyzer", "string", required = True, configurable = False),
+        attr("program", "string", required = True, configurable = False),
+        attr("python", "string", default = "\"python3\"", configurable = False),
+        attr("config", "list<string>", default = "[]", configurable = False),
+        attr("data", "list<string>", default = "[]", configurable = False),
+        attr("args", "list<string>", default = "[]", configurable = False),
+        attr("findings_exit_code", "int", default = "1", configurable = False),
+    ],
+    providers = ["once_lint_info"],
+    capabilities = [capability("lint", ["default", "lint_results"])],
+    tools = [tool("python", executables = ["python3", "python"])],
+    impl = _scripted_lint_impl,
+)
+"#;
+
+const LINT_TARGET_STARTER: &str = r#"[modules]
+paths = ["modules/*.star"]
+
+[[target]]
+name = "lint"
+kind = "scripted_lint"
+srcs = ["src/**/*.txt"]
+
+[target.attrs]
+analyzer = "TODO checker"
+program = "tools/lint_adapter.py"
+findings_exit_code = 1
+"#;
+
+const LINT_ADAPTER_STARTER: &str = r#"import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--report", required=True)
+parser.add_argument("--analyzer", required=True)
+parser.add_argument("sources", nargs="*")
+args = parser.parse_args()
+
+findings = []
+for source in args.sources:
+    path = Path(source)
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+        if "TODO" not in line:
+            continue
+        findings.append({
+            "ruleId": "todo",
+            "level": "warning",
+            "message": {"text": "Resolve this TODO before merging."},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": source},
+                    "region": {"startLine": line_number, "startColumn": 1},
+                },
+            }],
+        })
+
+report = {
+    "version": "2.1.0",
+    "runs": [{
+        "tool": {"driver": {"name": args.analyzer, "rules": []}},
+        "results": findings,
+    }],
+}
+Path(args.report).write_text(json.dumps(report, indent=2))
+raise SystemExit(1 if findings else 0)
+"#;
 
 #[must_use]
 pub fn module_authoring_contract() -> ModuleAuthoringContract {
@@ -144,8 +294,38 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Build a structured argument list, optionally backed by an argument file.",
             ),
             entry(
-                "run_action(argv, inputs = [], outputs = [], clean_paths = [], create_dirs = [], cwd = None, env = {}, toolchain_identity = None, identifier = None, cacheable = True, depends_on_prior_actions = True, stdout = None, stderr = None, sandbox = None)",
-                "Declare a direct executable invocation with explicit inputs, outputs, setup, caching, and sandbox policy. Use `once query validate-actions` to investigate filesystem contract drift without changing the sandbox policy.",
+                "run_action(argv, inputs = [], outputs = [], clean_paths = [], create_dirs = [], cwd = None, env = {}, toolchain_identity = None, identifier = None, cacheable = True, depends_on_prior_actions = True, stdout = None, stderr = None, sandbox = None, success_exit_codes = [0])",
+                "Declare a direct executable invocation with explicit inputs, outputs, setup, caching, sandbox policy, and exit codes that indicate valid outputs. Use `once query validate-actions` to investigate filesystem contract drift without changing the sandbox policy.",
+            ),
+        ],
+        lint_contract: vec![
+            entry(
+                "providers = [\"once_lint_info\"]",
+                "Declare the reserved provider whenever a target returns a `lint_info` record for generic lint execution.",
+            ),
+            entry(
+                "capability(\"lint\", [\"default\", \"lint_results\"])",
+                "Expose the generic lint capability and its conventional output group.",
+            ),
+            entry(
+                "provider[\"lint_info\"]",
+                "Return schema, target, analyzer, command, outputs, scope, execution, and metadata. The lint starter shows the complete required shape.",
+            ),
+            entry(
+                "run_action(..., success_exit_codes = [0, findings_code])",
+                "Treat a documented findings exit code as valid completion so the analyzer report is captured and cached. Unexpected codes remain failures.",
+            ),
+            entry(
+                "lint_info.outputs.sarif",
+                "Name the declared Static Analysis Results Interchange Format report produced by the target actions.",
+            ),
+            entry(
+                "lint_info.outputs.results",
+                "Reserve the normalized `once.lint_results.v1` destination written by `once lint` after it reads the portable report.",
+            ),
+            entry(
+                "lint_info.outputs.native_results",
+                "List native analyzer reports retained for inspection when a second declared action converts them to the portable report.",
             ),
         ],
         test_contract: vec![
@@ -213,6 +393,10 @@ generated_text = target_kind(
     impl = _generated_text_impl,
 )
 "#,
+        lint_starter: LINT_STARTER,
+        lint_target_starter: LINT_TARGET_STARTER,
+        lint_adapter_starter: LINT_ADAPTER_STARTER,
+        normalized_lint_result_example: normalized_lint_result_example(),
         test_starter: r#"def _project_path(ctx, path):
     package = ctx["label"]["package"]
     if package:
@@ -336,6 +520,35 @@ labels = ["scripted"]
     }
 }
 
+fn normalized_lint_result_example() -> Value {
+    json!({
+        "schema": "once.lint_results.v1",
+        "target": "lint",
+        "status": "completed",
+        "complete": true,
+        "summary": {
+            "total": 1,
+            "errors": 0,
+            "warnings": 1,
+            "notes": 0
+        },
+        "findings": [{
+            "analyzer": "TODO checker",
+            "rule_id": "todo",
+            "severity": "warning",
+            "message": "Resolve this TODO before merging.",
+            "location": {
+                "path": "src/example.txt",
+                "line": 1,
+                "column": 1
+            }
+        }],
+        "artifacts": {
+            "portable_report": ".once/out/lint/lint/report.sarif"
+        }
+    })
+}
+
 const fn entry(signature: &'static str, purpose: &'static str) -> ContractEntry {
     ContractEntry { signature, purpose }
 }
@@ -371,6 +584,27 @@ mod tests {
             .test_contract
             .iter()
             .any(|entry| entry.signature.contains("once_test_info")));
+        assert!(contract
+            .lint_contract
+            .iter()
+            .any(|entry| entry.signature.contains("once_lint_info")));
+        assert!(contract
+            .lint_starter
+            .contains("success_exit_codes = success_codes"));
+        assert!(contract.lint_starter.contains("once.lint_info.v1"));
+        assert!(contract
+            .lint_target_starter
+            .contains("kind = \"scripted_lint\""));
+        assert!(contract
+            .lint_adapter_starter
+            .contains("\"version\": \"2.1.0\""));
+        assert_eq!(
+            contract.normalized_lint_result_example["schema"],
+            "once.lint_results.v1"
+        );
+        let lint_module = format!("{}\n{}", contract.declaration_source, contract.lint_starter);
+        let engine = crate::analysis::AnalysisEngine::from_source(lint_module).unwrap();
+        assert!(engine.target_kind_has_impl("scripted_lint"));
         assert!(contract.test_starter.contains("ctx[\"test\"][\"filters\"]"));
         assert!(contract.test_starter.contains("once.test_info.v1"));
         assert!(contract

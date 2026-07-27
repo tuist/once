@@ -84,6 +84,11 @@ pub struct DeclaredAction {
     pub env: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
+    #[serde(
+        default = "default_success_exit_codes",
+        skip_serializing_if = "is_default_success_exit_codes"
+    )]
+    pub success_exit_codes: Vec<i32>,
     #[serde(default = "default_cacheable", skip_serializing_if = "is_true")]
     pub cacheable: bool,
     #[serde(
@@ -112,6 +117,14 @@ pub enum DeclaredArgFileFormat {
 
 fn default_cacheable() -> bool {
     true
+}
+
+fn default_success_exit_codes() -> Vec<i32> {
+    vec![0]
+}
+
+fn is_default_success_exit_codes(codes: &[i32]) -> bool {
+    codes == [0]
 }
 
 fn default_depends_on_prior_actions() -> bool {

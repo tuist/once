@@ -1,6 +1,6 @@
 # `once query module-contract`
 
-Return the project-module authoring contract and starter
+Return the project-module authoring contract, starters, and result examples
 
 ## Synopsis
 

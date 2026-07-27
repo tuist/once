@@ -31,9 +31,13 @@ pub(crate) async fn run(
                 validate_contract,
             ))
             .await?;
-            if result.exit_code == 0 && !validate_contract {
+            let completed = action.accepts_exit_code(result.exit_code);
+            if completed && !validate_contract {
                 result.outputs =
                     outputs::capture(outputs, workspace_root, cache, *output_symlink_mode).await?;
+            }
+            if completed {
+                result.exit_code = 0;
             }
             Ok(result)
         }
@@ -118,6 +122,7 @@ async fn execute_command(
         outputs,
         resources,
         timeout_ms,
+        success_exit_codes,
         remote,
         stdout_path,
         stderr_path,
@@ -145,6 +150,7 @@ async fn execute_command(
                     outputs,
                     resources,
                     timeout_ms: *timeout_ms,
+                    success_exit_codes,
                 },
                 workspace_root,
                 cache,
@@ -261,7 +267,7 @@ async fn execute_sandboxed_command(
                 }
                 return Ok(result);
             }
-            if result.exit_code == 0 {
+            if action.accepts_exit_code(result.exit_code) {
                 copy_sandbox_outputs(outputs, &sandbox.execroot, workspace_root).await?;
             }
             Ok(result)

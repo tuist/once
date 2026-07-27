@@ -13,10 +13,18 @@ use crate::{ResourceRequest, WorkspacePath};
 /// that should invalidate the cache. Older action result JSON still
 /// deserializes through serde defaults; the domain only partitions new
 /// action lookups.
-pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v8\0";
+pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v9\0";
 
 static DEFAULT_RESOURCE_REQUEST: LazyLock<ResourceRequest> =
     LazyLock::new(ResourceRequest::default);
+
+fn default_success_exit_codes() -> Vec<i32> {
+    vec![0]
+}
+
+fn is_default_success_exit_codes(codes: &[i32]) -> bool {
+    codes == [0]
+}
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -123,6 +131,14 @@ pub enum Action {
         /// Per-action timeout in milliseconds. None = no timeout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
+        /// Exit codes that mean the command completed successfully. Linters
+        /// commonly use a nonzero code to report findings while still
+        /// producing a valid machine-readable result.
+        #[serde(
+            default = "default_success_exit_codes",
+            skip_serializing_if = "is_default_success_exit_codes"
+        )]
+        success_exit_codes: Vec<i32>,
         /// Optional compute provider for remote execution. This is
         /// part of the action key so local and remote runs never share
         /// a cache slot by accident.
@@ -186,6 +202,16 @@ pub enum PreparePathMode {
 }
 
 impl Action {
+    #[must_use]
+    pub fn accepts_exit_code(&self, exit_code: i32) -> bool {
+        match self {
+            Self::RunCommand {
+                success_exit_codes, ..
+            } => success_exit_codes.contains(&exit_code),
+            _ => exit_code == 0,
+        }
+    }
+
     /// Canonical, content-addressed key for this action.
     ///
     /// The key is `BLAKE3(domain || canonical_json(self))`. Bumping the
@@ -271,6 +297,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         }
     }
@@ -297,6 +324,19 @@ mod tests {
         assert_ne!(base.digest(), with_stdout.digest());
         assert_ne!(base.digest(), with_stderr.digest());
         assert_ne!(with_stdout.digest(), with_stderr.digest());
+    }
+
+    #[test]
+    fn accepted_exit_codes_change_action_digest() {
+        let base = action(OutputSymlinkMode::default());
+        let mut accepts_findings = base.clone();
+        if let Action::RunCommand {
+            success_exit_codes, ..
+        } = &mut accepts_findings
+        {
+            *success_exit_codes = vec![0, 1];
+        }
+        assert_ne!(base.digest(), accepts_findings.digest());
     }
 
     #[test]

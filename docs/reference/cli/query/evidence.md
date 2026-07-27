@@ -10,7 +10,7 @@ once query evidence [OPTIONS] [SUBJECT]
 
 ## Description
 
-Evidence records are provenance for action outcomes. They record what happened after `once exec`, `once run`, `once build`, or `once test`: the subject, status, action digest, input digest when available, cache state, exit code, and captured output digests when available. Evidence is queryable history; it does not change action-cache reuse rules.
+Evidence records are provenance for action outcomes. They record what happened after `once exec`, `once run`, `once build`, `once lint`, or `once test`: the subject, status, action digest, input digest when available, cache state, exit code, and captured output digests when available. Evidence is queryable history; it does not change action-cache reuse rules.
 
 ## Arguments
 
