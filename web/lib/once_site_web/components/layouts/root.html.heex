@@ -9,6 +9,10 @@
       {assigns[:page_title]}
     </.live_title>
 
+    <% social_image =
+      OnceSiteWeb.Endpoint.url() <> (assigns[:og_image] || "/images/og/home.jpg") %>
+    <% social_image_alt = assigns[:og_image_alt] || assigns[:page_title] || "Once" %>
+
     <meta name="description" content={assigns[:meta_description] || default_description()} />
     <link
       rel="canonical"
@@ -43,8 +47,12 @@
     />
     <meta
       property="og:image"
-      content={OnceSiteWeb.Endpoint.url() <> (assigns[:og_image] || "/images/og/home.jpg")}
+      content={social_image}
     />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content={OnceSiteWeb.Docs.OgImage.width()} />
+    <meta property="og:image:height" content={OnceSiteWeb.Docs.OgImage.height()} />
+    <meta property="og:image:alt" content={social_image_alt} />
     <meta
       :if={published_time = assigns[:published_time]}
       property="article:published_time"
@@ -59,8 +67,11 @@
     />
     <meta
       name="twitter:image"
-      content={OnceSiteWeb.Endpoint.url() <> (assigns[:og_image] || "/images/og/home.jpg")}
+      content={social_image}
     />
+    <meta name="twitter:image:width" content={OnceSiteWeb.Docs.OgImage.width()} />
+    <meta name="twitter:image:height" content={OnceSiteWeb.Docs.OgImage.height()} />
+    <meta name="twitter:image:alt" content={social_image_alt} />
 
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
