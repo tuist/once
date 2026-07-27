@@ -38,6 +38,38 @@ pub enum DeclaredActionOperation {
         output: String,
         include_suffixes: Vec<String>,
     },
+    WriteArchive {
+        entries: Vec<DeclaredArchiveEntry>,
+        output: String,
+        sha256_output: Option<String>,
+        format: DeclaredArchiveFormat,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DeclaredArchiveEntry {
+    pub kind: DeclaredArchiveEntryKind,
+    pub source: Option<String>,
+    pub path: String,
+    pub mode: u32,
+    pub directory_mode: u32,
+    pub owner_id: u64,
+    pub group_id: u64,
+    pub mtime: u64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredArchiveEntryKind {
+    File,
+    Directory,
+    Tree,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredArchiveFormat {
+    Tar,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]

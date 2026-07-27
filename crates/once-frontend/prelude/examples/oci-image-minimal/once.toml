@@ -1,0 +1,26 @@
+[[target]]
+name = "hello"
+kind = "go_binary"
+srcs = ["main.go"]
+
+[target.attrs]
+goos = "linux"
+cgo = false
+strip = true
+
+[[target]]
+name = "hello_layer"
+kind = "oci_layer"
+
+[target.dependencies]
+programs = ["hello"]
+
+[[target]]
+name = "hello_image"
+kind = "oci_image"
+
+[target.dependencies]
+layers = ["hello_layer"]
+
+[target.attrs]
+tag = "once-hello:latest"

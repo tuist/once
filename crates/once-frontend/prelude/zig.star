@@ -223,6 +223,12 @@ def _zig_target_os(ctx):
         return "linux"
     return ""
 
+def _zig_target_architecture(ctx):
+    target = _zig_attr(ctx, "target", "")
+    if not target:
+        return _once_normalize_architecture(host_arch())
+    return _once_normalize_architecture(target.split("-")[0])
+
 def _zig_exe_extension(ctx):
     if _zig_target_os(ctx) == "windows":
         return ".exe"
@@ -738,6 +744,12 @@ def _zig_compile(ctx, kind, default_main, command, provider_kind):
         provider["zig_docs"] = _zig_docs_action(ctx, command, root, c_module_context, cinfo, inputs, zig, identity)
     if kind == "binary":
         provider["binary"] = primary_output
+        provider.update(_once_executable_fields(
+            primary_output,
+            runtime_files = provider["transitive_data"],
+            os = _once_normalize_os(_zig_target_os(ctx)),
+            architecture = _zig_target_architecture(ctx),
+        ))
     if kind == "test":
         provider["test_binary"] = primary_output
     if kind == "static":
@@ -1601,7 +1613,7 @@ zig_binary = target_kind(
         attr("args", "list<string>", default = "[]", docs = "Arguments passed to the binary during `once run`.", configurable = False),
     ],
     deps = _ZIG_DEP_EDGE,
-    providers = ["zig_binary"],
+    providers = ["zig_binary", "once_executable"],
     capabilities = [
         capability("build", ["binary", "asm", "llvm_ir", "llvm_bc", "zig_docs"]),
         capability("run", ["default"], ["binary"]),

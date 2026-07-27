@@ -1,6 +1,8 @@
 # Build context for web/Dockerfile is the repo root. Keep it small: the image
 # only needs `crates/` (for the `once` binary) and `web/` (the Phoenix app).
 .git
+.once
+**/.once
 target
 docs
 

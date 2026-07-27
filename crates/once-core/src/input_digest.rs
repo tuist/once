@@ -60,17 +60,24 @@ impl InputDigestBuilder {
         self
     }
 
-    /// Hash a workspace-relative source file or directory and append
-    /// the result keyed by the workspace-relative path. Files stream
-    /// through [`Digest::of_reader`]; directories use the same stable
-    /// encoding as cached directory outputs.
+    /// Hash a workspace-relative source file, symbolic link, or
+    /// directory and append the result keyed by the workspace-relative
+    /// path. Files stream through [`Digest::of_reader`], symbolic links
+    /// hash their target without following it, and directories use the
+    /// same stable encoding as cached directory outputs.
     pub fn push_source<P: AsRef<Path>>(
         &mut self,
         workspace_root: P,
         ws_rel: &str,
     ) -> std::io::Result<&mut Self> {
         let abs = workspace_root.as_ref().join(ws_rel);
-        let digest = if std::fs::metadata(&abs)?.is_dir() {
+        let metadata = std::fs::symlink_metadata(&abs)?;
+        let digest = if metadata.file_type().is_symlink() {
+            let target = std::fs::read_link(&abs)?;
+            let mut bytes = b"once.symlink.input.v1\0".to_vec();
+            bytes.extend_from_slice(target.to_string_lossy().as_bytes());
+            Digest::of_bytes(&bytes)
+        } else if metadata.is_dir() {
             let bytes = capture_directory_blob(&abs, OutputSymlinkMode::Preserve)?;
             Digest::of_bytes(&bytes)
         } else {
@@ -238,6 +245,39 @@ mod tests {
         std::fs::remove_file(tmp.path().join("tree/current.txt")).unwrap();
         symlink("two.txt", tmp.path().join("tree/current.txt")).unwrap();
         assert_ne!(first, digest());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn push_source_hashes_direct_symbolic_link_targets_without_following_them() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        std::fs::write(external.path().join("one.txt"), b"one").unwrap();
+        std::fs::write(external.path().join("two.txt"), b"two").unwrap();
+        let link = workspace.path().join("current.txt");
+        symlink(external.path().join("one.txt"), &link).unwrap();
+
+        let digest = || {
+            let mut builder = InputDigestBuilder::new(b"test.symlink.v1");
+            builder
+                .push_source(workspace.path(), "current.txt")
+                .unwrap();
+            builder.finish()
+        };
+        let first = digest();
+
+        std::fs::write(external.path().join("one.txt"), b"changed").unwrap();
+        assert_eq!(first, digest());
+
+        std::fs::remove_file(&link).unwrap();
+        symlink(external.path().join("two.txt"), &link).unwrap();
+        assert_ne!(first, digest());
+
+        std::fs::remove_file(&link).unwrap();
+        symlink(external.path().join("missing.txt"), &link).unwrap();
+        assert!(digest() != first);
     }
 
     #[test]

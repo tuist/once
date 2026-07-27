@@ -29,3 +29,11 @@ srcs = [
 manifest = "Cargo.toml"
 lockfile = "Cargo.lock"
 vendor_dir = "third_party/rust/vendor"
+
+[[target]]
+name = "web_image"
+kind = "dockerfile_image"
+
+[target.attrs]
+dockerfile = "web/Dockerfile"
+tag = "once-web:once-dockerfile"

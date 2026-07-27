@@ -15,6 +15,8 @@ PRELUDE_SOURCES = [
     "ruby.star",
     "javascript.star",
     "react_native.star",
+    "oci.star",
+    "dockerfile.star",
 ]
 
 PRELUDE_DEPENDENCIES = {
@@ -115,5 +117,12 @@ PRELUDE_TARGET_KINDS = {
         "react_native_apple_application",
         "react_native_android_application",
         "react_native_metro",
+    ],
+    "oci.star": [
+        "oci_layer",
+        "oci_image",
+    ],
+    "dockerfile.star": [
+        "dockerfile_image",
     ],
 }

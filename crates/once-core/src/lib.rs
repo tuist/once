@@ -6,6 +6,7 @@
 //! buffered.
 
 mod action;
+mod archive;
 mod contract;
 mod directory_blob;
 mod env;
@@ -32,7 +33,8 @@ mod test_schedule;
 mod xdg;
 
 pub use action::{
-    Action, CopyPathMode, OutputSymlinkMode, PreparePathMode, RemoteExecution, SandboxMode,
+    Action, ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode, OutputSymlinkMode,
+    PreparePathMode, RemoteExecution, SandboxMode,
 };
 pub use contract::{
     validate_action_contract, validate_action_contract_with_options, ActionContractDiagnostic,

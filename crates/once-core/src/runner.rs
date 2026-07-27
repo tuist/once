@@ -338,8 +338,8 @@ mod tests {
 
     use crate::action::ACTION_DIGEST_DOMAIN;
     use crate::{
-        CopyPathMode, Error, OutputSymlinkMode, PreparePathMode, RemoteExecution, ResourceRequest,
-        SandboxMode, WorkspacePath,
+        ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode, Error, OutputSymlinkMode,
+        PreparePathMode, RemoteExecution, ResourceRequest, SandboxMode, WorkspacePath,
     };
     use once_cas::{CacheProvider, Cas, Digest};
     use tempfile::TempDir;
@@ -429,6 +429,50 @@ mod tests {
             "declared"
         );
         assert!(first.result.outputs.contains_key("out/result.txt"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copied_input_sandbox_materializes_private_inputs() {
+        let (tmp, cas) = fresh_cas();
+        std::fs::write(tmp.path().join("declared.txt"), "declared").unwrap();
+        let output = WorkspacePath::try_from("out/result.txt").unwrap();
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "test ! -L declared.txt && printf changed > declared.txt && cat declared.txt > out/result.txt"
+                    .into(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: Some(Digest::of_bytes(b"copied-sandbox-inputs")),
+            inputs: vec![WorkspacePath::try_from("declared.txt").unwrap()],
+            outputs: vec![output.clone()],
+            stdout_path: None,
+            stderr_path: None,
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            sandbox: SandboxMode::CopiedInputs,
+            timeout_ms: None,
+            success_exit_codes: vec![0],
+            remote: None,
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+
+        assert_eq!(first.cache, CacheState::Miss);
+        assert_eq!(first.result.exit_code, 0);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("declared.txt")).unwrap(),
+            "declared"
+        );
+        assert_eq!(
+            std::fs::read_to_string(output.resolve(tmp.path())).unwrap(),
+            "changed"
+        );
     }
 
     #[cfg(unix)]
@@ -598,6 +642,53 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(tmp.path().join("out/generated.txt")).unwrap(),
             "generated"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_archive_action_restores_archive_and_digest_from_cache() {
+        let (tmp, cas) = fresh_cas();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/hello"), "hello").unwrap();
+        let action = Action::WriteArchive {
+            entries: vec![ArchiveEntry {
+                kind: ArchiveEntryKind::File,
+                source: Some(WorkspacePath::try_from("src/hello").unwrap()),
+                path: "usr/local/bin/hello".to_string(),
+                mode: 0o755,
+                directory_mode: 0o755,
+                owner_id: 0,
+                group_id: 0,
+                mtime: 0,
+            }],
+            output: WorkspacePath::try_from("out/layer.tar").unwrap(),
+            sha256_output: Some(WorkspacePath::try_from("out/layer.tar.sha256").unwrap()),
+            format: ArchiveFormat::Tar,
+            input_digest: Some(Digest::of_bytes(b"write-archive")),
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        let archive = std::fs::read(tmp.path().join("out/layer.tar")).unwrap();
+        let digest = std::fs::read_to_string(tmp.path().join("out/layer.tar.sha256")).unwrap();
+        assert!(!archive.is_empty());
+        assert_eq!(digest.trim().len(), 64);
+        std::fs::remove_file(tmp.path().join("out/layer.tar")).unwrap();
+        std::fs::remove_file(tmp.path().join("out/layer.tar.sha256")).unwrap();
+
+        let second = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.cache, CacheState::Hit);
+        assert_eq!(
+            std::fs::read(tmp.path().join("out/layer.tar")).unwrap(),
+            archive
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/layer.tar.sha256")).unwrap(),
+            digest
         );
     }
 

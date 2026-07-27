@@ -1,4 +1,4 @@
-use super::globals::expand_globs;
+use super::globals::{expand_globs, walk_package_files};
 #[cfg(windows)]
 use super::store::which_candidate_names;
 use super::store::{which_candidate_names_for, HostCache};
@@ -273,6 +273,25 @@ run_action(
     });
     assert_eq!(store.actions.len(), 1);
     assert_eq!(store.actions[0].sandbox.as_deref(), Some("inputs"));
+}
+
+#[test]
+fn run_action_records_copied_input_sandbox_policy() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "containers/service");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+run_action(
+    argv = ["tool", "input"],
+    inputs = ["containers/service/input"],
+    outputs = [".once/out/containers/service/output"],
+    sandbox = "copied-inputs",
+)
+"#)
+        .unwrap();
+    });
+    assert_eq!(store.actions.len(), 1);
+    assert_eq!(store.actions[0].sandbox.as_deref(), Some("copied-inputs"));
 }
 
 #[test]
@@ -722,6 +741,83 @@ write_tree_digest(".once/out/p/staged", ".once/out/p/staged.sha256", include_suf
 }
 
 #[test]
+fn write_archive_records_entries_inputs_and_digest_output() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "p");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+write_archive(
+    [
+        {
+            "kind": "directory",
+            "path": "etc",
+            "mode": 493,
+            "owner_id": 7,
+            "group_id": 8,
+            "mtime": 9,
+        },
+        {
+            "kind": "file",
+            "source": "src/app.conf",
+            "path": "etc/app.conf",
+            "mode": 420,
+            "owner_id": 7,
+            "group_id": 8,
+            "mtime": 9,
+        },
+    ],
+    ".once/out/p/layer.tar",
+    sha256_output = ".once/out/p/layer.tar.sha256",
+    identifier = "write-layer",
+)
+"#)
+        .unwrap();
+    });
+
+    assert_eq!(store.actions.len(), 1);
+    let action = &store.actions[0];
+    assert_eq!(action.inputs, vec!["src/app.conf".to_string()]);
+    assert_eq!(
+        action.outputs,
+        vec![
+            ".once/out/p/layer.tar".to_string(),
+            ".once/out/p/layer.tar.sha256".to_string(),
+        ]
+    );
+    assert_eq!(action.identifier.as_deref(), Some("write-layer"));
+    assert_eq!(
+        action.operation,
+        Some(DeclaredActionOperation::WriteArchive {
+            entries: vec![
+                DeclaredArchiveEntry {
+                    kind: DeclaredArchiveEntryKind::Directory,
+                    source: None,
+                    path: "etc".to_string(),
+                    mode: 493,
+                    directory_mode: 493,
+                    owner_id: 7,
+                    group_id: 8,
+                    mtime: 9,
+                },
+                DeclaredArchiveEntry {
+                    kind: DeclaredArchiveEntryKind::File,
+                    source: Some("src/app.conf".to_string()),
+                    path: "etc/app.conf".to_string(),
+                    mode: 420,
+                    directory_mode: 493,
+                    owner_id: 7,
+                    group_id: 8,
+                    mtime: 9,
+                },
+            ],
+            output: ".once/out/p/layer.tar".to_string(),
+            sha256_output: Some(".once/out/p/layer.tar.sha256".to_string()),
+            format: DeclaredArchiveFormat::Tar,
+        })
+    );
+}
+
+#[test]
 fn materialize_host_file_records_a_content_addressed_operation() {
     let tmp = TempDir::new().unwrap();
     let source = tmp.path().join("toolchain.bin");
@@ -869,6 +965,73 @@ fn glob_rejects_symlink_that_escapes_workspace() {
     .unwrap_err()
     .to_string();
     assert!(err.contains("outside the workspace"), "{err}");
+}
+
+#[test]
+fn walk_files_includes_hidden_paths_and_prunes_excluded_trees() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("containers/demo");
+    std::fs::create_dir_all(package.join(".hidden")).unwrap();
+    std::fs::create_dir_all(package.join("nested/.once/out")).unwrap();
+    std::fs::create_dir_all(package.join("target/debug")).unwrap();
+    std::fs::write(package.join("Dockerfile"), "FROM scratch\n").unwrap();
+    std::fs::write(package.join(".hidden/config"), "secret = false\n").unwrap();
+    std::fs::write(package.join("nested/.once/out/generated"), "generated\n").unwrap();
+    std::fs::write(package.join("target/debug/app"), "binary\n").unwrap();
+
+    let files = walk_package_files(
+        workspace.path(),
+        "containers/demo",
+        ".",
+        &["target".to_string()],
+        &[".once".to_string()],
+    )
+    .unwrap();
+
+    assert_eq!(
+        files,
+        vec![
+            "containers/demo/.hidden/config".to_string(),
+            "containers/demo/Dockerfile".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn walk_files_global_expands_against_the_active_package() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("containers/demo/context");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("message.txt"), "hello\n").unwrap();
+
+    let store = store_for(workspace.path(), "containers/demo");
+    let (_, value) = with_active_store(store, || {
+        eval_string(r#"value = repr(walk_files("context"))"#).unwrap()
+    });
+
+    assert_eq!(value, r#"["containers/demo/context/message.txt"]"#);
+}
+
+#[cfg(unix)]
+#[test]
+fn walk_files_preserves_symlinks_without_resolving_their_targets() {
+    let workspace = TempDir::new().unwrap();
+    let external = TempDir::new().unwrap();
+    let package = workspace.path().join("containers/demo");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(external.path().join("secret.txt"), "secret\n").unwrap();
+    std::os::unix::fs::symlink(external.path().join("secret.txt"), package.join("escape")).unwrap();
+    std::os::unix::fs::symlink("missing.txt", package.join("dangling")).unwrap();
+
+    let files = walk_package_files(workspace.path(), "containers/demo", ".", &[], &[]).unwrap();
+
+    assert_eq!(
+        files,
+        vec![
+            "containers/demo/dangling".to_string(),
+            "containers/demo/escape".to_string(),
+        ]
+    );
 }
 
 fn target(kind: &str) -> GraphTarget {

@@ -4,7 +4,8 @@ use std::process::Command;
 
 use once_frontend::analysis::{
     globals_for_prelude, target_kind_has_impl, with_active_store, AnalysisStore, DeclaredAction,
-    DeclaredActionOperation, DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
+    DeclaredActionOperation, DeclaredArchiveEntryKind, DeclaredArchiveFormat,
+    DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
 use once_frontend::{built_in_target_kind_schema, graph_from_targets, Target};
 use starlark::environment::Module;
@@ -118,6 +119,22 @@ fn go_prelude_source() -> String {
     )
 }
 
+fn oci_prelude_source() -> String {
+    format!(
+        "{}\n{}",
+        include_str!("../prelude/common.star"),
+        include_str!("../prelude/oci.star")
+    )
+}
+
+fn dockerfile_prelude_source() -> String {
+    format!(
+        "{}\n{}",
+        include_str!("../prelude/common.star"),
+        include_str!("../prelude/dockerfile.star")
+    )
+}
+
 fn all_prelude_source() -> String {
     [
         include_str!("../prelude/common.star"),
@@ -129,6 +146,8 @@ fn all_prelude_source() -> String {
         include_str!("../prelude/c.star"),
         include_str!("../prelude/cmake.star"),
         include_str!("../prelude/zig.star"),
+        include_str!("../prelude/oci.star"),
+        include_str!("../prelude/dockerfile.star"),
         include_str!("../prelude/swift.star"),
         include_str!("../prelude/kotlin.star"),
         include_str!("../prelude/elixir.star"),
@@ -1093,6 +1112,695 @@ fn go_target_kind_schemas_cover_bazel_buck_and_locked_modules() {
 }
 
 #[test]
+fn oci_target_kinds_expose_layers_images_and_runnable_examples() {
+    for kind in ["oci_layer", "oci_image"] {
+        assert!(target_kind_has_impl(kind).unwrap(), "missing `{kind}` impl");
+        let schema = built_in_target_kind_schema(kind)
+            .unwrap_or_else(|| panic!("missing target kind schema `{kind}`"));
+        assert!(
+            schema
+                .examples
+                .iter()
+                .any(|example| example.slug == "oci-image-minimal"),
+            "{kind} should expose the minimal container image starter"
+        );
+        assert!(
+            schema
+                .source_references
+                .iter()
+                .all(|reference| reference.content_digest.is_some()),
+            "{kind} should bind complete upstream sources"
+        );
+    }
+
+    let layer = built_in_target_kind_schema("oci_layer").unwrap();
+    assert!(layer
+        .providers
+        .iter()
+        .any(|provider| provider == "oci_layer"));
+    assert_target_kind_attrs(
+        "oci_layer",
+        &[
+            "archive",
+            "architecture",
+            "data_dir",
+            "group_id",
+            "owner_id",
+            "program_dir",
+        ],
+    );
+
+    let image = built_in_target_kind_schema("oci_image").unwrap();
+    assert!(image
+        .providers
+        .iter()
+        .any(|provider| provider == "oci_image"));
+    assert_target_kind_attrs(
+        "oci_image",
+        &[
+            "annotations",
+            "architecture",
+            "cmd",
+            "entrypoint",
+            "env",
+            "tag",
+        ],
+    );
+}
+
+#[test]
+fn native_binary_schemas_expose_the_shared_executable_provider() {
+    for kind in ["go_binary", "rust_binary", "zig_binary"] {
+        let schema = built_in_target_kind_schema(kind)
+            .unwrap_or_else(|| panic!("missing target kind schema `{kind}`"));
+        assert!(
+            schema
+                .providers
+                .iter()
+                .any(|provider| provider == "once_executable"),
+            "{kind} should expose the shared executable provider"
+        );
+    }
+}
+
+#[test]
+fn dockerfile_image_schema_exposes_buildkit_outputs_and_example() {
+    let schema = built_in_target_kind_schema("dockerfile_image").expect("dockerfile_image schema");
+    assert!(target_kind_has_impl("dockerfile_image").unwrap());
+    assert!(schema
+        .providers
+        .iter()
+        .any(|provider| provider == "container_image"));
+    assert!(schema
+        .examples
+        .iter()
+        .any(|example| example.slug == "dockerfile-image-minimal"));
+    assert_target_kind_attrs(
+        "dockerfile_image",
+        &[
+            "build_args",
+            "cacheable",
+            "context",
+            "dockerfile",
+            "format",
+            "network",
+            "platform",
+            "target",
+        ],
+    );
+}
+
+#[test]
+fn dockerfile_image_declares_an_isolated_buildx_action() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("containers/demo");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("Dockerfile"), "FROM scratch\n").unwrap();
+    std::fs::write(package.join(".dockerignore"), ".once\n").unwrap();
+    std::fs::write(package.join("message.txt"), "hello\n").unwrap();
+    let source = format!(
+        r#"{}
+def host_which_optional(name):
+    return "/tools/docker" if name == "docker" else None
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    if argv[1:3] == ["buildx", "version"]:
+        return "github.com/docker/buildx v1.2.3\n"
+    if argv[1:3] == ["buildx", "inspect"]:
+        return "Driver: docker\nBuildKit version: v4.5.6\n"
+    fail("unexpected command: " + repr(argv))
+
+def host_env(name):
+    return "/usr/bin" if name == "PATH" else ""
+
+ctx = {{
+    "label": {{"package": "containers/demo", "name": "image", "id": "containers/demo/image"}},
+    "attr": {{
+        "tag": "example/image:test",
+        "build_args": {{"MODE": "release"}},
+        "labels": {{"org.example.kind": "test"}},
+    }},
+    "srcs": [".dockerignore", "Dockerfile", "message.txt"],
+    "build_dir": ".once/out/containers/demo/image",
+    "scratch_dir": ".once/tmp/analysis/containers/demo/image",
+    "capability": "build",
+}}
+provider = _dockerfile_image_impl(ctx)
+result = repr(provider)
+"#,
+        dockerfile_prelude_source()
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "containers/demo".to_string(),
+        ".once/out/containers/demo/image".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let provider = result.unwrap();
+    assert!(provider.contains("\"container_image\": True"), "{provider}");
+    assert!(provider.contains("\"format\": \"docker\""), "{provider}");
+    let action = action_by_identifier(&store, "containers/demo/image:dockerfile-build");
+    assert!(!action.cacheable);
+    assert_eq!(action.sandbox.as_deref(), Some("copied-inputs"));
+    assert_eq!(action.cwd.as_deref(), Some("containers/demo"));
+    assert!(action.stdout.is_none());
+    assert!(action.stderr.is_none());
+    assert!(action.argv.starts_with(&[
+        "/tools/docker".to_string(),
+        "buildx".to_string(),
+        "build".to_string(),
+    ]));
+    assert!(action
+        .argv
+        .windows(2)
+        .any(|args| args == ["--build-arg", "MODE=release"]));
+    assert!(action
+        .argv
+        .windows(2)
+        .any(|args| args == ["--tag", "example/image:test"]));
+    assert_eq!(
+        action.inputs,
+        vec![
+            "containers/demo/.dockerignore".to_string(),
+            "containers/demo/Dockerfile".to_string(),
+            "containers/demo/message.txt".to_string(),
+        ]
+    );
+    let save = action_by_identifier(&store, "containers/demo/image:docker-save");
+    assert!(!save.cacheable);
+    assert_eq!(
+        save.inputs,
+        vec![".once/out/containers/demo/image/build-metadata.json".to_string()]
+    );
+    assert!(save.argv.windows(2).any(|args| args == ["image", "save"]));
+}
+
+#[test]
+fn dockerfile_image_infers_hidden_and_nested_context_inputs() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("containers/demo");
+    std::fs::create_dir_all(package.join(".hidden")).unwrap();
+    std::fs::create_dir_all(package.join("nested/.cache")).unwrap();
+    std::fs::create_dir_all(package.join("nested")).unwrap();
+    std::fs::create_dir_all(package.join("ignored")).unwrap();
+    std::fs::write(package.join("Dockerfile"), "FROM scratch\n").unwrap();
+    std::fs::write(
+        package.join(".dockerignore"),
+        "ignored\nignored.txt\n**/.cache\n",
+    )
+    .unwrap();
+    std::fs::write(package.join(".hidden/config"), "hidden\n").unwrap();
+    std::fs::write(package.join("nested/message.txt"), "hello\n").unwrap();
+    std::fs::write(package.join("nested/.cache/value"), "ignored\n").unwrap();
+    std::fs::write(package.join("ignored/result.txt"), "ignored\n").unwrap();
+    std::fs::write(package.join("ignored.txt"), "ignored\n").unwrap();
+    let source = format!(
+        r#"{}
+def host_which_optional(name):
+    return "/tools/docker" if name == "docker" else None
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    if argv[1:3] == ["buildx", "version"]:
+        return "github.com/docker/buildx v1.2.3\n"
+    if argv[1:3] == ["buildx", "inspect"]:
+        return "Driver: docker-container\nBuildKit version: v4.5.6\n"
+    fail("unexpected command: " + repr(argv))
+
+def host_env(name):
+    return ""
+
+ctx = {{
+    "label": {{"package": "containers/demo", "name": "image", "id": "containers/demo/image"}},
+    "attr": {{}},
+    "srcs": [],
+    "build_dir": ".once/out/containers/demo/image",
+    "scratch_dir": ".once/tmp/analysis/containers/demo/image",
+    "capability": "build",
+}}
+provider = _dockerfile_image_impl(ctx)
+result = repr(provider)
+"#,
+        dockerfile_prelude_source()
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "containers/demo".to_string(),
+        ".once/out/containers/demo/image".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let provider = result.unwrap();
+    assert!(
+        provider.contains("\"input_discovery\": \"context\""),
+        "{provider}"
+    );
+    let action = action_by_identifier(&store, "containers/demo/image:dockerfile-build");
+    assert_eq!(
+        action.inputs,
+        vec![
+            "containers/demo/.dockerignore".to_string(),
+            "containers/demo/.hidden/config".to_string(),
+            "containers/demo/Dockerfile".to_string(),
+            "containers/demo/nested/message.txt".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn dockerfile_image_normalizes_root_context_and_excludes_runtime_state() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::create_dir_all(workspace.path().join(".once/out/web_image")).unwrap();
+    std::fs::create_dir_all(workspace.path().join("nested/.once/out")).unwrap();
+    std::fs::write(workspace.path().join("Dockerfile"), "FROM scratch\n").unwrap();
+    std::fs::write(workspace.path().join("message.txt"), "hello\n").unwrap();
+    std::fs::write(
+        workspace.path().join(".once/out/web_image/image.tar"),
+        "output\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.path().join("nested/.once/out/generated"),
+        "generated\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{}
+def host_which_optional(name):
+    return "/tools/docker" if name == "docker" else None
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    if argv[1:3] == ["buildx", "version"]:
+        return "github.com/docker/buildx v1.2.3\n"
+    if argv[1:3] == ["buildx", "inspect"]:
+        return "Driver: docker-container\nBuildKit version: v4.5.6\n"
+    fail("unexpected command: " + repr(argv))
+
+def host_env(name):
+    return ""
+
+ctx = {{
+    "label": {{"package": "", "name": "image", "id": "image"}},
+    "attr": {{"context": "./"}},
+    "srcs": [],
+    "build_dir": ".once/out/image",
+    "scratch_dir": ".once/tmp/analysis/image",
+    "capability": "build",
+}}
+result = repr(_dockerfile_image_impl(ctx))
+"#,
+        dockerfile_prelude_source()
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        String::new(),
+        ".once/out/image".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    result.unwrap();
+    let action = action_by_identifier(&store, "image:dockerfile-build");
+    assert_eq!(
+        action.inputs,
+        vec!["Dockerfile".to_string(), "message.txt".to_string()]
+    );
+    assert_eq!(action.argv.last().map(String::as_str), Some("."));
+}
+
+#[test]
+fn dockerfile_metadata_infers_inputs_without_probing_the_toolchain() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::write(workspace.path().join("Dockerfile"), "FROM scratch\n").unwrap();
+    std::fs::write(workspace.path().join("message.txt"), "hello\n").unwrap();
+    let source = format!(
+        r#"{}
+def host_which_optional(name):
+    fail("metadata analysis must not resolve host tools")
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    fail("metadata analysis must not run host commands")
+
+ctx = {{
+    "label": {{"package": "", "name": "image", "id": "image"}},
+    "attr": {{}},
+    "srcs": [],
+    "build_dir": ".once/out/image",
+    "scratch_dir": ".once/tmp/analysis/image",
+    "capability": "metadata",
+}}
+result = repr(_dockerfile_image_impl(ctx))
+"#,
+        dockerfile_prelude_source()
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        String::new(),
+        ".once/out/image".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let provider = result.unwrap();
+    assert!(store.actions.is_empty());
+    assert!(
+        provider.contains("\"affected_inputs\": [\"Dockerfile\", \"message.txt\"]"),
+        "{provider}"
+    );
+}
+
+#[test]
+fn dockerfile_ignore_parent_pattern_is_kept_as_an_unmodeled_input_rule() {
+    let source = format!(
+        "{}\nresult = repr(_dockerfile_literal_excludes(\"..\\n\"))",
+        dockerfile_prelude_source()
+    );
+
+    let result = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(result, "{\"paths\": [], \"names\": []}");
+}
+
+#[test]
+fn dockerfile_image_keeps_inputs_when_ignore_rules_can_reinclude_them() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("containers/demo");
+    std::fs::create_dir_all(package.join("ignored")).unwrap();
+    std::fs::write(package.join("Dockerfile"), "FROM scratch\n").unwrap();
+    std::fs::write(
+        package.join(".dockerignore"),
+        "ignored\n!ignored/keep.txt\n**/*.log\n",
+    )
+    .unwrap();
+    std::fs::write(package.join("ignored/drop.txt"), "drop\n").unwrap();
+    std::fs::write(package.join("ignored/keep.txt"), "keep\n").unwrap();
+    std::fs::write(package.join("debug.log"), "log\n").unwrap();
+    let source = format!(
+        r#"{}
+def host_which_optional(name):
+    return "/tools/docker" if name == "docker" else None
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    if argv[1:3] == ["buildx", "version"]:
+        return "github.com/docker/buildx v1.2.3\n"
+    if argv[1:3] == ["buildx", "inspect"]:
+        return "Driver: docker-container\nBuildKit version: v4.5.6\n"
+    fail("unexpected command: " + repr(argv))
+
+def host_env(name):
+    return ""
+
+ctx = {{
+    "label": {{"package": "containers/demo", "name": "image", "id": "containers/demo/image"}},
+    "attr": {{}},
+    "srcs": [],
+    "build_dir": ".once/out/containers/demo/image",
+    "scratch_dir": ".once/tmp/analysis/containers/demo/image",
+    "capability": "build",
+}}
+result = repr(_dockerfile_image_impl(ctx))
+"#,
+        dockerfile_prelude_source()
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "containers/demo".to_string(),
+        ".once/out/containers/demo/image".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    result.unwrap();
+    let action = action_by_identifier(&store, "containers/demo/image:dockerfile-build");
+    assert!(action
+        .inputs
+        .contains(&"containers/demo/ignored/drop.txt".to_string()));
+    assert!(action
+        .inputs
+        .contains(&"containers/demo/ignored/keep.txt".to_string()));
+    assert!(action
+        .inputs
+        .contains(&"containers/demo/debug.log".to_string()));
+}
+
+#[test]
+fn dockerfile_specific_ignore_controls_an_inferred_nested_context() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("containers/demo");
+    std::fs::create_dir_all(package.join("app/ignored")).unwrap();
+    std::fs::create_dir_all(package.join("app/specific")).unwrap();
+    std::fs::create_dir_all(package.join("docker")).unwrap();
+    std::fs::write(package.join("docker/build.Dockerfile"), "FROM scratch\n").unwrap();
+    std::fs::write(package.join("app/.dockerignore"), "ignored\n").unwrap();
+    std::fs::write(
+        package.join("docker/build.Dockerfile.dockerignore"),
+        "specific\n",
+    )
+    .unwrap();
+    std::fs::write(package.join("app/ignored/value.txt"), "included\n").unwrap();
+    std::fs::write(package.join("app/specific/value.txt"), "excluded\n").unwrap();
+    let source = format!(
+        r#"{}
+def host_which_optional(name):
+    return "/tools/docker" if name == "docker" else None
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    if argv[1:3] == ["buildx", "version"]:
+        return "github.com/docker/buildx v1.2.3\n"
+    if argv[1:3] == ["buildx", "inspect"]:
+        return "Driver: docker-container\nBuildKit version: v4.5.6\n"
+    fail("unexpected command: " + repr(argv))
+
+def host_env(name):
+    return ""
+
+ctx = {{
+    "label": {{"package": "containers/demo", "name": "image", "id": "containers/demo/image"}},
+    "attr": {{
+        "context": "app",
+        "dockerfile": "docker/build.Dockerfile",
+    }},
+    "srcs": [],
+    "build_dir": ".once/out/containers/demo/image",
+    "scratch_dir": ".once/tmp/analysis/containers/demo/image",
+    "capability": "build",
+}}
+result = repr(_dockerfile_image_impl(ctx))
+"#,
+        dockerfile_prelude_source()
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "containers/demo".to_string(),
+        ".once/out/containers/demo/image".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    result.unwrap();
+    let action = action_by_identifier(&store, "containers/demo/image:dockerfile-build");
+    assert_eq!(
+        action.inputs,
+        vec![
+            "containers/demo/app/.dockerignore".to_string(),
+            "containers/demo/app/ignored/value.txt".to_string(),
+            "containers/demo/docker/build.Dockerfile".to_string(),
+            "containers/demo/docker/build.Dockerfile.dockerignore".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn dockerfile_image_exports_directly_with_a_container_builder() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("containers/demo");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("Dockerfile"), "FROM scratch\n").unwrap();
+    std::fs::write(package.join("Dockerfile.dockerignore"), "ignored\n").unwrap();
+    let source = format!(
+        r#"{}
+def host_which_optional(name):
+    return "/tools/docker" if name == "docker" else None
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    if argv[1:3] == ["buildx", "version"]:
+        return "github.com/docker/buildx v1.2.3\n"
+    if argv[1:3] == ["buildx", "inspect"]:
+        return "Driver: docker-container\nBuildKit version: v4.5.6\n"
+    fail("unexpected command: " + repr(argv))
+
+def host_env(name):
+    return ""
+
+ctx = {{
+    "label": {{"package": "containers/demo", "name": "image", "id": "containers/demo/image"}},
+    "attr": {{}},
+    "srcs": ["Dockerfile"],
+    "build_dir": ".once/out/containers/demo/image",
+    "scratch_dir": ".once/tmp/analysis/containers/demo/image",
+    "capability": "build",
+}}
+result = repr(_dockerfile_image_impl(ctx))
+"#,
+        dockerfile_prelude_source()
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "containers/demo".to_string(),
+        ".once/out/containers/demo/image".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    result.unwrap();
+    assert_eq!(store.actions.len(), 1);
+    let action = &store.actions[0];
+    assert_eq!(
+        action.inputs,
+        vec![
+            "containers/demo/Dockerfile".to_string(),
+            "containers/demo/Dockerfile.dockerignore".to_string(),
+        ]
+    );
+    assert!(action
+        .argv
+        .iter()
+        .any(|arg| arg.starts_with("type=docker,dest=")));
+    assert_eq!(
+        action.outputs,
+        vec![
+            ".once/out/containers/demo/image/image.docker.tar".to_string(),
+            ".once/out/containers/demo/image/build-metadata.json".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn dockerfile_paths_keep_dot_directories_inside_the_package() {
+    let source = format!(
+        r#"{}
+ctx = {{"label": {{"package": "containers/demo", "name": "image", "id": "containers/demo/image"}}}}
+result = repr(_dockerfile_workspace_path(ctx, ".docker/Dockerfile"))
+"#,
+        dockerfile_prelude_source()
+    );
+    let result = eval_prelude_source_to_repr(source).unwrap();
+    assert_eq!(result, "\"containers/demo/.docker/Dockerfile\"");
+}
+
+#[test]
+fn dockerfile_platform_rejects_multiple_values() {
+    let source = format!(
+        "{}\nresult = repr(_dockerfile_platform(\"linux/amd64,linux/arm64\"))",
+        dockerfile_prelude_source()
+    );
+    let error = eval_prelude_source_to_repr(source).unwrap_err();
+    assert!(
+        format!("{error:?}").contains("must name exactly one"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn oci_layer_consumes_the_cross_language_executable_provider() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::create_dir_all(workspace.path().join("bin")).unwrap();
+    std::fs::create_dir_all(workspace.path().join("assets")).unwrap();
+    std::fs::write(workspace.path().join("bin/hello"), "executable").unwrap();
+    std::fs::write(workspace.path().join("assets/message.txt"), "hello").unwrap();
+    let source = format!(
+        r#"{}
+ctx = {{
+    "label": {{"package": "", "name": "hello_layer", "id": "hello_layer"}},
+    "attr": {{}},
+    "deps_by_role": {{
+        "programs": [{{
+            "label_id": "hello",
+            "executable": {{
+                "path": "bin/hello",
+                "runtime_files": ["assets/message.txt"],
+                "os": "macos",
+                "architecture": "x86_64",
+                "variant": "",
+                "linkage": "static",
+            }},
+        }}],
+    }},
+    "srcs": [],
+    "build_dir": ".once/out/hello_layer",
+    "scratch_dir": ".once/tmp/analysis/hello_layer",
+    "capability": "build",
+}}
+provider = _oci_layer_impl(ctx)
+result = repr(provider)
+"#,
+        oci_prelude_source()
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        String::new(),
+        ".once/out/hello_layer".to_string(),
+    );
+
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let provider = result.unwrap();
+    assert!(
+        provider.contains("\"architecture\": \"amd64\""),
+        "{provider}"
+    );
+    assert!(provider.contains("\"os\": \"darwin\""), "{provider}");
+    assert!(
+        provider.contains("\"program_paths\": [\"/usr/local/bin/hello\"]"),
+        "{provider}"
+    );
+    let action = action_by_identifier(&store, "hello_layer:oci-layer");
+    assert_eq!(
+        action.inputs,
+        vec!["assets/message.txt".to_string(), "bin/hello".to_string()]
+    );
+    let Some(DeclaredActionOperation::WriteArchive {
+        entries,
+        output,
+        sha256_output,
+        format,
+    }) = &action.operation
+    else {
+        panic!("expected a portable archive action");
+    };
+    assert_eq!(output, ".once/out/hello_layer/hello_layer.tar");
+    assert_eq!(
+        sha256_output.as_deref(),
+        Some(".once/out/hello_layer/hello_layer.sha256")
+    );
+    assert_eq!(*format, DeclaredArchiveFormat::Tar);
+    let archive_paths = entries
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        archive_paths,
+        [
+            "app",
+            "usr",
+            "usr/local",
+            "usr/local/bin",
+            "usr/local/bin/hello",
+            "app/message.txt",
+        ]
+    );
+    let runtime_file = entries
+        .iter()
+        .find(|entry| entry.path == "app/message.txt")
+        .unwrap();
+    assert_eq!(runtime_file.kind, DeclaredArchiveEntryKind::File);
+    assert_eq!(runtime_file.source.as_deref(), Some("assets/message.txt"));
+    assert_eq!(runtime_file.mode, 0o644);
+}
+
+#[test]
 fn go_dependencies_lower_checksum_bound_vendor_modules() {
     let source = format!(
         r##"{}
@@ -1233,6 +1941,8 @@ result = repr(provider)
 
     let out = out.unwrap();
     assert!(out.contains("go_binary"), "{out}");
+    assert!(out.contains("\"once_executable\": True"), "{out}");
+    assert!(out.contains("\"architecture\": \"amd64\""), "{out}");
     let action = action_by_identifier(&store, "Hello:go-build");
     assert!(action.argv.iter().any(|arg| arg == "-mod=vendor"));
     assert!(action.argv.iter().any(|arg| arg == "./cmd/hello"));
