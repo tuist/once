@@ -60,7 +60,7 @@ discovery.
 - `deps`: `dep(...)` declarations that name expected providers.
 - `providers`: provider names this target kind can return.
 - `capabilities`: command surfaces this target kind supports, such as
-  `build`, `run`, `test`, or `metadata`.
+  `build`, `lint`, `run`, `test`, or `metadata`.
 - `tools`: `tool(...)` declarations for workspace tools the implementation
   needs during analysis or execution.
 - `examples`: `example(...)` declarations for starter workspaces exposed
@@ -86,6 +86,14 @@ does not.
 Use `allowed_values = ["first", "second"]` on a `string` or `target` attribute
 when the schema accepts a fixed set. Validation reports an attribute-scoped
 repair before analysis when a manifest supplies another value.
+Use `disallowed_values = ["", "reserved"]` when the schema accepts arbitrary
+strings except for a small reserved set. Validation ignores surrounding
+whitespace when comparing these values and reports an attribute-scoped repair
+before analysis.
+Use `min_count` and `max_count` on `dep(...)` when a dependency role requires
+a bounded number of targets. For example,
+`dep("deps", ["application"], min_count = 1, max_count = 1)` requires exactly
+one default dependency and reports an attribute-scoped repair before analysis.
 
 ## Native Project Discovery Contract
 
@@ -510,6 +518,10 @@ separate update workflow.
 - `glob(patterns, exclude = [])` expands patterns under the active package,
   omits matches selected by package-relative exclude patterns, and returns
   sorted workspace-relative file paths.
+- `walk_files(root, excluded_paths = [], excluded_names = [])` walks a
+  package-relative directory and returns sorted workspace-relative file and
+  symbolic-link paths. Exact root-relative exclusions and file names prune
+  whole trees before traversal.
 - `declare_output(name)` reserves an output under the target build
   directory.
 - `execution_path(path)` returns a stable command value for a
@@ -546,6 +558,14 @@ separate update workflow.
   setup actions for workspace paths.
 - `write_tree_digest(root, output, include_suffixes = [])` writes a
   deterministic digest listing for a workspace tree.
+- `write_archive(entries, output, sha256_output = None, format = "tar")`
+  writes a deterministic uncompressed
+  [tar archive](https://www.gnu.org/software/tar/manual/html_node/Standard.html).
+  Each entry declares a `file`, `directory`, or recursive `tree`, its archive
+  path, fixed mode, numeric owner and group identifiers, and modification
+  time. When requested, `sha256_output` records the
+  [Secure Hash Algorithm 256-bit](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
+  digest.
 - `toml_decode(src)` and `json_decode(src)` decode data into Starlark
   values.
 
@@ -572,10 +592,16 @@ layout.
 - `sandbox`: local filesystem sandbox policy. `off` uses the current
   workspace view. `inputs` runs in an action-private workspace view
   populated from declared inputs and copies declared outputs back after
-  a successful command. Use `once query validate-actions` to run an uncached
-  contract investigation that checks created, modified, and deleted paths
-  and returns structured repairs. Reads that leave no observable filesystem
-  evidence remain a limitation of this investigation.
+  a successful command. `copied-inputs` provides the same isolation but
+  materializes private input copies for tools that cannot consume symbolic
+  links. Both isolated modes create parent directories for declared outputs
+  inside the private workspace. Use `once query validate-actions` to run an
+  uncached contract investigation that checks created, modified, and deleted
+  paths and returns structured repairs. Reads that leave no observable
+  filesystem evidence remain a limitation of this investigation.
+- `success_exit_codes`: integer list whose members mean the command completed
+  and its declared outputs are valid. Defaults to `[0]`. Use this for tools
+  that report valid findings with a nonzero process code.
 - `cacheable`: `True` by default. Set `False` for interactive or local
   side-effect actions.
 - `inherit_parent_env`: `False` by default. Set `True` only on an
@@ -591,6 +617,140 @@ layout.
 Actions inside one target run in declaration order because later actions
 may consume earlier outputs. Independent graph targets run concurrently
 once their analysis-backed dependencies are complete.
+
+## Executable And Container Providers
+
+Native binary target kinds can publish the shared `once_executable` provider.
+It carries the executable path, runtime files, operating system, architecture,
+architecture variant, and linkage. Consumers depend on that provider instead
+of branching on the language that produced the program.
+
+The built-in `oci_layer` and `oci_image` target kinds use
+[`oci` as the abbreviation for Open Container Initiative](https://opencontainers.org/).
+An `oci_layer` packages native executable providers and source files into a
+deterministic filesystem layer. It can also pass through an existing
+uncompressed layer archive during incremental adoption. An `oci_image`
+assembles ordered layers, runtime configuration, a content-addressed image
+layout, and an archive accepted by
+[Docker](https://www.docker.com/).
+Both native images and Dockerfile-backed images publish the shared
+`container_image` provider.
+
+```toml
+[[target]]
+name = "server_layer"
+kind = "oci_layer"
+
+[target.dependencies]
+programs = ["server"]
+
+[[target]]
+name = "server_image"
+kind = "oci_image"
+
+[target.dependencies]
+layers = ["server_layer"]
+
+[target.attrs]
+tag = "server:latest"
+cmd = ["serve"]
+env = { LOG_LEVEL = "info" }
+working_dir = "/app"
+```
+
+When a layer contains exactly one executable, the image uses that executable
+as its default entry point. Explicit `entrypoint`, `cmd`, `env`, `user`,
+`working_dir`, `stop_signal`, labels, annotations, and exposed ports override
+or extend the runtime configuration. Layer metadata defaults to zero for the
+numeric owner, group, and modification time so identical inputs produce
+identical bytes.
+
+The `dockerfile_image` target kind gives complete Dockerfile semantics to
+[BuildKit](https://docs.docker.com/build/buildkit/). Starlark declares the
+context inputs, build arguments, platform, target stage, network policy,
+timestamp, archive format, and output contract. BuildKit interprets
+multi-stage files, resolves base images, and executes `RUN` instructions,
+including package installation.
+Docker and its selected Docker Buildx builder must be reachable when Once
+analyzes a build so the toolchain identity can include the builder driver and
+BuildKit version. Metadata and affected-file queries infer context inputs
+without contacting Docker.
+
+```toml
+[[target]]
+name = "service_image"
+kind = "dockerfile_image"
+
+[target.attrs]
+tag = "service:latest"
+platform = "linux/arm64"
+build_args = { MODE = "release" }
+```
+
+When `srcs` is empty, Once infers every local file and symbolic link that the
+build context can expose, including hidden paths. It also adds the Dockerfile
+and the effective [Docker ignore file](https://docs.docker.com/build/building/context/#dockerignore-files)
+automatically. Dockerfile-specific ignore files take precedence over the
+context's ignore file, matching Docker behavior.
+
+Inference recognizes simple literal ignore paths plus `**/<name>` exclusions
+and prunes their trees before walking the context. Wildcards, exceptions, and
+other complex ignore rules remain declared as inputs, then BuildKit applies
+their complete semantics during the build. This conservative direction can
+cause extra rebuilds, but it cannot hide a file that the Dockerfile may read.
+Workspace runtime directories named `.once` are always excluded so outputs
+never become their own inputs.
+
+Empty directories do not participate in the inferred input set yet. Declare a
+placeholder file when a Dockerfile must copy an otherwise empty directory.
+
+Set `srcs` only when a smaller, manually maintained input set is worth the
+precision. Once still adds the Dockerfile and effective ignore file. Dockerfile
+actions use an input-only workspace view, so an explicit set must cover every
+local context file the build may read.
+
+The rule rejects multiple values in `platform`; one target describes one
+exported platform. Selecting `network = "host"` also grants BuildKit's matching
+host-network entitlement.
+
+Dockerfile actions are not stored in the Once action cache by default because
+image tags, package registries, and network instructions may change without a
+source edit. BuildKit still reuses its own layer cache. Set `format = "oci"`,
+`cacheable = true`, and `pull = false` only when every remote input is
+immutable, such as base images pinned by digest and network access disabled.
+Open Container Initiative export requires a Docker Buildx builder that
+supports archive export.
+
+When the selected builder supports direct export, both archive formats are
+written without loading the image into the Docker engine. The built-in Docker
+driver cannot write an archive directly, so Docker output falls back to
+loading and saving the requested tag. That compatibility path uses shared
+engine state, leaves the loaded image behind, and always bypasses the Once
+action cache. Use a container or remote builder when builds sharing the same
+tag may run concurrently.
+
+## Lint Target Kinds
+
+A lint target declares the reserved `once_lint_info` provider and generic
+lint capability:
+
+```python
+providers = ["once_lint_info"]
+capabilities = [capability("lint", ["default", "lint_results"])]
+```
+
+Its `lint_info` record names the analyzer, requested source scope, command,
+portable report path, normalized result path, native artifacts, logs, and
+execution policy. The report uses
+[Static Analysis Results Interchange Format](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html).
+Tool-specific invocation and native configuration remain in the target kind.
+The Rust execution and result layers stay ecosystem-neutral.
+
+`once query module-contract --format json` returns a complete `lint_starter`,
+matching target and adapter starters, and a normalized result example. See
+[Custom lint target kinds](/reference/modules/linting) for a complete direct
+reporter, native report conversion, validation, execution, and cache
+verification workflow.
 
 ## Script-backed Test Target Kinds
 

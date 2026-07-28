@@ -1,0 +1,77 @@
+<Layouts.app flash={@flash}>
+  <section data-part="blog">
+    <header data-part="blog-header">
+      <p data-part="eyebrow">From the Once team</p>
+      <h1>Ideas for building once</h1>
+      <p data-part="page-copy">
+        Notes on build graphs, reusable automation, and tools that help people and coding
+        agents work from the same understanding.
+      </p>
+      <nav data-part="subscribe" aria-label="Blog subscriptions">
+        <a href={~p"/blog/feed.xml"}>RSS</a>
+        <a href={~p"/blog/feed.atom"}>Atom</a>
+      </nav>
+    </header>
+
+    <ol data-part="blog-list">
+      <li :for={post <- @posts} data-part="blog-entry">
+        <a data-part="blog-entry-link" href={~p"/blog/#{post.slug}"}>
+          <div data-part="blog-entry-copy">
+            <div data-part="blog-entry-meta">
+              <time datetime={Date.to_iso8601(post.date)}>{format_date(post.date)}</time>
+              <span aria-hidden="true">·</span>
+              <span>{reading_time(post.reading_minutes)}</span>
+            </div>
+            <h2>{post.title}</h2>
+            <p>{post.description}</p>
+          </div>
+
+          <div data-part="post-authors" aria-label={"Written by #{author_names(post.authors)}"}>
+            <div data-part="author-avatars">
+              <img
+                :for={author <- post.authors}
+                data-part="author-avatar"
+                src={avatar_url(author)}
+                alt=""
+                width="48"
+                height="48"
+                loading="lazy"
+              />
+            </div>
+            <div data-part="author-copy">
+              <span>Written by</span>
+              <strong>{author_names(post.authors)}</strong>
+            </div>
+          </div>
+        </a>
+      </li>
+    </ol>
+
+    <div :if={@posts == []} data-part="blog-empty">
+      <h2>Writing in progress</h2>
+      <p>Posts from the Once team will appear here soon.</p>
+    </div>
+
+    <nav :if={@meta.total_pages > 1} data-part="pagination" aria-label="Blog pages">
+      <a
+        :if={@meta.has_previous_page?}
+        data-part="pagination-link"
+        href={~p"/blog?#{%{page: @meta.previous_page}}"}
+        rel="prev"
+      >
+        ← Newer
+      </a>
+      <span data-part="pagination-status">
+        Page {@meta.current_page} of {@meta.total_pages}
+      </span>
+      <a
+        :if={@meta.has_next_page?}
+        data-part="pagination-link"
+        href={~p"/blog?#{%{page: @meta.next_page}}"}
+        rel="next"
+      >
+        Older →
+      </a>
+    </nav>
+  </section>
+</Layouts.app>

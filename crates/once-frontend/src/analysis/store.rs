@@ -38,6 +38,38 @@ pub enum DeclaredActionOperation {
         output: String,
         include_suffixes: Vec<String>,
     },
+    WriteArchive {
+        entries: Vec<DeclaredArchiveEntry>,
+        output: String,
+        sha256_output: Option<String>,
+        format: DeclaredArchiveFormat,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DeclaredArchiveEntry {
+    pub kind: DeclaredArchiveEntryKind,
+    pub source: Option<String>,
+    pub path: String,
+    pub mode: u32,
+    pub directory_mode: u32,
+    pub owner_id: u64,
+    pub group_id: u64,
+    pub mtime: u64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredArchiveEntryKind {
+    File,
+    Directory,
+    Tree,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredArchiveFormat {
+    Tar,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -84,6 +116,11 @@ pub struct DeclaredAction {
     pub env: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
+    #[serde(
+        default = "default_success_exit_codes",
+        skip_serializing_if = "is_default_success_exit_codes"
+    )]
+    pub success_exit_codes: Vec<i32>,
     #[serde(default = "default_cacheable", skip_serializing_if = "is_true")]
     pub cacheable: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -114,6 +151,14 @@ pub enum DeclaredArgFileFormat {
 
 fn default_cacheable() -> bool {
     true
+}
+
+fn default_success_exit_codes() -> Vec<i32> {
+    vec![0]
+}
+
+fn is_default_success_exit_codes(codes: &[i32]) -> bool {
+    codes == [0]
 }
 
 fn default_depends_on_prior_actions() -> bool {

@@ -35,6 +35,7 @@ fn cmd(script: &str) -> Action {
         resources: ResourceRequest::default(),
         sandbox: SandboxMode::default(),
         timeout_ms: Some(10_000),
+        success_exit_codes: vec![0],
         remote: None,
     }
 }
@@ -94,6 +95,27 @@ async fn second_run_of_same_action_is_a_cache_hit() {
 }
 
 #[tokio::test]
+async fn accepted_nonzero_exit_captures_outputs_and_is_cached() {
+    let (_tmp, runner) = ws();
+    let mut action = cmd("mkdir -p out; printf finding > out/report.sarif; exit 1");
+    if let Action::RunCommand {
+        outputs,
+        success_exit_codes,
+        ..
+    } = &mut action
+    {
+        outputs.push(WorkspacePath::try_from("out/report.sarif").unwrap());
+        *success_exit_codes = vec![0, 1];
+    }
+    let first = runner.run(&action).await.unwrap();
+    let second = runner.run(&action).await.unwrap();
+    assert_eq!(first.result.exit_code, 0);
+    assert_eq!(first.cache, CacheState::Miss);
+    assert_eq!(second.cache, CacheState::Hit);
+    assert!(first.result.outputs.contains_key("out/report.sarif"));
+}
+
+#[tokio::test]
 async fn cache_keys_partition_by_workspace_path() {
     // Two actions with the same argv but different workspace-relative
     // cwds get different cache slots.
@@ -116,6 +138,7 @@ async fn cache_keys_partition_by_workspace_path() {
         resources: ResourceRequest::default(),
         sandbox: SandboxMode::default(),
         timeout_ms: Some(5_000),
+        success_exit_codes: vec![0],
         remote: None,
     };
     let a = runner.run(&mk("a")).await.unwrap();
@@ -166,6 +189,7 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         resources: ResourceRequest::default(),
         sandbox: SandboxMode::default(),
         timeout_ms: Some(5_000),
+        success_exit_codes: vec![0],
         remote: None,
     };
     let outcome = runner_fail.run(&bad).await.unwrap();
@@ -186,6 +210,7 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         resources: ResourceRequest::default(),
         sandbox: SandboxMode::default(),
         timeout_ms: Some(5_000),
+        success_exit_codes: vec![0],
         remote: None,
     };
     let outcome = runner_fail.run(&good).await.unwrap();

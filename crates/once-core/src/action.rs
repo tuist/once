@@ -13,10 +13,18 @@ use crate::{ResourceRequest, WorkspacePath};
 /// that should invalidate the cache. Older action result JSON still
 /// deserializes through serde defaults; the domain only partitions new
 /// action lookups.
-pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v8\0";
+pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"once.action.v11\0";
 
 static DEFAULT_RESOURCE_REQUEST: LazyLock<ResourceRequest> =
     LazyLock::new(ResourceRequest::default);
+
+fn default_success_exit_codes() -> Vec<i32> {
+    vec![0]
+}
+
+fn is_default_success_exit_codes(codes: &[i32]) -> bool {
+    codes == [0]
+}
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -52,6 +60,7 @@ pub enum SandboxMode {
     #[default]
     Off,
     Inputs,
+    CopiedInputs,
 }
 
 impl SandboxMode {
@@ -72,7 +81,10 @@ impl FromStr for SandboxMode {
         match raw {
             "off" => Ok(Self::Off),
             "inputs" => Ok(Self::Inputs),
-            _ => Err(format!("expected `off` or `inputs`, got `{raw}`")),
+            "copied-inputs" => Ok(Self::CopiedInputs),
+            _ => Err(format!(
+                "expected `off`, `inputs`, or `copied-inputs`, got `{raw}`"
+            )),
         }
     }
 }
@@ -123,6 +135,14 @@ pub enum Action {
         /// Per-action timeout in milliseconds. None = no timeout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
+        /// Exit codes that mean the command completed successfully. Linters
+        /// commonly use a nonzero code to report findings while still
+        /// producing a valid machine-readable result.
+        #[serde(
+            default = "default_success_exit_codes",
+            skip_serializing_if = "is_default_success_exit_codes"
+        )]
+        success_exit_codes: Vec<i32>,
         /// Optional compute provider for remote execution. This is
         /// part of the action key so local and remote runs never share
         /// a cache slot by accident.
@@ -169,6 +189,42 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input_digest: Option<Digest>,
     },
+    WriteArchive {
+        entries: Vec<ArchiveEntry>,
+        output: WorkspacePath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha256_output: Option<WorkspacePath>,
+        format: ArchiveFormat,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveFormat {
+    Tar,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArchiveEntry {
+    pub kind: ArchiveEntryKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<WorkspacePath>,
+    pub path: String,
+    pub mode: u32,
+    pub directory_mode: u32,
+    pub owner_id: u64,
+    pub group_id: u64,
+    pub mtime: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveEntryKind {
+    File,
+    Directory,
+    Tree,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -186,6 +242,16 @@ pub enum PreparePathMode {
 }
 
 impl Action {
+    #[must_use]
+    pub fn accepts_exit_code(&self, exit_code: i32) -> bool {
+        match self {
+            Self::RunCommand {
+                success_exit_codes, ..
+            } => success_exit_codes.contains(&exit_code),
+            _ => exit_code == 0,
+        }
+    }
+
     /// Canonical, content-addressed key for this action.
     ///
     /// The key is `BLAKE3(domain || canonical_json(self))`. Bumping the
@@ -211,7 +277,8 @@ impl Action {
             | Action::LinkPath { .. }
             | Action::MaterializeHostFile { .. }
             | Action::PreparePath { .. }
-            | Action::WriteTreeDigest { .. } => &DEFAULT_RESOURCE_REQUEST,
+            | Action::WriteTreeDigest { .. }
+            | Action::WriteArchive { .. } => &DEFAULT_RESOURCE_REQUEST,
         }
     }
 
@@ -223,7 +290,8 @@ impl Action {
             | Action::LinkPath { input_digest, .. }
             | Action::MaterializeHostFile { input_digest, .. }
             | Action::PreparePath { input_digest, .. }
-            | Action::WriteTreeDigest { input_digest, .. } => *input_digest,
+            | Action::WriteTreeDigest { input_digest, .. }
+            | Action::WriteArchive { input_digest, .. } => *input_digest,
         }
     }
 }
@@ -275,6 +343,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         }
     }
@@ -285,6 +354,13 @@ mod tests {
             action(OutputSymlinkMode::MaterializeExternal).digest(),
             action(OutputSymlinkMode::Preserve).digest()
         );
+    }
+
+    #[test]
+    fn sandbox_modes_parse_from_their_public_names() {
+        assert_eq!("off".parse(), Ok(SandboxMode::Off));
+        assert_eq!("inputs".parse(), Ok(SandboxMode::Inputs));
+        assert_eq!("copied-inputs".parse(), Ok(SandboxMode::CopiedInputs));
     }
 
     #[test]
@@ -301,6 +377,19 @@ mod tests {
         assert_ne!(base.digest(), with_stdout.digest());
         assert_ne!(base.digest(), with_stderr.digest());
         assert_ne!(with_stdout.digest(), with_stderr.digest());
+    }
+
+    #[test]
+    fn accepted_exit_codes_change_action_digest() {
+        let base = action(OutputSymlinkMode::default());
+        let mut accepts_findings = base.clone();
+        if let Action::RunCommand {
+            success_exit_codes, ..
+        } = &mut accepts_findings
+        {
+            *success_exit_codes = vec![0, 1];
+        }
+        assert_ne!(base.digest(), accepts_findings.digest());
     }
 
     #[test]

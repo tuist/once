@@ -45,6 +45,7 @@ pub(super) fn action_for(
         resources: ResourceRequest::default(),
         sandbox: SandboxMode::default(),
         timeout_ms: None,
+        success_exit_codes: vec![0],
         remote: None,
     })
 }

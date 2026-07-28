@@ -20,7 +20,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
   @doc "Top navigation shown in the docs header."
   def nav do
     [
-      %{text: "Guide", href: "/docs/guide/getting-started", external: false},
+      %{text: "Guide", href: "/docs/guide", external: false},
       %{text: "Reference", href: "/docs/reference", external: false},
       %{text: "Releases", href: "https://github.com/tuist/once/releases", external: true},
       %{text: "GitHub", href: "https://github.com/tuist/once", external: true}
@@ -51,6 +51,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
       %Group{
         label: "Start Here",
         items: [
+          %Item{label: "Overview", slug: "/docs/guide"},
           %Item{label: "Why Once", slug: "/docs/guide/why"},
           %Item{label: "Getting Started", slug: "/docs/guide/getting-started"},
           %Item{label: "Coding Harnesses", slug: "/docs/guide/harness"}
@@ -70,6 +71,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{label: "Overview", slug: "/docs/guide/graph"},
           %Item{label: "Ecosystems", slug: "/docs/guide/graph/ecosystems"},
           %Item{label: "Testing and Scheduling", slug: "/docs/guide/graph/testing"},
+          %Item{label: "Linting", slug: "/docs/guide/graph/linting"},
           %Item{label: "Apple", slug: "/docs/guide/graph/apple", icon: "apple"},
           %Item{label: "Swift Packages", slug: "/docs/guide/graph/swift-packages", icon: "swift"},
           %Item{label: "Android", slug: "/docs/guide/graph/android", icon: "android"},
@@ -126,7 +128,16 @@ defmodule OnceSiteWeb.Docs.Sidebar do
         items: [
           %Item{label: "Overview", slug: "/docs/reference"},
           %Item{label: "Manifest", slug: "/docs/reference/manifest"},
-          %Item{label: "Modules", slug: "/docs/reference/modules"},
+          %Item{
+            label: "Modules",
+            slug: "/docs/reference/modules",
+            items: [
+              %Item{
+                label: "Custom Lint Targets",
+                slug: "/docs/reference/modules/linting"
+              }
+            ]
+          },
           %Item{label: "Memory", slug: "/docs/reference/memory"}
         ]
       },
@@ -139,6 +150,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{label: "cache", slug: "/docs/reference/cli/cache"},
           %Item{label: "edit", slug: "/docs/reference/cli/edit"},
           %Item{label: "exec", slug: "/docs/reference/cli/exec"},
+          %Item{label: "lint", slug: "/docs/reference/cli/lint"},
           %Item{label: "mcp", slug: "/docs/reference/cli/mcp"},
           %Item{label: "query", slug: "/docs/reference/cli/query"},
           %Item{label: "run", slug: "/docs/reference/cli/run"},
@@ -152,6 +164,10 @@ defmodule OnceSiteWeb.Docs.Sidebar do
         items:
           [%Item{label: "Overview", slug: "/docs/reference/prelude"}] ++
             [
+              target_group(
+                "Linting",
+                ~w(ruff_lint eslint_lint golangci_lint swiftlint_lint detekt_lint credo_lint rubocop_lint)
+              ),
               target_group("Apple", ~w(apple_library swift_macro apple_framework apple_application
                 apple_test_bundle swift_package_dependencies swift_package_pin)),
               target_group("Android", ~w(android_resource android_library android_local_test

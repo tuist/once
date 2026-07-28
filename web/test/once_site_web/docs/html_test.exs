@@ -13,7 +13,7 @@ defmodule OnceSiteWeb.Docs.HTMLTest do
     html = HTML.wrap_code_blocks(highlighted)
 
     assert html =~ ~s(<span>once</span> <span>query</span> <span>evidence</span>)
-    assert html =~ ~s(class="code-window")
+    assert html =~ ~s(data-part="code-window")
     # Copy source is the plain text with spaces intact.
     assert html =~ ~s(<template data-part="copy-source">once query evidence</template>)
   end

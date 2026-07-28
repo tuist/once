@@ -103,6 +103,7 @@ The command surface stays the same across ecosystems:
 once build apps/ios/AppCore
 once run apps/ios/App
 once test apps/ios/AppTests
+once lint quality/swift
 ```
 
 Ask `once query capabilities <target>` which of these operations a target
@@ -112,6 +113,9 @@ When a workspace has more than one test target, continue with
 [Testing and scheduling](/guide/graph/testing). It explains conservative
 affected selection, exact unit requests, dynamic workers, current ecosystem
 coverage, and project-local scripted test adapters.
+
+Use [Linting](/guide/graph/linting) for cacheable, normalized findings from
+the analyzers used by each supported ecosystem.
 
 ## Choose an Ecosystem
 

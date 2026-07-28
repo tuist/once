@@ -22,6 +22,23 @@ execute the portable starter set against the release command-line interface.
 Platform-specific starters remain covered by their dedicated toolchain setup
 and action tests.
 
+## Lint target kinds
+
+- [`ruff_lint`](/reference/prelude/ruff_lint): Python analysis with Ruff
+- [`eslint_lint`](/reference/prelude/eslint_lint): JavaScript and TypeScript
+  analysis with ESLint
+- [`golangci_lint`](/reference/prelude/golangci_lint): Go analysis with
+  golangci-lint
+- [`swiftlint_lint`](/reference/prelude/swiftlint_lint): Swift analysis with
+  SwiftLint
+- [`detekt_lint`](/reference/prelude/detekt_lint): Kotlin analysis with detekt
+- [`credo_lint`](/reference/prelude/credo_lint): Elixir analysis with Credo
+- [`rubocop_lint`](/reference/prelude/rubocop_lint): Ruby analysis with RuboCop
+
+See [Linting](/guide/graph/linting) for the shared result and failure-policy
+contract. Use [Custom lint target kinds](/reference/modules/linting) when the
+required analyzer is not built in.
+
 ## Apple target kinds
 
 - [`apple_library`](/reference/prelude/apple_library): Swift,
@@ -32,6 +49,8 @@ and action tests.
   Apple framework bundle
 - [`apple_application`](/reference/prelude/apple_application): Apple
   application bundle
+- [`apple_thinned_package`](/reference/prelude/apple_thinned_package):
+  device-specific archive for application size analysis
 - [`apple_test_bundle`](/reference/prelude/apple_test_bundle): XCTest
   bundle assembled for an external runner
 

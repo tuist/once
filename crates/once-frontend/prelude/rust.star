@@ -149,6 +149,24 @@ def _rust_build_script_inputs(ctx):
 def _rust_target(ctx):
     return _rust_target_raw(ctx)
 
+def _rust_executable_os(target):
+    if not target:
+        return _once_normalize_os(host_os())
+    if "linux" in target:
+        return "linux"
+    if "darwin" in target or "apple" in target:
+        return "darwin"
+    if "windows" in target:
+        return "windows"
+    if "android" in target:
+        return "android"
+    return ""
+
+def _rust_executable_architecture(target):
+    if not target:
+        return _once_normalize_architecture(host_arch())
+    return _once_normalize_architecture(target.split("-")[0])
+
 def _host_exe(name):
     if host_os() == "windows":
         return name + ".exe"
@@ -1561,6 +1579,13 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     }
     if test:
         provider["test_binary"] = output
+    if crate_type == "bin" and not test:
+        provider.update(_once_executable_fields(
+            output,
+            runtime_files = provider["transitive_data"],
+            os = _rust_executable_os(target),
+            architecture = _rust_executable_architecture(target),
+        ))
     return provider
 
 def _rust_library_impl(ctx):
@@ -3190,7 +3215,7 @@ rust_binary = target_kind(
         attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited during `once run` before `run_env` overrides.", configurable = False),
     ],
     deps = [dep("deps", _RUST_DEP_PROVIDERS, "Rust crate dependencies consumed through --extern and C providers linked into the executable.")] + _RUST_NAMED_DEP_ROLES,
-    providers = ["rust_binary"],
+    providers = ["rust_binary", "once_executable"],
     capabilities = [
         capability("build", ["binary"]),
         capability("run", ["default"], ["binary"]),

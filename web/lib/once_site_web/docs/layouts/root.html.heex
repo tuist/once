@@ -9,14 +9,38 @@
     <.live_title default="Documentation" suffix=" · Once">
       {assigns[:page_title]}
     </.live_title>
+    <% social_image_alt = assigns[:page_title] || "Once Documentation" %>
     <meta name="description" content="Once documentation." />
     <meta property="og:type" content="website" />
     <meta property="og:title" content={assigns[:page_title] || "Once Documentation"} />
     <meta property="og:description" content="Once documentation." />
     <meta :if={assigns[:head_image]} property="og:image" content={@head_image} />
+    <meta :if={assigns[:head_image]} property="og:image:type" content="image/jpeg" />
+    <meta
+      :if={assigns[:head_image]}
+      property="og:image:width"
+      content={OnceSiteWeb.Docs.OgImage.width()}
+    />
+    <meta
+      :if={assigns[:head_image]}
+      property="og:image:height"
+      content={OnceSiteWeb.Docs.OgImage.height()}
+    />
+    <meta :if={assigns[:head_image]} property="og:image:alt" content={social_image_alt} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={assigns[:page_title] || "Once Documentation"} />
     <meta :if={assigns[:head_image]} name="twitter:image" content={@head_image} />
+    <meta
+      :if={assigns[:head_image]}
+      name="twitter:image:width"
+      content={OnceSiteWeb.Docs.OgImage.width()}
+    />
+    <meta
+      :if={assigns[:head_image]}
+      name="twitter:image:height"
+      content={OnceSiteWeb.Docs.OgImage.height()}
+    />
+    <meta :if={assigns[:head_image]} name="twitter:image:alt" content={social_image_alt} />
     <link rel="stylesheet" href={~p"/docs/assets/bundle.css"} />
     <script defer type="text/javascript" src={~p"/docs/assets/bundle.js"}>
     </script>

@@ -13,13 +13,14 @@ use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     resolve_execution_argv, resolve_execution_env, validate_action_contract_with_options,
     workspace_mise_command, workspace_prepared_tool_env, workspace_tool_env_with_executables,
-    Action, ActionContractOptions, CopyPathMode, EvidenceCacheState, EvidenceSubject,
-    FilesystemOperation, InputDigestBuilder, OutputSymlinkMode, PreparePathMode, ResourceRequest,
-    SandboxMode, WorkspacePath,
+    Action, ActionContractOptions, ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode,
+    EvidenceCacheState, EvidenceSubject, FilesystemOperation, InputDigestBuilder,
+    OutputSymlinkMode, PreparePathMode, ResourceRequest, SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::{
-    AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArgFile,
-    DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
+    AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntryKind,
+    DeclaredArchiveFormat, DeclaredArgFile, DeclaredArgFileFormat, DeclaredCopyPathMode,
+    DeclaredPreparePathMode,
 };
 use once_frontend::GraphTarget;
 use serde::Serialize;
@@ -1148,8 +1149,9 @@ async fn run_uncached_action(
                     outputs: BTreeMap::new(),
                 }
             };
-            if result.exit_code == 0 {
+            if action.accepts_exit_code(result.exit_code) {
                 result.outputs = capture_uncached_outputs(outputs, workspace, cache).await?;
+                result.exit_code = 0;
             }
             Ok(result)
         }
@@ -1158,11 +1160,10 @@ async fn run_uncached_action(
         | Action::LinkPath { .. }
         | Action::MaterializeHostFile { .. }
         | Action::PreparePath { .. }
-        | Action::WriteTreeDigest { .. } => {
-            once_core::run_uncached(action, workspace, cache, false)
-                .await
-                .map_err(Into::into)
-        }
+        | Action::WriteTreeDigest { .. }
+        | Action::WriteArchive { .. } => once_core::run_uncached(action, workspace, cache, false)
+            .await
+            .map_err(Into::into),
     }
 }
 
@@ -1453,6 +1454,7 @@ fn declared_to_action_with_inputs(
             resources: ResourceRequest::default(),
             sandbox: effective_sandbox(declared.sandbox.as_deref(), sandbox_override)?,
             timeout_ms: None,
+            success_exit_codes: declared.success_exit_codes.clone(),
             remote: None,
         }),
         Some(operation) => operation_to_action(operation.clone(), input_digest),
@@ -1582,6 +1584,61 @@ fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest)
             include_suffixes,
             input_digest: Some(input_digest),
         },
+        DeclaredActionOperation::WriteArchive {
+            entries,
+            output,
+            sha256_output,
+            format,
+        } => archive_to_action(
+            entries,
+            &output,
+            sha256_output.as_deref(),
+            format,
+            input_digest,
+        )?,
+    })
+}
+
+fn archive_to_action(
+    entries: Vec<once_frontend::analysis::DeclaredArchiveEntry>,
+    output: &str,
+    sha256_output: Option<&str>,
+    format: DeclaredArchiveFormat,
+    input_digest: Digest,
+) -> Result<Action> {
+    let entries = entries
+        .into_iter()
+        .map(|entry| {
+            Ok(ArchiveEntry {
+                kind: match entry.kind {
+                    DeclaredArchiveEntryKind::File => ArchiveEntryKind::File,
+                    DeclaredArchiveEntryKind::Directory => ArchiveEntryKind::Directory,
+                    DeclaredArchiveEntryKind::Tree => ArchiveEntryKind::Tree,
+                },
+                source: entry
+                    .source
+                    .as_deref()
+                    .map(|source| workspace_path(source, "write_archive entry source"))
+                    .transpose()?,
+                path: entry.path,
+                mode: entry.mode,
+                directory_mode: entry.directory_mode,
+                owner_id: entry.owner_id,
+                group_id: entry.group_id,
+                mtime: entry.mtime,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Action::WriteArchive {
+        entries,
+        output: workspace_path(output, "write_archive output")?,
+        sha256_output: sha256_output
+            .map(|path| workspace_path(path, "write_archive sha256_output"))
+            .transpose()?,
+        format: match format {
+            DeclaredArchiveFormat::Tar => ArchiveFormat::Tar,
+        },
+        input_digest: Some(input_digest),
     })
 }
 
@@ -1886,6 +1943,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
@@ -1941,6 +1999,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
@@ -1994,6 +2053,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
@@ -2196,6 +2256,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -2235,6 +2296,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         std::fs::create_dir_all(workspace.path().join(".once/out")).unwrap();
@@ -2271,6 +2333,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
         std::fs::create_dir_all(workspace.path().join(".once/out")).unwrap();
@@ -2309,6 +2372,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -2343,6 +2407,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -2454,6 +2519,7 @@ mod tests {
                 cwd: None,
                 env: BTreeMap::new(),
                 sandbox: None,
+                success_exit_codes: vec![0],
                 cacheable: true,
                 inherit_parent_env: false,
                 depends_on_prior_actions: true,
@@ -2554,6 +2620,7 @@ mod tests {
                 cwd: None,
                 env: BTreeMap::new(),
                 sandbox: None,
+                success_exit_codes: vec![0],
                 cacheable: true,
                 inherit_parent_env: false,
                 depends_on_prior_actions: true,
@@ -2863,6 +2930,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: false,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
@@ -2955,6 +3023,7 @@ mod tests {
                     cwd: None,
                     env: BTreeMap::new(),
                     sandbox: None,
+                    success_exit_codes: vec![0],
                     cacheable: true,
                     inherit_parent_env: false,
                     depends_on_prior_actions: true,
@@ -2979,6 +3048,7 @@ mod tests {
                     cwd: None,
                     env: BTreeMap::new(),
                     sandbox: None,
+                    success_exit_codes: vec![0],
                     cacheable: true,
                     inherit_parent_env: false,
                     depends_on_prior_actions: false,
@@ -3054,6 +3124,7 @@ mod tests {
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
             timeout_ms: None,
+            success_exit_codes: vec![0],
             remote: None,
         };
 
@@ -3087,6 +3158,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
@@ -3118,6 +3190,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
@@ -3157,6 +3230,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
@@ -3194,6 +3268,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
@@ -3235,6 +3310,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
@@ -3291,6 +3367,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
@@ -3347,6 +3424,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,

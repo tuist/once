@@ -6,6 +6,8 @@ defmodule OnceSiteWeb.Docs.OgImageRenderer do
   images rather than failing the build.
   """
 
+  alias OnceSiteWeb.Docs.OgImage
+
   @pool __MODULE__.Pool
 
   @doc "Start the browser pool. Returns `{:ok, renderer}` or `{:error, reason}`."
@@ -18,7 +20,7 @@ defmodule OnceSiteWeb.Docs.OgImageRenderer do
 
   @doc "Render `html` to a JPEG binary."
   def render(%{pool: pool}, html) do
-    Carta.render(pool, html, width: 1920, height: 1080, quality: 90)
+    Carta.render(pool, html, width: OgImage.width(), height: OgImage.height(), quality: 90)
   rescue
     exception -> {:error, {exception.__struct__, Exception.message(exception)}}
   catch

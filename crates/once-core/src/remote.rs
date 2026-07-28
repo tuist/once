@@ -22,6 +22,13 @@ pub(crate) struct PreparedCommand<'a> {
     pub outputs: &'a [WorkspacePath],
     pub resources: &'a ResourceRequest,
     pub timeout_ms: Option<u64>,
+    pub success_exit_codes: &'a [i32],
+}
+
+impl PreparedCommand<'_> {
+    pub fn accepts_exit_code(&self, exit_code: i32) -> bool {
+        self.success_exit_codes.contains(&exit_code)
+    }
 }
 
 pub(crate) async fn execute_command(

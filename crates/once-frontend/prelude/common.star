@@ -1,4 +1,4 @@
-def attr(name, ty, required = False, default = None, docs = "", configurable = True, implemented = True, allowed_values = []):
+def attr(name, ty, required = False, default = None, docs = "", configurable = True, implemented = True, allowed_values = [], disallowed_values = []):
     return {
         "name": name,
         "ty": ty,
@@ -8,13 +8,16 @@ def attr(name, ty, required = False, default = None, docs = "", configurable = T
         "configurable": configurable,
         "implemented": implemented,
         "allowed_values": allowed_values,
+        "disallowed_values": disallowed_values,
     }
 
-def dep(name, expected_providers, docs = ""):
+def dep(name, expected_providers, docs = "", min_count = 0, max_count = None):
     return {
         "name": name,
         "expected_providers": expected_providers,
         "docs": docs,
+        "min_count": min_count,
+        "max_count": max_count,
     }
 
 def capability(name, output_groups, requires_outputs = []):
@@ -184,6 +187,36 @@ def _collect_transitive(deps, key, own_values):
             out.append(value)
     return _unique(out)
 
+def _once_executable_fields(path, runtime_files = [], os = "", architecture = "", variant = "", linkage = "unknown"):
+    return {
+        "once_executable": True,
+        "executable": {
+            "path": path,
+            "runtime_files": _unique(runtime_files),
+            "os": os,
+            "architecture": architecture,
+            "variant": variant,
+            "linkage": linkage,
+        },
+    }
+
+def _once_normalize_architecture(value):
+    return {
+        "aarch64": "arm64",
+        "arm64": "arm64",
+        "x86_64": "amd64",
+        "amd64": "amd64",
+        "x86": "386",
+        "i386": "386",
+        "i686": "386",
+    }.get(value) or value
+
+def _once_normalize_os(value):
+    return {
+        "macos": "darwin",
+        "win32": "windows",
+    }.get(value) or value
+
 def _configuration_tokens(ctx, extra = []):
     configured = (ctx.get("configuration") or {}).get("tokens") or []
     return _unique(extra + configured + ["default"])
@@ -281,6 +314,24 @@ def _json_string(value):
             out.append(ch)
     out.append("\"")
     return "".join(out)
+
+def _json_encode(value):
+    if value == None:
+        return "null"
+    if type(value) == type(True):
+        return "true" if value else "false"
+    if type(value) == type(0):
+        return str(value)
+    if type(value) == type(""):
+        return _json_string(value)
+    if type(value) == type([]):
+        return "[" + ",".join([_json_encode(item) for item in value]) + "]"
+    if type(value) == type({}):
+        return "{" + ",".join([
+            _json_string(key) + ":" + _json_encode(value[key])
+            for key in sorted(value.keys())
+        ]) + "}"
+    fail("cannot encode " + type(value) + " as JSON")
 
 def _run_result_json(target_id):
     return "{\"schema\":\"once.run_result.v1\",\"target\":" + _json_string(target_id) + ",\"exit_code\":0}\n"

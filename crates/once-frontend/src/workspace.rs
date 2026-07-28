@@ -115,7 +115,7 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
                 resolver_kinds.contains(&explicit.kind)
                     && target_covers_path(explicit, &marker_path)
             })
-            && scan.includes(&manifest_path)
+            && scan.includes_native_project(&manifest_path, &marker_path)
         {
             all.push(target);
         }
@@ -167,6 +167,21 @@ impl WorkspaceScan {
             return false;
         }
         self.include.is_empty() || self.include.iter().any(|pattern| pattern.matches(path))
+    }
+
+    fn includes_native_project(&self, manifest_path: &str, marker_path: &str) -> bool {
+        if self
+            .exclude
+            .iter()
+            .any(|pattern| pattern.matches(manifest_path) || pattern.matches(marker_path))
+        {
+            return false;
+        }
+        self.include.is_empty()
+            || self
+                .include
+                .iter()
+                .any(|pattern| pattern.matches(manifest_path) || pattern.matches(marker_path))
     }
 
     fn includes_top_level_dir(&self, name: &OsStr) -> bool {
@@ -400,6 +415,30 @@ kind = "custom_library"
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id(), "mix");
+    }
+
+    #[test]
+    fn workspace_scan_can_exclude_a_native_project_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("once.toml"),
+            r#"[workspace]
+exclude = ["mix.exs"]
+
+[[target]]
+name = "lint"
+kind = "custom_library"
+"#,
+        );
+        write(
+            &tmp.path().join("mix.exs"),
+            "defmodule Demo.MixProject do\n  use Mix.Project\nend\n",
+        );
+
+        let targets = load_workspace(tmp.path()).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id(), "lint");
     }
 
     #[test]

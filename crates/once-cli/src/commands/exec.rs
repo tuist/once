@@ -185,6 +185,7 @@ async fn plan_exec_action(
                 resources: ResourceRequest::default(),
                 sandbox,
                 timeout_ms: options.timeout_ms_override,
+                success_exit_codes: vec![0],
                 remote: options.remote_override.map(Box::new),
             },
         ))
@@ -367,6 +368,7 @@ async fn action_from_script_invocation(
         resources: ResourceRequest::default(),
         sandbox: invocation.sandbox,
         timeout_ms: invocation.timeout_ms,
+        success_exit_codes: vec![0],
         remote: invocation.remote.clone().map(Box::new),
     })
 }

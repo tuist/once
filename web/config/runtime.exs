@@ -20,6 +20,8 @@ if System.get_env("PHX_SERVER") do
   config :once_site, OnceSiteWeb.Endpoint, server: true
 end
 
+# In development and test, keep the per-worktree port unless an explicit
+# override is provided. Production and releases default to port 4000.
 port =
   System.get_env("PORT") ||
     if config_env() == :prod do

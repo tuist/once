@@ -1,5 +1,6 @@
 PRELUDE_SOURCES = [
     "common.star",
+    "lint.star",
     "apple.star",
     "android.star",
     "go.star",
@@ -14,6 +15,8 @@ PRELUDE_SOURCES = [
     "ruby.star",
     "javascript.star",
     "react_native.star",
+    "oci.star",
+    "dockerfile.star",
 ]
 
 PRELUDE_DEPENDENCIES = {
@@ -21,6 +24,15 @@ PRELUDE_DEPENDENCIES = {
 }
 
 PRELUDE_TARGET_KINDS = {
+    "lint.star": [
+        "ruff_lint",
+        "golangci_lint",
+        "swiftlint_lint",
+        "detekt_lint",
+        "credo_lint",
+        "eslint_lint",
+        "rubocop_lint",
+    ],
     "android.star": [
         "android_resource",
         "android_library",
@@ -35,6 +47,7 @@ PRELUDE_TARGET_KINDS = {
         "apple_library",
         "apple_framework",
         "apple_application",
+        "apple_thinned_package",
         "apple_test_bundle",
         "shellspec_test",
     ],
@@ -109,5 +122,12 @@ PRELUDE_TARGET_KINDS = {
         "react_native_apple_application",
         "react_native_android_application",
         "react_native_metro",
+    ],
+    "oci.star": [
+        "oci_layer",
+        "oci_image",
+    ],
+    "dockerfile.star": [
+        "dockerfile_image",
     ],
 }

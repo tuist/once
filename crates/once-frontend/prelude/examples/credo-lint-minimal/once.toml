@@ -1,0 +1,7 @@
+[workspace]
+exclude = ["mix.exs"]
+
+[[target]]
+name = "lint"
+kind = "credo_lint"
+srcs = ["lib/**/*.ex"]

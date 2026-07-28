@@ -6,7 +6,7 @@ use once_cas::{ActionResult, CacheProvider};
 use sha2::Digest as ShaDigest;
 
 use crate::{
-    contract, local, outputs, remote, Action, CopyPathMode, Error, OutputSymlinkMode,
+    archive, contract, local, outputs, remote, Action, CopyPathMode, Error, OutputSymlinkMode,
     PreparePathMode, Result, SandboxMode, WorkspacePath,
 };
 
@@ -17,26 +17,40 @@ pub(crate) async fn run(
     stream_to_parent: bool,
     validate_contract: bool,
 ) -> Result<ActionResult> {
-    match action {
-        Action::RunCommand {
-            outputs,
-            output_symlink_mode,
-            ..
-        } => {
-            let mut result = Box::pin(execute_command(
-                action,
-                workspace_root,
-                cache,
-                stream_to_parent,
-                validate_contract,
-            ))
-            .await?;
-            if result.exit_code == 0 && !validate_contract {
-                result.outputs =
-                    outputs::capture(outputs, workspace_root, cache, *output_symlink_mode).await?;
-            }
-            Ok(result)
+    if let Action::RunCommand {
+        outputs,
+        output_symlink_mode,
+        ..
+    } = action
+    {
+        let mut result = Box::pin(execute_command(
+            action,
+            workspace_root,
+            cache,
+            stream_to_parent,
+            validate_contract,
+        ))
+        .await?;
+        let completed = action.accepts_exit_code(result.exit_code);
+        if completed && !validate_contract {
+            result.outputs =
+                outputs::capture(outputs, workspace_root, cache, *output_symlink_mode).await?;
         }
+        if completed {
+            result.exit_code = 0;
+        }
+        return Ok(result);
+    }
+
+    execute_portable_action(action, workspace_root, cache).await
+}
+
+async fn execute_portable_action(
+    action: &Action,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+) -> Result<ActionResult> {
+    match action {
         Action::WriteFile { path, bytes, .. } => {
             write_file(path, bytes, workspace_root).await?;
             capture_file_action_outputs(std::slice::from_ref(path), workspace_root, cache).await
@@ -100,6 +114,28 @@ pub(crate) async fn run(
             write_tree_digest(root, output, include_suffixes, workspace_root).await?;
             capture_file_action_outputs(std::slice::from_ref(output), workspace_root, cache).await
         }
+        Action::WriteArchive {
+            entries,
+            output,
+            sha256_output,
+            format,
+            ..
+        } => {
+            archive::write(
+                entries,
+                output,
+                sha256_output.as_ref(),
+                *format,
+                workspace_root,
+            )
+            .await?;
+            let mut outputs = vec![output.clone()];
+            if let Some(path) = sha256_output {
+                outputs.push(path.clone());
+            }
+            capture_file_action_outputs(&outputs, workspace_root, cache).await
+        }
+        Action::RunCommand { .. } => unreachable!("command actions are dispatched separately"),
     }
 }
 
@@ -118,6 +154,7 @@ async fn execute_command(
         outputs,
         resources,
         timeout_ms,
+        success_exit_codes,
         remote,
         stdout_path,
         stderr_path,
@@ -145,6 +182,7 @@ async fn execute_command(
                     outputs,
                     resources,
                     timeout_ms: *timeout_ms,
+                    success_exit_codes,
                 },
                 workspace_root,
                 cache,
@@ -152,7 +190,7 @@ async fn execute_command(
             )
             .await
         }
-        (None, _, SandboxMode::Inputs) => {
+        (None, _, SandboxMode::Inputs | SandboxMode::CopiedInputs) => {
             execute_sandboxed_command(
                 action,
                 argv,
@@ -166,6 +204,7 @@ async fn execute_command(
                 redirect,
                 stream_to_parent,
                 validate_contract,
+                *sandbox == SandboxMode::CopiedInputs,
             )
             .await
         }
@@ -210,9 +249,18 @@ async fn execute_sandboxed_command(
     redirect: local::Redirect<'_>,
     stream_to_parent: bool,
     validate_contract: bool,
+    copy_inputs: bool,
 ) -> Result<ActionResult> {
-    let sandbox =
-        prepare_input_sandbox(action, inputs, cwd, workspace_root, validate_contract).await?;
+    let sandbox = prepare_input_sandbox(
+        action,
+        inputs,
+        outputs,
+        cwd,
+        workspace_root,
+        validate_contract,
+        copy_inputs,
+    )
+    .await?;
     let result = if stream_to_parent {
         local::execute_command_streaming(
             argv,
@@ -261,7 +309,7 @@ async fn execute_sandboxed_command(
                 }
                 return Ok(result);
             }
-            if result.exit_code == 0 {
+            if action.accepts_exit_code(result.exit_code) {
                 copy_sandbox_outputs(outputs, &sandbox.execroot, workspace_root).await?;
             }
             Ok(result)
@@ -298,9 +346,11 @@ impl Drop for PreparedSandbox {
 async fn prepare_input_sandbox(
     action: &Action,
     inputs: &[WorkspacePath],
+    outputs: &[WorkspacePath],
     cwd: Option<&WorkspacePath>,
     workspace_root: &Path,
     validate_contract: bool,
+    copy_inputs: bool,
 ) -> Result<PreparedSandbox> {
     let root = workspace_root
         .join(".once")
@@ -310,18 +360,24 @@ async fn prepare_input_sandbox(
     let sandbox_root = root.clone();
     let sandbox_execroot = execroot.clone();
     let input_paths = inputs.to_vec();
+    let output_paths = outputs.to_vec();
     let cwd_path = cwd.cloned();
     let workspace = workspace_root.to_path_buf();
     // Contract validation stages copies rather than symlinks so a probe that
     // writes one of its declared inputs mutates the private execroot copy (where
     // the audit still flags the write) instead of reaching through a symlink and
     // corrupting the real workspace source the docs promise to leave untouched.
-    let copy_inputs = validate_contract;
+    let copy_inputs = validate_contract || copy_inputs;
     tokio::task::spawn_blocking(move || {
         remove_path_blocking(&sandbox_root)?;
         std::fs::create_dir_all(&sandbox_execroot)?;
         for input in input_paths {
             stage_sandbox_input_blocking(&workspace, &sandbox_execroot, &input, copy_inputs)?;
+        }
+        for output in output_paths {
+            if let Some(parent) = output.resolve(&sandbox_execroot).parent() {
+                std::fs::create_dir_all(parent)?;
+            }
         }
         if let Some(cwd) = cwd_path {
             std::fs::create_dir_all(cwd.resolve(&sandbox_execroot))?;

@@ -164,6 +164,7 @@ fn command_action(
         resources: ResourceRequest::default(),
         sandbox,
         timeout_ms: None,
+        success_exit_codes: vec![0],
         remote: None,
     }
 }

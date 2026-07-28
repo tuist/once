@@ -37,6 +37,7 @@ pub fn validate_target(target: &TargetSpec, schemas: &[TargetKindSchema]) -> Vec
     };
 
     validate_dependency_roles(target, schema, &mut diagnostics);
+    validate_dependency_counts(target, schema, &mut diagnostics);
     validate_required_attrs(target, schema, &mut diagnostics);
 
     for (attr_name, attr_value) in &target.attrs {
@@ -125,6 +126,60 @@ fn validate_dependency_roles(
                 .with_repair(suggest_known_dependency_roles(schema)),
             );
         }
+    }
+}
+
+fn validate_dependency_counts(
+    target: &TargetSpec,
+    schema: &TargetKindSchema,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for edge in &schema.deps {
+        let (attribute, count) = if edge.name == "deps" {
+            ("deps".to_string(), target.deps.len())
+        } else {
+            (
+                format!("dependencies.{}", edge.name),
+                target.dependencies.get(&edge.name).map_or(0, Vec::len),
+            )
+        };
+        if count >= edge.min_count && edge.max_count.is_none_or(|maximum| count <= maximum) {
+            continue;
+        }
+        let expected = dependency_count_expectation(edge.min_count, edge.max_count);
+        diagnostics.push(
+            Diagnostic::new(
+                "dependency_count_mismatch",
+                format!(
+                    "dependency role `{}` must contain {expected}; got {count}",
+                    edge.name
+                ),
+            )
+            .with_target(target.name.as_str())
+            .with_attribute(&attribute)
+            .with_repair(format!("Set `target.{attribute}` to contain {expected}")),
+        );
+    }
+}
+
+fn dependency_count_expectation(minimum: usize, maximum: Option<usize>) -> String {
+    match maximum {
+        Some(maximum) if minimum == maximum => {
+            format!("exactly {minimum} {}", dependency_unit(minimum))
+        }
+        Some(maximum) if minimum == 0 => {
+            format!("at most {maximum} {}", dependency_unit(maximum))
+        }
+        Some(maximum) => format!("between {minimum} and {maximum} dependencies"),
+        None => format!("at least {minimum} {}", dependency_unit(minimum)),
+    }
+}
+
+fn dependency_unit(count: usize) -> &'static str {
+    if count == 1 {
+        "dependency"
+    } else {
+        "dependencies"
     }
 }
 
@@ -254,37 +309,73 @@ fn validate_attr_value(
         diagnostics.push(type_mismatch(target, attr_name, &attr_schema.ty, &detail));
         return;
     }
-    if attr_schema.allowed_values.is_empty() {
-        return;
-    }
     let Some(value) = value.as_str() else {
         return;
     };
-    if attr_schema
-        .allowed_values
-        .iter()
-        .any(|allowed| allowed == value)
+    if !attr_schema.allowed_values.is_empty()
+        && !attr_schema
+            .allowed_values
+            .iter()
+            .any(|allowed| allowed == value)
     {
+        let location = select_branch
+            .map(|branch| format!(" in select branch `{branch}`"))
+            .unwrap_or_default();
+        diagnostics.push(
+            Diagnostic::new(
+                "attr_value_not_allowed",
+                format!(
+                    "attribute `{attr_name}`{location} must be one of: {}; got `{value}`",
+                    attr_schema.allowed_values.join(", ")
+                ),
+            )
+            .with_target(target.name.as_str())
+            .with_attribute(attr_name)
+            .with_repair(format!(
+                "Set `target.attrs.{attr_name}` to one of: {}",
+                attr_schema.allowed_values.join(", ")
+            )),
+        );
         return;
     }
-    let location = select_branch
-        .map(|branch| format!(" in select branch `{branch}`"))
-        .unwrap_or_default();
-    diagnostics.push(
-        Diagnostic::new(
-            "attr_value_not_allowed",
-            format!(
-                "attribute `{attr_name}`{location} must be one of: {}; got `{value}`",
-                attr_schema.allowed_values.join(", ")
-            ),
-        )
-        .with_target(target.name.as_str())
-        .with_attribute(attr_name)
-        .with_repair(format!(
-            "Set `target.attrs.{attr_name}` to one of: {}",
-            attr_schema.allowed_values.join(", ")
-        )),
-    );
+    if attr_schema
+        .disallowed_values
+        .iter()
+        .any(|disallowed| disallowed == value.trim())
+    {
+        let location = select_branch
+            .map(|branch| format!(" in select branch `{branch}`"))
+            .unwrap_or_default();
+        diagnostics.push(
+            Diagnostic::new(
+                "attr_value_disallowed",
+                format!(
+                    "attribute `{attr_name}`{location} must not be {}; got `{value}`",
+                    describe_disallowed_values(&attr_schema.disallowed_values)
+                ),
+            )
+            .with_target(target.name.as_str())
+            .with_attribute(attr_name)
+            .with_repair(format!(
+                "Set `target.attrs.{attr_name}` to a value other than {}",
+                describe_disallowed_values(&attr_schema.disallowed_values)
+            )),
+        );
+    }
+}
+
+fn describe_disallowed_values(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| {
+            if value.is_empty() {
+                "empty".to_string()
+            } else {
+                format!("`{value}`")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" or ")
 }
 
 fn type_mismatch(target: &TargetSpec, attr_name: &str, ty: &str, err: &str) -> Diagnostic {
@@ -528,6 +619,32 @@ mod tests {
     }
 
     #[test]
+    fn dependency_count_reports_structured_diagnostic() {
+        let schemas = vec![schema_named("apple_thinned_package")];
+        for deps in [
+            Vec::new(),
+            vec!["./App".to_string(), "./OtherApp".to_string()],
+        ] {
+            let mut target = target("AppThinned", "apple_thinned_package");
+            target.deps = deps;
+            target
+                .attrs
+                .insert("device_model".to_string(), json!("iPhone17,1"));
+
+            let diagnostics = validate_target(&target, &schemas);
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "dependency_count_mismatch")
+                .expect("dependency count diagnostic");
+
+            assert_eq!(diagnostic.target.as_deref(), Some("AppThinned"));
+            assert_eq!(diagnostic.attribute.as_deref(), Some("deps"));
+            assert!(diagnostic.message.contains("exactly 1 dependency"));
+            assert!(diagnostic.repairs[0].contains("target.deps"));
+        }
+    }
+
+    #[test]
     fn type_mismatch_diagnoses_with_scope() {
         let schemas = built_in_target_kind_schemas();
         let mut t = target("Hello", "apple_library");
@@ -637,6 +754,28 @@ mod tests {
         assert_eq!(diagnostic.attribute.as_deref(), Some("platform"));
         assert!(diagnostic.message.contains("ios, android"));
         assert!(diagnostic.repairs[0].contains("target.attrs.platform"));
+    }
+
+    #[test]
+    fn disallowed_string_value_reports_structured_diagnostic() {
+        let schemas = vec![schema_named("apple_thinned_package")];
+        for value in ["", "  ", "all", " all "] {
+            let mut target = target("AppThinned", "apple_thinned_package");
+            target
+                .attrs
+                .insert("device_model".to_string(), json!(value));
+
+            let diagnostics = validate_target(&target, &schemas);
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "attr_value_disallowed")
+                .expect("disallowed-value diagnostic");
+
+            assert_eq!(diagnostic.target.as_deref(), Some("AppThinned"));
+            assert_eq!(diagnostic.attribute.as_deref(), Some("device_model"));
+            assert!(diagnostic.message.contains("empty or `all`"));
+            assert!(diagnostic.repairs[0].contains("target.attrs.device_model"));
+        }
     }
 
     #[test]

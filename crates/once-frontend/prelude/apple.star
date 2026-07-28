@@ -243,6 +243,55 @@ def _resolve_codesign(xcode_developer_dir):
         "env": env,
     }
 
+def _resolve_apple_thinning_tools(xcode_developer_dir):
+    env = _developer_env(xcode_developer_dir)
+    xcrun = host_which("xcrun")
+    if xcode_developer_dir:
+        developer_dir = xcode_developer_dir
+        ipatool = developer_dir + "/usr/bin/ipatool"
+        xcodebuild = developer_dir + "/usr/bin/xcodebuild"
+    else:
+        ipatool = host_command([xcrun, "--find", "ipatool"], env = env).strip()
+        suffix = "/usr/bin/ipatool"
+        if not _ends_with(ipatool, suffix):
+            fail("unable to derive the Xcode developer directory from ipatool at " + ipatool)
+        developer_dir = ipatool[:len(ipatool) - len(suffix)]
+        xcodebuild = host_command([xcrun, "--find", "xcodebuild"], env = env).strip()
+    ruby = host_which("ruby")
+    zip = host_which("zip")
+    codesign = _resolve_codesign(developer_dir)
+    xcode_version = host_command([xcodebuild, "-version"], env = env).strip()
+    ruby_version = host_command([ruby, "--version"]).strip()
+    zip_version = host_command([zip, "-v"]).strip()
+    action_env = dict(env)
+    action_path = developer_dir + "/Toolchains/XcodeDefault.xctoolchain/usr/bin:/usr/bin:/bin"
+    action_env["PATH"] = action_path
+    action_env["LANG"] = "C"
+    action_env["LC_ALL"] = "C"
+    action_env["TZ"] = "UTC"
+    identity = "\x00".join([
+        "once.apple.thinning.v1",
+        developer_dir,
+        ipatool,
+        xcode_version,
+        ruby,
+        ruby_version,
+        zip,
+        zip_version,
+        codesign["codesign_path"],
+        action_path,
+    ])
+    return {
+        "ruby": ruby,
+        "ipatool": ipatool,
+        "zip": zip,
+        "codesign": codesign["codesign_path"],
+        "toolchain_dir": developer_dir + "/Toolchains/XcodeDefault.xctoolchain/usr",
+        "platforms_dir": developer_dir + "/Platforms",
+        "identity": identity,
+        "env": action_env,
+    }
+
 def _swift_testing_macros_plugin(swiftc_path):
     suffix = "/usr/bin/swiftc"
     if not _ends_with(swiftc_path, suffix):
@@ -1483,6 +1532,23 @@ def _render_plist(entries, bool_entries = {}, array_entries = {}):
     lines.append("")
     return "\n".join(lines)
 
+def _apple_supported_platform(sdk_name):
+    names = {
+        "macosx": "MacOSX",
+        "iphoneos": "iPhoneOS",
+        "iphonesimulator": "iPhoneSimulator",
+        "appletvos": "AppleTVOS",
+        "appletvsimulator": "AppleTVSimulator",
+        "watchos": "WatchOS",
+        "watchsimulator": "WatchSimulator",
+        "xros": "XROS",
+        "xrsimulator": "XRSimulator",
+    }
+    name = names.get(sdk_name)
+    if not name:
+        fail("no supported-platform property-list value for Apple SDK `" + sdk_name + "`")
+    return name
+
 def _collect_dep_compile_inputs(deps, build_dir):
     """Aggregate compile-visible inputs from dep providers.
 
@@ -1757,6 +1823,7 @@ def _apple_framework_impl(ctx):
 def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesign, identifier_prefix):
     embedded_paths = []
     embedded_stamps = []
+    embedded_files = []
     destination_sources = {}
     for bundle in _apple_collect_runtime_framework_bundles(deps):
         framework_path = bundle["path"]
@@ -1779,6 +1846,7 @@ def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesi
         embedded_stamp = declare_output(embedded_relative_path + "/_CodeSignature/CodeResources")
         if embedded_stamp not in embed_outputs:
             embed_outputs.append(embedded_stamp)
+        embedded_files.extend(embed_outputs)
         embedded_framework_path = ctx["build_dir"] + "/" + embedded_relative_path
         embedded_paths.append(embedded_framework_path)
         copy_path(
@@ -1800,6 +1868,7 @@ def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesi
     return {
         "paths": embedded_paths,
         "stamps": embedded_stamps,
+        "files": embedded_files,
     }
 
 def shell_quote_for_action(path):
@@ -1903,8 +1972,13 @@ def _apple_application_impl(ctx):
         )
         return {
             "label_id": ctx["label"]["id"],
+            "target_kind": "apple_application",
             "app_path": app_path,
             "bundle_id": bundle_id,
+            "platform": platform,
+            "sdk_variant": sdk_variant,
+            "xcode_developer_dir": xcode_developer_dir,
+            "product_name": product_name,
         }
 
     executable = declare_output(app_dir + "/" + product_name)
@@ -2018,7 +2092,10 @@ def _apple_application_impl(ctx):
             device_family_codes.append({"integer": 1})
         elif family == "ipad":
             device_family_codes.append({"integer": 2})
-    array_entries = {"UIDeviceFamily": device_family_codes}
+    array_entries = {
+        "CFBundleSupportedPlatforms": [_apple_supported_platform(swiftc["sdk_name"])],
+        "UIDeviceFamily": device_family_codes,
+    }
     write_path(info_plist, _render_plist(plist_entries, bool_entries, array_entries))
 
     codesign = _resolve_codesign(xcode_developer_dir)
@@ -2049,8 +2126,242 @@ def _apple_application_impl(ctx):
 
     return {
         "label_id": ctx["label"]["id"],
+        "target_kind": "apple_application",
         "app_path": app_path,
+        "app_files": [executable, info_plist, app_cs_stamp] + embedded_frameworks["files"],
         "bundle_id": bundle_id,
+        "platform": platform,
+        "sdk_variant": sdk_variant,
+        "xcode_developer_dir": xcode_developer_dir,
+        "product_name": product_name,
+    }
+
+def _apple_thinning_application(deps, label_id):
+    if len(deps) != 1:
+        fail(label_id + ": apple_thinned_package requires exactly one apple_application dependency")
+    application = deps[0]
+    if application.get("target_kind") != "apple_application" or not application.get("app_path"):
+        fail(label_id + ": dependency must provide an apple_application bundle")
+    if application.get("platform") != "ios":
+        fail(label_id + ": apple_thinned_package only supports applications with platform = \"ios\"")
+    if application.get("sdk_variant") != "device":
+        fail(label_id + ": apple_thinned_package requires an application with sdk_variant = \"device\"")
+    return application
+
+def _apple_thinning_adapter():
+    return '''require "fileutils"
+require "find"
+require "json"
+require "open3"
+
+ruby_arguments = [
+  :ipatool,
+  :codesign,
+  :zip,
+  :input,
+  :device,
+  :product,
+  :target,
+  :variants,
+  :report,
+  :packages,
+  :manifest,
+  :toolchain,
+  :platforms,
+]
+options = ruby_arguments.zip(ARGV).to_h
+
+def run_quietly(argv, failure, working_directory = nil, input = nil)
+  _stdout, _stderr, status = if working_directory && input
+    Open3.capture3(*argv, chdir: working_directory, stdin_data: input)
+  elsif working_directory
+    Open3.capture3(*argv, chdir: working_directory)
+  else
+    Open3.capture3(*argv)
+  end
+  raise failure unless status.success?
+end
+
+def safe_name(value)
+  value.gsub(/[^A-Za-z0-9._-]+/, "-").gsub(/^-+|-+$/, "")
+end
+
+begin
+  ipatool_argv = [
+    options.fetch(:ipatool),
+    options.fetch(:input),
+    "--create-thinned=#{options.fetch(:device)}",
+    "--validate-output",
+    "--validate-output-zero-variants",
+    "--toolchain=#{options.fetch(:toolchain)}",
+    "--platforms=#{options.fetch(:platforms)}",
+    "--json=#{options.fetch(:report)}",
+    "--output=#{options.fetch(:variants)}",
+    "--quiet",
+  ]
+  _stdout, _stderr, status = Open3.capture3(*ipatool_argv)
+  unless status.success?
+    alerts = if File.file?(options.fetch(:report))
+      JSON.parse(File.read(options.fetch(:report))).fetch("alerts", [])
+    else
+      []
+    end
+    descriptions = alerts.each_with_object([]) do |alert, values|
+      values << alert["description"] if alert["level"] == "ERROR" && alert["description"]
+    end
+    detail = descriptions.empty? ? "Xcode app thinning failed" : descriptions.join("\n")
+    raise detail
+  end
+
+  report = JSON.parse(File.read(options.fetch(:report)))
+  records = report.fetch("thinnedIPAs", []).select do |record|
+    Array(record["devices"]).include?(options.fetch(:device))
+  end
+  raise "Xcode produced no thinned application for #{options.fetch(:device)}" if records.empty?
+
+  records.sort_by! do |record|
+    [
+      Array(record["devices"]).join(","),
+      JSON.generate(Array(record["installTargets"])),
+      record.fetch("path"),
+    ]
+  end
+  FileUtils.mkdir_p(options.fetch(:packages))
+  fixed_time = Time.utc(1980, 1, 1)
+  packages = records.each_with_index.map do |record, index|
+    expanded = record.fetch("path")
+    applications = Dir.glob(File.join(expanded, "Payload", "*.app")).sort
+    raise "thinned output must contain exactly one application bundle" unless applications.length == 1
+
+    signables = []
+    Find.find(applications.first) do |path|
+      if File.directory?(path) && [".app", ".appex", ".framework", ".xpc"].include?(File.extname(path))
+        signables << path
+      elsif File.file?(path) && File.extname(path) == ".dylib"
+        signables << path
+      end
+    end
+    signables.uniq.sort_by { |path| [-path.count("/"), path] }.each do |path|
+      run_quietly(
+        [options.fetch(:codesign), "--force", "--sign", "-", "--timestamp=none", path],
+        "failed to sign #{File.basename(path)} after app thinning",
+      )
+    end
+
+    Find.find(expanded) do |path|
+      File.utime(fixed_time, fixed_time, path) unless File.symlink?(path)
+    end
+    suffix = records.length == 1 ? "" : "-#{index + 1}"
+    filename = "#{safe_name(options.fetch(:product))}-#{safe_name(options.fetch(:device))}#{suffix}.ipa"
+    package = File.join(options.fetch(:packages), filename)
+    package_absolute = File.expand_path(package)
+    archive_entries = []
+    Find.find(expanded) do |path|
+      next if path == expanded
+      if File.file?(path) || File.symlink?(path)
+        archive_entries << path.delete_prefix(expanded + "/")
+      end
+    end
+    archive_entries.sort!
+    run_quietly(
+      [
+        options.fetch(:zip),
+        "-X",
+        "-q",
+        "-y",
+        package_absolute,
+        "-@",
+      ],
+      "failed to package #{filename}",
+      expanded,
+      archive_entries.join("\n") + "\n",
+    )
+    install_targets = Array(record["installTargets"]).sort_by do |target|
+      [target["deviceModel"].to_s, target["operatingSystemVersion"].to_s]
+    end
+    {
+      "path" => package,
+      "devices" => Array(record["devices"]).sort,
+      "installTargets" => install_targets,
+    }
+  end
+
+  manifest = {
+    "schema" => "once.apple.thinned-package.v1",
+    "target" => options.fetch(:target),
+    "deviceModel" => options.fetch(:device),
+    "packages" => packages,
+  }
+  File.write(options.fetch(:manifest), JSON.pretty_generate(manifest) + "\n")
+rescue StandardError => error
+  warn error.message
+  exit 1
+end
+'''
+
+def _apple_thinned_package_impl(ctx):
+    device_model = (ctx["attr"].get("device_model") or "").strip()
+    if not device_model:
+        fail(ctx["label"]["id"] + ": attribute `device_model` must name an Apple device model, such as `iPhone17,1`")
+    if device_model == "all":
+        fail(ctx["label"]["id"] + ": attribute `device_model` must name one device model; declare one target per model")
+
+    application = _apple_thinning_application(ctx["deps"], ctx["label"]["id"])
+    product_name = application.get("product_name") or ctx["label"]["name"]
+    app_path = application["app_path"]
+    app_files = application.get("app_files") or [app_path]
+    xcode_developer_dir = application.get("xcode_developer_dir") or ""
+    tools = _resolve_apple_thinning_tools(xcode_developer_dir)
+
+    staged_app = declare_output("thinning-input/Payload/" + product_name + ".app")
+    adapter = declare_output("apple-thinning-package.rb")
+    packages = declare_output("ipas")
+    manifest = declare_output("thinned-packages.json")
+    scratch = ctx["scratch_dir"] + "/apple-thinning"
+    variants = scratch + "/variants"
+    report = scratch + "/ipatool-report.json"
+
+    copy_path(
+        app_path,
+        staged_app,
+        kind = "tree",
+        inputs = app_files,
+        toolchain_identity = "once.apple.thinning.input.v1",
+        identifier = "apple_thinned_package_stage:" + ctx["label"]["id"],
+    )
+    write_path(adapter, _apple_thinning_adapter())
+    run_action(
+        argv = [
+            tools["ruby"],
+            adapter,
+            tools["ipatool"],
+            tools["codesign"],
+            tools["zip"],
+            _parent_dir(_parent_dir(staged_app)),
+            device_model,
+            product_name,
+            ctx["label"]["id"],
+            variants,
+            report,
+            packages,
+            manifest,
+            tools["toolchain_dir"],
+            tools["platforms_dir"],
+        ],
+        inputs = [adapter, staged_app],
+        outputs = [packages, manifest],
+        clean_paths = [scratch, packages, manifest],
+        create_dirs = [scratch],
+        env = tools["env"],
+        toolchain_identity = tools["identity"] + "\x00device\x00" + device_model,
+        identifier = "apple_thinned_package:" + ctx["label"]["id"],
+    )
+    return {
+        "label_id": ctx["label"]["id"],
+        "target_kind": "apple_thinned_package",
+        "device_model": device_model,
+        "ipa_directory": packages,
+        "manifest": manifest,
     }
 
 def _apple_test_bundle_impl(ctx):
@@ -3065,6 +3376,55 @@ apple_application = target_kind(
             "native-mobile-shared-code-e2e",
             name = "Apple app with shared native code",
             use_when = "Use this when an Apple app should embed a Kotlin/Native framework and link a Rust static library.",
+        ),
+    ],
+)
+
+apple_thinned_package = target_kind(
+    docs = "Produces an ad-hoc signed, device-specific application archive for Apple application size analysis.",
+    impl = _apple_thinned_package_impl,
+    attrs = [
+        attr(
+            "device_model",
+            "string",
+            required = True,
+            docs = "One Apple device model identifier, such as `iPhone17,1`",
+            configurable = False,
+            disallowed_values = ["", "all"],
+        ),
+    ],
+    deps = [
+        dep(
+            "deps",
+            ["apple_application"],
+            "Exactly one device application to thin and package",
+            min_count = 1,
+            max_count = 1,
+        ),
+    ],
+    providers = ["apple_thinned_package"],
+    capabilities = [
+        capability("build", ["default", "ipas", "manifest"]),
+    ],
+    source_references = [
+        source_reference(
+            "Sentry",
+            "Apple application size analysis",
+            "https://docs.sentry.io/platforms/apple/guides/ios/size-analysis/#app-thinning",
+            "Confirm that device-specific application archives should be created before upload.",
+        ),
+        source_reference(
+            "Apple",
+            "Reducing your app's size",
+            "https://developer.apple.com/documentation/Xcode/reducing-your-app-s-size",
+            "Confirm Apple application thinning behavior and size-analysis guidance.",
+        ),
+    ],
+    examples = [
+        example(
+            "apple-thinned-package-minimal",
+            name = "Device-specific Apple size-analysis package",
+            use_when = "You want an application archive thinned for one device model before uploading it for size analysis.",
         ),
     ],
 )

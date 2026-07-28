@@ -1,0 +1,4 @@
+[[target]]
+name = "lint"
+kind = "ruff_lint"
+srcs = ["src/**/*.py"]

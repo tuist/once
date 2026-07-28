@@ -94,7 +94,7 @@ async fn execute_with_client(
             )
             .await?;
         let result = action_result(response, cache, stream_to_parent).await?;
-        if result.exit_code == 0 && !command.outputs.is_empty() {
+        if command.accepts_exit_code(result.exit_code) && !command.outputs.is_empty() {
             ensure_success(
                 &client
                     .execute(
@@ -261,6 +261,7 @@ mod tests {
             outputs: &outputs,
             resources: &resources,
             timeout_ms: None,
+            success_exit_codes: &[0],
         };
         let client = Client::new(Config::for_test(url.clone(), format!("{url}/toolbox"))).unwrap();
 
@@ -309,6 +310,7 @@ mod tests {
             outputs: &[],
             resources: &resources,
             timeout_ms: None,
+            success_exit_codes: &[0],
         };
         let client = Client::new(Config::for_test(url.clone(), format!("{url}/toolbox"))).unwrap();
 
