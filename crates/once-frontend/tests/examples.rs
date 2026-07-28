@@ -162,6 +162,31 @@ fn every_impl_backed_target_kind_has_a_schema_example() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn mix_native_project_lints_in_the_development_environment() {
+    let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
+    let schema = schemas
+        .iter()
+        .find(|schema| schema.kind == "mix_workspace")
+        .expect("mix_workspace schema");
+    let bundle = load_target_kind_example(schema, "mix-workspace-native-project")
+        .expect("Mix native project example materializes");
+    let tmp = TempDir::new().expect("tempdir");
+    materialize(tmp.path(), &bundle);
+
+    let graph = once_frontend::load_graph_workspace(tmp.path()).expect("Mix example graph loads");
+    let lint = graph
+        .iter()
+        .find(|target| target.label.id == "mix_lint")
+        .expect("mix_lint target");
+
+    assert_eq!(
+        lint.attrs.get("mix_env"),
+        Some(&AttrValue::String("dev".to_string()))
+    );
+}
+
 #[test]
 fn native_mobile_shared_code_example_wires_cross_platform_apps() {
     let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");

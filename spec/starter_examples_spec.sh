@@ -36,6 +36,8 @@ c_library|c-library-minimal|build
 cmake_project|cmake-project-minimal|build
 elixir_library|elixir-library-minimal|build
 elixir_test|elixir-test-minimal|test
+mix_project|mix-project-minimal|build
+mix_release|mix-project-minimal|build
 go_binary|go-binary-minimal|build
 go_binary|go-comprehensive|build
 go_test|go-comprehensive|test

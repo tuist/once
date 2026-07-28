@@ -170,6 +170,10 @@ pub enum Cmd {
         /// Target id, e.g. `examples/hello/hello` or `./hello`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
+
+        /// Target-kind-specific arguments supplied to the generic run capability.
+        #[arg(last = true, value_name = "ARG")]
+        arguments: Vec<String>,
     },
 
     /// Test a declared target.
@@ -552,5 +556,28 @@ mod tests {
         assert!(!Output::new(Format::Json, false).show_human_trailers());
         assert!(!Output::new(Format::Json, true).show_human_trailers());
         assert!(!Output::new(Format::Toon, false).show_human_trailers());
+    }
+
+    #[test]
+    fn run_accepts_target_arguments_after_separator() {
+        let cli = Cli::try_parse_from([
+            "once",
+            "run",
+            "server/application_dev",
+            "--",
+            "phx.server",
+            "--port",
+            "4001",
+        ])
+        .unwrap();
+
+        let Some(Cmd::Run {
+            target, arguments, ..
+        }) = cli.command
+        else {
+            panic!("expected run command");
+        };
+        assert_eq!(target.as_deref(), Some("server/application_dev"));
+        assert_eq!(arguments, ["phx.server", "--port", "4001"]);
     }
 }

@@ -704,6 +704,36 @@ mod tests {
         assert!(outcome.result.outputs.contains_key("out/copied.txt"));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_file_action_materializes_a_directory_symlink_value() {
+        let (tmp, cas) = fresh_cas();
+        std::fs::create_dir_all(tmp.path().join("shared/nested")).unwrap();
+        std::fs::write(tmp.path().join("shared/nested/value.txt"), "value").unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::os::unix::fs::symlink("../shared", tmp.path().join("src/resources")).unwrap();
+        let action = Action::CopyPath {
+            sources: vec![WorkspacePath::try_from("src/resources").unwrap()],
+            destination: WorkspacePath::try_from("out/resources").unwrap(),
+            mode: CopyPathMode::File,
+            input_digest: Some(Digest::of_bytes(b"copy-directory-symlink")),
+        };
+
+        let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.cache, CacheState::Miss);
+        assert!(!std::fs::symlink_metadata(tmp.path().join("out/resources"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/resources/nested/value.txt")).unwrap(),
+            "value"
+        );
+    }
+
     #[tokio::test]
     async fn materialize_host_file_verifies_content_and_replays_from_cache() {
         let (tmp, cas) = fresh_cas();

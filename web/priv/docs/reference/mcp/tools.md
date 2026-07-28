@@ -294,6 +294,112 @@ Lightweight discovery entry point. Returns matching target kinds with documentat
 ]
 ```
 
+## `once_list_native_projects`
+
+List native project declarations and the roots they currently recognize.
+
+Returns each enabled native project's name, documentation, marker files, additional resolver inputs, seed target kind, and current package matches. Detection reads file names only and does not execute native project code. The matching command-line operation is `once query native-projects --format json`.
+
+**Input schema**
+
+```json
+{
+  "properties": {},
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "native_projects": [
+    { "name": "native", "docs": "Recognize a native project.", "markers": ["project.native"], "target_kind": "native_workspace", "target_name": "native" }
+  ],
+  "matches": [
+    { "native_project": "native", "package": "", "markers": ["project.native"], "seed_target": "native" }
+  ]
+}
+```
+
+## `once_preview_native_project`
+
+Preview the seed target and complete typed graph derived by one detected native project.
+
+Runs the selected native project's ordinary target-kind resolver without writing a manifest, then returns its declaration, detection evidence, seed target, and expanded typed targets. Omit `package` when the native project has one match. The matching command-line operation is `once query native-project <name> [--package <path>] --format json`.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "name": {
+      "description": "Name discovered with `once_list_native_projects`.",
+      "type": "string"
+    },
+    "package": {
+      "description": "Package path from the native project match. Use an empty string for the workspace root.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "native_project": { "name": "native", "target_kind": "native_workspace" },
+  "matched": { "native_project": "native", "package": "", "seed_target": "native" },
+  "seed": { "name": "native", "kind": "native_workspace" },
+  "targets": [ { "label": { "id": "native" }, "kind": "native_workspace" } ]
+}
+```
+
+## `once_init_native_project`
+
+Initialize Once from one detected native project.
+
+This state-changing tool is available only when the server starts with `once mcp --allow-run`. It writes the native project's validated seed target through the manifest editor while preserving unrelated configuration and comments. Repeating an identical initialization is idempotent. A conflicting target with the same name is rejected. The matching command-line operation is `once edit init-native-project <name> [--package <path>]`.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "name": {
+      "description": "Name discovered with `once_list_native_projects`.",
+      "type": "string"
+    },
+    "package": {
+      "description": "Package path from the native project match. Use an empty string for the workspace root.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "initialized": true,
+  "changed": true,
+  "native_project": "native",
+  "package": "",
+  "seed_target": "native",
+  "path": "/work/project/once.toml"
+}
+```
+
 ## `once_query_module_contract`
 
 Return the complete project-module authoring contract, generic analysis and action primitives, maintenance invariants, and a starter module.
@@ -973,13 +1079,20 @@ Runs the same declared action analysis used by the graph, bypasses the action ca
 
 Run a target by executing its generic `run` capability.
 
-This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes command diagnostics under `stderr` and up to 64 kibibytes of each declared `stdout.log` or `stderr.log` output under `captured_stdout` and `captured_stderr`, so an agent can verify ordinary command output without a separate filesystem read. A captured field is null when the target did not declare that log.
+This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Argument interpretation is target-kind-specific, so inspect the target-kind schema before supplying `arguments`. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes command diagnostics under `stderr` and up to 64 kibibytes of each declared `stdout.log` or `stderr.log` output under `captured_stdout` and `captured_stderr`, so an agent can verify ordinary command output without a separate filesystem read. A captured field is null when the target did not declare that log.
 
 **Input schema**
 
 ```json
 {
   "properties": {
+    "arguments": {
+      "description": "Target-kind-specific arguments supplied to the generic run capability. Inspect the target-kind schema before setting this field.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "target": {
       "description": "Target id to run, such as `apps/service/Service` or `./Service`.",
       "type": "string"
@@ -1009,7 +1122,7 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
     "kind": "application",
     "capability": "run",
     "cache": "bypass",
-    "outputs": [".once/out/apps/service/Service/run.json"]
+    "outputs": []
   },
   "stderr": ""
 }

@@ -87,6 +87,73 @@ Use `allowed_values = ["first", "second"]` on a `string` or `target` attribute
 when the schema accepts a fixed set. Validation reports an attribute-scoped
 repair before analysis when a manifest supplies another value.
 
+## Native Project Discovery Contract
+
+`native_project(...)` lets a module recognize an ecosystem-native project and
+map it to one ordinary seed target. The seed target's resolver emits the
+detailed graph through the same typed resolver contract as
+manifest-authored targets.
+
+```python
+native = native_project(
+    name = "native",
+    target_kind = "native_workspace",
+    target_name = "native",
+    docs = "Recognizes a native project.",
+    markers = ["project.native"],
+    inputs = ["project.lock", "config/**/*"],
+    exclude = ["build"],
+    on_match = "stop",
+    max_depth = 16,
+    requires_tools = ["native-tool"],
+)
+```
+
+- `target_kind` names the target kind instantiated by the seed. Schema loading
+  rejects a native project that references an unknown target kind.
+- `markers` lists files that must all exist in one directory. The first entry
+  drives the bounded scan.
+- `inputs` adds optional text globs to the seed's resolver inputs. Markers are
+  always included.
+- `target_name` names the virtual or initialized target.
+- `exclude` lists directory names skipped during discovery.
+- `on_match = "stop"` keeps the shallowest matching root, which suits native
+  workspaces that own nested package manifests. `"descend"` also recognizes
+  nested projects.
+- `max_depth` bounds discovery.
+- `requires_tools` reports executables needed when the seed resolver runs.
+
+Detection reads file names only. It does not evaluate executable manifests or
+invoke native tools. Previewing or loading the graph runs the seed target's
+resolver through the normal trusted analysis boundary.
+
+Native project discovery provides ephemeral seeds in packages that have no explicit Once
+targets. Explicit targets take precedence only in their own package, so an
+unrelated root target does not hide native projects elsewhere in a monorepo.
+The configured workspace include and exclude patterns still define the
+boundary.
+
+Discover and preview native projects from the command line:
+
+```sh
+once query native-projects
+once query native-project native
+```
+
+Initialize only the stable seed when the repository should own the selection:
+
+```sh
+once edit init-native-project native
+```
+
+Initialization is idempotent and preserves unrelated `once.toml` configuration and
+comments. Resolver-emitted dependency and product targets remain derived from
+the native manifest and lockfile.
+
+[Model Context Protocol](https://modelcontextprotocol.io/) callers use the
+matching `once_list_native_projects`, `once_preview_native_project`, and
+`once_init_native_project` tools.
+
 ## Dependency Resolver Contract
 
 A target kind resolver imports an authoritative locked dependency graph. It is
@@ -388,7 +455,9 @@ An implementation receives `ctx` with generic graph data:
   runs but are not durable target outputs.
 - `ctx["capability"]`: active capability being analyzed.
 - `ctx["run"]`: run request options. `ctx["run"]["visible"]` is true when
-  the caller requested a visible runtime interface.
+  the caller requested a visible runtime interface. `ctx["run"]["args"]`
+  contains caller arguments for the run capability and is empty for other
+  capabilities. Their interpretation is target-kind-specific.
 - `ctx["test"]`: test request options. `ctx["test"]["filters"]` contains
   stable semantic unit identifiers selected for this test execution. Target
   kinds that declare case filtering translate these identifiers into native
@@ -438,7 +507,8 @@ separate update workflow.
   [Secure Hash Algorithm 256-bit](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
   digest as lowercase hexadecimal text.
 - `host_file_contains(path, needle)` checks host file text content.
-- `glob(patterns)` expands patterns under the active package and returns
+- `glob(patterns, exclude = [])` expands patterns under the active package,
+  omits matches selected by package-relative exclude patterns, and returns
   sorted workspace-relative file paths.
 - `declare_output(name)` reserves an output under the target build
   directory.
@@ -460,9 +530,9 @@ separate update workflow.
 - `write_path(path, content)` materializes generated text or byte-list
   files through normal actions.
 - `copy_path(source, destination, inputs = [])` copies one workspace
-  file.
+  path by value. A directory symlink is materialized at the destination.
 - `copy_path(source, destination, kind = "tree", inputs = [])` copies
-  one or more directory contents.
+  one or more directory contents while preserving their symlink layout.
 - `materialize_host_file(source, destination)` snapshots one absolute host
   toolchain file into a workspace output. Analysis records its
   [256-bit Secure Hash Algorithm digest](https://csrc.nist.gov/pubs/fips/180-4/upd1/final),
@@ -508,6 +578,10 @@ layout.
   evidence remain a limitation of this investigation.
 - `cacheable`: `True` by default. Set `False` for interactive or local
   side-effect actions.
+- `inherit_parent_env`: `False` by default. Set `True` only on an
+  uncacheable, unsandboxed local run action that should behave like a command
+  launched from the user's development shell. Explicit `env` values take
+  precedence.
 - `depends_on_prior_actions`: `True` by default. When true, each action key
   includes prior actions declared by the same target. Set `False` only for
   independent actions that do not read earlier same-target outputs.

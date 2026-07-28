@@ -74,10 +74,17 @@ and action tests.
 
 ## Elixir target kinds
 
+- [`mix_workspace`](/reference/prelude/mix_workspace): native project seed
+  that derives development, test, production, lint, test, and release targets
+  from `mix.exs`
 - [`mix_dependencies`](/reference/prelude/mix_dependencies): locked Mix and Hex
   dependency graph imported as independently scheduled packages
 - [`mix_package`](/reference/prelude/mix_package): one generated package with
-  locked identity and native Mix compilation
+  locked identity and native Mix or Rebar compilation
+- [`mix_project`](/reference/prelude/mix_project): first-party Mix project
+  compiled against separately cached application dependencies
+- [`mix_release`](/reference/prelude/mix_release): cacheable Mix release
+  assembled from a compiled first-party project
 - [`elixir_library`](/reference/prelude/elixir_library): Elixir
   code compiled into cacheable bytecode with a target-level compiler
   action
@@ -124,6 +131,8 @@ and action tests.
 
 ## Rust target kinds
 
+- [`cargo_workspace`](/reference/prelude/cargo_workspace): native project seed
+  that derives first-party and locked external targets from `Cargo.toml`
 - [`cargo_dependencies`](/reference/prelude/cargo_dependencies): cacheable
   Cargo dependency set consumed by Rust targets
 - [`rust_library`](/reference/prelude/rust_library): Rust library artifact consumed

@@ -14,6 +14,7 @@ mod manifest;
 mod manifest_editor;
 mod module_contract;
 mod modules;
+mod native_project;
 mod resolution;
 mod script;
 mod target;
@@ -54,6 +55,10 @@ pub use manifest_editor::{
     apply_operations, apply_operations_with_schemas, EditOperation, TargetSpec, TargetUpdate,
 };
 pub use module_contract::{module_authoring_contract, ContractEntry, ModuleAuthoringContract};
+pub use native_project::{
+    detect_native_projects, native_project_schemas_for_workspace, native_project_seed_target,
+    preview_native_project, NativeProjectMatch, NativeProjectPreview, NativeProjectSchema,
+};
 pub use script::{parse_script_annotations, script_has_once_directives, ScriptAnnotations};
 pub use target::{AttrValue, Target};
 pub use target_ref::{

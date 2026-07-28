@@ -517,25 +517,33 @@ async fn copy_file(
     destination: &WorkspacePath,
     workspace_root: &Path,
 ) -> Result<()> {
+    let absolute_source = source.resolve(workspace_root);
     let absolute_destination = destination.resolve(workspace_root);
-    if let Some(parent) = absolute_destination.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|source| Error::FileAction {
-                action: "create_parent_dir",
-                path: destination.as_str().to_string(),
-                source,
-            })?;
-    }
-    remove_path_if_exists(&absolute_destination, "copy_file", destination.as_str()).await?;
-    tokio::fs::copy(source.resolve(workspace_root), &absolute_destination)
-        .await
-        .map_err(|source| Error::FileAction {
-            action: "copy_file",
-            path: destination.as_str().to_string(),
-            source,
-        })?;
-    Ok(())
+    let destination_label = destination.as_str().to_string();
+    tokio::task::spawn_blocking(move || {
+        let metadata = std::fs::metadata(&absolute_source)?;
+        if let Some(parent) = absolute_destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        remove_path_blocking(&absolute_destination)?;
+        if metadata.is_dir() {
+            std::fs::create_dir_all(&absolute_destination)?;
+            copy_directory_contents_blocking(&absolute_source, &absolute_destination)
+        } else {
+            std::fs::copy(&absolute_source, &absolute_destination).map(|_| ())
+        }
+    })
+    .await
+    .map_err(|source| Error::FileAction {
+        action: "copy_path",
+        path: destination.as_str().to_string(),
+        source: std::io::Error::other(source.to_string()),
+    })?
+    .map_err(|source| Error::FileAction {
+        action: "copy_path",
+        path: destination_label,
+        source,
+    })
 }
 
 async fn materialize_host_file(

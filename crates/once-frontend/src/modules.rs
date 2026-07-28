@@ -103,6 +103,12 @@ pub(crate) struct TargetKindExport<'v> {
     pub value: Value<'v>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NativeProjectExport<'v> {
+    pub name: &'v str,
+    pub value: Value<'v>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModuleFile {
     pub(crate) display_path: String,
@@ -282,6 +288,24 @@ pub(crate) fn exported_target_kind_values<'v>(module: &Module<'v>) -> Vec<Target
     target_kinds
 }
 
+pub(crate) fn exported_native_project_values<'v>(
+    module: &Module<'v>,
+) -> Vec<NativeProjectExport<'v>> {
+    let mut native_projects = module
+        .names()
+        .filter_map(|name| {
+            let name = name.as_str();
+            if name.starts_with('_') {
+                return None;
+            }
+            let value = module.get(name)?;
+            is_native_project_value(value).then_some(NativeProjectExport { name, value })
+        })
+        .collect::<Vec<_>>();
+    native_projects.sort_unstable_by(|a, b| a.name.cmp(b.name));
+    native_projects
+}
+
 pub(crate) fn target_kind(
     value: Value<'_>,
     export_name: &str,
@@ -304,6 +328,15 @@ fn is_target_kind_value(value: Value<'_>) -> bool {
         return false;
     };
     dict.get_str("_once_target_kind")
+        .and_then(Value::unpack_bool)
+        .unwrap_or(false)
+}
+
+fn is_native_project_value(value: Value<'_>) -> bool {
+    let Some(dict) = DictRef::from_value(value) else {
+        return false;
+    };
+    dict.get_str("_once_native_project")
         .and_then(Value::unpack_bool)
         .unwrap_or(false)
 }

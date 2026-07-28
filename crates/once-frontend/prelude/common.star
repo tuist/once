@@ -49,6 +49,21 @@ def source_reference(system, symbol, url, use_when, content_digest = None):
         "content_digest": content_digest,
     }
 
+def native_project(target_kind, markers, name = None, target_name = None, docs = "", inputs = [], exclude = [], on_match = "descend", max_depth = 16, requires_tools = []):
+    return {
+        "_once_native_project": True,
+        "target_kind": target_kind,
+        "name": name,
+        "target_name": target_name,
+        "docs": docs,
+        "markers": markers,
+        "inputs": inputs,
+        "exclude": exclude,
+        "on_match": on_match,
+        "max_depth": max_depth,
+        "requires_tools": requires_tools,
+    }
+
 def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, resolver = None, tools = [], source_references = []):
     return {
         "_once_target_kind": True,

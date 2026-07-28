@@ -19,7 +19,13 @@ def _impl(ctx):
         )
         return {"target": ctx["label"]["name"], "out": out}
 
-    if ctx["capability"] == "test":
+    if ctx["attr"].get("read_dependency_output"):
+        run_action(
+            argv = ["/bin/sh", "-c", "cat \"$1\" > \"$2\"", "sh", ctx["deps"][0]["out"], out],
+            outputs = [out],
+            identifier = ctx["label"]["name"] + "-dependency-output",
+        )
+    elif ctx["capability"] == "test":
         run_action(
             argv = ["/bin/sh", "-c", "printf test > \"$1\"", "sh", out],
             outputs = [out],
@@ -313,6 +319,69 @@ async fn independent_dependencies_run_in_parallel() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn cached_dependency_outputs_are_materialized_before_dependents_run() {
+    let workspace = tempfile::tempdir().unwrap();
+    let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+    let graph = vec![
+        target_with_capabilities("Root", &["ConsumerA", "ConsumerB"], &[], &["build"], []),
+        target_with_capabilities(
+            "ConsumerA",
+            &["Dependency"],
+            &[],
+            &["build"],
+            [("read_dependency_output".to_string(), AttrValue::Bool(true))],
+        ),
+        target_with_capabilities(
+            "ConsumerB",
+            &["Dependency"],
+            &[],
+            &["build"],
+            [("read_dependency_output".to_string(), AttrValue::Bool(true))],
+        ),
+        test_target("Dependency", &[], "printf dependency > \"$1\""),
+    ];
+    let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
+    let session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        analyzer,
+        SandboxMode::default(),
+    );
+
+    session
+        .build_with_analysis(&graph[3])
+        .await
+        .unwrap()
+        .unwrap();
+    std::fs::remove_file(
+        workspace
+            .path()
+            .join(".once/out/Dependency/Dependency-build.txt"),
+    )
+    .unwrap();
+
+    session
+        .build_with_analysis(&graph[0])
+        .await
+        .unwrap()
+        .unwrap();
+
+    for consumer in ["ConsumerA", "ConsumerB"] {
+        assert_eq!(
+            std::fs::read_to_string(
+                workspace
+                    .path()
+                    .join(format!(".once/out/{consumer}/{consumer}-build.txt"))
+            )
+            .unwrap(),
+            "dependency"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn uncacheable_declared_actions_bypass_action_cache() {
     let workspace = tempfile::tempdir().unwrap();
     let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
@@ -399,6 +468,110 @@ async fn build_direct_analysis_deps_returns_only_direct_deps_in_declared_order()
         .join(".once/out/Shared/Shared-build.txt")
         .is_file());
     assert!(!workspace.path().join(".once/out/Metadata").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn run_arguments_do_not_invalidate_dependency_build_actions() {
+    let workspace = tempfile::tempdir().unwrap();
+    let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+    let graph = vec![
+        target_with_capabilities("Root", &["Dep"], &[], &["run"], []),
+        test_target("Dep", &[], "printf dependency > \"$1\""),
+    ];
+    let first_analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
+    let first_session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        first_analyzer,
+        SandboxMode::default(),
+    );
+    let first = first_session
+        .build_with_analysis(&graph[1])
+        .await
+        .unwrap()
+        .unwrap();
+
+    let run_analyzer = AnalysisEngine::from_source_with_options(
+        GRAPH_TEST_PRELUDE,
+        AnalysisOptions {
+            run_arguments: vec!["serve".to_string()],
+            ..AnalysisOptions::default()
+        },
+    )
+    .unwrap();
+    let run_session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        run_analyzer,
+        SandboxMode::default(),
+    );
+    let dependencies = run_session
+        .build_direct_analysis_deps(&graph[0])
+        .await
+        .unwrap();
+
+    assert_eq!(dependencies[0].1.cache_tag, "hit");
+    assert_eq!(dependencies[0].1.action_digest, first.action_digest);
+}
+
+#[tokio::test]
+async fn capability_options_preserve_the_build_analysis_module_identity() {
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::write(
+        workspace.path().join("module.star"),
+        r#"
+def _impl(ctx):
+    return {"target": ctx["label"]["id"]}
+
+custom = target_kind(
+    kind = "custom",
+    capabilities = [
+        capability("build", []),
+        capability("run", []),
+    ],
+    impl = _impl,
+)
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.path().join("once.toml"),
+        r#"
+[modules]
+paths = ["module.star"]
+
+[[target]]
+name = "root"
+kind = "custom"
+"#,
+    )
+    .unwrap();
+    let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+    let build_session =
+        BuildSession::load_workspace(workspace.path(), &cache, SandboxMode::default())
+            .await
+            .unwrap();
+    let graph = once_frontend::load_graph_workspace(workspace.path()).unwrap();
+    let run_session = BuildSession::new_with_options(
+        workspace.path(),
+        &cache,
+        graph,
+        AnalysisOptions {
+            run_arguments: vec!["serve".to_string()],
+            ..AnalysisOptions::default()
+        },
+        SandboxMode::default(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        run_session.module_source_digest,
+        build_session.module_source_digest
+    );
 }
 
 #[tokio::test]

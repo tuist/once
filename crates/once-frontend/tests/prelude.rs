@@ -1599,6 +1599,10 @@ fn mix_dependency_target_kinds_are_discoverable() {
         "vendor_dir",
         "path_dependencies",
         "mix_env",
+        "dependency_mix_env",
+        "config",
+        "config_entry",
+        "config_target",
         "roots",
         "_mix_resolved",
         "_mix_locked_roots",
@@ -1621,9 +1625,44 @@ fn mix_dependency_target_kinds_are_discoverable() {
         "_mix_revision",
         "_mix_managers",
         "_mix_custom_compile",
+        "_mix_root_config_entry",
+        "_mix_root_config_env",
+        "_mix_root_config_target",
     ] {
         assert!(package.attrs.iter().any(|attr| attr.name == name));
     }
+
+    let project = built_in_target_kind_schema("mix_project").expect("mix_project schema");
+    assert!(target_kind_has_impl("mix_project").unwrap());
+    assert!(project
+        .providers
+        .iter()
+        .any(|provider| provider == "elixir_app"));
+    assert!(project
+        .providers
+        .iter()
+        .any(|provider| provider == "mix_project"));
+    assert!(project.attrs.iter().any(|attr| attr.name == "run_tasks"));
+    assert!(project
+        .attrs
+        .iter()
+        .any(|attr| attr.name == "run_cacheable"));
+    assert!(project
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "run"));
+
+    let release = built_in_target_kind_schema("mix_release").expect("mix_release schema");
+    assert!(target_kind_has_impl("mix_release").unwrap());
+    assert!(release
+        .providers
+        .iter()
+        .any(|provider| provider == "mix_release"));
+    assert!(release.attrs.iter().any(|attr| attr.name == "pre_tasks"));
+    assert!(release
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "build"));
 
     let source = format!(
         "{}\nresult = repr(mix_dependencies.get(\"resolver\") != None)\n",
@@ -1669,7 +1708,7 @@ fn prelude_mix_dependencies_expands_native_locked_graph() {
 }
 
 #[test]
-fn prelude_mix_dependencies_rejects_stale_snapshots_and_unmapped_paths() {
+fn prelude_mix_dependencies_rejects_stale_snapshots_and_derives_path_packages() {
     let prelude = all_prelude_source();
     let stale_graph =
         serde_json::json!({"manifest": "", "lockfile": "old\n", "mix_env": "prod"}).to_string();
@@ -1730,6 +1769,8 @@ result = repr(_mix_read_locked_graph(ctx))
         "dependencies": [{
             "app": "local_helper",
             "dependencies": [],
+            "destination": "local_helper",
+            "manager": "Mix.SCM.Path",
             "path_dependency": true,
             "top_level": true,
         }],
@@ -1749,8 +1790,36 @@ ctx = {{
 result = repr(_mix_dependencies_resolver(ctx))
 "#
     );
-    let path_error = eval_prelude_source_to_repr(path_source).unwrap_err();
-    assert!(path_error.contains("path_dependencies"), "{path_error}");
+    let path_output = eval_prelude_source_to_repr(path_source).unwrap();
+    assert!(
+        path_output.contains("\"_mix_local\": True"),
+        "{path_output}"
+    );
+    assert!(
+        path_output.contains("\"_mix_source_root\": \"local_helper\""),
+        "{path_output}"
+    );
+}
+
+#[test]
+fn mix_path_dependencies_accept_absolute_sources_inside_the_workspace() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::create_dir_all(workspace.path().join("server")).unwrap();
+    std::fs::create_dir_all(workspace.path().join("noora")).unwrap();
+    let source_root = workspace
+        .path()
+        .join("noora")
+        .to_string_lossy()
+        .into_owned();
+    let source = format!(
+        "{}\nresult = repr(_elixir_workspace_source_root(\"server\", {source_root:?}))\n",
+        all_prelude_source()
+    );
+    let store = store_for(workspace.path(), "server");
+
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"noora\"");
 }
 
 #[test]
@@ -1841,6 +1910,51 @@ result = repr(_mix_dependencies_resolver(ctx))
 }
 
 #[test]
+fn prelude_mix_dependencies_omit_packages_with_compile_disabled() {
+    let prelude = all_prelude_source();
+    let graph = serde_json::json!({
+        "manifest": "",
+        "lockfile": "fresh\n",
+        "mix_env": "prod",
+        "once_inputs": {"mix.exs": "", "mix.lock": "fresh\n"},
+        "lock": {
+            "assets": [
+                "git",
+                "https://example.com/assets.git",
+                "abc123",
+            ],
+        },
+        "dependencies": [{
+            "app": "assets",
+            "dependencies": [],
+            "path_dependency": false,
+            "skip_compile": true,
+            "top_level": true,
+        }],
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attrs": {{"graph_file": "graph.json"}},
+    "files": {{
+        "mix.exs": "",
+        "mix.lock": "fresh\n",
+        "graph.json": {graph:?},
+    }},
+}}
+result = repr(_mix_dependencies_resolver(ctx))
+"#
+    );
+
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(out.contains("\"targets\": []"), "{out}");
+    assert!(out.contains("\"roots\": []"), "{out}");
+}
+
+#[test]
 fn prelude_mix_dependencies_aggregates_locked_package_providers() {
     let prelude = all_prelude_source();
     let source = format!(
@@ -1879,17 +1993,12 @@ result = repr(_mix_dependencies_impl(ctx))
 }
 
 #[test]
-fn prelude_mix_package_rejects_unmodeled_build_managers() {
+fn prelude_mix_package_selects_supported_build_managers() {
     let prelude = all_prelude_source();
     for (attrs, expected) in [
-        (
-            r#"{"_mix_managers": ["rebar3"]}"#,
-            "Rebar and Make packages",
-        ),
-        (
-            r#"{"_mix_managers": ["mix"], "_mix_custom_compile": True}"#,
-            "custom Mix dependency compile commands",
-        ),
+        (r#"{"_mix_managers": ["mix"]}"#, "\"mix\""),
+        (r#"{"_mix_managers": ["rebar3"]}"#, "\"rebar3\""),
+        (r#"{"_mix_managers": ["make", "mix"]}"#, "\"mix\""),
     ] {
         let source = format!(
             r#"{prelude}
@@ -1900,9 +2009,23 @@ ctx = {{
 result = repr(_mix_supported_manager(ctx))
 "#
         );
-        let err = eval_prelude_source_to_repr(source).unwrap_err();
-        assert!(err.contains(expected), "{err}");
+        assert_eq!(eval_prelude_source_to_repr(source).unwrap(), expected);
     }
+
+    let custom = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "package", "id": "package"}},
+    "attr": {{"_mix_managers": ["mix"], "_mix_custom_compile": True}},
+}}
+result = repr(_mix_supported_manager(ctx))
+"#
+    );
+    let error = eval_prelude_source_to_repr(custom).unwrap_err();
+    assert!(
+        error.contains("custom Mix dependency compile commands"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1913,6 +2036,110 @@ fn prelude_mix_package_uses_native_mix_compiler_pipeline() {
     assert!(out.contains("Mix.Task.run(\"compile.all\""), "{out}");
     assert!(out.contains("--no-prune-code-paths"), "{out}");
     assert!(!out.contains("deps.get"), "{out}");
+}
+
+#[test]
+fn prelude_elixir_test_paths_only_select_executable_test_files() {
+    let source = format!(
+        r#"{}
+ctx = {{"label": {{"package": "server", "name": "tests", "id": "server/tests"}}}}
+result = repr(_elixir_test_paths(ctx, [
+    "server/test/test_helper.exs",
+    "server/test/example_test.exs",
+    "server/test/support/helper.ex",
+    "server/test/AGENTS.md",
+]))
+"#,
+        all_prelude_source()
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(out, "[\"test/test_helper.exs\", \"test/example_test.exs\"]");
+}
+
+#[test]
+fn prelude_elixir_empty_paths_stay_empty_across_package_boundaries() {
+    let source = format!(
+        r#"{}
+ctx = {{"label": {{"package": "apps/web", "name": "app", "id": "apps/web/app"}}}}
+result = repr(_elixir_from_package(ctx, ""))
+"#,
+        all_prelude_source()
+    );
+
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), "\"\"");
+}
+
+#[test]
+fn prelude_mix_project_accepts_a_runtime_task_without_manifest_coupling() {
+    let source = format!(
+        r#"{}
+ctx = {{
+    "label": {{"package": "server", "name": "application_dev", "id": "server/application_dev"}},
+    "attr": {{}},
+    "run": {{"args": ["phx.server", "--port", "4001"]}},
+}}
+result = repr(_mix_project_run_spec(ctx))
+"#,
+        all_prelude_source()
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(out.contains("\"task\": \"phx.server\""), "{out}");
+    assert!(out.contains("\"args\": [\"--port\", \"4001\"]"), "{out}");
+
+    let invalid_source = format!(
+        r#"{}
+ctx = {{
+    "label": {{"package": "server", "name": "application_dev", "id": "server/application_dev"}},
+    "attr": {{}},
+    "run": {{"args": ["--port", "4001"]}},
+}}
+result = repr(_mix_project_run_spec(ctx))
+"#,
+        all_prelude_source()
+    );
+    let error = eval_prelude_source_to_repr(invalid_source).unwrap_err();
+    assert!(
+        error.contains("expected a Mix task as the first argument"),
+        "{error}"
+    );
+}
+
+#[test]
+fn prelude_uncacheable_mix_runs_can_find_host_runtime_tools() {
+    let workspace = TempDir::new().unwrap();
+    let source = format!(
+        r#"{}
+toolchain = {{"path": "/once/toolchain"}}
+uncached = _elixir_run_action_env_with({{
+    "label": {{"id": "uncached"}},
+    "attr": {{"env": {{"EXPLICIT": "present"}}}},
+}}, toolchain, {{"HOME": "/once/scratch"}})
+cached = _elixir_run_action_env_with({{
+    "label": {{"id": "cached"}},
+    "attr": {{
+        "run_cacheable": True,
+        "env": {{"HOME": "/configured/home"}},
+    }},
+}}, toolchain, {{"HOME": "/once/scratch"}})
+result = repr([
+    uncached["PATH"] != "/once/toolchain",
+    uncached["HOME"] != "/once/scratch",
+    uncached["EXPLICIT"],
+    cached["PATH"],
+    cached["HOME"],
+])
+"#,
+        all_prelude_source()
+    );
+    let store = store_for(workspace.path(), "");
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        "[True, True, \"present\", \"/once/toolchain\", \"/configured/home\"]"
+    );
 }
 
 #[test]
@@ -2403,13 +2630,42 @@ ctx = {{
     "label": {{"package": "pkg", "name": "suite", "id": "pkg/suite"}},
     "attr": {{"elixir_opts": ["--no-halt"]}},
 }}
-result = repr(_elixir_test_info_for(ctx, "mix", "mix.exs", [], "results", "log", "native"))
+result = repr(_elixir_test_info_for(ctx, "mix", "mix.exs", [], [], "results", "log", "native"))
 "#
     );
 
     let err = eval_prelude_source_to_repr(source).unwrap_err();
 
     assert!(err.contains("applies to direct ExUnit mode only"), "{err}");
+}
+
+#[test]
+fn prelude_elixir_test_info_matches_the_executable_command() {
+    let source = format!(
+        r#"{}
+mix_ctx = {{
+    "label": {{"package": "server", "name": "tests", "id": "server/tests"}},
+    "attr": {{"no_start": True}},
+}}
+direct_ctx = {{
+    "label": {{"package": "server", "name": "tests", "id": "server/tests"}},
+    "attr": {{}},
+}}
+apps = [{{"ebin_dir": ".once/out/server/application/ebin"}}]
+result = repr([
+    _elixir_test_info_for(mix_ctx, "mix", "mix.exs", apps, ["server/test/example_test.exs"], "results", "log", "native")["command"]["argv"],
+    _elixir_test_info_for(direct_ctx, "elixir", "", apps, ["server/test/example_test.exs"], "results", "log", "native")["command"]["argv"],
+])
+"#,
+        all_prelude_source()
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(out.contains("\"--no-start\""), "{out}");
+    assert!(
+        out.contains("\"-pa\", \"../.once/out/server/application/ebin\""),
+        "{out}"
+    );
 }
 
 #[test]
@@ -6882,8 +7138,8 @@ def workspace_root():
     return "/workspace"
 
 commands = []
-def host_command(argv, env = None, merge_stderr = None):
-    commands.append(argv)
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    commands.append([argv, env, cwd])
     return "{{\"argv\": []}}"
 
 ctx = {{
@@ -6899,10 +7155,11 @@ result = repr(commands[0])
 
     assert!(
         out.contains(
-            "[\"cargo\", \"--config\", \"/workspace/examples/rust/.cargo/config.toml\", \"metadata\""
+            "[[\"cargo\", \"--config\", \"/workspace/examples/rust/.cargo/config.toml\", \"metadata\""
         ),
         "{out}"
     );
+    assert!(out.ends_with(", \"/workspace\"]"), "{out}");
 }
 
 #[test]

@@ -50,6 +50,20 @@ pub enum QueryCmd {
         query: Option<String>,
     },
 
+    /// List native project declarations and current marker matches.
+    NativeProjects,
+
+    /// Preview the typed graph derived from one native project.
+    NativeProject {
+        /// Name discovered with `once query native-projects`.
+        name: String,
+        /// Package directory relative to the workspace root.
+        ///
+        /// This may be omitted when the native project has exactly one match.
+        #[arg(long, value_name = "PATH")]
+        package: Option<String>,
+    },
+
     /// Return the project-module authoring contract and starter.
     ModuleContract,
 
@@ -183,6 +197,8 @@ impl QueryCmd {
             Self::Schema { .. } => vec!["schema"],
             Self::Example { .. } => vec!["example"],
             Self::TargetKinds { .. } => vec!["target-kinds"],
+            Self::NativeProjects => vec!["native-projects"],
+            Self::NativeProject { .. } => vec!["native-project"],
             Self::ModuleContract => vec!["module-contract"],
             Self::ExternalSource { .. } => vec!["external-source"],
             Self::Target { .. } => vec!["target"],

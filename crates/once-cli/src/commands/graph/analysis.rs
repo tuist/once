@@ -98,6 +98,7 @@ pub(super) struct AvailableInput {
     pub blob_digest: Digest,
     pub producer_action_digest: Digest,
     pub same_target: bool,
+    pub materialized: bool,
 }
 
 pub(super) struct AnalyzedCapability {
@@ -177,11 +178,19 @@ impl BuildSession {
         sandbox: SandboxMode,
     ) -> Result<Self> {
         let resolved_tools = resolve_graph_tools(workspace, &graph).await?;
-        let analyzer = AnalysisEngine::for_workspace_with_options(workspace, options)?
-            .with_tool_cache(
-                resolved_tools.paths.clone(),
-                resolved_tools.commands.clone(),
-            );
+        let target_kinds = graph
+            .iter()
+            .map(|target| target.kind.clone())
+            .collect::<BTreeSet<_>>();
+        let analyzer = AnalysisEngine::for_workspace_with_options_and_target_kinds(
+            workspace,
+            options,
+            &target_kinds,
+        )?
+        .with_tool_cache(
+            resolved_tools.paths.clone(),
+            resolved_tools.commands.clone(),
+        );
         let mut session = Self::new_with_analyzer(workspace, cache, graph, analyzer, sandbox);
         session.tool_paths = Arc::new(resolved_tools.paths);
         session.tool_cache_fingerprint = resolved_tools.fingerprint;
@@ -332,6 +341,7 @@ impl BuildSession {
                         blob_digest: *digest,
                         producer_action_digest: outcome.action_digest,
                         same_target: false,
+                        materialized: true,
                     },
                 )
             }));

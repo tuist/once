@@ -87,6 +87,12 @@ struct ModuleDiagnostic {
     repairs: Vec<&'static str>,
 }
 
+#[derive(Debug, Serialize)]
+struct NativeProjectCatalog {
+    native_projects: Vec<once_frontend::NativeProjectSchema>,
+    matches: Vec<once_frontend::NativeProjectMatch>,
+}
+
 pub async fn targets(workspace: &Path, output: Output, kind: Option<&str>) -> Result<()> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let records = target_records(graph, kind);
@@ -490,6 +496,95 @@ pub async fn target_kinds(workspace: &Path, output: Output, query: Option<&str>)
     let summaries: Vec<TargetKindSummary> =
         schemas.into_iter().map(TargetKindSummary::from).collect();
     write_body(output, || render_target_kinds_human(&summaries), &summaries).await
+}
+
+pub async fn native_projects(workspace: &Path, output: Output) -> Result<()> {
+    let catalog = native_project_catalog(workspace)?;
+    write_body(output, || render_native_projects_human(&catalog), &catalog).await
+}
+
+pub(crate) fn native_projects_value(workspace: &Path) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(native_project_catalog(workspace)?)?)
+}
+
+fn native_project_catalog(workspace: &Path) -> Result<NativeProjectCatalog> {
+    Ok(NativeProjectCatalog {
+        native_projects: once_frontend::native_project_schemas_for_workspace(workspace)?,
+        matches: once_frontend::detect_native_projects(workspace)?,
+    })
+}
+
+pub async fn native_project(
+    workspace: &Path,
+    output: Output,
+    name: &str,
+    package: Option<&str>,
+) -> Result<()> {
+    let preview = native_project_preview(workspace, name, package)?;
+    write_body(
+        output,
+        || render_native_project_preview_human(&preview),
+        &preview,
+    )
+    .await
+}
+
+pub(crate) fn native_project_preview_value(
+    workspace: &Path,
+    name: &str,
+    package: Option<&str>,
+) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(native_project_preview(
+        workspace, name, package,
+    )?)?)
+}
+
+pub(crate) fn native_project_package(
+    workspace: &Path,
+    name: &str,
+    package: Option<&str>,
+) -> Result<String> {
+    if let Some(package) = package {
+        let package = package.trim_matches('/');
+        return Ok(if package == "." {
+            String::new()
+        } else {
+            package.to_string()
+        });
+    }
+    let packages = once_frontend::detect_native_projects(workspace)?
+        .into_iter()
+        .filter(|matched| matched.native_project == name)
+        .map(|matched| matched.package)
+        .collect::<Vec<_>>();
+    match packages.as_slice() {
+        [package] => Ok(package.clone()),
+        [] => anyhow::bail!(
+            "native project `{name}` does not match this workspace; inspect `once query native-projects`"
+        ),
+        _ => anyhow::bail!(
+            "native project `{name}` has multiple matches; pass `--package` with one of: {}",
+            packages
+                .iter()
+                .map(|package| if package.is_empty() {
+                    ".".to_string()
+                } else {
+                    package.clone()
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn native_project_preview(
+    workspace: &Path,
+    name: &str,
+    package: Option<&str>,
+) -> Result<once_frontend::NativeProjectPreview> {
+    let package = native_project_package(workspace, name, package)?;
+    once_frontend::preview_native_project(workspace, name, &package)
+        .with_context(|| format!("previewing native project `{name}`"))
 }
 
 pub(crate) fn matching_target_kind_schemas(
@@ -1249,6 +1344,59 @@ fn render_target_kinds_human(target_kinds: &[TargetKindSummary]) -> String {
             writeln!(out, "    {} - {}", example.slug, example.use_when)
                 .expect("writing to string cannot fail");
         }
+    }
+    out
+}
+
+fn render_native_projects_human(catalog: &NativeProjectCatalog) -> String {
+    if catalog.native_projects.is_empty() {
+        return "native projects: none\n".to_string();
+    }
+    let mut out = String::from("native projects:\n");
+    for native_project in &catalog.native_projects {
+        let packages = catalog
+            .matches
+            .iter()
+            .filter(|matched| matched.native_project == native_project.name)
+            .map(|matched| {
+                if matched.package.is_empty() {
+                    ".".to_string()
+                } else {
+                    matched.package.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        let match_summary = if packages.is_empty() {
+            "no matches".to_string()
+        } else {
+            format!("matches {}", packages.join(", "))
+        };
+        writeln!(
+            out,
+            "  {}: {} [{}; {}]",
+            native_project.name,
+            native_project.docs,
+            native_project.markers.join(", "),
+            match_summary
+        )
+        .expect("writing to string cannot fail");
+    }
+    out
+}
+
+fn render_native_project_preview_human(preview: &once_frontend::NativeProjectPreview) -> String {
+    let package = if preview.matched.package.is_empty() {
+        "."
+    } else {
+        &preview.matched.package
+    };
+    let mut out = format!(
+        "native project: {} at {}\nseed: {} ({})\ntargets:\n",
+        preview.native_project.name, package, preview.matched.seed_target, preview.seed.kind
+    );
+    for target in &preview.targets {
+        writeln!(out, "  {} ({})", target.label.id, target.kind)
+            .expect("writing to string cannot fail");
     }
     out
 }

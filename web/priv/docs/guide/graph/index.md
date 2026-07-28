@@ -132,6 +132,48 @@ ecosystem-specific examples:
 The [Ecosystems guide](/guide/graph/ecosystems) compares these choices and
 helps you decide when a typed target is a better fit than a script.
 
+## Start From A Native Project
+
+Once can recognize supported native project descriptions before a package has
+an explicit target. A native project supplies an ephemeral seed target, then
+the seed's ordinary resolver derives the detailed typed graph from native
+metadata.
+
+Before previewing a project, follow its ecosystem guide to make the native
+lockfile and locked dependency sources available. Detection only reads marker
+names, but preview and normal graph loading may run the native resolver and
+require those sources.
+
+Inspect the available native projects and their current matches:
+
+```sh
+once query native-projects
+```
+
+Preview one match without changing the repository:
+
+```sh
+once query native-project mix
+once query native-project cargo
+```
+
+The preview includes the exact seed and every resolver-emitted target. Normal
+build, run, and test commands can use that ephemeral graph immediately.
+
+Initialize the seed when the native project selection should be reviewed and stored:
+
+```sh
+once edit init-native-project mix
+```
+
+Initialization writes only the seed target to `once.toml`. The native project
+description and lockfile remain authoritative for dependencies, products,
+tests, and releases. Repeating an identical initialization makes no change.
+
+An explicit Once target for the same target kind takes precedence in its
+package. Unrelated targets do not hide a native project in the same package or
+elsewhere in the workspace.
+
 Every built-in target kind also ships a complete starter with manifests and
 source files. Discover the available slugs, then materialize one directly:
 

@@ -92,7 +92,65 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
             load_toml_with_configuration(&display, &src, root, &pkg, &scan.configuration)?;
         all.extend(targets);
     }
+    let resolver_kinds = crate::graph::target_kind_schemas_for_workspace(root)?
+        .into_iter()
+        .filter(|schema| schema.has_resolver)
+        .map(|schema| schema.kind)
+        .collect::<BTreeSet<_>>();
+    for (matched, target) in crate::native_project::synthesized_workspace_seeds(root)? {
+        let manifest_path = if target.package.is_empty() {
+            TOML_BUILD_FILE_NAME.to_string()
+        } else {
+            format!("{}/{}", target.package, TOML_BUILD_FILE_NAME)
+        };
+        let marker_path = if matched.package.is_empty() {
+            matched.markers[0].clone()
+        } else {
+            format!("{}/{}", matched.package, matched.markers[0])
+        };
+        if !all
+            .iter()
+            .any(|explicit| explicit.package == target.package && explicit.kind == target.kind)
+            && !all.iter().any(|explicit| {
+                resolver_kinds.contains(&explicit.kind)
+                    && target_covers_path(explicit, &marker_path)
+            })
+            && scan.includes(&manifest_path)
+        {
+            all.push(target);
+        }
+    }
     Ok(all)
+}
+
+fn target_covers_path(target: &Target, path: &str) -> bool {
+    let relative = if target.package.is_empty() {
+        path
+    } else {
+        let prefix = format!("{}/", target.package);
+        let Some(relative) = path.strip_prefix(&prefix) else {
+            return false;
+        };
+        relative
+    };
+    let resolver_inputs = resolver_input_patterns(target);
+    target
+        .srcs
+        .iter()
+        .chain(resolver_inputs.iter())
+        .filter_map(|pattern| Pattern::new(pattern.trim_start_matches("./")).ok())
+        .any(|pattern| pattern.matches(relative))
+}
+
+fn resolver_input_patterns(target: &Target) -> Vec<String> {
+    let Some(crate::AttrValue::List(values)) = target.typed_attrs.get("resolver_inputs") else {
+        return Vec::new();
+    };
+    values
+        .iter()
+        .filter_map(crate::AttrValue::as_str)
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 #[derive(Debug, Default)]
@@ -309,5 +367,138 @@ kind = "custom_library"
             literal_include_roots(&["crates*/once.toml".to_string()]),
             None
         );
+    }
+
+    #[test]
+    fn native_project_supplies_a_seed_when_no_targets_are_declared() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("mix.exs"),
+            "defmodule Demo.MixProject do\n  use Mix.Project\nend\n",
+        );
+
+        let targets = load_workspace(tmp.path()).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id(), "mix");
+        assert_eq!(targets[0].kind, "mix_workspace");
+    }
+
+    #[test]
+    fn configuration_only_manifest_still_allows_native_project_discovery() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("once.toml"),
+            "[infrastructure.cache]\nprovider = \"local\"\n",
+        );
+        write(
+            &tmp.path().join("mix.exs"),
+            "defmodule Demo.MixProject do\n  use Mix.Project\nend\n",
+        );
+
+        let targets = load_workspace(tmp.path()).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id(), "mix");
+    }
+
+    #[test]
+    fn unrelated_explicit_targets_do_not_hide_native_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("once.toml"),
+            "[[target]]\nname = \"explicit\"\nkind = \"custom_library\"\n",
+        );
+        write(
+            &tmp.path().join("mix.exs"),
+            "defmodule Demo.MixProject do\n  use Mix.Project\nend\n",
+        );
+
+        let targets = load_workspace(tmp.path()).unwrap();
+
+        let ids = targets
+            .into_iter()
+            .map(|target| target.id())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["explicit", "mix"]);
+    }
+
+    #[test]
+    fn explicit_target_in_one_package_does_not_hide_other_native_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("once.toml"),
+            r#"[workspace]
+include = ["once.toml", "apps/*/once.toml"]
+
+[[target]]
+name = "docs"
+kind = "custom_library"
+"#,
+        );
+        for package in ["api", "web"] {
+            write(
+                &tmp.path().join(format!("apps/{package}/mix.exs")),
+                "defmodule Demo.MixProject do\n  use Mix.Project\nend\n",
+            );
+        }
+
+        let targets = load_workspace(tmp.path()).unwrap();
+        let ids = targets
+            .into_iter()
+            .map(|target| target.id())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["docs", "apps/api/mix", "apps/web/mix"]);
+    }
+
+    #[test]
+    fn non_resolver_target_does_not_claim_nested_native_project_markers() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("once.toml"),
+            r#"[[target]]
+name = "sources"
+kind = "custom_library"
+srcs = ["apps/**/mix.exs"]
+"#,
+        );
+        write(
+            &tmp.path().join("apps/api/mix.exs"),
+            "defmodule Demo.MixProject do\n  use Mix.Project\nend\n",
+        );
+
+        let targets = load_workspace(tmp.path()).unwrap();
+        let ids = targets
+            .into_iter()
+            .map(|target| target.id())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["sources", "apps/api/mix"]);
+    }
+
+    #[test]
+    fn resolver_target_claims_nested_native_project_markers_it_covers() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("once.toml"),
+            r#"[[target]]
+name = "workspace"
+kind = "mix_workspace"
+srcs = ["apps/**/mix.exs"]
+"#,
+        );
+        write(
+            &tmp.path().join("apps/api/mix.exs"),
+            "defmodule Demo.MixProject do\n  use Mix.Project\nend\n",
+        );
+
+        let targets = load_workspace(tmp.path()).unwrap();
+        let ids = targets
+            .into_iter()
+            .map(|target| target.id())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["workspace"]);
     }
 }

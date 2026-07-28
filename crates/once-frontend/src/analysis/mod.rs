@@ -28,7 +28,6 @@ pub use store::{
     with_active_store, AnalysisStore, CachedToolCommand, DeclaredAction, DeclaredActionOperation,
     DeclaredArgFile, DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
 };
-
 /// If `value` is the canonical select-shape Map (`{ "select": { ... }
 /// }`), return the inner branch map. Otherwise return `None`. The
 /// resolution mechanism itself lives in the Starlark prelude so that

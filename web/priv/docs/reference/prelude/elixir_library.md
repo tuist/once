@@ -109,6 +109,7 @@ The target emits `elixir_app`.
 | `mix_env` | string | Mix environment exported during compilation and tests |
 | `ebin_dir` | string | Directory containing compiled application bytecode and the generated application file |
 | `priv_dir` | string | Directory containing copied priv files |
+| `include_dir` | string | Directory containing copied Erlang header files |
 | `compile_metadata` | string | File containing dynamic compile metadata used for cache invalidation |
 | `compile_warnings` | string | File containing persisted compiler warning diagnostics |
 | `transitive_elixir_apps` | list&lt;record&gt; | This application plus dependency applications available to downstream Elixir targets |
