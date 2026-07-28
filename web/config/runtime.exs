@@ -20,8 +20,15 @@ if System.get_env("PHX_SERVER") do
   config :once_site, OnceSiteWeb.Endpoint, server: true
 end
 
-config :once_site, OnceSiteWeb.Endpoint,
-  http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+port =
+  System.get_env("PORT") ||
+    if config_env() == :prod do
+      "4000"
+    end
+
+if port do
+  config :once_site, OnceSiteWeb.Endpoint, http: [port: String.to_integer(port)]
+end
 
 if config_env() == :prod do
   database_url =
