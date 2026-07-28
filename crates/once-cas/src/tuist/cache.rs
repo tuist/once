@@ -1197,7 +1197,12 @@ fn remote_action_read_error(error: Error) -> RemoteReadError {
             message,
             operation,
             provider,
-        } if provider == PROVIDER_NAME && operation == "get action result" => {
+        } if provider == PROVIDER_NAME
+            && matches!(
+                operation,
+                "connect endpoint" | "get action result" | "pick fastest endpoint"
+            ) =>
+        {
             RemoteReadError::miss(message)
         }
         other => RemoteReadError::fatal(other),
@@ -1703,13 +1708,28 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_remote_action_errors_stay_fatal() {
-        let error = Error::Remote {
-            provider: PROVIDER_NAME,
-            operation: "put blob",
-            message: "write failed".to_string(),
-        };
+    fn remote_endpoint_connectivity_errors_are_read_misses() {
+        for operation in ["connect endpoint", "pick fastest endpoint"] {
+            let error = Error::Remote {
+                provider: PROVIDER_NAME,
+                operation,
+                message: "cache endpoint unavailable".to_string(),
+            };
 
-        assert!(!remote_action_read_error(error).is_read_miss());
+            assert!(remote_action_read_error(error).is_read_miss());
+        }
+    }
+
+    #[test]
+    fn unrelated_remote_action_errors_stay_fatal() {
+        for operation in ["discover endpoints", "put blob"] {
+            let error = Error::Remote {
+                provider: PROVIDER_NAME,
+                operation,
+                message: "remote operation failed".to_string(),
+            };
+
+            assert!(!remote_action_read_error(error).is_read_miss());
+        }
     }
 }
