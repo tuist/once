@@ -90,6 +90,12 @@ defmodule OnceSiteWeb.Docs.Sidebar do
         ]
       },
       %Group{
+        label: "Local Execution",
+        items: [
+          %Item{label: "Memory Limits", slug: "/docs/guide/local-execution/memory-limits"}
+        ]
+      },
+      %Group{
         label: "Infrastructure",
         items: [
           %Item{label: "Overview", slug: "/docs/guide/infrastructure"},
