@@ -31,6 +31,17 @@ pub enum EditCmd {
         #[arg(long, default_value = "", value_name = "DIR")]
         destination: String,
     },
+
+    /// Initialize Once from a detected native project.
+    InitNativeProject {
+        /// Name discovered with `once query native-projects`.
+        name: String,
+        /// Package directory relative to the workspace root.
+        ///
+        /// This may be omitted when the native project has exactly one match.
+        #[arg(long, value_name = "PATH")]
+        package: Option<String>,
+    },
 }
 
 impl EditCmd {
@@ -38,6 +49,7 @@ impl EditCmd {
         match self {
             Self::Apply { .. } => vec!["apply"],
             Self::MaterializeExample { .. } => vec!["materialize-example"],
+            Self::InitNativeProject { .. } => vec!["init-native-project"],
         }
     }
 }

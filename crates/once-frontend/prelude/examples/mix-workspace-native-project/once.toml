@@ -1,0 +1,7 @@
+[[target]]
+name = "mix"
+kind = "mix_workspace"
+srcs = ["mix.exs"]
+
+[target.attrs]
+resolver_inputs = ["mix.exs", "mix.lock", ".formatter.exs", "config/**/*.exs"]

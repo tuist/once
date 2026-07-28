@@ -194,6 +194,10 @@ pub enum Cmd {
         /// Target id, e.g. `examples/hello/hello` or `./hello`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
+
+        /// Target-kind-specific arguments supplied to the generic run capability.
+        #[arg(last = true, value_name = "ARG")]
+        arguments: Vec<String>,
     },
 
     /// Test a declared target.
@@ -632,5 +636,28 @@ mod tests {
         assert!(parse_byte_size("0").is_err());
         assert!(parse_byte_size("1XB").is_err());
         assert!(parse_byte_size("18446744073709551615TiB").is_err());
+    }
+
+    #[test]
+    fn run_accepts_target_arguments_after_separator() {
+        let cli = Cli::try_parse_from([
+            "once",
+            "run",
+            "server/application_dev",
+            "--",
+            "phx.server",
+            "--port",
+            "4001",
+        ])
+        .unwrap();
+
+        let Some(Cmd::Run {
+            target, arguments, ..
+        }) = cli.command
+        else {
+            panic!("expected run command");
+        };
+        assert_eq!(target.as_deref(), Some("server/application_dev"));
+        assert_eq!(arguments, ["phx.server", "--port", "4001"]);
     }
 }

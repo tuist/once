@@ -1,0 +1,17 @@
+[[target]]
+name = "greeting"
+kind = "mix_project"
+srcs = ["lib/**/*.ex"]
+
+[target.attrs]
+app_name = "greeting"
+manifest = "mix.exs"
+
+[[target]]
+name = "release"
+kind = "mix_release"
+srcs = ["mix.exs"]
+deps = ["./greeting"]
+
+[target.attrs]
+manifest = "mix.exs"

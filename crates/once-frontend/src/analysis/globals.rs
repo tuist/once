@@ -254,6 +254,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// relative file paths. Schema parsing returns an empty list.
     fn glob<'v>(
         patterns: Value<'v>,
+        exclude: Option<Value<'v>>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         let heap = eval.heap();
@@ -261,9 +262,13 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             return Ok(heap.alloc(Vec::<String>::new()));
         }
         let patterns = unpack_string_list(patterns, "patterns")?;
+        let excludes = exclude
+            .map(|value| unpack_string_list(value, "exclude"))
+            .transpose()?
+            .unwrap_or_default();
         let resolved = with_store(|store| -> Result<Vec<String>> {
             let store = store.ok_or_else(|| anyhow!("glob called outside analysis"))?;
-            expand_globs(&store.workspace_root, &store.package, &patterns)
+            expand_globs_with_excludes(&store.workspace_root, &store.package, &patterns, &excludes)
         })?;
         Ok(heap.alloc(resolved))
     }
@@ -344,6 +349,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(format!("write_path:{path}")),
@@ -356,9 +362,10 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
-    /// Declare a portable copy action. `kind` is `"file"` by default
-    /// or `"tree"` to copy directory contents. Tree copies accept one
-    /// source string or a list of source directories.
+    /// Declare a portable copy action. The default copies one path by value,
+    /// materializing a directory symlink at the destination. `kind = "tree"`
+    /// copies directory contents and preserves their symlink layout. Tree
+    /// copies accept one source string or a list of source directories.
     fn copy_path<'v>(
         source: Value<'v>,
         destination: &str,
@@ -396,6 +403,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: cacheable.unwrap_or(true),
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity,
             identifier: Some(identifier.unwrap_or_else(|| format!("copy_path:{destination}"))),
@@ -447,6 +455,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(format!("materialize_host_file:{destination}")),
@@ -491,6 +500,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: false,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(
@@ -538,6 +548,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: false,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("prepare_path:{kind}:{path}"))),
@@ -591,6 +602,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: cacheable.unwrap_or(true),
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("write_tree_digest:{output}"))),
@@ -652,6 +664,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: cacheable.unwrap_or(true),
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("write_archive:{output}"))),
@@ -709,8 +722,9 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// list of workspace directories to create before a fresh command
     /// execution; `cwd`: optional workspace-relative directory to run
     /// the command in, defaulting to the workspace root; `env`: optional
-    /// string->string dict; `cacheable`:
-    /// optional bool, default true;
+    /// string->string dict; `cacheable`: optional bool, default true;
+    /// `inherit_parent_env`: optional bool for uncached local run actions,
+    /// default false;
     /// `sandbox`: optional local filesystem sandbox policy, `"off"`,
     /// `"inputs"`, or `"copied-inputs"`; the copied mode materializes
     /// private input copies for tools that cannot consume links;
@@ -733,6 +747,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         toolchain_identity: Option<String>,
         identifier: Option<String>,
         cacheable: Option<bool>,
+        inherit_parent_env: Option<bool>,
         depends_on_prior_actions: Option<bool>,
         stdout: Option<String>,
         stderr: Option<String>,
@@ -771,6 +786,18 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .map(|value| unpack_string_dict(value, "env"))
             .transpose()?
             .unwrap_or_default();
+        let cacheable = cacheable.unwrap_or(true);
+        let inherit_parent_env = inherit_parent_env.unwrap_or(false);
+        if cacheable && inherit_parent_env {
+            return Err(anyhow!(
+                "run_action inherit_parent_env requires cacheable = False"
+            ));
+        }
+        if inherit_parent_env && sandbox.as_deref().is_some_and(|mode| mode != "off") {
+            return Err(anyhow!(
+                "run_action inherit_parent_env requires sandbox = \"off\""
+            ));
+        }
         let mut success_exit_codes = success_exit_codes
             .map(|value| unpack_i32_list(value, "success_exit_codes"))
             .transpose()?
@@ -794,7 +821,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             env,
             sandbox,
             success_exit_codes,
-            cacheable: cacheable.unwrap_or(true),
+            cacheable,
+            inherit_parent_env,
             depends_on_prior_actions: depends_on_prior_actions.unwrap_or(true),
             toolchain_identity,
             identifier,
@@ -1237,67 +1265,240 @@ fn host_os_str() -> &'static str {
 /// Expand `patterns` against `package` and return workspace-relative
 /// file paths.
 ///
-/// Each match is canonicalized and required to land inside the
-/// canonical workspace root, which rejects symlinks that point
-/// outside the tree. The check is best-effort against the on-disk
-/// state at evaluation time: a write-capable attacker on the
-/// workspace could in principle swap a symlink between
-/// `glob::glob` and `canonicalize`. Once treats the workspace as
-/// trusted (a developer's own checkout), so this TOCTOU window is
-/// out of scope for the threat model; the check exists to surface
-/// honest mistakes (a stray `..` symlink), not adversarial races.
-/// Windows junctions are not exercised by tests yet; the
-/// `canonicalize` call covers them in production but a dedicated
-/// Windows test should land alongside Windows CI.
+/// Each match is canonicalized for containment validation but returned by its
+/// logical workspace path. This keeps an internal symlink visible to actions
+/// that need to materialize its value while rejecting links that point outside
+/// the tree. The check is best-effort against the on-disk state at evaluation
+/// time: a write-capable attacker on the workspace could in principle swap a
+/// symlink between the directory walk and `canonicalize`. Once treats the workspace
+/// as trusted, so this TOCTOU window is out of scope for the threat model.
+/// Windows junctions are not exercised by tests yet; the `canonicalize` call
+/// covers them in production but a dedicated Windows test should land
+/// alongside Windows CI.
+#[cfg(test)]
 pub(super) fn expand_globs(
     workspace_root: &Path,
     package: &str,
     patterns: &[String],
+) -> Result<Vec<String>> {
+    expand_globs_with_excludes(workspace_root, package, patterns, &[])
+}
+
+fn expand_globs_with_excludes(
+    workspace_root: &Path,
+    package: &str,
+    patterns: &[String],
+    excludes: &[String],
 ) -> Result<Vec<String>> {
     let package_dir = if package.is_empty() {
         workspace_root.to_path_buf()
     } else {
         workspace_root.join(package)
     };
+    let excludes = excludes
+        .iter()
+        .map(|pattern| {
+            glob::Pattern::new(pattern)
+                .with_context(|| format!("invalid exclude glob pattern `{pattern}`"))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let canonical_workspace = std::fs::canonicalize(workspace_root)
         .with_context(|| format!("canonicalizing workspace `{}`", workspace_root.display()))?;
-    let mut out: Vec<String> = Vec::new();
-    for pattern in patterns {
-        let abs_pattern = package_dir.join(pattern);
-        let pattern_str = abs_pattern
-            .to_str()
-            .ok_or_else(|| anyhow!("non-utf8 glob pattern `{pattern}`"))?;
-        for entry in
-            glob::glob(pattern_str).with_context(|| format!("invalid glob pattern `{pattern}`"))?
-        {
-            let path = entry.with_context(|| format!("glob walk failed for `{pattern}`"))?;
-            if !path.is_file() {
-                continue;
+    let patterns = patterns
+        .iter()
+        .map(|pattern| {
+            let normalized = pattern.strip_prefix("./").unwrap_or(pattern);
+            glob::Pattern::new(normalized)
+                .with_context(|| format!("invalid glob pattern `{pattern}`"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let walk_workspace = patterns.iter().any(|pattern| {
+        Path::new(pattern.as_str())
+            .components()
+            .any(|component| component == Component::ParentDir)
+    });
+    let walk_root = if walk_workspace {
+        workspace_root
+    } else {
+        package_dir.as_path()
+    };
+    if !walk_root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut out = collect_glob_matches(
+        workspace_root,
+        package,
+        walk_root,
+        &patterns,
+        &excludes,
+        &canonical_workspace,
+    )?;
+    out.sort();
+    out.dedup();
+    let symlink_roots = out
+        .iter()
+        .filter(|path| {
+            std::fs::symlink_metadata(workspace_root.join(path))
+                .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    out.retain(|candidate| {
+        !symlink_roots.iter().any(|root| {
+            candidate
+                .strip_prefix(root)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+        })
+    });
+    Ok(out)
+}
+
+fn collect_glob_matches(
+    workspace_root: &Path,
+    package: &str,
+    walk_root: &Path,
+    patterns: &[glob::Pattern],
+    excludes: &[glob::Pattern],
+    canonical_workspace: &Path,
+) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let walker = WalkDir::new(walk_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            if entry.depth() == 0 {
+                return true;
             }
-            let canonical = std::fs::canonicalize(&path)
-                .with_context(|| format!("canonicalizing `{}`", path.display()))?;
-            let stripped = canonical
-                .strip_prefix(&canonical_workspace)
-                .with_context(|| {
-                    format!(
-                        "glob result `{}` is outside the workspace `{}`",
-                        canonical.display(),
-                        canonical_workspace.display()
-                    )
-                })?;
-            let ws_rel = stripped
+            let Ok(logical) = entry.path().strip_prefix(workspace_root) else {
+                return true;
+            };
+            if logical
                 .components()
-                .map(|component| component.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
-            if !ws_rel.is_empty() {
-                out.push(ws_rel);
+                .any(|component| component.as_os_str() == ".once")
+            {
+                return false;
+            }
+            if !entry.file_type().is_dir() {
+                return true;
+            }
+            let Ok(ws_rel) = normalize_logical_workspace_path(logical) else {
+                return true;
+            };
+            let package_relative = workspace_path_relative_to_package(package, &ws_rel);
+            !excludes.iter().any(|pattern| {
+                pattern.matches(&format!("{package_relative}/__once_glob_descendant__"))
+            })
+        });
+    for entry in walker {
+        let entry = entry.with_context(|| {
+            format!(
+                "walking glob root `{}` without following directory symlinks",
+                walk_root.display()
+            )
+        })?;
+        if entry.depth() == 0 {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(path)
+            .with_context(|| format!("reading metadata for `{}`", path.display()))?;
+        if !metadata.is_file() && !metadata.file_type().is_symlink() {
+            continue;
+        }
+        let logical = path.strip_prefix(workspace_root).with_context(|| {
+            format!(
+                "glob result `{}` is outside workspace `{}`",
+                path.display(),
+                workspace_root.display()
+            )
+        })?;
+        let ws_rel = normalize_logical_workspace_path(logical)?;
+        let package_relative = workspace_path_relative_to_package(package, &ws_rel);
+        let symlink_tree = metadata.file_type().is_symlink() && path.is_dir();
+        let matches = patterns.iter().any(|pattern| {
+            pattern.matches(&package_relative)
+                || symlink_tree
+                    && pattern.matches(&format!("{package_relative}/__once_glob_descendant__"))
+        });
+        if !matches {
+            continue;
+        }
+        let is_excluded = excludes
+            .iter()
+            .any(|pattern| pattern.matches(&package_relative));
+        let excluded_symlink_tree = symlink_tree
+            && excludes.iter().any(|pattern| {
+                pattern.matches(&format!("{package_relative}/__once_glob_descendant__"))
+            });
+        if is_excluded || excluded_symlink_tree {
+            continue;
+        }
+        let canonical = std::fs::canonicalize(path)
+            .with_context(|| format!("canonicalizing `{}`", path.display()))?;
+        canonical
+            .strip_prefix(canonical_workspace)
+            .with_context(|| {
+                format!(
+                    "glob result `{}` is outside the workspace `{}`",
+                    canonical.display(),
+                    canonical_workspace.display()
+                )
+            })?;
+        if !ws_rel.is_empty() {
+            out.push(ws_rel);
+        }
+    }
+    Ok(out)
+}
+
+fn workspace_path_relative_to_package(package: &str, workspace_path: &str) -> String {
+    let package_parts = package
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let path_parts = workspace_path
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let common = package_parts
+        .iter()
+        .zip(path_parts.iter())
+        .take_while(|(left, right)| left == right)
+        .count();
+    std::iter::repeat_n("..", package_parts.len() - common)
+        .chain(path_parts[common..].iter().copied())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn normalize_logical_workspace_path(path: &Path) -> Result<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(value) => parts.push(
+                value
+                    .to_str()
+                    .ok_or_else(|| anyhow!("glob result contains non-UTF-8 text"))?,
+            ),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if parts.pop().is_none() {
+                    return Err(anyhow!(
+                        "glob result `{}` escapes the workspace",
+                        path.display()
+                    ));
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(anyhow!(
+                    "glob result `{}` is not workspace-relative",
+                    path.display()
+                ));
             }
         }
     }
-    out.sort();
-    out.dedup();
-    Ok(out)
+    Ok(parts.join("/"))
 }
 
 pub(super) fn walk_package_files(

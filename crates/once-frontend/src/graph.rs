@@ -337,7 +337,7 @@ fn load_graph_workspace_with_schemas(
     load_graph_workspace_with_targets_and_schemas(root, load_workspace(root)?, schemas)
 }
 
-fn load_graph_workspace_with_targets_and_schemas(
+pub(crate) fn load_graph_workspace_with_targets_and_schemas(
     root: &Path,
     targets: Vec<Target>,
     schemas: &[TargetKindSchema],

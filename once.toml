@@ -2,6 +2,7 @@
 include = [
   "once.toml",
   "crates/*/once.toml",
+  "web/once.toml",
 ]
 exclude = [
   "crates/once-frontend/prelude/examples/**",

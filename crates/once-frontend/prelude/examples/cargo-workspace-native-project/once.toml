@@ -1,0 +1,7 @@
+[[target]]
+name = "cargo"
+kind = "cargo_workspace"
+srcs = ["Cargo.toml", "Cargo.lock"]
+
+[target.attrs]
+resolver_inputs = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", ".cargo/config", ".cargo/config.toml"]

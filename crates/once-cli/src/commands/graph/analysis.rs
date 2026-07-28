@@ -98,6 +98,7 @@ pub(super) struct AvailableInput {
     pub blob_digest: Digest,
     pub producer_action_digest: Digest,
     pub same_target: bool,
+    pub materialized: bool,
 }
 
 pub(super) struct AnalyzedCapability {
@@ -178,11 +179,19 @@ impl BuildSession {
         sandbox: SandboxMode,
     ) -> Result<Self> {
         let resolved_tools = resolve_graph_tools(workspace, &graph).await?;
-        let analyzer = AnalysisEngine::for_workspace_with_options(workspace, options)?
-            .with_tool_cache(
-                resolved_tools.paths.clone(),
-                resolved_tools.commands.clone(),
-            );
+        let target_kinds = graph
+            .iter()
+            .map(|target| target.kind.clone())
+            .collect::<BTreeSet<_>>();
+        let analyzer = AnalysisEngine::for_workspace_with_options_and_target_kinds(
+            workspace,
+            options,
+            &target_kinds,
+        )?
+        .with_tool_cache(
+            resolved_tools.paths.clone(),
+            resolved_tools.commands.clone(),
+        );
         let mut session = Self::new_with_analyzer(workspace, cache, graph, analyzer, sandbox);
         session.tool_paths = Arc::new(resolved_tools.paths);
         session.tool_cache_fingerprint = resolved_tools.fingerprint;
@@ -224,10 +233,13 @@ impl BuildSession {
     }
 
     pub(super) fn target(&self, target_id: &str) -> Result<&GraphTarget> {
-        self.targets
+        let target = self
+            .targets
             .get(target_id)
             .map(Arc::as_ref)
-            .with_context(|| format!("no target matches `{target_id}`"))
+            .with_context(|| format!("no target matches `{target_id}`"))?;
+        ensure_graph_target_valid(target)?;
+        Ok(target)
     }
 
     /// Build a target and the impl-backed portion of its dependency
@@ -350,6 +362,7 @@ impl BuildSession {
                         blob_digest: *digest,
                         producer_action_digest: outcome.action_digest,
                         same_target: false,
+                        materialized: true,
                     },
                 )
             }));
@@ -863,6 +876,7 @@ async fn build_one(
     sandbox: SandboxMode,
     resources: Arc<ResourcePool>,
 ) -> Result<(String, BuildOutcome)> {
+    ensure_graph_target_valid(&target)?;
     let target_id = target.label.id.clone();
     tracing::trace!(
         target = %target_id,
@@ -910,6 +924,17 @@ async fn build_one(
     )
     .await?;
     Ok((target_id, outcome))
+}
+
+fn ensure_graph_target_valid(target: &GraphTarget) -> Result<()> {
+    let Some(diagnostic) = target.diagnostics.first() else {
+        return Ok(());
+    };
+    Err(anyhow::Error::new(
+        once_frontend::analysis::AnalysisFailure {
+            diagnostic: diagnostic.clone(),
+        },
+    ))
 }
 
 #[cfg(test)]

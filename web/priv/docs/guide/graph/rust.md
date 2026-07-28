@@ -23,6 +23,45 @@ Host binaries and tests also need the platform linker selected by the Rust
 compiler. Cross-compiled and mobile outputs require the linker and target
 support for their destination platform.
 
+## Use `Cargo.toml` Directly
+
+A locked Cargo project can derive its first-party and external Once targets
+without a hand-written `once.toml`:
+
+```sh
+cargo generate-lockfile
+once query native-projects
+once query native-project cargo
+once query targets
+```
+
+The `cargo_workspace` seed runs locked, offline Cargo metadata. It emits
+first-party libraries, binaries, procedural macros, unit and integration test
+targets, build-script edges, and locked external packages.
+
+Build or test a generated target by the identifier returned from
+`once query targets`. For example:
+
+```sh
+once build cargo_hello_bin_hello
+once test cargo_hello_bin_hello_unit_tests
+```
+
+Cargo workspaces use their shallowest matching `Cargo.toml`, so member
+manifests do not create duplicate native project seeds. Cargo remains authoritative
+for workspace membership, features, target metadata, and resolved versions.
+
+Projects with external packages must materialize their locked sources into the
+native project's `vendor` directory and configure Cargo source replacement before
+building. Graph loading never acquires sources or changes `Cargo.lock`.
+
+Initialize the stable seed when the repository should record the native
+project selection:
+
+```sh
+once edit init-native-project cargo
+```
+
 ## Declare a Library, Binary, and Test
 
 Create `apps/hello/once.toml`:

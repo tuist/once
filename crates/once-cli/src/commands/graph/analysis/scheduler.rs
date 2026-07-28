@@ -10,7 +10,7 @@ use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 
-use super::{build_one, AvailableInput, BuildOutcome};
+use super::{build_one, materialize_cached_outputs, AvailableInput, BuildOutcome};
 
 pub(super) struct BuildScheduler<'a> {
     root_id: &'a str,
@@ -83,6 +83,9 @@ impl<'a> BuildScheduler<'a> {
                 .await
                 .context("build task set ended unexpectedly")?;
             let (target_id, outcome) = joined.context("joining graph build task")??;
+            materialize_cached_outputs(&outcome, self.workspace, self.cache)
+                .await
+                .with_context(|| format!("materializing outputs for {target_id}"))?;
             tracing::trace!(
                 target = %target_id,
                 cache = outcome.cache_tag,
@@ -248,6 +251,7 @@ impl BuildState {
                         blob_digest,
                         producer_action_digest: action_digest,
                         same_target: false,
+                        materialized: true,
                     },
                 )
             }));
@@ -265,6 +269,7 @@ impl BuildState {
                             blob_digest,
                             producer_action_digest: action_digest,
                             same_target: false,
+                            materialized: true,
                         },
                     )
                 }));

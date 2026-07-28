@@ -337,6 +337,11 @@ impl Server {
             "once_query_test_attempts" => self.tool_query_test_attempts(&call.arguments),
             "once_query_evidence" => self.tool_query_evidence(&call.arguments),
             "once_query_module_contract" => crate::commands::query::module_contract_value(),
+            "once_list_native_projects" => {
+                crate::commands::query::native_projects_value(&self.workspace)
+            }
+            "once_preview_native_project" => self.tool_preview_native_project(&call.arguments),
+            "once_init_native_project" => self.tool_init_native_project(&call.arguments),
             "once_fetch_external_source" => Self::tool_fetch_external_source(&call.arguments),
             "once_validate_module" => self.tool_validate_module(&call.arguments),
             "once_validate_workspace" => {
@@ -436,6 +441,24 @@ impl Server {
             &args.kind,
             &args.slug,
             &args.destination,
+        )
+    }
+
+    fn tool_preview_native_project(&self, args: &Value) -> Result<Value> {
+        let args: NativeProjectArgs = serde_json::from_value(tool_args(args))?;
+        crate::commands::query::native_project_preview_value(
+            &self.workspace,
+            &args.name,
+            args.package.as_deref(),
+        )
+    }
+
+    fn tool_init_native_project(&self, args: &Value) -> Result<Value> {
+        let args: NativeProjectArgs = serde_json::from_value(tool_args(args))?;
+        crate::commands::edit::init_native_project_json(
+            &self.workspace,
+            &args.name,
+            args.package.as_deref(),
         )
     }
 
@@ -552,6 +575,7 @@ impl Server {
             "build",
             &args.target,
             false,
+            &[],
             &self.resource_limits,
         )
     }
@@ -563,6 +587,7 @@ impl Server {
             "lint",
             &args.target,
             false,
+            &[],
             &self.resource_limits,
         )
     }
@@ -594,6 +619,7 @@ impl Server {
             "run",
             &args.target,
             args.visible,
+            &args.arguments,
             &self.resource_limits,
         )
     }
@@ -714,6 +740,7 @@ fn run_graph_target(
     capability: &str,
     target: &str,
     visible: bool,
+    arguments: &[String],
     resource_limits: &ResourceLimits,
 ) -> Result<Value> {
     let exe = std::env::current_exe().context("resolving current once executable")?;
@@ -723,6 +750,7 @@ fn run_graph_target(
         capability,
         target,
         visible,
+        arguments,
         resource_limits.memory_bytes,
     )
 }
@@ -734,8 +762,11 @@ fn run_graph_target_with_exe(
     capability: &str,
     target: &str,
     visible: bool,
+    arguments: &[String],
 ) -> Result<Value> {
-    run_graph_target_with_exe_and_memory_limit(exe, workspace, capability, target, visible, 0)
+    run_graph_target_with_exe_and_memory_limit(
+        exe, workspace, capability, target, visible, arguments, 0,
+    )
 }
 
 fn run_graph_target_with_exe_and_memory_limit(
@@ -744,6 +775,7 @@ fn run_graph_target_with_exe_and_memory_limit(
     capability: &str,
     target: &str,
     visible: bool,
+    arguments: &[String],
     memory_limit_bytes: u64,
 ) -> Result<Value> {
     let mut command = std::process::Command::new(exe);
@@ -763,6 +795,9 @@ fn run_graph_target_with_exe_and_memory_limit(
         command.arg("--visible");
     }
     command.arg(target);
+    if !arguments.is_empty() {
+        command.arg("--").args(arguments);
+    }
     let output = crate::commands::util::capture_command_output(&mut command)
         .with_context(|| format!("running `{}` {capability} `{target}`", exe.display()))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -981,6 +1016,14 @@ struct MaterializeExampleArgs {
     destination: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeProjectArgs {
+    name: String,
+    #[serde(default)]
+    package: Option<String>,
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct RunTestsArgs {
@@ -1002,6 +1045,8 @@ struct RunTargetArgs {
     target: String,
     #[serde(default)]
     visible: bool,
+    #[serde(default)]
+    arguments: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1564,6 +1609,8 @@ demo_kind = target_kind(
                 "once_query_schema".to_string(),
                 "once_query_example".to_string(),
                 "once_list_target_kinds".to_string(),
+                "once_list_native_projects".to_string(),
+                "once_preview_native_project".to_string(),
                 "once_query_module_contract".to_string(),
                 "once_fetch_external_source".to_string(),
                 "once_validate_module".to_string(),
@@ -1828,6 +1875,7 @@ script_runtime = "sh"
         assert!(names.contains(&"once_apply_edit".to_string()));
         assert!(names.contains(&"once_materialize_example".to_string()));
         assert!(names.contains(&"once_exec_script".to_string()));
+        assert!(names.contains(&"once_init_native_project".to_string()));
 
         for tool in result["tools"].as_array().unwrap() {
             assert!(tool["outputSchema"].is_object());
@@ -1865,6 +1913,7 @@ script_runtime = "sh"
             "once_exec_script",
             "once_apply_edit",
             "once_materialize_example",
+            "once_init_native_project",
         ] {
             let response = server(tmp.path().to_path_buf()).dispatch(request(
                 "tools/call",
@@ -2059,7 +2108,7 @@ srcs = ["unit_spec.sh"]
         let args_file = shell_literal(args_path.to_str().unwrap());
         let cwd_file = shell_literal(cwd_path.to_str().unwrap());
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {args_file}\npwd > {cwd_file}\ncapability=''\ntarget=''\nfor arg do\n  case \"$arg\" in build|run|test) capability=\"$arg\" ;;\n  *) target=\"$arg\" ;;\n  esac\ndone\nmkdir -p .once/out/mock/run\nprintf 'hello from target\\n' > .once/out/mock/run/stdout.log\nprintf '{{\"target\":\"%s\",\"capability\":\"%s\",\"status\":\"completed\",\"outputs\":[\".once/out/mock/run/stdout.log\"]}}\\n' \"$target\" \"$capability\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {args_file}\npwd > {cwd_file}\ncapability=''\ntarget=''\nnext_is_target=false\nfor arg do\n  case \"$arg\" in\n    build|run|test) capability=\"$arg\"; next_is_target=true ;;\n    --visible|--) ;;\n    *) if \"$next_is_target\"; then target=\"$arg\"; next_is_target=false; fi ;;\n  esac\ndone\nmkdir -p .once/out/mock/run\nprintf 'hello from target\\n' > .once/out/mock/run/stdout.log\nprintf '{{\"target\":\"%s\",\"capability\":\"%s\",\"status\":\"completed\",\"outputs\":[\".once/out/mock/run/stdout.log\"]}}\\n' \"$target\" \"$capability\"\n",
         );
         std::fs::write(&exe, script).unwrap();
         let mut permissions = std::fs::metadata(&exe).unwrap().permissions();
@@ -2067,13 +2116,19 @@ srcs = ["unit_spec.sh"]
         std::fs::set_permissions(&exe, permissions).unwrap();
 
         let build =
-            run_graph_target_with_exe(&exe, tmp.path(), "build", "apps/App", false).unwrap();
+            run_graph_target_with_exe(&exe, tmp.path(), "build", "apps/App", false, &[]).unwrap();
         assert_eq!(build["capability"], "build");
         assert_eq!(build["success"], true);
         assert_eq!(build["record"]["target"], "apps/App");
         assert_eq!(build["record"]["capability"], "build");
 
-        let run = run_graph_target_with_exe(&exe, tmp.path(), "run", "apps/App", true).unwrap();
+        let arguments = vec![
+            "serve".to_string(),
+            "--port".to_string(),
+            "4001".to_string(),
+        ];
+        let run = run_graph_target_with_exe(&exe, tmp.path(), "run", "apps/App", true, &arguments)
+            .unwrap();
         assert_eq!(run["capability"], "run");
         assert_eq!(run["success"], true);
         assert_eq!(run["record"]["target"], "apps/App");
@@ -2081,7 +2136,9 @@ srcs = ["unit_spec.sh"]
         assert_eq!(run["captured_stdout"]["text"], "hello from target\n");
 
         let args = std::fs::read_to_string(args_path).unwrap();
-        assert!(args.contains("--format\njson\nrun\n--visible\napps/App\n"));
+        assert!(
+            args.contains("--format\njson\nrun\n--visible\napps/App\n--\nserve\n--port\n4001\n")
+        );
         let cwd = std::fs::read_to_string(cwd_path).unwrap();
         assert_eq!(
             std::fs::canonicalize(cwd.trim()).unwrap(),
@@ -2107,7 +2164,8 @@ exit 2
         std::fs::set_permissions(&exe, permissions).unwrap();
 
         let result =
-            run_graph_target_with_exe(&exe, tmp.path(), "lint", "quality/lint", false).unwrap();
+            run_graph_target_with_exe(&exe, tmp.path(), "lint", "quality/lint", false, &[])
+                .unwrap();
 
         assert_eq!(result["success"], false);
         assert_eq!(result["error"]["code"], "invalid_lint_provider_output");
