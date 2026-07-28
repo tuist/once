@@ -1327,6 +1327,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn copy_blob_to_file_preserves_destination_when_decode_fails() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path().join("cas"));
+        let payload = vec![b'x'; STREAM_CHUNK * 4];
+        let digest = cas.put_blob(&payload).await.unwrap();
+        let stored_path = cas.blob_path(&digest);
+        let mut stored = fs::read(&stored_path).await.unwrap();
+        assert!(stored.starts_with(blob::ZSTD_BLOB_MAGIC));
+        stored.truncate(blob::ZSTD_BLOB_HEADER_LEN + 1);
+        fs::write(&stored_path, stored).await.unwrap();
+        let destination = tmp.path().join("existing-output");
+        fs::write(&destination, b"keep this output").await.unwrap();
+
+        assert!(cas.copy_blob_to_file(&digest, &destination).await.is_err());
+        assert_eq!(fs::read(&destination).await.unwrap(), b"keep this output");
+    }
+
+    #[tokio::test]
     async fn put_stream_cleans_up_scratch_on_read_error() {
         use std::io;
         use std::pin::Pin;

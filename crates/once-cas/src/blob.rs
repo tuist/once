@@ -90,14 +90,15 @@ pub(crate) fn decode_file(stored_path: &Path, output_path: &Path) -> io::Result<
         header_len += read;
     }
     input.rewind()?;
-    let mut output = File::create(output_path)?;
+    let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut output = tempfile::NamedTempFile::new_in(parent)?;
     if header_len == ZSTD_BLOB_HEADER_LEN && header.starts_with(ZSTD_BLOB_MAGIC) {
         let raw_size = raw_size_from_header(&header).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "truncated zstd blob header")
         })?;
         input.seek(io::SeekFrom::Start(ZSTD_BLOB_HEADER_LEN as u64))?;
         copy_decode(&mut input, &mut output)?;
-        if output.metadata()?.len() != raw_size {
+        if output.as_file().metadata()?.len() != raw_size {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "zstd blob decoded size mismatch",
@@ -106,7 +107,9 @@ pub(crate) fn decode_file(stored_path: &Path, output_path: &Path) -> io::Result<
     } else {
         io::copy(&mut input, &mut output)?;
     }
-    output.sync_all()
+    output.as_file().sync_all()?;
+    output.persist(output_path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 pub(crate) struct EncodedFile {
