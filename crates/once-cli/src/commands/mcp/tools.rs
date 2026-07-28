@@ -41,6 +41,7 @@ pub(super) fn tool_requires_allow_run(name: &str) -> bool {
             | "once_stop_runtime"
             | "once_apply_edit"
             | "once_materialize_example"
+            | "once_init_native_project"
     )
 }
 
@@ -49,6 +50,8 @@ fn tool_annotations(name: &str) -> Value {
         || matches!(
             name,
             "once_list_target_kinds"
+                | "once_list_native_projects"
+                | "once_preview_native_project"
                 | "once_get_target"
                 | "once_fetch_external_source"
                 | "once_validate_module"
@@ -58,7 +61,10 @@ fn tool_annotations(name: &str) -> Value {
                 | "once_runtime_status"
                 | "once_runtime_logs"
         );
-    let destructive = matches!(name, "once_apply_edit" | "once_stop_runtime");
+    let destructive = matches!(
+        name,
+        "once_apply_edit" | "once_init_native_project" | "once_stop_runtime"
+    );
     let idempotent = read_only
         || matches!(
             name,
@@ -67,6 +73,7 @@ fn tool_annotations(name: &str) -> Value {
                 | "once_runtime_status"
                 | "once_runtime_logs"
                 | "once_materialize_example"
+                | "once_init_native_project"
         );
     json!({
         "readOnlyHint": read_only,
@@ -211,6 +218,56 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 }
             }),
             example_return: "[\n  {\n    \"kind\": \"library\",\n    \"docs\": \"Reusable library target...\",\n    \"source_references\": [\n      { \"system\": \"Example Build\", \"symbol\": \"example_library\",\n        \"url\": \"https://example.com/example_library\", \"use_when\": \"...\",\n        \"content_digest\": \"...\" }\n    ],\n    \"examples\": [\n      { \"slug\": \"library-minimal\", \"name\": \"Minimal library\", \"use_when\": \"...\" }\n    ]\n  }\n]",
+        },
+        ToolDefinition {
+            name: "once_list_native_projects",
+            description: "List native project declarations and the roots they currently recognize.",
+            long_description: "Returns each enabled native project's name, documentation, marker files, additional resolver inputs, seed target kind, and current package matches. Detection reads file names only and does not execute native project code. The matching command-line operation is `once query native-projects --format json`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {}
+            }),
+            example_return: "{\n  \"native_projects\": [\n    { \"name\": \"native\", \"docs\": \"Recognize a native project.\", \"markers\": [\"project.native\"], \"target_kind\": \"native_workspace\", \"target_name\": \"native\" }\n  ],\n  \"matches\": [\n    { \"native_project\": \"native\", \"package\": \"\", \"markers\": [\"project.native\"], \"seed_target\": \"native\" }\n  ]\n}",
+        },
+        ToolDefinition {
+            name: "once_preview_native_project",
+            description: "Preview the seed target and complete typed graph derived by one detected native project.",
+            long_description: "Runs the selected native project's ordinary target-kind resolver without writing a manifest, then returns its declaration, detection evidence, seed target, and expanded typed targets. Omit `package` when the native project has one match. The matching command-line operation is `once query native-project <name> [--package <path>] --format json`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name discovered with `once_list_native_projects`."
+                    },
+                    "package": {
+                        "type": "string",
+                        "description": "Package path from the native project match. Use an empty string for the workspace root."
+                    }
+                },
+                "required": ["name"]
+            }),
+            example_return: "{\n  \"native_project\": { \"name\": \"native\", \"target_kind\": \"native_workspace\" },\n  \"matched\": { \"native_project\": \"native\", \"package\": \"\", \"seed_target\": \"native\" },\n  \"seed\": { \"name\": \"native\", \"kind\": \"native_workspace\" },\n  \"targets\": [ { \"label\": { \"id\": \"native\" }, \"kind\": \"native_workspace\" } ]\n}",
+        },
+        ToolDefinition {
+            name: "once_init_native_project",
+            description: "Initialize Once from one detected native project.",
+            long_description: "This state-changing tool is available only when the server starts with `once mcp --allow-run`. It writes the native project's validated seed target through the manifest editor while preserving unrelated configuration and comments. Repeating an identical initialization is idempotent. A conflicting target with the same name is rejected. The matching command-line operation is `once edit init-native-project <name> [--package <path>]`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name discovered with `once_list_native_projects`."
+                    },
+                    "package": {
+                        "type": "string",
+                        "description": "Package path from the native project match. Use an empty string for the workspace root."
+                    }
+                },
+                "required": ["name"]
+            }),
+            example_return: "{\n  \"initialized\": true,\n  \"changed\": true,\n  \"native_project\": \"native\",\n  \"package\": \"\",\n  \"seed_target\": \"native\",\n  \"path\": \"/work/project/once.toml\"\n}",
         },
         ToolDefinition {
             name: "once_query_module_contract",
@@ -525,7 +582,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_run_target",
             description: "Run a target by executing its generic `run` capability.",
-            long_description: "This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes command diagnostics under `stderr` and up to 64 kibibytes of each declared `stdout.log` or `stderr.log` output under `captured_stdout` and `captured_stderr`, so an agent can verify ordinary command output without a separate filesystem read. A captured field is null when the target did not declare that log.",
+            long_description: "This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Argument interpretation is target-kind-specific, so inspect the target-kind schema before supplying `arguments`. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes command diagnostics under `stderr` and up to 64 kibibytes of each declared `stdout.log` or `stderr.log` output under `captured_stdout` and `captured_stderr`, so an agent can verify ordinary command output without a separate filesystem read. A captured field is null when the target did not declare that log.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -536,11 +593,16 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                     "visible": {
                         "type": "boolean",
                         "description": "Request a visible runtime interface when the target kind supports one."
+                    },
+                    "arguments": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Target-kind-specific arguments supplied to the generic run capability. Inspect the target-kind schema before setting this field."
                     }
                 },
                 "required": ["target"]
             }),
-            example_return: "{\n  \"target\": \"apps/service/Service\",\n  \"capability\": \"run\",\n  \"exit_code\": 0,\n  \"success\": true,\n  \"record\": {\n    \"target\": \"apps/service/Service\",\n    \"kind\": \"application\",\n    \"capability\": \"run\",\n    \"cache\": \"bypass\",\n    \"outputs\": [\".once/out/apps/service/Service/run.json\"]\n  },\n  \"stderr\": \"\"\n}",
+            example_return: "{\n  \"target\": \"apps/service/Service\",\n  \"capability\": \"run\",\n  \"exit_code\": 0,\n  \"success\": true,\n  \"record\": {\n    \"target\": \"apps/service/Service\",\n    \"kind\": \"application\",\n    \"capability\": \"run\",\n    \"cache\": \"bypass\",\n    \"outputs\": []\n  },\n  \"stderr\": \"\"\n}",
         },
         ToolDefinition {
             name: "once_start_target",

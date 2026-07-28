@@ -75,6 +75,7 @@ async fn run_command(
             runtime_rpc_socket,
             remote,
             compute,
+            arguments,
         } => {
             Box::pin(dispatch_run(
                 workspace,
@@ -86,6 +87,7 @@ async fn run_command(
                     runtime_rpc,
                     runtime_rpc_socket,
                     sandbox,
+                    arguments,
                     remote: resolve_remote_execution(workspace, xdg, remote, compute.as_deref())?,
                 },
             ))
@@ -345,6 +347,14 @@ async fn run_query_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
+        Some(cli::QueryCmd::NativeProjects) => commands::query::native_projects(workspace, output)
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Some(cli::QueryCmd::NativeProject { name, package }) => {
+            commands::query::native_project(workspace, output, &name, package.as_deref())
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
         Some(cli::QueryCmd::ModuleContract) => commands::query::module_contract(output)
             .await
             .map(|()| ExitCode::SUCCESS),
@@ -459,6 +469,11 @@ async fn run_edit_command(
         }) => commands::edit::materialize_example(workspace, output, &kind, &slug, &destination)
             .await
             .map(|()| ExitCode::SUCCESS),
+        Some(cli::EditCmd::InitNativeProject { name, package }) => {
+            commands::edit::init_native_project(workspace, output, &name, package.as_deref())
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
         None => anyhow::bail!("edit subcommand required"),
     }
 }
@@ -609,6 +624,7 @@ struct RunDispatchArgs {
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
     sandbox: SandboxMode,
+    arguments: Vec<String>,
     remote: Option<RemoteExecution>,
 }
 
@@ -620,6 +636,7 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
         runtime_rpc,
         runtime_rpc_socket,
         sandbox,
+        arguments,
         remote,
     } = args;
     let resolved_target = resolve_required_target(workspace, target.clone())?;
@@ -640,10 +657,13 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
             graph,
             output,
             &resolved_target,
-            commands::graph::GraphRunOptions { visible },
+            commands::graph::GraphRunOptions { visible, arguments },
             sandbox,
         ))
         .await;
+    }
+    if !arguments.is_empty() {
+        anyhow::bail!("arguments after `--` are only supported for graph run targets");
     }
     if visible {
         anyhow::bail!("--visible is only supported for graph run targets");

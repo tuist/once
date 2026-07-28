@@ -112,9 +112,28 @@ where
                 continue;
             }
             let files = resolver_files(root, &target)?;
-            let raw = resolve(&graph_target, &files)
-                .map_err(|source| resolution_error(&target.id(), source.to_string()))?
-                .ok_or_else(|| resolution_error(&target.id(), "resolver returned no value"))?;
+            let raw = match resolve(&graph_target, &files) {
+                Ok(Some(raw)) => raw,
+                Ok(None) => {
+                    return Err(resolution_error(&target.id(), "resolver returned no value"));
+                }
+                Err(source) => {
+                    let unavailable_tool = source.chain().find_map(|cause| {
+                        cause
+                            .downcast_ref::<crate::analysis::AnalysisFailure>()
+                            .filter(|failure| failure.diagnostic.code == "required_tool_not_found")
+                    });
+                    let Some(failure) = unavailable_tool else {
+                        return Err(resolution_error(&target.id(), source.to_string()));
+                    };
+                    diagnostics
+                        .entry(graph_target.label.id)
+                        .or_default()
+                        .push(failure.diagnostic.clone());
+                    index += 1;
+                    continue;
+                }
+            };
             let output = parse_resolver_output(&target.id(), raw)?;
             let (specs, roots, attrs) = match output {
                 ResolverOutput::Targets(specs) => (specs, None, BTreeMap::new()),
@@ -644,6 +663,51 @@ resolved_set = target_kind(resolver = _resolve)
 
         assert!(error.contains("specific resolver failure"), "{error}");
         assert!(!error.contains("declared actions or outputs"), "{error}");
+    }
+
+    #[test]
+    fn missing_resolver_tools_do_not_block_unrelated_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("once.toml"),
+            r#"[modules]
+paths = ["deps.star"]
+
+[[target]]
+name = "available"
+kind = "plain"
+
+[[target]]
+name = "unavailable"
+kind = "resolved_set"
+"#,
+        );
+        write(
+            temp.path().join("deps.star"),
+            r#"def _resolve(ctx):
+    host_which("once-deliberately-missing-resolver-tool")
+    return []
+
+plain = target_kind()
+resolved_set = target_kind(resolver = _resolve)
+"#,
+        );
+
+        let graph = crate::graph::load_graph_workspace(temp.path()).unwrap();
+        let available = graph
+            .iter()
+            .find(|target| target.label.id == "available")
+            .expect("unrelated target remains available");
+        let unavailable = graph
+            .iter()
+            .find(|target| target.label.id == "unavailable")
+            .expect("resolver owner remains in the graph");
+
+        assert!(available.diagnostics.is_empty());
+        assert!(unavailable.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "required_tool_not_found"
+                && diagnostic.target.as_deref() == Some("unavailable")
+        }));
     }
 
     #[test]

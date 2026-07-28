@@ -52,17 +52,19 @@ pub async fn workspace_mise_command(workspace: &Path) -> Result<Option<Vec<Strin
     if !has_mise_config(workspace) {
         return Ok(None);
     }
-    let mut argv = vec![
-        managed_mise().await?.display().to_string(),
-        "exec".to_string(),
-        "-C".to_string(),
-        workspace.display().to_string(),
-    ];
-    if has_mise_lock(workspace) {
+    Ok(Some(mise_execution_prefix(
+        &managed_mise().await?,
+        has_mise_lock(workspace),
+    )))
+}
+
+fn mise_execution_prefix(mise: &Path, locked: bool) -> Vec<String> {
+    let mut argv = vec![mise.display().to_string(), "exec".to_string()];
+    if locked {
         argv.push("--locked".to_string());
     }
     argv.push("--".to_string());
-    Ok(Some(argv))
+    argv
 }
 
 /// Environment required by managed mise during action execution.
@@ -403,5 +405,13 @@ mod tests {
         assert!(selected.contains_key("MISE_DATA_DIR"));
         assert!(selected.contains_key("MISE_CONFIG_DIR"));
         assert!(selected.contains_key("MISE_CACHE_DIR"));
+    }
+
+    #[test]
+    fn mise_execution_preserves_the_action_working_directory() {
+        assert_eq!(
+            mise_execution_prefix(Path::new("/once/mise"), true),
+            ["/once/mise", "exec", "--locked", "--"]
+        );
     }
 }

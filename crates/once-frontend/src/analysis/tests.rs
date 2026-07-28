@@ -257,6 +257,45 @@ run_action(
 }
 
 #[test]
+fn run_action_can_inherit_parent_environment_only_when_uncacheable() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "apps/service");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+run_action(
+    argv = ["tool"],
+    cacheable = False,
+    inherit_parent_env = True,
+)
+"#)
+        .unwrap();
+    });
+    assert!(store.actions[0].inherit_parent_env);
+
+    let store = store_for(tmp.path(), "apps/service");
+    let (_, err) = with_active_store(store, || {
+        run(r#"run_action(argv = ["tool"], inherit_parent_env = True)"#).unwrap_err()
+    });
+    let message = format!("{err:?}");
+    assert!(
+        message.contains("inherit_parent_env requires cacheable = False"),
+        "{message}"
+    );
+
+    let message = format!(
+        "{:#}",
+        run(
+            r#"run_action(argv = ["tool"], cacheable = False, inherit_parent_env = True, sandbox = "inputs")"#
+        )
+        .unwrap_err()
+    );
+    assert!(
+        message.contains("inherit_parent_env requires sandbox = \"off\""),
+        "{message}"
+    );
+}
+
+#[test]
 fn run_action_records_sandbox_policy() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "apps/ios/App");
@@ -333,6 +372,7 @@ fn declared_action_defaults_cacheable_when_omitted() {
     .unwrap();
 
     assert!(action.cacheable);
+    assert!(!action.inherit_parent_env);
     assert!(action.depends_on_prior_actions);
     assert_eq!(
         serde_json::to_value(&action).unwrap(),
@@ -940,6 +980,112 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
     assert!(!argv[1..].iter().any(|p| p.ends_with("Sources/c.txt")));
 }
 
+#[test]
+fn glob_ignores_once_runtime_state() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::create_dir_all(tmp.path().join(".once/out/app")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("packages/lib/.once/out/app")).unwrap();
+    std::fs::write(tmp.path().join("src/main.rs"), "").unwrap();
+    std::fs::write(tmp.path().join(".once/out/app/generated.rs"), "").unwrap();
+    std::fs::write(
+        tmp.path().join("packages/lib/.once/out/app/generated.rs"),
+        "",
+    )
+    .unwrap();
+
+    let matches = expand_globs(tmp.path(), "", &["**/*".to_string()]).unwrap();
+
+    assert_eq!(matches, vec!["src/main.rs"]);
+}
+
+#[test]
+fn glob_returns_no_matches_for_a_missing_package_directory() {
+    let workspace = TempDir::new().unwrap();
+
+    let matches = expand_globs(
+        workspace.path(),
+        "packages/missing",
+        &["src/**/*.rs".to_string()],
+    )
+    .unwrap();
+
+    assert!(matches.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn glob_excludes_generated_trees_before_resolving_external_symlinks() {
+    let workspace = TempDir::new().unwrap();
+    let external = TempDir::new().unwrap();
+    let package = workspace.path().join("packages/app");
+    std::fs::create_dir_all(package.join("lib")).unwrap();
+    std::fs::create_dir_all(external.path().join("package")).unwrap();
+    std::fs::write(package.join("lib/app.ex"), "").unwrap();
+    std::fs::write(external.path().join("package/index.js"), "").unwrap();
+    std::os::unix::fs::symlink(external.path(), package.join("node_modules")).unwrap();
+
+    let store = store_for(workspace.path(), "packages/app");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+matches = glob(["**/*"], exclude = ["**/node_modules/**/*"])
+run_action(argv = ["echo"] + matches, outputs = ["out"])
+"#)
+        .unwrap();
+    });
+
+    assert_eq!(
+        store.actions[0].argv,
+        vec!["echo".to_string(), "packages/app/lib/app.ex".to_string()]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn glob_preserves_an_internal_directory_symlinks_logical_path() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::create_dir_all(workspace.path().join("shared/resources")).unwrap();
+    std::fs::create_dir_all(workspace.path().join("app/priv")).unwrap();
+    std::fs::write(workspace.path().join("shared/resources/value.txt"), "value").unwrap();
+    std::os::unix::fs::symlink(
+        "../../shared/resources",
+        workspace.path().join("app/priv/resources"),
+    )
+    .unwrap();
+
+    let matches = expand_globs(workspace.path(), "app", &["priv/**/*".to_string()]).unwrap();
+
+    assert_eq!(matches, vec!["app/priv/resources"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn glob_does_not_follow_a_cyclic_directory_symlink() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::create_dir_all(workspace.path().join("app/test/fixture")).unwrap();
+    std::fs::write(workspace.path().join("app/test/fixture/value.exs"), "value").unwrap();
+    std::os::unix::fs::symlink("..", workspace.path().join("app/test/fixture/parent")).unwrap();
+
+    let matches = expand_globs(workspace.path(), "app", &["test/**/*".to_string()]).unwrap();
+
+    assert_eq!(
+        matches,
+        vec!["app/test/fixture/parent", "app/test/fixture/value.exs"]
+    );
+}
+
+#[test]
+fn glob_normalizes_package_parent_segments_without_losing_the_logical_path() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::create_dir_all(workspace.path().join("app")).unwrap();
+    std::fs::create_dir_all(workspace.path().join("shared")).unwrap();
+    std::fs::write(workspace.path().join("shared/value.ex"), "value").unwrap();
+
+    let matches = expand_globs(workspace.path(), "app", &["../shared/*.ex".to_string()]).unwrap();
+
+    assert_eq!(matches, vec!["shared/value.ex"]);
+}
+
 /// A symlink that resolves outside the workspace must surface as
 /// an error rather than silently leaking external paths into the
 /// returned list. The check rejects honest mistakes; the threat
@@ -1238,12 +1384,13 @@ fn analysis_context_exposes_visible_run_option() {
     let engine = AnalysisEngine::from_source_with_options(
         r#"
 def _demo_impl(ctx):
-    return {"visible": ctx["run"]["visible"]}
+    return {"visible": ctx["run"]["visible"], "args": ctx["run"]["args"]}
 
 demo_kind = {"_once_target_kind": True, "impl": _demo_impl}
 "#,
         AnalysisOptions {
             run_visible: true,
+            run_arguments: vec!["serve".into(), "--port".into(), "4001".into()],
             ..AnalysisOptions::default()
         },
     )
@@ -1255,6 +1402,16 @@ demo_kind = {"_once_target_kind": True, "impl": _demo_impl}
         .unwrap();
 
     assert_eq!(result.provider["visible"], true);
+    assert_eq!(
+        result.provider["args"],
+        serde_json::json!(["serve", "--port", "4001"])
+    );
+
+    let build_result = engine
+        .analyze_target_capability(&target("demo_kind"), tmp.path(), &[], "build")
+        .unwrap();
+    assert_eq!(build_result.provider["visible"], false);
+    assert_eq!(build_result.provider["args"], serde_json::json!([]));
 }
 
 #[test]

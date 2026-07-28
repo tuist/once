@@ -7,6 +7,7 @@ pub struct ModuleAuthoringContract {
     pub registration: &'static str,
     pub declaration_source: String,
     pub schema_invariants: Vec<&'static str>,
+    pub native_project_contract: Vec<ContractEntry>,
     pub resolver_contract: Vec<ContractEntry>,
     pub context_fields: Vec<ContractEntry>,
     pub analysis_primitives: Vec<ContractEntry>,
@@ -200,6 +201,32 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             "Resolver-owned attributes and synthetic target attributes must be declared in their target kind schemas.",
             "Modules are trusted analysis code. Host commands must be deterministic, must not mutate workspace sources or the build output tree, and may keep resolver scratch state only under .once/tmp. Fetching and build work belong in explicit workflows and actions.",
         ],
+        native_project_contract: vec![
+            entry(
+                "native_project(target_kind, markers, name = None, target_name = None, docs = \"\", inputs = [], exclude = [], on_match = \"descend\", max_depth = 16, requires_tools = [])",
+                "Declare how Once recognizes native project roots and maps each match to one ordinary seed target.",
+            ),
+            entry(
+                "markers",
+                "Normalized package-relative files that must all exist before the native project matches.",
+            ),
+            entry(
+                "target_kind",
+                "Target kind used by the virtual or materialized seed. Put native metadata interpretation in this target kind's resolver.",
+            ),
+            entry(
+                "inputs",
+                "Optional package-relative text globs added to the seed's resolver inputs. Marker files are always included.",
+            ),
+            entry(
+                "exclude",
+                "Directory names skipped while discovering native project roots.",
+            ),
+            entry(
+                "explicit target precedence",
+                "An authored target suppresses a discovered seed in the same package. A resolver target also suppresses nested matches covered by its declared sources or resolver inputs.",
+            ),
+        ],
         resolver_contract: vec![
             entry(
                 "resolver(ctx)",
@@ -236,6 +263,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             ),
             entry("ctx[\"run\"][\"visible\"]", "Whether a visible runtime was requested."),
             entry(
+                "ctx[\"run\"][\"args\"]",
+                "Arguments supplied after `--` for the active run request. Interpretation is target-kind-specific. The list is empty for other capabilities.",
+            ),
+            entry(
                 "ctx[\"test\"][\"filters\"]",
                 "Stable semantic test-unit identifiers requested for this test execution.",
             ),
@@ -245,7 +276,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             ),
         ],
         analysis_primitives: vec![
-            entry("glob(patterns)", "Expand package source patterns into sorted workspace paths."),
+            entry(
+                "glob(patterns, exclude = [])",
+                "Expand package source patterns into sorted workspace paths, omitting matches selected by package-relative exclude patterns.",
+            ),
             entry(
                 "walk_files(root, excluded_paths = [], excluded_names = [])",
                 "Walk a package-relative directory into sorted workspace file and symbolic-link paths while pruning exact root-relative paths and names.",
@@ -277,7 +311,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry("write_path(path, content)", "Declare a portable file-writing action."),
             entry(
                 "copy_path(source, destination, kind = \"file\", inputs = [], toolchain_identity = None, identifier = None, cacheable = True)",
-                "Declare a portable file or directory copy action.",
+                "Copy one workspace path by value, materializing a directory symlink at the destination, or merge directory contents while preserving their symlink layout.",
             ),
             entry(
                 "materialize_host_file(source, destination)",
@@ -304,8 +338,8 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Build a structured argument list, optionally backed by an argument file.",
             ),
             entry(
-                "run_action(argv, inputs = [], outputs = [], clean_paths = [], create_dirs = [], cwd = None, env = {}, toolchain_identity = None, identifier = None, cacheable = True, depends_on_prior_actions = True, stdout = None, stderr = None, sandbox = None, success_exit_codes = [0])",
-                "Declare a direct executable invocation with explicit inputs, outputs, setup, caching, sandbox policy, and exit codes that indicate valid outputs. Use `once query validate-actions` to investigate filesystem contract drift without changing the sandbox policy.",
+                "run_action(argv, inputs = [], outputs = [], clean_paths = [], create_dirs = [], cwd = None, env = {}, toolchain_identity = None, identifier = None, cacheable = True, inherit_parent_env = False, depends_on_prior_actions = True, stdout = None, stderr = None, sandbox = None, success_exit_codes = [0])",
+                "Declare a direct executable invocation with explicit inputs, outputs, setup, caching, sandbox policy, and exit codes that indicate valid outputs. `inherit_parent_env` is available only to uncached local run actions. Explicit `env` values take precedence. Use `once query validate-actions` to investigate filesystem contract drift without changing the sandbox policy.",
             ),
         ],
         lint_contract: vec![
@@ -574,6 +608,7 @@ mod tests {
         assert!(contract
             .declaration_source
             .contains("def source_reference("));
+        assert!(contract.declaration_source.contains("def native_project("));
         assert!(contract
             .action_primitives
             .iter()
@@ -590,6 +625,10 @@ mod tests {
             .resolver_contract
             .iter()
             .any(|entry| entry.signature == "{targets, roots, attrs}"));
+        assert!(contract
+            .native_project_contract
+            .iter()
+            .any(|entry| entry.signature.starts_with("native_project(")));
         assert!(contract
             .test_contract
             .iter()

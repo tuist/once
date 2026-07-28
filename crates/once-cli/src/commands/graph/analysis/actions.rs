@@ -271,12 +271,7 @@ pub(super) fn run_declared_actions<'a>(
         let mut available_inputs = dependency_inputs.clone();
         let mut aggregate_cache_state = None;
         let mut all_outputs = Vec::new();
-        let mut aggregate_result = ActionResult {
-            exit_code: 0,
-            stdout: None,
-            stderr: None,
-            outputs: BTreeMap::new(),
-        };
+        let mut aggregate_result = empty_action_result();
         let mut cached_results = Vec::new();
         // A single-action target is fully represented by the caller's
         // capability-level record. Multi-action targets need per-action
@@ -320,6 +315,7 @@ pub(super) fn run_declared_actions<'a>(
                         blob_digest: *digest,
                         producer_action_digest: outcome.digest,
                         same_target: true,
+                        materialized: outcome.cache_state != EvidenceCacheState::Hit,
                     },
                 )
             }));
@@ -359,6 +355,15 @@ pub(super) fn run_declared_actions<'a>(
             cached_results,
         })
     })
+}
+
+fn empty_action_result() -> ActionResult {
+    ActionResult {
+        exit_code: 0,
+        stdout: None,
+        stderr: None,
+        outputs: BTreeMap::new(),
+    }
 }
 
 fn track_cached_result(cached_results: &mut Vec<ActionResult>, outcome: &DeclaredActionOutcome) {
@@ -607,7 +612,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
             .with_context(|| {
                 format!("preparing action {index} for {target_id} ({identifier_for_error})")
             })?;
-        run_uncacheable_declared_action(context, action).await
+        run_uncacheable_declared_action(context, action, declared.inherit_parent_env).await
     }
 }
 
@@ -843,7 +848,9 @@ async fn materialize_available_inputs(
         .collect::<BTreeSet<_>>();
     let outputs = available_inputs
         .iter()
-        .filter(|(path, input)| !input.same_target && declared_inputs.contains(path.as_str()))
+        .filter(|(path, input)| {
+            !input.same_target && !input.materialized && declared_inputs.contains(path.as_str())
+        })
         .map(|(path, input)| (path.clone(), input.blob_digest))
         .collect::<BTreeMap<_, _>>();
     if outputs.is_empty() {
@@ -866,16 +873,22 @@ async fn materialize_available_inputs(
 async fn run_uncacheable_declared_action(
     context: DeclaredActionContext<'_>,
     action: Action,
+    inherit_parent_env: bool,
 ) -> Result<DeclaredActionOutcome> {
     let action_digest = action.digest();
-    let result = run_uncached_action(&action, context.workspace, context.cache)
-        .await
-        .with_context(|| {
-            format!(
-                "executing action {} for {} ({})",
-                context.index, context.target_id, context.identifier
-            )
-        })?;
+    let result = run_uncached_action(
+        &action,
+        context.workspace,
+        context.cache,
+        inherit_parent_env,
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "executing action {} for {} ({})",
+            context.index, context.target_id, context.identifier
+        )
+    })?;
     let exit_code = result.exit_code;
     if exit_code != 0 {
         record_declared_action_evidence(
@@ -1064,6 +1077,7 @@ async fn run_uncached_action(
     action: &Action,
     workspace: &Path,
     cache: &CacheProvider,
+    inherit_parent_env: bool,
 ) -> Result<ActionResult> {
     match action {
         Action::RunCommand {
@@ -1078,6 +1092,11 @@ async fn run_uncached_action(
             ..
         } => {
             if *sandbox != SandboxMode::Off {
+                if inherit_parent_env {
+                    anyhow::bail!(
+                        "inherit_parent_env is available only when the action sandbox is off"
+                    );
+                }
                 return once_core::run_uncached(action, workspace, cache, false)
                     .await
                     .map_err(Into::into);
@@ -1089,7 +1108,9 @@ async fn run_uncached_action(
                 .ok_or_else(|| anyhow::anyhow!("declared action has empty argv"))?;
             let mut command = Command::new(program);
             command.args(rest);
-            command.env_clear();
+            if !inherit_parent_env {
+                command.env_clear();
+            }
             for (key, value) in &env {
                 command.env(key, value);
             }
@@ -1924,6 +1945,7 @@ mod tests {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
@@ -1979,6 +2001,7 @@ mod tests {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
@@ -2032,6 +2055,7 @@ mod tests {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
@@ -2236,16 +2260,54 @@ mod tests {
             remote: None,
         };
 
-        run_uncached_action(&action, workspace.path(), &cache)
+        run_uncached_action(&action, workspace.path(), &cache, false)
             .await
             .unwrap();
-        run_uncached_action(&action, workspace.path(), &cache)
+        run_uncached_action(&action, workspace.path(), &cache, false)
             .await
             .unwrap();
 
         assert_eq!(
             std::fs::read_to_string(workspace.path().join("counter")).unwrap(),
             "xx"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uncached_action_can_inherit_parent_environment() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let output = WorkspacePath::try_from(".once/out/home.txt").unwrap();
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf %s \"$HOME\" > .once/out/home.txt".to_string(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            inputs: vec![],
+            outputs: vec![output],
+            stdout_path: None,
+            stderr_path: None,
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
+            timeout_ms: None,
+            success_exit_codes: vec![0],
+            remote: None,
+        };
+        std::fs::create_dir_all(workspace.path().join(".once/out")).unwrap();
+
+        run_uncached_action(&action, workspace.path(), &cache, true)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/home.txt")).unwrap(),
+            std::env::var("HOME").unwrap()
         );
     }
 
@@ -2276,7 +2338,7 @@ mod tests {
         };
         std::fs::create_dir_all(workspace.path().join(".once/out")).unwrap();
 
-        let result = run_uncached_action(&action, workspace.path(), &cache)
+        let result = run_uncached_action(&action, workspace.path(), &cache, false)
             .await
             .unwrap();
 
@@ -2314,7 +2376,7 @@ mod tests {
             remote: None,
         };
 
-        let result = run_uncached_action(&action, workspace.path(), &cache)
+        let result = run_uncached_action(&action, workspace.path(), &cache, false)
             .await
             .unwrap();
 
@@ -2349,7 +2411,7 @@ mod tests {
             remote: None,
         };
 
-        let result = run_uncached_action(&action, workspace.path(), &cache)
+        let result = run_uncached_action(&action, workspace.path(), &cache, false)
             .await
             .unwrap();
 
@@ -2459,6 +2521,7 @@ mod tests {
                 sandbox: None,
                 success_exit_codes: vec![0],
                 cacheable: true,
+                inherit_parent_env: false,
                 depends_on_prior_actions: true,
                 toolchain_identity: None,
                 identifier: Some("one".to_string()),
@@ -2559,6 +2622,7 @@ mod tests {
                 sandbox: None,
                 success_exit_codes: vec![0],
                 cacheable: true,
+                inherit_parent_env: false,
                 depends_on_prior_actions: true,
                 toolchain_identity: None,
                 identifier: Some("cached".to_string()),
@@ -2581,6 +2645,7 @@ mod tests {
                 blob_digest: dependency_blob,
                 producer_action_digest: Digest::of_bytes(b"dependency action"),
                 same_target: false,
+                materialized: false,
             },
         )]);
         let target = cached_test_target();
@@ -2656,6 +2721,7 @@ mod tests {
                 blob_digest: dependency_blob,
                 producer_action_digest: Digest::of_bytes(b"dependency action"),
                 same_target: false,
+                materialized: false,
             },
         )]);
         let target = cached_test_target();
@@ -2686,6 +2752,56 @@ mod tests {
         assert_eq!(
             std::fs::read(workspace.path().join(".once/out/out.txt")).unwrap(),
             b"dependency"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn materialized_dependency_inputs_are_not_restored_again() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let dependency_path = ".once/out/dependency/input.txt";
+        let dependency = workspace.path().join(dependency_path);
+        std::fs::create_dir_all(dependency.parent().unwrap()).unwrap();
+        std::fs::write(&dependency, b"ready").unwrap();
+        let dependency_blob = cache.put_blob(b"stale").await.unwrap();
+        let available_inputs = BTreeMap::from([(
+            dependency_path.to_string(),
+            AvailableInput {
+                blob_digest: dependency_blob,
+                producer_action_digest: Digest::of_bytes(b"dependency action"),
+                same_target: false,
+                materialized: true,
+            },
+        )]);
+        let target = cached_test_target();
+        let mut analysis = cached_test_analysis(dependency_path);
+        analysis.actions[0].cacheable = false;
+        analysis.actions[0].argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            format!("cat {dependency_path} > .once/out/out.txt"),
+        ];
+
+        run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis,
+            &[],
+            &available_inputs,
+            &BTreeMap::new(),
+            SandboxMode::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(&dependency).unwrap(), b"ready");
+        assert_eq!(
+            std::fs::read(workspace.path().join(".once/out/out.txt")).unwrap(),
+            b"ready"
         );
     }
 
@@ -2816,6 +2932,7 @@ mod tests {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: false,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(name.to_string()),
@@ -2908,6 +3025,7 @@ mod tests {
                     sandbox: None,
                     success_exit_codes: vec![0],
                     cacheable: true,
+                    inherit_parent_env: false,
                     depends_on_prior_actions: true,
                     toolchain_identity: None,
                     identifier: Some("first".to_string()),
@@ -2932,6 +3050,7 @@ mod tests {
                     sandbox: None,
                     success_exit_codes: vec![0],
                     cacheable: true,
+                    inherit_parent_env: false,
                     depends_on_prior_actions: false,
                     toolchain_identity: None,
                     identifier: Some("second".to_string()),
@@ -3009,7 +3128,7 @@ mod tests {
             remote: None,
         };
 
-        let err = run_uncached_action(&action, workspace.path(), &cache)
+        let err = run_uncached_action(&action, workspace.path(), &cache, false)
             .await
             .unwrap_err()
             .to_string();
@@ -3041,6 +3160,7 @@ mod tests {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: Some("id-1".to_string()),
             identifier: None,
@@ -3072,6 +3192,7 @@ mod tests {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
@@ -3111,6 +3232,7 @@ mod tests {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
@@ -3148,6 +3270,7 @@ mod tests {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
@@ -3189,6 +3312,7 @@ mod tests {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
@@ -3201,6 +3325,7 @@ mod tests {
                     blob_digest: Digest::of_bytes(content),
                     producer_action_digest,
                     same_target: true,
+                    materialized: false,
                 },
             )])
         };
@@ -3244,6 +3369,7 @@ mod tests {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
@@ -3256,6 +3382,7 @@ mod tests {
                     blob_digest: Digest::of_bytes(content),
                     producer_action_digest,
                     same_target: false,
+                    materialized: false,
                 },
             )])
         };
@@ -3299,6 +3426,7 @@ mod tests {
             sandbox: None,
             success_exit_codes: vec![0],
             cacheable: true,
+            inherit_parent_env: false,
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,

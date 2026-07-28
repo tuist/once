@@ -5,14 +5,22 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/web.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
       - "infra/**"
+      - "once.toml"
       - "web/**"
       - "mise.toml"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - ".github/workflows/web.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
       - "infra/**"
+      - "once.toml"
       - "web/**"
       - "mise.toml"
 
@@ -23,69 +31,13 @@ concurrency:
   group: web-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  MIX_ENV: test
-
 jobs:
-  build:
-    name: build
+  check:
+    name: check
     runs-on: tuist-linux
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
-
-      - name: Cache deps
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
-        with:
-          path: web/deps
-          key: web-deps-${{ runner.os }}-${{ hashFiles('web/mix.lock') }}
-          restore-keys: web-deps-${{ runner.os }}-
-
-      - name: Cache build
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
-        with:
-          path: web/_build
-          key: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-${{ hashFiles('web/mix.lock') }}
-          restore-keys: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-
-
-      - run: mise exec -- mix deps.get
-      - run: mise exec -- mix compile --warnings-as-errors
-
-  format:
-    name: format
-    runs-on: tuist-linux
-    needs: build
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
-
-      - name: Cache deps
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
-        with:
-          path: web/deps
-          key: web-deps-${{ runner.os }}-${{ hashFiles('web/mix.lock') }}
-          restore-keys: web-deps-${{ runner.os }}-
-
-      - name: Cache build
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
-        with:
-          path: web/_build
-          key: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-${{ hashFiles('web/mix.lock') }}
-          restore-keys: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-
-
-      - run: mise exec -- mix deps.get
-      - run: mise exec -- mix format --check-formatted
-
-  test:
-    name: test
-    runs-on: tuist-linux
-    needs: build
+    permissions:
+      contents: read
+      id-token: write
     services:
       postgres:
         image: postgres:18
@@ -100,46 +52,91 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
 
-      - name: Cache deps
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
-        with:
-          path: web/deps
-          key: web-deps-${{ runner.os }}-${{ hashFiles('web/mix.lock') }}
-          restore-keys: web-deps-${{ runner.os }}-
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
 
-      - name: Cache build
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          path: web/_build
-          key: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-${{ hashFiles('web/mix.lock') }}
-          restore-keys: web-build-${{ runner.os }}-${{ env.MIX_ENV }}-
+          shared-key: web-once-bootstrap
+          cache-on-failure: true
+          cache-bin: false
 
-      - run: mise exec -- mix deps.get
-      - run: mise exec -- mix test
+      - name: Bootstrap Once from source
+        run: mise exec -- cargo build --locked --package once-cli
+
+      - name: Materialize locked Elixir dependency sources
+        working-directory: web
+        run: |
+          mise exec -- mix local.hex --force
+          mise exec -- mix local.rebar --force
+          mise exec -- mix deps.get --check-locked
+
+      - name: Authenticate the shared Once cache
+        id: once-cache-auth
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        run: target/debug/once auth login --provider tuist --no-browser
+
+      - name: Build with Once
+        run: target/debug/once build web/application_test
+        env:
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+
+      - name: Lint with Once
+        run: target/debug/once run web/application_test
+        env:
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+
+      - name: Test with Once
+        run: target/debug/once test web/tests
+        env:
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
 
   release:
     name: release
     runs-on: tuist-linux
-    defaults:
-      run:
-        working-directory: web
-    env:
-      MIX_ENV: prod
+    needs: check
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
 
-      - run: mise exec -- mix deps.get --only prod
-      - run: mise exec -- mix compile
-      - run: mise exec -- mix assets.deploy
-      - run: mise exec -- mix release --overwrite
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: web-once-bootstrap
+          cache-on-failure: true
+          cache-bin: false
+
+      - name: Bootstrap Once from source
+        run: mise exec -- cargo build --locked --package once-cli
+
+      - name: Materialize locked Elixir dependency sources
+        working-directory: web
+        run: |
+          mise exec -- mix local.hex --force
+          mise exec -- mix local.rebar --force
+          MIX_ENV=prod mise exec -- mix deps.get --check-locked
+          MIX_ENV=prod mise exec -- mix esbuild.install --if-missing
+
+      - name: Authenticate the shared Once cache
+        id: once-cache-auth
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        run: target/debug/once auth login --provider tuist --no-browser
+
+      - name: Assemble the production release with Once
+        run: target/debug/once build web/release
+        env:
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
 
   docker:
     name: docker

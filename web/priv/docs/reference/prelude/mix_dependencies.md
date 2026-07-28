@@ -22,6 +22,23 @@ actions enable Hex offline mode and use the locked source tree as declared
 inputs. Live graph loading uses the vendored source tree and committed lockfile
 without requiring a separately installed Hex archive.
 
+The selected `mix_env` controls which dependencies are present in the root
+graph. Each generated package compiles with the environment reported by Mix
+for that dependency. `dependency_mix_env` supplies the fallback when Mix does
+not report one. This matches native Mix behavior, where a test graph may
+contain packages that compile in their own production environment.
+
+When dependency compilation reads root application configuration, declare
+`config_entry` and include that file plus every transitively imported
+configuration file in `config`. Once reads the root configuration with
+`mix_env` and `config_target`, then restores the dependency environment before
+running its compiler pipeline. This preserves the distinction between the
+root graph environment and each dependency's compilation environment.
+
+Use `target_prefix` when one package declares dependency graphs for more than
+one root environment. Separate development, test, and production dependency
+targets keep their configuration and action identities independent.
+
 The aggregate target depends only on the direct roots selected by Mix. The
 synthetic targets carry transitive edges, so Once still sees and schedules the
 complete graph. An optional `roots` list can expose a narrower set by Mix
@@ -38,7 +55,12 @@ application name or Hex package name.
 | `vendor_dir` | string | no | `deps` | Package-relative directory containing fetched dependency source trees |
 | `path_dependencies` | map&lt;string, string&gt; | no | `{}` | Active path dependency application names mapped to first-party Once targets |
 | `mix_env` | string | no | `prod` | Mix environment used to evaluate dependency declarations |
+| `dependency_mix_env` | string | no | `prod` | Fallback Mix environment used to compile a dependency when Mix does not report one |
+| `config` | list&lt;string&gt; | no | `[]` | Root configuration inputs available while compiling dependencies |
+| `config_entry` | string | no | empty | Root configuration entry loaded before dependency compilation; it must match an expanded `config` input |
+| `config_target` | string | no | `host` | Root Mix target used while reading `config_entry` |
 | `roots` | list&lt;string&gt; | no | `[]` | Optional application or Hex package names exposed as direct roots |
+| `target_prefix` | string | no | `mix` | Prefix for generated package target names |
 | `_mix_resolved` | bool | resolver-owned | `false` | Marks a graph expanded from the lockfile |
 | `_mix_locked_roots` | list&lt;string&gt; | resolver-owned | `[]` | Records generated root target names |
 
@@ -80,6 +102,10 @@ lockfile = "mix.lock"
 graph_file = "mix-dependencies.json"
 resolver_inputs = ["mix.exs", "mix.lock", "mix-dependencies.json"]
 vendor_dir = "deps"
+mix_env = "test"
+target_prefix = "mix-test"
+config = ["config/**/*.exs"]
+config_entry = "config/config.exs"
 
 [[target]]
 name = "greeting"
@@ -102,7 +128,9 @@ record the normalized result before restoring tool-free queries.
 
 Map every active path dependency to an ordinary first-party target. The mapped
 target participates in the imported root and transitive edges instead of being
-silently omitted:
+silently omitted. Once stages mapped projects at their workspace-relative
+source roots, so the path expression in `mix.exs` continues to resolve inside
+the isolated build workspace:
 
 ```toml
 [target.attrs.path_dependencies]
@@ -111,10 +139,9 @@ local_helper = "./local_helper"
 
 ## Supported Sources and Build Managers
 
-Locked Hex and Git entries are supported. A generated package must use Mix as
-its build manager. Rebar, Make, and dependency declarations that override the
-compile command fail explicitly. Dedicated target kinds are required before
-Once can model those tools and their outputs safely.
+Locked Hex and Git entries are supported. A generated package may use Mix or
+Rebar 3 as its build manager. Make-only packages and dependency declarations
+that override the compile command fail explicitly.
 
 The live graph reader requires Erlang 27 or newer for its built-in JavaScript
 Object Notation encoder. Checked-in snapshots do not require Mix or Erlang

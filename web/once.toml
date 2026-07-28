@@ -1,0 +1,263 @@
+[[target]]
+name = "dependencies_dev"
+kind = "mix_dependencies"
+srcs = ["mix.exs", "mix.lock"]
+
+[target.attrs]
+manifest = "mix.exs"
+lockfile = "mix.lock"
+resolver_inputs = [
+  "mix.exs",
+  "mix.lock",
+  "deps/*/mix.exs",
+  "deps/*/rebar.config",
+]
+vendor_dir = "deps"
+mix_env = "dev"
+target_prefix = "mix-dev"
+config = ["config/**/*.exs"]
+config_entry = "config/config.exs"
+
+[[target]]
+name = "dependencies_test"
+kind = "mix_dependencies"
+srcs = ["mix.exs", "mix.lock"]
+
+[target.attrs]
+manifest = "mix.exs"
+lockfile = "mix.lock"
+resolver_inputs = [
+  "mix.exs",
+  "mix.lock",
+  "deps/*/mix.exs",
+  "deps/*/rebar.config",
+]
+vendor_dir = "deps"
+mix_env = "test"
+target_prefix = "mix-test"
+config = ["config/**/*.exs"]
+config_entry = "config/config.exs"
+
+[[target]]
+name = "dependencies_prod"
+kind = "mix_dependencies"
+srcs = ["mix.exs", "mix.lock"]
+
+[target.attrs]
+manifest = "mix.exs"
+lockfile = "mix.lock"
+resolver_inputs = [
+  "mix.exs",
+  "mix.lock",
+  "deps/*/mix.exs",
+  "deps/*/rebar.config",
+]
+vendor_dir = "deps"
+mix_env = "prod"
+target_prefix = "mix-prod"
+config = ["config/**/*.exs"]
+config_entry = "config/config.exs"
+
+[[target]]
+name = "application_dev"
+kind = "mix_project"
+srcs = ["lib/**/*"]
+deps = ["./dependencies_dev"]
+
+[target.attrs]
+app_name = "once_site"
+mix_env = "dev"
+manifest = "mix.exs"
+compile_args = ["--warnings-as-errors"]
+run_task = "phx.server"
+config = ["config/**/*.exs"]
+data = [
+  "assets/**/*",
+  "priv/changelog/**/*.md",
+  "priv/docs/guide/**/*.md",
+  "priv/docs/reference/index.md",
+  "priv/docs/reference/manifest.md",
+  "priv/docs/reference/cli/**/*.md",
+  "priv/docs/reference/mcp/**/*.md",
+  "priv/docs/reference/memory/**/*.md",
+  "priv/docs/reference/modules/**/*.md",
+  "priv/docs/reference/prelude/**/*.md",
+  "priv/static/docs/icons/*.svg",
+  "priv/static/docs/*.png",
+  "priv/static/fonts/*",
+  "priv/static/images/*.svg",
+]
+priv = [
+  "priv/changelog/**/*.md",
+  "priv/docs/guide/**/*.md",
+  "priv/docs/reference/index.md",
+  "priv/docs/reference/manifest.md",
+  "priv/docs/reference/cli/**/*.md",
+  "priv/docs/reference/mcp/**/*.md",
+  "priv/docs/reference/memory/**/*.md",
+  "priv/docs/reference/modules/**/*.md",
+  "priv/docs/reference/prelude/**/*.md",
+  "priv/static/docs/icons/*.svg",
+  "priv/static/docs/*.png",
+  "priv/static/favicon.ico",
+  "priv/static/fonts/*",
+  "priv/static/images/*.svg",
+  "priv/static/robots.txt",
+]
+env_inherit = ["PORT"]
+
+[[target]]
+name = "application_test"
+kind = "mix_project"
+srcs = ["lib/**/*", "test/support/**/*"]
+deps = ["./dependencies_test"]
+
+[target.attrs]
+app_name = "once_site"
+mix_env = "test"
+manifest = "mix.exs"
+compile_args = ["--warnings-as-errors"]
+run_tasks = [
+  ["deps.unlock", "--check-unused"],
+  ["format", "--check-formatted"],
+  ["credo"],
+]
+run_cacheable = true
+config = ["config/**/*.exs"]
+data = [
+  ".formatter.exs",
+  "mix.lock",
+  "priv/changelog/**/*.md",
+  "priv/docs/guide/**/*.md",
+  "priv/docs/reference/index.md",
+  "priv/docs/reference/manifest.md",
+  "priv/docs/reference/cli/**/*.md",
+  "priv/docs/reference/mcp/**/*.md",
+  "priv/docs/reference/memory/**/*.md",
+  "priv/docs/reference/modules/**/*.md",
+  "priv/docs/reference/prelude/**/*.md",
+  "priv/static/docs/icons/*.svg",
+  "priv/static/docs/*.png",
+  "priv/static/fonts/*",
+  "priv/static/images/*.svg",
+]
+priv = [
+  "priv/changelog/**/*.md",
+  "priv/docs/guide/**/*.md",
+  "priv/docs/reference/index.md",
+  "priv/docs/reference/manifest.md",
+  "priv/docs/reference/cli/**/*.md",
+  "priv/docs/reference/mcp/**/*.md",
+  "priv/docs/reference/memory/**/*.md",
+  "priv/docs/reference/modules/**/*.md",
+  "priv/docs/reference/prelude/**/*.md",
+  "priv/static/docs/icons/*.svg",
+  "priv/static/docs/*.png",
+  "priv/static/favicon.ico",
+  "priv/static/fonts/*",
+  "priv/static/images/*.svg",
+  "priv/static/robots.txt",
+]
+
+[[target]]
+name = "release"
+kind = "mix_release"
+srcs = ["mix.exs"]
+deps = ["./application_prod"]
+
+[target.attrs]
+manifest = "mix.exs"
+pre_tasks = [
+  ["esbuild", "once_site", "--minify"],
+  ["esbuild", "docs", "--minify"],
+  ["phx.digest", "--no-compile"],
+]
+config = ["config/**/*.exs"]
+data = [
+  "assets/**/*",
+  "deps/noora/priv/static/*",
+  "deps/phoenix/package.json",
+  "deps/phoenix/priv/static/*",
+  "deps/phoenix_html/package.json",
+  "deps/phoenix_html/priv/static/*",
+  "deps/phoenix_live_view/package.json",
+  "deps/phoenix_live_view/priv/static/*",
+  "priv/changelog/**/*.md",
+  "priv/docs/guide/**/*.md",
+  "priv/docs/reference/index.md",
+  "priv/docs/reference/manifest.md",
+  "priv/docs/reference/cli/**/*.md",
+  "priv/docs/reference/mcp/**/*.md",
+  "priv/docs/reference/memory/**/*.md",
+  "priv/docs/reference/modules/**/*.md",
+  "priv/docs/reference/prelude/**/*.md",
+  "priv/static/docs/icons/*.svg",
+  "priv/static/docs/*.json",
+  "priv/static/docs/*.png",
+  "priv/static/favicon.ico",
+  "priv/static/fonts/*",
+  "priv/static/images/*.svg",
+  "priv/static/robots.txt",
+]
+tools = ["_build/esbuild-*"]
+
+[[target]]
+name = "tests"
+kind = "elixir_test"
+srcs = ["test/**/*.exs"]
+deps = ["./application_test"]
+
+[target.attrs]
+cacheable = false
+setup_tasks = [
+  ["ecto.create", "--quiet", "--no-compile", "--no-deps-check"],
+  ["ecto.migrate", "--quiet", "--no-compile", "--no-deps-check"],
+]
+config = ["config/**/*.exs"]
+data = ["priv/repo/migrations/**/*"]
+
+[[target]]
+name = "application_prod"
+kind = "mix_project"
+srcs = ["lib/**/*"]
+deps = ["./dependencies_prod"]
+
+[target.attrs]
+app_name = "once_site"
+mix_env = "prod"
+manifest = "mix.exs"
+compile_args = ["--warnings-as-errors"]
+config = ["config/config.exs", "config/prod.exs"]
+data = [
+  "assets/**/*",
+  "priv/changelog/**/*.md",
+  "priv/docs/guide/**/*.md",
+  "priv/docs/reference/index.md",
+  "priv/docs/reference/manifest.md",
+  "priv/docs/reference/cli/**/*.md",
+  "priv/docs/reference/mcp/**/*.md",
+  "priv/docs/reference/memory/**/*.md",
+  "priv/docs/reference/modules/**/*.md",
+  "priv/docs/reference/prelude/**/*.md",
+  "priv/static/docs/icons/*.svg",
+  "priv/static/docs/*.png",
+  "priv/static/fonts/*",
+  "priv/static/images/*.svg",
+]
+priv = [
+  "priv/changelog/**/*.md",
+  "priv/docs/guide/**/*.md",
+  "priv/docs/reference/index.md",
+  "priv/docs/reference/manifest.md",
+  "priv/docs/reference/cli/**/*.md",
+  "priv/docs/reference/mcp/**/*.md",
+  "priv/docs/reference/memory/**/*.md",
+  "priv/docs/reference/modules/**/*.md",
+  "priv/docs/reference/prelude/**/*.md",
+  "priv/static/docs/icons/*.svg",
+  "priv/static/docs/*.png",
+  "priv/static/favicon.ico",
+  "priv/static/fonts/*",
+  "priv/static/images/*.svg",
+  "priv/static/robots.txt",
+]

@@ -123,6 +123,8 @@ pub struct DeclaredAction {
     pub success_exit_codes: Vec<i32>,
     #[serde(default = "default_cacheable", skip_serializing_if = "is_true")]
     pub cacheable: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub inherit_parent_env: bool,
     #[serde(
         default = "default_depends_on_prior_actions",
         skip_serializing_if = "is_true"
@@ -166,6 +168,11 @@ fn default_depends_on_prior_actions() -> bool {
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_true(value: &bool) -> bool {
     *value
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Per-target collection of declared outputs, actions, and the host

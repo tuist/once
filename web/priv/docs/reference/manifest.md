@@ -20,9 +20,10 @@ include = ["apps/*/once.toml", "packages/*/once.toml"]
 exclude = ["packages/experimental/once.toml"]
 ```
 
-`include` and `exclude` contain workspace-relative glob patterns. An excluded
-path is always omitted. When `include` is empty, every discovered manifest is
-included unless `exclude` removes it.
+`include` and `exclude` contain workspace-relative glob patterns. They match
+both `once.toml` manifests and native project markers such as `mix.exs`. An
+excluded path is always omitted. When `include` is empty, every discovered
+manifest and native project is included unless `exclude` removes it.
 
 ## Root-only Tables
 

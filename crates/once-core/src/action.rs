@@ -259,8 +259,12 @@ impl Action {
     /// silently colliding.
     pub fn digest(&self) -> Digest {
         let body = serde_json::to_vec(self).expect("Action is serializable");
-        let mut buf = Vec::with_capacity(ACTION_DIGEST_DOMAIN.len() + body.len());
-        buf.extend_from_slice(ACTION_DIGEST_DOMAIN);
+        let domain = match self {
+            Action::CopyPath { .. } => b"once.action.copy_path.v2\0".as_slice(),
+            _ => ACTION_DIGEST_DOMAIN,
+        };
+        let mut buf = Vec::with_capacity(domain.len() + body.len());
+        buf.extend_from_slice(domain);
         buf.extend_from_slice(&body);
         Digest::of_bytes(&buf)
     }

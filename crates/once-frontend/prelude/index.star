@@ -60,6 +60,7 @@ PRELUDE_TARGET_KINDS = {
         "go_test",
     ],
     "rust.star": [
+        "cargo_workspace",
         "cargo_dependencies",
         "rust_library",
         "rust_mobile_library",
@@ -95,8 +96,11 @@ PRELUDE_TARGET_KINDS = {
         "kotlin_jvm_test",
     ],
     "elixir.star": [
+        "mix_workspace",
         "mix_dependencies",
         "mix_package",
+        "mix_project",
+        "mix_release",
         "elixir_library",
         "elixir_test",
     ],

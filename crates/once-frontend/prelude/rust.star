@@ -528,7 +528,7 @@ def _rust_manifest_dir(ctx, manifest_dir):
         return manifest_dir
     package = ctx["label"]["package"]
     if manifest_dir == ".":
-        return package
+        return package or "."
     if manifest_dir.startswith("./"):
         suffix = manifest_dir[2:]
         if package and suffix:
@@ -2287,7 +2287,23 @@ def _cargo_metadata_for_platform(ctx, cargo, manifest, platform):
     if platform:
         argv.extend(["--filter-platform", platform])
     argv.extend(_cargo_feature_args(ctx))
-    metadata_content = host_command(argv)
+    metadata_env = {}
+    for name in [
+        "CARGO_HOME",
+        "RUSTUP_HOME",
+        "RUSTUP_TOOLCHAIN",
+        "RUSTFLAGS",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_TARGET_DIR",
+    ]:
+        value = host_env(name)
+        if value:
+            metadata_env[name] = value
+    metadata_content = host_command(
+        argv,
+        env = metadata_env,
+        cwd = workspace_root(),
+    )
     return json_decode(metadata_content)
 
 def _cargo_resolver_config(ctx):
@@ -2483,7 +2499,18 @@ def _cargo_host_dependency_ids(packages, nodes, host_nodes = None):
     stack = []
     for package in packages:
         package_id = package.get("id")
-        if package.get("source") == None or not package_id:
+        if not package_id:
+            continue
+        if package.get("source") == None:
+            if _cargo_build_script_target(package) != None:
+                node = nodes.get(package_id) or {}
+                for dep in node.get("deps") or []:
+                    if not _cargo_dep_is_build(dep):
+                        continue
+                    dep_id = dep.get("pkg")
+                    dep_package = package_by_id.get(dep_id)
+                    if dep_package != None and dep_package.get("source") != None:
+                        stack.append(dep_id)
             continue
         if _cargo_package_is_proc_macro(package):
             stack.append(package_id)
@@ -2794,6 +2821,198 @@ def _cargo_package_version_matches(manifest, version):
         return value == "\"" + version + "\"" or value == "'" + version + "'"
     return False
 
+def _cargo_workspace_source_root(ctx, package):
+    package_root = _cargo_normalized_path(_cargo_package_root(package))
+    workspace_package = _cargo_normalized_path(workspace_root())
+    label_package = (ctx.get("label") or {}).get("package") or ""
+    if label_package:
+        workspace_package += "/" + label_package
+    if package_root == workspace_package:
+        return "."
+    prefix = workspace_package + "/"
+    if package_root.startswith(prefix):
+        return package_root[len(prefix):]
+    fail(ctx["label"]["id"] + ": Cargo workspace package `" + package["name"] + "` is outside the adapted project root; run Once from a common workspace root or declare an explicit once.toml workspace")
+
+def _cargo_workspace_name(value):
+    return "cargo_" + value.replace("-", "_").replace(".", "_")
+
+def _cargo_workspace_library_names(packages):
+    names = {}
+    for package in packages:
+        target = _cargo_library_target(package)
+        if target != None:
+            names[package["id"]] = _cargo_workspace_name(package["name"])
+    return names
+
+def _cargo_workspace_target_name(package, target, kind, library_names):
+    if kind == "library" or kind == "proc_macro":
+        return library_names[package["id"]]
+    prefix = _cargo_workspace_name(package["name"])
+    target_name = (target.get("name") or package["name"]).replace("-", "_").replace(".", "_")
+    if kind == "binary":
+        return prefix + "_bin_" + target_name
+    if kind == "test":
+        return prefix + "_test_" + target_name
+    return prefix + "_" + target_name
+
+def _cargo_workspace_target_kind(target):
+    kinds = target.get("kind") or []
+    crate_types = target.get("crate_types") or []
+    if "custom-build" in kinds:
+        return ""
+    if "proc-macro" in kinds or "proc-macro" in crate_types:
+        return "proc_macro"
+    if "test" in kinds or "bench" in kinds:
+        return "test"
+    if "bin" in kinds or "example" in kinds:
+        return "binary"
+    if "lib" in kinds or "rlib" in crate_types or "lib" in crate_types:
+        return "library"
+    return ""
+
+def _cargo_workspace_attrs(package, target, node, source_root, aliases):
+    attrs = {
+        "crate_name": target.get("name") or package["name"].replace("-", "_"),
+        "crate_root": source_root + "/" + _cargo_source_rel(package, target),
+        "edition": target.get("edition") or package.get("edition") or "2021",
+        "features": node.get("features") or [],
+        "rustc_env": _cargo_rustc_env(package, target, source_root),
+        "cargo_package": package["name"],
+    }
+    if aliases:
+        attrs["crate_aliases"] = aliases
+    build_script = _cargo_build_script_target(package)
+    if build_script != None:
+        attrs["build_script"] = source_root + "/" + _cargo_source_rel(package, build_script)
+    return attrs
+
+def _cargo_workspace_dep_maps(metadata, external_names, local_names):
+    target_names = {}
+    for package_id, name in external_names.items():
+        target_names[package_id] = name
+    for package_id, name in local_names.items():
+        target_names[package_id] = name
+    return target_names
+
+def _cargo_workspace_target_spec(package, target, node, kind, source_root, target_names, build_target_names, local_library):
+    deps, aliases = _cargo_metadata_deps(node, target_names, False, True)
+    build_deps, build_aliases = _cargo_metadata_build_deps(node, build_target_names, True)
+    name = _cargo_workspace_target_name(
+        package,
+        target,
+        kind,
+        {package["id"]: local_library} if local_library else {},
+    )
+    if local_library and name != local_library and ("test" in (target.get("kind") or []) or "bench" in (target.get("kind") or []) or "bin" in (target.get("kind") or []) or "example" in (target.get("kind") or [])):
+        local_ref = "./" + local_library
+        if local_ref not in deps:
+            deps.append(local_ref)
+        library = _cargo_library_target(package)
+        if library != None:
+            aliases[local_library] = library.get("name") or package["name"].replace("-", "_")
+    attrs = _cargo_workspace_attrs(
+        package,
+        target,
+        node,
+        source_root,
+        _cargo_merge_aliases(aliases, build_aliases),
+    )
+    target_kind = {
+        "library": "rust_library",
+        "proc_macro": "rust_proc_macro",
+        "binary": "rust_binary",
+        "test": "rust_test",
+    }[kind]
+    spec = {
+        "name": name,
+        "kind": target_kind,
+        "deps": deps,
+        "srcs": _cargo_package_source_globs(source_root),
+        "attrs": attrs,
+    }
+    if build_deps:
+        spec["dependencies"] = {"build_deps": build_deps}
+    return spec
+
+def _cargo_workspace_resolver(ctx):
+    _cargo_require_resolver_file(ctx, "manifest", "Cargo.toml")
+    _cargo_require_resolver_file(ctx, "lockfile", "Cargo.lock")
+    resolved = _cargo_resolved_metadata(ctx)
+    metadata = resolved["metadata"]
+    packages = metadata.get("packages") or []
+    workspace_packages = [
+        package
+        for package in packages
+        if package.get("source") == None
+    ]
+    duplicate_counts = _cargo_duplicate_counts(packages)
+    nodes = _cargo_resolve_nodes(metadata)
+    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes)
+    external_names, host_external_names = _cargo_dependency_name_maps(
+        packages,
+        duplicate_counts,
+        host_dependency_ids,
+        _rust_target(ctx),
+    )
+    library_names = _cargo_workspace_library_names(workspace_packages)
+    target_names = _cargo_workspace_dep_maps(metadata, external_names, library_names)
+    host_target_names = _cargo_workspace_dep_maps(metadata, external_names, library_names)
+    for package_id, name in host_external_names.items():
+        host_target_names[package_id] = name
+    targets = _cargo_resolver_target_specs(ctx, resolved["specs"])
+    roots = []
+
+    for package in workspace_packages:
+        source_root = _cargo_workspace_source_root(ctx, package)
+        node = nodes.get(package.get("id")) or {}
+        local_library = library_names.get(package.get("id")) or ""
+        for target in package.get("targets") or []:
+            kind = _cargo_workspace_target_kind(target)
+            if not kind:
+                continue
+            names = host_target_names if kind == "proc_macro" else target_names
+            spec = _cargo_workspace_target_spec(
+                package,
+                target,
+                node,
+                kind,
+                source_root,
+                names,
+                host_target_names,
+                local_library,
+            )
+            targets.append(spec)
+            if kind != "test":
+                roots.append(spec["name"])
+
+            if kind != "test" and target.get("test"):
+                test_spec = _cargo_workspace_target_spec(
+                    package,
+                    target,
+                    node,
+                    "test",
+                    source_root,
+                    target_names,
+                    host_target_names,
+                    local_library if kind != "library" else "",
+                )
+                test_spec["name"] = spec["name"] + "_unit_tests"
+                targets.append(test_spec)
+
+    return {
+        "targets": targets,
+        "roots": _unique(roots),
+    }
+
+def _cargo_workspace_impl(ctx):
+    return {
+        "label_id": ctx["label"]["id"],
+        "target_kind": "cargo_workspace",
+        "cargo_workspace": True,
+        "targets": ctx["deps"],
+    }
+
 _RUST_COMMON_ATTRS = [
     attr("crate_name", "string", docs = "Rust crate name passed to rustc. Defaults to the target name with `-` and `.` rewritten as `_`.", configurable = False),
     attr("crate_root", "string", docs = "Package-relative path to lib.rs or main.rs. Defaults to src/lib.rs for libraries and src/main.rs for binaries.", configurable = False),
@@ -2871,6 +3090,47 @@ _RUST_NAMED_DEP_ROLES = [
 _RUST_CARGO_DEP_ROLES = [
     dep("build_deps", _RUST_DEP_PROVIDERS, "Rust crates and procedural macros compiled for a Cargo build script and passed to its rustc invocation."),
 ] + _RUST_NAMED_DEP_ROLES
+
+cargo_workspace = target_kind(
+    docs = "Native Cargo project seed. Its resolver reads locked Cargo metadata and emits first-party libraries, binaries, tests, procedural macros, build scripts, and external packages as ordinary Once targets.",
+    attrs = [
+        attr("manifest", "string", default = "Cargo.toml", docs = "Package-relative Cargo manifest path passed to `cargo metadata --manifest-path`.", configurable = False),
+        attr("lockfile", "string", default = "Cargo.lock", docs = "Package-relative Cargo lockfile path read as a declared resolver input.", configurable = False),
+        attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native project resolution. Defaults to srcs when empty.", configurable = False),
+        attr("metadata_file", "string", docs = "Optional checked-in JavaScript Object Notation output from cargo metadata.", configurable = False),
+        attr("host_metadata_file", "string", docs = "Optional checked-in host Cargo metadata snapshot.", configurable = False),
+        attr("vendor_dir", "string", default = "vendor", docs = "Package-relative directory containing vendored crate sources.", configurable = False),
+        attr("features", "list<string>", default = "[]", docs = "Cargo features passed to `cargo metadata --features`.", configurable = True),
+        attr("all_features", "bool", default = "false", docs = "Pass `--all-features` to Cargo metadata.", configurable = True),
+        attr("no_default_features", "bool", default = "false", docs = "Pass `--no-default-features` to Cargo metadata.", configurable = True),
+        attr("target", "string", docs = "Rust target triple passed to Cargo as `--filter-platform`.", configurable = False),
+        attr("dep_rustc_flags", "list<string>", default = "[]", docs = "Additional compiler flags applied to resolved external packages.", configurable = False),
+    ],
+    resolver = _cargo_workspace_resolver,
+    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_binary"], "Default first-party Cargo products emitted by native project discovery.")],
+    providers = ["cargo_workspace"],
+    capabilities = [capability("build", [])],
+    tools = [_RUST_TOOL],
+    examples = [
+        example(
+            "cargo-workspace-native-project",
+            name = "Cargo native project seed",
+            use_when = "Use this when a Cargo project should derive first-party build and test targets from Cargo.toml.",
+        ),
+    ],
+    impl = _cargo_workspace_impl,
+)
+
+cargo = native_project(
+    target_kind = "cargo_workspace",
+    docs = "Recognizes a native Cargo project or workspace from Cargo.toml.",
+    markers = ["Cargo.toml"],
+    target_name = "cargo",
+    inputs = ["Cargo.lock", "**/Cargo.toml", ".cargo/config", ".cargo/config.toml"],
+    exclude = ["target", "vendor", "third_party"],
+    on_match = "stop",
+    requires_tools = ["cargo", "rustc"],
+)
 
 cargo_dependencies = target_kind(
     docs = "Cargo dependency graph consumed by Rust targets. Graph loading runs `cargo metadata --locked`, lowers every resolved external package to a synthetic Rust target, and aggregates the resulting providers for first-party workspace packages.",

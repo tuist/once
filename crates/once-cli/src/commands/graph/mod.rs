@@ -50,9 +50,10 @@ struct CapabilityRunRecord {
     result: ActionResult,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct GraphRunOptions {
     pub visible: bool,
+    pub arguments: Vec<String>,
 }
 
 pub async fn build(
@@ -320,6 +321,7 @@ pub async fn run(
         graph,
         AnalysisOptions {
             run_visible: options.visible,
+            run_arguments: options.arguments,
             ..AnalysisOptions::default()
         },
         sandbox,

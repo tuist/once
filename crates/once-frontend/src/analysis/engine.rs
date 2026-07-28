@@ -29,6 +29,8 @@ pub struct AnalysisOptions {
     /// Request a visible runtime surface for run capabilities when the target
     /// kind supports one.
     pub run_visible: bool,
+    /// Arguments supplied to the target's generic run capability.
+    pub run_arguments: Vec<String>,
     /// Stable semantic test-unit identifiers requested for a test capability.
     pub test_filters: Vec<String>,
     /// Stable batch identifier used to isolate outputs for parallel test runs.
@@ -664,10 +666,21 @@ fn build_ctx<'v>(
             }),
     );
     let deps_by_role = heap.alloc(AllocDict(providers_by_role));
-    let run = heap.alloc(AllocDict([(
-        "visible",
-        Value::new_bool(analysis.options.run_visible),
-    )]));
+    let is_run = analysis.capability == "run";
+    let run = heap.alloc(AllocDict([
+        (
+            "visible",
+            Value::new_bool(is_run && analysis.options.run_visible),
+        ),
+        (
+            "args",
+            heap.alloc(if is_run {
+                analysis.options.run_arguments.clone()
+            } else {
+                Vec::new()
+            }),
+        ),
+    ]));
     let test = heap.alloc(AllocDict([
         ("filters", heap.alloc(analysis.options.test_filters.clone())),
         (
