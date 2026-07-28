@@ -1,11 +1,14 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+
+const HOST_COMMAND_OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
 
 /// A portable filesystem operation declared by a target kind impl.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -371,10 +374,9 @@ impl HostCache {
         for (key, value) in env {
             command.env(key, value);
         }
-        let output = command
-            .output()
+        let (status, stdout, stderr) = capture_host_command_output(&mut command)
             .with_context(|| format!("running `{program}`"))?;
-        if !output.status.success() {
+        if !status.success() {
             let rendered_args = command_args
                 .iter()
                 .map(|arg| arg.as_str())
@@ -383,18 +385,18 @@ impl HostCache {
             return Err(anyhow!(
                 "`{program} {}` exited with {}: {}",
                 rendered_args,
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
+                status,
+                String::from_utf8_lossy(&stderr).trim()
             ));
         }
         // Some tools (kotlinc, older javac) print their version banner to
         // stderr. `merge_stderr` folds it in so version probes need no
         // host shell `2>&1`.
-        let mut combined = String::from_utf8(output.stdout)
-            .map_err(|error| anyhow!("non-utf8 stdout: {error}"))?;
+        let mut combined =
+            String::from_utf8(stdout).map_err(|error| anyhow!("non-utf8 stdout: {error}"))?;
         if merge_stderr {
-            let stderr = String::from_utf8(output.stderr)
-                .map_err(|error| anyhow!("non-utf8 stderr: {error}"))?;
+            let stderr =
+                String::from_utf8(stderr).map_err(|error| anyhow!("non-utf8 stderr: {error}"))?;
             combined.push_str(&stderr);
         }
         self.lock_commands()?.insert(key, combined.clone());
@@ -451,6 +453,30 @@ impl HostCache {
             .lock()
             .map_err(|_| anyhow!("host_command cache lock poisoned"))
     }
+}
+
+fn capture_host_command_output(command: &mut Command) -> Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
+    let stdout = tempfile::tempfile().context("creating host command stdout staging file")?;
+    let stderr = tempfile::tempfile().context("creating host command stderr staging file")?;
+    command.stdout(Stdio::from(stdout.try_clone()?));
+    command.stderr(Stdio::from(stderr.try_clone()?));
+    let status = command.status()?;
+    let stdout = read_host_command_output(stdout)?;
+    let stderr = read_host_command_output(stderr)?;
+    Ok((status, stdout, stderr))
+}
+
+fn read_host_command_output(mut file: std::fs::File) -> Result<Vec<u8>> {
+    let len = file.metadata()?.len();
+    if len > HOST_COMMAND_OUTPUT_LIMIT {
+        anyhow::bail!("host command output exceeds the 16 mebibyte analysis limit");
+    }
+    file.rewind()?;
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(len).context("host command output exceeds addressable memory")?,
+    );
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 thread_local! {

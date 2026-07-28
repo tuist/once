@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
-use once_core::{EvidenceCacheState, SandboxMode};
+use once_core::{EvidenceCacheState, ResourceLimits, ResourcePool, SandboxMode};
 use once_frontend::analysis::{AnalysisEngine, AnalysisOptions, CachedToolCommand};
 use once_frontend::GraphTarget;
 use serde::{Deserialize, Serialize};
@@ -126,6 +126,7 @@ pub(super) struct BuildSession {
     tool_paths: Arc<BTreeMap<String, String>>,
     tool_cache_fingerprint: Option<Digest>,
     cached_tool_commands: Arc<[CachedToolCommand]>,
+    resources: Arc<ResourcePool>,
     sandbox: SandboxMode,
 }
 
@@ -221,8 +222,14 @@ impl BuildSession {
             tool_paths: Arc::new(BTreeMap::new()),
             tool_cache_fingerprint: None,
             cached_tool_commands: Arc::from([]),
+            resources: Arc::new(ResourcePool::new(ResourceLimits::default())),
             sandbox,
         }
+    }
+
+    pub(super) fn with_resource_limits(mut self, limits: ResourceLimits) -> Self {
+        self.resources = Arc::new(ResourcePool::new(limits));
+        self
     }
 
     pub(super) fn target(&self, target_id: &str) -> Result<&GraphTarget> {
@@ -311,6 +318,7 @@ impl BuildSession {
                 &available_inputs,
                 &self.tool_paths,
                 self.sandbox,
+                &self.resources,
             )
             .await
             .with_context(|| format!("executing {capability} for {}", target.label.id))?;
@@ -519,6 +527,7 @@ impl BuildSession {
             reachable,
             retained,
             self.sandbox,
+            &self.resources,
         )
         .run()
         .await
@@ -865,6 +874,7 @@ async fn build_one(
     available_inputs: BTreeMap<String, AvailableInput>,
     tool_paths: Arc<BTreeMap<String, String>>,
     sandbox: SandboxMode,
+    resources: Arc<ResourcePool>,
 ) -> Result<(String, BuildOutcome)> {
     ensure_graph_target_valid(&target)?;
     let target_id = target.label.id.clone();
@@ -910,6 +920,7 @@ async fn build_one(
         &available_inputs,
         &tool_paths,
         sandbox,
+        &resources,
     )
     .await?;
     Ok((target_id, outcome))

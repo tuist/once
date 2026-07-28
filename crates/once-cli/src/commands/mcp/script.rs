@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use once_core::WorkspacePath;
+use once_core::{ResourceLimits, WorkspacePath};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -26,16 +26,21 @@ pub(super) fn validate(workspace: &Path, args: &Value) -> Result<Value> {
     crate::commands::query::script_validation_value(workspace, &args.path)
 }
 
-pub(super) fn execute(workspace: &Path, args: &Value) -> Result<Value> {
+pub(super) fn execute(
+    workspace: &Path,
+    args: &Value,
+    resource_limits: &ResourceLimits,
+) -> Result<Value> {
     let args: ExecuteScriptArgs = serde_json::from_value(tool_args(args))?;
     let executable = std::env::current_exe().context("resolving current once executable")?;
-    execute_with_executable(&executable, workspace, &args)
+    execute_with_executable(&executable, workspace, &args, resource_limits.memory_bytes)
 }
 
 fn execute_with_executable(
     executable: &Path,
     workspace: &Path,
     args: &ExecuteScriptArgs,
+    memory_limit_bytes: u64,
 ) -> Result<Value> {
     let script_path = WorkspacePath::try_from(args.path.as_str())?;
     let absolute = script_path.resolve(workspace);
@@ -43,11 +48,13 @@ fn execute_with_executable(
         .with_context(|| format!("validating annotated script `{}`", args.path))?;
 
     let mut command = std::process::Command::new(executable);
+    command.arg("-C").arg(workspace).arg("--format").arg("json");
+    if memory_limit_bytes > 0 {
+        command
+            .arg("--memory-limit")
+            .arg(memory_limit_bytes.to_string());
+    }
     command
-        .arg("-C")
-        .arg(workspace)
-        .arg("--format")
-        .arg("json")
         .arg("exec")
         .arg("--script")
         .arg("--")
@@ -55,8 +62,7 @@ fn execute_with_executable(
         .args(&annotations.runtime_args)
         .arg(script_path.as_str())
         .args(&args.args);
-    let output = command
-        .output()
+    let output = crate::commands::util::capture_command_output(&mut command)
         .with_context(|| format!("executing annotated script `{}`", args.path))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let raw_stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -82,6 +88,8 @@ fn execute_with_executable(
         "exit_code": output.status.code().unwrap_or(-1),
         "stdout": stdout,
         "stderr": stderr,
+        "stdout_truncated": output.stdout_truncated,
+        "stderr_truncated": output.stderr_truncated,
         "record": record,
         "evidence_subject": evidence_subject,
         "evidence": evidence,

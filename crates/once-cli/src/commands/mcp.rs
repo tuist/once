@@ -18,6 +18,7 @@ use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use once_core::ResourceLimits;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -74,8 +75,12 @@ fn negotiated_protocol_version(params: Option<&Value>) -> String {
 }
 
 /// Run the MCP server until stdin closes.
-pub async fn serve(workspace: PathBuf, allow_run: bool) -> Result<()> {
-    tokio::task::spawn_blocking(move || serve_blocking(workspace, allow_run))
+pub async fn serve(
+    workspace: PathBuf,
+    allow_run: bool,
+    resource_limits: ResourceLimits,
+) -> Result<()> {
+    tokio::task::spawn_blocking(move || serve_blocking(workspace, allow_run, resource_limits))
         .await
         .context("joining MCP server thread")?
 }
@@ -87,11 +92,15 @@ pub async fn serve(workspace: PathBuf, allow_run: bool) -> Result<()> {
 /// Tool calls are orders of magnitude smaller than this.
 const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 
-fn serve_blocking(workspace: PathBuf, allow_run: bool) -> Result<()> {
+fn serve_blocking(
+    workspace: PathBuf,
+    allow_run: bool,
+    resource_limits: ResourceLimits,
+) -> Result<()> {
     let stdin = io::stdin();
     let mut handle = stdin.lock();
     let mut stdout = io::stdout().lock();
-    let server = Server::new(workspace, allow_run);
+    let server = Server::with_resource_limits(workspace, allow_run, resource_limits);
 
     let mut buf: Vec<u8> = Vec::new();
     loop {
@@ -206,6 +215,7 @@ fn read_capped_line<R: BufRead>(
 struct Server {
     workspace: PathBuf,
     allow_run: bool,
+    resource_limits: ResourceLimits,
 }
 
 #[derive(Debug)]
@@ -215,10 +225,20 @@ enum DispatchOutcome {
 }
 
 impl Server {
+    #[cfg(test)]
     fn new(workspace: PathBuf, allow_run: bool) -> Self {
+        Self::with_resource_limits(workspace, allow_run, ResourceLimits::default())
+    }
+
+    fn with_resource_limits(
+        workspace: PathBuf,
+        allow_run: bool,
+        resource_limits: ResourceLimits,
+    ) -> Self {
         Self {
             workspace,
             allow_run,
+            resource_limits,
         }
     }
 
@@ -328,7 +348,9 @@ impl Server {
                 crate::commands::query::workspace_validation_value(&self.workspace)
             }
             "once_validate_script" => script::validate(&self.workspace, &call.arguments),
-            "once_exec_script" => script::execute(&self.workspace, &call.arguments),
+            "once_exec_script" => {
+                script::execute(&self.workspace, &call.arguments, &self.resource_limits)
+            }
             "once_build_target" => self.tool_build_target(&call.arguments),
             "once_lint_target" => self.tool_lint_target(&call.arguments),
             "once_validate_actions" => self.tool_validate_actions(&call.arguments),
@@ -531,6 +553,7 @@ impl Server {
         let plan = run_test_plan_args(&self.workspace, &args)?;
         let workspace = self.workspace.clone();
         let workers = args.jobs;
+        let resource_limits = self.resource_limits.clone();
         run_async_result(async move {
             let report = crate::commands::test_schedule::execute(
                 &workspace,
@@ -538,6 +561,7 @@ impl Server {
                 plan,
                 workers,
                 once_core::SandboxMode::Off,
+                resource_limits,
             )
             .await?;
             Ok(serde_json::to_value(report)?)
@@ -546,12 +570,26 @@ impl Server {
 
     fn tool_build_target(&self, args: &Value) -> Result<Value> {
         let args: TargetExecutionArgs = serde_json::from_value(tool_args(args))?;
-        run_graph_target(&self.workspace, "build", &args.target, false, &[])
+        run_graph_target(
+            &self.workspace,
+            "build",
+            &args.target,
+            false,
+            &[],
+            &self.resource_limits,
+        )
     }
 
     fn tool_lint_target(&self, args: &Value) -> Result<Value> {
         let args: TargetExecutionArgs = serde_json::from_value(tool_args(args))?;
-        run_graph_target(&self.workspace, "lint", &args.target, false, &[])
+        run_graph_target(
+            &self.workspace,
+            "lint",
+            &args.target,
+            false,
+            &[],
+            &self.resource_limits,
+        )
     }
 
     fn tool_validate_actions(&self, args: &Value) -> Result<Value> {
@@ -582,6 +620,7 @@ impl Server {
             &args.target,
             args.visible,
             &args.arguments,
+            &self.resource_limits,
         )
     }
 
@@ -702,11 +741,21 @@ fn run_graph_target(
     target: &str,
     visible: bool,
     arguments: &[String],
+    resource_limits: &ResourceLimits,
 ) -> Result<Value> {
     let exe = std::env::current_exe().context("resolving current once executable")?;
-    run_graph_target_with_exe(&exe, workspace, capability, target, visible, arguments)
+    run_graph_target_with_exe_and_memory_limit(
+        &exe,
+        workspace,
+        capability,
+        target,
+        visible,
+        arguments,
+        resource_limits.memory_bytes,
+    )
 }
 
+#[cfg(test)]
 fn run_graph_target_with_exe(
     exe: &std::path::Path,
     workspace: &std::path::Path,
@@ -715,14 +764,33 @@ fn run_graph_target_with_exe(
     visible: bool,
     arguments: &[String],
 ) -> Result<Value> {
+    run_graph_target_with_exe_and_memory_limit(
+        exe, workspace, capability, target, visible, arguments, 0,
+    )
+}
+
+fn run_graph_target_with_exe_and_memory_limit(
+    exe: &std::path::Path,
+    workspace: &std::path::Path,
+    capability: &str,
+    target: &str,
+    visible: bool,
+    arguments: &[String],
+    memory_limit_bytes: u64,
+) -> Result<Value> {
     let mut command = std::process::Command::new(exe);
     command
         .current_dir(workspace)
         .arg("-C")
         .arg(workspace)
         .arg("--format")
-        .arg("json")
-        .arg(capability);
+        .arg("json");
+    if memory_limit_bytes > 0 {
+        command
+            .arg("--memory-limit")
+            .arg(memory_limit_bytes.to_string());
+    }
+    command.arg(capability);
     if visible {
         command.arg("--visible");
     }
@@ -730,8 +798,7 @@ fn run_graph_target_with_exe(
     if !arguments.is_empty() {
         command.arg("--").args(arguments);
     }
-    let output = command
-        .output()
+    let output = crate::commands::util::capture_command_output(&mut command)
         .with_context(|| format!("running `{}` {capability} `{target}`", exe.display()))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -748,6 +815,8 @@ fn run_graph_target_with_exe(
         "success": output.status.success(),
         "record": record,
         "record_parse_error": record_parse_error,
+        "stdout_truncated": output.stdout_truncated,
+        "stderr_truncated": output.stderr_truncated,
         "error": error,
         "captured_stdout": captured_stdout,
         "captured_stderr": captured_stderr,

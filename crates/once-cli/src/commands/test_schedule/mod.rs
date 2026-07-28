@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use once_core::{SandboxMode, TestPlan, TestSchedule, TestTimingStore};
+use once_core::{ResourceLimits, SandboxMode, TestPlan, TestSchedule, TestTimingStore};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
@@ -39,6 +39,7 @@ pub(crate) async fn execute(
     plan: TestPlan,
     requested_workers: Option<usize>,
     sandbox: SandboxMode,
+    resource_limits: ResourceLimits,
 ) -> Result<TestExecutionReport> {
     validate_workers(requested_workers)?;
     if plan.batches.is_empty() {
@@ -63,6 +64,7 @@ pub(crate) async fn execute(
             &estimates,
             requested_workers,
             sandbox,
+            &resource_limits,
         )
     })
     .await
@@ -96,8 +98,17 @@ pub(crate) async fn run(
     plan: TestPlan,
     requested_workers: Option<usize>,
     sandbox: SandboxMode,
+    resource_limits: ResourceLimits,
 ) -> Result<ExitCode> {
-    let report = execute(workspace, graph, plan, requested_workers, sandbox).await?;
+    let report = execute(
+        workspace,
+        graph,
+        plan,
+        requested_workers,
+        sandbox,
+        resource_limits,
+    )
+    .await?;
     let succeeded = report.succeeded();
     write_report(output, &report).await?;
     Ok(if succeeded {

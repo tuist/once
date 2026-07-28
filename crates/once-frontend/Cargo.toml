@@ -15,13 +15,11 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 starlark.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 toml_edit = "0.25"
 walkdir.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
 
 [lints]
 workspace = true

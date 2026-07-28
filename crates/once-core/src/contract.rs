@@ -7,6 +7,8 @@ use sha2::Digest as _;
 
 use crate::{Action, SandboxMode, WorkspacePath};
 
+const CONTRACT_STDERR_LIMIT: u64 = 16 * 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum FilesystemOperation {
     Read,
@@ -313,8 +315,8 @@ pub(crate) async fn audit_filesystem(
     }
     if result.exit_code != 0 {
         if let Some(stderr) = result.stderr {
-            let bytes = cache
-                .get_blob(&stderr)
+            let (bytes, _) = cache
+                .read_blob_limited(&stderr, CONTRACT_STDERR_LIMIT, false)
                 .await
                 .map_err(std::io::Error::other)?;
             let text = String::from_utf8_lossy(&bytes);

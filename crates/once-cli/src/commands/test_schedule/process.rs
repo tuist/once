@@ -10,6 +10,7 @@ pub(super) fn run_test_target(
     workspace: &Path,
     batch: &TestBatch,
     sandbox: SandboxMode,
+    memory_limit_bytes: u64,
 ) -> Result<Value> {
     let sandbox = match sandbox {
         SandboxMode::Off => "off",
@@ -17,11 +18,13 @@ pub(super) fn run_test_target(
         SandboxMode::CopiedInputs => "copied-inputs",
     };
     let mut command = Command::new(executable);
+    command.arg("-C").arg(workspace).arg("--format").arg("json");
+    if memory_limit_bytes > 0 {
+        command
+            .arg("--memory-limit")
+            .arg(memory_limit_bytes.to_string());
+    }
     command
-        .arg("-C")
-        .arg(workspace)
-        .arg("--format")
-        .arg("json")
         .arg("test")
         .arg("--sandbox")
         .arg(sandbox)
@@ -32,8 +35,7 @@ pub(super) fn run_test_target(
     if !batch.test_filters.is_empty() {
         command.arg("--test-batch-id").arg(&batch.id);
     }
-    let output = command
-        .output()
+    let output = crate::commands::util::capture_command_output(&mut command)
         .with_context(|| format!("running `{}` test `{}`", executable.display(), batch.target))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -75,6 +77,8 @@ pub(super) fn run_test_target(
         "success": success,
         "record": record,
         "record_parse_error": record_parse_error,
+        "stdout_truncated": output.stdout_truncated,
+        "stderr_truncated": output.stderr_truncated,
         "results": results,
         "results_error": results_error,
         "stderr": stderr,

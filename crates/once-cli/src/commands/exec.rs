@@ -16,22 +16,25 @@ use std::env;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::{ExitCode, Output as ProcessOutput};
+use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     tool_env, workspace_tool_command, workspace_tool_env, Action, CacheState, EvidenceSubject,
-    InputDigestBuilder, OutputSymlinkMode, RemoteExecution, ResourceRequest, RunOpts, SandboxMode,
-    WorkspacePath, Xdg,
+    InputDigestBuilder, OutputSymlinkMode, RemoteExecution, ResourceLimits, ResourceRequest,
+    RunOpts, SandboxMode, WorkspacePath, Xdg,
 };
 use once_frontend::{parse_script_annotations, ScriptAnnotations};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::{exit_from, Format, Output};
-use crate::commands::util::{cache_tag, relative_path};
+use crate::commands::util::{
+    cache_tag, capture_tokio_command_output, relative_path, write_cache_blob, CapturedOutput,
+    CHILD_OUTPUT_LIMIT,
+};
 use crate::render;
 
 const MAX_SCRIPT_GLOB_MATCHES: usize = 1_000;
@@ -53,6 +56,7 @@ pub struct ExecArgs {
     pub cwd: Option<WorkspacePath>,
     pub timeout_ms: Option<u64>,
     pub cache_failures: bool,
+    pub resource_limits: ResourceLimits,
     pub remote: Option<RemoteExecution>,
     pub argv: Vec<String>,
 }
@@ -82,6 +86,7 @@ struct ScriptGraphOptions<'a> {
     timeout_ms_override: Option<u64>,
     remote_override: Option<RemoteExecution>,
     sandbox: SandboxMode,
+    resource_limits: ResourceLimits,
     xdg: Option<&'a Xdg>,
 }
 
@@ -91,6 +96,7 @@ struct ScriptExecutionOptions<'a> {
     timeout_ms_override: Option<u64>,
     remote_override: Option<RemoteExecution>,
     sandbox: SandboxMode,
+    resource_limits: ResourceLimits,
     xdg: Option<&'a Xdg>,
 }
 
@@ -122,9 +128,18 @@ pub async fn exec(
     let opts = RunOpts {
         cache_failures: args.cache_failures,
     };
+    let resource_limits = args.resource_limits.clone();
     let (workspace, action) = plan_exec_action(workspace, xdg, cache, opts, args).await?;
     let streams_live = action_remote(&action).is_some() && output.format == Format::Human;
-    let outcome = run_exec_action(cache, &workspace, opts, &action, streams_live).await?;
+    let outcome = run_exec_action(
+        cache,
+        &workspace,
+        opts,
+        resource_limits,
+        &action,
+        streams_live,
+    )
+    .await?;
     crate::commands::evidence::record_outcome(
         &workspace,
         EvidenceSubject::command(outcome.action),
@@ -151,6 +166,7 @@ async fn plan_exec_action(
         cwd,
         timeout_ms,
         cache_failures: _,
+        resource_limits,
         remote,
         argv,
     } = args;
@@ -160,6 +176,7 @@ async fn plan_exec_action(
         timeout_ms_override: timeout_ms,
         remote_override: remote,
         sandbox,
+        resource_limits,
         xdg: Some(xdg),
     };
 
@@ -196,17 +213,19 @@ async fn run_exec_action(
     cache: &CacheProvider,
     workspace: &Path,
     opts: RunOpts,
+    resource_limits: ResourceLimits,
     action: &Action,
     streams_live: bool,
 ) -> Result<once_core::Outcome> {
+    let runner = once_core::Runner::with_cache(cache.clone(), workspace, opts)
+        .with_resource_limits(resource_limits);
     let outcome = if streams_live {
-        once_core::run_with_cache_streaming(action, workspace, cache, opts)
+        runner
+            .run_streaming(action)
             .await
             .context("executing action")?
     } else {
-        once_core::run_with_cache(action, workspace, cache, opts)
-            .await
-            .context("executing action")?
+        runner.run(action).await.context("executing action")?
     };
     Ok(outcome)
 }
@@ -217,14 +236,6 @@ async fn write_exec_output(
     streams_live: bool,
     outcome: &once_core::Outcome,
 ) -> Result<()> {
-    let stdout = match outcome.result.stdout {
-        Some(digest) => cache.get_blob(&digest).await?,
-        None => Vec::new(),
-    };
-    let stderr = match outcome.result.stderr {
-        Some(digest) => cache.get_blob(&digest).await?,
-        None => Vec::new(),
-    };
     // tokio::io::stdout/stderr are line-buffered. Flush explicitly so
     // the bytes reach the pipe before the process exits; without this,
     // captured output is empty under timing pressure (we observed this
@@ -232,14 +243,18 @@ async fn write_exec_output(
     let mut out = tokio::io::stdout();
     let streamed_now = streams_live && outcome.cache == CacheState::Miss;
     if !streamed_now {
-        out.write_all(&stdout).await?;
+        if let Some(digest) = outcome.result.stdout {
+            write_cache_blob(cache, &digest, &mut out).await?;
+        }
     }
     // Flush explicitly so the wrapped stdout is visible before the
     // Once stderr trailer, even under macOS CI timing pressure.
     out.flush().await?;
     let mut err = tokio::io::stderr();
     if !streamed_now {
-        err.write_all(&stderr).await?;
+        if let Some(digest) = outcome.result.stderr {
+            write_cache_blob(cache, &digest, &mut err).await?;
+        }
     }
 
     let tag = cache_tag(outcome.cache);
@@ -310,6 +325,7 @@ async fn script_action_with_dependencies(
         timeout_ms_override: options.timeout_ms_override,
         remote_override: options.remote_override.clone(),
         sandbox: options.sandbox,
+        resource_limits: options.resource_limits.clone(),
         xdg: options.xdg,
     };
     let invocation = script_invocation(
@@ -443,8 +459,14 @@ async fn script_action_with_dependency_graph(
     let root = graph
         .get(&root_id)
         .with_context(|| format!("script graph root `{root_id}` was not collected"))?;
-    let dependency_fingerprints =
-        run_script_graph_dependencies(cache, opts, &graph, root_id.as_str()).await?;
+    let dependency_fingerprints = run_script_graph_dependencies(
+        cache,
+        opts,
+        &graph,
+        root_id.as_str(),
+        graph_options.resource_limits,
+    )
+    .await?;
     let fingerprints = run_fingerprint_commands(root).await?;
     let input_digest = Some(script_input_digest(
         &root.workspace,
@@ -526,6 +548,7 @@ async fn run_script_graph_dependencies(
     opts: RunOpts,
     graph: &BTreeMap<String, ScriptInvocation>,
     root_id: &str,
+    resource_limits: ResourceLimits,
 ) -> Result<Vec<DependencyFingerprint>> {
     let target_count = graph.len().saturating_sub(1);
     let mut completed = BTreeSet::new();
@@ -533,7 +556,8 @@ async fn run_script_graph_dependencies(
     let root = graph
         .get(root_id)
         .with_context(|| format!("script graph root `{root_id}` vanished from the graph"))?;
-    let runner = once_core::Runner::with_cache(cache.clone(), root.workspace.clone(), opts);
+    let runner = once_core::Runner::with_cache(cache.clone(), root.workspace.clone(), opts)
+        .with_resource_limits(resource_limits);
 
     while completed.len() < target_count {
         let ready = graph
@@ -662,8 +686,14 @@ async fn cached_blob_text(cache: &CacheProvider, digest: Option<Digest>) -> Resu
     let Some(digest) = digest else {
         return Ok(String::new());
     };
-    let bytes = cache.get_blob(&digest).await?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    let (bytes, truncated) = cache
+        .read_blob_limited(&digest, CHILD_OUTPUT_LIMIT, false)
+        .await?;
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if truncated {
+        text.push_str("\n... output truncated at 16 mebibytes");
+    }
+    Ok(text)
 }
 
 async fn run_fingerprint_commands(invocation: &ScriptInvocation) -> Result<Vec<FingerprintResult>> {
@@ -692,6 +722,11 @@ async fn run_fingerprint_command(
     }
 
     let output = fingerprint_command_output(child, invocation.timeout_ms, command).await?;
+    if output.stdout_truncated || output.stderr_truncated {
+        anyhow::bail!(
+            "fingerprint command `{command}` produced more than 16 mebibytes on a captured stream"
+        );
+    }
     let digest = fingerprint_digest(command, &output);
     if !output.status.success() {
         let mut message = format!(
@@ -721,16 +756,15 @@ async fn fingerprint_command_output(
     mut child: tokio::process::Command,
     timeout_ms: Option<u64>,
     command: &str,
-) -> Result<ProcessOutput> {
-    match timeout_ms {
-        Some(ms) => tokio::time::timeout(Duration::from_millis(ms), child.output())
-            .await
-            .with_context(|| format!("fingerprint command `{command}` timed out after {ms}ms"))?
-            .with_context(|| format!("running fingerprint command `{command}`")),
-        None => child
-            .output()
-            .await
-            .with_context(|| format!("running fingerprint command `{command}`")),
+) -> Result<CapturedOutput> {
+    let result =
+        capture_tokio_command_output(&mut child, timeout_ms.map(Duration::from_millis)).await;
+    match (result, timeout_ms) {
+        (Err(error), Some(ms)) if error.to_string() == "child process timed out" => Err(error
+            .context(format!(
+                "fingerprint command `{command}` timed out after {ms}ms"
+            ))),
+        (result, _) => result.with_context(|| format!("running fingerprint command `{command}`")),
     }
 }
 
@@ -752,7 +786,7 @@ fn fingerprint_shell() -> FingerprintShell {
     }
 }
 
-fn fingerprint_digest(command: &str, output: &ProcessOutput) -> Digest {
+fn fingerprint_digest(command: &str, output: &CapturedOutput) -> Digest {
     let mut buf = Vec::new();
     buf.extend_from_slice(b"once.exec.script.fingerprint.v1\0");
     buf.extend_from_slice(b"command\0");
@@ -1387,6 +1421,7 @@ mod tests {
                 timeout_ms_override: None,
                 remote_override: None,
                 sandbox: SandboxMode::default(),
+                resource_limits: ResourceLimits::default(),
                 xdg: None,
             },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
@@ -1631,6 +1666,7 @@ image = "node:22.18.0-alpine"
                 timeout_ms_override: None,
                 remote_override: None,
                 sandbox: SandboxMode::default(),
+                resource_limits: ResourceLimits::default(),
                 xdg: None,
             },
             &["/bin/bash".to_string(), "scripts/build.sh".to_string()],
@@ -1658,6 +1694,7 @@ image = "node:22.18.0-alpine"
                 timeout_ms_override: None,
                 remote_override: None,
                 sandbox: SandboxMode::default(),
+                resource_limits: ResourceLimits::default(),
                 xdg: None,
             },
             &["/bin/sh".to_string(), "build.sh".to_string()],

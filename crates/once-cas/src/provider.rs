@@ -1,6 +1,7 @@
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 
 use crate::tuist::{TuistCache, TuistCacheConfig};
 use crate::{ActionResult, Cas, Digest, GcReport, Result, Stats};
@@ -64,6 +65,63 @@ impl CacheProvider {
             Self::Local(cas) => cas.get_blob(digest).await,
             Self::Tuist(cache) => cache.get_blob(digest).await,
         }
+    }
+
+    pub async fn copy_blob_to_file(&self, digest: &Digest, destination: &Path) -> Result<()> {
+        match self {
+            Self::Local(cas) => cas.copy_blob_to_file(digest, destination).await,
+            Self::Tuist(cache) => {
+                cache.ensure_blob_local(digest).await?;
+                cache.local().copy_blob_to_file(digest, destination).await
+            }
+        }
+    }
+
+    pub async fn read_blob_limited(
+        &self,
+        digest: &Digest,
+        limit: u64,
+        from_end: bool,
+    ) -> Result<(Vec<u8>, bool)> {
+        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
+            path: std::env::temp_dir(),
+            source,
+        })?;
+        let path = directory.path().join("blob");
+        self.copy_blob_to_file(digest, &path).await?;
+        let mut file = tokio::fs::File::open(&path)
+            .await
+            .map_err(|source| crate::Error::Io {
+                path: path.clone(),
+                source,
+            })?;
+        let len = file
+            .metadata()
+            .await
+            .map_err(|source| crate::Error::Io {
+                path: path.clone(),
+                source,
+            })?
+            .len();
+        let truncated = len > limit;
+        if from_end && truncated {
+            file.seek(SeekFrom::Start(len - limit))
+                .await
+                .map_err(|source| crate::Error::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+        }
+        let capacity = usize::try_from(len.min(limit)).map_err(|_| crate::Error::Io {
+            path: path.clone(),
+            source: std::io::Error::other("blob limit exceeds addressable memory"),
+        })?;
+        let mut bytes = Vec::with_capacity(capacity);
+        file.take(limit)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|source| crate::Error::Io { path, source })?;
+        Ok((bytes, truncated))
     }
 
     /// True if a content-addressed blob exists. For Tuist this consults
@@ -158,6 +216,22 @@ mod tests {
         let digest = provider.put_stream(&b"streamed"[..]).await.unwrap();
         assert_eq!(digest, Digest::of_bytes(b"streamed"));
         assert_eq!(provider.get_blob(&digest).await.unwrap(), b"streamed");
+    }
+
+    #[tokio::test]
+    async fn limited_blob_reads_bound_prefixes_and_suffixes() {
+        let tmp = TempDir::new().unwrap();
+        let provider = CacheProvider::open_local(tmp.path());
+        let digest = provider.put_blob(b"0123456789").await.unwrap();
+
+        assert_eq!(
+            provider.read_blob_limited(&digest, 4, false).await.unwrap(),
+            (b"0123".to_vec(), true)
+        );
+        assert_eq!(
+            provider.read_blob_limited(&digest, 4, true).await.unwrap(),
+            (b"6789".to_vec(), true)
+        );
     }
 
     #[tokio::test]

@@ -9,6 +9,7 @@
 //! targets, and unix permission bits.
 
 use std::collections::HashSet;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::path::WorkspacePath;
@@ -16,6 +17,7 @@ use crate::{Error, OutputSymlinkMode, Result};
 
 pub(crate) const DIRECTORY_BLOB_MAGIC: &[u8] = b"once.directory.v2\0";
 const DIRECTORY_BLOB_V1_MAGIC: &[u8] = b"once.directory.v1\0";
+const MAX_DIRECTORY_PATH_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy)]
 enum DirectoryEntryKind {
@@ -39,17 +41,67 @@ struct DirectoryEntry {
     rel: String,
     kind: DirectoryEntryKind,
     mode: u32,
-    bytes: Vec<u8>,
+    content: DirectoryEntryContent,
+}
+
+enum DirectoryEntryContent {
+    File { path: PathBuf, len: u64 },
+    Bytes(Vec<u8>),
+}
+
+impl DirectoryEntryContent {
+    fn len(&self) -> u64 {
+        match self {
+            Self::File { len, .. } => *len,
+            Self::Bytes(bytes) => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        }
+    }
+
+    fn write_to(&self, writer: &mut impl Write) -> std::io::Result<()> {
+        match self {
+            Self::File { path, len } => {
+                let mut file = std::fs::File::open(path)?.take(*len);
+                let written = std::io::copy(&mut file, writer)?;
+                if written != *len {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "directory output file changed during capture",
+                    ));
+                }
+            }
+            Self::Bytes(bytes) => writer.write_all(bytes)?,
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Bytes(bytes) => bytes,
+            Self::File { .. } => &[],
+        }
+    }
 }
 
 pub(crate) fn is_directory_blob(bytes: &[u8]) -> bool {
     bytes.starts_with(DIRECTORY_BLOB_MAGIC) || bytes.starts_with(DIRECTORY_BLOB_V1_MAGIC)
 }
 
+#[cfg(test)]
 pub(crate) fn capture_directory_blob(
     root: &Path,
     symlink_mode: OutputSymlinkMode,
 ) -> std::io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    write_directory_blob(root, symlink_mode, &mut out)?;
+    Ok(out)
+}
+
+pub(crate) fn write_directory_blob(
+    root: &Path,
+    symlink_mode: OutputSymlinkMode,
+    mut writer: impl Write,
+) -> std::io::Result<()> {
     let mut entries = Vec::new();
     let root_canonical = root.canonicalize()?;
     let mut materialized_dirs = HashSet::new();
@@ -63,7 +115,7 @@ pub(crate) fn capture_directory_blob(
     )?;
     entries.sort_by(|a, b| a.rel.cmp(&b.rel));
 
-    let mut out = Vec::from(DIRECTORY_BLOB_MAGIC);
+    writer.write_all(DIRECTORY_BLOB_MAGIC)?;
     for entry in entries {
         let path_bytes = entry.rel.as_bytes();
         let path_len = u32::try_from(path_bytes.len()).map_err(|_| {
@@ -72,20 +124,15 @@ pub(crate) fn capture_directory_blob(
                 "directory path is too long",
             )
         })?;
-        let content_len = u64::try_from(entry.bytes.len()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "directory file is too large",
-            )
-        })?;
-        out.push(entry.kind as u8);
-        out.extend_from_slice(&path_len.to_le_bytes());
-        out.extend_from_slice(&entry.mode.to_le_bytes());
-        out.extend_from_slice(&content_len.to_le_bytes());
-        out.extend_from_slice(path_bytes);
-        out.extend_from_slice(&entry.bytes);
+        let content_len = entry.content.len();
+        writer.write_all(&[entry.kind as u8])?;
+        writer.write_all(&path_len.to_le_bytes())?;
+        writer.write_all(&entry.mode.to_le_bytes())?;
+        writer.write_all(&content_len.to_le_bytes())?;
+        writer.write_all(path_bytes)?;
+        entry.content.write_to(&mut writer)?;
     }
-    Ok(out)
+    Ok(())
 }
 
 fn collect_directory_entries(
@@ -121,7 +168,7 @@ fn collect_directory_entries(
                 symlink_mode,
             )?;
         } else if metadata.is_file() {
-            entries.push(capture_file_entry(&logical_path, &path, &metadata)?);
+            entries.push(capture_file_entry(&logical_path, &path, &metadata));
         }
     }
     Ok(())
@@ -176,7 +223,7 @@ fn collect_symlink_entry(
             logical_path,
             &resolved_target,
             &target_metadata,
-        )?);
+        ));
     } else {
         entries.push(capture_symlink_entry(path, logical_path, &target));
     }
@@ -188,7 +235,7 @@ fn capture_symlink_entry(path: &Path, logical_path: &Path, target: &Path) -> Dir
         rel: logical_entry_path(logical_path),
         kind: symlink_kind(path),
         mode: 0o777,
-        bytes: path_to_bytes(target),
+        content: DirectoryEntryContent::Bytes(path_to_bytes(target)),
     }
 }
 
@@ -196,13 +243,16 @@ fn capture_file_entry(
     logical_path: &Path,
     path: &Path,
     metadata: &std::fs::Metadata,
-) -> std::io::Result<DirectoryEntry> {
-    Ok(DirectoryEntry {
+) -> DirectoryEntry {
+    DirectoryEntry {
         rel: logical_entry_path(logical_path),
         kind: DirectoryEntryKind::File,
         mode: file_mode(metadata),
-        bytes: std::fs::read(path)?,
-    })
+        content: DirectoryEntryContent::File {
+            path: path.to_path_buf(),
+            len: metadata.len(),
+        },
+    }
 }
 
 fn logical_entry_path(path: &Path) -> String {
@@ -242,6 +292,7 @@ fn path_to_bytes(path: &Path) -> Vec<u8> {
     path.to_string_lossy().as_bytes().to_vec()
 }
 
+#[cfg(test)]
 pub(crate) fn restore_directory_blob(logical_path: &str, abs: &Path, bytes: &[u8]) -> Result<()> {
     let entries = decode_directory_blob(logical_path, bytes)?;
     if let Ok(metadata) = std::fs::symlink_metadata(abs) {
@@ -304,9 +355,11 @@ pub(crate) fn restore_directory_blob(logical_path: &str, abs: &Path, bytes: &[u8
         }
         match entry.kind {
             DirectoryEntryKind::File => {
-                std::fs::write(&dest, entry.bytes).map_err(|source| Error::RestoreOutput {
-                    path: logical_path.to_string(),
-                    source,
+                std::fs::write(&dest, entry.content.bytes()).map_err(|source| {
+                    Error::RestoreOutput {
+                        path: logical_path.to_string(),
+                        source,
+                    }
                 })?;
                 #[cfg(unix)]
                 {
@@ -322,7 +375,7 @@ pub(crate) fn restore_directory_blob(logical_path: &str, abs: &Path, bytes: &[u8
                 }
             }
             DirectoryEntryKind::SymlinkFile | DirectoryEntryKind::SymlinkDir => {
-                let target = symlink_target(logical_path, &entry.bytes)?;
+                let target = symlink_target(logical_path, entry.content.bytes())?;
                 create_symlink(entry.kind, &target, &dest).map_err(|source| {
                     Error::RestoreOutput {
                         path: logical_path.to_string(),
@@ -335,6 +388,232 @@ pub(crate) fn restore_directory_blob(logical_path: &str, abs: &Path, bytes: &[u8
     Ok(())
 }
 
+pub(crate) fn restore_directory_blob_from_reader(
+    logical_path: &str,
+    abs: &Path,
+    mut reader: impl Read,
+) -> Result<()> {
+    let mut magic = vec![0_u8; DIRECTORY_BLOB_MAGIC.len()];
+    read_directory_bytes(
+        logical_path,
+        &mut reader,
+        &mut magic,
+        "directory blob magic",
+    )?;
+    let version_one = magic == DIRECTORY_BLOB_V1_MAGIC;
+    if !version_one && magic != DIRECTORY_BLOB_MAGIC {
+        return Err(invalid_directory(
+            logical_path,
+            "missing directory blob magic",
+        ));
+    }
+    prepare_directory_restore(logical_path, abs)?;
+    while let Some(entry) =
+        read_streamed_directory_entry(logical_path, abs, version_one, &mut reader)?
+    {
+        restore_streamed_directory_entry(logical_path, &entry, &mut reader)?;
+    }
+    Ok(())
+}
+
+struct StreamedDirectoryEntry {
+    kind: DirectoryEntryKind,
+    mode: u32,
+    content_len: u64,
+    destination: PathBuf,
+}
+
+fn read_streamed_directory_entry(
+    logical_path: &str,
+    root: &Path,
+    version_one: bool,
+    reader: &mut impl Read,
+) -> Result<Option<StreamedDirectoryEntry>> {
+    let mut first = [0_u8; 1];
+    match reader.read(&mut first) {
+        Ok(0) => return Ok(None),
+        Ok(1) => {}
+        Ok(_) => unreachable!(),
+        Err(source) => {
+            return Err(Error::RestoreOutput {
+                path: logical_path.to_string(),
+                source,
+            });
+        }
+    }
+    let (kind, path_len) = if version_one {
+        let mut raw = [0_u8; 4];
+        raw[0] = first[0];
+        read_directory_bytes(logical_path, reader, &mut raw[1..], "entry path length")?;
+        (
+            DirectoryEntryKind::File,
+            usize::try_from(u32::from_le_bytes(raw)).unwrap_or(usize::MAX),
+        )
+    } else {
+        let kind = DirectoryEntryKind::from_u8(first[0])
+            .ok_or_else(|| invalid_directory(logical_path, "unknown directory entry kind"))?;
+        let path_len =
+            usize::try_from(read_directory_u32(logical_path, reader)?).unwrap_or(usize::MAX);
+        (kind, path_len)
+    };
+    if path_len > MAX_DIRECTORY_PATH_BYTES {
+        return Err(invalid_directory(
+            logical_path,
+            "directory entry path is too long",
+        ));
+    }
+    let mode = read_directory_u32(logical_path, reader)?;
+    let content_len = read_directory_u64(logical_path, reader)?;
+    let mut path_bytes = vec![0_u8; path_len];
+    read_directory_bytes(logical_path, reader, &mut path_bytes, "entry path")?;
+    let path = std::str::from_utf8(&path_bytes).map_err(|source| {
+        invalid_directory(logical_path, format!("entry path is not utf-8: {source}"))
+    })?;
+    let rel_path = WorkspacePath::try_from(path)
+        .map_err(|source| invalid_directory(logical_path, source.to_string()))?;
+    if rel_path.as_str().is_empty() {
+        return Err(invalid_directory(
+            logical_path,
+            "directory entry path is empty",
+        ));
+    }
+    Ok(Some(StreamedDirectoryEntry {
+        kind,
+        mode,
+        content_len,
+        destination: rel_path.resolve(root),
+    }))
+}
+
+fn restore_streamed_directory_entry(
+    logical_path: &str,
+    entry: &StreamedDirectoryEntry,
+    reader: &mut impl Read,
+) -> Result<()> {
+    if let Some(parent) = entry.destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| Error::RestoreOutput {
+            path: logical_path.to_string(),
+            source,
+        })?;
+    }
+    match entry.kind {
+        DirectoryEntryKind::File => restore_streamed_directory_file(logical_path, entry, reader),
+        DirectoryEntryKind::SymlinkFile | DirectoryEntryKind::SymlinkDir => {
+            restore_streamed_directory_symlink(logical_path, entry, reader)
+        }
+    }
+}
+
+fn restore_streamed_directory_file(
+    logical_path: &str,
+    entry: &StreamedDirectoryEntry,
+    reader: &mut impl Read,
+) -> Result<()> {
+    let mut output =
+        std::fs::File::create(&entry.destination).map_err(|source| Error::RestoreOutput {
+            path: logical_path.to_string(),
+            source,
+        })?;
+    let copied =
+        std::io::copy(&mut reader.take(entry.content_len), &mut output).map_err(|source| {
+            Error::RestoreOutput {
+                path: logical_path.to_string(),
+                source,
+            }
+        })?;
+    if copied != entry.content_len {
+        return Err(invalid_directory(logical_path, "truncated entry content"));
+    }
+    output.flush().map_err(|source| Error::RestoreOutput {
+        path: logical_path.to_string(),
+        source,
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            &entry.destination,
+            std::fs::Permissions::from_mode(entry.mode.max(0o400)),
+        )
+        .map_err(|source| Error::RestoreOutput {
+            path: logical_path.to_string(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+fn restore_streamed_directory_symlink(
+    logical_path: &str,
+    entry: &StreamedDirectoryEntry,
+    reader: &mut impl Read,
+) -> Result<()> {
+    let content_len = usize::try_from(entry.content_len)
+        .map_err(|_| invalid_directory(logical_path, "symlink target is too long"))?;
+    if content_len > MAX_DIRECTORY_PATH_BYTES {
+        return Err(invalid_directory(
+            logical_path,
+            "symlink target is too long",
+        ));
+    }
+    let mut target = vec![0_u8; content_len];
+    read_directory_bytes(logical_path, reader, &mut target, "symlink target")?;
+    let target = symlink_target(logical_path, &target)?;
+    create_symlink(entry.kind, &target, &entry.destination).map_err(|source| Error::RestoreOutput {
+        path: logical_path.to_string(),
+        source,
+    })
+}
+
+fn prepare_directory_restore(logical_path: &str, abs: &Path) -> Result<()> {
+    if let Ok(metadata) = std::fs::symlink_metadata(abs) {
+        if metadata.file_type().is_symlink() || metadata.is_file() {
+            std::fs::remove_file(abs)
+        } else {
+            std::fs::remove_dir_all(abs)
+        }
+        .map_err(|source| Error::RestoreOutput {
+            path: logical_path.to_string(),
+            source,
+        })?;
+    }
+    std::fs::create_dir_all(abs).map_err(|source| Error::RestoreOutput {
+        path: logical_path.to_string(),
+        source,
+    })
+}
+
+fn read_directory_u32(logical_path: &str, reader: &mut impl Read) -> Result<u32> {
+    let mut raw = [0_u8; 4];
+    read_directory_bytes(logical_path, reader, &mut raw, "entry u32")?;
+    Ok(u32::from_le_bytes(raw))
+}
+
+fn read_directory_u64(logical_path: &str, reader: &mut impl Read) -> Result<u64> {
+    let mut raw = [0_u8; 8];
+    read_directory_bytes(logical_path, reader, &mut raw, "entry u64")?;
+    Ok(u64::from_le_bytes(raw))
+}
+
+fn read_directory_bytes(
+    logical_path: &str,
+    reader: &mut impl Read,
+    bytes: &mut [u8],
+    label: &str,
+) -> Result<()> {
+    reader
+        .read_exact(bytes)
+        .map_err(|source| invalid_directory(logical_path, format!("truncated {label}: {source}")))
+}
+
+fn invalid_directory(path: &str, message: impl Into<String>) -> Error {
+    Error::InvalidDirectoryOutput {
+        path: path.to_string(),
+        message: message.into(),
+    }
+}
+
+#[cfg(test)]
 fn decode_directory_blob(logical_path: &str, bytes: &[u8]) -> Result<Vec<DirectoryEntry>> {
     if bytes.starts_with(DIRECTORY_BLOB_V1_MAGIC) {
         return decode_v1_directory_blob(logical_path, bytes);
@@ -393,12 +672,13 @@ fn decode_directory_blob(logical_path: &str, bytes: &[u8]) -> Result<Vec<Directo
             rel: path,
             kind,
             mode,
-            bytes,
+            content: DirectoryEntryContent::Bytes(bytes),
         });
     }
     Ok(entries)
 }
 
+#[cfg(test)]
 fn decode_v1_directory_blob(logical_path: &str, bytes: &[u8]) -> Result<Vec<DirectoryEntry>> {
     let mut pos = DIRECTORY_BLOB_V1_MAGIC.len();
     let mut entries = Vec::new();
@@ -443,7 +723,7 @@ fn decode_v1_directory_blob(logical_path: &str, bytes: &[u8]) -> Result<Vec<Dire
             rel: path,
             kind: DirectoryEntryKind::File,
             mode,
-            bytes,
+            content: DirectoryEntryContent::Bytes(bytes),
         });
     }
     Ok(entries)
@@ -477,6 +757,7 @@ fn create_symlink(_: DirectoryEntryKind, target: &Path, link: &Path) -> std::io:
     std::fs::write(link, target.to_string_lossy().as_bytes())
 }
 
+#[cfg(test)]
 fn read_u8(logical_path: &str, bytes: &[u8], pos: &mut usize) -> Result<u8> {
     let Some(value) = bytes.get(*pos).copied() else {
         return Err(Error::InvalidDirectoryOutput {
@@ -488,6 +769,7 @@ fn read_u8(logical_path: &str, bytes: &[u8], pos: &mut usize) -> Result<u8> {
     Ok(value)
 }
 
+#[cfg(test)]
 fn read_u32(logical_path: &str, bytes: &[u8], pos: &mut usize) -> Result<u32> {
     if bytes.len().saturating_sub(*pos) < 4 {
         return Err(Error::InvalidDirectoryOutput {
@@ -501,6 +783,7 @@ fn read_u32(logical_path: &str, bytes: &[u8], pos: &mut usize) -> Result<u32> {
     Ok(u32::from_le_bytes(raw))
 }
 
+#[cfg(test)]
 fn read_u64(logical_path: &str, bytes: &[u8], pos: &mut usize) -> Result<u64> {
     if bytes.len().saturating_sub(*pos) < 8 {
         return Err(Error::InvalidDirectoryOutput {

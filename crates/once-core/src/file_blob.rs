@@ -13,8 +13,18 @@ use crate::{Error, Result};
 
 pub(crate) const FILE_BLOB_MAGIC: &[u8] = b"once.file.v1\0";
 
+#[cfg(test)]
 pub(crate) fn capture_file_blob(path: &Path) -> std::io::Result<Vec<u8>> {
     let metadata = std::fs::metadata(path)?;
+    let header = file_blob_header(&metadata);
+    let content = std::fs::read(path)?;
+    let mut out = Vec::with_capacity(header.len() + content.len());
+    out.extend_from_slice(&header);
+    out.extend_from_slice(&content);
+    Ok(out)
+}
+
+pub(crate) fn file_blob_header(metadata: &std::fs::Metadata) -> Vec<u8> {
     #[cfg(unix)]
     let mode = {
         use std::os::unix::fs::PermissionsExt;
@@ -23,29 +33,19 @@ pub(crate) fn capture_file_blob(path: &Path) -> std::io::Result<Vec<u8>> {
     #[cfg(not(unix))]
     let mode = 0o644_u32;
 
-    let content = std::fs::read(path)?;
-    let mut out = Vec::with_capacity(FILE_BLOB_MAGIC.len() + 4 + content.len());
-    out.extend_from_slice(FILE_BLOB_MAGIC);
-    out.extend_from_slice(&mode.to_le_bytes());
-    out.extend_from_slice(&content);
-    Ok(out)
+    let mut header = Vec::with_capacity(FILE_BLOB_MAGIC.len() + 4);
+    header.extend_from_slice(FILE_BLOB_MAGIC);
+    header.extend_from_slice(&mode.to_le_bytes());
+    header
 }
 
 pub(crate) fn digest_file_blob(
     path: &Path,
     metadata: &std::fs::Metadata,
 ) -> std::io::Result<Digest> {
-    #[cfg(unix)]
-    let mode = {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o777
-    };
-    #[cfg(not(unix))]
-    let mode = 0o644_u32;
-
-    let mode = mode.to_le_bytes();
+    let header = file_blob_header(metadata);
     let file = std::fs::File::open(path)?;
-    Digest::of_parts_and_reader(&[FILE_BLOB_MAGIC, &mode], file)
+    Digest::of_parts_and_reader(&[&header], file)
 }
 
 pub(crate) fn restore_file_blob_from_reader(

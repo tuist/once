@@ -6,6 +6,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -15,7 +16,7 @@ use once_core::{
     workspace_mise_command, workspace_prepared_tool_env, workspace_tool_env_with_executables,
     Action, ActionContractOptions, ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode,
     EvidenceCacheState, EvidenceSubject, FilesystemOperation, InputDigestBuilder,
-    OutputSymlinkMode, PreparePathMode, ResourceRequest, SandboxMode, WorkspacePath,
+    OutputSymlinkMode, PreparePathMode, ResourcePool, ResourceRequest, SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::{
     AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntryKind,
@@ -43,6 +44,7 @@ struct DeclaredActionRun<'a> {
     prior_cached_results: &'a [ActionResult],
     record_success_evidence: bool,
     sandbox: SandboxMode,
+    resources: &'a Arc<ResourcePool>,
 }
 
 struct DeclaredActionOutcome {
@@ -64,6 +66,7 @@ struct DeclaredActionContext<'a> {
     argv: &'a [String],
     arg_files: &'a [DeclaredArgFile],
     record_success_evidence: bool,
+    resources: &'a Arc<ResourcePool>,
 }
 
 struct DeclaredActionFailure<'a> {
@@ -87,8 +90,7 @@ pub(crate) struct DeclaredActionValidation {
     pub(crate) limitations: Vec<String>,
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) async fn validate_declared_actions(
     workspace: &Path,
     cache: &CacheProvider,
@@ -240,7 +242,7 @@ pub(super) async fn validate_declared_actions(
 /// captures declared action state and cache execution state. Boxing at
 /// this boundary keeps parent graph futures small enough for
 /// `clippy::large_futures` and centralizes the allocation.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) fn run_declared_actions<'a>(
     workspace: &'a Path,
     cache: &'a CacheProvider,
@@ -252,6 +254,7 @@ pub(super) fn run_declared_actions<'a>(
     dependency_inputs: &'a BTreeMap<String, AvailableInput>,
     tool_paths: &'a BTreeMap<String, String>,
     sandbox: SandboxMode,
+    resources: &'a Arc<ResourcePool>,
 ) -> Pin<Box<dyn Future<Output = Result<BuildOutcome>> + Send + 'a>> {
     Box::pin(async move {
         let AnalysisResult {
@@ -305,6 +308,7 @@ pub(super) fn run_declared_actions<'a>(
                 prior_cached_results: &cached_results,
                 record_success_evidence,
                 sandbox,
+                resources,
             }))
             .await?;
             action_digests.push(outcome.digest);
@@ -555,6 +559,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         prior_cached_results,
         record_success_evidence,
         sandbox,
+        resources,
     } = run;
     let identifier_for_error = declared
         .identifier
@@ -594,6 +599,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         argv: &declared.argv,
         arg_files: &declared.arg_files,
         record_success_evidence,
+        resources,
     };
 
     if cacheable {
@@ -761,6 +767,10 @@ async fn execute_declared_cache_miss(
     action: &Action,
     declared: &DeclaredAction,
 ) -> Result<once_core::Outcome> {
+    let _permit = context
+        .resources
+        .acquire(action.resource_request().clone())
+        .await;
     materialize_prior_cached_results(
         context.workspace,
         context.cache,
@@ -876,6 +886,10 @@ async fn run_uncacheable_declared_action(
     inherit_parent_env: bool,
 ) -> Result<DeclaredActionOutcome> {
     let action_digest = action.digest();
+    let _permit = context
+        .resources
+        .acquire(action.resource_request().clone())
+        .await;
     let result = run_uncached_action(
         &action,
         context.workspace,
@@ -1043,8 +1057,11 @@ async fn append_captured_output(
     let Some(digest) = digest else {
         return;
     };
-    let bytes = match cache.get_blob(digest).await {
-        Ok(bytes) => bytes,
+    let (bytes, truncated) = match cache
+        .read_blob_limited(digest, FAILURE_OUTPUT_LIMIT as u64, true)
+        .await
+    {
+        Ok(output) => output,
         Err(err) => {
             tracing::warn!(
                 output = name,
@@ -1058,19 +1075,16 @@ async fn append_captured_output(
     if bytes.is_empty() {
         return;
     }
-    let (prefix, slice) = if bytes.len() > FAILURE_OUTPUT_LIMIT {
-        (
-            format!("last {FAILURE_OUTPUT_LIMIT} bytes of "),
-            &bytes[bytes.len() - FAILURE_OUTPUT_LIMIT..],
-        )
+    let prefix = if truncated {
+        format!("last {FAILURE_OUTPUT_LIMIT} bytes of ")
     } else {
-        (String::new(), bytes.as_slice())
+        String::new()
     };
     message.push_str("\n\n");
     message.push_str(&prefix);
     message.push_str(name);
     message.push_str(":\n");
-    message.push_str(&String::from_utf8_lossy(slice));
+    message.push_str(&String::from_utf8_lossy(&bytes));
 }
 
 async fn run_uncached_action(
@@ -1136,16 +1150,26 @@ async fn run_uncached_action(
                 // it; only stderr is retained for failure diagnostics.
                 command.stdout(Stdio::null());
                 command.stderr(Stdio::piped());
-                let output = match timeout_ms {
-                    Some(ms) => tokio::time::timeout(Duration::from_millis(*ms), command.output())
+                let mut child = command.spawn().context("spawning declared action")?;
+                let stderr_pipe = child
+                    .stderr
+                    .take()
+                    .context("capturing declared action stderr")?;
+                let wait = async {
+                    let stderr = cache.put_stream(stderr_pipe).await?;
+                    let status = child.wait().await?;
+                    Ok::<_, anyhow::Error>((status, stderr))
+                };
+                let (status, stderr) = match timeout_ms {
+                    Some(ms) => tokio::time::timeout(Duration::from_millis(*ms), wait)
                         .await
                         .with_context(|| format!("declared action timed out after {ms}ms"))??,
-                    None => command.output().await?,
+                    None => wait.await?,
                 };
                 ActionResult {
-                    exit_code: output.status.code().unwrap_or(-1),
+                    exit_code: status.code().unwrap_or(-1),
                     stdout: None,
-                    stderr: Some(cache.put_blob(&output.stderr).await?),
+                    stderr: Some(stderr),
                     outputs: BTreeMap::new(),
                 }
             };
@@ -1206,12 +1230,7 @@ async fn run_uncached_redirected(
     let stderr_pipe = child.stderr.take();
     let wait = async {
         let stderr_blob = match stderr_pipe {
-            Some(mut pipe) => {
-                use tokio::io::AsyncReadExt as _;
-                let mut buf = Vec::new();
-                pipe.read_to_end(&mut buf).await?;
-                Some(cache.put_blob(&buf).await?)
-            }
+            Some(pipe) => Some(cache.put_stream(pipe).await?),
             None => None,
         };
         let status = child.wait().await?;
@@ -1289,10 +1308,10 @@ async fn capture_uncached_outputs(
             );
             continue;
         }
-        let bytes = tokio::fs::read(&absolute)
+        let file = tokio::fs::File::open(&absolute)
             .await
-            .with_context(|| format!("reading declared action output `{}`", output.as_str()))?;
-        captured.insert(output.as_str().to_string(), cache.put_blob(&bytes).await?);
+            .with_context(|| format!("opening declared action output `{}`", output.as_str()))?;
+        captured.insert(output.as_str().to_string(), cache.put_stream(file).await?);
     }
     Ok(captured)
 }
@@ -1327,9 +1346,11 @@ fn collect_directory_manifest(root: &Path, dir: &Path, entries: &mut Vec<String>
             entries.push(format!("dir\t{relative}"));
             collect_directory_manifest(root, &path, entries)?;
         } else if metadata.is_file() {
-            let bytes = std::fs::read(&path)
+            let file = std::fs::File::open(&path)
                 .with_context(|| format!("reading declared output file `{}`", path.display()))?;
-            entries.push(format!("file\t{relative}\t{}", Digest::of_bytes(&bytes)));
+            let digest = Digest::of_reader(std::io::BufReader::new(file))
+                .with_context(|| format!("hashing declared output file `{}`", path.display()))?;
+            entries.push(format!("file\t{relative}\t{digest}"));
         } else if metadata.file_type().is_symlink() {
             let target = std::fs::read_link(&path)
                 .with_context(|| format!("reading declared output symlink `{}`", path.display()))?;
@@ -1923,6 +1944,13 @@ mod tests {
         Digest::of_bytes(b"modules")
     }
 
+    fn test_resources() -> &'static Arc<ResourcePool> {
+        static RESOURCES: std::sync::LazyLock<Arc<ResourcePool>> = std::sync::LazyLock::new(|| {
+            Arc::new(ResourcePool::new(once_core::ResourceLimits::new(256, 0)))
+        });
+        &RESOURCES
+    }
+
     #[test]
     fn missing_declared_inputs_reports_only_absent_paths() {
         let workspace = tempfile::tempdir().unwrap();
@@ -2386,6 +2414,44 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn uncached_action_streams_large_stderr_into_the_cache() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let action = Action::RunCommand {
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "dd if=/dev/zero bs=1048576 count=8 1>&2 2>/dev/null".to_string(),
+            ],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            inputs: vec![],
+            outputs: Vec::new(),
+            stdout_path: None,
+            stderr_path: None,
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
+            timeout_ms: Some(30_000),
+            success_exit_codes: vec![0],
+            remote: None,
+        };
+
+        let result = run_uncached_action(&action, workspace.path(), &cache, false)
+            .await
+            .unwrap();
+        let stderr = cache
+            .get_blob(result.stderr.as_ref().expect("stderr digest"))
+            .await
+            .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(stderr.len(), 8 * 1024 * 1024);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn uncached_action_redirects_merged_streams_to_declared_file() {
         let workspace = tempfile::tempdir().unwrap();
         let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
@@ -2541,6 +2607,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             SandboxMode::default(),
+            test_resources(),
         )
         .await
         .unwrap();
@@ -2663,6 +2730,7 @@ mod tests {
             &available_inputs,
             &BTreeMap::new(),
             SandboxMode::default(),
+            test_resources(),
         )
         .await
         .unwrap();
@@ -2691,6 +2759,7 @@ mod tests {
             &available_inputs,
             &BTreeMap::new(),
             SandboxMode::default(),
+            test_resources(),
         )
         .await
         .unwrap();
@@ -2744,6 +2813,7 @@ mod tests {
             &available_inputs,
             &BTreeMap::new(),
             SandboxMode::default(),
+            test_resources(),
         )
         .await
         .unwrap();
@@ -2794,6 +2864,7 @@ mod tests {
             &available_inputs,
             &BTreeMap::new(),
             SandboxMode::default(),
+            test_resources(),
         )
         .await
         .unwrap();
@@ -2828,6 +2899,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             SandboxMode::default(),
+            test_resources(),
         )
         .await
         .unwrap();
@@ -2847,6 +2919,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             SandboxMode::default(),
+            test_resources(),
         )
         .await
         .unwrap();
@@ -2867,6 +2940,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             SandboxMode::default(),
+            test_resources(),
         )
         .await
         .unwrap();
@@ -2954,6 +3028,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             SandboxMode::default(),
+            test_resources(),
         )
         .await
         .unwrap();
@@ -3071,6 +3146,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             SandboxMode::default(),
+            test_resources(),
         )
         .await
         .unwrap();
@@ -3087,6 +3163,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             SandboxMode::default(),
+            test_resources(),
         )
         .await
         .unwrap();

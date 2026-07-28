@@ -12,6 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use walkdir::WalkDir;
 
 use crate::cli::{Format, Output};
+use crate::commands::util::write_cache_blob;
 use crate::render;
 
 #[derive(Serialize)]
@@ -50,7 +51,7 @@ struct BlobExistsRecord {
 #[derive(Serialize)]
 struct BlobGetRecord<'a> {
     digest: Digest,
-    bytes: usize,
+    bytes: u64,
     output: &'a str,
 }
 
@@ -205,26 +206,42 @@ pub async fn get_blob(
     output_path: Option<&Path>,
     output: Output,
 ) -> Result<()> {
-    let bytes = cache.get_blob(&digest).await?;
     match output_path {
         Some(path) if path != Path::new("-") => {
-            write_output_file(path, &bytes).await?;
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .with_context(|| format!("creating output directory {}", parent.display()))?;
+            }
+            cache.copy_blob_to_file(&digest, path).await?;
+            let bytes = tokio::fs::metadata(path)
+                .await
+                .with_context(|| format!("reading blob output {}", path.display()))?
+                .len();
             let path_text = path.display().to_string();
             let record = BlobGetRecord {
                 digest,
-                bytes: bytes.len(),
+                bytes,
                 output: &path_text,
             };
             let body = match output.format {
                 Format::Human if output.show_human_trailers() => {
-                    format!("wrote {} bytes to {}\n", bytes.len(), path.display())
+                    format!("wrote {bytes} bytes to {}\n", path.display())
                 }
                 Format::Human => String::new(),
                 Format::Json | Format::Toon => render::structured(output.format, &record)?,
             };
             write_stdout(body.as_bytes()).await
         }
-        _ => write_stdout(&bytes).await,
+        _ => {
+            let mut out = tokio::io::stdout();
+            write_cache_blob(cache, &digest, &mut out).await?;
+            out.flush().await?;
+            Ok(())
+        }
     }
 }
 
@@ -481,20 +498,6 @@ async fn write_stdout(bytes: &[u8]) -> Result<()> {
     out.write_all(bytes).await?;
     out.flush().await?;
     Ok(())
-}
-
-async fn write_output_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("creating output directory {}", parent.display()))?;
-    }
-    tokio::fs::write(path, bytes)
-        .await
-        .with_context(|| format!("writing blob output {}", path.display()))
 }
 
 #[cfg(test)]

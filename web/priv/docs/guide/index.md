@@ -22,6 +22,11 @@ dependencies, build and run capabilities, and ecosystem integrations.
 - [Ecosystems](/guide/graph/ecosystems) helps choose between typed targets and
   scripted automation.
 
+## Control local execution
+
+Use [Memory Limits](/guide/local-execution/memory-limits) to keep concurrent
+local actions within a scheduling budget on constrained or shared machines.
+
 ## Share or move execution
 
 Use [Infrastructure](/guide/infrastructure/) after local execution works and

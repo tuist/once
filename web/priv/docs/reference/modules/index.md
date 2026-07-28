@@ -505,16 +505,18 @@ separate update workflow.
   discovery command and returns standard output. Arguments, environment
   values, the working directory, and stream merging participate in the
   command-scoped cache key. When set, `cwd` must be an absolute path, normally
-  derived from `workspace_root()`.
+  derived from `workspace_root()`. Each captured stream is limited to 16
+  mebibytes.
 - `host_file_exists(path)` checks whether a host path is currently a
   file.
 - `host_file_read(path)` reads a host file as
   [Unicode Transformation Format, 8-bit (UTF-8)](https://www.unicode.org/faq/utf_bom.html#UTF8)
-  text.
+  text. Analysis rejects files larger than 16 mebibytes.
 - `host_file_sha256(path)` returns a host file's
   [Secure Hash Algorithm 256-bit](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
   digest as lowercase hexadecimal text.
-- `host_file_contains(path, needle)` checks host file text content.
+- `host_file_contains(path, needle)` checks host file text content and applies
+  the same 16 mebibyte file limit.
 - `glob(patterns, exclude = [])` expands patterns under the active package,
   omits matches selected by package-relative exclude patterns, and returns
   sorted workspace-relative file paths.

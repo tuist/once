@@ -45,6 +45,7 @@ defmodule OnceSiteWeb.Docs.SidebarTest do
       |> Enum.map(& &1.slug)
 
     assert "/docs/guide/graph/linting" in guide_slugs
+    assert "/docs/guide/local-execution/memory-limits" in guide_slugs
     assert "/docs/reference/cli/lint" in reference_slugs
     assert "/docs/reference/modules/linting" in reference_slugs
     assert "/docs/reference/prelude/ruff_lint" in reference_slugs

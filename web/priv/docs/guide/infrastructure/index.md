@@ -78,5 +78,5 @@ provider for one invocation.
 
 ## Next
 
-Start with [Remote Execution](/guide/infrastructure/remote-execution), then
-open the setup guide for the provider you want to use.
+Start with [Remote Execution](/guide/infrastructure/remote-execution), then open
+the setup guide for the provider you want to use.

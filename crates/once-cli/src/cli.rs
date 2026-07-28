@@ -109,6 +109,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub list: bool,
 
+    /// Maximum memory scheduling budget for local actions.
+    /// Defaults to two thirds of the memory visible to the host or container.
+    #[arg(long, global = true, value_name = "SIZE", value_parser = parse_byte_size)]
+    pub memory_limit: Option<u64>,
+
     #[command(subcommand)]
     pub command: Option<Cmd>,
 }
@@ -560,6 +565,36 @@ fn parse_lint_severity(raw: &str) -> std::result::Result<LintSeverity, String> {
     }
 }
 
+fn parse_byte_size(raw: &str) -> std::result::Result<u64, String> {
+    let value = raw.trim();
+    let digit_count = value.bytes().take_while(u8::is_ascii_digit).count();
+    if digit_count == 0 {
+        return Err(format!("expected a positive byte size, got `{raw}`"));
+    }
+    let (number, suffix) = value.split_at(digit_count);
+    let number = number
+        .parse::<u64>()
+        .map_err(|_| format!("invalid byte size `{raw}`"))?;
+    if number == 0 {
+        return Err("memory limit must be greater than zero".to_string());
+    }
+    let multiplier = match suffix.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1,
+        "kb" => 1_000,
+        "mb" => 1_000_000,
+        "gb" => 1_000_000_000,
+        "tb" => 1_000_000_000_000,
+        "kib" => 1 << 10,
+        "mib" => 1 << 20,
+        "gib" => 1 << 30,
+        "tib" => 1_u64 << 40,
+        _ => return Err(format!("unsupported byte-size suffix in `{raw}`")),
+    };
+    number
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("byte size `{raw}` is too large"))
+}
+
 /// Map a subprocess exit code to a CLI [`ExitCode`].
 ///
 /// `Command::status().code()` returns `None` when the child was killed
@@ -587,6 +622,20 @@ mod tests {
         assert!(!Output::new(Format::Json, false).show_human_trailers());
         assert!(!Output::new(Format::Json, true).show_human_trailers());
         assert!(!Output::new(Format::Toon, false).show_human_trailers());
+    }
+
+    #[test]
+    fn byte_sizes_accept_decimal_binary_and_raw_values() {
+        assert_eq!(parse_byte_size("1024").unwrap(), 1024);
+        assert_eq!(parse_byte_size("2MB").unwrap(), 2_000_000);
+        assert_eq!(parse_byte_size("2 MiB").unwrap(), 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn byte_sizes_reject_zero_unknown_suffixes_and_overflow() {
+        assert!(parse_byte_size("0").is_err());
+        assert!(parse_byte_size("1XB").is_err());
+        assert!(parse_byte_size("18446744073709551615TiB").is_err());
     }
 
     #[test]

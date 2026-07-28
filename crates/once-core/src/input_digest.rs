@@ -8,11 +8,12 @@
 //! domain prefix that collides across two plugins. This builder is the
 //! one canonical implementation.
 
+use std::io::Write;
 use std::path::Path;
 
 use once_cas::Digest;
 
-use crate::directory_blob::capture_directory_blob;
+use crate::directory_blob::write_directory_blob;
 use crate::OutputSymlinkMode;
 
 #[derive(Debug)]
@@ -78,8 +79,9 @@ impl InputDigestBuilder {
             bytes.extend_from_slice(target.to_string_lossy().as_bytes());
             Digest::of_bytes(&bytes)
         } else if metadata.is_dir() {
-            let bytes = capture_directory_blob(&abs, OutputSymlinkMode::Preserve)?;
-            Digest::of_bytes(&bytes)
+            let mut writer = DigestWriter::default();
+            write_directory_blob(&abs, OutputSymlinkMode::Preserve, &mut writer)?;
+            writer.finish()
         } else {
             let file = std::fs::File::open(&abs)?;
             Digest::of_reader(std::io::BufReader::new(file))?
@@ -90,6 +92,26 @@ impl InputDigestBuilder {
     /// Finalise the buffer into a [`Digest`].
     pub fn finish(self) -> Digest {
         Digest::of_bytes(&self.buf)
+    }
+}
+
+#[derive(Default)]
+struct DigestWriter(blake3::Hasher);
+
+impl DigestWriter {
+    fn finish(self) -> Digest {
+        Digest::from_bytes(*self.0.finalize().as_bytes())
+    }
+}
+
+impl Write for DigestWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

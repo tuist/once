@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, Write};
 use std::path::Path;
 
-use zstd::stream::{copy_encode, decode_all, encode_all};
+use zstd::stream::{copy_decode, copy_encode, decode_all, encode_all};
 
 pub(crate) const ZSTD_BLOB_MAGIC: &[u8] = b"once.cas.zstd.v1\0";
 pub(crate) const ZSTD_BLOB_HEADER_LEN: usize = ZSTD_BLOB_MAGIC.len() + RAW_SIZE_LEN;
@@ -76,6 +76,40 @@ pub(crate) fn encode_file(raw_path: &Path, encoded_path: &Path) -> io::Result<En
     Ok(EncodedFile {
         should_store: raw_starts_with_magic || encoded_size < raw_size,
     })
+}
+
+pub(crate) fn decode_file(stored_path: &Path, output_path: &Path) -> io::Result<()> {
+    let mut input = File::open(stored_path)?;
+    let mut header = vec![0_u8; ZSTD_BLOB_HEADER_LEN];
+    let mut header_len = 0;
+    while header_len < header.len() {
+        let read = input.read(&mut header[header_len..])?;
+        if read == 0 {
+            break;
+        }
+        header_len += read;
+    }
+    input.rewind()?;
+    let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut output = tempfile::NamedTempFile::new_in(parent)?;
+    if header_len == ZSTD_BLOB_HEADER_LEN && header.starts_with(ZSTD_BLOB_MAGIC) {
+        let raw_size = raw_size_from_header(&header).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "truncated zstd blob header")
+        })?;
+        input.seek(io::SeekFrom::Start(ZSTD_BLOB_HEADER_LEN as u64))?;
+        copy_decode(&mut input, &mut output)?;
+        if output.as_file().metadata()?.len() != raw_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "zstd blob decoded size mismatch",
+            ));
+        }
+    } else {
+        io::copy(&mut input, &mut output)?;
+    }
+    output.as_file().sync_all()?;
+    output.persist(output_path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 pub(crate) struct EncodedFile {
