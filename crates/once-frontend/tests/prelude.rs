@@ -2397,6 +2397,11 @@ fn rust_and_elixir_runtime_schemas_are_discoverable() {
 
     let elixir = built_in_target_kind_schema("elixir_library").expect("elixir_library schema");
     assert!(target_kind_has_impl("elixir_library").unwrap());
+    assert_eq!(elixir.tools.len(), 2);
+    assert_eq!(elixir.tools[0].name, "elixir");
+    assert_eq!(elixir.tools[0].executables, ["elixir", "elixirc", "mix"]);
+    assert_eq!(elixir.tools[1].name, "erlang");
+    assert_eq!(elixir.tools[1].executables, ["erl"]);
     assert!(elixir.attrs.iter().any(|attr| attr.name == "elixirc_opts"));
     assert!(elixir.attrs.iter().any(|attr| attr.name == "extra_apps"));
     assert!(elixir
@@ -2417,6 +2422,9 @@ fn rust_and_elixir_runtime_schemas_are_discoverable() {
         .iter()
         .any(|attr| attr.name == "env_inherit"));
     assert!(elixir_test.attrs.iter().any(|attr| attr.name == "tools"));
+
+    let mix_package = built_in_target_kind_schema("mix_package").expect("mix_package schema");
+    assert_eq!(mix_package.tools, elixir.tools);
 }
 
 #[test]

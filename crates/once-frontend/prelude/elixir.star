@@ -1,3 +1,8 @@
+_ELIXIR_TOOLS = [
+    tool("elixir", executables = ["elixir", "elixirc", "mix"]),
+    tool("erlang", executables = ["erl"]),
+]
+
 def _elixir_attr(ctx, key, default):
     return _configured_attr(ctx, key, default)
 
@@ -3282,6 +3287,7 @@ mix_workspace = target_kind(
     deps = [dep("deps", ["mix_project", "mix_workspace"], "Default development application or nested workspace emitted by native project discovery.")],
     providers = ["mix_workspace"],
     capabilities = [capability("build", [])],
+    tools = _ELIXIR_TOOLS,
     examples = [
         example(
             "mix-workspace-native-project",
@@ -3310,6 +3316,7 @@ mix_dependencies = target_kind(
     deps = [dep("deps", ["elixir_app"], "Locked package roots generated from the active Mix dependency graph.")],
     providers = ["elixir_app", "mix_dependency_set"],
     capabilities = [capability("build", [])],
+    tools = _ELIXIR_TOOLS,
     examples = [
         example(
             "elixir-library-with-mix-dependency",
@@ -3341,6 +3348,7 @@ mix_package = target_kind(
     deps = [dep("deps", ["elixir_app"], "Locked Mix packages available on the compile path.")],
     providers = ["elixir_app"],
     capabilities = [capability("build", ["bytecode"])],
+    tools = _ELIXIR_TOOLS,
     examples = [
         example(
             "elixir-library-with-mix-dependency",
@@ -3368,6 +3376,7 @@ mix_project = target_kind(
         capability("build", ["bytecode"]),
         capability("run", ["default"], ["bytecode"]),
     ],
+    tools = _ELIXIR_TOOLS,
     examples = [
         example(
             "mix-project-minimal",
@@ -3392,6 +3401,7 @@ mix_release = target_kind(
     deps = [dep("deps", ["mix_project"], "Exactly one Mix project and its transitive compiled applications.")],
     providers = ["mix_release"],
     capabilities = [capability("build", ["default", "release"])],
+    tools = _ELIXIR_TOOLS,
     examples = [
         example(
             "mix-project-minimal",
@@ -3416,6 +3426,7 @@ elixir_library = target_kind(
     deps = [dep("deps", ["elixir_app"], "Elixir applications available on the compile path.")],
     providers = ["elixir_app"],
     capabilities = [capability("build", ["bytecode"])],
+    tools = _ELIXIR_TOOLS,
     examples = [
         example(
             "elixir-library-minimal",
@@ -3432,6 +3443,7 @@ elixir_test = target_kind(
     deps = [dep("deps", ["elixir_app"], "The test-environment Elixir application under test.")],
     providers = ["once_test_info"],
     capabilities = [capability("test", ["default", "test_results", "logs"])],
+    tools = _ELIXIR_TOOLS,
     examples = [
         example(
             "elixir-test-minimal",
