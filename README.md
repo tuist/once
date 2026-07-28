@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" width="360" alt="Once" />
+  <img src="assets/nav-logo.png" width="140" alt="Once" />
 </p>
 
 <p align="center">
