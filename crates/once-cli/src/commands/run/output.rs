@@ -1,10 +1,12 @@
 use anyhow::Result;
+use once_cas::{CacheProvider, Digest};
 use once_core::Outcome;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use super::runtime_descriptor::RuntimeDescriptor;
 use crate::cli::{Format, Output};
+use crate::commands::util::write_cache_blob;
 use crate::render;
 
 #[derive(Serialize)]
@@ -42,33 +44,41 @@ impl<'a> RunRecord<'a> {
 
 pub(super) async fn render(
     output: Output,
-    stdout_blob: &[u8],
-    stderr_blob: &[u8],
+    cache: &CacheProvider,
+    stdout: Option<&Digest>,
+    stderr: Option<&Digest>,
     record: &RunRecord<'_>,
     streams_live: bool,
 ) -> Result<()> {
     match output.format {
-        Format::Human => render_human(output, stdout_blob, stderr_blob, record, streams_live).await,
-        Format::Json | Format::Toon => render_structured(output.format, stderr_blob, record).await,
+        Format::Human => render_human(output, cache, stdout, stderr, record, streams_live).await,
+        Format::Json | Format::Toon => {
+            render_structured(output.format, cache, stderr, record).await
+        }
     }
 }
 
 async fn render_human(
     output: Output,
-    stdout_blob: &[u8],
-    stderr_blob: &[u8],
+    cache: &CacheProvider,
+    stdout: Option<&Digest>,
+    stderr: Option<&Digest>,
     record: &RunRecord<'_>,
     streams_live: bool,
 ) -> Result<()> {
     let mut out = tokio::io::stdout();
     if !streams_live {
-        out.write_all(stdout_blob).await?;
+        if let Some(digest) = stdout {
+            write_cache_blob(cache, digest, &mut out).await?;
+        }
     }
     out.flush().await?;
 
     let mut err = tokio::io::stderr();
     if !streams_live {
-        err.write_all(stderr_blob).await?;
+        if let Some(digest) = stderr {
+            write_cache_blob(cache, digest, &mut err).await?;
+        }
     }
     if output.show_human_trailers() {
         err.write_all(
@@ -89,11 +99,14 @@ async fn render_human(
 
 async fn render_structured(
     format: Format,
-    stderr_blob: &[u8],
+    cache: &CacheProvider,
+    stderr: Option<&Digest>,
     record: &RunRecord<'_>,
 ) -> Result<()> {
     let mut err = tokio::io::stderr();
-    err.write_all(stderr_blob).await?;
+    if let Some(digest) = stderr {
+        write_cache_blob(cache, digest, &mut err).await?;
+    }
     err.flush().await?;
 
     let mut out = tokio::io::stdout();

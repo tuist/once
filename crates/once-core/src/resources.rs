@@ -5,8 +5,11 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use sysinfo::System;
 use tokio::sync::Notify;
 use tracing::debug;
+
+pub const DEFAULT_ACTION_MEMORY_BYTES: u64 = 250 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceRequest {
@@ -55,10 +58,15 @@ impl ResourceRequest {
 
     fn bounded_by(self, limits: &ResourceLimits) -> Self {
         let cpu_slots = self.cpu_slots.clamp(1, limits.cpu_slots);
-        let memory_bytes = if limits.memory_bytes == 0 {
-            self.memory_bytes
+        let requested_memory = if self.memory_bytes == 0 {
+            limits.default_action_memory_bytes
         } else {
-            self.memory_bytes.min(limits.memory_bytes)
+            self.memory_bytes
+        };
+        let memory_bytes = if limits.memory_bytes == 0 {
+            requested_memory
+        } else {
+            requested_memory.min(limits.memory_bytes)
         };
         // Clamp each named slot request to whatever the pool publishes
         // for that name; missing pool entries default to 1 so an
@@ -91,6 +99,7 @@ impl Default for ResourceRequest {
 pub struct ResourceLimits {
     pub cpu_slots: usize,
     pub memory_bytes: u64,
+    pub default_action_memory_bytes: u64,
     /// Per-name pool size for shared slots. A name absent from this
     /// map is treated as if its limit were 1, so even un-configured
     /// slots still serialize correctly rather than allowing unbounded
@@ -103,8 +112,34 @@ impl ResourceLimits {
         Self {
             cpu_slots: if cpu_slots == 0 { 1 } else { cpu_slots },
             memory_bytes,
+            default_action_memory_bytes: if memory_bytes == 0 {
+                0
+            } else {
+                DEFAULT_ACTION_MEMORY_BYTES.min(memory_bytes)
+            },
             slot_limits: BTreeMap::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_memory_bytes(mut self, memory_bytes: u64) -> Self {
+        self.memory_bytes = memory_bytes;
+        self.default_action_memory_bytes = if memory_bytes == 0 {
+            0
+        } else {
+            DEFAULT_ACTION_MEMORY_BYTES.min(memory_bytes)
+        };
+        self
+    }
+
+    #[must_use]
+    pub fn with_default_action_memory_bytes(mut self, memory_bytes: u64) -> Self {
+        self.default_action_memory_bytes = if self.memory_bytes == 0 {
+            memory_bytes
+        } else {
+            memory_bytes.min(self.memory_bytes)
+        };
+        self
     }
 
     /// Publish a pool size for a named slot. Plugins call this when
@@ -123,13 +158,41 @@ impl ResourceLimits {
     pub fn slot_limit(&self, name: &str, default_value: usize) -> usize {
         self.slot_limits.get(name).copied().unwrap_or(default_value)
     }
+
+    pub fn max_parallel_actions(&self) -> usize {
+        if self.memory_bytes == 0 || self.default_action_memory_bytes == 0 {
+            return self.cpu_slots;
+        }
+        let memory_slots = self.memory_bytes / self.default_action_memory_bytes;
+        self.cpu_slots
+            .min(usize::try_from(memory_slots).unwrap_or(usize::MAX))
+            .max(1)
+    }
 }
 
 impl Default for ResourceLimits {
     fn default() -> Self {
         let cpu_slots = std::thread::available_parallelism().map_or(8, NonZeroUsize::get);
-        Self::new(cpu_slots, 0)
+        let memory_bytes = detected_memory_bytes()
+            .unwrap_or(1024 * 1024 * 1024)
+            .saturating_mul(2)
+            / 3;
+        Self::new(cpu_slots, memory_bytes)
     }
+}
+
+fn detected_memory_bytes() -> Option<u64> {
+    let mut system = System::new();
+    system.refresh_memory();
+    let host = system.total_memory();
+    let constrained = system
+        .cgroup_limits()
+        .map(|limits| limits.total_memory)
+        .filter(|memory| *memory > 0);
+    [Some(host).filter(|memory| *memory > 0), constrained]
+        .into_iter()
+        .flatten()
+        .min()
 }
 
 #[derive(Debug, Default)]
@@ -157,6 +220,7 @@ impl ResourcePool {
                 limits.cpu_slots
             },
             memory_bytes: limits.memory_bytes,
+            default_action_memory_bytes: limits.default_action_memory_bytes,
             slot_limits: limits.slot_limits,
         };
         Self {
@@ -164,6 +228,10 @@ impl ResourcePool {
             state: Mutex::new(State::default()),
             notify: Notify::new(),
         }
+    }
+
+    pub fn max_parallel_actions(&self) -> usize {
+        self.limits.max_parallel_actions()
     }
 
     pub fn limits(&self) -> ResourceLimits {
@@ -282,6 +350,15 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn default_limits_reserve_memory_for_the_host() {
+        let limits = ResourceLimits::default();
+
+        assert!(limits.memory_bytes > 0);
+        assert!(limits.default_action_memory_bytes > 0);
+        assert!(limits.default_action_memory_bytes <= limits.memory_bytes);
+    }
+
     #[tokio::test]
     async fn memory_budget_blocks_until_released() {
         let pool = Arc::new(ResourcePool::new(ResourceLimits::new(4, 100)));
@@ -299,6 +376,39 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn unspecified_memory_uses_the_default_action_estimate() {
+        let limits = ResourceLimits::new(4, 100).with_default_action_memory_bytes(60);
+        let pool = Arc::new(ResourcePool::new(limits));
+        let first = pool.acquire(ResourceRequest::default()).await;
+        let waiting_pool = Arc::clone(&pool);
+        let waiting = tokio::spawn(async move {
+            let _permit = waiting_pool.acquire(ResourceRequest::default()).await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!waiting.is_finished());
+
+        drop(first);
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_unspecified_estimate_is_clamped_without_deadlock() {
+        let limits = ResourceLimits::new(2, 10).with_default_action_memory_bytes(100);
+        let pool = Arc::new(ResourcePool::new(limits));
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            pool.acquire(ResourceRequest::default()),
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -386,5 +496,38 @@ mod tests {
             .with_slot("exclusive_slot", 1)
             .with_slot("exclusive_slot", 0);
         assert!(r.slots.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn memory_budget_stress_never_exceeds_the_limit() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        const BUDGET: u64 = 4 * 1024 * 1024;
+        const ALLOCATION: u64 = 1024 * 1024;
+
+        let pool = Arc::new(ResourcePool::new(ResourceLimits::new(32, BUDGET)));
+        let live = Arc::new(AtomicU64::new(0));
+        let peak = Arc::new(AtomicU64::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..64 {
+            let pool = Arc::clone(&pool);
+            let live = Arc::clone(&live);
+            let peak = Arc::clone(&peak);
+            tasks.push(tokio::spawn(async move {
+                let _permit = pool.acquire(ResourceRequest::new(1, ALLOCATION)).await;
+                let bytes = vec![0x5a; usize::try_from(ALLOCATION).unwrap()];
+                let current = live.fetch_add(ALLOCATION, Ordering::SeqCst) + ALLOCATION;
+                peak.fetch_max(current, Ordering::SeqCst);
+                tokio::task::yield_now().await;
+                assert_eq!(bytes[0], 0x5a);
+                live.fetch_sub(ALLOCATION, Ordering::SeqCst);
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        assert!(peak.load(Ordering::SeqCst) <= BUDGET);
+        assert_eq!(live.load(Ordering::SeqCst), 0);
     }
 }

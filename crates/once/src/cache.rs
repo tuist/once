@@ -121,7 +121,6 @@ impl Cache {
     /// Materialize a blob at a file path and return the number of bytes written.
     pub async fn get_blob_to_file(&self, digest: Digest, path: impl AsRef<Path>) -> Result<u64> {
         let path = path.as_ref();
-        let bytes = self.get_blob(digest).await?;
         if let Some(parent) = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -133,13 +132,14 @@ impl Cache {
                     source,
                 })?;
         }
-        tokio::fs::write(path, &bytes)
+        self.cache.copy_blob_to_file(&digest, path).await?;
+        let bytes = tokio::fs::metadata(path)
             .await
             .map_err(|source| once_cas::Error::Io {
                 path: path.to_path_buf(),
                 source,
             })?;
-        Ok(bytes.len() as u64)
+        Ok(bytes.len())
     }
 
     /// Return whether a blob exists.

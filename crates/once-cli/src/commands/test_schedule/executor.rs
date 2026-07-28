@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use once_core::{SandboxMode, TestBatch, TestPlan, TestSchedule};
+use once_core::{ResourceLimits, SandboxMode, TestBatch, TestPlan, TestSchedule};
 use serde_json::Value;
 
 use super::process::run_test_target;
@@ -23,10 +23,27 @@ pub(super) fn execute(
     estimates: &BTreeMap<String, u64>,
     requested_workers: Option<usize>,
     sandbox: SandboxMode,
+    resource_limits: &ResourceLimits,
 ) -> Result<CompletedSchedule> {
-    execute_with(plan, estimates, requested_workers, |batch| {
-        run_test_target(executable, workspace, batch, sandbox)
+    let requested_workers = bounded_worker_request(requested_workers, resource_limits);
+    execute_with(plan, estimates, Some(requested_workers), |batch| {
+        run_test_target(
+            executable,
+            workspace,
+            batch,
+            sandbox,
+            resource_limits.memory_bytes,
+        )
     })
+}
+
+fn bounded_worker_request(
+    requested_workers: Option<usize>,
+    resource_limits: &ResourceLimits,
+) -> usize {
+    requested_workers
+        .unwrap_or(resource_limits.max_parallel_actions())
+        .min(resource_limits.max_parallel_actions())
 }
 
 fn execute_with<F>(

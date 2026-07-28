@@ -108,6 +108,25 @@ impl Cas {
         }
     }
 
+    pub async fn copy_blob_to_file(&self, digest: &Digest, destination: &Path) -> Result<()> {
+        let stored_path = self.blob_path(digest);
+        if !fs::try_exists(&stored_path).await.unwrap_or(false) {
+            return Err(Error::BlobNotFound(*digest));
+        }
+        let output_path = destination.to_path_buf();
+        let error_path = output_path.clone();
+        tokio::task::spawn_blocking(move || blob::decode_file(&stored_path, &output_path))
+            .await
+            .map_err(|source| Error::Io {
+                path: error_path.clone(),
+                source: io::Error::other(source.to_string()),
+            })?
+            .map_err(|source| Error::Io {
+                path: error_path,
+                source,
+            })
+    }
+
     fn action_path(&self, digest: &Digest) -> PathBuf {
         Self::shard_path(&self.actions_dir(), digest, ".json")
     }
@@ -1288,6 +1307,23 @@ mod tests {
         assert!(stored.starts_with(blob::ZSTD_BLOB_MAGIC));
         assert!(stored.len() < payload.len());
         assert_eq!(cas.get_blob(&d).await.unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn copy_blob_to_file_streams_raw_and_compressed_storage() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path().join("cas"));
+        for (name, payload) in [
+            ("raw", b"small payload".to_vec()),
+            ("compressed", vec![b'x'; STREAM_CHUNK * 4]),
+        ] {
+            let digest = cas.put_stream(payload.as_slice()).await.unwrap();
+            let destination = tmp.path().join(name);
+
+            cas.copy_blob_to_file(&digest, &destination).await.unwrap();
+
+            assert_eq!(fs::read(destination).await.unwrap(), payload);
+        }
     }
 
     #[tokio::test]

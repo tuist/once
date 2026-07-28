@@ -81,11 +81,9 @@ impl Runner {
     /// environments. A value of 0 is silently raised to 1.
     #[must_use]
     pub fn with_max_concurrency(mut self, n: usize) -> Self {
-        let limits = self.resources.limits();
-        self.resources = Arc::new(ResourcePool::new(ResourceLimits::new(
-            n,
-            limits.memory_bytes,
-        )));
+        let mut limits = self.resources.limits();
+        limits.cpu_slots = n.max(1);
+        self.resources = Arc::new(ResourcePool::new(limits));
         self
     }
 
@@ -123,6 +121,45 @@ impl Runner {
             key,
         ))
         .await
+    }
+
+    pub async fn run_streaming(&self, action: &Action) -> Result<Outcome> {
+        let key = action.digest();
+        if let Some(hit) = lookup_cached(action, &self.cache, &self.workspace_root, &key).await? {
+            return Ok(hit);
+        }
+        let _permit = self
+            .resources
+            .acquire(action.resource_request().clone())
+            .await;
+        if let Some(hit) = lookup_cached(action, &self.cache, &self.workspace_root, &key).await? {
+            return Ok(hit);
+        }
+        let result = Box::pin(execute::run(
+            action,
+            &self.workspace_root,
+            &self.cache,
+            true,
+            false,
+        ))
+        .await?;
+        let uses_cache = action_uses_cache(action);
+        let cacheable = uses_cache && (result.exit_code == 0 || self.opts.cache_failures);
+        if cacheable {
+            self.cache.put_action_result(&key, &result).await?;
+        } else if !uses_cache {
+            debug!("skipping action cache for non-cacheable action");
+        } else {
+            debug!(
+                exit_code = result.exit_code,
+                "skipping cache write for failure"
+            );
+        }
+        Ok(Outcome {
+            action: key,
+            result,
+            cache: CacheState::Miss,
+        })
     }
 }
 

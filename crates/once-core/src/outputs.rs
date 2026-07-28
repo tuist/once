@@ -1,14 +1,16 @@
 use std::collections::{BTreeMap, VecDeque};
-use std::io::{Read, Seek, Write};
+use std::io::{BufWriter, Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use once_cas::{ActionResult, CacheProvider, Digest};
 use tokio::task::JoinSet;
 
-use crate::directory_blob::{capture_directory_blob, is_directory_blob, restore_directory_blob};
+use crate::directory_blob::{
+    is_directory_blob, restore_directory_blob_from_reader, write_directory_blob,
+};
 use crate::file_blob::{
-    capture_file_blob, digest_file_blob, restore_file_blob_from_reader, FILE_BLOB_MAGIC,
+    digest_file_blob, file_blob_header, restore_file_blob_from_reader, FILE_BLOB_MAGIC,
 };
 use crate::{Error, OutputSymlinkMode, Result, WorkspacePath};
 
@@ -26,7 +28,7 @@ pub(crate) async fn restore(
     if outputs.outputs.is_empty() {
         return Ok(());
     }
-    let staging = RestoreStagingDir::create(workspace_root)?;
+    let staging = StagingDir::create(workspace_root)?;
     let prefetched = prefetch_output_blobs(&outputs, cache, staging.path()).await?;
     for output in prefetched {
         let PrefetchedOutput { rel, blob_path, .. } = output;
@@ -60,11 +62,7 @@ fn restore_prefetched_output(rel: &str, abs: &Path, blob_path: &Path) -> Result<
         source,
     })?;
     if is_directory_blob(&prefix[..read]) {
-        let bytes = std::fs::read(blob_path).map_err(|source| Error::RestoreOutput {
-            path: rel.to_string(),
-            source,
-        })?;
-        return restore_directory_blob(rel, abs, &bytes);
+        return restore_directory_blob_from_reader(rel, abs, blob);
     }
     if prefix[..read].starts_with(FILE_BLOB_MAGIC) {
         return restore_file_blob_from_reader(rel, abs, blob);
@@ -190,10 +188,7 @@ fn spawn_prefetch(
 ) {
     let blob_path = staging_dir.join(format!("{index}.blob"));
     tasks.spawn(async move {
-        let bytes = cache.get_blob(&digest).await?;
-        if let Err(source) = tokio::fs::write(&blob_path, bytes).await {
-            return Err(Error::RestoreOutput { path: rel, source });
-        }
+        cache.copy_blob_to_file(&digest, &blob_path).await?;
         Ok(PrefetchedOutput {
             index,
             rel,
@@ -208,11 +203,11 @@ struct PrefetchedOutput {
     blob_path: PathBuf,
 }
 
-struct RestoreStagingDir {
+struct StagingDir {
     path: PathBuf,
 }
 
-impl RestoreStagingDir {
+impl StagingDir {
     fn create(workspace_root: &Path) -> Result<Self> {
         let parent = workspace_root.join(".once/tmp");
         std::fs::create_dir_all(&parent).map_err(|source| Error::RestoreOutput {
@@ -250,7 +245,7 @@ impl RestoreStagingDir {
     }
 }
 
-impl Drop for RestoreStagingDir {
+impl Drop for StagingDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
@@ -313,40 +308,52 @@ pub(crate) async fn capture(
                 });
             }
         };
-        let bytes = if metadata.is_dir() {
-            read_output_blocking(rel.as_str(), {
+        let digest = if metadata.is_dir() {
+            let staging = StagingDir::create(workspace_root)?;
+            let blob_path = staging.path().join("directory.blob");
+            let output_path = blob_path.clone();
+            let logical_path = rel.as_str().to_string();
+            tokio::task::spawn_blocking({
                 let abs = abs.clone();
-                move || capture_directory_blob(&abs, symlink_mode)
+                move || {
+                    let file = std::fs::File::create(&output_path)?;
+                    let mut writer = BufWriter::new(file);
+                    write_directory_blob(&abs, symlink_mode, &mut writer)?;
+                    writer.flush()
+                }
             })
-            .await?
+            .await
+            .map_err(|source| Error::ReadOutput {
+                path: logical_path.clone(),
+                source: std::io::Error::other(source.to_string()),
+            })?
+            .map_err(|source| Error::ReadOutput {
+                path: logical_path,
+                source,
+            })?;
+            let file =
+                tokio::fs::File::open(&blob_path)
+                    .await
+                    .map_err(|source| Error::ReadOutput {
+                        path: rel.as_str().to_string(),
+                        source,
+                    })?;
+            cache.put_stream(file).await?
         } else {
-            read_output_blocking(rel.as_str(), {
-                let abs = abs.clone();
-                move || capture_file_blob(&abs)
-            })
-            .await?
+            let header = Cursor::new(file_blob_header(&metadata));
+            let file = tokio::fs::File::open(&abs)
+                .await
+                .map_err(|source| Error::ReadOutput {
+                    path: rel.as_str().to_string(),
+                    source,
+                })?;
+            cache
+                .put_stream(tokio::io::AsyncReadExt::chain(header, file))
+                .await?
         };
-        let digest = cache.put_blob(&bytes).await?;
         captured.insert(rel.as_str().to_string(), digest);
     }
     Ok(captured)
-}
-
-async fn read_output_blocking(
-    path: &str,
-    read: impl FnOnce() -> std::io::Result<Vec<u8>> + Send + 'static,
-) -> Result<Vec<u8>> {
-    match tokio::task::spawn_blocking(read).await {
-        Ok(Ok(bytes)) => Ok(bytes),
-        Ok(Err(source)) => Err(Error::ReadOutput {
-            path: path.to_string(),
-            source,
-        }),
-        Err(source) => Err(Error::ReadOutput {
-            path: path.to_string(),
-            source: std::io::Error::other(source.to_string()),
-        }),
-    }
 }
 
 #[cfg(test)]
@@ -533,5 +540,51 @@ mod tests {
 
         assert!(matches!(err, Error::Cas(once_cas::Error::BlobNotFound(_))));
         assert!(!workspace.join("out/first.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn large_file_and_directory_outputs_roundtrip_through_streaming_paths() {
+        let (_tmp, workspace, cache) = workspace_and_cache();
+        let file_path = workspace.join("out/large.bin");
+        let directory_file = workspace.join("out/tree/nested.bin");
+        std::fs::create_dir_all(directory_file.parent().unwrap()).unwrap();
+        std::fs::File::create(&file_path)
+            .unwrap()
+            .set_len(32 * 1024 * 1024)
+            .unwrap();
+        std::fs::File::create(&directory_file)
+            .unwrap()
+            .set_len(16 * 1024 * 1024)
+            .unwrap();
+        let outputs = [
+            WorkspacePath::try_from("out/large.bin").unwrap(),
+            WorkspacePath::try_from("out/tree").unwrap(),
+        ];
+
+        let captured = capture(&outputs, &workspace, &cache, OutputSymlinkMode::default())
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(workspace.join("out")).unwrap();
+        restore(
+            &ActionResult {
+                exit_code: 0,
+                stdout: None,
+                stderr: None,
+                outputs: captured,
+            },
+            &workspace,
+            &cache,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::metadata(file_path).unwrap().len(),
+            32 * 1024 * 1024
+        );
+        assert_eq!(
+            std::fs::metadata(directory_file).unwrap().len(),
+            16 * 1024 * 1024
+        );
     }
 }

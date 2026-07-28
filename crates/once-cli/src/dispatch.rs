@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use once_cas::CacheProvider;
-use once_core::{RemoteExecution, SandboxMode, Xdg};
+use once_core::{RemoteExecution, ResourceLimits, SandboxMode, Xdg};
 
 use crate::cli::{self, Cli, Cmd, Output};
 use crate::commands;
@@ -23,7 +23,25 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
 
     let workspace = resolve_workspace(cli.directory)?;
     let xdg = Xdg::from_env();
-    Box::pin(run_command(&workspace, &xdg, output, command)).await
+    let resource_limits = cli
+        .memory_limit
+        .map_or_else(ResourceLimits::default, |memory| {
+            ResourceLimits::default().with_memory_bytes(memory)
+        });
+    tracing::debug!(
+        memory_limit_bytes = resource_limits.memory_bytes,
+        default_action_memory_bytes = resource_limits.default_action_memory_bytes,
+        cpu_slots = resource_limits.cpu_slots,
+        "resolved local resource limits"
+    );
+    Box::pin(run_command(
+        &workspace,
+        &xdg,
+        output,
+        &resource_limits,
+        command,
+    ))
+    .await
 }
 
 fn resolve_workspace(directory: Option<PathBuf>) -> Result<PathBuf> {
@@ -55,18 +73,30 @@ async fn run_command(
     workspace: &Path,
     xdg: &Xdg,
     output: Output,
+    resource_limits: &ResourceLimits,
     command: Cmd,
 ) -> Result<ExitCode> {
     match command {
         Cmd::Auth { cmd } => run_auth_command(workspace, xdg, output, cmd).await,
         Cmd::Build { target, sandbox } => {
-            dispatch_build(workspace, xdg, output, target, sandbox).await
+            dispatch_build(workspace, xdg, output, target, sandbox, resource_limits).await
         }
         Cmd::Lint {
             target,
             sandbox,
             fail_on,
-        } => dispatch_lint(workspace, xdg, output, target, sandbox, fail_on).await,
+        } => {
+            dispatch_lint(
+                workspace,
+                xdg,
+                output,
+                target,
+                sandbox,
+                fail_on,
+                resource_limits,
+            )
+            .await
+        }
         Cmd::Run {
             target,
             sandbox,
@@ -86,6 +116,7 @@ async fn run_command(
                     runtime_rpc,
                     runtime_rpc_socket,
                     sandbox,
+                    resource_limits: resource_limits.clone(),
                     remote: resolve_remote_execution(workspace, xdg, remote, compute.as_deref())?,
                 },
             ))
@@ -113,6 +144,7 @@ async fn run_command(
                     cwd,
                     timeout_ms,
                     cache_failures,
+                    resource_limits: resource_limits.clone(),
                     remote: resolve_remote_execution(workspace, xdg, remote, compute.as_deref())?,
                     argv,
                 },
@@ -143,6 +175,7 @@ async fn run_command(
                     test_unit,
                     batch_test_units,
                     test_batch_id,
+                    resource_limits: resource_limits.clone(),
                 },
             ))
             .await
@@ -156,7 +189,15 @@ async fn run_command(
         Cmd::Mcp {
             workspace: workspace_override,
             allow_run,
-        } => run_mcp_command(workspace, workspace_override, allow_run).await,
+        } => {
+            run_mcp_command(
+                workspace,
+                workspace_override,
+                allow_run,
+                resource_limits.clone(),
+            )
+            .await
+        }
         Cmd::Reference { out } => crate::reference::generate(&out),
     }
 }
@@ -165,9 +206,10 @@ async fn run_mcp_command(
     workspace: &Path,
     workspace_override: Option<PathBuf>,
     allow_run: bool,
+    resource_limits: ResourceLimits,
 ) -> Result<ExitCode> {
     let workspace = resolve_mcp_workspace(workspace, workspace_override)?;
-    commands::mcp::serve(workspace, allow_run)
+    commands::mcp::serve(workspace, allow_run, resource_limits)
         .await
         .map(|()| ExitCode::SUCCESS)
 }
@@ -204,11 +246,17 @@ async fn dispatch_build(
     output: Output,
     target: Option<String>,
     sandbox: SandboxMode,
+    resource_limits: &ResourceLimits,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     Box::pin(commands::graph::build(
-        workspace, &cache, output, &target, sandbox,
+        workspace,
+        &cache,
+        output,
+        &target,
+        sandbox,
+        resource_limits.clone(),
     ))
     .await
 }
@@ -220,11 +268,18 @@ async fn dispatch_lint(
     target: Option<String>,
     sandbox: SandboxMode,
     fail_on: once_core::LintSeverity,
+    resource_limits: &ResourceLimits,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     Box::pin(commands::graph::lint(
-        workspace, &cache, output, &target, sandbox, fail_on,
+        workspace,
+        &cache,
+        output,
+        &target,
+        sandbox,
+        fail_on,
+        resource_limits.clone(),
     ))
     .await
 }
@@ -239,6 +294,7 @@ struct TestDispatchArgs {
     test_unit: Option<String>,
     batch_test_units: Vec<String>,
     test_batch_id: Option<String>,
+    resource_limits: ResourceLimits,
 }
 
 async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> Result<ExitCode> {
@@ -253,6 +309,7 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
             args.sandbox,
             &args.batch_test_units,
             args.test_batch_id.as_deref(),
+            args.resource_limits,
         ))
         .await;
     }
@@ -266,6 +323,7 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
             args.output,
             &target,
             args.sandbox,
+            args.resource_limits,
         ))
         .await;
     }
@@ -292,6 +350,7 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
         plan,
         args.jobs,
         args.sandbox,
+        args.resource_limits,
     ))
     .await
 }
@@ -609,6 +668,7 @@ struct RunDispatchArgs {
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
     sandbox: SandboxMode,
+    resource_limits: ResourceLimits,
     remote: Option<RemoteExecution>,
 }
 
@@ -620,6 +680,7 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
         runtime_rpc,
         runtime_rpc_socket,
         sandbox,
+        resource_limits,
         remote,
     } = args;
     let resolved_target = resolve_required_target(workspace, target.clone())?;
@@ -642,6 +703,7 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
             &resolved_target,
             commands::graph::GraphRunOptions { visible },
             sandbox,
+            resource_limits,
         ))
         .await;
     }
@@ -657,6 +719,7 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
         runtime_rpc,
         runtime_rpc_socket,
         sandbox,
+        resource_limits,
         remote,
     )
     .await
@@ -681,6 +744,7 @@ async fn run_target_command(
     runtime_rpc: bool,
     runtime_rpc_socket: Option<PathBuf>,
     sandbox: SandboxMode,
+    resource_limits: ResourceLimits,
     remote: Option<RemoteExecution>,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
@@ -693,6 +757,7 @@ async fn run_target_command(
             runtime_rpc,
             runtime_rpc_socket,
             sandbox,
+            resource_limits,
             remote,
         },
     )

@@ -10,7 +10,9 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use once_cas::CacheProvider;
-use once_core::{Action, CacheState, EvidenceSubject, RemoteExecution, RunOpts, SandboxMode};
+use once_core::{
+    Action, CacheState, EvidenceSubject, RemoteExecution, ResourceLimits, RunOpts, SandboxMode,
+};
 
 use self::action::action_for;
 use self::runtime_descriptor::runtime_descriptor;
@@ -22,6 +24,7 @@ pub struct RunArgs {
     pub runtime_rpc: bool,
     pub runtime_rpc_socket: Option<PathBuf>,
     pub sandbox: SandboxMode,
+    pub resource_limits: ResourceLimits,
     pub remote: Option<RemoteExecution>,
 }
 
@@ -47,14 +50,15 @@ pub async fn run(
 
     let streams_live =
         action_remote(&plan.action).is_some() && args.output.format == crate::cli::Format::Human;
+    let runner = once_core::Runner::with_cache(cache.clone(), workspace, RunOpts::default())
+        .with_resource_limits(args.resource_limits.clone());
     let outcome = if streams_live {
-        once_core::run_with_cache_streaming(&plan.action, workspace, cache, RunOpts::default())
+        runner
+            .run_streaming(&plan.action)
             .await
             .context("executing action")?
     } else {
-        once_core::run_with_cache(&plan.action, workspace, cache, RunOpts::default())
-            .await
-            .context("executing action")?
+        runner.run(&plan.action).await.context("executing action")?
     };
     crate::commands::evidence::record_outcome(
         workspace,
@@ -94,16 +98,9 @@ async fn finish_run(
         runtime_rpc,
         runtime_rpc_socket,
         sandbox: _,
+        resource_limits: _,
         remote: _,
     } = args;
-    let stdout_blob = match outcome.result.stdout {
-        Some(digest) => cache.get_blob(&digest).await?,
-        None => Vec::new(),
-    };
-    let stderr_blob = match outcome.result.stderr {
-        Some(digest) => cache.get_blob(&digest).await?,
-        None => Vec::new(),
-    };
     let tag = cache_tag(outcome.cache);
     let mut runtime = runtime_descriptor(target_id, target)?;
     let session = match (&mut runtime, runtime_rpc) {
@@ -113,8 +110,9 @@ async fn finish_run(
                 target_id,
                 runtime,
                 runtime_rpc_socket,
-                &stdout_blob,
-                &stderr_blob,
+                cache,
+                outcome.result.stdout.as_ref(),
+                outcome.result.stderr.as_ref(),
             )
             .await?,
         ),
@@ -129,7 +127,15 @@ async fn finish_run(
         output_path.to_string(),
         runtime,
     );
-    output::render(output, &stdout_blob, &stderr_blob, &record, streams_live).await?;
+    output::render(
+        output,
+        cache,
+        outcome.result.stdout.as_ref(),
+        outcome.result.stderr.as_ref(),
+        &record,
+        streams_live,
+    )
+    .await?;
 
     if let Some(session) = session {
         crate::commands::runtime::rpc(&session.dir, Some(&session.socket)).await?;

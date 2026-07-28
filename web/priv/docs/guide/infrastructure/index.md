@@ -8,6 +8,11 @@ Once works locally without configuration. Infrastructure becomes useful when
 you want to run an action on another machine or share a cached result with
 another developer or coding agent.
 
+Local execution also has a memory scheduling budget. Once derives it from the
+memory visible to the host or container, and you can override it for constrained
+machines. Read [Memory Limits](/guide/infrastructure/memory-limits) before
+choosing a custom value.
+
 ## Run An Action Somewhere Else
 
 Choose a named execution provider in the repository root `once.toml`:
@@ -78,5 +83,6 @@ provider for one invocation.
 
 ## Next
 
-Start with [Remote Execution](/guide/infrastructure/remote-execution), then
-open the setup guide for the provider you want to use.
+Start with [Memory Limits](/guide/infrastructure/memory-limits) for local
+resource control or [Remote Execution](/guide/infrastructure/remote-execution)
+for hosted actions, then open the setup guide for the provider you want to use.

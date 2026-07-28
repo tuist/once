@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
+use std::process::{Output, Stdio};
 
 use futures::future::try_join_all;
 use tokio::process::Command;
@@ -11,6 +13,8 @@ use super::{
     path::build_action_path,
     select_extra_env, tool_env, MANAGED_MISE_VERSION,
 };
+
+const MISE_OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
 
 /// Resolve `tool` through the workspace's mise config when one exists.
 ///
@@ -118,13 +122,8 @@ async fn workspace_tool_without_prepare(
     let mut command = Command::new(&mise);
     configure_mise_command(&mut command, workspace);
     enable_mise_tools(&mut command, enabled_tools);
-    let output = command
-        .args(["which", "-C"])
-        .arg(workspace)
-        .arg(tool)
-        .output()
-        .await
-        .map_err(|source| ToolEnvError::SpawnMise { source })?;
+    command.args(["which", "-C"]).arg(workspace).arg(tool);
+    let output = bounded_mise_output(&mut command).await?;
     if !output.status.success() {
         return Err(ToolEnvError::MiseFailed {
             command: format!("mise which {tool}"),
@@ -225,10 +224,7 @@ async fn ensure_workspace_tools(workspace: &Path, tools: &[&str]) -> Result<(), 
         .args(["--yes", "--quiet"])
         .args(tools)
         .env("MISE_ENABLE_TOOLS", tools.join(","));
-    let output = command
-        .output()
-        .await
-        .map_err(|source| ToolEnvError::SpawnMise { source })?;
+    let output = bounded_mise_output(&mut command).await?;
     if !output.status.success() {
         return Err(ToolEnvError::MiseFailed {
             command: format!("mise install {}", tools.join(" ")),
@@ -243,12 +239,8 @@ async fn mise_env(workspace: &Path) -> Result<BTreeMap<String, String>, ToolEnvE
     let mise = managed_mise().await?;
     let mut command = Command::new(&mise);
     configure_mise_command(&mut command, workspace);
-    let output = command
-        .args(["env", "--json", "-C"])
-        .arg(workspace)
-        .output()
-        .await
-        .map_err(|source| ToolEnvError::SpawnMise { source })?;
+    command.args(["env", "--json", "-C"]).arg(workspace);
+    let output = bounded_mise_output(&mut command).await?;
     if !output.status.success() {
         return Err(ToolEnvError::MiseFailed {
             command: "mise env --json".to_string(),
@@ -263,6 +255,51 @@ fn configure_mise_command(command: &mut Command, workspace: &Path) {
     for (key, value) in managed_mise_isolation(workspace) {
         command.env(key, value);
     }
+}
+
+async fn bounded_mise_output(command: &mut Command) -> Result<Output, ToolEnvError> {
+    let stdout = tempfile::tempfile().map_err(|source| ToolEnvError::SpawnMise { source })?;
+    let stderr = tempfile::tempfile().map_err(|source| ToolEnvError::SpawnMise { source })?;
+    command.stdout(Stdio::from(
+        stdout
+            .try_clone()
+            .map_err(|source| ToolEnvError::SpawnMise { source })?,
+    ));
+    command.stderr(Stdio::from(
+        stderr
+            .try_clone()
+            .map_err(|source| ToolEnvError::SpawnMise { source })?,
+    ));
+    let status = command
+        .status()
+        .await
+        .map_err(|source| ToolEnvError::SpawnMise { source })?;
+    Ok(Output {
+        status,
+        stdout: read_mise_output(stdout, "standard output")?,
+        stderr: read_mise_output(stderr, "standard error")?,
+    })
+}
+
+fn read_mise_output(
+    mut file: std::fs::File,
+    stream: &'static str,
+) -> Result<Vec<u8>, ToolEnvError> {
+    let len = file
+        .metadata()
+        .map_err(|source| ToolEnvError::SpawnMise { source })?
+        .len();
+    if len > MISE_OUTPUT_LIMIT {
+        return Err(ToolEnvError::MiseOutputTooLarge { stream });
+    }
+    file.rewind()
+        .map_err(|source| ToolEnvError::SpawnMise { source })?;
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(len).map_err(|_| ToolEnvError::MiseOutputTooLarge { stream })?,
+    );
+    file.read_to_end(&mut bytes)
+        .map_err(|source| ToolEnvError::SpawnMise { source })?;
+    Ok(bytes)
 }
 
 /// Directories that isolate managed mise from the user's global mise
@@ -329,6 +366,8 @@ pub enum ToolEnvError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("mise {stream} exceeds the 16 mebibyte capture limit")]
+    MiseOutputTooLarge { stream: &'static str },
     #[error("failed to build action PATH: {source}")]
     JoinPath {
         #[source]

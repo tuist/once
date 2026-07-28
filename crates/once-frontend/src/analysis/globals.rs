@@ -24,6 +24,7 @@ use super::values::{
 
 const CMD_ARGS_MARKER: &str = "_once_cmd_args";
 const EXECUTION_ROOT_MARKER: &str = "{{once.execution_root}}";
+const MAX_HOST_FILE_READ_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Globals exposed to the prelude.
 ///
@@ -203,7 +204,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(String::new());
         }
-        std::fs::read_to_string(path).with_context(|| format!("reading host file `{path}`"))
+        let bytes = read_bounded_host_file(path)?;
+        String::from_utf8(bytes).with_context(|| format!("host file `{path}` is not UTF-8 text"))
     }
 
     /// Return whether one host file contains `needle` as text.
@@ -214,7 +216,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if needle.is_empty() {
             return Ok(true);
         }
-        let content = std::fs::read(path).with_context(|| format!("reading host file `{path}`"))?;
+        let content = read_bounded_host_file(path)?;
         Ok(content
             .windows(needle.len())
             .any(|window| window == needle.as_bytes()))
@@ -820,6 +822,15 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let value: JsonValue = serde_json::from_str(src)?;
         Ok(json_to_value(eval, &value))
     }
+}
+
+fn read_bounded_host_file(path: &str) -> Result<Vec<u8>> {
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("reading host file `{path}`"))?;
+    if metadata.len() > MAX_HOST_FILE_READ_BYTES {
+        anyhow::bail!("host file `{path}` exceeds the 16 mebibyte analysis limit");
+    }
+    std::fs::read(path).with_context(|| format!("reading host file `{path}`"))
 }
 
 struct ActionArgv {

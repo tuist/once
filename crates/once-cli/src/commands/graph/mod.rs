@@ -17,8 +17,8 @@ use std::process::ExitCode;
 use anyhow::{anyhow, Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
-    EvidenceCacheState, EvidenceSubject, LintResults, LintSeverity, RunOpts, SandboxMode,
-    WorkspacePath,
+    EvidenceCacheState, EvidenceSubject, LintResults, LintSeverity, ResourceLimits, RunOpts,
+    SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::AnalysisOptions;
 use once_frontend::GraphTarget;
@@ -61,8 +61,11 @@ pub async fn build(
     output: Output,
     target_id: &str,
     sandbox: SandboxMode,
+    resource_limits: ResourceLimits,
 ) -> Result<ExitCode> {
-    let session = analysis::BuildSession::load_workspace(workspace, cache, sandbox).await?;
+    let session = analysis::BuildSession::load_workspace(workspace, cache, sandbox)
+        .await?
+        .with_resource_limits(resource_limits);
     let target = session.target(target_id)?;
     let record = build_target(workspace, cache, target, &session, sandbox).await?;
     record_capability_run(workspace, &record).await;
@@ -77,9 +80,12 @@ pub async fn lint(
     target_id: &str,
     sandbox: SandboxMode,
     fail_on: LintSeverity,
+    resource_limits: ResourceLimits,
 ) -> Result<ExitCode> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let session = analysis::BuildSession::new(workspace, cache, graph, sandbox).await?;
+    let session = analysis::BuildSession::new(workspace, cache, graph, sandbox)
+        .await?
+        .with_resource_limits(resource_limits);
     let target = session.target(target_id)?;
     let capability = ensure_capability(target, "lint")?;
     let outcome = session
@@ -214,10 +220,22 @@ pub async fn test(
     output: Output,
     target_id: &str,
     sandbox: SandboxMode,
+    resource_limits: ResourceLimits,
 ) -> Result<ExitCode> {
-    test_with_filters(workspace, cache, output, target_id, sandbox, &[], None).await
+    test_with_filters(
+        workspace,
+        cache,
+        output,
+        target_id,
+        sandbox,
+        &[],
+        None,
+        resource_limits,
+    )
+    .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn test_with_filters(
     workspace: &Path,
     cache: &CacheProvider,
@@ -226,6 +244,7 @@ pub async fn test_with_filters(
     sandbox: SandboxMode,
     test_filters: &[String],
     test_batch_id: Option<&str>,
+    resource_limits: ResourceLimits,
 ) -> Result<ExitCode> {
     if let Some(batch_id) = test_batch_id {
         if Digest::from_hex(batch_id).is_none() {
@@ -251,7 +270,8 @@ pub async fn test_with_filters(
         },
         sandbox,
     )
-    .await?;
+    .await?
+    .with_resource_limits(resource_limits);
     let target = session.target(target_id)?;
     let test_capability = ensure_capability(target, "test")?;
     if !test_capability.requires_outputs.is_empty()
@@ -305,6 +325,7 @@ pub async fn test_with_filters(
     Ok(ExitCode::SUCCESS)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     workspace: &Path,
     cache: &CacheProvider,
@@ -313,6 +334,7 @@ pub async fn run(
     target_id: &str,
     options: GraphRunOptions,
     sandbox: SandboxMode,
+    resource_limits: ResourceLimits,
 ) -> Result<ExitCode> {
     let session = analysis::BuildSession::new_with_options(
         workspace,
@@ -324,7 +346,8 @@ pub async fn run(
         },
         sandbox,
     )
-    .await?;
+    .await?
+    .with_resource_limits(resource_limits);
     let target = session.target(target_id)?;
     let run_capability = ensure_capability(target, "run")?;
     if !run_capability.requires_outputs.is_empty()

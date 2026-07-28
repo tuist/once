@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use once_cas::{CacheProvider, Digest};
-use once_core::SandboxMode;
+use once_core::{ResourcePool, SandboxMode};
 use once_frontend::analysis::AnalysisEngine;
 use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
@@ -23,6 +23,7 @@ pub(super) struct BuildScheduler<'a> {
     reachable: &'a HashSet<String>,
     retained: &'a HashSet<String>,
     sandbox: SandboxMode,
+    resources: &'a Arc<ResourcePool>,
     /// Ceiling on build tasks in flight at once. A wide graph can have
     /// thousands of independently-ready targets; spawning a task (and its
     /// subprocess) for every one at once is how a build system exhausts
@@ -44,10 +45,10 @@ impl<'a> BuildScheduler<'a> {
         reachable: &'a HashSet<String>,
         retained: &'a HashSet<String>,
         sandbox: SandboxMode,
+        resources: &'a Arc<ResourcePool>,
     ) -> Self {
         let module_source_digest = Digest::of_bytes(analyzer.module_source().as_bytes());
-        let max_in_flight =
-            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        let max_in_flight = resources.max_parallel_actions();
         Self {
             root_id,
             workspace,
@@ -59,6 +60,7 @@ impl<'a> BuildScheduler<'a> {
             reachable,
             retained,
             sandbox,
+            resources,
             max_in_flight,
         }
     }
@@ -130,6 +132,7 @@ impl<'a> BuildScheduler<'a> {
                 inputs.available_inputs,
                 Arc::clone(self.tool_paths),
                 self.sandbox,
+                Arc::clone(self.resources),
             ));
         }
         Ok(())

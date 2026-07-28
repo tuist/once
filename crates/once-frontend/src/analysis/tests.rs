@@ -142,6 +142,25 @@ fn host_file_read_returns_host_file_text() {
 }
 
 #[test]
+fn host_file_read_rejects_files_above_the_analysis_limit() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("large.txt");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(16 * 1024 * 1024 + 1)
+        .unwrap();
+    let source = format!(
+        "value = host_file_read({})",
+        serde_json::to_string(path.to_str().unwrap()).unwrap()
+    );
+
+    let store = store_for(tmp.path(), "pkg");
+    let (_, error) = with_active_store(store, || eval_string(&source).unwrap_err());
+
+    assert!(format!("{error:#}").contains("exceeds the 16 mebibyte analysis limit"));
+}
+
+#[test]
 fn windows_host_which_candidates_skip_extensionless_names() {
     assert_eq!(
         which_candidate_names_for("tool", true, Some(".COM;.EXE;.CMD")),
@@ -481,6 +500,23 @@ fn host_command_cache_reuses_identical_argv_results() {
     assert_eq!(cache.command(&argv, &env, None, false).unwrap(), "done");
 
     assert_eq!(std::fs::read_to_string(counter).unwrap(), "x");
+}
+
+#[cfg(unix)]
+#[test]
+fn host_command_rejects_output_above_the_analysis_limit() {
+    let cache = HostCache::default();
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "dd if=/dev/zero bs=1048576 count=17 2>/dev/null".to_string(),
+    ];
+
+    let error = cache
+        .command(&argv, &BTreeMap::new(), None, false)
+        .unwrap_err();
+
+    assert!(format!("{error:#}").contains("exceeds the 16 mebibyte analysis limit"));
 }
 
 #[cfg(unix)]

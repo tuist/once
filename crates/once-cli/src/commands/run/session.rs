@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use once_cas::{CacheProvider, Digest};
 use serde::Serialize;
 use tokio::fs;
 
@@ -18,8 +19,9 @@ pub(super) async fn prepare(
     target_id: &str,
     runtime: &mut RuntimeDescriptor,
     socket: Option<PathBuf>,
-    stdout: &[u8],
-    stderr: &[u8],
+    cache: &CacheProvider,
+    stdout: Option<&Digest>,
+    stderr: Option<&Digest>,
 ) -> Result<RuntimeSession> {
     let name = session_name(target_id);
     let dir = workspace.join(CACHE_DIR).join("runtime").join(&name);
@@ -27,17 +29,23 @@ pub(super) async fn prepare(
     fs::create_dir_all(&dir)
         .await
         .with_context(|| format!("creating runtime session {}", dir.display()))?;
-    fs::write(dir.join("stdout.log"), stdout)
-        .await
-        .with_context(|| format!("writing {}", dir.join("stdout.log").display()))?;
-    fs::write(dir.join("stderr.log"), stderr)
-        .await
-        .with_context(|| format!("writing {}", dir.join("stderr.log").display()))?;
+    write_log(cache, stdout, &dir.join("stdout.log")).await?;
+    write_log(cache, stderr, &dir.join("stderr.log")).await?;
 
     runtime.session = Some(display_path(workspace, &dir));
     runtime.rpc = Some(RuntimeRpcDescriptor::new(display_path(workspace, &socket)));
     write_session_json(&dir, target_id, runtime).await?;
     Ok(RuntimeSession { dir, socket })
+}
+
+async fn write_log(cache: &CacheProvider, digest: Option<&Digest>, path: &Path) -> Result<()> {
+    match digest {
+        Some(digest) => cache.copy_blob_to_file(digest, path).await?,
+        None => fs::write(path, [])
+            .await
+            .with_context(|| format!("writing {}", path.display()))?,
+    }
+    Ok(())
 }
 
 fn default_socket(dir: &Path, session_name: &str) -> PathBuf {
