@@ -226,10 +226,13 @@ impl BuildSession {
     }
 
     pub(super) fn target(&self, target_id: &str) -> Result<&GraphTarget> {
-        self.targets
+        let target = self
+            .targets
             .get(target_id)
             .map(Arc::as_ref)
-            .with_context(|| format!("no target matches `{target_id}`"))
+            .with_context(|| format!("no target matches `{target_id}`"))?;
+        ensure_graph_target_valid(target)?;
+        Ok(target)
     }
 
     /// Build a target and the impl-backed portion of its dependency
@@ -863,6 +866,7 @@ async fn build_one(
     tool_paths: Arc<BTreeMap<String, String>>,
     sandbox: SandboxMode,
 ) -> Result<(String, BuildOutcome)> {
+    ensure_graph_target_valid(&target)?;
     let target_id = target.label.id.clone();
     tracing::trace!(
         target = %target_id,
@@ -909,6 +913,17 @@ async fn build_one(
     )
     .await?;
     Ok((target_id, outcome))
+}
+
+fn ensure_graph_target_valid(target: &GraphTarget) -> Result<()> {
+    let Some(diagnostic) = target.diagnostics.first() else {
+        return Ok(());
+    };
+    Err(anyhow::Error::new(
+        once_frontend::analysis::AnalysisFailure {
+            diagnostic: diagnostic.clone(),
+        },
+    ))
 }
 
 #[cfg(test)]

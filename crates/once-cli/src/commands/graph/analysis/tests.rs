@@ -111,6 +111,27 @@ fn target_with_capabilities(
     }
 }
 
+#[test]
+fn graph_targets_with_loading_diagnostics_cannot_execute() {
+    let mut target = target_with_capabilities("Unavailable", &[], &[], &["build"], []);
+    target.diagnostics.push(
+        once_frontend::Diagnostic::new(
+            "required_tool_not_found",
+            "`example-tool` not found on PATH",
+        )
+        .with_target("Unavailable")
+        .with_repair("Install the required tool"),
+    );
+
+    let error = ensure_graph_target_valid(&target).unwrap_err();
+    let failure = error
+        .downcast_ref::<once_frontend::analysis::AnalysisFailure>()
+        .expect("structured graph loading failure");
+
+    assert_eq!(failure.diagnostic.code, "required_tool_not_found");
+    assert_eq!(failure.diagnostic.target.as_deref(), Some("Unavailable"));
+}
+
 #[tokio::test]
 async fn graph_tool_resolution_defers_to_host_path_without_mise_config() {
     let workspace = tempfile::tempdir().unwrap();
