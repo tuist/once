@@ -283,6 +283,9 @@ pub struct AttrSchema {
     /// Accepted string values. An empty list accepts every value of the type.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_values: Vec<String>,
+    /// Rejected string values. Surrounding whitespace is ignored during validation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disallowed_values: Vec<String>,
 }
 
 /// Dependency metadata exposed by a target kind schema.
@@ -294,6 +297,12 @@ pub struct DepSchema {
     pub expected_providers: Vec<String>,
     /// Human-readable dependency description.
     pub docs: String,
+    /// Minimum number of dependencies accepted by this edge.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub min_count: usize,
+    /// Maximum number of dependencies accepted by this edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_count: Option<usize>,
 }
 
 pub fn load_graph_workspace(root: &Path) -> Result<Vec<GraphTarget>> {
@@ -873,21 +882,36 @@ fn attr_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<A
         configurable: field_bool(value, path, "configurable")?,
         implemented: field_bool(value, path, "implemented")?,
         allowed_values: field_string_list(value, path, "allowed_values")?,
+        disallowed_values: field_string_list(value, path, "disallowed_values")?,
     };
     if !schema.allowed_values.is_empty() && schema.ty != "string" && schema.ty != "target" {
         return Err(format!(
             "{path}.allowed_values is supported only for string and target attributes"
         ));
     }
+    if !schema.disallowed_values.is_empty() && schema.ty != "string" && schema.ty != "target" {
+        return Err(format!(
+            "{path}.disallowed_values is supported only for string and target attributes"
+        ));
+    }
     Ok(schema)
 }
 
 fn dep_schema_from_value(value: Value<'_>, path: &str) -> std::result::Result<DepSchema, String> {
-    Ok(DepSchema {
+    let schema = DepSchema {
         name: field_string(value, path, "name")?,
         expected_providers: field_string_list(value, path, "expected_providers")?,
         docs: field_string(value, path, "docs")?,
-    })
+        min_count: field_non_negative_usize(value, path, "min_count")?,
+        max_count: optional_field_non_negative_usize(value, path, "max_count")?,
+    };
+    if schema
+        .max_count
+        .is_some_and(|max_count| schema.min_count > max_count)
+    {
+        return Err(format!("{path}.min_count must not exceed {path}.max_count"));
+    }
+    Ok(schema)
 }
 
 fn capability_from_value(value: Value<'_>, path: &str) -> std::result::Result<Capability, String> {
@@ -1019,6 +1043,41 @@ fn field_bool(value: Value<'_>, path: &str, field: &str) -> std::result::Result<
     })
 }
 
+fn field_non_negative_usize(
+    value: Value<'_>,
+    path: &str,
+    field: &str,
+) -> std::result::Result<usize, String> {
+    let value = field_value(value, path, field)?;
+    let integer = value.unpack_i32().ok_or_else(|| {
+        format!(
+            "{path}.{field} should be a non-negative integer, got `{}`",
+            value.get_type()
+        )
+    })?;
+    usize::try_from(integer).map_err(|_| format!("{path}.{field} should be a non-negative integer"))
+}
+
+fn optional_field_non_negative_usize(
+    value: Value<'_>,
+    path: &str,
+    field: &str,
+) -> std::result::Result<Option<usize>, String> {
+    let value = field_value(value, path, field)?;
+    if value.is_none() {
+        return Ok(None);
+    }
+    let integer = value.unpack_i32().ok_or_else(|| {
+        format!(
+            "{path}.{field} should be a non-negative integer or None, got `{}`",
+            value.get_type()
+        )
+    })?;
+    usize::try_from(integer)
+        .map(Some)
+        .map_err(|_| format!("{path}.{field} should be a non-negative integer or None"))
+}
+
 fn field_list<'v>(
     value: Value<'v>,
     path: &str,
@@ -1051,6 +1110,11 @@ fn field_string_list(
 fn list<'v>(value: Value<'v>, path: &str) -> std::result::Result<&'v ListRef<'v>, String> {
     ListRef::from_value(value)
         .ok_or_else(|| format!("{path} should be a list, got `{}`", value.get_type()))
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 fn script_schema() -> TargetKindSchema {
@@ -1102,6 +1166,7 @@ fn attr(
         configurable,
         implemented: true,
         allowed_values: Vec::new(),
+        disallowed_values: Vec::new(),
     }
 }
 
@@ -1214,6 +1279,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_target_kind_schemas_exposes_disallowed_attribute_values() {
+        let source = source_with_common(
+            r#"demo = target_kind(
+    docs = "Demo kind",
+    attrs = [
+        attr("mode", "string", disallowed_values = ["", "all"]),
+    ],
+)"#,
+        );
+        let schemas = parse_target_kind_schemas("test.star", &source).unwrap();
+
+        assert_eq!(
+            schemas[0].attrs[0].disallowed_values,
+            vec![String::new(), "all".to_string()]
+        );
+    }
+
+    #[test]
     fn parse_target_kind_schemas_rejects_allowed_values_on_non_string_attributes() {
         let source = source_with_common(
             r#"demo = target_kind(
@@ -1229,6 +1312,56 @@ mod tests {
         assert!(error
             .to_string()
             .contains("supported only for string and target attributes"));
+    }
+
+    #[test]
+    fn parse_target_kind_schemas_rejects_disallowed_values_on_non_string_attributes() {
+        let source = source_with_common(
+            r#"demo = target_kind(
+    docs = "Demo kind",
+    attrs = [
+        attr("count", "int", disallowed_values = ["0"]),
+    ],
+)"#,
+        );
+
+        let error = parse_target_kind_schemas("test.star", &source).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("supported only for string and target attributes"));
+    }
+
+    #[test]
+    fn parse_target_kind_schemas_exposes_dependency_count_bounds() {
+        let source = source_with_common(
+            r#"demo = target_kind(
+    docs = "Demo kind",
+    deps = [
+        dep("deps", ["provider"], min_count = 1, max_count = 1),
+    ],
+)"#,
+        );
+        let schemas = parse_target_kind_schemas("test.star", &source).unwrap();
+
+        assert_eq!(schemas[0].deps[0].min_count, 1);
+        assert_eq!(schemas[0].deps[0].max_count, Some(1));
+    }
+
+    #[test]
+    fn parse_target_kind_schemas_rejects_invalid_dependency_count_bounds() {
+        let source = source_with_common(
+            r#"demo = target_kind(
+    docs = "Demo kind",
+    deps = [
+        dep("deps", ["provider"], min_count = 2, max_count = 1),
+    ],
+)"#,
+        );
+
+        let error = parse_target_kind_schemas("test.star", &source).unwrap_err();
+
+        assert!(error.to_string().contains("min_count must not exceed"));
     }
 
     #[test]

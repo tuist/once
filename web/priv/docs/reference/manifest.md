@@ -142,6 +142,9 @@ Validation checks each role against its matching schema entry. Analysis keeps
 `deps` in declared order and exposes the other roles separately, so a target
 kind can distinguish compiler plug-ins, runtime-only dependencies, native
 links, and other semantics without hardcoding them in Once.
+Target kinds can also set minimum and maximum counts for each role. Validation
+reports an attribute-scoped repair before an edit can commit too few or too
+many dependencies.
 
 ## Target Identifiers
 
@@ -203,6 +206,9 @@ attribute. Validation rejects `select` on a non-configurable attribute and
 rejects an unavailable compatibility attribute marked `implemented = false`.
 Schemas can also report `allowed_values` for string attributes. Validation
 rejects other values with the target, attribute, and accepted replacements.
+Schemas can report `disallowed_values` when only a small reserved set should
+be rejected. Validation ignores surrounding whitespace for those comparisons
+and reports an attribute-scoped replacement before analysis.
 Generic target kinds use the tokens returned by `once query workspace`.
 Ecosystem target kinds can add their own tokens and restrictions.
 

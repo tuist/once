@@ -42,6 +42,10 @@ Describe 'apple graph'
     cp -R "$REPO_ROOT/fixtures/apple_application_swiftui/." "$WORKSPACE/"
   }
 
+  copy_apple_thinned_package_fixture() {
+    cp -R "$REPO_ROOT/fixtures/apple_thinned_package/." "$WORKSPACE/"
+  }
+
   copy_apple_graph_fixture() {
     cp -R "$REPO_ROOT/fixtures/apple_graph/." "$WORKSPACE/"
   }
@@ -680,6 +684,26 @@ EOF
 
       When call verify_unchanged_framework_signature
       The status should be success
+    End
+  End
+
+  Describe 'apple_thinned_package end-to-end'
+    It 'creates a signed device-specific archive and stable manifest'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_thinned_package_fixture
+
+      verify_thinned_package() {
+        once --format json build apps/ios/AppThinned >/dev/null &&
+          unzip -q "$WORKSPACE/.once/out/apps/ios/AppThinned/ipas/App-iPhone17-1.ipa" -d "$WORKSPACE/extracted" &&
+          codesign --verify --deep --strict "$WORKSPACE/extracted/Payload/App.app" &&
+          grep -q '"schema": "once.apple.thinned-package.v1"' "$WORKSPACE/.once/out/apps/ios/AppThinned/thinned-packages.json" &&
+          grep -q '"deviceModel": "iPhone17,1"' "$WORKSPACE/.once/out/apps/ios/AppThinned/thinned-packages.json"
+      }
+
+      When call verify_thinned_package
+      The status should be success
+      The path "$WORKSPACE/.once/out/apps/ios/AppThinned/ipas/App-iPhone17-1.ipa" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/AppThinned/thinned-packages.json" should be file
     End
   End
 

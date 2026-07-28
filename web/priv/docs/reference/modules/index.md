@@ -86,6 +86,14 @@ does not.
 Use `allowed_values = ["first", "second"]` on a `string` or `target` attribute
 when the schema accepts a fixed set. Validation reports an attribute-scoped
 repair before analysis when a manifest supplies another value.
+Use `disallowed_values = ["", "reserved"]` when the schema accepts arbitrary
+strings except for a small reserved set. Validation ignores surrounding
+whitespace when comparing these values and reports an attribute-scoped repair
+before analysis.
+Use `min_count` and `max_count` on `dep(...)` when a dependency role requires
+a bounded number of targets. For example,
+`dep("deps", ["application"], min_count = 1, max_count = 1)` requires exactly
+one default dependency and reports an attribute-scoped repair before analysis.
 
 ## Dependency Resolver Contract
 

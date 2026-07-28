@@ -108,6 +108,56 @@ need to be brought to the foreground.
 macOS applications use the host application launcher. Launching directly on
 an iPhone or iPad is not supported yet.
 
+## Create a Device-Specific Size-Analysis Archive
+
+Size-analysis services can report confusing results when they receive a
+universal application. Sentry, for example, does not thin an uploaded
+application and [recommends thinning it before
+upload](https://docs.sentry.io/platforms/apple/guides/ios/size-analysis/#app-thinning).
+
+Add a device application and a package target for the device model you want to
+measure:
+
+```toml
+[[target]]
+name = "HelloDevice"
+kind = "apple_application"
+srcs = ["Sources/HelloApp/**/*.swift"]
+deps = ["./AppCore"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "device"
+bundle_id = "dev.once.Hello"
+minimum_os = "17.0"
+families = ["iphone"]
+
+[[target]]
+name = "HelloSizeAnalysis"
+kind = "apple_thinned_package"
+deps = ["./HelloDevice"]
+
+[target.attrs]
+device_model = "iPhone17,1"
+```
+
+Build the device-specific archive:
+
+```sh
+once build apps/Hello/HelloSizeAnalysis
+```
+
+The target writes one or more archives with the `.ipa` extension and a stable
+manifest that maps them to the requested device model. Declare another
+`apple_thinned_package` target for each additional model so builds and cache
+entries stay independent.
+
+These archives use ad-hoc signing and are intended for size analysis. They do
+not replace distribution signing or provisioning for physical-device
+installation. See the
+[`apple_thinned_package` reference](/reference/prelude/apple_thinned_package)
+for the exact outputs and validation rules.
+
 ## Add a Test Target
 
 Add a test target to the same `apps/Hello/once.toml`:
@@ -179,6 +229,7 @@ Use the target kind reference for the contract that matches the artifact:
 - [`apple_library`](/reference/prelude/apple_library)
 - [`apple_framework`](/reference/prelude/apple_framework)
 - [`apple_application`](/reference/prelude/apple_application)
+- [`apple_thinned_package`](/reference/prelude/apple_thinned_package)
 - [`apple_test_bundle`](/reference/prelude/apple_test_bundle)
 - [`swift_macro`](/reference/prelude/swift_macro)
 

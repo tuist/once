@@ -1,4 +1,4 @@
-def attr(name, ty, required = False, default = None, docs = "", configurable = True, implemented = True, allowed_values = []):
+def attr(name, ty, required = False, default = None, docs = "", configurable = True, implemented = True, allowed_values = [], disallowed_values = []):
     return {
         "name": name,
         "ty": ty,
@@ -8,13 +8,16 @@ def attr(name, ty, required = False, default = None, docs = "", configurable = T
         "configurable": configurable,
         "implemented": implemented,
         "allowed_values": allowed_values,
+        "disallowed_values": disallowed_values,
     }
 
-def dep(name, expected_providers, docs = ""):
+def dep(name, expected_providers, docs = "", min_count = 0, max_count = None):
     return {
         "name": name,
         "expected_providers": expected_providers,
         "docs": docs,
+        "min_count": min_count,
+        "max_count": max_count,
     }
 
 def capability(name, output_groups, requires_outputs = []):
