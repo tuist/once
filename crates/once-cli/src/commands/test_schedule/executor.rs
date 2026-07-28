@@ -26,14 +26,10 @@ pub(super) fn execute(
     resource_limits: &ResourceLimits,
 ) -> Result<CompletedSchedule> {
     let requested_workers = bounded_worker_request(requested_workers, resource_limits);
-    execute_with(plan, estimates, Some(requested_workers), |batch| {
-        run_test_target(
-            executable,
-            workspace,
-            batch,
-            sandbox,
-            resource_limits.memory_bytes,
-        )
+    let workers = worker_count(Some(requested_workers), plan.batches.len());
+    let memory_limit_bytes = worker_memory_limit(resource_limits.memory_bytes, workers);
+    execute_with(plan, estimates, Some(workers), |batch| {
+        run_test_target(executable, workspace, batch, sandbox, memory_limit_bytes)
     })
 }
 
@@ -44,6 +40,14 @@ fn bounded_worker_request(
     requested_workers
         .unwrap_or(resource_limits.max_parallel_actions())
         .min(resource_limits.max_parallel_actions())
+}
+
+fn worker_memory_limit(memory_limit_bytes: u64, workers: usize) -> u64 {
+    if memory_limit_bytes == 0 {
+        return 0;
+    }
+    let workers = u64::try_from(workers.max(1)).unwrap_or(u64::MAX);
+    (memory_limit_bytes / workers).max(1)
 }
 
 fn execute_with<F>(

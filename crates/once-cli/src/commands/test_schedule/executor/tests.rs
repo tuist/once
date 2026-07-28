@@ -63,6 +63,13 @@ fn workers_are_capped_by_the_memory_budget() {
     assert_eq!(bounded_worker_request(None, &limits), 2);
 }
 
+#[test]
+fn memory_budget_is_partitioned_across_workers() {
+    assert_eq!(worker_memory_limit(500 * 1024 * 1024, 2), 250 * 1024 * 1024);
+    assert_eq!(worker_memory_limit(500 * 1024 * 1024, 1), 500 * 1024 * 1024);
+    assert_eq!(worker_memory_limit(0, 8), 0);
+}
+
 fn plan(targets: &[&str]) -> TestPlan {
     TestPlan::for_selected_targets(TestSelectionReport {
         schema: TEST_SELECTION_SCHEMA.to_string(),
