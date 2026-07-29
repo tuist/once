@@ -996,6 +996,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn materialize_host_tree_rejects_destination_nested_under_source() {
+        let (tmp, cas) = fresh_cas();
+        // Source is a workspace directory and the destination resolves beneath
+        // it, so copying would recurse the fresh destination into itself.
+        let source = tmp.path().join("out");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("keep.rs"), "keep\n").unwrap();
+        let action = Action::MaterializeHostTree {
+            source,
+            source_sha256: "unused".to_string(),
+            destination: WorkspacePath::try_from("out/nested").unwrap(),
+            input_digest: Some(Digest::of_bytes(b"overlap-host-tree")),
+        };
+
+        let error = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::InvalidHostFile { .. }));
+        // The source data must be untouched.
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/keep.rs")).unwrap(),
+            "keep\n"
+        );
+    }
+
+    #[tokio::test]
     async fn copy_tree_action_replaces_destination_and_restores_from_cache() {
         let (tmp, cas) = fresh_cas();
         std::fs::create_dir_all(tmp.path().join("src/a")).unwrap();
