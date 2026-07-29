@@ -232,7 +232,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_preview_native_project",
             description: "Preview the seed target and complete typed graph derived by one detected native project.",
-            long_description: "Runs the selected native project's ordinary target-kind resolver without writing a manifest, then returns its declaration, detection evidence, seed target, and expanded typed targets. Omit `package` when the native project has one match. The matching command-line operation is `once query native-project <name> [--package <path>] --format json`.",
+            long_description: "Runs the selected native project's ordinary target-kind resolver without writing a manifest, then returns its declaration, detection evidence, seed target, and expanded typed targets. Omit `package` when the native project has one match. Expanded dependency graphs can be very large. For a loaded project, prefer `once_query_workspace`, filtered `once_query_targets`, `once_query_tests`, and `once_get_target` when the complete graph is not needed. The matching command-line operation is `once query native-project <name> [--package <path>] --format json`.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -277,7 +277,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 "type": "object",
                 "properties": {}
             }),
-            example_return: "{\n  \"language\": \"Starlark\",\n  \"registration\": \"[modules]\\npaths = [\\\"modules/*.star\\\"]\\n\",\n  \"schema_invariants\": [\"attr.default is optional schema documentation and must be a string...\"],\n  \"context_fields\": [\n    { \"signature\": \"ctx[\\\"attr\\\"]\", \"purpose\": \"Typed target attributes.\" }\n  ],\n  \"action_primitives\": [\n    { \"signature\": \"write_path(path, content)\", \"purpose\": \"Declare a portable file-writing action.\" },\n    { \"signature\": \"materialize_host_file(source, destination)\", \"purpose\": \"Snapshot a content-verified absolute host toolchain file into a workspace output.\" }\n  ],\n  \"starter\": \"def _generated_text_impl(ctx): ...\",\n  \"lint_starter\": \"def _scripted_lint_impl(ctx): ...\",\n  \"lint_target_starter\": \"[[target]]\\nname = \\\"lint\\\"\\nkind = \\\"scripted_lint\\\"\\n...\",\n  \"lint_adapter_starter\": \"import argparse\\nimport json\\n...\",\n  \"normalized_lint_result_example\": {\n    \"schema\": \"once.lint_results.v1\",\n    \"status\": \"completed\"\n  },\n  \"test_starter\": \"def _scripted_test_impl(ctx): ...\"\n}",
+            example_return: "{\n  \"language\": \"Starlark\",\n  \"registration\": \"[modules]\\npaths = [\\\"modules/*.star\\\"]\\n\",\n  \"schema_invariants\": [\"attr.default is optional schema documentation and must be a string...\"],\n  \"context_fields\": [\n    { \"signature\": \"ctx[\\\"attr\\\"]\", \"purpose\": \"Typed target attributes.\" }\n  ],\n  \"action_primitives\": [\n    { \"signature\": \"write_path(path, content)\", \"purpose\": \"Declare a portable file-writing action.\" },\n    { \"signature\": \"materialize_host_file(source, destination)\", \"purpose\": \"Snapshot a content-verified absolute host toolchain file into a workspace output.\" },\n    { \"signature\": \"materialize_host_tree(source, destination)\", \"purpose\": \"Snapshot a content-verified absolute host directory into a workspace output.\" }\n  ],\n  \"starter\": \"def _generated_text_impl(ctx): ...\",\n  \"lint_starter\": \"def _scripted_lint_impl(ctx): ...\",\n  \"lint_target_starter\": \"[[target]]\\nname = \\\"lint\\\"\\nkind = \\\"scripted_lint\\\"\\n...\",\n  \"lint_adapter_starter\": \"import argparse\\nimport json\\n...\",\n  \"normalized_lint_result_example\": {\n    \"schema\": \"once.lint_results.v1\",\n    \"status\": \"completed\"\n  },\n  \"test_starter\": \"def _scripted_test_impl(ctx): ...\"\n}",
         },
         ToolDefinition {
             name: "once_fetch_external_source",
@@ -387,7 +387,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_run_tests",
             description: "Run test targets by id, or run tests affected by changed workspace paths.",
-            long_description: "Creates the same immutable plan as `once_query_test_plan`, then pulls stable batches from a shared local queue. Batches with longer historical uncached durations are queued first, and idle workers dynamically take the next batch. Explicit `target` or `targets` produce an exact plan; otherwise `changed_paths` drive conservative graph selection. With exactly one target, `test_unit` runs a stable unit returned by `once_query_test_manifest` when the target kind declares filtering support. `jobs` caps workers without changing plan or batch identity. The result's `plan` is the work that just executed. Its `next_plan` is recomputed after complete runs refresh discovery, so use that field to assess file or case batching for the next run. The result also includes actual schedule attempts and normalized test results. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate. The matching command-line operations are `once test --changed-path <path> --jobs <count> --format json` and `once test <target> --test-unit <unit> --format json`.",
+            long_description: "Creates the same immutable plan as `once_query_test_plan`, then pulls stable batches from a shared local queue. Batches with longer historical uncached durations are queued first, and idle workers dynamically take the next batch. Explicit `target` or `targets` produce an exact plan; otherwise `changed_paths` drive conservative graph selection. With exactly one target, `test_unit` runs a stable unit returned by `once_query_test_manifest` when the target kind declares filtering support. `jobs` caps workers without changing plan or batch identity. Set `summary_only` for compact normalized totals without case-level records. The result's `plan` is the work that just executed. Its `next_plan` is recomputed after complete runs refresh discovery, so use that field to assess file or case batching for the next run. The result also includes actual schedule attempts and normalized test results. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate. The matching command-line operations are `once test --changed-path <path> --jobs <count> --format json` and `once test <target> --test-unit <unit> --format json`.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -414,6 +414,10 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                     "test_unit": {
                         "type": "string",
                         "description": "Run one stable unit identifier returned by once_query_test_manifest. Requires exactly one explicit target."
+                    },
+                    "summary_only": {
+                        "type": "boolean",
+                        "description": "Replace case-level normalized results with compact once.test_results_summary.v1 totals."
                     }
                 }
             }),
@@ -422,13 +426,17 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_test_results",
             description: "Read normalized once.test_results.v1 results for a target.",
-            long_description: "Reads the normalized result file produced by the target's `test` capability. This is the stable agent-facing interface for pass or fail summaries, case-level failures, attempts, and artifacts. Callers do not need to parse a runner's command output.",
+            long_description: "Reads the normalized result file produced by the target's `test` capability. This is the stable agent-facing interface for pass or fail summaries, case-level failures, attempts, and artifacts. Set `summary_only` when exact totals are sufficient and a large case array would waste model context. The matching command-line operation is `once query test-results <target> --summary-only --format json`. Callers do not need to parse a runner's command output.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "target": {
                         "type": "string",
                         "description": "Canonical target id, such as `tests/unit`."
+                    },
+                    "summary_only": {
+                        "type": "boolean",
+                        "description": "Return once.test_results_summary.v1 status, totals, runner, and artifacts without case-level records."
                     }
                 },
                 "required": ["target"]
