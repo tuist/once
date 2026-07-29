@@ -13,6 +13,7 @@ pub struct Model {
     pub status: String,
     pub action_digest: String,
     pub input_digest: Option<String>,
+    pub input_fingerprint_json: Option<String>,
     pub cache: String,
     pub exit_code: i32,
     pub stdout_digest: Option<String>,

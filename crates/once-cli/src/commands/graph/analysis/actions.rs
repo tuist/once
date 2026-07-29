@@ -16,7 +16,8 @@ use once_core::{
     workspace_mise_command, workspace_prepared_tool_env, workspace_tool_env_with_executables,
     Action, ActionContractOptions, ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode,
     EvidenceCacheState, EvidenceRecord, EvidenceSubject, FilesystemOperation, InputDigestBuilder,
-    OutputSymlinkMode, PreparePathMode, ResourcePool, ResourceRequest, SandboxMode, WorkspacePath,
+    InputFingerprintComponent, InputFingerprintManifest, OutputSymlinkMode, PreparePathMode,
+    ResourcePool, ResourceRequest, SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::{
     AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntryKind,
@@ -52,6 +53,7 @@ struct DeclaredActionRun<'a> {
 struct DeclaredActionOutcome {
     digest: Digest,
     input_digest: Option<Digest>,
+    input_fingerprint: InputFingerprintManifest,
     cache_state: EvidenceCacheState,
     result: ActionResult,
     evidence_record: Option<EvidenceRecord>,
@@ -60,6 +62,7 @@ struct DeclaredActionOutcome {
 struct DeclaredActionsState {
     action_digests: Vec<Digest>,
     input_digests: Vec<Digest>,
+    input_fingerprints: Vec<InputFingerprintManifest>,
     available_inputs: BTreeMap<String, AvailableInput>,
     aggregate_cache_state: Option<EvidenceCacheState>,
     outputs: Vec<String>,
@@ -73,6 +76,7 @@ impl DeclaredActionsState {
         Self {
             action_digests: Vec::new(),
             input_digests: Vec::new(),
+            input_fingerprints: Vec::new(),
             available_inputs: available_inputs.clone(),
             aggregate_cache_state: None,
             outputs: Vec::new(),
@@ -137,6 +141,7 @@ impl DeclaredActionsState {
                 .map(|(path, digest)| (path.clone(), *digest)),
         );
         track_cached_result(&mut self.cached_results, &outcome);
+        self.input_fingerprints.push(outcome.input_fingerprint);
         self.evidence_records.extend(outcome.evidence_record);
     }
 
@@ -145,10 +150,14 @@ impl DeclaredActionsState {
         let cache_state = self
             .aggregate_cache_state
             .unwrap_or(EvidenceCacheState::Miss);
+        let input_digest = compose_target_input_digest(&self.input_digests);
+        let input_fingerprint =
+            compose_target_input_fingerprint(input_digest, self.input_fingerprints);
         BuildOutcome {
             provider: Arc::new(provider),
             action_digest: compose_target_action_digest(target_id, &self.action_digests),
-            input_digest: compose_target_input_digest(&self.input_digests),
+            input_digest,
+            input_fingerprint,
             available_inputs: self.available_inputs,
             outputs: self.outputs,
             cache_tag: cache_state.as_str(),
@@ -171,6 +180,7 @@ struct DeclaredActionContext<'a> {
     identifier: &'a str,
     argv: &'a [String],
     arg_files: &'a [DeclaredArgFile],
+    input_fingerprint: InputFingerprintManifest,
     record_success_evidence: bool,
     resources: &'a Arc<ResourcePool>,
 }
@@ -627,7 +637,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     materialize_declared_arg_files(workspace, &declared.arg_files).with_context(|| {
         format!("writing arg files for action {index} for {target_id} ({identifier_for_error})")
     })?;
-    let action = declared_to_action_with_inputs(
+    let prepared = prepare_declared_action_with_inputs(
         workspace,
         &declared,
         module_source_digest,
@@ -637,6 +647,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         sandbox,
     )
     .with_context(|| format!("building action {index} for {target_id} ({identifier_for_error})"))?;
+    let action = prepared.action;
     let context = DeclaredActionContext {
         workspace,
         cache,
@@ -649,6 +660,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         identifier: &identifier_for_error,
         argv: &declared.argv,
         arg_files: &declared.arg_files,
+        input_fingerprint: prepared.input_fingerprint,
         record_success_evidence,
         resources,
     };
@@ -715,9 +727,7 @@ async fn run_cacheable_declared_action(
     let exit_code = outcome.result.exit_code;
     if exit_code != 0 {
         record_declared_action_evidence(
-            context.workspace,
-            context.target_id,
-            context.capability,
+            &context,
             &action,
             outcome.action,
             EvidenceCacheState::from(outcome.cache),
@@ -757,6 +767,7 @@ async fn run_cacheable_declared_action(
                 context.capability,
                 &action,
                 outcome.action,
+                &context.input_fingerprint,
                 cache_state,
                 &outcome.result,
             )
@@ -765,6 +776,7 @@ async fn run_cacheable_declared_action(
     Ok(DeclaredActionOutcome {
         digest: outcome.action,
         input_digest: action.input_digest(),
+        input_fingerprint: context.input_fingerprint,
         cache_state,
         result: outcome.result,
         evidence_record,
@@ -987,9 +999,7 @@ async fn run_uncacheable_declared_action(
     let exit_code = result.exit_code;
     if exit_code != 0 {
         record_declared_action_evidence(
-            context.workspace,
-            context.target_id,
-            context.capability,
+            &context,
             &action,
             action_digest,
             EvidenceCacheState::Bypass,
@@ -1026,6 +1036,7 @@ async fn run_uncacheable_declared_action(
                 context.capability,
                 &action,
                 action_digest,
+                &context.input_fingerprint,
                 EvidenceCacheState::Bypass,
                 &result,
             )
@@ -1034,6 +1045,7 @@ async fn run_uncacheable_declared_action(
     Ok(DeclaredActionOutcome {
         digest: action_digest,
         input_digest: action.input_digest(),
+        input_fingerprint: context.input_fingerprint,
         cache_state: EvidenceCacheState::Bypass,
         result,
         evidence_record,
@@ -1041,18 +1053,22 @@ async fn run_uncacheable_declared_action(
 }
 
 async fn record_declared_action_evidence(
-    workspace: &Path,
-    target_id: &str,
-    capability: &str,
+    context: &DeclaredActionContext<'_>,
     action: &Action,
     action_digest: Digest,
     cache: EvidenceCacheState,
     result: &ActionResult,
 ) {
-    if let Some(record) =
-        declared_action_evidence_record(target_id, capability, action, action_digest, cache, result)
-    {
-        crate::commands::evidence::append_records(workspace, &[record]).await;
+    if let Some(record) = declared_action_evidence_record(
+        context.target_id,
+        context.capability,
+        action,
+        action_digest,
+        &context.input_fingerprint,
+        cache,
+        result,
+    ) {
+        crate::commands::evidence::append_records(context.workspace, &[record]).await;
     }
 }
 
@@ -1061,13 +1077,15 @@ fn declared_action_evidence_record(
     capability: &str,
     action: &Action,
     action_digest: Digest,
+    input_fingerprint: &InputFingerprintManifest,
     cache: EvidenceCacheState,
     result: &ActionResult,
 ) -> Option<EvidenceRecord> {
-    match EvidenceRecord::from_action_result(
+    match EvidenceRecord::from_action_result_with_fingerprint(
         EvidenceSubject::target(target_id, capability),
         action_digest,
         action.input_digest(),
+        Some(input_fingerprint.clone()),
         cache,
         result,
     ) {
@@ -1501,6 +1519,40 @@ fn compose_target_input_digest(input_digests: &[Digest]) -> Option<Digest> {
     }
 }
 
+fn compose_target_input_fingerprint(
+    input_digest: Option<Digest>,
+    input_fingerprints: Vec<InputFingerprintManifest>,
+) -> Option<InputFingerprintManifest> {
+    let input_digest = input_digest?;
+    match input_fingerprints.as_slice() {
+        [fingerprint] if fingerprint.input_digest == input_digest => {
+            input_fingerprints.into_iter().next()
+        }
+        [] | [_] => None,
+        _ => {
+            let components = input_fingerprints
+                .into_iter()
+                .enumerate()
+                .flat_map(|(index, fingerprint)| {
+                    fingerprint.components.into_iter().map(move |component| {
+                        InputFingerprintComponent::new(
+                            component.category,
+                            format!("action:{index}:{}", component.label),
+                            component.digest,
+                        )
+                    })
+                })
+                .collect();
+            Some(InputFingerprintManifest::new(input_digest, components))
+        }
+    }
+}
+
+struct PreparedDeclaredAction {
+    action: Action,
+    input_fingerprint: InputFingerprintManifest,
+}
+
 fn declared_to_action(
     workspace: &Path,
     declared: &DeclaredAction,
@@ -1508,7 +1560,7 @@ fn declared_to_action(
     dep_action_digests: &[(String, Digest)],
     sandbox_override: SandboxMode,
 ) -> Result<Action> {
-    declared_to_action_with_inputs(
+    Ok(prepare_declared_action_with_inputs(
         workspace,
         declared,
         module_source_digest,
@@ -1516,10 +1568,11 @@ fn declared_to_action(
         &BTreeMap::new(),
         None,
         sandbox_override,
-    )
+    )?
+    .action)
 }
 
-fn declared_to_action_with_inputs(
+fn prepare_declared_action_with_inputs(
     workspace: &Path,
     declared: &DeclaredAction,
     module_source_digest: Digest,
@@ -1527,7 +1580,7 @@ fn declared_to_action_with_inputs(
     available_inputs: &BTreeMap<String, AvailableInput>,
     source_digest_cache: Option<&SourceDigestCache>,
     sandbox_override: SandboxMode,
-) -> Result<Action> {
+) -> Result<PreparedDeclaredAction> {
     let env_keys = declared.env.keys().cloned().collect::<Vec<_>>();
     tracing::trace!(
         identifier = ?declared.identifier,
@@ -1537,7 +1590,7 @@ fn declared_to_action_with_inputs(
         outputs = declared.outputs.len(),
         "declared graph action"
     );
-    let input_digest = compose_input_digest_with_available(
+    let input_fingerprint = compose_input_fingerprint_with_available(
         workspace,
         declared,
         module_source_digest,
@@ -1545,6 +1598,7 @@ fn declared_to_action_with_inputs(
         available_inputs,
         source_digest_cache,
     )?;
+    let input_digest = input_fingerprint.input_digest;
     let inputs = declared_action_inputs(declared)?;
     let outputs = declared
         .outputs
@@ -1567,8 +1621,8 @@ fn declared_to_action_with_inputs(
         .map(|path| workspace_path(path, "run_action stderr path"))
         .transpose()?
         .map(Box::new);
-    match &declared.operation {
-        None => Ok(Action::RunCommand {
+    let action = match &declared.operation {
+        None => Action::RunCommand {
             argv: declared.argv.clone(),
             env: declared.env.clone(),
             cwd: declared
@@ -1587,9 +1641,13 @@ fn declared_to_action_with_inputs(
             timeout_ms: None,
             success_exit_codes: declared.success_exit_codes.clone(),
             remote: None,
-        }),
-        Some(operation) => operation_to_action(operation.clone(), input_digest),
-    }
+        },
+        Some(operation) => operation_to_action(operation.clone(), input_digest)?,
+    };
+    Ok(PreparedDeclaredAction {
+        action,
+        input_fingerprint,
+    })
 }
 
 fn materialize_declared_arg_files(workspace: &Path, arg_files: &[DeclaredArgFile]) -> Result<()> {
@@ -1855,6 +1913,7 @@ fn compose_input_digest(
     )
 }
 
+#[cfg(test)]
 fn compose_input_digest_with_available(
     workspace: &Path,
     declared: &DeclaredAction,
@@ -1863,47 +1922,33 @@ fn compose_input_digest_with_available(
     available_inputs: &BTreeMap<String, AvailableInput>,
     source_digest_cache: Option<&SourceDigestCache>,
 ) -> Result<Digest> {
+    Ok(compose_input_fingerprint_with_available(
+        workspace,
+        declared,
+        module_source_digest,
+        dep_action_digests,
+        available_inputs,
+        source_digest_cache,
+    )?
+    .input_digest)
+}
+
+fn compose_input_fingerprint_with_available(
+    workspace: &Path,
+    declared: &DeclaredAction,
+    module_source_digest: Digest,
+    dep_action_digests: &[(String, Digest)],
+    available_inputs: &BTreeMap<String, AvailableInput>,
+    source_digest_cache: Option<&SourceDigestCache>,
+) -> Result<InputFingerprintManifest> {
     let mut builder = InputDigestBuilder::new(b"once.declared_action.input.v2\0");
-    builder.push_keyed(b"rules", &module_source_digest);
-    if let Some(identity) = &declared.toolchain_identity {
-        builder.push_bytes(identity.as_bytes());
-    }
-    if let Some(identifier) = &declared.identifier {
-        builder.push_bytes(identifier.as_bytes());
-    }
-    if let Some(operation) = &declared.operation {
-        let encoded =
-            serde_json::to_vec(operation).context("serializing declared action operation")?;
-        builder.push_bytes(&encoded);
-    }
-    for arg in &declared.argv {
-        builder.push_bytes(arg.as_bytes());
-    }
-    if let Some(stdout) = &declared.stdout {
-        builder.push_keyed(b"stdout", &Digest::of_bytes(stdout.as_bytes()));
-    }
-    if let Some(stderr) = &declared.stderr {
-        builder.push_keyed(b"stderr", &Digest::of_bytes(stderr.as_bytes()));
-    }
-    let encoded_arg_files =
-        serde_json::to_vec(&declared.arg_files).context("serializing declared action arg files")?;
-    builder.push_bytes(&encoded_arg_files);
-    for (key, value) in &declared.env {
-        builder.push_bytes(key.as_bytes());
-        builder.push_bytes(value.as_bytes());
-    }
-    for path in &declared.clean_paths {
-        builder.push_bytes(b"clean_path");
-        builder.push_bytes(path.as_bytes());
-    }
-    for path in &declared.create_dirs {
-        builder.push_bytes(b"create_dir");
-        builder.push_bytes(path.as_bytes());
-    }
-    if let Some(cwd) = &declared.cwd {
-        builder.push_bytes(b"cwd");
-        builder.push_bytes(cwd.as_bytes());
-    }
+    builder.push_keyed_component(
+        "module",
+        "target-kind-source",
+        b"rules",
+        &module_source_digest,
+    );
+    push_declared_action_metadata(&mut builder, declared)?;
 
     let mut sorted_inputs = declared
         .inputs
@@ -1919,14 +1964,19 @@ fn compose_input_digest_with_available(
             } else {
                 &available.producer_action_digest
             };
-            builder.push_keyed(input.as_bytes(), digest);
+            let category = if available.same_target {
+                "generated-input"
+            } else {
+                "dependency-output"
+            };
+            builder.push_keyed_component(category, *input, input.as_bytes(), digest);
         } else {
             let digest = match source_digest_cache {
                 Some(cache) => cache.digest(workspace, input),
                 None => once_core::digest_source_path(workspace, input),
             }
             .with_context(|| format!("hashing declared input `{input}`"))?;
-            builder.push_keyed(input.as_bytes(), &digest);
+            builder.push_keyed_component("source", *input, input.as_bytes(), &digest);
         }
     }
 
@@ -1935,9 +1985,83 @@ fn compose_input_digest_with_available(
     for index in dep_order {
         let (label, digest) = &dep_action_digests[index];
         let key = format!("dep:{label}");
-        builder.push_keyed(key.as_bytes(), digest);
+        builder.push_keyed_component("dependency", label, key.as_bytes(), digest);
     }
-    Ok(builder.finish())
+    Ok(builder.finish_with_fingerprint())
+}
+
+fn push_declared_action_metadata(
+    builder: &mut InputDigestBuilder,
+    declared: &DeclaredAction,
+) -> Result<()> {
+    if let Some(identity) = &declared.toolchain_identity {
+        builder.push_bytes_component("toolchain", "identity", identity.as_bytes());
+    }
+    if let Some(identifier) = &declared.identifier {
+        builder.push_bytes_component("action", "identifier", identifier.as_bytes());
+    }
+    if let Some(operation) = &declared.operation {
+        let encoded =
+            serde_json::to_vec(operation).context("serializing declared action operation")?;
+        builder.push_bytes_component("command", "operation", &encoded);
+    }
+    for arg in &declared.argv {
+        builder.push_bytes(arg.as_bytes());
+    }
+    if !declared.argv.is_empty() {
+        let encoded =
+            serde_json::to_vec(&declared.argv).context("serializing declared action arguments")?;
+        builder.record_bytes("command", "arguments", &encoded);
+    }
+    if let Some(stdout) = &declared.stdout {
+        builder.push_keyed_component(
+            "command",
+            "stdout-path",
+            b"stdout",
+            &Digest::of_bytes(stdout.as_bytes()),
+        );
+    }
+    if let Some(stderr) = &declared.stderr {
+        builder.push_keyed_component(
+            "command",
+            "stderr-path",
+            b"stderr",
+            &Digest::of_bytes(stderr.as_bytes()),
+        );
+    }
+    let encoded_arg_files =
+        serde_json::to_vec(&declared.arg_files).context("serializing declared action arg files")?;
+    builder.push_bytes(&encoded_arg_files);
+    if !declared.arg_files.is_empty() {
+        builder.record_bytes("command", "argument-files", &encoded_arg_files);
+    }
+    for (key, value) in &declared.env {
+        builder.push_bytes(key.as_bytes());
+        builder.push_bytes(value.as_bytes());
+    }
+    if !declared.env.is_empty() {
+        let encoded =
+            serde_json::to_vec(&declared.env).context("serializing declared environment")?;
+        builder.record_bytes("environment", "declared", &encoded);
+    }
+    for path in &declared.clean_paths {
+        builder.push_bytes(b"clean_path");
+        builder.push_bytes(path.as_bytes());
+    }
+    for path in &declared.create_dirs {
+        builder.push_bytes(b"create_dir");
+        builder.push_bytes(path.as_bytes());
+    }
+    if !declared.clean_paths.is_empty() || !declared.create_dirs.is_empty() {
+        let encoded = serde_json::to_vec(&(&declared.clean_paths, &declared.create_dirs))
+            .context("serializing declared path setup")?;
+        builder.record_bytes("command", "path-setup", &encoded);
+    }
+    if let Some(cwd) = &declared.cwd {
+        builder.push_bytes(b"cwd").push_bytes(cwd.as_bytes());
+        builder.record_bytes("command", "working-directory", cwd.as_bytes());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3143,6 +3267,34 @@ mod tests {
         );
     }
 
+    fn assert_declared_action_fingerprints(
+        records: &[EvidenceRecord],
+        aggregate: Option<InputFingerprintManifest>,
+    ) {
+        assert!(records
+            .iter()
+            .all(|record| record.input_fingerprint.is_some()));
+        assert!(records.iter().any(|record| {
+            record
+                .input_fingerprint
+                .as_ref()
+                .is_some_and(|fingerprint| {
+                    fingerprint
+                        .components
+                        .iter()
+                        .any(|component| component.category == "dependency")
+                })
+        }));
+        let aggregate = aggregate.expect("multi-action outcome should aggregate fingerprints");
+        assert!(aggregate
+            .components
+            .iter()
+            .any(|component| component.label.starts_with("action:1:")));
+        let encoded = serde_json::to_string(&records).unwrap();
+        assert!(!encoded.contains("printf one"));
+        assert!(!encoded.contains("printf two"));
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn declared_actions_record_success_evidence_per_action() {
@@ -3229,6 +3381,7 @@ mod tests {
         assert!(records
             .iter()
             .any(|record| record.outputs.contains_key(".once/out/two.txt")));
+        assert_declared_action_fingerprints(&records, outcome.input_fingerprint);
     }
 
     #[cfg(unix)]
@@ -3430,6 +3583,69 @@ mod tests {
         };
         let two = compose_input_digest(workspace.path(), &declared2, module_digest(), &[]).unwrap();
         assert_ne!(one, two);
+    }
+
+    #[test]
+    fn input_fingerprint_explains_inputs_without_exposing_values() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
+        let declared = DeclaredAction {
+            operation: None,
+            argv: vec!["tool".to_string(), "--token=command-secret".to_string()],
+            arg_files: Vec::new(),
+            inputs: vec!["input.txt".to_string()],
+            outputs: vec![".once/out/A.a".to_string()],
+            stdout: None,
+            stderr: None,
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
+            env: BTreeMap::from([("TOKEN".to_string(), "environment-secret".to_string())]),
+            sandbox: None,
+            success_exit_codes: vec![0],
+            cacheable: true,
+            inherit_parent_env: false,
+            depends_on_prior_actions: true,
+            toolchain_identity: Some("toolchain-secret".to_string()),
+            identifier: Some("compile".to_string()),
+        };
+        let dependency = Digest::of_bytes(b"dependency");
+        let fingerprint = compose_input_fingerprint_with_available(
+            workspace.path(),
+            &declared,
+            module_digest(),
+            &[("core".to_string(), dependency)],
+            &BTreeMap::new(),
+            None,
+        )
+        .unwrap();
+        let digest = compose_input_digest(
+            workspace.path(),
+            &declared,
+            module_digest(),
+            &[("core".to_string(), dependency)],
+        )
+        .unwrap();
+
+        assert_eq!(fingerprint.input_digest, digest);
+        for (category, label) in [
+            ("module", "target-kind-source"),
+            ("toolchain", "identity"),
+            ("action", "identifier"),
+            ("command", "arguments"),
+            ("environment", "declared"),
+            ("source", "input.txt"),
+            ("dependency", "core"),
+        ] {
+            assert!(fingerprint
+                .components
+                .iter()
+                .any(|component| { component.category == category && component.label == label }));
+        }
+        let encoded = serde_json::to_string(&fingerprint).unwrap();
+        assert!(!encoded.contains("command-secret"));
+        assert!(!encoded.contains("environment-secret"));
+        assert!(!encoded.contains("toolchain-secret"));
     }
 
     #[test]

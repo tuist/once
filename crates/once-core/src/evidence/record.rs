@@ -5,7 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use once_cas::{ActionResult, Digest};
 use serde::{Deserialize, Serialize};
 
-use crate::{Action, CacheState, Outcome};
+use crate::{Action, CacheState, InputFingerprintManifest, Outcome};
 
 pub(crate) const EVIDENCE_SCHEMA: &str = "once.evidence.v1";
 pub(crate) const ACTION_RESULT_KIND: &str = "action_result";
@@ -129,6 +129,8 @@ pub struct EvidenceRecord {
     pub action_digest: Digest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_digest: Option<Digest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_fingerprint: Option<InputFingerprintManifest>,
     pub cache: EvidenceCacheState,
     pub exit_code: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -162,6 +164,33 @@ impl EvidenceRecord {
         cache: EvidenceCacheState,
         result: &ActionResult,
     ) -> Result<Self> {
+        Self::from_action_result_with_fingerprint(
+            subject,
+            action_digest,
+            input_digest,
+            None,
+            cache,
+            result,
+        )
+    }
+
+    pub fn from_action_result_with_fingerprint(
+        subject: EvidenceSubject,
+        action_digest: Digest,
+        input_digest: Option<Digest>,
+        input_fingerprint: Option<InputFingerprintManifest>,
+        cache: EvidenceCacheState,
+        result: &ActionResult,
+    ) -> Result<Self> {
+        if let Some(fingerprint) = &input_fingerprint {
+            let digest = input_digest.context("input fingerprint requires an input digest")?;
+            if fingerprint.input_digest != digest {
+                return Err(anyhow!(
+                    "input fingerprint digest {} does not match action input digest {digest}",
+                    fingerprint.input_digest
+                ));
+            }
+        }
         let created_at_unix_ms = unix_ms_now()?;
         let id = evidence_id(
             &subject,
@@ -178,6 +207,7 @@ impl EvidenceRecord {
             status: EvidenceStatus::from_exit_code(result.exit_code),
             action_digest,
             input_digest,
+            input_fingerprint,
             cache,
             exit_code: result.exit_code,
             stdout: result.stdout,
@@ -228,6 +258,8 @@ fn unix_ms(time: SystemTime) -> Result<i64> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     #[test]
@@ -279,6 +311,31 @@ mod tests {
     fn storage_conversions_reject_unknown_values() {
         assert!(EvidenceStatus::from_storage("unknown").is_err());
         assert!(EvidenceCacheState::from_storage("skipped").is_err());
+    }
+
+    #[test]
+    fn evidence_rejects_a_fingerprint_for_another_input_digest() {
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::new(),
+        };
+        let fingerprint = InputFingerprintManifest::new(Digest::of_bytes(b"other"), Vec::new());
+
+        let error = EvidenceRecord::from_action_result_with_fingerprint(
+            EvidenceSubject::target("cli", "test"),
+            Digest::of_bytes(b"action"),
+            Some(Digest::of_bytes(b"input")),
+            Some(fingerprint),
+            EvidenceCacheState::Miss,
+            &result,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("does not match action input digest"));
     }
 
     #[test]

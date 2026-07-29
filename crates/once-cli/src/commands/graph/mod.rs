@@ -19,8 +19,8 @@ use std::process::ExitCode;
 use anyhow::{anyhow, Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
-    EvidenceCacheState, EvidenceSubject, LintResults, LintSeverity, ResourceLimits, RunOpts,
-    SandboxMode, WorkspacePath,
+    EvidenceCacheState, EvidenceSubject, InputFingerprintManifest, LintResults, LintSeverity,
+    ResourceLimits, RunOpts, SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::AnalysisOptions;
 use once_frontend::GraphTarget;
@@ -46,6 +46,8 @@ struct CapabilityRunRecord {
     test_results: Option<String>,
     #[serde(skip, default)]
     input_digest: Option<Digest>,
+    #[serde(skip, default)]
+    input_fingerprint: Option<InputFingerprintManifest>,
     #[serde(skip, default = "default_cache_state")]
     cache_state: EvidenceCacheState,
     #[serde(skip, default = "default_action_result")]
@@ -182,6 +184,7 @@ pub async fn lint(
         outputs: outcome.outputs,
         test_results: None,
         input_digest: outcome.input_digest,
+        input_fingerprint: outcome.input_fingerprint,
         cache_state: outcome.cache_state,
         result: outcome.result,
     };
@@ -362,6 +365,7 @@ pub async fn test_with_filters(
             provider,
             action_digest,
             input_digest,
+            input_fingerprint,
             outputs,
             cache_tag,
             cache_state,
@@ -384,6 +388,7 @@ pub async fn test_with_filters(
             outputs,
             test_results,
             input_digest,
+            input_fingerprint,
             cache_state,
             result,
         }
@@ -438,6 +443,7 @@ pub async fn run(
         let analysis::BuildOutcome {
             action_digest,
             input_digest,
+            input_fingerprint,
             outputs,
             cache_tag,
             cache_state,
@@ -456,6 +462,7 @@ pub async fn run(
             outputs,
             test_results: None,
             input_digest,
+            input_fingerprint,
             cache_state,
             result,
         }
@@ -486,6 +493,7 @@ async fn build_target(
         let analysis::BuildOutcome {
             action_digest,
             input_digest,
+            input_fingerprint,
             outputs,
             cache_state,
             result,
@@ -504,6 +512,7 @@ async fn build_target(
             outputs,
             test_results: None,
             input_digest,
+            input_fingerprint,
             cache_state,
             result,
         })
@@ -580,6 +589,7 @@ async fn run_target_capability(
             .collect(),
         test_results: None,
         input_digest: action.input_digest(),
+        input_fingerprint: None,
         cache_state,
         result,
     })
@@ -606,6 +616,7 @@ async fn record_capability_run(workspace: &Path, record: &CapabilityRunRecord) {
         EvidenceSubject::target(record.target.as_str(), record.capability.as_str()),
         action_digest,
         record.input_digest,
+        record.input_fingerprint.clone(),
         record.cache_state,
         &record.result,
     )
@@ -795,6 +806,7 @@ mod tests {
             outputs: vec![".once/out/apps/ios/App/run".to_string()],
             test_results: None,
             input_digest: None,
+            input_fingerprint: None,
             cache_state: EvidenceCacheState::Miss,
             result: action_result(),
         };
@@ -821,6 +833,7 @@ mod tests {
             outputs: Vec::new(),
             test_results: None,
             input_digest: None,
+            input_fingerprint: None,
             cache_state: EvidenceCacheState::Hit,
             result: action_result(),
         };
