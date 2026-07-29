@@ -2,38 +2,41 @@
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-benchmark="$root/benchmarks/cache-comparison"
-result="$(mktemp "${TMPDIR:-/tmp}/once-autoresearch.XXXXXX.json")"
-started_server=0
+benchmark="$root/benchmarks/codex-build-comparison/benchmark.py"
+checkout="${ONCE_CODEX_CHECKOUT:-/tmp/once-codex-benchmark}"
+state_root="${ONCE_CODEX_STATE_ROOT:-/tmp/once-codex-autoresearch}"
+temporary="$(mktemp -d "${TMPDIR:-/tmp}/once-autoresearch.XXXXXX")"
+result="$temporary/results.jsonl"
+logs="$temporary/logs"
+mkdir -p "$logs"
 
 cleanup() {
-  find "$result" -maxdepth 0 -type f -delete
-  if [[ "$started_server" == 1 ]]; then
-    "$benchmark/server.sh" stop
-  fi
+  find "$temporary" -depth -delete
 }
 trap cleanup EXIT INT TERM
 
 cd "$root"
 mise exec -- cargo build --quiet --release -p once-cli
-"$benchmark/verify-fixtures.sh"
 
-if ! "$benchmark/run-once.sh" >/dev/null 2>&1; then
-    "$benchmark/server.sh" start >/dev/null
-    started_server=1
-    "$benchmark/run-once.sh" >/dev/null
-fi
-
-mise exec -- hyperfine \
-  --runs 40 \
-  --warmup 5 \
-  --export-json "$result" \
-  "$benchmark/run-once.sh" \
+python3 "$benchmark" once warm \
+  --checkout "$checkout" \
+  --once "$root/target/release/once" \
+  --state-root "$state_root" \
+  --results "$result" \
+  --log-directory "$logs" \
   >/dev/null
 
+for _ in 1 2 3; do
+  python3 "$benchmark" once warm \
+    --checkout "$checkout" \
+    --once "$root/target/release/once" \
+    --state-root "$state_root" \
+    --results "$result" \
+    --log-directory "$logs" \
+    >/dev/null
+done
+
 mise exec -- jq -r '
-  .results[0] |
-  "METRIC local_hit_ms=\(.median * 1000)",
-  "METRIC mean_ms=\(.mean * 1000)",
-  "METRIC stddev_ms=\(.stddev * 1000)"
-' "$result"
+  [inputs] | .[1:] |
+  "METRIC warm_elapsed_seconds=\([.[].elapsed_seconds] | sort | .[1])"
+' /dev/null "$result"
