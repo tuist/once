@@ -92,17 +92,20 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
             load_toml_with_configuration(&display, &src, root, &pkg, &scan.configuration)?;
         all.extend(targets);
     }
-    let resolver_kinds = crate::graph::target_kind_schemas_for_workspace(root)?
-        .into_iter()
+    let target_kind_schemas = crate::graph::target_kind_schemas_for_workspace(root)?;
+    let resolver_kinds = target_kind_schemas
+        .iter()
         .filter(|schema| schema.has_resolver)
-        .map(|schema| schema.kind)
+        .map(|schema| schema.kind.clone())
         .collect::<BTreeSet<_>>();
-    for (matched, target) in crate::native_project::synthesized_workspace_seeds(root)? {
-        let manifest_path = if target.package.is_empty() {
-            TOML_BUILD_FILE_NAME.to_string()
-        } else {
-            format!("{}/{}", target.package, TOML_BUILD_FILE_NAME)
-        };
+    let native_project_schemas =
+        crate::native_project::native_project_schemas_for_workspace_with_target_kinds(
+            root,
+            &target_kind_schemas,
+        )?;
+    for (matched, target) in
+        crate::native_project::synthesized_workspace_seeds(root, &native_project_schemas, &scan)?
+    {
         let marker_path = if matched.package.is_empty() {
             matched.markers[0].clone()
         } else {
@@ -115,7 +118,6 @@ pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
                 resolver_kinds.contains(&explicit.kind)
                     && target_covers_path(explicit, &marker_path)
             })
-            && scan.includes_native_project(&manifest_path, &marker_path)
         {
             all.push(target);
         }
@@ -154,7 +156,7 @@ fn resolver_input_patterns(target: &Target) -> Vec<String> {
 }
 
 #[derive(Debug, Default)]
-struct WorkspaceScan {
+pub(crate) struct WorkspaceScan {
     include: Vec<Pattern>,
     include_roots: Option<BTreeSet<String>>,
     exclude: Vec<Pattern>,
@@ -169,7 +171,7 @@ impl WorkspaceScan {
         self.include.is_empty() || self.include.iter().any(|pattern| pattern.matches(path))
     }
 
-    fn includes_native_project(&self, manifest_path: &str, marker_path: &str) -> bool {
+    pub(crate) fn includes_native_project(&self, manifest_path: &str, marker_path: &str) -> bool {
         if self
             .exclude
             .iter()
@@ -189,9 +191,20 @@ impl WorkspaceScan {
             .as_ref()
             .is_none_or(|roots| name.to_str().is_none_or(|name| roots.contains(name)))
     }
+
+    pub(crate) fn includes_native_project_dir(&self, path: &str, depth: usize) -> bool {
+        if depth == 1 && !self.includes_top_level_dir(OsStr::new(path)) {
+            return false;
+        }
+        let descendant = format!("{path}/__once_native_project_descendant__");
+        !self
+            .exclude
+            .iter()
+            .any(|pattern| pattern.matches(&descendant))
+    }
 }
 
-fn load_workspace_scan(root: &Path) -> Result<WorkspaceScan> {
+pub(crate) fn load_workspace_scan(root: &Path) -> Result<WorkspaceScan> {
     let path = root.join(TOML_BUILD_FILE_NAME);
     let src = match std::fs::read_to_string(&path) {
         Ok(src) => src,
