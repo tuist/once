@@ -102,6 +102,15 @@ pub async fn build(
     let target = session.target(target_id)?;
     let record = build_target(workspace, cache, target, &session, sandbox).await?;
     record_capability_run(workspace, &record).await;
+    // An uncacheable build (any declared action with `cacheable = false`, which
+    // several target kinds such as Dockerfile, Go, and Android use) must run on
+    // every invocation. Never persist a receipt for it, and drop any stale one,
+    // so the fast path can never skip its mandatory work.
+    if record.cache_state == EvidenceCacheState::Bypass {
+        build_receipt::clear(workspace, target_id, sandbox).await;
+        write_record(output, &record).await?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if let Some(final_snapshot) = crate::commands::change_tracker::snapshot(
         workspace,
         &xdg,

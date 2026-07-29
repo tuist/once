@@ -12,7 +12,7 @@ use crate::commands::change_tracker::{ChangePosition, ChangeSnapshot};
 
 use self::path_fingerprint::PathFingerprint;
 
-const SCHEMA: &str = "once.build-receipt.v4";
+const SCHEMA: &str = "once.build-receipt.v5";
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct BuildReceipt {
@@ -144,6 +144,17 @@ pub(super) async fn store(
     };
     if let Err(error) = write_receipt(&receipt_path(workspace, target, sandbox), &receipt).await {
         tracing::debug!(%error, target, "failed to persist build receipt");
+    }
+}
+
+/// Remove any stored receipt for a target so a later invocation cannot reuse
+/// it. Used when the completed build is uncacheable and must run every time.
+pub(super) async fn clear(workspace: &Path, target: &str, sandbox: SandboxMode) {
+    let path = receipt_path(workspace, target, sandbox);
+    if let Err(error) = tokio::fs::remove_file(&path).await {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::debug!(%error, target, "failed to clear build receipt");
+        }
     }
 }
 

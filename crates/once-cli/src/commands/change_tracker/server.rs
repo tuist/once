@@ -342,11 +342,18 @@ impl TrackerState {
             .context("build output change tracker is not initialized")?;
         for output in outputs {
             let path = self.workspace.join(output);
-            if watched_outputs.contains(&path)
-                || !path.starts_with(self.workspace.join(".once").join("out"))
-                || !path.exists()
-            {
+            if !path.starts_with(self.workspace.join(".once").join("out")) || !path.exists() {
                 continue;
+            }
+            // Re-register on every barrier. On Linux an inotify watch is bound
+            // to the inode, so replacing a watched output by rename reports the
+            // first replacement and then leaves the watch on the dead inode.
+            // Without re-registering, a later replacement of the same output
+            // would go unobserved and an unchanged receipt could certify a
+            // stale output. Dropping the previous watch first keeps the watch
+            // pointed at the live inode.
+            if watched_outputs.contains(&path) {
+                let _ = watcher.unwatch(&path);
             }
             watch_output(watcher, &path)?;
             watched_outputs.insert(path);

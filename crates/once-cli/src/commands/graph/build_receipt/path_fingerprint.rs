@@ -11,6 +11,8 @@ pub(super) struct PathFingerprint {
     modified_nanos: u32,
     file_type: u8,
     link_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolved: Option<Box<PathFingerprint>>,
     #[cfg(unix)]
     changed_seconds: i64,
     #[cfg(unix)]
@@ -50,17 +52,36 @@ pub(super) fn fingerprint(path: &Path) -> Option<PathFingerprint> {
 impl PathFingerprint {
     fn capture(path: &Path) -> Option<Self> {
         let metadata = std::fs::symlink_metadata(path).ok()?;
+        let is_symlink = metadata.file_type().is_symlink();
+        let link_target = is_symlink
+            .then(|| std::fs::read_link(path).ok())
+            .flatten()
+            .map(|target| target.to_string_lossy().into_owned());
+        // When the observed path is a symlink (for example /usr/bin/cc), the
+        // link's own metadata and the recorded target path stay constant if the
+        // destination binary is replaced in place. Follow the link and bind the
+        // resolved target's identity so such an in-place tool change still
+        // invalidates the receipt, while the link's own identity is retained.
+        let resolved = is_symlink
+            .then(|| {
+                std::fs::metadata(path)
+                    .ok()
+                    .and_then(|resolved| Self::from_metadata(&resolved))
+            })
+            .flatten()
+            .map(Box::new);
+        let mut fingerprint = Self::from_metadata(&metadata)?;
+        fingerprint.link_target = link_target;
+        fingerprint.resolved = resolved;
+        Some(fingerprint)
+    }
+
+    fn from_metadata(metadata: &std::fs::Metadata) -> Option<Self> {
         let modified = metadata
             .modified()
             .ok()?
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
-        let link_target = metadata
-            .file_type()
-            .is_symlink()
-            .then(|| std::fs::read_link(path).ok())
-            .flatten()
-            .map(|target| target.to_string_lossy().into_owned());
         Some(Self {
             len: metadata.len(),
             modified_seconds: modified.as_secs(),
@@ -68,17 +89,44 @@ impl PathFingerprint {
             file_type: u8::from(metadata.is_file())
                 | (u8::from(metadata.is_dir()) << 1)
                 | (u8::from(metadata.file_type().is_symlink()) << 2),
-            link_target,
+            link_target: None,
+            resolved: None,
             #[cfg(unix)]
-            changed_seconds: std::os::unix::fs::MetadataExt::ctime(&metadata),
+            changed_seconds: std::os::unix::fs::MetadataExt::ctime(metadata),
             #[cfg(unix)]
-            changed_nanos: std::os::unix::fs::MetadataExt::ctime_nsec(&metadata),
+            changed_nanos: std::os::unix::fs::MetadataExt::ctime_nsec(metadata),
             #[cfg(unix)]
-            device: std::os::unix::fs::MetadataExt::dev(&metadata),
+            device: std::os::unix::fs::MetadataExt::dev(metadata),
             #[cfg(unix)]
-            inode: std::os::unix::fs::MetadataExt::ino(&metadata),
+            inode: std::os::unix::fs::MetadataExt::ino(metadata),
             #[cfg(unix)]
-            mode: std::os::unix::fs::MetadataExt::mode(&metadata),
+            mode: std::os::unix::fs::MetadataExt::mode(metadata),
         })
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn symlink_fingerprint_tracks_in_place_target_changes() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let target = directory.path().join("gcc-real");
+        let link = directory.path().join("cc");
+        std::fs::write(&target, b"compiler one").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let observed = BTreeSet::from([link.clone()]);
+        let baseline = capture(&observed);
+        // The link itself is untouched; only the resolved binary is replaced in
+        // place. Without binding the resolved target this would look unchanged.
+        std::fs::write(&target, b"compiler two has more bytes").unwrap();
+
+        assert_eq!(
+            changed(&baseline),
+            vec![link.to_string_lossy().into_owned()]
+        );
     }
 }
