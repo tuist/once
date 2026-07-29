@@ -168,11 +168,17 @@ Initialize the seed when the native project selection should be reviewed and sto
 
 ```sh
 once edit init-native-project mix
+once edit init-native-project cargo
 ```
 
 Initialization writes only the seed target to `once.toml`. The native project
 description and lockfile remain authoritative for dependencies, products,
 tests, and releases. Repeating an identical initialization makes no change.
+
+The native seed can remain the only target, or it can live beside explicit
+targets for exceptional build boundaries. Keep manifest data in `once.toml`
+and introduce a project Starlark module only when reusable behavior is missing
+from the built-in target kinds.
 
 An explicit Once target for the same target kind takes precedence in its
 package. Unrelated targets do not hide a native project in the same package or

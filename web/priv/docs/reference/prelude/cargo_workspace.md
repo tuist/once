@@ -11,8 +11,17 @@ Locked external packages use the same fine-grained lowering as
 `cargo_dependencies`.
 
 Cargo remains authoritative for workspace membership, targets, features,
-renamed dependencies, build scripts, versions, and checksums. External package
-sources must already exist in the configured vendored source directory.
+renamed dependencies, build scripts, versions, and checksums. By default, Once
+snapshots locked external package trees from Cargo's local cache into each
+target's output. The repository stays unchanged. A pre-existing vendored source
+directory can be selected explicitly.
+Targets whose `required-features` are not selected are omitted, matching
+Cargo's target selection. Generated test targets include development
+dependencies. Cargo target names are normalized to valid Rust crate
+identifiers while binary names retain their manifest spelling. Multi-output
+libraries emit one target per declared Rust library crate type. Cargo's
+workspace member list determines which packages are first-party, so local path
+dependencies outside that list remain ordinary dependency targets.
 
 ## Attributes
 
@@ -23,7 +32,7 @@ sources must already exist in the configured vendored source directory.
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Text inputs available while deriving the graph |
 | `metadata_file` | string | no |  | Optional checked Cargo metadata snapshot |
 | `host_metadata_file` | string | no |  | Optional host metadata snapshot for cross-compilation |
-| `vendor_dir` | string | no | `vendor` | Package-relative vendored external sources |
+| `vendor_dir` | string | no | Once-managed | Optional package-relative pre-vendored external sources |
 | `features` | list&lt;string&gt; | no | `[]` | Selected Cargo features |
 | `all_features` | bool | no | `false` | Select every Cargo feature |
 | `no_default_features` | bool | no | `false` | Disable default Cargo features |
@@ -41,6 +50,15 @@ The target emits `cargo_workspace`.
 | `build` | none |
 
 ## Direct Use
+
+On a fresh clone, populate Cargo's local source cache from the lockfile:
+
+```sh
+cargo fetch --locked
+```
+
+Once never performs that network operation while loading or building the
+graph.
 
 Discover and preview the native project:
 
@@ -66,6 +84,12 @@ srcs = ["Cargo.toml"]
 [target.attrs]
 resolver_inputs = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", ".cargo/config", ".cargo/config.toml"]
 ```
+
+Keep this seed as the only Once target while Cargo metadata describes the
+complete build. Add explicit targets beside it for exceptional cross-language
+or packaging boundaries. Use a project Starlark module only when those
+exceptions share reusable behavior that the built-in target kinds cannot
+express.
 
 ## Sources
 
