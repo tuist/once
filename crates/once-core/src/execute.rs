@@ -95,6 +95,16 @@ async fn execute_portable_action(
             capture_file_action_outputs(std::slice::from_ref(destination), workspace_root, cache)
                 .await
         }
+        Action::MaterializeHostTree {
+            source,
+            source_sha256,
+            destination,
+            ..
+        } => {
+            materialize_host_tree(source, source_sha256, destination, workspace_root).await?;
+            capture_file_action_outputs(std::slice::from_ref(destination), workspace_root, cache)
+                .await
+        }
         Action::PreparePath { path, mode, .. } => match mode {
             PreparePathMode::Remove => {
                 remove_path(path, workspace_root).await?;
@@ -635,6 +645,55 @@ async fn materialize_host_file(
     write_file(destination, &bytes, workspace_root).await
 }
 
+async fn materialize_host_tree(
+    source: &Path,
+    source_sha256: &str,
+    destination: &WorkspacePath,
+    workspace_root: &Path,
+) -> Result<()> {
+    if !source.is_absolute() {
+        return Err(Error::InvalidHostFile {
+            reason: format!("source `{}` must be absolute", source.display()),
+        });
+    }
+    if !source.is_dir() {
+        return Err(Error::InvalidHostFile {
+            reason: format!("source `{}` must be a directory", source.display()),
+        });
+    }
+    let source = source.to_path_buf();
+    let destination_path = destination.resolve(workspace_root);
+    let destination_label = destination.as_str().to_string();
+    let expected = source_sha256.to_string();
+    tokio::task::spawn_blocking(move || {
+        let actual = host_tree_sha256_hex(&source).map_err(|source_error| Error::FileAction {
+            action: "hash_host_tree",
+            path: source.display().to_string(),
+            source: source_error,
+        })?;
+        if actual != expected {
+            return Err(Error::HostFileDigestMismatch {
+                path: source.display().to_string(),
+                expected,
+                actual,
+            });
+        }
+        copy_sandbox_output_blocking(&source, &destination_path).map_err(|source_error| {
+            Error::FileAction {
+                action: "materialize_host_tree",
+                path: destination_label,
+                source: source_error,
+            }
+        })
+    })
+    .await
+    .map_err(|source_error| Error::FileAction {
+        action: "materialize_host_tree",
+        path: destination.as_str().to_string(),
+        source: std::io::Error::other(source_error.to_string()),
+    })?
+}
+
 async fn copy_tree(
     sources: &[WorkspacePath],
     destination: &WorkspacePath,
@@ -1001,6 +1060,65 @@ fn file_sha256_hex(path: &Path) -> std::io::Result<String> {
         hasher.update(&buf[..read]);
     }
     Ok(hex_lower(&hasher.finalize()))
+}
+
+pub(crate) fn host_tree_sha256_hex(root: &Path) -> std::io::Result<String> {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"once.host_tree.v1\0");
+    hash_host_tree_directory(root, root, &mut hasher)?;
+    Ok(hex_lower(&hasher.finalize()))
+}
+
+fn hash_host_tree_directory(
+    root: &Path,
+    directory: &Path,
+    hasher: &mut sha2::Sha256,
+) -> std::io::Result<()> {
+    let mut children = std::fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
+    children.sort_by_key(std::fs::DirEntry::file_name);
+    for child in children {
+        let path = child.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
+        let relative = path
+            .strip_prefix(root)
+            .map_err(std::io::Error::other)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let kind = if metadata.file_type().is_symlink() {
+            b'l'
+        } else if metadata.is_dir() {
+            b'd'
+        } else if metadata.is_file() {
+            b'f'
+        } else {
+            continue;
+        };
+        hasher.update([kind]);
+        hasher.update(relative.as_bytes());
+        hasher.update([0]);
+        hasher.update(host_file_mode(&metadata).to_le_bytes());
+        if metadata.file_type().is_symlink() {
+            hasher.update(std::fs::read_link(&path)?.to_string_lossy().as_bytes());
+        } else if metadata.is_file() {
+            hasher.update(file_sha256_hex(&path)?.as_bytes());
+        }
+        hasher.update([0]);
+        if metadata.is_dir() {
+            hash_host_tree_directory(root, &path, hasher)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn host_file_mode(metadata: &std::fs::Metadata) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode()
+}
+
+#[cfg(not(unix))]
+fn host_file_mode(_metadata: &std::fs::Metadata) -> u32 {
+    0
 }
 
 fn hex_lower(bytes: &[u8]) -> String {

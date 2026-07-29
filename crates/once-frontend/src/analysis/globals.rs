@@ -468,6 +468,58 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
+    /// Snapshot an absolute host directory into a workspace-relative output.
+    /// The source tree digest is captured during analysis and verified again
+    /// on execution, so cache identity follows files, modes, and symlinks.
+    fn materialize_host_tree(source: &str, destination: &str) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let source_path = Path::new(source);
+        if !source_path.is_absolute() {
+            return Err(anyhow!(
+                "materialize_host_tree source must be absolute, got `{source}`"
+            ));
+        }
+        if !source_path.is_dir() {
+            return Err(anyhow!(
+                "materialize_host_tree source is not a directory: `{source}`"
+            ));
+        }
+        let source_sha256 = host_tree_sha256_hex(source_path)
+            .with_context(|| format!("hashing host directory `{source}`"))?;
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::MaterializeHostTree {
+                source: source.to_string(),
+                source_sha256,
+                destination: destination.to_string(),
+            }),
+            argv: Vec::new(),
+            arg_files: Vec::new(),
+            inputs: Vec::new(),
+            outputs: vec![destination.to_string()],
+            stdout: None,
+            stderr: None,
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
+            sandbox: None,
+            success_exit_codes: vec![0],
+            cacheable: true,
+            inherit_parent_env: false,
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: Some(format!("materialize_host_tree:{destination}")),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
     /// Link one workspace path to another without copying or caching
     /// the linked contents. Downstream actions still hash the linked
     /// tree when they declare it as an input.
@@ -1228,6 +1280,71 @@ fn file_sha256_hex(path: &Path) -> Result<String> {
         hasher.update(&buf[..read]);
     }
     Ok(hex_lower(&hasher.finalize()))
+}
+
+fn host_tree_sha256_hex(root: &Path) -> Result<String> {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"once.host_tree.v1\0");
+    hash_host_tree_directory(root, root, &mut hasher)?;
+    Ok(hex_lower(&hasher.finalize()))
+}
+
+fn hash_host_tree_directory(
+    root: &Path,
+    directory: &Path,
+    hasher: &mut sha2::Sha256,
+) -> Result<()> {
+    let mut children = std::fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
+    children.sort_by_key(std::fs::DirEntry::file_name);
+    for child in children {
+        let path = child.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
+        let relative = path
+            .strip_prefix(root)
+            .with_context(|| {
+                format!(
+                    "making `{}` relative to `{}`",
+                    path.display(),
+                    root.display()
+                )
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let kind = if metadata.file_type().is_symlink() {
+            b'l'
+        } else if metadata.is_dir() {
+            b'd'
+        } else if metadata.is_file() {
+            b'f'
+        } else {
+            continue;
+        };
+        hasher.update([kind]);
+        hasher.update(relative.as_bytes());
+        hasher.update([0]);
+        hasher.update(host_file_mode(&metadata).to_le_bytes());
+        if metadata.file_type().is_symlink() {
+            hasher.update(std::fs::read_link(&path)?.to_string_lossy().as_bytes());
+        } else if metadata.is_file() {
+            hasher.update(file_sha256_hex(&path)?.as_bytes());
+        }
+        hasher.update([0]);
+        if metadata.is_dir() {
+            hash_host_tree_directory(root, &path, hasher)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn host_file_mode(metadata: &std::fs::Metadata) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode()
+}
+
+#[cfg(not(unix))]
+fn host_file_mode(_metadata: &std::fs::Metadata) -> u32 {
+    0
 }
 
 fn hex_lower(bytes: &[u8]) -> String {

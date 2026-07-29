@@ -1183,6 +1183,7 @@ async fn run_uncached_action(
         | Action::CopyPath { .. }
         | Action::LinkPath { .. }
         | Action::MaterializeHostFile { .. }
+        | Action::MaterializeHostTree { .. }
         | Action::PreparePath { .. }
         | Action::WriteTreeDigest { .. }
         | Action::WriteArchive { .. } => once_core::run_uncached(action, workspace, cache, false)
@@ -1584,6 +1585,25 @@ fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest)
                 source,
                 source_sha256,
                 destination: workspace_path(&destination, "materialize_host_file destination")?,
+                input_digest: Some(input_digest),
+            }
+        }
+        DeclaredActionOperation::MaterializeHostTree {
+            source,
+            source_sha256,
+            destination,
+        } => {
+            let source = std::path::PathBuf::from(source);
+            if !source.is_absolute() {
+                anyhow::bail!(
+                    "invalid materialize_host_tree source `{}`: expected an absolute path",
+                    source.display()
+                );
+            }
+            Action::MaterializeHostTree {
+                source,
+                source_sha256,
+                destination: workspace_path(&destination, "materialize_host_tree destination")?,
                 input_digest: Some(input_digest),
             }
         }

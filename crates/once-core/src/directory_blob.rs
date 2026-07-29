@@ -12,6 +12,8 @@ use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use once_cas::Digest;
+
 use crate::path::WorkspacePath;
 use crate::{Error, OutputSymlinkMode, Result};
 
@@ -85,6 +87,35 @@ impl DirectoryEntryContent {
 
 pub(crate) fn is_directory_blob(bytes: &[u8]) -> bool {
     bytes.starts_with(DIRECTORY_BLOB_MAGIC) || bytes.starts_with(DIRECTORY_BLOB_V1_MAGIC)
+}
+
+pub(crate) fn digest_directory_blob(
+    root: &Path,
+    symlink_mode: OutputSymlinkMode,
+) -> std::io::Result<Digest> {
+    let mut writer = DigestWriter::default();
+    write_directory_blob(root, symlink_mode, &mut writer)?;
+    Ok(writer.finish())
+}
+
+#[derive(Default)]
+struct DigestWriter(blake3::Hasher);
+
+impl DigestWriter {
+    fn finish(self) -> Digest {
+        Digest::from_bytes(*self.0.finalize().as_bytes())
+    }
+}
+
+impl Write for DigestWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
