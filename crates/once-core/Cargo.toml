@@ -12,6 +12,7 @@ remote-microsandbox = ["dep:microsandbox"]
 
 [dependencies]
 once-cas.workspace = true
+once-host-tree.workspace = true
 
 anyhow.workspace = true
 base64.workspace = true

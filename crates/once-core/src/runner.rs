@@ -935,7 +935,7 @@ mod tests {
         std::fs::write(&executable, "#!/bin/sh\n").unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
         symlink("src/lib.rs", source.join("linked.rs")).unwrap();
-        let source_sha256 = crate::execute::host_tree_sha256_hex(&source).unwrap();
+        let source_sha256 = once_host_tree::host_tree_sha256_hex(&source).unwrap();
         let action = Action::MaterializeHostTree {
             source: source.clone(),
             source_sha256,
@@ -980,7 +980,7 @@ mod tests {
         let source = tmp.path().join("crate");
         std::fs::create_dir_all(&source).unwrap();
         std::fs::write(source.join("source.rs"), "before\n").unwrap();
-        let source_sha256 = crate::execute::host_tree_sha256_hex(&source).unwrap();
+        let source_sha256 = once_host_tree::host_tree_sha256_hex(&source).unwrap();
         std::fs::write(source.join("source.rs"), "after\n").unwrap();
         let action = Action::MaterializeHostTree {
             source,
