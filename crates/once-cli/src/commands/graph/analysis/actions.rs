@@ -15,7 +15,7 @@ use once_core::{
     resolve_execution_argv, resolve_execution_env, validate_action_contract_with_options,
     workspace_mise_command, workspace_prepared_tool_env, workspace_tool_env_with_executables,
     Action, ActionContractOptions, ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode,
-    EvidenceCacheState, EvidenceSubject, FilesystemOperation, InputDigestBuilder,
+    EvidenceCacheState, EvidenceRecord, EvidenceSubject, FilesystemOperation, InputDigestBuilder,
     OutputSymlinkMode, PreparePathMode, ResourcePool, ResourceRequest, SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::{
@@ -27,6 +27,7 @@ use once_frontend::GraphTarget;
 use serde::Serialize;
 use tokio::process::Command;
 
+use super::source_digest_cache::SourceDigestCache;
 use super::{AvailableInput, BuildOutcome};
 
 const FAILURE_OUTPUT_LIMIT: usize = 16 * 1024;
@@ -41,6 +42,7 @@ struct DeclaredActionRun<'a> {
     declared: DeclaredAction,
     input_action_digests: &'a [(String, Digest)],
     available_inputs: &'a BTreeMap<String, AvailableInput>,
+    source_digest_cache: Option<&'a SourceDigestCache>,
     prior_cached_results: &'a [ActionResult],
     record_success_evidence: bool,
     sandbox: SandboxMode,
@@ -52,11 +54,115 @@ struct DeclaredActionOutcome {
     input_digest: Option<Digest>,
     cache_state: EvidenceCacheState,
     result: ActionResult,
+    evidence_record: Option<EvidenceRecord>,
+}
+
+struct DeclaredActionsState {
+    action_digests: Vec<Digest>,
+    input_digests: Vec<Digest>,
+    available_inputs: BTreeMap<String, AvailableInput>,
+    aggregate_cache_state: Option<EvidenceCacheState>,
+    outputs: Vec<String>,
+    result: ActionResult,
+    cached_results: Vec<ActionResult>,
+    evidence_records: Vec<EvidenceRecord>,
+}
+
+impl DeclaredActionsState {
+    fn new(available_inputs: &BTreeMap<String, AvailableInput>) -> Self {
+        Self {
+            action_digests: Vec::new(),
+            input_digests: Vec::new(),
+            available_inputs: available_inputs.clone(),
+            aggregate_cache_state: None,
+            outputs: Vec::new(),
+            result: ActionResult {
+                exit_code: 0,
+                stdout: None,
+                stderr: None,
+                outputs: BTreeMap::new(),
+            },
+            cached_results: Vec::new(),
+            evidence_records: Vec::new(),
+        }
+    }
+
+    fn input_action_digests(
+        &self,
+        declared: &DeclaredAction,
+        dependency_digests: &[(String, Digest)],
+    ) -> Vec<(String, Digest)> {
+        let mut input_digests = dependency_digests.to_vec();
+        if declared.depends_on_prior_actions {
+            input_digests.extend(
+                self.action_digests
+                    .iter()
+                    .enumerate()
+                    .map(|(index, digest)| (format!("same-target:{index}"), *digest)),
+            );
+        }
+        input_digests
+    }
+
+    fn record(&mut self, outcome: DeclaredActionOutcome, streams: bool) {
+        self.action_digests.push(outcome.digest);
+        self.available_inputs
+            .extend(outcome.result.outputs.iter().map(|(path, digest)| {
+                (
+                    path.clone(),
+                    AvailableInput {
+                        blob_digest: *digest,
+                        producer_action_digest: outcome.digest,
+                        same_target: true,
+                        materialized: outcome.cache_state != EvidenceCacheState::Hit,
+                    },
+                )
+            }));
+        self.input_digests.extend(outcome.input_digest);
+        self.aggregate_cache_state = Some(
+            self.aggregate_cache_state
+                .map_or(outcome.cache_state, |current| {
+                    aggregate_declared_action_cache_state(current, outcome.cache_state)
+                }),
+        );
+        if streams {
+            self.result.stdout = outcome.result.stdout;
+            self.result.stderr = outcome.result.stderr;
+        }
+        self.result.outputs.extend(
+            outcome
+                .result
+                .outputs
+                .iter()
+                .map(|(path, digest)| (path.clone(), *digest)),
+        );
+        track_cached_result(&mut self.cached_results, &outcome);
+        self.evidence_records.extend(outcome.evidence_record);
+    }
+
+    fn finish(mut self, target_id: &str, provider: serde_json::Value) -> BuildOutcome {
+        deduplicate_outputs(&mut self.outputs);
+        let cache_state = self
+            .aggregate_cache_state
+            .unwrap_or(EvidenceCacheState::Miss);
+        BuildOutcome {
+            provider: Arc::new(provider),
+            action_digest: compose_target_action_digest(target_id, &self.action_digests),
+            input_digest: compose_target_input_digest(&self.input_digests),
+            available_inputs: self.available_inputs,
+            outputs: self.outputs,
+            cache_tag: cache_state.as_str(),
+            cache_state,
+            result: self.result,
+            cached_results: self.cached_results,
+        }
+    }
 }
 
 struct DeclaredActionContext<'a> {
     workspace: &'a Path,
     cache: &'a CacheProvider,
+    source_digest_cache: Option<&'a SourceDigestCache>,
     available_inputs: &'a BTreeMap<String, AvailableInput>,
     prior_cached_results: &'a [ActionResult],
     target_id: &'a str,
@@ -253,6 +359,7 @@ pub(super) fn run_declared_actions<'a>(
     dep_action_digests: &'a [(String, Digest)],
     dependency_inputs: &'a BTreeMap<String, AvailableInput>,
     tool_paths: &'a BTreeMap<String, String>,
+    source_digest_cache: Option<&'a SourceDigestCache>,
     sandbox: SandboxMode,
     resources: &'a Arc<ResourcePool>,
 ) -> Pin<Box<dyn Future<Output = Result<BuildOutcome>> + Send + 'a>> {
@@ -269,32 +376,15 @@ pub(super) fn run_declared_actions<'a>(
             dep_action_digests = dep_action_digests.len(),
             "running declared graph actions"
         );
-        let mut action_digests = Vec::new();
-        let mut input_digests = Vec::new();
-        let mut available_inputs = dependency_inputs.clone();
-        let mut aggregate_cache_state = None;
-        let mut all_outputs = Vec::new();
-        let mut aggregate_result = empty_action_result();
-        let mut cached_results = Vec::new();
+        let mut state = DeclaredActionsState::new(dependency_inputs);
         // A single-action target is fully represented by the caller's
         // capability-level record. Multi-action targets need per-action
         // success evidence so individual streams and outputs stay visible.
         let record_success_evidence = actions.len() > 1;
 
         for (index, declared) in actions.into_iter().enumerate() {
-            all_outputs.extend(declared.outputs.iter().cloned());
-            let mut input_action_digests = dep_action_digests.to_vec();
-            if declared.depends_on_prior_actions {
-                input_action_digests.extend(
-                    action_digests
-                        .iter()
-                        .enumerate()
-                        .map(|(prior_index, digest)| {
-                            (format!("same-target:{prior_index}"), *digest)
-                        }),
-                );
-            }
-
+            state.outputs.extend(declared.outputs.iter().cloned());
+            let input_action_digests = state.input_action_digests(&declared, dep_action_digests);
             let outcome = Box::pin(run_declared_action(DeclaredActionRun {
                 workspace,
                 cache,
@@ -304,70 +394,28 @@ pub(super) fn run_declared_actions<'a>(
                 index,
                 declared,
                 input_action_digests: &input_action_digests,
-                available_inputs: &available_inputs,
-                prior_cached_results: &cached_results,
+                available_inputs: &state.available_inputs,
+                source_digest_cache,
+                prior_cached_results: &state.cached_results,
                 record_success_evidence,
                 sandbox,
                 resources,
             }))
-            .await?;
-            action_digests.push(outcome.digest);
-            available_inputs.extend(outcome.result.outputs.iter().map(|(path, digest)| {
-                (
-                    path.clone(),
-                    AvailableInput {
-                        blob_digest: *digest,
-                        producer_action_digest: outcome.digest,
-                        same_target: true,
-                        materialized: outcome.cache_state != EvidenceCacheState::Hit,
-                    },
-                )
-            }));
-            if let Some(input_digest) = outcome.input_digest {
-                input_digests.push(input_digest);
-            }
-            aggregate_cache_state = Some(match aggregate_cache_state {
-                Some(current) => {
-                    aggregate_declared_action_cache_state(current, outcome.cache_state)
+            .await;
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    crate::commands::evidence::append_records(workspace, &state.evidence_records)
+                        .await;
+                    return Err(error);
                 }
-                None => outcome.cache_state,
-            });
-            if !record_success_evidence {
-                aggregate_result.stdout = outcome.result.stdout;
-                aggregate_result.stderr = outcome.result.stderr;
-            }
-            aggregate_result.outputs.extend(
-                outcome
-                    .result
-                    .outputs
-                    .iter()
-                    .map(|(path, digest)| (path.clone(), *digest)),
-            );
-            track_cached_result(&mut cached_results, &outcome);
+            };
+            state.record(outcome, !record_success_evidence);
         }
 
-        deduplicate_outputs(&mut all_outputs);
-        let cache_state = aggregate_cache_state.unwrap_or(EvidenceCacheState::Miss);
-        Ok(BuildOutcome {
-            provider,
-            action_digest: compose_target_action_digest(&target.label.id, &action_digests),
-            input_digest: compose_target_input_digest(&input_digests),
-            outputs: all_outputs,
-            cache_tag: cache_state.as_str(),
-            cache_state,
-            result: aggregate_result,
-            cached_results,
-        })
+        crate::commands::evidence::append_records(workspace, &state.evidence_records).await;
+        Ok(state.finish(&target.label.id, provider))
     })
-}
-
-fn empty_action_result() -> ActionResult {
-    ActionResult {
-        exit_code: 0,
-        stdout: None,
-        stderr: None,
-        outputs: BTreeMap::new(),
-    }
 }
 
 fn track_cached_result(cached_results: &mut Vec<ActionResult>, outcome: &DeclaredActionOutcome) {
@@ -556,6 +604,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         declared,
         input_action_digests,
         available_inputs,
+        source_digest_cache,
         prior_cached_results,
         record_success_evidence,
         sandbox,
@@ -584,12 +633,14 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         module_source_digest,
         input_action_digests,
         available_inputs,
+        source_digest_cache,
         sandbox,
     )
     .with_context(|| format!("building action {index} for {target_id} ({identifier_for_error})"))?;
     let context = DeclaredActionContext {
         workspace,
         cache,
+        source_digest_cache,
         available_inputs,
         prior_cached_results,
         target_id,
@@ -610,8 +661,8 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
             .await
             .with_context(|| {
                 format!(
-                    "materializing inputs for action {index} for {target_id} ({identifier_for_error})"
-                )
+                "materializing inputs for action {index} for {target_id} ({identifier_for_error})"
+            )
             })?;
         prepare_declared_command_paths(workspace, &declared)
             .await
@@ -660,34 +711,7 @@ async fn run_cacheable_declared_action(
     action: Action,
     declared: &DeclaredAction,
 ) -> Result<DeclaredActionOutcome> {
-    // clean_paths and create_dirs model the command's own filesystem
-    // setup, so they must only run when the command actually executes.
-    // A cache hit does not run command setup. Removing a clean_paths entry on
-    // a hit could delete an unrelated path with no command left to recreate it.
-    let cached = context
-        .cache
-        .get_action_result(&action.digest())
-        .await
-        .with_context(|| {
-            format!(
-                "probing cache for action {} for {} ({})",
-                context.index, context.target_id, context.identifier
-            )
-        })?;
-    let action_digest = action.digest();
-    let outcome = if let Some(result) = cached {
-        if action_result_blobs_present(&result, context.cache).await? {
-            once_core::Outcome {
-                action: action_digest,
-                result,
-                cache: once_core::CacheState::Hit,
-            }
-        } else {
-            execute_declared_cache_miss(&context, &action, declared).await?
-        }
-    } else {
-        execute_declared_cache_miss(&context, &action, declared).await?
-    };
+    let outcome = resolve_cacheable_declared_action(&context, &action, declared).await?;
     let exit_code = outcome.result.exit_code;
     if exit_code != 0 {
         record_declared_action_evidence(
@@ -725,36 +749,93 @@ async fn run_cacheable_declared_action(
         action_digest = %outcome.action,
         "completed cacheable declared graph action"
     );
-    if context.record_success_evidence {
-        record_declared_action_evidence(
-            context.workspace,
-            context.target_id,
-            context.capability,
-            &action,
-            outcome.action,
-            cache_state,
-            &outcome.result,
-        )
-        .await;
-    }
+    let evidence_record = context
+        .record_success_evidence
+        .then(|| {
+            declared_action_evidence_record(
+                context.target_id,
+                context.capability,
+                &action,
+                outcome.action,
+                cache_state,
+                &outcome.result,
+            )
+        })
+        .flatten();
     Ok(DeclaredActionOutcome {
         digest: outcome.action,
         input_digest: action.input_digest(),
         cache_state,
         result: outcome.result,
+        evidence_record,
     })
+}
+
+async fn resolve_cacheable_declared_action(
+    context: &DeclaredActionContext<'_>,
+    action: &Action,
+    declared: &DeclaredAction,
+) -> Result<once_core::Outcome> {
+    // clean_paths and create_dirs model the command's own filesystem
+    // setup, so they must only run when the command actually executes.
+    // A cache hit does not run command setup. Removing a clean_paths entry on
+    // a hit could delete an unrelated path with no command left to recreate it.
+    let cached = context
+        .cache
+        .get_action_result(&action.digest())
+        .await
+        .with_context(|| {
+            format!(
+                "probing cache for action {} for {} ({})",
+                context.index, context.target_id, context.identifier
+            )
+        })?;
+    let action_digest = action.digest();
+    let outcome = if let Some(result) = cached {
+        if action_result_blobs_present(
+            &result,
+            context.workspace,
+            context.cache,
+            context.source_digest_cache,
+        )
+        .await?
+        {
+            once_core::Outcome {
+                action: action_digest,
+                result,
+                cache: once_core::CacheState::Hit,
+            }
+        } else {
+            execute_declared_cache_miss(context, action, declared).await?
+        }
+    } else {
+        execute_declared_cache_miss(context, action, declared).await?
+    };
+    if outcome.cache == once_core::CacheState::Miss {
+        if let Some(cache) = context.source_digest_cache {
+            cache.record_outputs(&outcome.result, context.workspace);
+        }
+    }
+    Ok(outcome)
 }
 
 async fn action_result_blobs_present(
     result: &ActionResult,
+    workspace: &Path,
     cache: &CacheProvider,
+    source_digest_cache: Option<&SourceDigestCache>,
 ) -> once_cas::Result<bool> {
-    for digest in result
-        .stdout
-        .iter()
-        .chain(result.stderr.iter())
-        .chain(result.outputs.values())
-    {
+    for digest in result.stdout.iter().chain(result.stderr.iter()) {
+        if !cache.has_blob(digest).await? {
+            return Ok(false);
+        }
+    }
+    for (relative, digest) in &result.outputs {
+        if source_digest_cache
+            .is_some_and(|digests| digests.output_matches(workspace, relative, *digest))
+        {
+            continue;
+        }
         if !cache.has_blob(digest).await? {
             return Ok(false);
         }
@@ -937,23 +1018,25 @@ async fn run_uncacheable_declared_action(
         action_digest = %action_digest,
         "completed uncached declared graph action"
     );
-    if context.record_success_evidence {
-        record_declared_action_evidence(
-            context.workspace,
-            context.target_id,
-            context.capability,
-            &action,
-            action_digest,
-            EvidenceCacheState::Bypass,
-            &result,
-        )
-        .await;
-    }
+    let evidence_record = context
+        .record_success_evidence
+        .then(|| {
+            declared_action_evidence_record(
+                context.target_id,
+                context.capability,
+                &action,
+                action_digest,
+                EvidenceCacheState::Bypass,
+                &result,
+            )
+        })
+        .flatten();
     Ok(DeclaredActionOutcome {
         digest: action_digest,
         input_digest: action.input_digest(),
         cache_state: EvidenceCacheState::Bypass,
         result,
+        evidence_record,
     })
 }
 
@@ -966,15 +1049,39 @@ async fn record_declared_action_evidence(
     cache: EvidenceCacheState,
     result: &ActionResult,
 ) {
-    crate::commands::evidence::record_action_result(
-        workspace,
+    if let Some(record) =
+        declared_action_evidence_record(target_id, capability, action, action_digest, cache, result)
+    {
+        crate::commands::evidence::append_records(workspace, &[record]).await;
+    }
+}
+
+fn declared_action_evidence_record(
+    target_id: &str,
+    capability: &str,
+    action: &Action,
+    action_digest: Digest,
+    cache: EvidenceCacheState,
+    result: &ActionResult,
+) -> Option<EvidenceRecord> {
+    match EvidenceRecord::from_action_result(
         EvidenceSubject::target(target_id, capability),
         action_digest,
         action.input_digest(),
         cache,
         result,
-    )
-    .await;
+    ) {
+        Ok(record) => Some(record),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                target = target_id,
+                capability,
+                "failed to construct evidence record"
+            );
+            None
+        }
+    }
 }
 
 async fn declared_action_failure_message(failure: DeclaredActionFailure<'_>) -> String {
@@ -1407,6 +1514,7 @@ fn declared_to_action(
         module_source_digest,
         dep_action_digests,
         &BTreeMap::new(),
+        None,
         sandbox_override,
     )
 }
@@ -1417,6 +1525,7 @@ fn declared_to_action_with_inputs(
     module_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
     available_inputs: &BTreeMap<String, AvailableInput>,
+    source_digest_cache: Option<&SourceDigestCache>,
     sandbox_override: SandboxMode,
 ) -> Result<Action> {
     let env_keys = declared.env.keys().cloned().collect::<Vec<_>>();
@@ -1434,6 +1543,7 @@ fn declared_to_action_with_inputs(
         module_source_digest,
         dep_action_digests,
         available_inputs,
+        source_digest_cache,
     )?;
     let inputs = declared_action_inputs(declared)?;
     let outputs = declared
@@ -1741,6 +1851,7 @@ fn compose_input_digest(
         module_source_digest,
         dep_action_digests,
         &BTreeMap::new(),
+        None,
     )
 }
 
@@ -1750,6 +1861,7 @@ fn compose_input_digest_with_available(
     module_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
     available_inputs: &BTreeMap<String, AvailableInput>,
+    source_digest_cache: Option<&SourceDigestCache>,
 ) -> Result<Digest> {
     let mut builder = InputDigestBuilder::new(b"once.declared_action.input.v2\0");
     builder.push_keyed(b"rules", &module_source_digest);
@@ -1809,9 +1921,12 @@ fn compose_input_digest_with_available(
             };
             builder.push_keyed(input.as_bytes(), digest);
         } else {
-            builder
-                .push_source(workspace, input)
-                .with_context(|| format!("hashing declared input `{input}`"))?;
+            let digest = match source_digest_cache {
+                Some(cache) => cache.digest(workspace, input),
+                None => once_core::digest_source_path(workspace, input),
+            }
+            .with_context(|| format!("hashing declared input `{input}`"))?;
+            builder.push_keyed(input.as_bytes(), &digest);
         }
     }
 
@@ -2606,6 +2721,7 @@ mod tests {
             &[],
             &BTreeMap::new(),
             &BTreeMap::new(),
+            None,
             SandboxMode::default(),
             test_resources(),
         )
@@ -2701,9 +2817,10 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn cache_hit_skips_command_setup_and_input_materialization() {
+    async fn cache_hit_skips_command_setup_and_defers_output_materialization() {
         let workspace = tempfile::tempdir().unwrap();
         let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let source_digest_cache = SourceDigestCache::open(workspace.path());
         let dependency_path = ".once/out/dependency/input.txt";
         let dependency_blob = cache.put_blob(b"dependency").await.unwrap();
         let available_inputs = BTreeMap::from([(
@@ -2729,6 +2846,7 @@ mod tests {
             &[],
             &available_inputs,
             &BTreeMap::new(),
+            Some(&source_digest_cache),
             SandboxMode::default(),
             test_resources(),
         )
@@ -2736,6 +2854,15 @@ mod tests {
         .unwrap();
         assert_eq!(first.cache_tag, "miss");
         assert!(first.cached_results.is_empty());
+        assert_eq!(
+            first.available_inputs[dependency_path].blob_digest,
+            dependency_blob
+        );
+        assert!(!first.available_inputs[dependency_path].same_target);
+        assert!(
+            first.available_inputs[".once/out/out.txt"].same_target,
+            "the target's own output stays marked as same-target until a dependent consumes it"
+        );
         let dependency = workspace.path().join(dependency_path);
         assert_eq!(std::fs::read(&dependency).unwrap(), b"dependency");
         std::fs::remove_file(&dependency).unwrap();
@@ -2745,6 +2872,8 @@ mod tests {
         // cache hit would not restore it.
         let side = workspace.path().join(".once/out/side.txt");
         std::fs::write(&side, b"precious").unwrap();
+        let output = workspace.path().join(".once/out/out.txt");
+        std::fs::write(&output, b"stale").unwrap();
 
         // Second run hits the cache. The command never executes, so its
         // clean_paths must not delete the untracked file.
@@ -2758,6 +2887,7 @@ mod tests {
             &[],
             &available_inputs,
             &BTreeMap::new(),
+            Some(&source_digest_cache),
             SandboxMode::default(),
             test_resources(),
         )
@@ -2774,7 +2904,16 @@ mod tests {
             [".once/out/out.txt"]
         );
         assert_eq!(std::fs::read(&side).unwrap(), b"precious");
+        assert_eq!(std::fs::read(&output).unwrap(), b"stale");
         assert!(!dependency.exists());
+
+        for result in &second.cached_results {
+            source_digest_cache
+                .materialize_outputs(result, workspace.path(), &cache)
+                .await
+                .unwrap();
+        }
+        assert_eq!(std::fs::read(&output).unwrap(), b"ok");
     }
 
     #[cfg(unix)]
@@ -2812,6 +2951,7 @@ mod tests {
             &[],
             &available_inputs,
             &BTreeMap::new(),
+            None,
             SandboxMode::default(),
             test_resources(),
         )
@@ -2863,6 +3003,7 @@ mod tests {
             &[],
             &available_inputs,
             &BTreeMap::new(),
+            None,
             SandboxMode::default(),
             test_resources(),
         )
@@ -2898,6 +3039,7 @@ mod tests {
             &[],
             &BTreeMap::new(),
             &BTreeMap::new(),
+            None,
             SandboxMode::default(),
             test_resources(),
         )
@@ -2918,6 +3060,7 @@ mod tests {
             &[],
             &BTreeMap::new(),
             &BTreeMap::new(),
+            None,
             SandboxMode::default(),
             test_resources(),
         )
@@ -2939,6 +3082,7 @@ mod tests {
             &[],
             &BTreeMap::new(),
             &BTreeMap::new(),
+            None,
             SandboxMode::default(),
             test_resources(),
         )
@@ -2960,9 +3104,43 @@ mod tests {
             outputs: BTreeMap::from([("out.txt".to_string(), present)]),
         };
 
-        assert!(action_result_blobs_present(&result, &cache).await.unwrap());
+        assert!(
+            action_result_blobs_present(&result, workspace.path(), &cache, None)
+                .await
+                .unwrap()
+        );
         result.stderr = Some(missing);
-        assert!(!action_result_blobs_present(&result, &cache).await.unwrap());
+        assert!(
+            !action_result_blobs_present(&result, workspace.path(), &cache, None)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn matching_indexed_output_does_not_require_cached_blob() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cache")));
+        let output = workspace.path().join("out.txt");
+        std::fs::write(&output, b"present").unwrap();
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::from([(
+                "out.txt".to_string(),
+                Digest::of_bytes(b"absent from cache"),
+            )]),
+        };
+        let digests = SourceDigestCache::open(workspace.path());
+        digests.record_outputs(&result, workspace.path());
+
+        assert!(
+            action_result_blobs_present(&result, workspace.path(), &cache, Some(&digests))
+                .await
+                .unwrap()
+        );
     }
 
     #[cfg(unix)]
@@ -3027,6 +3205,7 @@ mod tests {
             &[],
             &BTreeMap::new(),
             &BTreeMap::new(),
+            None,
             SandboxMode::default(),
             test_resources(),
         )
@@ -3145,6 +3324,7 @@ mod tests {
             &[],
             &BTreeMap::new(),
             &BTreeMap::new(),
+            None,
             SandboxMode::default(),
             test_resources(),
         )
@@ -3162,6 +3342,7 @@ mod tests {
             &[],
             &BTreeMap::new(),
             &BTreeMap::new(),
+            None,
             SandboxMode::default(),
             test_resources(),
         )
@@ -3413,6 +3594,7 @@ mod tests {
             module_digest(),
             &[],
             &available(b"false"),
+            None,
         )
         .unwrap();
         let second = compose_input_digest_with_available(
@@ -3421,6 +3603,7 @@ mod tests {
             module_digest(),
             &[],
             &available(b"true"),
+            None,
         )
         .unwrap();
 
@@ -3470,6 +3653,7 @@ mod tests {
             module_digest(),
             &[],
             &available(b"first remote blob"),
+            None,
         )
         .unwrap();
         let second = compose_input_digest_with_available(
@@ -3478,6 +3662,7 @@ mod tests {
             module_digest(),
             &[],
             &available(b"second remote blob"),
+            None,
         )
         .unwrap();
 

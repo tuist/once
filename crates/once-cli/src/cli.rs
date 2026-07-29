@@ -473,6 +473,9 @@ pub enum Cmd {
         #[arg(long, value_name = "DIR")]
         out: PathBuf,
     },
+
+    #[command(name = "__change-tracker", hide = true)]
+    ChangeTracker,
 }
 
 impl Cli {
@@ -535,6 +538,7 @@ impl Cmd {
             }
             Self::Mcp { .. } => vec!["mcp"],
             Self::Reference { .. } => vec!["reference"],
+            Self::ChangeTracker => vec!["__change-tracker"],
         }
     }
 }

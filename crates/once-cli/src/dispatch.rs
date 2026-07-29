@@ -201,6 +201,7 @@ async fn run_command(
             .await
         }
         Cmd::Reference { out } => crate::reference::generate(&out),
+        Cmd::ChangeTracker => commands::change_tracker::serve(workspace, xdg).await,
     }
 }
 

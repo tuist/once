@@ -101,6 +101,7 @@ fn host_env_reads_active_analysis_environment_only() {
 
     let tmp = TempDir::new().unwrap();
     let host_cache = HostCache::with_env(BTreeMap::from([(name.to_string(), "present".into())]));
+    let observations = host_cache.clone();
     let store = AnalysisStore::with_host_cache(
         tmp.path().to_path_buf(),
         "apps/android/App".to_string(),
@@ -109,6 +110,10 @@ fn host_env_reads_active_analysis_environment_only() {
     );
     let (_, value) = with_active_store(store, || eval_string(&source).unwrap());
     assert_eq!(value, "present");
+    assert_eq!(
+        observations.observed_environment(),
+        BTreeMap::from([(name.to_string(), Some("present".to_string()))])
+    );
 }
 
 #[test]

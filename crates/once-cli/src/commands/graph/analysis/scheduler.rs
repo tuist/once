@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -10,6 +11,7 @@ use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 
+use super::source_digest_cache::SourceDigestCache;
 use super::{build_one, materialize_cached_outputs, AvailableInput, BuildOutcome};
 
 pub(super) struct BuildScheduler<'a> {
@@ -19,6 +21,7 @@ pub(super) struct BuildScheduler<'a> {
     targets: &'a HashMap<String, Arc<GraphTarget>>,
     analyzer: &'a AnalysisEngine,
     tool_paths: &'a Arc<BTreeMap<String, String>>,
+    source_digest_cache: &'a SourceDigestCache,
     module_source_digest: Digest,
     reachable: &'a HashSet<String>,
     retained: &'a HashSet<String>,
@@ -42,6 +45,7 @@ impl<'a> BuildScheduler<'a> {
         targets: &'a HashMap<String, Arc<GraphTarget>>,
         analyzer: &'a AnalysisEngine,
         tool_paths: &'a Arc<BTreeMap<String, String>>,
+        source_digest_cache: &'a SourceDigestCache,
         reachable: &'a HashSet<String>,
         retained: &'a HashSet<String>,
         sandbox: SandboxMode,
@@ -56,6 +60,7 @@ impl<'a> BuildScheduler<'a> {
             targets,
             analyzer,
             tool_paths,
+            source_digest_cache,
             module_source_digest,
             reachable,
             retained,
@@ -83,9 +88,14 @@ impl<'a> BuildScheduler<'a> {
                 .await
                 .context("build task set ended unexpectedly")?;
             let (target_id, outcome) = joined.context("joining graph build task")??;
-            materialize_cached_outputs(&outcome, self.workspace, self.cache)
-                .await
-                .with_context(|| format!("materializing outputs for {target_id}"))?;
+            materialize_cached_outputs(
+                &outcome,
+                self.workspace,
+                self.cache,
+                Some(self.source_digest_cache),
+            )
+            .await
+            .with_context(|| format!("materializing outputs for {target_id}"))?;
             tracing::trace!(
                 target = %target_id,
                 cache = outcome.cache_tag,
@@ -107,7 +117,7 @@ impl<'a> BuildScheduler<'a> {
         running: &mut JoinSet<Result<(String, BuildOutcome)>>,
     ) -> Result<()> {
         while running.len() < self.max_in_flight {
-            let Some(target_id) = state.ready.pop_front() else {
+            let Some((critical_depth, Reverse(target_id))) = state.ready.pop() else {
                 break;
             };
             let target = Arc::clone(
@@ -119,6 +129,7 @@ impl<'a> BuildScheduler<'a> {
             tracing::trace!(
                 target = %target_id,
                 deps = inputs.providers.len(),
+                critical_depth,
                 running_after_spawn = running.len() + 1,
                 "spawning graph target build task"
             );
@@ -134,6 +145,7 @@ impl<'a> BuildScheduler<'a> {
                 inputs.action_digests,
                 inputs.available_inputs,
                 Arc::clone(self.tool_paths),
+                self.source_digest_cache.clone(),
                 self.sandbox,
                 Arc::clone(self.resources),
             ));
@@ -143,8 +155,8 @@ impl<'a> BuildScheduler<'a> {
 }
 
 struct DependencyInputs {
-    providers: Vec<JsonValue>,
-    providers_by_role: BTreeMap<String, Vec<JsonValue>>,
+    providers: Vec<Arc<JsonValue>>,
+    providers_by_role: BTreeMap<String, Vec<Arc<JsonValue>>>,
     action_digests: Vec<(String, Digest)>,
     available_inputs: BTreeMap<String, AvailableInput>,
 }
@@ -152,8 +164,9 @@ struct DependencyInputs {
 struct BuildState {
     remaining_deps: HashMap<String, usize>,
     dependents: HashMap<String, Vec<String>>,
+    critical_depths: HashMap<String, usize>,
     remaining_readers: HashMap<String, usize>,
-    ready: VecDeque<String>,
+    ready: BinaryHeap<(usize, Reverse<String>)>,
     outcomes: HashMap<String, BuildOutcome>,
     completed: usize,
 }
@@ -192,14 +205,22 @@ impl BuildState {
             *remaining_readers.entry(target_id.clone()).or_default() += 1;
         }
 
+        let critical_depths = critical_depths(reachable, &dependents)?;
         let ready = remaining_deps
             .iter()
-            .filter_map(|(target_id, count)| (*count == 0).then_some(target_id.clone()))
+            .filter(|(_, count)| **count == 0)
+            .map(|(target_id, _)| {
+                (
+                    critical_depths.get(target_id).copied().unwrap_or(1),
+                    Reverse(target_id.clone()),
+                )
+            })
             .collect();
 
         Ok(Self {
             remaining_deps,
             dependents,
+            critical_depths,
             remaining_readers,
             ready,
             outcomes: HashMap::new(),
@@ -219,7 +240,10 @@ impl BuildState {
                     .with_context(|| format!("missing dependency count for `{next_id}`"))?;
                 *remaining -= 1;
                 if *remaining == 0 {
-                    self.ready.push_back(next_id.clone());
+                    self.ready.push((
+                        self.critical_depths.get(next_id).copied().unwrap_or(1),
+                        Reverse(next_id.clone()),
+                    ));
                 }
             }
         }
@@ -241,37 +265,23 @@ impl BuildState {
             .iter()
             .filter(|dep_id| reachable.contains(*dep_id))
         {
-            let (provider, action_digest, outputs) = self.read_dependency(dep_id)?;
+            let (provider, action_digest, inputs) = self.read_dependency(dep_id)?;
             providers.push(provider);
             action_digests.push((dep_id.clone(), action_digest));
-            available_inputs.extend(outputs.into_iter().map(|(path, blob_digest)| {
-                (
-                    path,
-                    AvailableInput {
-                        blob_digest,
-                        producer_action_digest: action_digest,
-                        same_target: false,
-                        materialized: true,
-                    },
-                )
+            available_inputs.extend(inputs.into_iter().map(|(path, mut input)| {
+                input.same_target = false;
+                (path, input)
             }));
         }
         for (role, dep_ids) in &target.dependency_edges {
             let mut role_providers = Vec::new();
             for dep_id in dep_ids.iter().filter(|dep_id| reachable.contains(*dep_id)) {
-                let (provider, action_digest, outputs) = self.read_dependency(dep_id)?;
+                let (provider, action_digest, inputs) = self.read_dependency(dep_id)?;
                 role_providers.push(provider);
                 action_digests.push((dep_id.clone(), action_digest));
-                available_inputs.extend(outputs.into_iter().map(|(path, blob_digest)| {
-                    (
-                        path,
-                        AvailableInput {
-                            blob_digest,
-                            producer_action_digest: action_digest,
-                            same_target: false,
-                            materialized: true,
-                        },
-                    )
+                available_inputs.extend(inputs.into_iter().map(|(path, mut input)| {
+                    input.same_target = false;
+                    (path, input)
                 }));
             }
             providers_by_role.insert(role.clone(), role_providers);
@@ -287,7 +297,7 @@ impl BuildState {
     fn read_dependency(
         &mut self,
         dep_id: &str,
-    ) -> Result<(JsonValue, Digest, BTreeMap<String, Digest>)> {
+    ) -> Result<(Arc<JsonValue>, Digest, BTreeMap<String, AvailableInput>)> {
         let remaining = self
             .remaining_readers
             .get_mut(dep_id)
@@ -304,7 +314,7 @@ impl BuildState {
             Ok((
                 outcome.provider,
                 outcome.action_digest,
-                outcome.result.outputs,
+                outcome.available_inputs,
             ))
         } else {
             let outcome = self
@@ -312,10 +322,87 @@ impl BuildState {
                 .get(dep_id)
                 .with_context(|| format!("missing build outcome for dependency `{dep_id}`"))?;
             Ok((
-                outcome.provider.clone(),
+                Arc::clone(&outcome.provider),
                 outcome.action_digest,
-                outcome.result.outputs.clone(),
+                outcome.available_inputs.clone(),
             ))
         }
+    }
+}
+
+fn critical_depths(
+    reachable: &HashSet<String>,
+    dependents: &HashMap<String, Vec<String>>,
+) -> Result<HashMap<String, usize>> {
+    let mut depths = HashMap::with_capacity(reachable.len());
+    let mut visiting = HashSet::new();
+    for target_id in reachable {
+        critical_depth(target_id, reachable, dependents, &mut depths, &mut visiting)?;
+    }
+    Ok(depths)
+}
+
+fn critical_depth(
+    target_id: &str,
+    reachable: &HashSet<String>,
+    dependents: &HashMap<String, Vec<String>>,
+    depths: &mut HashMap<String, usize>,
+    visiting: &mut HashSet<String>,
+) -> Result<usize> {
+    if let Some(depth) = depths.get(target_id) {
+        return Ok(*depth);
+    }
+    if !visiting.insert(target_id.to_string()) {
+        anyhow::bail!("cycle detected while ranking graph target `{target_id}`");
+    }
+    let mut depth = 1;
+    if let Some(next_targets) = dependents.get(target_id) {
+        for next_id in next_targets
+            .iter()
+            .filter(|next_id| reachable.contains(*next_id))
+        {
+            depth = depth.max(
+                critical_depth(next_id, reachable, dependents, depths, visiting)?.saturating_add(1),
+            );
+        }
+    }
+    visiting.remove(target_id);
+    depths.insert(target_id.to_string(), depth);
+    Ok(depth)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn critical_depth_prioritizes_the_longest_remaining_chain() {
+        let reachable = ["root", "short", "long-a", "long-b"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let dependents = HashMap::from([
+            ("short".to_string(), vec!["root".to_string()]),
+            ("long-a".to_string(), vec!["long-b".to_string()]),
+            ("long-b".to_string(), vec!["root".to_string()]),
+        ]);
+
+        let depths = critical_depths(&reachable, &dependents).unwrap();
+
+        assert_eq!(depths["root"], 1);
+        assert_eq!(depths["short"], 2);
+        assert_eq!(depths["long-b"], 2);
+        assert_eq!(depths["long-a"], 3);
+    }
+
+    #[test]
+    fn critical_depth_rejects_cycles() {
+        let reachable = ["a", "b"].into_iter().map(str::to_string).collect();
+        let dependents = HashMap::from([
+            ("a".to_string(), vec!["b".to_string()]),
+            ("b".to_string(), vec!["a".to_string()]),
+        ]);
+
+        assert!(critical_depths(&reachable, &dependents).is_err());
     }
 }
