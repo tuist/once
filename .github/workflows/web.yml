@@ -94,7 +94,7 @@ jobs:
       - name: Test with Once
         run: target/debug/once test web/tests
         env:
-          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+          ONCE_CACHE_PROVIDER: local
 
   release:
     name: release
