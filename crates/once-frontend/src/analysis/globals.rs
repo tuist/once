@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value as JsonValue;
@@ -184,18 +184,16 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(String::new());
         }
+        observe_host_path(Path::new(path))?;
         file_sha256_hex(Path::new(path)).with_context(|| format!("hashing host file `{path}`"))
     }
 
     /// Return whether one host path currently exists as a file.
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "starlark_module native functions use Result-returning signatures"
-    )]
     fn host_file_exists(path: &str) -> anyhow::Result<bool> {
         if !analysis_active() {
             return Ok(false);
         }
+        observe_host_path(Path::new(path))?;
         Ok(Path::new(path).is_file())
     }
 
@@ -204,6 +202,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(String::new());
         }
+        observe_host_path(Path::new(path))?;
         let bytes = read_bounded_host_file(path)?;
         String::from_utf8(bytes).with_context(|| format!("host file `{path}` is not UTF-8 text"))
     }
@@ -213,6 +212,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(false);
         }
+        observe_host_path(Path::new(path))?;
         if needle.is_empty() {
             return Ok(true);
         }
@@ -226,10 +226,6 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// non-directory paths (and schema parsing) return an empty list.
     /// Names are bare file names, letting rules enumerate host toolchains
     /// (for example SDK version directories) without a host shell.
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "starlark_module native functions use Result-returning signatures"
-    )]
     fn host_read_dir<'v>(
         path: &str,
         eval: &mut Evaluator<'v, '_, '_>,
@@ -238,6 +234,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(heap.alloc(Vec::<String>::new()));
         }
+        observe_host_path(Path::new(path))?;
         let mut names = match std::fs::read_dir(path) {
             Ok(entries) => entries
                 .filter_map(std::result::Result::ok)
@@ -434,6 +431,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                 "materialize_host_file source is not a file: `{source}`"
             ));
         }
+        observe_host_path(source_path)?;
         let source_sha256 = file_sha256_hex(source_path)
             .with_context(|| format!("hashing host file `{source}`"))?;
         let action = DeclaredAction {
@@ -1265,6 +1263,14 @@ fn optional_string_field(dict: &DictRef<'_>, name: &str) -> anyhow::Result<Optio
         .transpose()
 }
 
+fn observe_host_path(path: &Path) -> Result<()> {
+    with_store(|store| {
+        let store = store.ok_or_else(|| anyhow!("host path observed outside analysis"))?;
+        store.host_cache.observe_path(path);
+        Ok(())
+    })
+}
+
 fn file_sha256_hex(path: &Path) -> Result<String> {
     use std::io::Read;
 
@@ -1370,9 +1376,10 @@ fn expand_globs_with_excludes(
             .any(|component| component == Component::ParentDir)
     });
     let walk_root = if walk_workspace {
-        workspace_root
+        workspace_root.to_path_buf()
     } else {
-        package_dir.as_path()
+        let narrowed = narrow_walk_root(&package_dir, &patterns);
+        narrowed.unwrap_or_else(|| package_dir.clone())
     };
     if !walk_root.exists() {
         return Ok(Vec::new());
@@ -1381,7 +1388,7 @@ fn expand_globs_with_excludes(
     let mut out = collect_glob_matches(
         workspace_root,
         package,
-        walk_root,
+        walk_root.as_path(),
         &patterns,
         &excludes,
         &canonical_workspace,
@@ -1404,6 +1411,62 @@ fn expand_globs_with_excludes(
         })
     });
     Ok(out)
+}
+
+/// Compute the deepest directory under `package_dir` that could contain
+/// files matching any of the compiled `patterns`. Returns `None` when a
+/// pattern starts with a wildcard or has no literal directory prefix,
+/// meaning the walk cannot be narrowed below `package_dir`.
+fn narrow_walk_root(package_dir: &Path, patterns: &[glob::Pattern]) -> Option<PathBuf> {
+    let mut common: Option<PathBuf> = None;
+    for pattern in patterns {
+        let raw = pattern.as_str();
+        let wildcard_pos = raw.find(['*', '?', '[']);
+        let literal = match wildcard_pos {
+            Some(pos) => &raw[..pos],
+            None => raw,
+        };
+        let dir_str = if literal.is_empty() {
+            return None;
+        } else if let Some(stripped) = literal.strip_suffix('/') {
+            stripped
+        } else {
+            match literal.rfind('/') {
+                Some(pos) => &literal[..pos],
+                None => return None,
+            }
+        };
+        if dir_str.is_empty() {
+            return None;
+        }
+        // An absolute literal prefix would make `join` discard `package_dir`
+        // and could collapse the common ancestor to the filesystem root,
+        // walking far more than the package. Fall back to the package walk.
+        if Path::new(dir_str).is_absolute() {
+            return None;
+        }
+        let candidate = package_dir.join(dir_str);
+        common = Some(match common {
+            None => candidate,
+            Some(existing) => common_ancestor(&existing, &candidate),
+        });
+        if common.as_ref().is_some_and(|c| c == package_dir) {
+            return None;
+        }
+    }
+    common.filter(|path| path != package_dir)
+}
+
+fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for (comp_a, comp_b) in a.components().zip(b.components()) {
+        if comp_a == comp_b {
+            result.push(comp_a.as_os_str());
+        } else {
+            break;
+        }
+    }
+    result
 }
 
 fn collect_glob_matches(
@@ -1668,4 +1731,58 @@ fn normalize_walk_name(name: &str) -> Result<std::ffi::OsString> {
         ));
     }
     Ok(std::ffi::OsString::from(name))
+}
+
+#[cfg(test)]
+mod narrow_walk_root_tests {
+    use super::narrow_walk_root;
+    use std::path::{Path, PathBuf};
+
+    fn compile(patterns: &[&str]) -> Vec<glob::Pattern> {
+        patterns
+            .iter()
+            .map(|pattern| glob::Pattern::new(pattern).expect("valid glob"))
+            .collect()
+    }
+
+    #[test]
+    fn narrows_to_literal_prefix() {
+        let package = Path::new("/ws");
+        let patterns = compile(&["codex-rs/tui/**/*.rs"]);
+        assert_eq!(
+            narrow_walk_root(package, &patterns),
+            Some(PathBuf::from("/ws/codex-rs/tui"))
+        );
+    }
+
+    #[test]
+    fn common_ancestor_across_patterns() {
+        let package = Path::new("/ws");
+        let patterns = compile(&["codex-rs/tui/**/*.rs", "codex-rs/core/**/*.rs"]);
+        assert_eq!(
+            narrow_walk_root(package, &patterns),
+            Some(PathBuf::from("/ws/codex-rs"))
+        );
+    }
+
+    #[test]
+    fn leading_wildcard_cannot_narrow() {
+        let package = Path::new("/ws");
+        assert_eq!(narrow_walk_root(package, &compile(&["**/*.rs"])), None);
+        assert_eq!(narrow_walk_root(package, &compile(&["*.rs"])), None);
+    }
+
+    #[test]
+    fn absolute_pattern_does_not_escape_package() {
+        // An absolute literal prefix must not make the walk root jump outside
+        // the package (previously `join` discarded the package and the common
+        // ancestor collapsed toward the filesystem root).
+        let package = Path::new("/ws/pkg");
+        let patterns = compile(&["/abs/src/*.rs", "src/**/*.rs"]);
+        assert_eq!(narrow_walk_root(package, &patterns), None);
+        assert_eq!(
+            narrow_walk_root(package, &compile(&["/abs/src/*.rs"])),
+            None
+        );
+    }
 }

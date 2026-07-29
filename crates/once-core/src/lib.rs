@@ -54,7 +54,7 @@ pub use evidence::{
 pub use execution_path::{
     resolve_execution_argv, resolve_execution_env, resolve_execution_value, EXECUTION_ROOT_MARKER,
 };
-pub use input_digest::InputDigestBuilder;
+pub use input_digest::{digest_source_path, InputDigestBuilder};
 pub use lint_results::{
     read_sarif_results, LintArtifacts, LintFinding, LintLocation, LintResults, LintSeverity,
     LintSummary, LINT_RESULTS_SCHEMA,

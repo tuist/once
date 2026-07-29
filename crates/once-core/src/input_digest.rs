@@ -15,6 +15,25 @@ use once_cas::Digest;
 use crate::directory_blob::digest_directory_blob;
 use crate::OutputSymlinkMode;
 
+pub fn digest_source_path<P: AsRef<Path>>(
+    workspace_root: P,
+    ws_rel: &str,
+) -> std::io::Result<Digest> {
+    let abs = workspace_root.as_ref().join(ws_rel);
+    let metadata = std::fs::symlink_metadata(&abs)?;
+    if metadata.file_type().is_symlink() {
+        let target = std::fs::read_link(&abs)?;
+        let mut bytes = b"once.symlink.input.v1\0".to_vec();
+        bytes.extend_from_slice(target.to_string_lossy().as_bytes());
+        Ok(Digest::of_bytes(&bytes))
+    } else if metadata.is_dir() {
+        digest_directory_blob(&abs, OutputSymlinkMode::Preserve)
+    } else {
+        let file = std::fs::File::open(&abs)?;
+        Digest::of_reader(std::io::BufReader::new(file))
+    }
+}
+
 #[derive(Debug)]
 /// Build an input digest piece by piece.
 ///
@@ -70,19 +89,7 @@ impl InputDigestBuilder {
         workspace_root: P,
         ws_rel: &str,
     ) -> std::io::Result<&mut Self> {
-        let abs = workspace_root.as_ref().join(ws_rel);
-        let metadata = std::fs::symlink_metadata(&abs)?;
-        let digest = if metadata.file_type().is_symlink() {
-            let target = std::fs::read_link(&abs)?;
-            let mut bytes = b"once.symlink.input.v1\0".to_vec();
-            bytes.extend_from_slice(target.to_string_lossy().as_bytes());
-            Digest::of_bytes(&bytes)
-        } else if metadata.is_dir() {
-            digest_directory_blob(&abs, OutputSymlinkMode::Preserve)?
-        } else {
-            let file = std::fs::File::open(&abs)?;
-            Digest::of_reader(std::io::BufReader::new(file))?
-        };
+        let digest = digest_source_path(workspace_root, ws_rel)?;
         Ok(self.push_keyed(ws_rel.as_bytes(), &digest))
     }
 

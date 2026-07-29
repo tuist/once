@@ -36,12 +36,19 @@ pub async fn record_action_result(
 }
 
 async fn append_record(workspace: &Path, record: &EvidenceRecord) {
+    append_records(workspace, std::slice::from_ref(record)).await;
+}
+
+pub async fn append_records(workspace: &Path, records: &[EvidenceRecord]) {
+    if records.is_empty() {
+        return;
+    }
     let store = EvidenceStore::open_workspace(workspace);
-    if let Err(err) = store.append(record).await {
+    if let Err(err) = store.append_many(records).await {
         tracing::warn!(
             error = %err,
             path = %store.path().display(),
-            evidence = %record.id,
+            evidence_records = records.len(),
             "failed to record evidence"
         );
     }

@@ -7,10 +7,12 @@
 
 mod action;
 mod analysis;
+mod build_receipt;
 mod contract;
 
 pub use contract::{validate_action_contracts, ActionContractValidation};
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -22,32 +24,45 @@ use once_core::{
 };
 use once_frontend::analysis::AnalysisOptions;
 use once_frontend::GraphTarget;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::{Format, Output};
 use crate::commands::util::cache_tag;
 use crate::render;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct CapabilityRunRecord {
     target: String,
     kind: String,
     capability: String,
-    status: &'static str,
+    status: String,
     action_digest: String,
-    cache: &'static str,
+    cache: String,
     output_groups: Vec<String>,
     required_outputs: Vec<String>,
     outputs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     test_results: Option<String>,
-    #[serde(skip)]
+    #[serde(skip, default)]
     input_digest: Option<Digest>,
-    #[serde(skip)]
+    #[serde(skip, default = "default_cache_state")]
     cache_state: EvidenceCacheState,
-    #[serde(skip)]
+    #[serde(skip, default = "default_action_result")]
     result: ActionResult,
+}
+
+fn default_cache_state() -> EvidenceCacheState {
+    EvidenceCacheState::Hit
+}
+
+fn default_action_result() -> ActionResult {
+    ActionResult {
+        exit_code: 0,
+        stdout: None,
+        stderr: None,
+        outputs: BTreeMap::new(),
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -64,12 +79,70 @@ pub async fn build(
     sandbox: SandboxMode,
     resource_limits: ResourceLimits,
 ) -> Result<ExitCode> {
+    let xdg = once_core::Xdg::from_env();
+    let stored_receipt = build_receipt::read(workspace, target_id, sandbox).await;
+    let prior_position = stored_receipt.as_ref().map(build_receipt::position);
+    let initial_snapshot =
+        crate::commands::change_tracker::snapshot(workspace, &xdg, &[], prior_position).await;
+    if let Some(record) = build_receipt::load(
+        workspace,
+        target_id,
+        sandbox,
+        initial_snapshot.as_ref(),
+        stored_receipt,
+    )
+    .await
+    {
+        write_record(output, &record).await?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let session = analysis::BuildSession::load_workspace(workspace, cache, sandbox)
         .await?
         .with_resource_limits(resource_limits);
     let target = session.target(target_id)?;
     let record = build_target(workspace, cache, target, &session, sandbox).await?;
     record_capability_run(workspace, &record).await;
+    // An uncacheable build (any declared action with `cacheable = false`, which
+    // several target kinds such as Dockerfile, Go, and Android use) must run on
+    // every invocation. Never persist a receipt for it, and drop any stale one,
+    // so the fast path can never skip its mandatory work.
+    if record.cache_state == EvidenceCacheState::Bypass {
+        build_receipt::clear(workspace, target_id, sandbox).await;
+        write_record(output, &record).await?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(final_snapshot) = crate::commands::change_tracker::snapshot(
+        workspace,
+        &xdg,
+        &record.outputs,
+        initial_snapshot.as_ref().map(|snapshot| &snapshot.position),
+    )
+    .await
+    {
+        if initial_snapshot.as_ref().is_some_and(|initial| {
+            initial.position.instance_id == final_snapshot.position.instance_id
+                && (initial.position.source_generation == final_snapshot.position.source_generation
+                    || session.source_changes_match(final_snapshot.source_changes.as_deref()))
+        }) {
+            let environment = session.observed_environment();
+            let host_paths = session.observed_host_paths();
+            let source_digests =
+                session.observed_source_digests(final_snapshot.source_changes.as_deref());
+            build_receipt::store(
+                workspace,
+                target_id,
+                sandbox,
+                &final_snapshot,
+                build_receipt::Observations {
+                    environment: &environment,
+                    host_paths: &host_paths,
+                    source_digests: &source_digests,
+                },
+                &record,
+            )
+            .await;
+        }
+    }
     write_record(output, &record).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -101,9 +174,9 @@ pub async fn lint(
         target: target.label.id.clone(),
         kind: target.kind.clone(),
         capability: capability.name.clone(),
-        status: "completed",
+        status: "completed".to_string(),
         action_digest: outcome.action_digest.to_string(),
-        cache: outcome.cache_tag,
+        cache: outcome.cache_tag.to_string(),
         output_groups: capability.output_groups.clone(),
         required_outputs: capability.requires_outputs.clone(),
         outputs: outcome.outputs,
@@ -303,9 +376,9 @@ pub async fn test_with_filters(
             target: target.label.id.clone(),
             kind: target.kind.clone(),
             capability: test_capability.name.clone(),
-            status: "completed",
+            status: "completed".to_string(),
             action_digest: action_digest.to_string(),
-            cache: cache_tag,
+            cache: cache_tag.to_string(),
             output_groups: test_capability.output_groups.clone(),
             required_outputs: test_capability.requires_outputs.clone(),
             outputs,
@@ -375,9 +448,9 @@ pub async fn run(
             target: target.label.id.clone(),
             kind: target.kind.clone(),
             capability: run_capability.name.clone(),
-            status: "completed",
+            status: "completed".to_string(),
             action_digest: action_digest.to_string(),
-            cache: cache_tag,
+            cache: cache_tag.to_string(),
             output_groups: run_capability.output_groups.clone(),
             required_outputs: run_capability.requires_outputs.clone(),
             outputs,
@@ -423,9 +496,9 @@ async fn build_target(
             target: target.label.id.clone(),
             kind: target.kind.clone(),
             capability: capability.name.clone(),
-            status: "completed",
+            status: "completed".to_string(),
             action_digest: action_digest.to_string(),
-            cache: cache_tag,
+            cache: cache_tag.to_string(),
             output_groups: capability.output_groups.clone(),
             required_outputs: capability.requires_outputs.clone(),
             outputs,
@@ -489,14 +562,14 @@ async fn run_target_capability(
             outcome.result.exit_code
         );
     }
-    let cache = cache_tag(outcome.cache);
+    let cache = cache_tag(outcome.cache).to_string();
     let cache_state = EvidenceCacheState::from(outcome.cache);
     let result = outcome.result;
     Ok(CapabilityRunRecord {
         target: target.label.id.clone(),
         kind: target.kind.clone(),
         capability: capability.name.clone(),
-        status: "completed",
+        status: "completed".to_string(),
         action_digest: outcome.action.to_string(),
         cache,
         output_groups: capability.output_groups.clone(),
@@ -714,9 +787,9 @@ mod tests {
             target: "apps/ios/App".to_string(),
             kind: "apple_application".to_string(),
             capability: "run".to_string(),
-            status: "completed",
+            status: "completed".to_string(),
             action_digest: "deadbeef".to_string(),
-            cache: "miss",
+            cache: "miss".to_string(),
             output_groups: vec!["default".to_string()],
             required_outputs: vec!["bundle".to_string()],
             outputs: vec![".once/out/apps/ios/App/run".to_string()],
@@ -740,9 +813,9 @@ mod tests {
             target: "apps/ios/App".to_string(),
             kind: "apple_application".to_string(),
             capability: "build".to_string(),
-            status: "completed",
+            status: "completed".to_string(),
             action_digest: "deadbeef".to_string(),
-            cache: "hit",
+            cache: "hit".to_string(),
             output_groups: Vec::new(),
             required_outputs: Vec::new(),
             outputs: Vec::new(),

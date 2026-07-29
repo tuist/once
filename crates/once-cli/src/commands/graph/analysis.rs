@@ -17,6 +17,7 @@
 
 mod actions;
 mod scheduler;
+mod source_digest_cache;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::future::Future;
@@ -34,6 +35,7 @@ use serde_json::Value as JsonValue;
 
 use self::actions::{run_declared_actions, validate_declared_actions, DeclaredActionValidation};
 use self::scheduler::BuildScheduler;
+use self::source_digest_cache::SourceDigestCache;
 
 const GRAPH_TOOL_CACHE_SCHEMA: &str = "once.graph-tool-paths.v4";
 const GRAPH_TOOL_ENVIRONMENT_KEYS: &[&str] = &[
@@ -83,9 +85,10 @@ const GRAPH_TOOL_ENVIRONMENT_KEYS: &[&str] = &[
 /// (also a move via `outcomes.remove`).
 #[derive(Debug)]
 pub(super) struct BuildOutcome {
-    pub provider: JsonValue,
+    pub provider: Arc<JsonValue>,
     pub action_digest: Digest,
     pub input_digest: Option<Digest>,
+    pub available_inputs: BTreeMap<String, AvailableInput>,
     pub outputs: Vec<String>,
     pub cache_tag: &'static str,
     pub cache_state: EvidenceCacheState,
@@ -127,6 +130,7 @@ pub(super) struct BuildSession {
     tool_cache_fingerprint: Option<Digest>,
     cached_tool_commands: Arc<[CachedToolCommand]>,
     resources: Arc<ResourcePool>,
+    source_digest_cache: SourceDigestCache,
     sandbox: SandboxMode,
 }
 
@@ -223,6 +227,7 @@ impl BuildSession {
             tool_cache_fingerprint: None,
             cached_tool_commands: Arc::from([]),
             resources: Arc::new(ResourcePool::new(ResourceLimits::default())),
+            source_digest_cache: SourceDigestCache::open(workspace),
             sandbox,
         }
     }
@@ -265,9 +270,14 @@ impl BuildSession {
             "building graph target through Starlark analysis"
         );
         let outcome = self.build_reachable(&target.label.id, &reachable).await?;
-        materialize_cached_outputs(&outcome, &self.workspace, &self.cache)
-            .await
-            .with_context(|| format!("materializing outputs for {}", target.label.id))?;
+        materialize_cached_outputs(
+            &outcome,
+            &self.workspace,
+            &self.cache,
+            Some(&self.source_digest_cache),
+        )
+        .await
+        .with_context(|| format!("materializing outputs for {}", target.label.id))?;
         self.persist_graph_tool_cache();
         Ok(Some(outcome))
     }
@@ -317,16 +327,22 @@ impl BuildSession {
                 &dep_action_digests,
                 &available_inputs,
                 &self.tool_paths,
+                Some(&self.source_digest_cache),
                 self.sandbox,
                 &self.resources,
             )
             .await
             .with_context(|| format!("executing {capability} for {}", target.label.id))?;
-            materialize_cached_outputs(&outcome, &self.workspace, &self.cache)
-                .await
-                .with_context(|| {
-                    format!("materializing {capability} outputs for {}", target.label.id)
-                })?;
+            materialize_cached_outputs(
+                &outcome,
+                &self.workspace,
+                &self.cache,
+                Some(&self.source_digest_cache),
+            )
+            .await
+            .with_context(|| {
+                format!("materializing {capability} outputs for {}", target.label.id)
+            })?;
             self.persist_graph_tool_cache();
             Ok(Some(outcome))
         })
@@ -355,17 +371,12 @@ impl BuildSession {
         let mut available_inputs = BTreeMap::new();
         for (dep_id, outcome) in dep_outcomes {
             dep_action_digests.push((dep_id.clone(), outcome.action_digest));
-            available_inputs.extend(outcome.result.outputs.iter().map(|(path, digest)| {
-                (
-                    path.clone(),
-                    AvailableInput {
-                        blob_digest: *digest,
-                        producer_action_digest: outcome.action_digest,
-                        same_target: false,
-                        materialized: true,
-                    },
-                )
-            }));
+            available_inputs.extend(outcome.available_inputs.into_iter().map(
+                |(path, mut input)| {
+                    input.same_target = false;
+                    (path, input)
+                },
+            ));
             providers_by_id.insert(dep_id, outcome.provider);
         }
         let dep_providers = target
@@ -386,7 +397,7 @@ impl BuildSession {
             .collect::<BTreeMap<_, _>>();
         let analysis = self
             .analyzer
-            .analyze_target_capability_with_dependency_roles(
+            .analyze_target_capability_with_shared_dependency_roles(
                 target,
                 &self.workspace,
                 &dep_providers,
@@ -524,6 +535,7 @@ impl BuildSession {
             &self.targets,
             &self.analyzer,
             &self.tool_paths,
+            &self.source_digest_cache,
             reachable,
             retained,
             self.sandbox,
@@ -553,17 +565,52 @@ impl BuildSession {
             tracing::debug!(%error, "failed to persist graph tool commands");
         }
     }
+
+    pub(super) fn observed_environment(&self) -> BTreeMap<String, Option<String>> {
+        let mut environment = self.analyzer.observed_host_environment();
+        for key in GRAPH_TOOL_ENVIRONMENT_KEYS {
+            environment
+                .entry((*key).to_string())
+                .or_insert_with(|| std::env::var(key).ok());
+        }
+        environment
+    }
+
+    pub(super) fn observed_host_paths(&self) -> BTreeSet<PathBuf> {
+        let mut paths = self.analyzer.observed_host_paths();
+        paths.extend(self.tool_paths.values().map(PathBuf::from));
+        paths
+    }
+
+    pub(super) fn observed_source_digests(
+        &self,
+        changes: Option<&[String]>,
+    ) -> BTreeMap<String, Digest> {
+        self.source_digest_cache.observed_digests_for(changes)
+    }
+
+    pub(super) fn source_changes_match(&self, changes: Option<&[String]>) -> bool {
+        self.source_digest_cache
+            .changes_match(&self.workspace, changes)
+    }
 }
 
 async fn materialize_cached_outputs(
     outcome: &BuildOutcome,
     workspace: &Path,
     cache: &CacheProvider,
+    source_digest_cache: Option<&SourceDigestCache>,
 ) -> Result<()> {
     for result in &outcome.cached_results {
-        once_core::materialize_outputs(result, workspace, cache)
-            .await
-            .map_err(anyhow::Error::from)?;
+        match source_digest_cache {
+            Some(digests) => digests
+                .materialize_outputs(result, workspace, cache)
+                .await
+                .map_err(anyhow::Error::from)?,
+            None => once_core::materialize_outputs(result, workspace, cache)
+                .await
+                .map_err(anyhow::Error::from)?,
+        }
     }
     Ok(())
 }
@@ -868,11 +915,12 @@ async fn build_one(
     analyzer: AnalysisEngine,
     module_source_digest: Digest,
     target: Arc<GraphTarget>,
-    dep_providers: Vec<JsonValue>,
-    dependency_providers: BTreeMap<String, Vec<JsonValue>>,
+    dep_providers: Vec<Arc<JsonValue>>,
+    dependency_providers: BTreeMap<String, Vec<Arc<JsonValue>>>,
     dep_action_digests: Vec<(String, Digest)>,
     available_inputs: BTreeMap<String, AvailableInput>,
     tool_paths: Arc<BTreeMap<String, String>>,
+    source_digest_cache: SourceDigestCache,
     sandbox: SandboxMode,
     resources: Arc<ResourcePool>,
 ) -> Result<(String, BuildOutcome)> {
@@ -891,7 +939,7 @@ async fn build_one(
     let analysis_workspace = workspace.clone();
     let analysis = tokio::task::spawn_blocking(move || {
         analyzer
-            .analyze_target_capability_with_dependency_roles(
+            .analyze_target_capability_with_shared_dependency_roles(
                 &analysis_target,
                 &analysis_workspace,
                 &dep_providers,
@@ -919,6 +967,7 @@ async fn build_one(
         &dep_action_digests,
         &available_inputs,
         &tool_paths,
+        Some(&source_digest_cache),
         sandbox,
         &resources,
     )

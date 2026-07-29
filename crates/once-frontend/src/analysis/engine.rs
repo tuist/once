@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
@@ -246,6 +246,14 @@ impl AnalysisEngine {
         self.host_cache.cacheable_tool_commands()
     }
 
+    pub fn observed_host_environment(&self) -> BTreeMap<String, Option<String>> {
+        self.host_cache.observed_environment()
+    }
+
+    pub fn observed_host_paths(&self) -> BTreeSet<PathBuf> {
+        self.host_cache.observed_paths()
+    }
+
     /// Run a single target's target kind impl and collect its declared
     /// actions and provider record.
     ///
@@ -284,6 +292,55 @@ impl AnalysisEngine {
         workspace_root: &Path,
         dep_providers: &[JsonValue],
         dependency_providers: &BTreeMap<String, Vec<JsonValue>>,
+        capability: &str,
+    ) -> Result<AnalysisResult> {
+        let dep_providers = dep_providers.iter().collect::<Vec<_>>();
+        let dependency_providers = dependency_providers
+            .iter()
+            .map(|(role, providers)| (role.clone(), providers.iter().collect::<Vec<_>>()))
+            .collect::<BTreeMap<_, _>>();
+        self.analyze_target_capability_with_provider_refs(
+            target,
+            workspace_root,
+            &dep_providers,
+            &dependency_providers,
+            capability,
+        )
+    }
+
+    pub fn analyze_target_capability_with_shared_dependency_roles(
+        &self,
+        target: &GraphTarget,
+        workspace_root: &Path,
+        dep_providers: &[Arc<JsonValue>],
+        dependency_providers: &BTreeMap<String, Vec<Arc<JsonValue>>>,
+        capability: &str,
+    ) -> Result<AnalysisResult> {
+        let dep_providers = dep_providers.iter().map(Arc::as_ref).collect::<Vec<_>>();
+        let dependency_providers = dependency_providers
+            .iter()
+            .map(|(role, providers)| {
+                (
+                    role.clone(),
+                    providers.iter().map(Arc::as_ref).collect::<Vec<_>>(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        self.analyze_target_capability_with_provider_refs(
+            target,
+            workspace_root,
+            &dep_providers,
+            &dependency_providers,
+            capability,
+        )
+    }
+
+    fn analyze_target_capability_with_provider_refs(
+        &self,
+        target: &GraphTarget,
+        workspace_root: &Path,
+        dep_providers: &[&JsonValue],
+        dependency_providers: &BTreeMap<String, Vec<&JsonValue>>,
         capability: &str,
     ) -> Result<AnalysisResult> {
         let analysis = TargetAnalysis {
@@ -347,8 +404,8 @@ pub fn analyze_target(
 struct TargetAnalysis<'a> {
     target: &'a GraphTarget,
     workspace_root: &'a Path,
-    dep_providers: &'a [JsonValue],
-    dependency_providers: &'a BTreeMap<String, Vec<JsonValue>>,
+    dep_providers: &'a [&'a JsonValue],
+    dependency_providers: &'a BTreeMap<String, Vec<&'a JsonValue>>,
     capability: &'a str,
     options: AnalysisOptions,
     configuration: &'a crate::manifest::BuildConfiguration,

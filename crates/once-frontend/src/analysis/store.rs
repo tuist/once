@@ -246,6 +246,8 @@ type HostEnvLookup = dyn Fn(&str) -> Option<String> + Send + Sync;
 pub(super) struct HostCache {
     which: Arc<Mutex<BTreeMap<String, Option<String>>>>,
     commands: Arc<Mutex<BTreeMap<CommandKey, String>>>,
+    environment: Arc<Mutex<BTreeMap<String, Option<String>>>>,
+    paths: Arc<Mutex<BTreeSet<PathBuf>>>,
     host_env: Arc<HostEnvLookup>,
     tool_paths: Arc<BTreeMap<String, String>>,
 }
@@ -261,6 +263,8 @@ impl Clone for HostCache {
         Self {
             which: Arc::clone(&self.which),
             commands: Arc::clone(&self.commands),
+            environment: Arc::clone(&self.environment),
+            paths: Arc::clone(&self.paths),
             host_env: Arc::clone(&self.host_env),
             tool_paths: Arc::clone(&self.tool_paths),
         }
@@ -278,6 +282,8 @@ impl HostCache {
         Self {
             which: Arc::new(Mutex::new(BTreeMap::new())),
             commands: Arc::new(Mutex::new(BTreeMap::new())),
+            environment: Arc::new(Mutex::new(BTreeMap::new())),
+            paths: Arc::new(Mutex::new(BTreeSet::new())),
             host_env: Arc::new(host_env),
             tool_paths: Arc::new(BTreeMap::new()),
         }
@@ -319,7 +325,38 @@ impl HostCache {
     }
 
     pub(super) fn env(&self, name: &str) -> Option<String> {
-        (self.host_env)(name)
+        let value = (self.host_env)(name);
+        self.environment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(name.to_string(), value.clone());
+        value
+    }
+
+    pub(super) fn observed_environment(&self) -> BTreeMap<String, Option<String>> {
+        self.environment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(super) fn observe_path(&self, path: &Path) {
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
+        };
+        self.paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(path);
+    }
+
+    pub(super) fn observed_paths(&self) -> BTreeSet<PathBuf> {
+        self.paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Resolve `name` on `PATH`, caching the result.
@@ -329,12 +366,19 @@ impl HostCache {
     /// each other.
     pub(super) fn which(&self, name: &str) -> Result<Option<String>> {
         if let Some(path) = self.tool_paths.get(name) {
+            self.observe_path(Path::new(path));
             return Ok(Some(path.clone()));
         }
         if let Some(cached) = self.lock_which()?.get(name).cloned() {
+            if let Some(path) = &cached {
+                self.observe_path(Path::new(path));
+            }
             return Ok(cached);
         }
         let resolved = which_on_path(name).map(|path| path.display().to_string());
+        if let Some(path) = &resolved {
+            self.observe_path(Path::new(path));
+        }
         // Cache the result after the slow path. A racing concurrent
         // caller may have populated the slot already; that's fine, we
         // just overwrite with an equivalent value.
@@ -371,6 +415,9 @@ impl HostCache {
             .ok_or_else(|| anyhow!("host_command requires a non-empty argv"))?;
         let command_args: Vec<&String> = iter.collect();
         let resolved_program = self.tool_paths.get(program).unwrap_or(program);
+        if Path::new(resolved_program).components().count() > 1 {
+            self.observe_path(Path::new(resolved_program));
+        }
         let mut command = Command::new(resolved_program);
         command.args(&command_args);
         if let Some(cwd) = cwd {
