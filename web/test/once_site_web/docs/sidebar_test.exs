@@ -33,6 +33,21 @@ defmodule OnceSiteWeb.Docs.SidebarTest do
     refute Sidebar.item_or_children_active?(parent, "/docs/reference/prelude/other")
   end
 
+  test "infrastructure providers include their company logos" do
+    infrastructure =
+      Sidebar.guide_tree()
+      |> Enum.find(&(&1.label == "Infrastructure"))
+
+    assert Map.new(infrastructure.items, &{&1.label, &1.icon}) == %{
+             "Daytona" => "daytona",
+             "E2B" => "e2b",
+             "Microsandbox" => "microsandbox",
+             "Overview" => nil,
+             "Remote Execution" => nil,
+             "Tuist" => "tuist"
+           }
+  end
+
   test "exposes linting guides, commands, modules, and target kinds" do
     guide_slugs =
       Sidebar.guide_tree()

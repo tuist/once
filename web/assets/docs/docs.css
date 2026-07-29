@@ -112,65 +112,80 @@ p {
   }
 }
 
-/* Sidebar language icons: monochrome SVGs tinted per language via CSS mask,
+/* Sidebar item icons: monochrome SVGs tinted per brand via CSS mask,
    full-color logos (Ruby, JavaScript) drawn as a background instead. */
-#docs-sidebar [data-part="lang-icon"] {
+#docs-sidebar [data-part="nav-item-icon"] {
   display: inline-block;
   flex-shrink: 0;
   width: 16px;
   height: 16px;
-  background-color: var(--lang-color, var(--noora-surface-label-primary));
-  -webkit-mask: var(--lang-mask) center / contain no-repeat;
-  mask: var(--lang-mask) center / contain no-repeat;
+  background-color: var(--nav-icon-color, var(--noora-surface-label-primary));
+  -webkit-mask: var(--nav-icon-mask) center / contain no-repeat;
+  mask: var(--nav-icon-mask) center / contain no-repeat;
 }
 
-#docs-sidebar [data-part="lang-icon"][data-lang="rust"] {
-  --lang-mask: url("/docs/icons/rust.svg");
-  --lang-color: var(--noora-surface-label-primary);
+#docs-sidebar [data-part="nav-item-icon"][data-icon="rust"] {
+  --nav-icon-mask: url("/docs/icons/rust.svg");
+  --nav-icon-color: var(--noora-surface-label-primary);
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="apple"] {
-  --lang-mask: url("/docs/icons/apple.svg");
-  --lang-color: var(--noora-surface-label-primary);
+#docs-sidebar [data-part="nav-item-icon"][data-icon="apple"] {
+  --nav-icon-mask: url("/docs/icons/apple.svg");
+  --nav-icon-color: var(--noora-surface-label-primary);
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="swift"] {
-  --lang-mask: url("/docs/icons/swift.svg");
-  --lang-color: oklch(62% 0.1659 48.81);
+#docs-sidebar [data-part="nav-item-icon"][data-icon="swift"] {
+  --nav-icon-mask: url("/docs/icons/swift.svg");
+  --nav-icon-color: oklch(62% 0.1659 48.81);
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="android"] {
-  --lang-mask: url("/docs/icons/android.svg");
-  --lang-color: oklch(53.7% 0.1613 146.6);
+#docs-sidebar [data-part="nav-item-icon"][data-icon="android"] {
+  --nav-icon-mask: url("/docs/icons/android.svg");
+  --nav-icon-color: oklch(53.7% 0.1613 146.6);
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="c"] {
-  --lang-mask: url("/docs/icons/c.svg");
-  --lang-color: oklch(63% 0.182 259.5);
+#docs-sidebar [data-part="nav-item-icon"][data-icon="c"] {
+  --nav-icon-mask: url("/docs/icons/c.svg");
+  --nav-icon-color: oklch(63% 0.182 259.5);
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="cplusplus"] {
-  --lang-mask: url("/docs/icons/cplusplus.svg");
-  --lang-color: oklch(57% 0.127 238.5);
+#docs-sidebar [data-part="nav-item-icon"][data-icon="cplusplus"] {
+  --nav-icon-mask: url("/docs/icons/cplusplus.svg");
+  --nav-icon-color: oklch(57% 0.127 238.5);
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="go"] {
-  --lang-mask: url("/docs/icons/go.svg");
-  --lang-color: oklch(57% 0.127 238.5);
+#docs-sidebar [data-part="nav-item-icon"][data-icon="go"] {
+  --nav-icon-mask: url("/docs/icons/go.svg");
+  --nav-icon-color: oklch(57% 0.127 238.5);
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="elixir"] {
-  --lang-mask: url("/docs/icons/elixir.svg");
-  --lang-color: oklch(53.2% 0.276 286.9);
+#docs-sidebar [data-part="nav-item-icon"][data-icon="elixir"] {
+  --nav-icon-mask: url("/docs/icons/elixir.svg");
+  --nav-icon-color: oklch(53.2% 0.276 286.9);
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="kotlin"] {
-  --lang-mask: url("/docs/icons/kotlin.svg");
-  --lang-color: oklch(53.2% 0.276 286.9);
+#docs-sidebar [data-part="nav-item-icon"][data-icon="kotlin"] {
+  --nav-icon-mask: url("/docs/icons/kotlin.svg");
+  --nav-icon-color: oklch(53.2% 0.276 286.9);
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="zig"] {
-  --lang-mask: url("/docs/icons/zig.svg");
-  --lang-color: oklch(62% 0.1659 48.81);
+#docs-sidebar [data-part="nav-item-icon"][data-icon="zig"] {
+  --nav-icon-mask: url("/docs/icons/zig.svg");
+  --nav-icon-color: oklch(62% 0.1659 48.81);
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="react-native"] {
-  --lang-mask: url("/docs/icons/react-native.svg");
-  --lang-color: #149eca;
+#docs-sidebar [data-part="nav-item-icon"][data-icon="react-native"] {
+  --nav-icon-mask: url("/docs/icons/react-native.svg");
+  --nav-icon-color: #149eca;
 }
 
-#docs-sidebar [data-part="lang-icon"][data-lang="ruby"],
-#docs-sidebar [data-part="lang-icon"][data-lang="javascript"] {
+#docs-sidebar [data-part="nav-item-icon"][data-icon="microsandbox"] {
+  --nav-icon-mask: url("/docs/icons/microsandbox.svg");
+  --nav-icon-color: #bf84fe;
+}
+#docs-sidebar [data-part="nav-item-icon"][data-icon="e2b"] {
+  --nav-icon-mask: url("/docs/icons/e2b.svg");
+  --nav-icon-color: #ff8800;
+}
+#docs-sidebar [data-part="nav-item-icon"][data-icon="daytona"] {
+  --nav-icon-mask: url("/docs/icons/daytona.svg");
+}
+#docs-sidebar [data-part="nav-item-icon"][data-icon="tuist"] {
+  --nav-icon-mask: url("/docs/icons/tuist.svg");
+}
+
+#docs-sidebar [data-part="nav-item-icon"][data-icon="ruby"],
+#docs-sidebar [data-part="nav-item-icon"][data-icon="javascript"] {
   background-color: transparent;
   -webkit-mask: none;
   mask: none;
@@ -178,9 +193,9 @@ p {
   background-size: contain;
   background-repeat: no-repeat;
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="ruby"] {
+#docs-sidebar [data-part="nav-item-icon"][data-icon="ruby"] {
   background-image: url("/docs/icons/ruby.svg");
 }
-#docs-sidebar [data-part="lang-icon"][data-lang="javascript"] {
+#docs-sidebar [data-part="nav-item-icon"][data-icon="javascript"] {
   background-image: url("/docs/icons/javascript.svg");
 }

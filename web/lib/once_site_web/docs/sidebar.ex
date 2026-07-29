@@ -100,10 +100,18 @@ defmodule OnceSiteWeb.Docs.Sidebar do
         items: [
           %Item{label: "Overview", slug: "/docs/guide/infrastructure"},
           %Item{label: "Remote Execution", slug: "/docs/guide/infrastructure/remote-execution"},
-          %Item{label: "Microsandbox", slug: "/docs/guide/infrastructure/microsandbox"},
-          %Item{label: "E2B", slug: "/docs/guide/infrastructure/e2b"},
-          %Item{label: "Daytona", slug: "/docs/guide/infrastructure/daytona"},
-          %Item{label: "Tuist", slug: "/docs/guide/infrastructure/tuist"}
+          %Item{
+            label: "Microsandbox",
+            slug: "/docs/guide/infrastructure/microsandbox",
+            icon: "microsandbox"
+          },
+          %Item{label: "E2B", slug: "/docs/guide/infrastructure/e2b", icon: "e2b"},
+          %Item{
+            label: "Daytona",
+            slug: "/docs/guide/infrastructure/daytona",
+            icon: "daytona"
+          },
+          %Item{label: "Tuist", slug: "/docs/guide/infrastructure/tuist", icon: "tuist"}
         ]
       },
       %Group{
