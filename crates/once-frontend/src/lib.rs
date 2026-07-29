@@ -56,8 +56,9 @@ pub use manifest_editor::{
 };
 pub use module_contract::{module_authoring_contract, ContractEntry, ModuleAuthoringContract};
 pub use native_project::{
-    detect_native_projects, native_project_schemas_for_workspace, native_project_seed_target,
-    preview_native_project, NativeProjectMatch, NativeProjectPreview, NativeProjectSchema,
+    detect_native_projects, discover_native_projects, native_project_schemas_for_workspace,
+    native_project_seed_target, preview_native_project, NativeProjectCatalog, NativeProjectMatch,
+    NativeProjectPreview, NativeProjectSchema,
 };
 pub use script::{parse_script_annotations, script_has_once_directives, ScriptAnnotations};
 pub use target::{AttrValue, Target};

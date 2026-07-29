@@ -135,6 +135,11 @@ Detection reads file names only. It does not evaluate executable manifests or
 invoke native tools. Previewing or loading the graph runs the seed target's
 resolver through the normal trusted analysis boundary.
 
+Discovery retains at most 16 mebibytes of match records. Once stops with an
+error if a workspace produces more, rather than allowing repository size to
+drive unbounded memory growth. Narrow the workspace include or exclude patterns,
+or use `on_match = "stop"` when nested projects belong to one workspace.
+
 Native project discovery provides ephemeral seeds in packages that have no explicit Once
 targets. Explicit targets take precedence only in their own package, so an
 unrelated root target does not hide native projects elsewhere in a monorepo.

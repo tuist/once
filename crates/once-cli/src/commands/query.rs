@@ -87,12 +87,6 @@ struct ModuleDiagnostic {
     repairs: Vec<&'static str>,
 }
 
-#[derive(Debug, Serialize)]
-struct NativeProjectCatalog {
-    native_projects: Vec<once_frontend::NativeProjectSchema>,
-    matches: Vec<once_frontend::NativeProjectMatch>,
-}
-
 pub async fn targets(workspace: &Path, output: Output, kind: Option<&str>) -> Result<()> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let records = target_records(graph, kind);
@@ -507,11 +501,8 @@ pub(crate) fn native_projects_value(workspace: &Path) -> Result<serde_json::Valu
     Ok(serde_json::to_value(native_project_catalog(workspace)?)?)
 }
 
-fn native_project_catalog(workspace: &Path) -> Result<NativeProjectCatalog> {
-    Ok(NativeProjectCatalog {
-        native_projects: once_frontend::native_project_schemas_for_workspace(workspace)?,
-        matches: once_frontend::detect_native_projects(workspace)?,
-    })
+fn native_project_catalog(workspace: &Path) -> Result<once_frontend::NativeProjectCatalog> {
+    once_frontend::discover_native_projects(workspace).map_err(Into::into)
 }
 
 pub async fn native_project(
@@ -1348,7 +1339,7 @@ fn render_target_kinds_human(target_kinds: &[TargetKindSummary]) -> String {
     out
 }
 
-fn render_native_projects_human(catalog: &NativeProjectCatalog) -> String {
+fn render_native_projects_human(catalog: &once_frontend::NativeProjectCatalog) -> String {
     if catalog.native_projects.is_empty() {
         return "native projects: none\n".to_string();
     }

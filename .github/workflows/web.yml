@@ -91,10 +91,9 @@ jobs:
         env:
           ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
 
-      - name: Test with Once
-        run: target/debug/once test web/tests
-        env:
-          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+      - name: Test
+        working-directory: web
+        run: mise exec -- mix test
 
   release:
     name: release

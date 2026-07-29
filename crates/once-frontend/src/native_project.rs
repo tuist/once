@@ -1,17 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
+use crate::error::{Error, Result};
+use crate::graph::GraphTarget;
+use crate::target::{AttrValue, Target};
 use serde::Serialize;
 use starlark::environment::Module;
 use starlark::eval::Evaluator;
 use starlark::syntax::{AstModule, Dialect};
 use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
-use walkdir::WalkDir;
 
-use crate::error::{Error, Result};
-use crate::graph::GraphTarget;
-use crate::target::{AttrValue, Target};
+mod discovery;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct NativeProjectSchema {
@@ -43,16 +43,30 @@ pub struct NativeProjectPreview {
     pub targets: Vec<GraphTarget>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct NativeProjectCatalog {
+    pub native_projects: Vec<NativeProjectSchema>,
+    pub matches: Vec<NativeProjectMatch>,
+}
+
 pub fn native_project_schemas_for_workspace(root: &Path) -> Result<Vec<NativeProjectSchema>> {
+    let target_kinds = crate::graph::target_kind_schemas_for_workspace(root)?;
+    native_project_schemas_for_workspace_with_target_kinds(root, &target_kinds)
+}
+
+pub(crate) fn native_project_schemas_for_workspace_with_target_kinds(
+    root: &Path,
+    target_kinds: &[crate::graph::TargetKindSchema],
+) -> Result<Vec<NativeProjectSchema>> {
     let source = crate::modules::combined_module_source_for_workspace(root)?;
     let native_projects =
         parse_native_project_schemas(crate::modules::COMBINED_MODULE_PATH, &source)?;
-    let target_kinds = crate::graph::target_kind_schemas_for_workspace(root)?
-        .into_iter()
-        .map(|schema| schema.kind)
+    let target_kinds = target_kinds
+        .iter()
+        .map(|schema| schema.kind.as_str())
         .collect::<BTreeSet<_>>();
     for native_project in &native_projects {
-        if !target_kinds.contains(&native_project.target_kind) {
+        if !target_kinds.contains(native_project.target_kind.as_str()) {
             return Err(native_project_error(
                 &native_project.name,
                 format!(
@@ -65,44 +79,38 @@ pub fn native_project_schemas_for_workspace(root: &Path) -> Result<Vec<NativePro
     Ok(native_projects)
 }
 
+pub fn discover_native_projects(root: &Path) -> Result<NativeProjectCatalog> {
+    let target_kinds = crate::graph::target_kind_schemas_for_workspace(root)?;
+    let native_projects =
+        native_project_schemas_for_workspace_with_target_kinds(root, &target_kinds)?;
+    let boundary = crate::workspace::load_workspace_scan(root)?;
+    let (matches, _) =
+        discovery::detect_native_projects_with_schemas(root, &native_projects, &boundary)?;
+    Ok(NativeProjectCatalog {
+        native_projects,
+        matches,
+    })
+}
+
 pub fn detect_native_projects(root: &Path) -> Result<Vec<NativeProjectMatch>> {
-    let schemas = native_project_schemas_for_workspace(root)?;
-    let mut matches = Vec::new();
-    for schema in schemas {
-        let mut candidates = native_project_candidates(root, &schema)?;
-        candidates.sort();
-        for package_path in candidates {
-            let package = display_relative(root, &package_path);
-            let seed_target = crate::target_ref::target_id(&package, &schema.target_name);
-            matches.push(NativeProjectMatch {
-                native_project: schema.name.clone(),
-                package,
-                markers: schema.markers.clone(),
-                seed_target,
-            });
-        }
-    }
-    matches.sort_by(|left, right| {
-        left.package
-            .cmp(&right.package)
-            .then(left.native_project.cmp(&right.native_project))
-    });
-    Ok(matches)
+    Ok(discover_native_projects(root)?.matches)
 }
 
 pub(crate) fn synthesized_workspace_seeds(
     root: &Path,
+    schemas: &[NativeProjectSchema],
+    boundary: &crate::workspace::WorkspaceScan,
 ) -> Result<Vec<(NativeProjectMatch, Target)>> {
-    let schemas = native_project_schemas_for_workspace(root)?;
-    let schemas = schemas
-        .into_iter()
-        .map(|schema| (schema.name.clone(), schema))
+    let schema_by_name = schemas
+        .iter()
+        .map(|schema| (schema.name.as_str(), schema))
         .collect::<BTreeMap<_, _>>();
     let mut targets = Vec::new();
     let mut ids = BTreeMap::<String, String>::new();
-    for matched in detect_native_projects(root)? {
-        let schema = schemas
-            .get(&matched.native_project)
+    let (matches, _) = discovery::detect_native_projects_with_schemas(root, schemas, boundary)?;
+    for matched in matches {
+        let schema = schema_by_name
+            .get(matched.native_project.as_str())
             .ok_or_else(|| Error::Eval {
                 path: crate::modules::COMBINED_MODULE_PATH.to_string(),
                 message: format!(
@@ -130,14 +138,17 @@ pub(crate) fn synthesized_workspace_seeds(
 }
 
 pub fn native_project_seed_target(root: &Path, name: &str, package: &str) -> Result<Target> {
-    let schema = native_project_schemas_for_workspace(root)?
+    let catalog = discover_native_projects(root)?;
+    let schema = catalog
+        .native_projects
         .into_iter()
         .find(|schema| schema.name == name)
         .ok_or_else(|| Error::Eval {
             path: crate::modules::COMBINED_MODULE_PATH.to_string(),
             message: format!("unknown native project `{name}`"),
         })?;
-    let matched = detect_native_projects(root)?
+    let matched = catalog
+        .matches
         .into_iter()
         .any(|matched| matched.native_project == name && matched.package == package);
     if !matched {
@@ -157,14 +168,20 @@ pub fn preview_native_project(
     name: &str,
     package: &str,
 ) -> Result<NativeProjectPreview> {
-    let schema = native_project_schemas_for_workspace(root)?
+    let target_kinds = crate::graph::target_kind_schemas_for_workspace(root)?;
+    let native_projects =
+        native_project_schemas_for_workspace_with_target_kinds(root, &target_kinds)?;
+    let boundary = crate::workspace::load_workspace_scan(root)?;
+    let (matches, _) =
+        discovery::detect_native_projects_with_schemas(root, &native_projects, &boundary)?;
+    let schema = native_projects
         .into_iter()
         .find(|schema| schema.name == name)
         .ok_or_else(|| Error::Eval {
             path: crate::modules::COMBINED_MODULE_PATH.to_string(),
             message: format!("unknown native project `{name}`"),
         })?;
-    let matched = detect_native_projects(root)?
+    let selected_match = matches
         .into_iter()
         .find(|matched| matched.native_project == name && matched.package == package)
         .ok_or_else(|| Error::Eval {
@@ -175,15 +192,14 @@ pub fn preview_native_project(
             ),
         })?;
     let seed = seed_target(&schema, package);
-    let schemas = crate::graph::target_kind_schemas_for_workspace(root)?;
     let targets = crate::graph::load_graph_workspace_with_targets_and_schemas(
         root,
         vec![seed.clone()],
-        &schemas,
+        &target_kinds,
     )?;
     Ok(NativeProjectPreview {
         native_project: schema,
-        matched,
+        matched: selected_match,
         seed,
         targets,
     })
@@ -306,61 +322,6 @@ fn parse_native_project_schemas(path: &str, source: &str) -> Result<Vec<NativePr
             })
             .collect()
     })
-}
-
-fn native_project_candidates(root: &Path, schema: &NativeProjectSchema) -> Result<Vec<PathBuf>> {
-    let walker = WalkDir::new(root)
-        .max_depth(schema.max_depth)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| {
-            if entry.depth() == 0 {
-                return true;
-            }
-            let Some(name) = entry.file_name().to_str() else {
-                return false;
-            };
-            if name.starts_with('.') {
-                return false;
-            }
-            !entry.file_type().is_dir() || !schema.exclude.iter().any(|excluded| excluded == name)
-        });
-    let primary = &schema.markers[0];
-    let mut candidates = Vec::new();
-    for entry in walker {
-        let entry = entry.map_err(|source| Error::Walk {
-            root: root.display().to_string(),
-            source,
-        })?;
-        if !entry.file_type().is_file() || entry.file_name() != primary.as_str() {
-            continue;
-        }
-        let package = entry.path().parent().unwrap_or(root);
-        if schema
-            .markers
-            .iter()
-            .all(|marker| package.join(marker).is_file())
-        {
-            candidates.push(package.to_path_buf());
-        }
-    }
-    if schema.on_match == "stop" {
-        candidates.sort_by(|left, right| {
-            left.components()
-                .count()
-                .cmp(&right.components().count())
-                .then(left.cmp(right))
-        });
-        let mut roots = Vec::<PathBuf>::new();
-        for candidate in candidates {
-            if roots.iter().any(|root| candidate.starts_with(root)) {
-                continue;
-            }
-            roots.push(candidate);
-        }
-        return Ok(roots);
-    }
-    Ok(candidates)
 }
 
 fn validate_relative_literal(native_project: &str, field: &str, value: &str) -> Result<()> {
@@ -496,8 +457,12 @@ mod tests {
         assert_eq!(schemas[0].name, "demo");
         assert_eq!(schemas[0].target_kind, "demo_workspace");
 
-        let candidates = native_project_candidates(temporary.path(), &schemas[0]).unwrap();
-        assert_eq!(candidates, vec![temporary.path().to_path_buf()]);
+        let boundary = crate::workspace::load_workspace_scan(temporary.path()).unwrap();
+        let (matches, _) =
+            discovery::detect_native_projects_with_schemas(temporary.path(), &schemas, &boundary)
+                .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].package.is_empty());
     }
 
     #[test]
