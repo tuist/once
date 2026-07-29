@@ -167,8 +167,19 @@ fn existing_output_matches_digest(path: &Path, expected: Digest) -> bool {
         return false;
     };
     if metadata.is_dir() {
-        return digest_directory_blob(path, OutputSymlinkMode::Preserve)
-            .is_ok_and(|digest| digest == expected);
+        // The capture symlink mode is not carried in the cached
+        // `ActionResult`, so we cannot know which mode produced `expected`.
+        // The two modes only differ for directories containing symlinks that
+        // point outside the tree; for everything else they hash identically.
+        // Accept a match under either mode so the "already on disk, skip
+        // restore" optimization is not silently defeated for such outputs.
+        // The default mode is tried first, so unchanged directories captured
+        // the usual way match on the first hash.
+        return [OutputSymlinkMode::default(), OutputSymlinkMode::Preserve]
+            .into_iter()
+            .any(|mode| {
+                digest_directory_blob(path, mode).is_ok_and(|digest| digest == expected)
+            });
     }
     if metadata.is_file()
         && digest_file_blob(path, &metadata).is_ok_and(|digest| digest == expected)
@@ -517,6 +528,47 @@ mod tests {
 
         assert_eq!(
             std::fs::metadata(&output_path).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn restore_does_not_rewrite_an_unchanged_directory_output_with_external_symlink() {
+        let (tmp, workspace, cache) = workspace_and_cache();
+        let external = tmp.path().join("external.txt");
+        std::fs::write(&external, b"external payload").unwrap();
+        let tree = workspace.join("out/tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("data.txt"), b"payload").unwrap();
+        std::os::unix::fs::symlink(&external, tree.join("link")).unwrap();
+
+        let output = WorkspacePath::try_from("out/tree").unwrap();
+        // Captured with the default mode, which materializes the external
+        // symlink's contents into the directory blob.
+        let outputs = capture(
+            std::slice::from_ref(&output),
+            &workspace,
+            &cache,
+            OutputSymlinkMode::default(),
+        )
+        .await
+        .unwrap();
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs,
+        };
+        let modified = std::fs::metadata(&tree).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        restore(&result, &workspace, &cache).await.unwrap();
+
+        // The on-disk tree already matches the cached digest, so restore must
+        // recognize it as unchanged rather than re-materializing it.
+        assert_eq!(
+            std::fs::metadata(&tree).unwrap().modified().unwrap(),
             modified
         );
     }
