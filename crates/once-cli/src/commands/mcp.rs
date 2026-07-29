@@ -1505,6 +1505,35 @@ mod tests {
     }
 
     #[test]
+    fn summarized_test_run_results_tolerate_partial_result() {
+        // A non-null but partial result (missing `runner`/`artifacts`) must not
+        // fail the whole report; absent fields become null.
+        let mut value = json!({
+            "runs": [
+                {
+                    "target": "tests/unit",
+                    "results": {
+                        "schema": "once.test_results.v1",
+                        "target": "tests/unit",
+                        "status": "errored",
+                        "summary": { "total": 0, "passed": 0, "failed": 0, "skipped": 0, "flaky": 0 }
+                    }
+                }
+            ]
+        });
+
+        summarize_test_run_results(&mut value).unwrap();
+
+        assert_eq!(
+            value["runs"][0]["results"]["schema"],
+            "once.test_results_summary.v1"
+        );
+        assert_eq!(value["runs"][0]["results"]["status"], "errored");
+        assert!(value["runs"][0]["results"]["runner"].is_null());
+        assert!(value["runs"][0]["results"]["artifacts"].is_null());
+    }
+
+    #[test]
     fn capped_reader_reads_normal_lines() {
         let data = b"first\nsecond\n";
         let mut reader = std::io::BufReader::new(&data[..]);

@@ -1175,20 +1175,19 @@ pub(crate) fn test_results_summary_value(value: &serde_json::Value) -> Result<se
     let object = value
         .as_object()
         .context("normalized test results must be an object")?;
-    let required = |name: &str| {
-        object
-            .get(name)
-            .cloned()
-            .with_context(|| format!("normalized test results are missing `{name}`"))
-    };
+    // Tolerate results objects that are non-null but partial (for example an
+    // errored or minimally-populated run). Missing fields become `null` rather
+    // than failing the whole report, which would otherwise make `summary_only`
+    // error on runs that the full (non-summary) view returns fine.
+    let field = |name: &str| object.get(name).cloned().unwrap_or(serde_json::Value::Null);
     Ok(serde_json::json!({
         "schema": "once.test_results_summary.v1",
-        "source_schema": required("schema")?,
-        "target": required("target")?,
-        "runner": required("runner")?,
-        "status": required("status")?,
-        "summary": required("summary")?,
-        "artifacts": required("artifacts")?,
+        "source_schema": field("schema"),
+        "target": field("target"),
+        "runner": field("runner"),
+        "status": field("status"),
+        "summary": field("summary"),
+        "artifacts": field("artifacts"),
     }))
 }
 
