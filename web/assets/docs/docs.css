@@ -112,8 +112,8 @@ p {
   }
 }
 
-/* Sidebar item icons: monochrome SVGs tinted per brand via CSS mask,
-   full-color logos (Ruby, JavaScript) drawn as a background instead. */
+/* Sidebar item icons: monochrome vectors tinted with a mask,
+   full-color assets drawn as a background instead. */
 #docs-sidebar [data-part="nav-item-icon"] {
   display: inline-block;
   flex-shrink: 0;
@@ -169,23 +169,12 @@ p {
   --nav-icon-color: #149eca;
 }
 
-#docs-sidebar [data-part="nav-item-icon"][data-icon="microsandbox"] {
-  --nav-icon-mask: url("/docs/icons/microsandbox.svg");
-  --nav-icon-color: #bf84fe;
-}
-#docs-sidebar [data-part="nav-item-icon"][data-icon="e2b"] {
-  --nav-icon-mask: url("/docs/icons/e2b.svg");
-  --nav-icon-color: #ff8800;
-}
-#docs-sidebar [data-part="nav-item-icon"][data-icon="daytona"] {
-  --nav-icon-mask: url("/docs/icons/daytona.svg");
-}
-#docs-sidebar [data-part="nav-item-icon"][data-icon="tuist"] {
-  --nav-icon-mask: url("/docs/icons/tuist.svg");
-}
-
 #docs-sidebar [data-part="nav-item-icon"][data-icon="ruby"],
-#docs-sidebar [data-part="nav-item-icon"][data-icon="javascript"] {
+#docs-sidebar [data-part="nav-item-icon"][data-icon="javascript"],
+#docs-sidebar [data-part="nav-item-icon"][data-icon="microsandbox"],
+#docs-sidebar [data-part="nav-item-icon"][data-icon="e2b"],
+#docs-sidebar [data-part="nav-item-icon"][data-icon="daytona"],
+#docs-sidebar [data-part="nav-item-icon"][data-icon="tuist"] {
   background-color: transparent;
   -webkit-mask: none;
   mask: none;
@@ -198,4 +187,16 @@ p {
 }
 #docs-sidebar [data-part="nav-item-icon"][data-icon="javascript"] {
   background-image: url("/docs/icons/javascript.svg");
+}
+#docs-sidebar [data-part="nav-item-icon"][data-icon="microsandbox"] {
+  background-image: url("/docs/icons/microsandbox.png");
+}
+#docs-sidebar [data-part="nav-item-icon"][data-icon="e2b"] {
+  background-image: url("/docs/icons/e2b.png");
+}
+#docs-sidebar [data-part="nav-item-icon"][data-icon="daytona"] {
+  background-image: url("/docs/icons/daytona.png");
+}
+#docs-sidebar [data-part="nav-item-icon"][data-icon="tuist"] {
+  background-image: url("/docs/icons/tuist.png");
 }
