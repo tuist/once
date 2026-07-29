@@ -113,14 +113,11 @@ mod tests {
     fn empty_directory_hashes_to_the_version_prefix_only() {
         let tmp = tempfile::TempDir::new().unwrap();
         // sha256("once.host_tree.v1\0")
-        assert_eq!(
-            host_tree_sha256_hex(tmp.path()).unwrap(),
-            {
-                let mut hasher = sha2::Sha256::new();
-                hasher.update(b"once.host_tree.v1\0");
-                hex_lower(&hasher.finalize())
-            }
-        );
+        assert_eq!(host_tree_sha256_hex(tmp.path()).unwrap(), {
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(b"once.host_tree.v1\0");
+            hex_lower(&hasher.finalize())
+        });
     }
 
     #[test]

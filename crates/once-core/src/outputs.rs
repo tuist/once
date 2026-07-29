@@ -177,9 +177,7 @@ fn existing_output_matches_digest(path: &Path, expected: Digest) -> bool {
         // the usual way match on the first hash.
         return [OutputSymlinkMode::default(), OutputSymlinkMode::Preserve]
             .into_iter()
-            .any(|mode| {
-                digest_directory_blob(path, mode).is_ok_and(|digest| digest == expected)
-            });
+            .any(|mode| digest_directory_blob(path, mode).is_ok_and(|digest| digest == expected));
     }
     if metadata.is_file()
         && digest_file_blob(path, &metadata).is_ok_and(|digest| digest == expected)
