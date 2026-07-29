@@ -2610,7 +2610,7 @@ def _cargo_package_id_set(packages):
 
 def _cargo_workspace_member_ids(metadata, packages = []):
     members = metadata.get("workspace_members")
-    if members != None:
+    if members:
         return {package_id: True for package_id in members}
     return _cargo_package_id_set([
         package
