@@ -1,48 +1,39 @@
-# Autoresearch: outperform Bazel on the Codex build
+# Autoresearch: reduce Once local-hit latency
 
 ## Objective
 
-Reduce end-to-end cold and unchanged warm build time for the pinned OpenAI
-Codex command-line executable. First make Once's unchanged warm build faster
-than Bazel's, then optimize cold scheduling, memory, fetching, and
-materialization. Retain only changes that improve repeated release-build
-measurements without weakening correctness, portability, structured logging,
-or graph semantics.
+Reduce end-to-end local cache-hit latency for the 15-target cache-comparison
+workspace. Retain only changes that improve repeated release-build measurements
+without weakening correctness, portability, structured logging, or graph
+semantics.
 
 ## Metrics
 
-- Primary: median Once unchanged warm build time (`warm_elapsed_seconds`,
-  seconds, lower is better)
-- Secondary, measured in dedicated runs: aggregate peak resident memory
-  (`peak_resident_kibibytes`, kibibytes, lower is better)
-- Comparison gates: Bazel unchanged warm build time, Once cold build time, and
-  Bazel cold build time for the same pinned Codex revision
+- Primary: median local-hit latency (`local_hit_ms`, milliseconds, lower is better)
+- Secondary: mean latency (`mean_ms`) and standard deviation (`stddev_ms`)
 
 ## How to Run
 
 `./autoresearch.sh`
 
-The script builds the release executable, stabilizes the Codex action and
-source-digest caches, then measures three fresh Once command invocations. The
-Codex checkout defaults to `/tmp/once-codex-benchmark` and can be overridden
-with `ONCE_CODEX_CHECKOUT`. Isolated benchmark state defaults to
-`/tmp/once-codex-autoresearch` and can be overridden with
-`ONCE_CODEX_STATE_ROOT`.
+The script builds the release executable before measurement, warms the existing
+local action cache, and measures 40 fresh command invocations after five warmup
+runs. It starts the local benchmark server only when needed to populate an empty
+client cache.
 
 ## Files in Scope
 
+- `crates/once-cli/src/main.rs`: process runtime and command dispatch
+- `crates/once-cli/src/logging.rs`: per-invocation logging setup and writes
 - `crates/once-cli/src/commands/graph/`: graph analysis and scheduling
 - `crates/once-frontend/src/`: manifest, module, and graph loading
-- `crates/once-core/src/`: input hashing, execution, and materialization
-- workspace manifests: dependencies and release profile experiments
-- `benchmarks/codex-build-comparison/`: reproducible benchmark adapters and
-  measurement
+- workspace manifests: allocator and release profile experiments
 
 ## Off Limits
 
+- A persistent background process unless measurements show process startup is
+  still the dominant controllable cost
 - Platform-specific behavior in generic graph or cache interfaces
-- Benchmark-only target-kind behavior or Codex-specific branches in Rust
-- Reusing a cached result without a conservative invalidation boundary
 - Skipping required session logs
 - Benchmark-only shortcuts that do not improve normal Once workspaces
 
@@ -51,44 +42,11 @@ with `ONCE_CODEX_CHECKOUT`. Isolated benchmark state defaults to
 - Use `mise exec --` for every Rust command.
 - Keep the public command and graph behavior compatible.
 - Keep expensive filesystem and analysis work eligible for parallel execution.
-- Pin Codex revision `3947f0d0c3e255bade02e241c16cb43d284c0e65`.
-- Use Rust 1.95.0 for both build systems.
-- Separate downloaded source inputs from derived action results.
 - Run focused checks after every measured experiment and the full suite before
   handoff.
 - Do not use em dashes in user-facing text.
 
 ## What's Been Tried
-
-### Current Codex campaign
-
-- The generated Once graph now follows the exact normal and build dependency
-  closure and feature set reported for `codex-cli`. This fixed incompatible
-  development and cross-platform feature unification.
-- The first unchanged Once result was a cache hit but took 100.28 seconds and
-  retained about 3.0 gibibytes, with no compiler process running.
-- A persistent metadata-validated source and output digest index reduced
-  repeated content reads and repairs missing or stale workspace outputs from
-  the content store.
-- Immutable provider sharing cut the stable warm path from 5.903 to 3.607
-  seconds and reduced Once's resident memory from about 4.4 to 4.7 gibibytes
-  to about 2.0 to 2.2 gibibytes.
-- One shared evidence database connection and batched target evidence reduced
-  the stable warm path to 2.847 seconds.
-- A kernel file-event tracker and correctness-bound build receipts reduced the
-  final end-to-end median to 0.0556 seconds. Bazel's median is 0.7281 seconds,
-  so Once is 13.1 times faster. With both launchers prepared, Once is 22.9
-  times faster.
-- The Once tracker retained 11.3 mebibytes versus 2,163.6 mebibytes for the
-  Bazel service. A sampled Once cold build peaked at about 7.43 gibibytes.
-- The corrected isolated Once cold build took 311.624 seconds versus a
-  2,795.311-second completed Bazel reference. The native dependency strategies
-  differ, so this is a contributor-wait comparison rather than proof that Once
-  executes equivalent cold actions faster.
-- The research, rejected hypotheses, correctness fixes, and chronological
-  measurements are recorded in `codex.md`.
-
-### Earlier cache-hit campaign
 
 - Reusing one compiled Starlark program per invocation was a large improvement.
 - Loading only built-in modules required by the workspace reduced the rebased
@@ -176,31 +134,3 @@ with `ONCE_CODEX_CHECKOUT`. Isolated benchmark state defaults to
 - [Linux zero-copy receive documentation](https://www.kernel.org/doc/html/next/networking/iou-zcrx.html)
   describes a specialized network receive path with kernel and hardware
   requirements. It is not portable enough for Once's generic cache client.
-
-### Rebase onto bounded-memory main
-
-The campaign worktree rebased onto origin/main which added bounded memory
-management (`ResourcePool`, `--memory-limit`, streaming I/O, 250 MiB default
-action estimate, scheduler concurrency derived from memory budget). All six
-conflicting files were resolved by layering the campaign features (transitive
-artifact identities, critical-depth scheduling, build receipts, source digest
-cache, change tracker) on top of the upstream resource-bounding infrastructure.
-The release build and focused tests pass. A new cache must be primed with the
-rebased binary before lazy materialization and cold/warm comparisons resume.
-
-### Lazy materialization measured
-
-The corrected transitive lazy materialization design (carrying typed artifact
-identities through BuildOutcome, materializing only declared inputs and final
-outputs) was measured against the eager control on a complete-cache,
-empty-output-tree scenario:
-
-- Eager control: 47.799 seconds, 2740 files, 4.5 GiB output tree
-- Lazy treatment: 8.870 seconds, 121 files, 658 MiB output tree
-- Improvement: 5.4 times faster, 82 percent less filesystem traffic
-- Receipt follow-up: 0.297 seconds
-
-The treatment is retained. The rebased code restored the scheduler-level
-`materialize_cached_outputs` call for Starlark correctness, so the rebased
-binary cannot achieve this without further work to make the materialization
-demand-driven rather than eager.
