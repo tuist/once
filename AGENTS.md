@@ -125,6 +125,26 @@ reference implementation. Treat their module-owned examples, schema
 metadata, validation, and MCP/CLI discovery shape as the template when
 wiring a new toolchain.
 
+## Resource Budgeting
+
+Once's design requires that resources be bounded and budgeted. Every
+command that admits concurrent work operates within an explicit memory
+budget, defaulted to two thirds of the memory visible to the host or
+container and overridable with `--memory-limit`. The
+`ResourceLimits`/`ResourcePool` types in `once-core` own this budget.
+Each local action reserves its declared memory estimate (defaulting to
+250 mebibytes when undeclared) before it starts; the scheduler admits
+more work only when the combined reservations fit within the budget.
+
+New code that executes actions, captures command output, or restores
+cached artifacts must respect this boundary. Stream large files through
+bounded buffers and temporary files instead of buffering whole artifacts
+in memory. Do not introduce parallel work that bypasses the resource
+pool's admission control. Generic Rust code must not hardcode memory
+limits, action estimates, or concurrency ceilings for specific
+toolchains; those values belong in target kind resource declarations or
+the resource limits configuration.
+
 ## SDK API And Docs
 
 The `once` crate root and `crates/once/swift/Once.swift` are public SDK

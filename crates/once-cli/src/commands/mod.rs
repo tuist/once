@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod cache;
+pub mod change_tracker;
 pub mod edit;
 pub mod evidence;
 pub mod exec;

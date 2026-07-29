@@ -4,27 +4,31 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use once_cas::Digest;
-use sea_orm::{ActiveValue::Set, EntityTrait, QueryOrder};
+use sea_orm::{ActiveValue::Set, DatabaseConnection, EntityTrait, QueryOrder, TransactionTrait};
 
 use super::entity;
 use super::{EvidenceCacheState, EvidenceRecord, EvidenceStatus, EvidenceSubject};
 use crate::WorkspaceStore;
 
 type EvidenceDatabaseLock = Arc<tokio::sync::Mutex<()>>;
+type EvidenceDatabase = Arc<tokio::sync::OnceCell<DatabaseConnection>>;
 
 static EVIDENCE_DATABASE_LOCKS: LazyLock<Mutex<BTreeMap<PathBuf, EvidenceDatabaseLock>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
+static EVIDENCE_DATABASES: LazyLock<Mutex<BTreeMap<PathBuf, EvidenceDatabase>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 #[derive(Debug, Clone)]
 pub struct EvidenceStore {
     store: WorkspaceStore,
+    database: EvidenceDatabase,
 }
 
 impl EvidenceStore {
     pub fn open_workspace(workspace: impl AsRef<Path>) -> Self {
-        Self {
-            store: WorkspaceStore::open(workspace),
-        }
+        let store = WorkspaceStore::open(workspace);
+        let database = evidence_database(store.path());
+        Self { store, database }
     }
 
     pub fn path(&self) -> &Path {
@@ -32,14 +36,29 @@ impl EvidenceStore {
     }
 
     pub async fn append(&self, record: &EvidenceRecord) -> Result<()> {
+        self.append_many(std::slice::from_ref(record)).await
+    }
+
+    pub async fn append_many(&self, records: &[EvidenceRecord]) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
         let lock = evidence_database_lock(self.path());
         let _guard = lock.lock().await;
-        let db = self.store.connect().await?;
-        let model = record_to_active_model(record)?;
-        entity::Entity::insert(model)
-            .exec(&db)
+        let db = self.database().await?;
+        let transaction = db.begin().await.context("starting evidence transaction")?;
+        let models = records
+            .iter()
+            .map(record_to_active_model)
+            .collect::<Result<Vec<_>>>()?;
+        entity::Entity::insert_many(models)
+            .exec(&transaction)
             .await
-            .with_context(|| format!("writing evidence record `{}`", record.id))?;
+            .with_context(|| format!("writing {} evidence records", records.len()))?;
+        transaction
+            .commit()
+            .await
+            .context("committing evidence transaction")?;
         Ok(())
     }
 
@@ -49,15 +68,19 @@ impl EvidenceStore {
         }
         let lock = evidence_database_lock(self.path());
         let _guard = lock.lock().await;
-        let db = self.store.connect().await?;
+        let db = self.database().await?;
         entity::Entity::find()
             .order_by_asc(entity::Column::CreatedAtUnixMs)
-            .all(&db)
+            .all(db)
             .await
             .with_context(|| format!("reading evidence records from `{}`", self.path().display()))?
             .into_iter()
             .map(record_from_model)
             .collect()
+    }
+
+    async fn database(&self) -> Result<&DatabaseConnection> {
+        self.database.get_or_try_init(|| self.store.connect()).await
     }
 }
 
@@ -69,6 +92,17 @@ fn evidence_database_lock(path: &Path) -> EvidenceDatabaseLock {
         locks
             .entry(path.to_path_buf())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+    )
+}
+
+fn evidence_database(path: &Path) -> EvidenceDatabase {
+    let mut databases = EVIDENCE_DATABASES
+        .lock()
+        .expect("evidence database map lock poisoned");
+    Arc::clone(
+        databases
+            .entry(path.to_path_buf())
+            .or_insert_with(|| Arc::new(tokio::sync::OnceCell::new())),
     )
 }
 
@@ -167,6 +201,32 @@ mod tests {
         let loaded = store.load().await.unwrap();
         assert_eq!(loaded, vec![record]);
         assert!(store.path().is_file());
+    }
+
+    #[tokio::test]
+    async fn evidence_store_appends_records_in_one_batch() {
+        let tmp = TempDir::new().unwrap();
+        let store = EvidenceStore::open_workspace(tmp.path());
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::new(),
+        };
+        let records = [b"one", b"two"].map(|action| {
+            EvidenceRecord::from_action_result(
+                EvidenceSubject::target("cli", "build"),
+                Digest::of_bytes(action),
+                None,
+                EvidenceCacheState::Hit,
+                &result,
+            )
+            .unwrap()
+        });
+
+        store.append_many(&records).await.unwrap();
+
+        assert_eq!(store.load().await.unwrap(), records);
     }
 
     #[tokio::test]
