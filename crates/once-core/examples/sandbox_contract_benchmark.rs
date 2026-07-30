@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use once_cas::{CacheProvider, Cas, Digest};
 use once_core::{
-    run_uncached, validate_action_contract, Action, OutputSymlinkMode, ResourceRequest,
-    SandboxMode, WorkspacePath,
+    run_uncached, validate_action_contract, Action, NetworkPolicy, OutputSymlinkMode,
+    ResourceRequest, SandboxMode, WorkspacePath,
 };
 use tempfile::TempDir;
 
@@ -163,6 +163,7 @@ fn command_action(
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
         sandbox,
+        network: NetworkPolicy::default(),
         timeout_ms: None,
         success_exit_codes: vec![0],
         remote: None,

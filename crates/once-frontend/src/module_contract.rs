@@ -342,7 +342,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Build a structured argument list, optionally backed by an argument file.",
             ),
             entry(
-                "run_action(argv, inputs = [], outputs = [], clean_paths = [], create_dirs = [], cwd = None, env = {}, toolchain_identity = None, identifier = None, cacheable = True, inherit_parent_env = False, depends_on_prior_actions = True, stdout = None, stderr = None, sandbox = None, success_exit_codes = [0])",
+                "run_action(argv, inputs = [], outputs = [], clean_paths = [], create_dirs = [], cwd = None, env = {}, toolchain_identity = None, identifier = None, cacheable = True, inherit_parent_env = False, depends_on_prior_actions = True, stdout = None, stderr = None, sandbox = None, network = None, success_exit_codes = [0])",
                 "Declare a direct executable invocation with explicit inputs, outputs, setup, caching, sandbox policy, and exit codes that indicate valid outputs. `inherit_parent_env` is available only to uncached local run actions. Explicit `env` values take precedence. Use `once query validate-actions` to investigate filesystem contract drift without changing the sandbox policy.",
             ),
         ],

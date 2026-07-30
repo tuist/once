@@ -10,7 +10,9 @@ use tokio::process::Command;
 use tracing::debug;
 
 use crate::stream::{self, Destination};
-use crate::{resolve_execution_argv, resolve_execution_env, Error, Result, WorkspacePath};
+use crate::{
+    resolve_execution_argv, resolve_execution_env, Error, NetworkPolicy, Result, WorkspacePath,
+};
 
 /// Optional per-stream file redirection for a command. When a stream is
 /// redirected, the child writes directly to the workspace-relative file
@@ -37,6 +39,7 @@ pub(crate) struct Invocation<'a> {
     pub cwd: Option<&'a WorkspacePath>,
     pub timeout_ms: Option<u64>,
     pub redirect: Redirect<'a>,
+    pub network: NetworkPolicy,
 }
 
 /// How a child's stdout and stderr are consumed.
@@ -166,6 +169,7 @@ async fn spawn_and_capture(
         cwd,
         timeout_ms,
         redirect,
+        network,
     } = invocation;
     let argv = resolve_execution_argv(argv, workspace_root);
     let env = resolve_execution_env(env, workspace_root);
@@ -186,6 +190,21 @@ async fn spawn_and_capture(
     );
     command.current_dir(&command_cwd);
     command.kill_on_drop(true);
+    // Isolate the child from the network when the action declared `deny`.
+    // On Linux a seccomp filter installed between fork and exec turns every
+    // network syscall into `EACCES`. Other platforms accept the declaration
+    // but cannot enforce it; warn so the gap is visible rather than silent.
+    #[cfg(target_os = "linux")]
+    if network.is_denied() {
+        crate::network::arm(&mut command);
+    }
+    #[cfg(not(target_os = "linux"))]
+    if network.is_denied() {
+        tracing::warn!(
+            program = %program,
+            "network `deny` requested but not enforced on this platform; the action may still reach the network",
+        );
+    }
     debug!(
         program = %program,
         arg_count = rest.len(),
