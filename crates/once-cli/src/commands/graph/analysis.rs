@@ -31,6 +31,7 @@ use once_core::{
     EvidenceCacheState, InputFingerprintManifest, ResourceLimits, ResourcePool, SandboxMode,
 };
 use once_frontend::analysis::{AnalysisEngine, AnalysisOptions, CachedToolCommand};
+use once_frontend::ConfigurationOverrides;
 use once_frontend::GraphTarget;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -38,6 +39,8 @@ use serde_json::Value as JsonValue;
 use self::actions::{run_declared_actions, validate_declared_actions, DeclaredActionValidation};
 use self::scheduler::BuildScheduler;
 use self::source_digest_cache::SourceDigestCache;
+
+use super::configuration::ResolvedConfiguration;
 
 const GRAPH_TOOL_CACHE_SCHEMA: &str = "once.graph-tool-paths.v4";
 const GRAPH_TOOL_ENVIRONMENT_KEYS: &[&str] = &[
@@ -138,13 +141,15 @@ pub(super) struct BuildSession {
 }
 
 impl BuildSession {
-    pub(super) async fn load_workspace(
+    pub(super) async fn load_workspace_with_configuration(
         workspace: &Path,
         cache: &CacheProvider,
         sandbox: SandboxMode,
+        resolved: &ResolvedConfiguration,
     ) -> Result<Self> {
         let workspace_targets =
-            once_frontend::load_workspace(workspace).context("loading workspace")?;
+            once_frontend::load_workspace_with_configuration(workspace, &resolved.configuration)
+                .context("loading workspace")?;
         let target_kinds = workspace_targets
             .iter()
             .map(|target| target.kind.clone())
@@ -153,7 +158,8 @@ impl BuildSession {
             workspace,
             AnalysisOptions::default(),
             &target_kinds,
-        )?;
+        )?
+        .with_configuration(resolved.configuration.clone(), resolved.path_suffix.clone());
         let graph = analyzer
             .load_graph_workspace_from_targets(workspace, workspace_targets)
             .context("loading graph")?;
@@ -185,6 +191,22 @@ impl BuildSession {
         options: AnalysisOptions,
         sandbox: SandboxMode,
     ) -> Result<Self> {
+        let resolved =
+            super::configuration::resolve(workspace, &ConfigurationOverrides::default())?;
+        Self::new_with_options_with_configuration(
+            workspace, cache, graph, options, sandbox, &resolved,
+        )
+        .await
+    }
+
+    pub(super) async fn new_with_options_with_configuration(
+        workspace: &Path,
+        cache: &CacheProvider,
+        graph: Vec<GraphTarget>,
+        options: AnalysisOptions,
+        sandbox: SandboxMode,
+        resolved: &ResolvedConfiguration,
+    ) -> Result<Self> {
         let resolved_tools = resolve_graph_tools(workspace, &graph).await?;
         let target_kinds = graph
             .iter()
@@ -195,6 +217,7 @@ impl BuildSession {
             options,
             &target_kinds,
         )?
+        .with_configuration(resolved.configuration.clone(), resolved.path_suffix.clone())
         .with_tool_cache(
             resolved_tools.paths.clone(),
             resolved_tools.commands.clone(),

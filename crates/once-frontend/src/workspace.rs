@@ -32,7 +32,19 @@ pub fn load_file(path: &Path) -> Result<Vec<Target>> {
 /// Recursively scan `root` for `once.toml` files and return every
 /// script-like target they declare.
 pub fn load_workspace(root: &Path) -> Result<Vec<Target>> {
-    let scan = load_workspace_scan(root)?;
+    let configuration = crate::manifest::load_workspace_configuration(root)?;
+    load_workspace_with_configuration(root, &configuration)
+}
+
+/// Load the workspace using an explicit configuration rather than the
+/// one declared in `once.toml`. Invocation-time overrides flow through
+/// here so dependency selection and Starlark analysis observe the same
+/// configuration that scopes target identity.
+pub fn load_workspace_with_configuration(
+    root: &Path,
+    configuration: &BuildConfiguration,
+) -> Result<Vec<Target>> {
+    let scan = load_workspace_scan_with_configuration(root, configuration)?;
     let walker = WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -202,6 +214,15 @@ impl WorkspaceScan {
             .iter()
             .any(|pattern| pattern.matches(&descendant))
     }
+}
+
+pub(crate) fn load_workspace_scan_with_configuration(
+    root: &Path,
+    configuration: &BuildConfiguration,
+) -> Result<WorkspaceScan> {
+    let mut scan = load_workspace_scan(root)?;
+    scan.configuration = configuration.clone();
+    Ok(scan)
 }
 
 pub(crate) fn load_workspace_scan(root: &Path) -> Result<WorkspaceScan> {

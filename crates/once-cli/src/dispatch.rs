@@ -78,14 +78,30 @@ async fn run_command(
 ) -> Result<ExitCode> {
     match command {
         Cmd::Auth { cmd } => run_auth_command(workspace, xdg, output, cmd).await,
-        Cmd::Build { target, sandbox } => {
-            dispatch_build(workspace, xdg, output, target, sandbox, resource_limits).await
+        Cmd::Build {
+            target,
+            sandbox,
+            config,
+        } => {
+            let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
+            dispatch_build(
+                workspace,
+                xdg,
+                output,
+                target,
+                sandbox,
+                resource_limits,
+                resolved,
+            )
+            .await
         }
         Cmd::Lint {
             target,
             sandbox,
+            config,
             fail_on,
         } => {
+            let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
             dispatch_lint(
                 workspace,
                 xdg,
@@ -94,12 +110,14 @@ async fn run_command(
                 sandbox,
                 fail_on,
                 resource_limits,
+                resolved,
             )
             .await
         }
         Cmd::Run {
             target,
             sandbox,
+            config,
             visible,
             runtime_rpc,
             runtime_rpc_socket,
@@ -107,6 +125,7 @@ async fn run_command(
             compute,
             arguments,
         } => {
+            let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
             Box::pin(dispatch_run(
                 workspace,
                 xdg,
@@ -120,6 +139,7 @@ async fn run_command(
                     resource_limits: resource_limits.clone(),
                     arguments,
                     remote: resolve_remote_execution(workspace, xdg, remote, compute.as_deref())?,
+                    resolved,
                 },
             ))
             .await
@@ -157,6 +177,7 @@ async fn run_command(
         Cmd::Test {
             target,
             sandbox,
+            config,
             jobs,
             all,
             changed_paths,
@@ -164,6 +185,7 @@ async fn run_command(
             batch_test_units,
             test_batch_id,
         } => {
+            let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
             Box::pin(dispatch_test(
                 workspace,
                 xdg,
@@ -178,6 +200,7 @@ async fn run_command(
                     batch_test_units,
                     test_batch_id,
                     resource_limits: resource_limits.clone(),
+                    resolved,
                 },
             ))
             .await
@@ -243,6 +266,7 @@ mod tests {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_build(
     workspace: &Path,
     xdg: &Xdg,
@@ -250,6 +274,7 @@ async fn dispatch_build(
     target: Option<String>,
     sandbox: SandboxMode,
     resource_limits: &ResourceLimits,
+    resolved: commands::graph::ResolvedConfiguration,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
@@ -260,10 +285,12 @@ async fn dispatch_build(
         &target,
         sandbox,
         resource_limits.clone(),
+        &resolved,
     ))
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_lint(
     workspace: &Path,
     xdg: &Xdg,
@@ -272,6 +299,7 @@ async fn dispatch_lint(
     sandbox: SandboxMode,
     fail_on: once_core::LintSeverity,
     resource_limits: &ResourceLimits,
+    resolved: commands::graph::ResolvedConfiguration,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
@@ -283,6 +311,7 @@ async fn dispatch_lint(
         sandbox,
         fail_on,
         resource_limits.clone(),
+        &resolved,
     ))
     .await
 }
@@ -298,6 +327,7 @@ struct TestDispatchArgs {
     batch_test_units: Vec<String>,
     test_batch_id: Option<String>,
     resource_limits: ResourceLimits,
+    resolved: commands::graph::ResolvedConfiguration,
 }
 
 async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> Result<ExitCode> {
@@ -313,6 +343,7 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
             &args.batch_test_units,
             args.test_batch_id.as_deref(),
             args.resource_limits,
+            &args.resolved,
         ))
         .await;
     }
@@ -327,6 +358,7 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
             &target,
             args.sandbox,
             args.resource_limits,
+            &args.resolved,
         ))
         .await;
     }
@@ -688,6 +720,7 @@ struct RunDispatchArgs {
     resource_limits: ResourceLimits,
     arguments: Vec<String>,
     remote: Option<RemoteExecution>,
+    resolved: commands::graph::ResolvedConfiguration,
 }
 
 async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Result<ExitCode> {
@@ -701,11 +734,15 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
         resource_limits,
         arguments,
         remote,
+        resolved,
     } = args;
     let resolved_target = resolve_required_target(workspace, target.clone())?;
-    if let Some(graph) =
-        commands::graph::load_graph_for_capability(workspace, &resolved_target, "run")?
-    {
+    if let Some(graph) = commands::graph::load_graph_for_capability_with_configuration(
+        workspace,
+        &resolved_target,
+        "run",
+        &resolved,
+    )? {
         if runtime_rpc || runtime_rpc_socket.is_some() {
             anyhow::bail!("--runtime-rpc is only supported for executable script targets");
         }
@@ -723,6 +760,7 @@ async fn dispatch_run(workspace: &Path, xdg: &Xdg, args: RunDispatchArgs) -> Res
             commands::graph::GraphRunOptions { visible, arguments },
             sandbox,
             resource_limits,
+            &resolved,
         ))
         .await;
     }
