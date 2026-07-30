@@ -1639,6 +1639,14 @@ def _collect_dep_compile_inputs(deps, build_dir):
             module_name = bundle.get("module_name") or ""
             if module_name and module_name not in framework_module_names:
                 framework_module_names.append(module_name)
+        # Framework search directories contributed without a specific framework
+        # bundle. Swift autolinks imported frameworks, so a consumer only needs
+        # the search path on the compile and link lines; the framework itself is
+        # embedded separately. Swift Package Manager dependency sets use this to
+        # expose a directory of built frameworks (binary package products).
+        for d in dep.get("transitive_framework_search_dirs") or []:
+            if d and d not in framework_search_dirs:
+                framework_search_dirs.append(d)
         for fw in dep.get("transitive_sdk_frameworks") or []:
             if fw and fw not in sdk_frameworks:
                 sdk_frameworks.append(fw)
@@ -1864,6 +1872,42 @@ def _apple_framework_impl(ctx):
         "transitive_linkopts": transitive_linkopts,
     }
 
+def _apple_embed_framework_dirs(ctx, deps, bundle_dir, frameworks_dir, codesign, identifier):
+    # Embed every built framework found in a dependency's framework directories
+    # into the app bundle and re-sign it. Swift Package Manager dependency sets
+    # expose these directories (their built binary framework products have names
+    # only known after the build), so the copy and signing happen in one action
+    # that stages whatever frameworks are present.
+    embed_dirs = []
+    for dep in deps:
+        for d in dep.get("transitive_embed_framework_dirs") or []:
+            if d and d not in embed_dirs:
+                embed_dirs.append(d)
+    if not embed_dirs:
+        return {"stamp": "", "tree": ""}
+    dest = ctx["build_dir"] + "/" + bundle_dir + "/" + frameworks_dir
+    stamp = declare_output("spm-frameworks.stamp")
+    lines = ["set -eu", "mkdir -p " + _shell_literal(dest)]
+    for d in embed_dirs:
+        lines.append("for fw in " + _shell_literal(d) + "/*.framework; do")
+        lines.append('  [ -e "$fw" ] || continue')
+        lines.append('  name=$(basename "$fw")')
+        lines.append("  rm -rf " + _shell_literal(dest) + '/"$name"')
+        lines.append("  cp -R \"$fw\" " + _shell_literal(dest) + "/")
+        lines.append("  " + _shell_literal(codesign["codesign_path"]) + " --force --sign - --timestamp=none " + _shell_literal(dest) + '/"$name"')
+        lines.append("done")
+    lines.append("touch " + _shell_literal(stamp))
+    run_action(
+        argv = [host_which("sh"), "-c", "\n".join(lines)],
+        inputs = embed_dirs,
+        outputs = [dest, stamp],
+        clean_paths = [dest],
+        env = codesign["env"],
+        toolchain_identity = "once.apple.embed.framework_dirs.v1\x00" + codesign["identity"],
+        identifier = identifier + ":" + ctx["label"]["id"],
+    )
+    return {"stamp": stamp, "tree": dest}
+
 def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesign, identifier_prefix):
     embedded_paths = []
     embedded_stamps = []
@@ -1986,6 +2030,7 @@ def _apple_application_impl(ctx):
     linkopts = attrs.get("linkopts") or []
     defines = attrs.get("defines") or []
     swift_flags = attrs.get("swift_flags") or []
+    bridging_header = attrs.get("bridging_header") or ""
     enable_testing = attrs.get("enable_testing") or False
     swiftmodule = declare_output(product_name + ".swiftmodule") if enable_testing else ""
     swiftdoc = declare_output(product_name + ".swiftdoc") if enable_testing else ""
@@ -2064,7 +2109,15 @@ def _apple_application_impl(ctx):
         "@executable_path/Frameworks",
         "-o",
         executable,
+        # Actions run with a cleared environment, so give the Clang importer an
+        # explicit, writable module cache under the build directory. Without it,
+        # importing a source-built module map (an Objective-C Swift package
+        # dependency) fails because the implicit cache has nowhere to go.
+        "-module-cache-path",
+        ctx["build_dir"] + "/ModuleCache",
     ]
+    if bridging_header:
+        swift_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
     for d in compile_swiftmodule_dirs:
         swift_argv.extend(["-I", d])
     for hdir in compile_header_dirs:
@@ -2104,6 +2157,19 @@ def _apple_application_impl(ctx):
         swift_argv.append(ar)
 
     swift_inputs = list(swift_srcs)
+    if bridging_header:
+        bridging_header_path = _package_relative(ctx, bridging_header)
+        if bridging_header_path not in swift_inputs:
+            swift_inputs.append(bridging_header_path)
+    for mmap in dep_modulemaps:
+        if mmap not in swift_inputs:
+            swift_inputs.append(mmap)
+    for hdir in compile_header_dirs:
+        if hdir not in swift_inputs:
+            swift_inputs.append(hdir)
+    for d in framework_search_dirs:
+        if d not in swift_inputs:
+            swift_inputs.append(d)
     for ar in dep_archives:
         if ar not in swift_inputs:
             swift_inputs.append(ar)
@@ -2143,8 +2209,15 @@ def _apple_application_impl(ctx):
             "-emit-module-path",
             swiftmodule,
         ]
+        module_argv.extend(["-module-cache-path", ctx["build_dir"] + "/ModuleCache"])
+        if bridging_header:
+            module_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
         for d in compile_swiftmodule_dirs:
             module_argv.extend(["-I", d])
+        for hdir in compile_header_dirs:
+            module_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+        for mmap in dep_modulemaps:
+            module_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
         for d in framework_search_dirs:
             module_argv.extend(["-F", d])
         for fw in framework_module_names:
@@ -2157,9 +2230,21 @@ def _apple_application_impl(ctx):
             module_argv.append(flag)
         for src in swift_srcs:
             module_argv.append(src)
+        module_inputs = list(swift_srcs)
+        if bridging_header and _package_relative(ctx, bridging_header) not in module_inputs:
+            module_inputs.append(_package_relative(ctx, bridging_header))
+        for mmap in dep_modulemaps:
+            if mmap not in module_inputs:
+                module_inputs.append(mmap)
+        for hdir in compile_header_dirs:
+            if hdir not in module_inputs:
+                module_inputs.append(hdir)
+        for d in framework_search_dirs:
+            if d not in module_inputs:
+                module_inputs.append(d)
         run_action(
             argv = module_argv,
-            inputs = swift_srcs,
+            inputs = module_inputs,
             outputs = [swiftmodule, swiftdoc],
             env = swiftc["env"],
             toolchain_identity = swiftc["identity"],
@@ -2200,6 +2285,14 @@ def _apple_application_impl(ctx):
         codesign,
         "apple_application_embed",
     )
+    embedded_dir_frameworks = _apple_embed_framework_dirs(
+        ctx,
+        deps,
+        app_dir,
+        "Frameworks",
+        codesign,
+        "apple_application_embed_frameworks",
+    )
 
     # Ad-hoc codesign the .app bundle itself. Must run after embedded
     # frameworks land so their signature is included in the bundle's
@@ -2208,6 +2301,8 @@ def _apple_application_impl(ctx):
     cs_inputs = [executable, info_plist]
     for stamp in embedded_frameworks["stamps"]:
         cs_inputs.append(stamp)
+    if embedded_dir_frameworks["stamp"]:
+        cs_inputs.append(embedded_dir_frameworks["stamp"])
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + app_dir],
         inputs = cs_inputs,
@@ -2228,7 +2323,7 @@ def _apple_application_impl(ctx):
         "label_id": ctx["label"]["id"],
         "target_kind": "apple_application",
         "app_path": app_path,
-        "app_files": [executable, info_plist, app_cs_stamp] + embedded_frameworks["files"] + ([swiftmodule, swiftdoc] if enable_testing else []),
+        "app_files": [executable, info_plist, app_cs_stamp] + embedded_frameworks["files"] + ([embedded_dir_frameworks["tree"]] if embedded_dir_frameworks["tree"] else []) + ([swiftmodule, swiftdoc] if enable_testing else []),
         "bundle_id": bundle_id,
         "platform": platform,
         "sdk_variant": sdk_variant,
@@ -3473,6 +3568,7 @@ apple_application = target_kind(
         attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple SDK dynamic libraries linked by name"),
         attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
+        attr("bridging_header", "string", docs = "ObjC bridging header imported into every Swift source (`-import-objc-header`), letting them see ObjC symbols and any frameworks the header imports"),
         attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled so hosted test bundles can `@testable import` the application module"),
     ],
     deps = [

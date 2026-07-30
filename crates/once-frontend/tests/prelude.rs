@@ -12313,6 +12313,56 @@ fn prelude_apple_application_exposes_enable_testing() {
 }
 
 #[test]
+fn prelude_apple_application_exposes_bridging_header() {
+    // An Xcode app whose `SWIFT_OBJC_BRIDGING_HEADER` imports a framework
+    // (commonly AppKit) makes it visible to every Swift source; the application
+    // kind must accept and apply that header.
+    assert_target_kind_attrs("apple_application", &["bridging_header"]);
+    let source = include_str!("../prelude/apple.star");
+    assert!(
+        source.contains("\"-import-objc-header\", _package_relative(ctx, bridging_header)"),
+        "apple_application must import the bridging header"
+    );
+    // The main and testable-module compiles both run with a cleared
+    // environment, so both must set an explicit Clang module cache or a
+    // source-built Objective-C package module cannot be imported.
+    assert!(
+        source.matches("/ModuleCache").count() >= 2,
+        "both app compiles must set an explicit module cache path"
+    );
+}
+
+#[test]
+fn prelude_xcode_spm_dependencies_registered() {
+    let schema =
+        built_in_target_kind_schema("xcode_spm_dependencies").expect("xcode_spm_dependencies");
+    assert!(target_kind_has_impl("xcode_spm_dependencies").unwrap());
+    assert!(schema.providers.iter().any(|p| p == "apple_linkable"));
+    assert_target_kind_attrs(
+        "xcode_spm_dependencies",
+        &["manifest", "resolved", "products", "platform"],
+    );
+}
+
+#[test]
+fn prelude_apple_consumes_framework_search_dirs() {
+    // A dependency can contribute a bare framework search directory (Swift
+    // autolinks the imported framework, so no framework name is needed). The
+    // collector must surface it as a `-F` search directory.
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+deps = [{{"transitive_framework_search_dirs": ["out/spm/frameworks"]}}]
+result = repr(_collect_dep_compile_inputs(deps, "build")[5])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["out/spm/frameworks"]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_product_kind_maps_apple_product_types() {
     let prelude = xcode_prelude_source();
     let source = format!(

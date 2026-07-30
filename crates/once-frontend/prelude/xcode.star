@@ -661,8 +661,8 @@ def _xcode_spm_manifest(platform, minimum_os, packages, products):
     # Synthesize an aggregating `Package.swift`: one static library target that
     # depends on every product the Xcode targets consume, so a single
     # `swift build` produces a linkable archive plus each dependency's module
-    # and framework. Proven to build against real packages (for example Sparkle
-    # and MASShortcut).
+    # and framework. Handles both source packages and binary xcframework
+    # products distributed through Swift Package Manager.
     dependency_lines = []
     for package in packages:
         dependency_lines.append("        " + _xcode_spm_dependency_clause(package["url"], package["requirement"]) + ",")
@@ -883,6 +883,9 @@ def _xcode_common_attrs(ctx, target, settings, subs, platform, files):
     swift_flags = _xcode_swift_flags(settings, subs)
     if swift_flags:
         attrs["swift_flags"] = swift_flags
+    bridging_header = _xcode_resolve_vars(_xcode_scalar(settings.get("SWIFT_OBJC_BRIDGING_HEADER")), subs)
+    if bridging_header and not bridging_header.startswith("$("):
+        attrs["bridging_header"] = bridging_header
     if files["headers"]:
         attrs["exported_headers"] = files["headers"]
     sdk_frameworks = _xcode_sdk_frameworks(settings, files["frameworks"])
@@ -1025,18 +1028,110 @@ def _xcode_workspace_resolver(ctx):
         name = target.get("name") or ""
         dep_closure[name] = _xcode_transitive_deps(objects, target, name_to_id)
 
+    # Swift Package Manager dependencies: collect the products every target
+    # consumes so a single aggregating package can build them and every consumer
+    # can link against the result.
+    package_refs = _xcode_spm_package_refs(objects)
+    used_products = {}
+    used_identities = {}
+    target_uses_spm = {}
+    for target in native_targets:
+        products = _xcode_target_spm_products(objects, target, package_refs)
+        if products:
+            target_uses_spm[target.get("name") or ""] = True
+        for product in products:
+            used_products[product["name"]] = product["package_identity"]
+            if product["package_identity"]:
+                used_identities[product["package_identity"]] = True
+
+    spm_target_name = ""
+    spm_spec = None
+    if used_products:
+        spm_target_name = "OnceSwiftPackages"
+        spm_spec = _xcode_spm_spec(ctx, objects, package_refs, used_products, used_identities, project_settings, project_path, project_dir, spm_target_name)
+
     specs = []
     roots = []
     for target in native_targets:
         spec = _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir)
         if spec == None:
             continue
+        if spm_spec != None and target_uses_spm.get(target.get("name") or ""):
+            dep_ref = "./" + spm_target_name
+            if dep_ref not in spec["deps"]:
+                spec["deps"] = _unique(spec["deps"] + [dep_ref])
         specs.append(spec)
         roots.append(spec["name"])
+
+    if spm_spec != None:
+        specs.append(spm_spec)
 
     # The application targets are the natural build roots; tests are roots too
     # so `once test` can reach them, but applications take precedence in order.
     return {"targets": specs, "roots": _xcode_roots(specs)}
+
+def _xcode_spm_spec(ctx, objects, package_refs, used_products, used_identities, project_settings, project_path, project_dir, spm_target_name):
+    # Assemble the `xcode_spm_dependencies` target that builds the project's
+    # Swift package products. Only remote packages are built here; workspace
+    # local packages are not modeled yet.
+    packages = []
+    seen = {}
+    for ref in package_refs.values():
+        if ref.get("kind") != "remote":
+            continue
+        identity = ref.get("identity") or ""
+        if identity not in used_identities or identity in seen:
+            continue
+        seen[identity] = True
+        packages.append(ref)
+
+    product_records = []
+    product_specs = []
+    for name in sorted(used_products.keys()):
+        package_identity = used_products[name]
+        product_records.append({"name": name, "package_identity": package_identity})
+        product_specs.append(name + "\x1f" + package_identity)
+
+    sdkroot = _xcode_scalar(project_settings.get("SDKROOT"))
+    platform = _xcode_platform(sdkroot)
+    minimum_os = _xcode_minimum_os(project_settings, platform) or "11.0"
+    manifest = _xcode_spm_manifest(platform, minimum_os, packages, product_records)
+
+    resolved = _xcode_read_package_resolved(ctx, project_path)
+
+    attrs = {
+        "manifest": manifest,
+        "resolved": resolved,
+        "products": product_specs,
+        "platform": platform,
+        "minimum_os": minimum_os,
+    }
+    sdk_variant = ctx["attr"].get("sdk_variant")
+    if sdk_variant:
+        attrs["sdk_variant"] = sdk_variant
+    developer_dir = ctx["attr"].get("xcode_developer_dir")
+    if developer_dir:
+        attrs["xcode_developer_dir"] = developer_dir
+    return {
+        "name": spm_target_name,
+        "kind": "xcode_spm_dependencies",
+        "deps": [],
+        "srcs": [],
+        "attrs": attrs,
+    }
+
+def _xcode_read_package_resolved(ctx, project_path):
+    bundle = project_path
+    if _ends_with(bundle, "/project.pbxproj"):
+        bundle = _parent_dir(bundle)
+    candidates = [
+        bundle + "/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+        bundle + "/project.workspace/xcshareddata/swiftpm/Package.resolved",
+    ]
+    for candidate in candidates:
+        if host_file_exists(_xcode_abs(candidate)):
+            return host_file_read(_xcode_abs(candidate))
+    return ""
 
 def _xcode_transitive_deps(objects, target, name_to_id, seen = None):
     seen = seen or {}
@@ -1137,6 +1232,136 @@ def _xcode_workspace_impl(ctx):
     return {}
 
 # ---------------------------------------------------------------------------
+# Swift Package Manager dependency set
+# ---------------------------------------------------------------------------
+
+def _xcode_spm_stage_script(checkouts_dir, bin_dir, include_dir, product_specs):
+    # Stage every Objective-C / C package module the aggregate consumes into a
+    # single include directory with one combined module map, so the consuming
+    # Apple targets import them through a stable path. Framework products (for
+    # binary xcframework products) stay in the build directory and are reached through the
+    # framework search path, so they are skipped here.
+    lines = [
+        "set -eu",
+        "mkdir -p " + _shell_literal(include_dir),
+        ": > " + _shell_literal(include_dir + "/module.modulemap"),
+    ]
+    for spec in product_specs:
+        parts = spec.split("\x1f")
+        name = parts[0]
+        package = parts[1] if len(parts) > 1 else parts[0]
+        checkout = _shell_literal(checkouts_dir) + "/" + _shell_literal(package)
+        framework = _shell_literal(bin_dir) + "/" + _shell_literal(name + ".framework")
+        lines.append("if [ ! -d " + framework + " ] && [ -d " + checkout + " ]; then")
+        lines.append("  mm=$(find " + checkout + " -path '*/include/module.modulemap' 2>/dev/null | head -n 1)")
+        lines.append('  if [ -z "$mm" ]; then mm=$(find ' + checkout + " -name module.modulemap 2>/dev/null | head -n 1); fi")
+        lines.append('  if [ -n "$mm" ]; then')
+        lines.append("    find " + checkout + " -name '*.h' -exec cp -f {} " + _shell_literal(include_dir) + "/ \\; 2>/dev/null || true")
+        lines.append('    cat "$mm" >> ' + _shell_literal(include_dir) + "/module.modulemap")
+        lines.append("  fi")
+        lines.append("fi")
+    return "\n".join(lines)
+
+def _xcode_spm_dependencies_impl(ctx):
+    attrs = ctx["attr"]
+    platform = attrs.get("platform") or "macos"
+    minimum_os = attrs.get("minimum_os") or "10.15"
+    sdk_variant = attrs.get("sdk_variant") or "simulator"
+    arch = attrs.get("arch") or host_arch()
+    configuration = "release"
+    xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
+    manifest = attrs.get("manifest") or ""
+    resolved = attrs.get("resolved") or ""
+    product_specs = attrs.get("products") or []
+
+    swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
+    swift = _swiftpm_swift_executable(attrs.get("swift") or "swift", xcode_developer_dir, swiftc["swiftc_path"])
+    version = host_command([swift, "--version"], env = swiftc["env"]).strip()
+    action_env = dict(swiftc["env"])
+    action_path = _parent_dir(swiftc["swiftc_path"]) + ":" + _parent_dir(swift) + ":/usr/bin:/bin"
+    action_env["PATH"] = action_path
+    triple = _apple_triple(platform, minimum_os, sdk_variant, arch, False)
+    build_triple_dir = _swiftpm_build_triple_dir(platform, sdk_variant, arch)
+
+    # Materialize the synthesized aggregating package.
+    pkg_dir = ctx["build_dir"] + "/spm"
+    manifest_path = pkg_dir + "/Package.swift"
+    source_path = pkg_dir + "/Sources/OnceXcodeDeps/Empty.swift"
+    write_path(manifest_path, manifest)
+    write_path(source_path, "// Once aggregating package for Xcode SwiftPM dependencies\n")
+    build_inputs = [manifest_path, source_path]
+    if resolved:
+        resolved_path = pkg_dir + "/Package.resolved"
+        write_path(resolved_path, resolved)
+        build_inputs.append(resolved_path)
+
+    scratch = declare_output("spm-build")
+    bin_dir = scratch + "/" + build_triple_dir + "/" + configuration
+    checkouts_dir = scratch + "/checkouts"
+    archive = bin_dir + "/libOnceXcodeDeps.a"
+    module_dir = bin_dir + "/Modules"
+
+    build_argv = [
+        swift,
+        "build",
+        "--package-path",
+        pkg_dir,
+        "--scratch-path",
+        scratch,
+        "--configuration",
+        configuration,
+        "--triple",
+        triple,
+        "--sdk",
+        swiftc["sdk_path"],
+        "--manifest-cache",
+        "local",
+    ]
+    run_action(
+        argv = build_argv,
+        inputs = build_inputs,
+        outputs = [bin_dir, checkouts_dir],
+        clean_paths = [scratch],
+        env = action_env,
+        toolchain_identity = "once.xcode.spm.build.v1\x00" + version + "\x00" + swiftc["identity"] + "\x00" + triple,
+        identifier = "xcode_spm_build:" + ctx["label"]["id"],
+    )
+
+    include_dir = ctx["build_dir"] + "/spmroot/include"
+    stage_script = _xcode_spm_stage_script(checkouts_dir, bin_dir, include_dir, product_specs)
+    run_action(
+        argv = [host_which("sh"), "-c", stage_script],
+        inputs = [bin_dir, checkouts_dir],
+        outputs = [include_dir],
+        clean_paths = [include_dir],
+        env = {},
+        toolchain_identity = "once.xcode.spm.stage.v1",
+        identifier = "xcode_spm_stage:" + ctx["label"]["id"],
+    )
+
+    return {
+        "label_id": ctx["label"]["id"],
+        "xcode_spm_dependencies": True,
+        "swiftmodule_dir": module_dir,
+        "archive": archive,
+        "transitive_archives": [archive],
+        "transitive_alwayslink_archives": [],
+        "transitive_swiftmodule_dirs": [module_dir],
+        "transitive_exported_headers": [],
+        "transitive_exported_header_dirs": [include_dir],
+        "transitive_modulemaps": [include_dir + "/module.modulemap"],
+        "transitive_hmaps": [],
+        "transitive_framework_search_dirs": [bin_dir],
+        "transitive_embed_framework_dirs": [bin_dir],
+        "transitive_sdk_frameworks": [],
+        "transitive_sdk_dylibs": [],
+        "transitive_linkopts": [],
+        "transitive_defines": [],
+        "transitive_link_framework_bundles": [],
+        "transitive_framework_bundles": [],
+    }
+
+# ---------------------------------------------------------------------------
 # Public target kind + native project
 # ---------------------------------------------------------------------------
 
@@ -1162,4 +1387,24 @@ xcode_workspace = target_kind(
         ),
     ],
     impl = _xcode_workspace_impl,
+)
+
+xcode_spm_dependencies = target_kind(
+    docs = "Builds the Swift Package Manager dependencies an Xcode project consumes. The resolver synthesizes an aggregating `Package.swift` from the project's package references and per-target product dependencies; this target runs one `swift build` and exposes the resulting archive, modules, Objective-C module maps, and built frameworks to the lowered Apple targets.",
+    attrs = [
+        attr("manifest", "string", docs = "Synthesized `Package.swift` describing the consumed packages and products.", configurable = False),
+        attr("resolved", "string", default = "", docs = "Contents of the project's `Package.resolved`, applied so the build resolves to the project's pinned versions.", configurable = False),
+        attr("products", "list<string>", default = "[]", docs = "Consumed products as `product\\x1fpackage` records used to stage source package modules.", configurable = False),
+        attr("platform", "string", default = "macos", docs = "Apple platform the packages are built for.", configurable = False),
+        attr("minimum_os", "string", default = "10.15", docs = "Minimum OS version passed to the package build triple.", configurable = False),
+        attr("sdk_variant", "string", default = "simulator", docs = "`simulator` or `device` SDK selection on non-macOS platforms.", configurable = False),
+        attr("arch", "string", default = "", docs = "Build architecture. Defaults to the host architecture.", configurable = False),
+        attr("swift", "string", default = "swift", docs = "Swift driver used to run `swift build`.", configurable = False),
+        attr("xcode_developer_dir", "string", default = "", docs = "Optional `DEVELOPER_DIR` override folded into the build cache key.", configurable = False),
+    ],
+    deps = [],
+    providers = ["xcode_spm_dependencies", "apple_linkable"],
+    capabilities = [capability("build", ["default"])],
+    tools = [_XCODE_TOOL],
+    impl = _xcode_spm_dependencies_impl,
 )

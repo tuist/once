@@ -73,6 +73,7 @@ PRELUDE_TARGET_KINDS = {
     ],
     "xcode.star": [
         "xcode_workspace",
+        "xcode_spm_dependencies",
     ],
     "c.star": ["c_library"],
     "cmake.star": [
