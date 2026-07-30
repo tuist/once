@@ -839,8 +839,16 @@ pub(crate) fn validate_test_unit(
     Ok(())
 }
 
-pub async fn test_results(workspace: &Path, output: Output, target_id: &str) -> Result<()> {
-    let value = test_results_value(workspace, target_id)?;
+pub async fn test_results(
+    workspace: &Path,
+    output: Output,
+    target_id: &str,
+    summary_only: bool,
+) -> Result<()> {
+    let mut value = test_results_value(workspace, target_id)?;
+    if summary_only {
+        value = test_results_summary_value(&value)?;
+    }
     write_body(output, || render_test_results_human(&value), &value).await
 }
 
@@ -1161,6 +1169,26 @@ pub(crate) async fn evidence_records(
 
 pub(crate) fn test_results_value(workspace: &Path, target_id: &str) -> Result<serde_json::Value> {
     test_results_value_at(workspace, target_id, None, &[])
+}
+
+pub(crate) fn test_results_summary_value(value: &serde_json::Value) -> Result<serde_json::Value> {
+    let object = value
+        .as_object()
+        .context("normalized test results must be an object")?;
+    // Tolerate results objects that are non-null but partial (for example an
+    // errored or minimally-populated run). Missing fields become `null` rather
+    // than failing the whole report, which would otherwise make `summary_only`
+    // error on runs that the full (non-summary) view returns fine.
+    let field = |name: &str| object.get(name).cloned().unwrap_or(serde_json::Value::Null);
+    Ok(serde_json::json!({
+        "schema": "once.test_results_summary.v1",
+        "source_schema": field("schema"),
+        "target": field("target"),
+        "runner": field("runner"),
+        "status": field("status"),
+        "summary": field("summary"),
+        "artifacts": field("artifacts"),
+    }))
 }
 
 pub(crate) fn test_results_value_at(
@@ -1801,6 +1829,36 @@ mod tests {
             tools: Vec::new(),
             diagnostics: Vec::new(),
         }
+    }
+
+    #[test]
+    fn test_results_summary_omits_case_records() {
+        let value = serde_json::json!({
+            "schema": "once.test_results.v1",
+            "target": "tests/unit",
+            "runner": { "type": "rust_libtest", "metadata": {} },
+            "status": "passed",
+            "summary": {
+                "total": 2,
+                "passed": 1,
+                "failed": 0,
+                "skipped": 1,
+                "flaky": 0
+            },
+            "cases": [
+                { "name": "passes", "status": "passed" },
+                { "name": "skips", "status": "skipped" }
+            ],
+            "artifacts": { "logs": ["test.log"], "native_results": [] }
+        });
+
+        let summary = test_results_summary_value(&value).unwrap();
+
+        assert_eq!(summary["schema"], "once.test_results_summary.v1");
+        assert_eq!(summary["source_schema"], "once.test_results.v1");
+        assert_eq!(summary["summary"]["passed"], 1);
+        assert_eq!(summary["summary"]["skipped"], 1);
+        assert!(summary.get("cases").is_none());
     }
 
     #[test]

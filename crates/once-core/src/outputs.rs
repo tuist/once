@@ -1,13 +1,16 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::fs::OpenOptions;
 use std::io::{BufWriter, Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fd_lock::RwLock;
 use once_cas::{ActionResult, CacheProvider, Digest};
 use tokio::task::JoinSet;
 
 use crate::directory_blob::{
-    is_directory_blob, restore_directory_blob_from_reader, write_directory_blob,
+    digest_directory_blob, is_directory_blob, restore_directory_blob_from_reader,
+    write_directory_blob,
 };
 use crate::file_blob::{
     digest_file_blob, file_blob_header, restore_file_blob_from_reader, FILE_BLOB_MAGIC,
@@ -30,12 +33,51 @@ pub(crate) async fn restore(
     }
     let staging = StagingDir::create(workspace_root)?;
     let prefetched = prefetch_output_blobs(&outputs, cache, staging.path()).await?;
+    let mut lock = output_restore_lock(workspace_root)?;
+    let _guard = lock.write().map_err(|source| Error::RestoreOutput {
+        path: output_restore_lock_path(workspace_root)
+            .display()
+            .to_string(),
+        source,
+    })?;
     for output in prefetched {
-        let PrefetchedOutput { rel, blob_path, .. } = output;
+        let PrefetchedOutput {
+            rel,
+            digest,
+            blob_path,
+            ..
+        } = output;
         let abs = workspace_root.join(&rel);
+        if existing_output_matches_digest(&abs, digest) {
+            continue;
+        }
         restore_prefetched_output(&rel, &abs, &blob_path)?;
     }
     Ok(())
+}
+
+fn output_restore_lock(workspace_root: &Path) -> Result<RwLock<std::fs::File>> {
+    let path = output_restore_lock_path(workspace_root);
+    let parent = path.parent().expect("output restore lock has a parent");
+    std::fs::create_dir_all(parent).map_err(|source| Error::RestoreOutput {
+        path: parent.display().to_string(),
+        source,
+    })?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(|source| Error::RestoreOutput {
+            path: path.display().to_string(),
+            source,
+        })?;
+    Ok(RwLock::new(file))
+}
+
+fn output_restore_lock_path(workspace_root: &Path) -> PathBuf {
+    workspace_root.join(".once/locks/output-restore.lock")
 }
 
 fn restore_prefetched_output(rel: &str, abs: &Path, blob_path: &Path) -> Result<()> {
@@ -115,22 +157,35 @@ fn spawn_output_validation(
 ) {
     let absolute = workspace_root.join(&path);
     tasks.spawn_blocking(move || {
-        let matches = existing_file_matches_digest(&absolute, digest);
+        let matches = existing_output_matches_digest(&absolute, digest);
         (path, digest, matches)
     });
 }
 
-fn existing_file_matches_digest(path: &Path, expected: Digest) -> bool {
+fn existing_output_matches_digest(path: &Path, expected: Digest) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
     };
-    if !metadata.is_file() {
-        return false;
+    if metadata.is_dir() {
+        // The capture symlink mode is not carried in the cached
+        // `ActionResult`, so we cannot know which mode produced `expected`.
+        // The two modes only differ for directories containing symlinks that
+        // point outside the tree; for everything else they hash identically.
+        // Accept a match under either mode so the "already on disk, skip
+        // restore" optimization is not silently defeated for such outputs.
+        // The default mode is tried first, so unchanged directories captured
+        // the usual way match on the first hash.
+        return [OutputSymlinkMode::default(), OutputSymlinkMode::Preserve]
+            .into_iter()
+            .any(|mode| digest_directory_blob(path, mode).is_ok_and(|digest| digest == expected));
     }
-    if digest_file_blob(path, &metadata).is_ok_and(|digest| digest == expected) {
+    if metadata.is_file()
+        && digest_file_blob(path, &metadata).is_ok_and(|digest| digest == expected)
+    {
         return true;
     }
-    std::fs::read(path).is_ok_and(|bytes| Digest::of_bytes(&bytes) == expected)
+    metadata.is_file()
+        && std::fs::read(path).is_ok_and(|bytes| Digest::of_bytes(&bytes) == expected)
 }
 
 async fn prefetch_output_blobs(
@@ -192,6 +247,7 @@ fn spawn_prefetch(
         Ok(PrefetchedOutput {
             index,
             rel,
+            digest,
             blob_path,
         })
     });
@@ -200,6 +256,7 @@ fn spawn_prefetch(
 struct PrefetchedOutput {
     index: usize,
     rel: String,
+    digest: Digest,
     blob_path: PathBuf,
 }
 
@@ -437,6 +494,79 @@ mod tests {
 
         assert_eq!(
             std::fs::metadata(&output_path).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_does_not_rewrite_an_unchanged_directory_output() {
+        let (_tmp, workspace, cache) = workspace_and_cache();
+        let output_path = workspace.join("out/tree/data.txt");
+        std::fs::create_dir_all(output_path.parent().unwrap()).unwrap();
+        std::fs::write(&output_path, b"payload").unwrap();
+        let output = WorkspacePath::try_from("out/tree").unwrap();
+        let outputs = capture(
+            std::slice::from_ref(&output),
+            &workspace,
+            &cache,
+            OutputSymlinkMode::default(),
+        )
+        .await
+        .unwrap();
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs,
+        };
+        let modified = std::fs::metadata(&output_path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        restore(&result, &workspace, &cache).await.unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&output_path).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn restore_does_not_rewrite_an_unchanged_directory_output_with_external_symlink() {
+        let (tmp, workspace, cache) = workspace_and_cache();
+        let external = tmp.path().join("external.txt");
+        std::fs::write(&external, b"external payload").unwrap();
+        let tree = workspace.join("out/tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("data.txt"), b"payload").unwrap();
+        std::os::unix::fs::symlink(&external, tree.join("link")).unwrap();
+
+        let output = WorkspacePath::try_from("out/tree").unwrap();
+        // Captured with the default mode, which materializes the external
+        // symlink's contents into the directory blob.
+        let outputs = capture(
+            std::slice::from_ref(&output),
+            &workspace,
+            &cache,
+            OutputSymlinkMode::default(),
+        )
+        .await
+        .unwrap();
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs,
+        };
+        let modified = std::fs::metadata(&tree).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        restore(&result, &workspace, &cache).await.unwrap();
+
+        // The on-disk tree already matches the cached digest, so restore must
+        // recognize it as unchanged rather than re-materializing it.
+        assert_eq!(
+            std::fs::metadata(&tree).unwrap().modified().unwrap(),
             modified
         );
     }

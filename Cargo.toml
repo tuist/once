@@ -6,6 +6,7 @@ members = [
     "crates/once-core",
     "crates/once-cas",
     "crates/once-frontend",
+    "crates/once-host-tree",
 ]
 
 [workspace.package]
@@ -20,6 +21,7 @@ once = { version = "0.0.0", path = "crates/once" }
 once-core = { version = "0.0.0", path = "crates/once-core", default-features = false }
 once-cas = { version = "0.0.0", path = "crates/once-cas" }
 once-frontend = { version = "0.0.0", path = "crates/once-frontend" }
+once-host-tree = { version = "0.0.0", path = "crates/once-host-tree" }
 
 anyhow = "1"
 bazel-remote-apis = "0.27"
@@ -27,6 +29,7 @@ base64 = "0.22"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 console = "0.16"
+fd-lock = "4"
 futures = "0.3"
 glob = "0.3"
 hex = "0.4"

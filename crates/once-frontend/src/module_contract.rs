@@ -318,6 +318,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Snapshot a content-verified absolute host toolchain file into a workspace output.",
             ),
             entry(
+                "materialize_host_tree(source, destination)",
+                "Snapshot a content-verified absolute host directory into one workspace directory output while preserving file modes and symbolic links.",
+            ),
+            entry(
                 "link_path(source, destination, identifier = None)",
                 "Declare an uncached relative workspace link from an existing source without copying or caching the linked contents.",
             ),
@@ -617,6 +621,10 @@ mod tests {
             .action_primitives
             .iter()
             .any(|entry| entry.signature.starts_with("materialize_host_file(")));
+        assert!(contract
+            .action_primitives
+            .iter()
+            .any(|entry| entry.signature.starts_with("materialize_host_tree(")));
         assert!(contract
             .schema_invariants
             .iter()

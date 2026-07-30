@@ -3,6 +3,7 @@ name = "once_core"
 kind = "rust_library"
 deps = [
   "crates/once-cas/once_cas",
+  "crates/once-host-tree/once_host_tree",
   "cargo_dependencies",
 ]
 srcs = ["src/**/*.rs"]

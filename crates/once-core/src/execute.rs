@@ -95,6 +95,16 @@ async fn execute_portable_action(
             capture_file_action_outputs(std::slice::from_ref(destination), workspace_root, cache)
                 .await
         }
+        Action::MaterializeHostTree {
+            source,
+            source_sha256,
+            destination,
+            ..
+        } => {
+            materialize_host_tree(source, source_sha256, destination, workspace_root).await?;
+            capture_file_action_outputs(std::slice::from_ref(destination), workspace_root, cache)
+                .await
+        }
         Action::PreparePath { path, mode, .. } => match mode {
             PreparePathMode::Remove => {
                 remove_path(path, workspace_root).await?;
@@ -633,6 +643,127 @@ async fn materialize_host_file(
         });
     }
     write_file(destination, &bytes, workspace_root).await
+}
+
+async fn materialize_host_tree(
+    source: &Path,
+    source_sha256: &str,
+    destination: &WorkspacePath,
+    workspace_root: &Path,
+) -> Result<()> {
+    if !source.is_absolute() {
+        return Err(Error::InvalidHostFile {
+            reason: format!("source `{}` must be absolute", source.display()),
+        });
+    }
+    if !source.is_dir() {
+        return Err(Error::InvalidHostFile {
+            reason: format!("source `{}` must be a directory", source.display()),
+        });
+    }
+    let source = source.to_path_buf();
+    let destination_path = destination.resolve(workspace_root);
+    let destination_label = destination.as_str().to_string();
+    let expected = source_sha256.to_string();
+    tokio::task::spawn_blocking(move || {
+        // Copying a tree into itself (destination equal to, nested under, or an
+        // ancestor of the source) would remove the verified source before
+        // recreating it or recurse the fresh destination into itself, silently
+        // destroying workspace data. Reject the overlap before touching disk.
+        reject_overlapping_host_tree_paths(&source, &destination_path)?;
+        let actual = once_host_tree::host_tree_sha256_hex(&source).map_err(|source_error| {
+            Error::FileAction {
+                action: "hash_host_tree",
+                path: source.display().to_string(),
+                source: source_error,
+            }
+        })?;
+        if actual != expected {
+            return Err(Error::HostFileDigestMismatch {
+                path: source.display().to_string(),
+                expected,
+                actual,
+            });
+        }
+        copy_sandbox_output_blocking(&source, &destination_path).map_err(|source_error| {
+            Error::FileAction {
+                action: "materialize_host_tree",
+                path: destination_label,
+                source: source_error,
+            }
+        })?;
+        // The hash above and this copy are independent traversals of the
+        // source. If the source changed in between, the destination we just
+        // captured no longer matches `expected`; re-hash the copied snapshot
+        // and reject it rather than caching bytes under a stale digest.
+        let copied =
+            once_host_tree::host_tree_sha256_hex(&destination_path).map_err(|source_error| {
+                Error::FileAction {
+                    action: "verify_host_tree",
+                    path: destination_path.display().to_string(),
+                    source: source_error,
+                }
+            })?;
+        if copied != expected {
+            return Err(Error::HostFileDigestMismatch {
+                path: destination_path.display().to_string(),
+                expected,
+                actual: copied,
+            });
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|source_error| Error::FileAction {
+        action: "materialize_host_tree",
+        path: destination.as_str().to_string(),
+        source: std::io::Error::other(source_error.to_string()),
+    })?
+}
+
+/// Reject a host-tree copy whose source and destination overlap: equal paths,
+/// a destination nested under the source, or a source nested under the
+/// destination. Symlinks in the existing prefixes are resolved so the check
+/// cannot be bypassed by linking one side into the other.
+fn reject_overlapping_host_tree_paths(source: &Path, destination: &Path) -> Result<()> {
+    let source_c = source
+        .canonicalize()
+        .unwrap_or_else(|_| source.to_path_buf());
+    let dest_c = canonicalize_existing_prefix(destination);
+    if dest_c == source_c || dest_c.starts_with(&source_c) || source_c.starts_with(&dest_c) {
+        return Err(Error::InvalidHostFile {
+            reason: format!(
+                "materialize_host_tree destination `{}` overlaps source `{}`",
+                destination.display(),
+                source.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Canonicalize the longest existing prefix of `path` (resolving any symlinks
+/// there) and re-append the not-yet-created remainder lexically, so a
+/// destination that does not exist on disk can still be compared safely.
+fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+    let mut current = path.to_path_buf();
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        if let Ok(canonical) = current.canonicalize() {
+            let mut resolved = canonical;
+            for part in suffix.iter().rev() {
+                resolved.push(part);
+            }
+            return resolved;
+        }
+        match (current.parent(), current.file_name()) {
+            (Some(parent), Some(name)) => {
+                suffix.push(name.to_os_string());
+                current = parent.to_path_buf();
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 async fn copy_tree(

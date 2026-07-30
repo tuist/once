@@ -67,6 +67,9 @@ def native_project(target_kind, markers, name = None, target_name = None, docs =
         "requires_tools": requires_tools,
     }
 
+def _native_project_generated_dirs():
+    return ["_build", "deps", "target", "third_party", "vendor"]
+
 def target_kind(kind = None, docs = "", attrs = [], deps = [], providers = [], capabilities = [], examples = [], impl = None, resolver = None, tools = [], source_references = []):
     return {
         "_once_target_kind": True,

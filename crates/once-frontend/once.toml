@@ -1,7 +1,10 @@
 [[target]]
 name = "once_frontend"
 kind = "rust_library"
-deps = ["cargo_dependencies"]
+deps = [
+  "crates/once-host-tree/once_host_tree",
+  "cargo_dependencies",
+]
 srcs = ["src/**/*.rs", "prelude/**/*.star", "prelude/examples/**"]
 
 [target.attrs]

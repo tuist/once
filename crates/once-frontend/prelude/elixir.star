@@ -3306,7 +3306,7 @@ mix = native_project(
     docs = "Recognizes a native Mix project from mix.exs.",
     markers = ["mix.exs"],
     inputs = ["mix.lock", ".formatter.exs", "config/**/*.exs"],
-    exclude = ["deps", "_build"],
+    exclude = _native_project_generated_dirs(),
     requires_tools = ["elixir"],
 )
 

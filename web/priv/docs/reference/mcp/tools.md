@@ -326,7 +326,7 @@ Returns each enabled native project's name, documentation, marker files, additio
 
 Preview the seed target and complete typed graph derived by one detected native project.
 
-Runs the selected native project's ordinary target-kind resolver without writing a manifest, then returns its declaration, detection evidence, seed target, and expanded typed targets. Omit `package` when the native project has one match. The matching command-line operation is `once query native-project <name> [--package <path>] --format json`.
+Runs the selected native project's ordinary target-kind resolver without writing a manifest, then returns its declaration, detection evidence, seed target, and expanded typed targets. Omit `package` when the native project has one match. Expanded dependency graphs can be very large. For a loaded project, prefer `once_query_workspace`, filtered `once_query_targets`, `once_query_tests`, and `once_get_target` when the complete graph is not needed. The matching command-line operation is `once query native-project <name> [--package <path>] --format json`.
 
 **Input schema**
 
@@ -427,7 +427,8 @@ Use this when no discovered target kind covers an external rule or plugin. The r
   ],
   "action_primitives": [
     { "signature": "write_path(path, content)", "purpose": "Declare a portable file-writing action." },
-    { "signature": "materialize_host_file(source, destination)", "purpose": "Snapshot a content-verified absolute host toolchain file into a workspace output." }
+    { "signature": "materialize_host_file(source, destination)", "purpose": "Snapshot a content-verified absolute host toolchain file into a workspace output." },
+    { "signature": "materialize_host_tree(source, destination)", "purpose": "Snapshot a content-verified absolute host directory into a workspace output." }
   ],
   "starter": "def _generated_text_impl(ctx): ...",
   "lint_starter": "def _scripted_lint_impl(ctx): ...",
@@ -676,7 +677,7 @@ Returns the selection policy, normalized changed paths, unmatched paths, selecte
 
 Run test targets by id, or run tests affected by changed workspace paths.
 
-Creates the same immutable plan as `once_query_test_plan`, then pulls stable batches from a shared local queue. Batches with longer historical uncached durations are queued first, and idle workers dynamically take the next batch. Explicit `target` or `targets` produce an exact plan; otherwise `changed_paths` drive conservative graph selection. With exactly one target, `test_unit` runs a stable unit returned by `once_query_test_manifest` when the target kind declares filtering support. `jobs` caps workers without changing plan or batch identity. The result's `plan` is the work that just executed. Its `next_plan` is recomputed after complete runs refresh discovery, so use that field to assess file or case batching for the next run. The result also includes actual schedule attempts and normalized test results. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate. The matching command-line operations are `once test --changed-path <path> --jobs <count> --format json` and `once test <target> --test-unit <unit> --format json`.
+Creates the same immutable plan as `once_query_test_plan`, then pulls stable batches from a shared local queue. Batches with longer historical uncached durations are queued first, and idle workers dynamically take the next batch. Explicit `target` or `targets` produce an exact plan; otherwise `changed_paths` drive conservative graph selection. With exactly one target, `test_unit` runs a stable unit returned by `once_query_test_manifest` when the target kind declares filtering support. `jobs` caps workers without changing plan or batch identity. Set `summary_only` for compact normalized totals without case-level records. The result's `plan` is the work that just executed. Its `next_plan` is recomputed after complete runs refresh discovery, so use that field to assess file or case batching for the next run. The result also includes actual schedule attempts and normalized test results. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate. The matching command-line operations are `once test --changed-path <path> --jobs <count> --format json` and `once test <target> --test-unit <unit> --format json`.
 
 **Input schema**
 
@@ -695,6 +696,10 @@ Creates the same immutable plan as `once_query_test_plan`, then pulls stable bat
       "maximum": 256,
       "minimum": 1,
       "type": "integer"
+    },
+    "summary_only": {
+      "description": "Replace case-level normalized results with compact once.test_results_summary.v1 totals.",
+      "type": "boolean"
     },
     "target": {
       "description": "Single canonical target id to run, such as `tests/unit`.",
@@ -748,13 +753,17 @@ Creates the same immutable plan as `once_query_test_plan`, then pulls stable bat
 
 Read normalized once.test_results.v1 results for a target.
 
-Reads the normalized result file produced by the target's `test` capability. This is the stable agent-facing interface for pass or fail summaries, case-level failures, attempts, and artifacts. Callers do not need to parse a runner's command output.
+Reads the normalized result file produced by the target's `test` capability. This is the stable agent-facing interface for pass or fail summaries, case-level failures, attempts, and artifacts. Set `summary_only` when exact totals are sufficient and a large case array would waste model context. The matching command-line operation is `once query test-results <target> --summary-only --format json`. Callers do not need to parse a runner's command output.
 
 **Input schema**
 
 ```json
 {
   "properties": {
+    "summary_only": {
+      "description": "Return once.test_results_summary.v1 status, totals, runner, and artifacts without case-level records.",
+      "type": "boolean"
+    },
     "target": {
       "description": "Canonical target id, such as `tests/unit`.",
       "type": "string"

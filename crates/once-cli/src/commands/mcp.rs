@@ -493,7 +493,16 @@ impl Server {
             .get("target")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing `target` argument"))?;
-        crate::commands::query::test_results_value(&self.workspace, target_id)
+        let summary_only = args
+            .get("summary_only")
+            .map(|value| value.as_bool().context("`summary_only` must be a boolean"))
+            .transpose()?
+            .unwrap_or(false);
+        let value = crate::commands::query::test_results_value(&self.workspace, target_id)?;
+        if summary_only {
+            return crate::commands::query::test_results_summary_value(&value);
+        }
+        Ok(value)
     }
 
     fn tool_query_test_manifest(&self, args: &Value) -> Result<Value> {
@@ -553,6 +562,7 @@ impl Server {
         let plan = run_test_plan_args(&self.workspace, &args)?;
         let workspace = self.workspace.clone();
         let workers = args.jobs;
+        let summary_only = args.summary_only;
         let resource_limits = self.resource_limits.clone();
         run_async_result(async move {
             let report = crate::commands::test_schedule::execute(
@@ -564,7 +574,11 @@ impl Server {
                 resource_limits,
             )
             .await?;
-            Ok(serde_json::to_value(report)?)
+            let mut value = serde_json::to_value(report)?;
+            if summary_only {
+                summarize_test_run_results(&mut value)?;
+            }
+            Ok(value)
         })
     }
 
@@ -714,6 +728,23 @@ fn run_test_plan_args(
         .collect::<Vec<_>>();
     validate_test_targets(workspace, &targets)?;
     Ok(plan)
+}
+
+fn summarize_test_run_results(value: &mut Value) -> Result<()> {
+    let runs = value
+        .get_mut("runs")
+        .and_then(Value::as_array_mut)
+        .context("test run report is missing `runs`")?;
+    for run in runs {
+        let Some(results) = run.get_mut("results") else {
+            continue;
+        };
+        if results.is_null() {
+            continue;
+        }
+        *results = crate::commands::query::test_results_summary_value(results)?;
+    }
+    Ok(())
 }
 
 fn validate_test_targets(workspace: &std::path::Path, targets: &[String]) -> Result<()> {
@@ -1037,6 +1068,8 @@ struct RunTestsArgs {
     jobs: Option<usize>,
     #[serde(default)]
     test_unit: Option<String>,
+    #[serde(default)]
+    summary_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -1431,6 +1464,73 @@ mod tests {
 
     fn server(workspace: PathBuf) -> Server {
         Server::new(workspace, false)
+    }
+
+    #[test]
+    fn summarized_test_run_results_keep_totals_without_cases() {
+        let mut value = json!({
+            "runs": [
+                {
+                    "target": "tests/unit",
+                    "results": {
+                        "schema": "once.test_results.v1",
+                        "target": "tests/unit",
+                        "runner": { "type": "rust_libtest", "metadata": {} },
+                        "status": "passed",
+                        "summary": {
+                            "total": 2,
+                            "passed": 1,
+                            "failed": 0,
+                            "skipped": 1,
+                            "flaky": 0
+                        },
+                        "cases": [
+                            { "name": "passes", "status": "passed" },
+                            { "name": "skips", "status": "skipped" }
+                        ],
+                        "artifacts": { "logs": [], "native_results": [] }
+                    }
+                }
+            ]
+        });
+
+        summarize_test_run_results(&mut value).unwrap();
+
+        assert_eq!(
+            value["runs"][0]["results"]["schema"],
+            "once.test_results_summary.v1"
+        );
+        assert_eq!(value["runs"][0]["results"]["summary"]["total"], 2);
+        assert!(value["runs"][0]["results"].get("cases").is_none());
+    }
+
+    #[test]
+    fn summarized_test_run_results_tolerate_partial_result() {
+        // A non-null but partial result (missing `runner`/`artifacts`) must not
+        // fail the whole report; absent fields become null.
+        let mut value = json!({
+            "runs": [
+                {
+                    "target": "tests/unit",
+                    "results": {
+                        "schema": "once.test_results.v1",
+                        "target": "tests/unit",
+                        "status": "errored",
+                        "summary": { "total": 0, "passed": 0, "failed": 0, "skipped": 0, "flaky": 0 }
+                    }
+                }
+            ]
+        });
+
+        summarize_test_run_results(&mut value).unwrap();
+
+        assert_eq!(
+            value["runs"][0]["results"]["schema"],
+            "once.test_results_summary.v1"
+        );
+        assert_eq!(value["runs"][0]["results"]["status"], "errored");
+        assert!(value["runs"][0]["results"]["runner"].is_null());
+        assert!(value["runs"][0]["results"]["artifacts"].is_null());
     }
 
     #[test]

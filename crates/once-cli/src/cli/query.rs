@@ -116,6 +116,9 @@ pub enum QueryCmd {
     TestResults {
         /// Target id, such as `tests/unit`.
         target: String,
+        /// Return the normalized status and totals without case-level records.
+        #[arg(long)]
+        summary_only: bool,
     },
 
     /// List stable test units discovered in a target's normalized results.
