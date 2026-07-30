@@ -184,6 +184,13 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input_digest: Option<Digest>,
     },
+    MaterializeHostTree {
+        source: PathBuf,
+        source_sha256: String,
+        destination: WorkspacePath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
     PreparePath {
         path: WorkspacePath,
         mode: PreparePathMode,
@@ -313,6 +320,7 @@ impl Action {
             | Action::CopyPath { .. }
             | Action::LinkPath { .. }
             | Action::MaterializeHostFile { .. }
+            | Action::MaterializeHostTree { .. }
             | Action::PreparePath { .. }
             | Action::WriteTreeDigest { .. }
             | Action::WriteArchive { .. } => &DEFAULT_RESOURCE_REQUEST,
@@ -326,6 +334,7 @@ impl Action {
             | Action::CopyPath { input_digest, .. }
             | Action::LinkPath { input_digest, .. }
             | Action::MaterializeHostFile { input_digest, .. }
+            | Action::MaterializeHostTree { input_digest, .. }
             | Action::PreparePath { input_digest, .. }
             | Action::WriteTreeDigest { input_digest, .. }
             | Action::WriteArchive { input_digest, .. } => *input_digest,

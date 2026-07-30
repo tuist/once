@@ -494,4 +494,28 @@ mod tests {
             .iter()
             .any(|matched| matched.native_project == "cargo" && matched.package == "rust/member"));
     }
+
+    #[test]
+    fn built_in_native_projects_ignore_generated_dependency_trees() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::write(temporary.path().join("mix.exs"), "raise \"not executed\"\n").unwrap();
+        std::fs::create_dir_all(temporary.path().join("deps/native")).unwrap();
+        std::fs::write(
+            temporary.path().join("deps/native/Cargo.toml"),
+            "[package]\nname = \"native\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temporary.path().join("target/tool")).unwrap();
+        std::fs::write(
+            temporary.path().join("target/tool/mix.exs"),
+            "raise \"not executed\"\n",
+        )
+        .unwrap();
+
+        let matches = detect_native_projects(temporary.path()).unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].native_project, "mix");
+        assert!(matches[0].package.is_empty());
+    }
 }

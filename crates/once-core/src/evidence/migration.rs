@@ -1,7 +1,9 @@
 use sea_orm_migration::prelude::*;
 
+mod input_fingerprint;
 mod test_batch_attempts;
 
+use input_fingerprint::M20260729000000AddInputFingerprint;
 use test_batch_attempts::M20260716000000CreateTestBatchAttempts;
 
 pub struct Migrator;
@@ -12,6 +14,7 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(M20260619000000CreateEvidenceRecords),
             Box::new(M20260716000000CreateTestBatchAttempts),
+            Box::new(M20260729000000AddInputFingerprint),
         ]
     }
 }

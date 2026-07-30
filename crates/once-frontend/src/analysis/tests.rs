@@ -921,6 +921,28 @@ fn materialize_host_file_records_a_content_addressed_operation() {
 }
 
 #[test]
+fn materialize_host_tree_records_a_content_addressed_operation() {
+    let tmp = TempDir::new().unwrap();
+    let source = tmp.path().join("toolchain");
+    std::fs::create_dir_all(source.join("bin")).unwrap();
+    std::fs::write(source.join("bin/tool"), b"toolchain").unwrap();
+    let store = store_for(tmp.path(), "p");
+    let source_literal = serde_json::to_string(source.to_str().unwrap()).unwrap();
+    let script = format!("materialize_host_tree({source_literal}, \".once/out/p/toolchain\")");
+    let (store, ()) = with_active_store(store, || run(&script).unwrap());
+
+    assert_eq!(store.actions.len(), 1);
+    assert!(matches!(
+        store.actions[0].operation,
+        Some(DeclaredActionOperation::MaterializeHostTree {
+            ref source_sha256,
+            ref destination,
+            ..
+        }) if source_sha256.len() == 64 && destination == ".once/out/p/toolchain"
+    ));
+}
+
+#[test]
 fn run_action_records_command_setup_paths() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "p");

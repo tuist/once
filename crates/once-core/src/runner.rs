@@ -921,6 +921,106 @@ mod tests {
         assert!(matches!(error, Error::HostFileDigestMismatch { .. }));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn materialize_host_tree_preserves_modes_and_symlinks_and_replays_from_cache() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let (tmp, cas) = fresh_cas();
+        let host = TempDir::new().unwrap();
+        let source = host.path().join("crate");
+        std::fs::create_dir_all(source.join("src")).unwrap();
+        std::fs::write(source.join("src/lib.rs"), "pub fn value() {}\n").unwrap();
+        let executable = source.join("build-helper");
+        std::fs::write(&executable, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        symlink("src/lib.rs", source.join("linked.rs")).unwrap();
+        let source_sha256 = once_host_tree::host_tree_sha256_hex(&source).unwrap();
+        let action = Action::MaterializeHostTree {
+            source: source.clone(),
+            source_sha256,
+            destination: WorkspacePath::try_from("out/crate").unwrap(),
+            input_digest: Some(Digest::of_bytes(b"host-tree")),
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        assert_eq!(
+            std::fs::metadata(tmp.path().join("out/crate/build-helper"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        assert!(
+            std::fs::symlink_metadata(tmp.path().join("out/crate/linked.rs"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        std::fs::remove_dir_all(source).unwrap();
+        std::fs::remove_dir_all(tmp.path().join("out/crate")).unwrap();
+        let second = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.cache, CacheState::Hit);
+        assert_eq!(
+            std::fs::read_link(tmp.path().join("out/crate/linked.rs")).unwrap(),
+            std::path::PathBuf::from("src/lib.rs")
+        );
+    }
+
+    #[tokio::test]
+    async fn materialize_host_tree_rejects_content_changed_after_analysis() {
+        let (tmp, cas) = fresh_cas();
+        let source = tmp.path().join("crate");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("source.rs"), "before\n").unwrap();
+        let source_sha256 = once_host_tree::host_tree_sha256_hex(&source).unwrap();
+        std::fs::write(source.join("source.rs"), "after\n").unwrap();
+        let action = Action::MaterializeHostTree {
+            source,
+            source_sha256,
+            destination: WorkspacePath::try_from("out/crate").unwrap(),
+            input_digest: Some(Digest::of_bytes(b"changed-host-tree")),
+        };
+
+        let error = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::HostFileDigestMismatch { .. }));
+    }
+
+    #[tokio::test]
+    async fn materialize_host_tree_rejects_destination_nested_under_source() {
+        let (tmp, cas) = fresh_cas();
+        // Source is a workspace directory and the destination resolves beneath
+        // it, so copying would recurse the fresh destination into itself.
+        let source = tmp.path().join("out");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("keep.rs"), "keep\n").unwrap();
+        let action = Action::MaterializeHostTree {
+            source,
+            source_sha256: "unused".to_string(),
+            destination: WorkspacePath::try_from("out/nested").unwrap(),
+            input_digest: Some(Digest::of_bytes(b"overlap-host-tree")),
+        };
+
+        let error = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::InvalidHostFile { .. }));
+        // The source data must be untouched.
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/keep.rs")).unwrap(),
+            "keep\n"
+        );
+    }
+
     #[tokio::test]
     async fn copy_tree_action_replaces_destination_and_restores_from_cache() {
         let (tmp, cas) = fresh_cas();

@@ -27,7 +27,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
-use once_core::{EvidenceCacheState, ResourceLimits, ResourcePool, SandboxMode};
+use once_core::{
+    EvidenceCacheState, InputFingerprintManifest, ResourceLimits, ResourcePool, SandboxMode,
+};
 use once_frontend::analysis::{AnalysisEngine, AnalysisOptions, CachedToolCommand};
 use once_frontend::GraphTarget;
 use serde::{Deserialize, Serialize};
@@ -88,6 +90,7 @@ pub(super) struct BuildOutcome {
     pub provider: Arc<JsonValue>,
     pub action_digest: Digest,
     pub input_digest: Option<Digest>,
+    pub input_fingerprint: Option<InputFingerprintManifest>,
     pub available_inputs: BTreeMap<String, AvailableInput>,
     pub outputs: Vec<String>,
     pub cache_tag: &'static str,

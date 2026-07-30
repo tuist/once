@@ -5,62 +5,223 @@ next: false
 
 # Rust
 
-Once can build Rust libraries, binaries, tests, procedural macros, and native
-mobile libraries. This guide starts with one local library, a binary that uses
-it, and a test for the same code. Cargo dependency resolution comes after that
-first working graph.
+Once can read an existing `Cargo.toml`, derive a typed build graph, and cache
+each workspace package and locked dependency separately. You can build, run,
+and test the project without first translating it into `once.toml`.
 
-## Prerequisites
+## Start With an Existing Cargo Project
 
-Install the repository's pinned Rust toolchain through mise:
+### Check the Toolchain
+
+Once invokes `rustc` and `cargo` from the selected toolchain. Confirm that the
+versions expected by the project are available:
+
+```sh
+rustc --version
+cargo --version
+```
+
+If the repository uses [mise](https://mise.jdx.dev/) to pin them, install and
+activate that configuration first:
 
 ```sh
 mise install
 mise exec -- rustc --version
+mise exec -- cargo --version
 ```
 
 Host binaries and tests also need the platform linker selected by the Rust
-compiler. Cross-compiled and mobile outputs require the linker and target
+compiler. Cross-compiled and mobile outputs require the linker and Rust target
 support for their destination platform.
 
-## Use `Cargo.toml` Directly
+### Materialize Locked Dependencies
 
-A locked Cargo project can derive its first-party and external Once targets
-without a hand-written `once.toml`:
+Once does not download dependencies or change `Cargo.lock`. If the project has
+a current lockfile, populate Cargo's local source cache from its exact
+resolution:
 
 ```sh
-cargo generate-lockfile
+cargo fetch --locked
+```
+
+Run `cargo generate-lockfile` once when the lockfile needs to be created or
+deliberately updated. Review that change before continuing. Once requires a
+concrete lockfile when a project declares external dependencies. Library
+maintainers who do not commit `Cargo.lock` can generate one locally, but
+repeatable builds on another machine require the same resolution.
+
+### Preview the Derived Graph
+
+From the directory that contains the root `Cargo.toml`, inspect the match and
+the first-party targets:
+
+```sh
 once query native-projects
-once query native-project cargo
-once query targets
+once query targets --kind rust_binary
+once query targets --kind rust_library
+once query targets --kind rust_test
+```
+
+No `once.toml` is required, and these commands do not write one. If a
+repository contains several independent Cargo projects, select one explicitly:
+
+```sh
+once query native-project cargo --package tools/linter
 ```
 
 The `cargo_workspace` seed runs locked, offline Cargo metadata. It emits
 first-party libraries, binaries, procedural macros, unit and integration test
 targets, build-script edges, and locked external packages.
 
-Build or test a generated target by the identifier returned from
-`once query targets`. For example:
+The complete preview includes locked external packages, so it can be large.
+Request it only when you need to inspect the full expansion:
+
+```sh
+once query native-project cargo
+```
+
+The identifiers printed by `once query targets` are the source of truth.
+Generated first-party identifiers carry their package and Cargo target role.
+For a package named `hello` with a binary also named `hello`, discovery
+normally derives `cargo_hello_bin_hello` and
+`cargo_hello_bin_hello_unit_tests`.
+
+Cargo workspaces use their shallowest matching `Cargo.toml`, so member
+manifests do not create duplicate native project seeds. Cargo remains
+authoritative for workspace membership, default members, features, target
+metadata, and resolved versions. Local path packages outside the workspace
+remain dependency targets instead of becoming first-party workspace members.
+
+Once snapshots external package trees from Cargo's local cache into target
+outputs. It preserves files, executable modes, and symbolic links without
+copying sources into the repository. It does not reuse or modify a repository's
+`vendor` directory.
+
+An explicit `vendor_dir` remains available for repositories that already
+manage pre-vendored Cargo sources. Graph loading never acquires sources or
+changes `Cargo.lock`.
+
+Targets gated by Cargo `required-features` appear only when every required
+feature is selected. Generated test targets include the package's development
+dependencies, and hyphenated Cargo target names are normalized for the Rust
+compiler automatically. Multi-output libraries expose each declared Rust
+library crate type as a separate generated target.
+
+### Build, Run, and Test
+
+Use a generated identifier through the same commands as every other Once
+graph:
 
 ```sh
 once build cargo_hello_bin_hello
+once run cargo_hello_bin_hello
 once test cargo_hello_bin_hello_unit_tests
 ```
 
-Cargo workspaces use their shallowest matching `Cargo.toml`, so member
-manifests do not create duplicate native project seeds. Cargo remains authoritative
-for workspace membership, features, target metadata, and resolved versions.
+Ask Once about a target before invoking it when its role is not obvious:
 
-Projects with external packages must materialize their locked sources into the
-native project's `vendor` directory and configure Cargo source replacement before
-building. Graph loading never acquires sources or changes `Cargo.lock`.
+```sh
+once query capabilities cargo_hello_bin_hello
+```
 
-Initialize the stable seed when the repository should record the native
-project selection:
+Outputs are materialized under `.once/out/<target>/`. The
+[`rust_binary` reference](/reference/prelude/rust_binary) and
+[`rust_test` reference](/reference/prelude/rust_test) list their executable,
+log, and test-result outputs.
+
+### Confirm Caching
+
+Run the same build twice without changing an input:
+
+```sh
+once build cargo_hello_bin_hello
+once build cargo_hello_bin_hello
+```
+
+The second invocation should restore unchanged actions from the configured
+cache. Changing one locked dependency invalidates that package and its
+consumers. Changing one workspace package invalidates that package and its
+dependants. Changing only a test file reruns the affected test without
+recompiling an unchanged library.
+
+Dependency fetching is outside the Once graph. Once caches compilation after
+Cargo's local cache contains the sources selected by `Cargo.lock`. Continue
+with [Caching](/guide/scripted/caching) to configure a shared remote cache.
+
+### Record the Project Selection
+
+Initialization is optional. Use it when the repository should make its native
+project selection explicit:
 
 ```sh
 once edit init-native-project cargo
 ```
+
+This writes only the `cargo_workspace` seed. The detailed targets remain
+derived from `Cargo.toml` and `Cargo.lock`, so they do not become duplicated
+configuration. Commit the seed when reviewers and continuous integration
+should see the selection.
+
+After initialization, the seed can select Cargo features or a compilation
+target without copying the generated package graph into the manifest:
+
+```toml
+[target.attrs]
+features = ["workspace-package/feature-name"]
+target = "aarch64-unknown-linux-gnu"
+```
+
+Use the [`cargo_workspace` reference](/reference/prelude/cargo_workspace) for
+the complete seed contract.
+
+### Workspaces and Troubleshooting
+
+- If graph loading reports a missing source, run `cargo fetch --locked` with
+  the same Cargo home and retry.
+- If a binary or example is absent, inspect its `required-features`, initialize
+  the seed, and select those features explicitly.
+- Use `once query native-project cargo --package <path>` when more than one
+  independent `Cargo.toml` matches the workspace.
+- Build scripts that invoke unsupported host tools fail as ordinary declared
+  actions. Add the required toolchain or move the exceptional operation into an
+  explicit target.
+- Cargo configuration files participate in graph resolution. Keep the
+  repository's source replacement and target configuration available when
+  loading the graph.
+
+## Choose How Much Configuration to Own
+
+Native discovery, manifests, and Starlark modules are composable layers. A
+project does not need to migrate away from `Cargo.toml` to gain more control.
+
+| Layer | Repository change | Use it when |
+| --- | --- | --- |
+| Native Cargo project | None | The graph derived from `Cargo.toml` already describes the build. |
+| Recorded native seed | One `cargo_workspace` target in `once.toml` | The repository should pin project selection, features, target configuration, caching, or execution infrastructure. |
+| Explicit typed targets | Additional targets in `once.toml` | A package needs a custom boundary, cross-language dependency, mobile artifact, or operation that Cargo metadata does not describe. |
+| Project Starlark module | A registered reusable target kind | Several targets need the same new behavior and an existing target kind cannot express it. |
+
+Start with native discovery and stop there when it is sufficient. Add an
+annotated script for a one-off repository task. Move data into `once.toml` when
+the task needs typed dependencies, inputs, outputs, or platform selection. Move
+behavior into a Starlark target kind only when the rule should be reusable.
+
+The initialized `cargo_workspace` seed can live beside additional explicit
+targets, so Cargo can continue to own its package graph while Once owns only
+the exceptional edges. Do not restate every generated Cargo package in
+`once.toml`.
+
+When a custom target kind is necessary, keep project-specific Cargo behavior
+inside that Starlark module and build it from generic action primitives. The
+shared Rust execution layer remains independent of Cargo and other build
+systems. The [Modules reference](/reference/modules/) covers target kind
+schemas, resolvers, actions, validation, and module registration.
+
+## Author a Graph When You Need More Control
+
+Hand-authored targets are useful for a standalone Rust library without Cargo,
+cross-language links, native mobile outputs, or a boundary that should be
+cached independently.
 
 ## Declare a Library, Binary, and Test
 
@@ -161,7 +322,12 @@ configuration. `data` files become declared run inputs, while `compile_data`
 files affect compilation. Keeping those roles separate makes cache behavior
 visible.
 
-## Add Cargo Dependencies
+## Keep Cargo Dependencies When Authoring Targets
+
+Skip this section when the native `cargo_workspace` graph is sufficient. That
+seed already imports the complete locked dependency graph. Use
+`cargo_dependencies` when hand-authored Rust targets should keep Cargo as the
+authority for third-party packages.
 
 Keep third-party requirements in `Cargo.toml` and exact versions in
 `Cargo.lock`. A root `cargo_dependencies` target lets Cargo resolve the
@@ -377,6 +543,7 @@ Use the target kind reference for each role:
 - [`rust_binary`](/reference/prelude/rust_binary)
 - [`rust_test`](/reference/prelude/rust_test)
 - [`rust_proc_macro`](/reference/prelude/rust_proc_macro)
+- [`cargo_workspace`](/reference/prelude/cargo_workspace)
 - [`cargo_dependencies`](/reference/prelude/cargo_dependencies)
 - [`rust_crate`](/reference/prelude/rust_crate)
 - [`rust_mobile_library`](/reference/prelude/rust_mobile_library)

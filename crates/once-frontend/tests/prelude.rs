@@ -8430,6 +8430,297 @@ fn prelude_cargo_workspace_edges_reject_missing_providers() {
 }
 
 #[test]
+fn prelude_cargo_normalizes_hyphenated_crate_names() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+package = {{
+    "name": "demo-tool",
+    "version": "1.0.0",
+}}
+target = {{
+    "name": "demo-tool",
+    "kind": ["bin"],
+}}
+env = _cargo_rustc_env(package, target, ".")
+example_env = _cargo_rustc_env(package, {{
+    "name": "demo-example",
+    "kind": ["example"],
+}}, ".")
+result = repr([
+    _cargo_crate_name(package, target),
+    env["CARGO_CRATE_NAME"],
+    env["CARGO_BIN_NAME"],
+    example_env["CARGO_BIN_NAME"],
+])
+"#
+    );
+
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        "[\"demo_tool\", \"demo_tool\", \"demo-tool\", \"demo-example\"]"
+    );
+}
+
+#[test]
+fn prelude_cargo_native_workspace_materializes_cached_sources() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+root_id = "path+file:///workspace#root@0.1.0"
+dependency_id = "registry+https://registry.example/index#demo@1.0.0"
+metadata = {{
+    "workspace_members": [root_id],
+    "packages": [
+        {{
+            "id": root_id,
+            "name": "root",
+            "version": "0.1.0",
+            "source": None,
+            "manifest_path": "/workspace/Cargo.toml",
+            "targets": [],
+        }},
+        {{
+            "id": dependency_id,
+            "name": "demo",
+            "version": "1.0.0",
+            "source": "registry+https://registry.example/index",
+            "manifest_path": "/cargo/cache/demo-1.0.0/Cargo.toml",
+            "targets": [{{
+                "name": "demo",
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "src_path": "/cargo/cache/demo-1.0.0/src/lib.rs",
+                "edition": "2021",
+            }}],
+        }},
+    ],
+    "resolve": {{"nodes": [
+        {{"id": root_id, "features": [], "deps": []}},
+        {{"id": dependency_id, "features": [], "deps": []}},
+    ]}},
+}}
+resolution = _cargo_metadata_resolution({{
+    "label": {{"package": "pkg", "name": "cargo", "id": "pkg/cargo"}},
+    "attrs": {{}},
+}}, metadata, None, True)
+target = resolution["specs"][0]
+result = repr([
+    target["srcs"],
+    target["attrs"]["_cargo_source_root"],
+    target["attrs"]["_cargo_materialized_source_root"],
+    target["attrs"]["crate_root"],
+])
+"#
+    );
+
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[[], "/cargo/cache/demo-1.0.0", ".once/out/pkg/demo-1.0.0/source", ".once/out/pkg/demo-1.0.0/source/src/lib.rs"]"#
+    );
+}
+
+#[test]
+fn prelude_rust_materializes_resolver_owned_host_source_tree() {
+    let workspace = TempDir::new().unwrap();
+    let host_root = workspace.path().join("cargo-cache/demo-1.0.0");
+    std::fs::create_dir_all(host_root.join("src")).unwrap();
+    std::fs::write(
+        host_root.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(host_root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+    let host_root = host_root.to_string_lossy();
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def _rustc_toolchain(target):
+    return ("rustc", "rustc-test", "test-host-triple")
+
+ctx = {{
+    "label": {{"package": "pkg", "name": "demo", "id": "pkg/demo"}},
+    "attr": {{
+        "crate_name": "demo",
+        "crate_root": ".once/out/pkg/demo/source/src/lib.rs",
+        "_cargo_source_root": {host_root:?},
+        "_cargo_materialized_source_root": ".once/out/pkg/demo/source",
+    }},
+    "deps": [],
+    "srcs": [],
+}}
+_rust_compile(ctx, "rlib", "src/lib.rs", "libdemo.rlib")
+result = repr("ok")
+"#
+    );
+    let store = store_for(workspace.path(), "pkg/demo");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "\"ok\"");
+    assert!(matches!(
+        store.actions[0].operation,
+        Some(DeclaredActionOperation::MaterializeHostTree {
+            ref source,
+            ref destination,
+            ..
+        }) if source.ends_with("cargo-cache/demo-1.0.0")
+            && destination == ".once/out/pkg/demo/source"
+    ));
+    let rustc = action_by_identifier(&store, "pkg/demo:rustc");
+    assert!(
+        rustc
+            .inputs
+            .iter()
+            .any(|input| input == ".once/out/pkg/demo/source"),
+        "{:?}",
+        rustc.inputs
+    );
+}
+
+#[test]
+fn prelude_cargo_skips_targets_with_disabled_required_features() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+target = {{"required-features": ["standalone", "windows"]}}
+result = repr([
+    _cargo_workspace_target_enabled(target, {{"features": ["standalone"]}}),
+    _cargo_workspace_target_enabled(target, {{"features": ["standalone", "windows"]}}),
+])
+"#
+    );
+
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        "[False, True]"
+    );
+}
+
+#[test]
+fn prelude_cargo_emits_each_declared_library_crate_type() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+package = {{
+    "id": "demo-id",
+    "name": "demo",
+    "version": "1.0.0",
+    "targets": [],
+}}
+target = {{
+    "name": "demo",
+    "kind": ["lib"],
+    "crate_types": ["staticlib", "rlib", "cdylib"],
+    "src_path": "/workspace/src/lib.rs",
+    "edition": "2021",
+}}
+specs = _cargo_workspace_target_specs(
+    package,
+    target,
+    {{"features": [], "deps": []}},
+    "library",
+    ".",
+    {{}},
+    {{}},
+    "cargo_demo",
+    "aarch64-unknown-linux-gnu",
+)
+result = repr([
+    [[spec["name"], spec["attrs"]["crate_type"], spec["attrs"]["target"]] for spec in specs],
+    _cargo_workspace_target_kind({{
+        "kind": ["example"],
+        "crate_types": ["staticlib"],
+    }}),
+])
+"#
+    );
+
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[[["cargo_demo", "rlib", "aarch64-unknown-linux-gnu"], ["cargo_demo_staticlib", "staticlib", "aarch64-unknown-linux-gnu"], ["cargo_demo_cdylib", "cdylib", "aarch64-unknown-linux-gnu"]], "library"]"#
+    );
+}
+
+#[test]
+fn prelude_cargo_treats_nonmember_path_packages_as_dependencies() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+root_id = "path+file:///workspace#root@0.1.0"
+path_id = "path+file:///shared#shared@1.0.0"
+metadata = {{
+    "workspace_members": [root_id],
+    "packages": [
+        {{
+            "id": root_id,
+            "name": "root",
+            "version": "0.1.0",
+            "source": None,
+            "manifest_path": "/workspace/Cargo.toml",
+            "targets": [],
+        }},
+        {{
+            "id": path_id,
+            "name": "shared",
+            "version": "1.0.0",
+            "source": None,
+            "manifest_path": "/shared/Cargo.toml",
+            "targets": [{{
+                "name": "shared",
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "src_path": "/shared/src/lib.rs",
+                "edition": "2021",
+            }}],
+        }},
+    ],
+    "resolve": {{"nodes": [
+        {{"id": root_id, "features": [], "deps": []}},
+        {{"id": path_id, "features": [], "deps": []}},
+    ]}},
+}}
+resolution = _cargo_metadata_resolution({{
+    "label": {{"package": "", "name": "cargo", "id": "cargo"}},
+    "attrs": {{}},
+}}, metadata, None, True)
+result = repr([
+    len(resolution["specs"]),
+    resolution["specs"][0]["name"],
+    resolution["specs"][0]["attrs"]["_cargo_source_root"],
+])
+"#
+    );
+
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[1, "shared-1.0.0", "/shared"]"#
+    );
+}
+
+#[test]
+fn prelude_cargo_test_targets_include_development_dependencies() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+node = {{"deps": [
+    {{"name": "runtime", "pkg": "runtime-id", "dep_kinds": [{{"kind": None}}]}},
+    {{"name": "test_support", "pkg": "dev-id", "dep_kinds": [{{"kind": "dev"}}]}},
+]}}
+names = {{"runtime-id": "runtime-target", "dev-id": "dev-target"}}
+library_deps, _library_aliases = _cargo_metadata_deps(node, names, False, True)
+test_deps, test_aliases = _cargo_metadata_deps(node, names, False, True, True)
+result = repr([library_deps, test_deps, test_aliases])
+"#
+    );
+
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["./runtime-target"], ["./runtime-target", "./dev-target"], {"runtime-target": "runtime", "dev-target": "test_support"}]"#
+    );
+}
+
+#[test]
 fn prelude_cargo_ignores_unused_build_dependencies_without_a_build_script() {
     let prelude = all_prelude_source();
     let source = format!(

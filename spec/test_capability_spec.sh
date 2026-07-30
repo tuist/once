@@ -917,4 +917,17 @@ KOTLIN
     The stdout should include 'spec/cli_surface_spec.sh::lists commands'
     The stdout should include 'spec/graph_query_spec.sh::lists declared targets'
   End
+
+  It 'queries summarized shellspec test results without case records'
+    create_shellspec_test_workspace
+    once --format json test cli_e2e >/dev/null
+
+    When call once --format json query test-results cli_e2e --summary-only
+    The status should be success
+    The stdout should include '"schema":"once.test_results_summary.v1"'
+    The stdout should include '"source_schema":"once.test_results.v1"'
+    The stdout should include '"target":"cli_e2e"'
+    The stdout should include '"status":"passed"'
+    The stdout should not include 'spec/cli_surface_spec.sh::lists commands'
+  End
 End

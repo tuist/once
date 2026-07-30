@@ -20,6 +20,14 @@ defmodule OnceSiteWeb.DocsLiveTest do
     assert html =~ "data-prose"
   end
 
+  test "renders the native Cargo adoption path", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/docs/guide/graph/rust")
+
+    assert html =~ "Start With an Existing Cargo Project"
+    assert html =~ "Choose How Much Configuration to Own"
+    assert html =~ "once query targets --kind rust_binary"
+  end
+
   test "renders a hand-written reference page", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/docs/reference/prelude/apple_library")
 

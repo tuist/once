@@ -137,6 +137,16 @@ jobs:
         env:
           ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
 
+      - name: Surface mix release logs on failure
+        if: failure()
+        working-directory: web
+        run: |
+          for log in $(find ../.once -name 'mix-release*.log' 2>/dev/null); do
+            echo "::group::$log"
+            cat "$log" || true
+            echo "::endgroup::"
+          done
+
   docker:
     name: docker
     runs-on: tuist-linux

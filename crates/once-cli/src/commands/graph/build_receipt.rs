@@ -232,6 +232,7 @@ mod tests {
             outputs: vec![".once/out/app/app".to_string()],
             test_results: None,
             input_digest: None,
+            input_fingerprint: None,
             cache_state: EvidenceCacheState::Miss,
             result: ActionResult {
                 exit_code: 0,

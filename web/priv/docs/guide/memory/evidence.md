@@ -85,6 +85,9 @@ An action evidence record contains:
 - **Status**: Whether the action passed or failed.
 - **Action digest**: The identity of the complete action.
 - **Input digest**: The identity of declared inputs when available.
+- **Input fingerprint**: For declared graph actions, categorized component
+  digests for module code, toolchains, command shape, environment, sources,
+  generated inputs, and dependencies.
 - **Cache state**: Whether the result was a hit, miss, or bypass.
 - **Exit code**: The process exit code.
 - **Stream digests**: References to captured standard output and standard error
@@ -95,6 +98,13 @@ An action evidence record contains:
 Compare digests before applying an older result to current work. Matching input
 and action digests show that two records describe the same action state;
 different digests show that some relevant part of that state changed.
+
+Input fingerprint components make that change explainable. Components contain a
+category, label, and digest. They never include raw command arguments or
+environment values. Compare components with the same category and label across
+two records to identify the source, dependency, toolchain, or action property
+that changed. Literal commands and older evidence records may omit the optional
+fingerprint.
 
 ## Next
 

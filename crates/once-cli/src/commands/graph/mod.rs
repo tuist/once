@@ -150,6 +150,7 @@ pub async fn lint(
         outputs: outcome.outputs,
         test_results: None,
         input_digest: outcome.input_digest,
+        input_fingerprint: outcome.input_fingerprint,
         cache_state: outcome.cache_state,
         result: outcome.result,
     };
@@ -236,6 +237,7 @@ pub async fn test_with_filters(
             provider,
             action_digest,
             input_digest,
+            input_fingerprint,
             outputs,
             cache_tag,
             cache_state,
@@ -258,6 +260,7 @@ pub async fn test_with_filters(
             outputs,
             test_results,
             input_digest,
+            input_fingerprint,
             cache_state,
             result,
         }
@@ -312,6 +315,7 @@ pub async fn run(
         let analysis::BuildOutcome {
             action_digest,
             input_digest,
+            input_fingerprint,
             outputs,
             cache_tag,
             cache_state,
@@ -330,6 +334,7 @@ pub async fn run(
             outputs,
             test_results: None,
             input_digest,
+            input_fingerprint,
             cache_state,
             result,
         }
@@ -459,6 +464,7 @@ mod tests {
             outputs: vec![".once/out/apps/ios/App/run".to_string()],
             test_results: None,
             input_digest: None,
+            input_fingerprint: None,
             cache_state: EvidenceCacheState::Miss,
             result: action_result(),
         };
@@ -485,6 +491,7 @@ mod tests {
             outputs: Vec::new(),
             test_results: None,
             input_digest: None,
+            input_fingerprint: None,
             cache_state: EvidenceCacheState::Hit,
             result: action_result(),
         };

@@ -9,7 +9,9 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
-use once_core::{EvidenceCacheState, EvidenceSubject, RunOpts, SandboxMode};
+use once_core::{
+    EvidenceCacheState, EvidenceSubject, InputFingerprintManifest, RunOpts, SandboxMode,
+};
 use once_frontend::GraphTarget;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
@@ -34,6 +36,8 @@ pub(super) struct CapabilityRunRecord {
     pub test_results: Option<String>,
     #[serde(skip, default)]
     pub input_digest: Option<Digest>,
+    #[serde(skip, default)]
+    pub input_fingerprint: Option<InputFingerprintManifest>,
     #[serde(skip, default = "default_cache_state")]
     pub cache_state: EvidenceCacheState,
     #[serde(skip, default = "default_action_result")]
@@ -69,6 +73,7 @@ pub(super) async fn build_target(
         let analysis::BuildOutcome {
             action_digest,
             input_digest,
+            input_fingerprint,
             outputs,
             cache_state,
             result,
@@ -87,6 +92,7 @@ pub(super) async fn build_target(
             outputs,
             test_results: None,
             input_digest,
+            input_fingerprint,
             cache_state,
             result,
         })
@@ -163,6 +169,7 @@ pub(super) async fn run_target_capability(
             .collect(),
         test_results: None,
         input_digest: action.input_digest(),
+        input_fingerprint: None,
         cache_state,
         result,
     })
@@ -189,6 +196,7 @@ pub(super) async fn record_capability_run(workspace: &Path, record: &CapabilityR
         EvidenceSubject::target(record.target.as_str(), record.capability.as_str()),
         action_digest,
         record.input_digest,
+        record.input_fingerprint.clone(),
         record.cache_state,
         &record.result,
     )

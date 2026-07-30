@@ -83,8 +83,9 @@ query-before-build workflow, current limitations, and follow-up steps:
   binaries, Android Kotlin sources, and Kotlin/Native Apple frameworks.
 - [Go](/guide/graph/go) covers package archives, executables, tests, cgo,
   cross-compilation, and locked vendored modules.
-- [Rust](/guide/graph/rust) covers libraries, binaries, tests, procedural
-  macros, Cargo dependencies, and native mobile outputs.
+- [Rust](/guide/graph/rust) starts from an existing `Cargo.toml`, then covers
+  optional manifest adoption, libraries, binaries, tests, procedural macros,
+  Cargo dependencies, and native mobile outputs.
 - [React Native](/guide/graph/react-native) covers New Architecture
   dependencies, native modules, JavaScript bundles, Apple and Android
   applications, and Fast Refresh.

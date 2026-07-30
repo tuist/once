@@ -191,7 +191,13 @@ procedural macros, build scripts, and external packages.
 
 `on_match = "stop"` lets a workspace root own its members. Cargo remains
 authoritative for membership, features, resolved versions, build scripts, and
-target metadata.
+target metadata. Targets gated by unselected required features are omitted,
+test targets include development dependencies, and Cargo target names are
+normalized to valid Rust crate identifiers. Locked external sources are
+snapshotted from Cargo's local cache into target-owned outputs, without assuming
+that the project owns a `vendor` directory. Cargo's explicit workspace member
+set distinguishes first-party packages from local path dependencies, and
+multi-output libraries emit one target per declared Rust library crate type.
 
 ### Future Ecosystems
 

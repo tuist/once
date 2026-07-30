@@ -466,6 +466,58 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
+    /// Snapshot an absolute host directory into a workspace-relative output.
+    /// The source tree digest is captured during analysis and verified again
+    /// on execution, so cache identity follows files, modes, and symlinks.
+    fn materialize_host_tree(source: &str, destination: &str) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let source_path = Path::new(source);
+        if !source_path.is_absolute() {
+            return Err(anyhow!(
+                "materialize_host_tree source must be absolute, got `{source}`"
+            ));
+        }
+        if !source_path.is_dir() {
+            return Err(anyhow!(
+                "materialize_host_tree source is not a directory: `{source}`"
+            ));
+        }
+        let source_sha256 = once_host_tree::host_tree_sha256_hex(source_path)
+            .with_context(|| format!("hashing host directory `{source}`"))?;
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::MaterializeHostTree {
+                source: source.to_string(),
+                source_sha256,
+                destination: destination.to_string(),
+            }),
+            argv: Vec::new(),
+            arg_files: Vec::new(),
+            inputs: Vec::new(),
+            outputs: vec![destination.to_string()],
+            stdout: None,
+            stderr: None,
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
+            sandbox: None,
+            success_exit_codes: vec![0],
+            cacheable: true,
+            inherit_parent_env: false,
+            depends_on_prior_actions: true,
+            toolchain_identity: None,
+            identifier: Some(format!("materialize_host_tree:{destination}")),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
     /// Link one workspace path to another without copying or caching
     /// the linked contents. Downstream actions still hash the linked
     /// tree when they declare it as an input.

@@ -117,6 +117,12 @@ fn record_to_active_model(record: &EvidenceRecord) -> Result<entity::ActiveModel
         status: Set(record.status.as_str().to_string()),
         action_digest: Set(record.action_digest.to_string()),
         input_digest: Set(record.input_digest.map(|digest| digest.to_string())),
+        input_fingerprint_json: Set(record
+            .input_fingerprint
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .context("serializing evidence input fingerprint")?),
         cache: Set(record.cache.as_str().to_string()),
         exit_code: Set(record.exit_code),
         stdout_digest: Set(record.stdout.map(|digest| digest.to_string())),
@@ -141,6 +147,12 @@ fn record_from_model(model: entity::Model) -> Result<EvidenceRecord> {
         status: EvidenceStatus::from_storage(&model.status)?,
         action_digest: parse_digest(&model.action_digest, "action_digest")?,
         input_digest: parse_optional_digest(model.input_digest.as_deref(), "input_digest")?,
+        input_fingerprint: model
+            .input_fingerprint_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .context("parsing evidence input fingerprint")?,
         cache: EvidenceCacheState::from_storage(&model.cache)?,
         exit_code: model.exit_code,
         stdout: parse_optional_digest(model.stdout_digest.as_deref(), "stdout_digest")?,
@@ -166,6 +178,8 @@ mod tests {
     use once_cas::ActionResult;
     use tempfile::TempDir;
 
+    use crate::InputDigestBuilder;
+
     use super::*;
 
     #[test]
@@ -187,10 +201,14 @@ mod tests {
             stderr: None,
             outputs: BTreeMap::from([("out.txt".to_string(), Digest::of_bytes(b"out"))]),
         };
-        let record = EvidenceRecord::from_action_result(
+        let mut builder = InputDigestBuilder::new(b"test");
+        builder.push_bytes_component("toolchain", "identity", b"rust-1.96");
+        let fingerprint = builder.finish_with_fingerprint();
+        let record = EvidenceRecord::from_action_result_with_fingerprint(
             EvidenceSubject::target("cli", "test"),
             action,
-            Some(Digest::of_bytes(b"input")),
+            Some(fingerprint.input_digest),
+            Some(fingerprint),
             EvidenceCacheState::Miss,
             &result,
         )

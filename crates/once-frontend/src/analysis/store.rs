@@ -32,6 +32,11 @@ pub enum DeclaredActionOperation {
         source_sha256: String,
         destination: String,
     },
+    MaterializeHostTree {
+        source: String,
+        source_sha256: String,
+        destination: String,
+    },
     PreparePath {
         path: String,
         mode: DeclaredPreparePathMode,

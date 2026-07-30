@@ -441,11 +441,12 @@ async fn run_query_command(
             target,
             test_unit,
         }) => run_test_plan_query(workspace, output, &changed_paths, target, test_unit).await,
-        Some(cli::QueryCmd::TestResults { target }) => {
-            commands::query::test_results(workspace, output, &target)
-                .await
-                .map(|()| ExitCode::SUCCESS)
-        }
+        Some(cli::QueryCmd::TestResults {
+            target,
+            summary_only,
+        }) => commands::query::test_results(workspace, output, &target, summary_only)
+            .await
+            .map(|()| ExitCode::SUCCESS),
         Some(cli::QueryCmd::TestManifest { target }) => {
             commands::query::test_manifest(workspace, output, &target)
                 .await

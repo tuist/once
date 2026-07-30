@@ -99,14 +99,26 @@ def _rust_crate_name(ctx):
 def _rust_crate_root(ctx, default_root):
     return _package_relative(ctx, _rust_attr(ctx, "crate_root", default_root))
 
-def _rust_sources(ctx, crate_root):
+def _rust_materialized_cargo_sources(ctx):
+    host_root = _rust_attr(ctx, "_cargo_source_root", "")
+    output_root = _rust_attr(ctx, "_cargo_materialized_source_root", "")
+    if not host_root or not output_root:
+        return []
+    materialize_host_tree(host_root, output_root)
+    return [output_root]
+
+def _rust_sources(ctx, crate_root, materialized_sources = []):
+    if materialized_sources:
+        return _unique(materialized_sources)
     resolved = ctx["attr"].get("_resolved_sources")
     srcs = _filter_by_extensions(resolved if resolved != None else glob(ctx["srcs"]), [".rs"])
     if crate_root not in srcs:
         srcs.append(crate_root)
     return _unique(srcs)
 
-def _rust_source_inputs(ctx):
+def _rust_source_inputs(ctx, materialized_sources = []):
+    if materialized_sources:
+        return _unique(materialized_sources)
     resolved = ctx["attr"].get("_resolved_source_inputs")
     if resolved != None:
         return resolved
@@ -1084,7 +1096,7 @@ def _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports):
     ])
     return "\n".join(lines)
 
-def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps, metadata_deps, feature_flags):
+def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_args, dep_inputs, deps, metadata_deps, feature_flags, source_inputs, build_script_inputs):
     build_script = _rust_attr(ctx, "build_script", "")
     if not build_script:
         return (None, [], {}, None)
@@ -1132,7 +1144,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     run_script = _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports)
     run_action(
         argv = [host_which("sh"), "-c", run_script],
-        inputs = _unique([runner] + metadata_inputs + _rust_source_inputs(ctx) + _rust_build_script_inputs(ctx) + _rust_extra_inputs(ctx)),
+        inputs = _unique([runner] + metadata_inputs + source_inputs + build_script_inputs + _rust_extra_inputs(ctx)),
         outputs = [out_dir, stdout],
         env = run_env,
         toolchain_identity = identity + "\x00build-script-run",
@@ -1442,7 +1454,7 @@ def _rust_output_name(ctx, crate_type):
     crate_name = _rust_crate_name(ctx)
     target = _rust_effective_target(ctx, crate_type)
     if crate_type == "bin":
-        return crate_name + _rust_output_extension(crate_type, target)
+        return _rust_attr(ctx, "_binary_output_name", crate_name) + _rust_output_extension(crate_type, target)
     if crate_type == "rlib" or crate_type == "staticlib" or crate_type == "cdylib" or crate_type == "dylib" or crate_type == "proc-macro":
         prefix = "" if "windows" in (target or host_os()) and crate_type != "rlib" else "lib"
         return prefix + crate_name + _rust_extra_filename(ctx, crate_type) + _rust_output_extension(crate_type, target)
@@ -1472,7 +1484,10 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     crate_name = _rust_crate_name(ctx)
     edition = _rust_attr(ctx, "edition", "2021")
     crate_root = _rust_crate_root(ctx, default_root)
-    srcs = _rust_sources(ctx, crate_root)
+    materialized_sources = _rust_materialized_cargo_sources(ctx)
+    source_inputs = _rust_source_inputs(ctx, materialized_sources)
+    build_script_inputs = materialized_sources if materialized_sources else _rust_build_script_inputs(ctx)
+    srcs = _rust_sources(ctx, crate_root, materialized_sources)
     output = declare_output(_rust_declared_output(ctx, _rust_compile_output_name(ctx, crate_type, output_name)))
     aliases = _rust_aliases(ctx)
     deps = _rust_resolved_deps(ctx)
@@ -1485,7 +1500,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     build_dep_args.extend(build_dep_search_args)
     build_dep_inputs = _unique(_rust_dep_inputs(build_deps) + build_dep_search_inputs)
     feature_flags = _rust_feature_flags(ctx)
-    build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_flags)
+    build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_flags, source_inputs, build_script_inputs)
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
     _rust_add_windows_rustc_runtime_path(compile_env, rustc, host_triple)
     _rust_add_windows_proc_macro_path(compile_env, deps)
@@ -1544,7 +1559,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
         own_android_native_libraries.append({"abi": android_abi, "path": output})
     own_native_archives = [output] if crate_type == "staticlib" else []
     own_build_script_outputs = [build_stdout] if build_stdout else []
-    own_build_script_inputs = _rust_build_script_inputs(ctx) if build_stdout else []
+    own_build_script_inputs = build_script_inputs if build_stdout else []
     provider = {
         "label_id": ctx["label"]["id"],
         "target_kind": provider_kind,
@@ -1905,13 +1920,13 @@ fn parse_statuses(text: &str) -> BTreeMap<String, String> {
             continue;
         }
         let rest = &line[5..];
-        for (suffix, status) in [
-            (" ... ok", "passed"),
-            (" ... FAILED", "failed"),
-            (" ... ignored", "skipped"),
-        ] {
-            if let Some(name) = rest.strip_suffix(suffix) {
-                out.insert(name.to_string(), status.to_string());
+        if let Some(name) = rest.strip_suffix(" ... ok") {
+            out.insert(name.to_string(), "passed".to_string());
+        } else if let Some(name) = rest.strip_suffix(" ... FAILED") {
+            out.insert(name.to_string(), "failed".to_string());
+        } else if let Some((name, detail)) = rest.split_once(" ... ignored") {
+            if detail.is_empty() || detail.starts_with(", ") {
+                out.insert(name.to_string(), "skipped".to_string());
             }
         }
     }
@@ -2078,9 +2093,9 @@ def _cargo_feature_args(ctx):
         args.extend(["--features", ",".join(features)])
     return args
 
-def _cargo_resolved_metadata(ctx):
+def _cargo_resolved_metadata(ctx, default_vendor_dir = "third_party/rust/vendor", materialize_sources = False):
     manifest = _package_relative(ctx, _rust_attr(ctx, "manifest", "Cargo.toml"))
-    vendor_dir = _trim_trailing_slash(_rust_attr(ctx, "vendor_dir", "third_party/rust/vendor"))
+    vendor_dir = _trim_trailing_slash(_rust_attr(ctx, "vendor_dir", default_vendor_dir))
     target = _rust_target(ctx)
     metadata_file = _rust_attr(ctx, "metadata_file", "")
     host_metadata_file = _rust_attr(ctx, "host_metadata_file", "")
@@ -2113,7 +2128,7 @@ def _cargo_resolved_metadata(ctx):
         "label": ctx["label"],
         "attrs": resolver_attrs,
     }
-    resolution = _cargo_metadata_resolution(resolver_ctx, metadata, host_metadata)
+    resolution = _cargo_metadata_resolution(resolver_ctx, metadata, host_metadata, materialize_sources)
     return {
         "metadata": metadata,
         "specs": resolution["specs"],
@@ -2142,15 +2157,11 @@ def _cargo_resolver_target_specs(ctx, specs):
 def _cargo_workspace_dependency_names(metadata, id_to_target_name):
     packages = metadata.get("packages") or []
     nodes = _cargo_resolve_nodes(metadata)
-    workspace_package_ids = _cargo_package_id_set([
-        package
-        for package in packages
-        if package.get("source") == None
-    ])
+    workspace_package_ids = _cargo_workspace_member_ids(metadata, packages)
     dependencies = {}
     aliases = {}
     for package in packages:
-        if package.get("source") != None:
+        if not workspace_package_ids.get(package.get("id")):
             continue
         node = nodes.get(package.get("id")) or {}
         external_deps = [
@@ -2422,10 +2433,10 @@ def _cargo_source_suffix(source):
             out.append("_")
     return "".join(out)
 
-def _cargo_duplicate_counts(packages):
+def _cargo_duplicate_counts(packages, workspace_member_ids = {}):
     counts = {}
     for package in packages:
-        if package.get("source") == None:
+        if workspace_member_ids.get(package.get("id")):
             continue
         key = _cargo_key([package["name"], package["version"]])
         counts[key] = counts.get(key, 0) + 1
@@ -2491,8 +2502,8 @@ def _cargo_package_is_proc_macro(package):
 def _cargo_host_variant_name(package, duplicate_counts, target = ""):
     return _cargo_target_name(package, duplicate_counts, target) + "-host"
 
-def _cargo_host_dependency_ids(packages, nodes, host_nodes = None):
-    package_by_id, _ = _cargo_package_indexes(packages, _cargo_duplicate_counts(packages))
+def _cargo_host_dependency_ids(packages, nodes, host_nodes = None, workspace_member_ids = {}):
+    package_by_id, _ = _cargo_package_indexes(packages, _cargo_duplicate_counts(packages, workspace_member_ids), workspace_member_ids)
     if host_nodes == None:
         host_nodes = nodes
     needed = {}
@@ -2501,7 +2512,7 @@ def _cargo_host_dependency_ids(packages, nodes, host_nodes = None):
         package_id = package.get("id")
         if not package_id:
             continue
-        if package.get("source") == None:
+        if workspace_member_ids.get(package_id):
             if _cargo_build_script_target(package) != None:
                 node = nodes.get(package_id) or {}
                 for dep in node.get("deps") or []:
@@ -2509,7 +2520,7 @@ def _cargo_host_dependency_ids(packages, nodes, host_nodes = None):
                         continue
                     dep_id = dep.get("pkg")
                     dep_package = package_by_id.get(dep_id)
-                    if dep_package != None and dep_package.get("source") != None:
+                    if dep_package != None and not workspace_member_ids.get(dep_id):
                         stack.append(dep_id)
             continue
         if _cargo_package_is_proc_macro(package):
@@ -2520,7 +2531,7 @@ def _cargo_host_dependency_ids(packages, nodes, host_nodes = None):
                 if _cargo_dep_is_build(dep):
                     dep_id = dep.get("pkg")
                     dep_package = package_by_id.get(dep_id)
-                    if dep_package != None and dep_package.get("source") != None:
+                    if dep_package != None and not workspace_member_ids.get(dep_id):
                         stack.append(dep_id)
     for _ in range(len(packages) + 1):
         if len(stack) == 0:
@@ -2529,7 +2540,7 @@ def _cargo_host_dependency_ids(packages, nodes, host_nodes = None):
         stack = []
         for package_id in current:
             package = package_by_id.get(package_id)
-            if package == None or package.get("source") == None or package_id in needed:
+            if package == None or workspace_member_ids.get(package_id) or package_id in needed:
                 continue
             needed[package_id] = True
             node = host_nodes.get(package_id) or nodes.get(package_id) or {}
@@ -2539,16 +2550,16 @@ def _cargo_host_dependency_ids(packages, nodes, host_nodes = None):
                     continue
                 dep_id = dep.get("pkg")
                 dep_package = package_by_id.get(dep_id)
-                if dep_package != None and dep_package.get("source") != None and dep_id not in needed:
+                if dep_package != None and not workspace_member_ids.get(dep_id) and dep_id not in needed:
                     stack.append(dep_id)
     return needed
 
-def _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, target = ""):
+def _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, target = "", workspace_member_ids = {}):
     target_names = {}
     host_names = {}
     for package in packages:
         package_id = package.get("id")
-        if package.get("source") == None or not package_id:
+        if workspace_member_ids.get(package_id) or not package_id:
             continue
         target_name = _cargo_target_name(package, duplicate_counts, target)
         target_names[package_id] = target_name
@@ -2558,7 +2569,7 @@ def _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids,
             host_names[package_id] = _cargo_host_variant_name(package, duplicate_counts, target)
     return (target_names, host_names)
 
-def _cargo_package_indexes(packages, duplicate_counts):
+def _cargo_package_indexes(packages, duplicate_counts, workspace_member_ids = {}):
     by_id = {}
     id_to_target_name = {}
     for package in packages:
@@ -2566,7 +2577,7 @@ def _cargo_package_indexes(packages, duplicate_counts):
         if not package_id:
             continue
         by_id[package_id] = package
-        if package.get("source") != None:
+        if not workspace_member_ids.get(package_id):
             id_to_target_name[package_id] = _cargo_target_name(package, duplicate_counts)
     return (by_id, id_to_target_name)
 
@@ -2597,6 +2608,16 @@ def _cargo_package_id_set(packages):
             ids[package_id] = True
     return ids
 
+def _cargo_workspace_member_ids(metadata, packages = []):
+    members = metadata.get("workspace_members")
+    if members:
+        return {package_id: True for package_id in members}
+    return _cargo_package_id_set([
+        package
+        for package in packages
+        if package.get("source") == None
+    ])
+
 def _cargo_dep_is_runtime(dep):
     saw_kind = False
     for kind in dep.get("dep_kinds") or []:
@@ -2611,13 +2632,20 @@ def _cargo_dep_is_build(dep):
             return True
     return False
 
-def _cargo_metadata_dep_refs(node, id_to_target_name, include_runtime, include_build, fail_missing = False):
+def _cargo_dep_is_dev(dep):
+    for kind in dep.get("dep_kinds") or []:
+        if kind.get("kind") == "dev":
+            return True
+    return False
+
+def _cargo_metadata_dep_refs(node, id_to_target_name, include_runtime, include_build, fail_missing = False, include_dev = False):
     deps = []
     aliases = {}
     for dep in node.get("deps") or []:
         runtime = include_runtime and _cargo_dep_is_runtime(dep)
         build = include_build and _cargo_dep_is_build(dep)
-        if not runtime and not build:
+        dev = include_dev and _cargo_dep_is_dev(dep)
+        if not runtime and not build and not dev:
             continue
         dep_id = dep.get("pkg")
         target_name = id_to_target_name.get(dep_id)
@@ -2631,8 +2659,8 @@ def _cargo_metadata_dep_refs(node, id_to_target_name, include_runtime, include_b
             aliases[target_name] = local_name
     return (_unique(deps), aliases)
 
-def _cargo_metadata_deps(node, id_to_target_name, include_build, fail_missing = False):
-    return _cargo_metadata_dep_refs(node, id_to_target_name, True, include_build, fail_missing)
+def _cargo_metadata_deps(node, id_to_target_name, include_build, fail_missing = False, include_dev = False):
+    return _cargo_metadata_dep_refs(node, id_to_target_name, True, include_build, fail_missing, include_dev)
 
 def _cargo_metadata_build_deps(node, id_to_target_name, fail_missing = False):
     return _cargo_metadata_dep_refs(node, id_to_target_name, False, True, fail_missing)
@@ -2661,7 +2689,7 @@ def _cargo_package_field(package, key):
     return value
 
 def _cargo_rustc_env(package, target, source_root):
-    crate_name = target.get("name") or package["name"].replace("-", "_")
+    crate_name = _cargo_crate_name(package, target)
     version = package["version"]
     components = _cargo_version_components(version)
     env = {
@@ -2682,15 +2710,17 @@ def _cargo_rustc_env(package, target, source_root):
         "CARGO_PKG_VERSION_PATCH": components["patch"],
         "CARGO_PKG_VERSION_PRE": components["pre"],
     }
+    if "bin" in (target.get("kind") or []) or "example" in (target.get("kind") or []):
+        env["CARGO_BIN_NAME"] = target.get("name") or package["name"]
     links = package.get("links")
     if links != None:
         env["CARGO_MANIFEST_LINKS"] = links
     return env
 
-def _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases):
+def _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases, host_source_root = ""):
     attrs = {
         "package_name": package["name"],
-        "crate_name": target.get("name") or package["name"].replace("-", "_"),
+        "crate_name": _cargo_crate_name(package, target),
         "version": package["version"],
         "crate_root": crate_root,
         "edition": target.get("edition") or package.get("edition") or "2021",
@@ -2701,6 +2731,9 @@ def _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliase
     }
     if aliases:
         attrs["crate_aliases"] = aliases
+    if host_source_root:
+        attrs["_cargo_source_root"] = host_source_root
+        attrs["_cargo_materialized_source_root"] = source_root
     build_script = _cargo_build_script_target(package)
     if build_script != None:
         attrs["build_script"] = source_root + "/" + _cargo_source_rel(package, build_script)
@@ -2714,20 +2747,20 @@ def _cargo_merge_aliases(left, right):
         out[key] = value
     return out
 
-def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target, host_tool = False):
-    attrs = _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases)
+def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target, host_tool = False, host_source_root = ""):
+    attrs = _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases, host_source_root)
     if rust_target:
         attrs["target"] = rust_target
     checksum = package.get("checksum")
     if checksum != None:
         attrs["checksum"] = checksum
-    if attrs.get("build_script"):
+    if attrs.get("build_script") and not host_source_root:
         attrs["_build_script_inputs"] = [source_root + "/**"]
     spec = {
         "name": name,
         "kind": kind,
         "deps": deps,
-        "srcs": _cargo_package_source_globs(source_root),
+        "srcs": [] if host_source_root else _cargo_package_source_globs(source_root),
         "attrs": attrs,
         "host_tool": host_tool,
     }
@@ -2735,21 +2768,30 @@ def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, 
         spec["build_deps"] = build_deps
     return spec
 
-def _cargo_metadata_resolution(ctx, metadata, host_metadata = None):
+def _cargo_materialized_source_root(ctx, target_name):
+    package = (ctx.get("label") or {}).get("package") or ""
+    target_id = package + "/" + target_name if package else target_name
+    return ".once/out/" + target_id + "/source"
+
+def _cargo_metadata_resolution(ctx, metadata, host_metadata = None, materialize_sources = False):
     target_packages = metadata.get("packages") or []
     host_packages = host_metadata.get("packages") if host_metadata != None else []
     packages = _cargo_merge_packages(target_packages, host_packages)
+    workspace_member_ids = _cargo_workspace_member_ids(metadata, target_packages)
+    if host_metadata != None:
+        for package_id in _cargo_workspace_member_ids(host_metadata, host_packages).keys():
+            workspace_member_ids[package_id] = True
     target_package_ids = _cargo_package_id_set(target_packages)
-    duplicate_counts = _cargo_duplicate_counts(packages)
+    duplicate_counts = _cargo_duplicate_counts(packages, workspace_member_ids)
     nodes = _cargo_resolve_nodes(metadata)
     host_nodes = _cargo_resolve_nodes(host_metadata) if host_metadata != None else nodes
-    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, host_nodes)
+    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, host_nodes, workspace_member_ids)
     vendor_dir = _trim_trailing_slash(ctx["attrs"].get("vendor_dir") or "vendor")
     rust_target = ctx["attrs"].get("target") or ""
-    id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, rust_target)
+    id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, rust_target, workspace_member_ids)
     targets = []
     for package in packages:
-        if package.get("source") == None:
+        if workspace_member_ids.get(package.get("id")):
             continue
         target = _cargo_library_target(package)
         if target == None:
@@ -2757,7 +2799,8 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None):
         package_id = package.get("id")
         name = id_to_target_name.get(package_id) or _cargo_target_name(package, duplicate_counts, rust_target)
         kind = _cargo_kind_for_target(target)
-        source_root = _cargo_vendor_source_root(ctx, vendor_dir, package, _cargo_target_name(package, duplicate_counts))
+        host_source_root = _cargo_package_root(package) if materialize_sources else ""
+        source_root = _cargo_materialized_source_root(ctx, name) if materialize_sources else _cargo_vendor_source_root(ctx, vendor_dir, package, _cargo_target_name(package, duplicate_counts))
         rel_root = _cargo_source_rel(package, target)
         crate_root = source_root + "/" + rel_root
         node = nodes.get(package_id) or {}
@@ -2767,19 +2810,20 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None):
         if kind == "rust_proc_macro":
             deps, aliases = _cargo_metadata_deps(host_node, id_to_host_name, False, True)
             build_deps, build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name, True) if has_build_script else ([], {})
-            targets.append(_cargo_metadata_target_spec(package, target, host_node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), ""))
+            targets.append(_cargo_metadata_target_spec(package, target, host_node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), "", host_source_root = host_source_root))
             continue
 
         if target_package_ids.get(package_id):
             deps, aliases = _cargo_metadata_deps(node, id_to_target_name, False, True)
             build_deps, build_aliases = _cargo_metadata_build_deps(node, id_to_host_name, True) if has_build_script else ([], {})
-            targets.append(_cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), rust_target))
+            targets.append(_cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), rust_target, host_source_root = host_source_root))
 
         host_name = id_to_host_name.get(package_id)
         if host_name:
+            host_materialized_source_root = _cargo_materialized_source_root(ctx, host_name) if materialize_sources else source_root
             host_deps, host_aliases = _cargo_metadata_deps(host_node, id_to_host_name, False, True)
             host_build_deps, host_build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name, True) if has_build_script else ([], {})
-            targets.append(_cargo_metadata_target_spec(package, target, host_node, source_root, crate_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), "", host_tool = True))
+            targets.append(_cargo_metadata_target_spec(package, target, host_node, host_materialized_source_root, host_materialized_source_root + "/" + rel_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), "", host_tool = True, host_source_root = host_source_root))
     workspace_deps, workspace_dep_aliases = _cargo_workspace_dependency_names(metadata, id_to_target_name)
     return {
         "specs": targets,
@@ -2837,13 +2881,23 @@ def _cargo_workspace_source_root(ctx, package):
 def _cargo_workspace_name(value):
     return "cargo_" + value.replace("-", "_").replace(".", "_")
 
+def _cargo_crate_name(package, target):
+    return (target.get("name") or package["name"]).replace("-", "_")
+
 def _cargo_workspace_library_names(packages):
     names = {}
     for package in packages:
-        target = _cargo_library_target(package)
+        target = _cargo_workspace_library_target(package)
         if target != None:
             names[package["id"]] = _cargo_workspace_name(package["name"])
     return names
+
+def _cargo_workspace_library_target(package):
+    for target in package.get("targets") or []:
+        kind = _cargo_workspace_target_kind(target)
+        if kind == "library" or kind == "proc_macro":
+            return target
+    return None
 
 def _cargo_workspace_target_name(package, target, kind, library_names):
     if kind == "library" or kind == "proc_macro":
@@ -2865,15 +2919,38 @@ def _cargo_workspace_target_kind(target):
         return "proc_macro"
     if "test" in kinds or "bench" in kinds:
         return "test"
+    if "lib" in kinds or any([crate_type in ["lib", "rlib", "staticlib", "cdylib", "dylib"] for crate_type in crate_types]):
+        return "library"
     if "bin" in kinds or "example" in kinds:
         return "binary"
-    if "lib" in kinds or "rlib" in crate_types or "lib" in crate_types:
-        return "library"
     return ""
+
+def _cargo_workspace_crate_types(target, kind):
+    if kind != "library":
+        return []
+    crate_types = []
+    for crate_type in target.get("crate_types") or []:
+        normalized = "rlib" if crate_type == "lib" else crate_type
+        if normalized in ["rlib", "staticlib", "cdylib", "dylib"] and normalized not in crate_types:
+            crate_types.append(normalized)
+    if not crate_types:
+        crate_types.append("rlib")
+    if "rlib" in crate_types:
+        crate_types = ["rlib"] + [crate_type for crate_type in crate_types if crate_type != "rlib"]
+    return crate_types
+
+def _cargo_workspace_target_enabled(target, node):
+    enabled = {}
+    for feature in node.get("features") or []:
+        enabled[feature] = True
+    for feature in target.get("required-features") or []:
+        if not enabled.get(feature):
+            return False
+    return True
 
 def _cargo_workspace_attrs(package, target, node, source_root, aliases):
     attrs = {
-        "crate_name": target.get("name") or package["name"].replace("-", "_"),
+        "crate_name": _cargo_crate_name(package, target),
         "crate_root": source_root + "/" + _cargo_source_rel(package, target),
         "edition": target.get("edition") or package.get("edition") or "2021",
         "features": node.get("features") or [],
@@ -2882,6 +2959,8 @@ def _cargo_workspace_attrs(package, target, node, source_root, aliases):
     }
     if aliases:
         attrs["crate_aliases"] = aliases
+    if "bin" in (target.get("kind") or []) or "example" in (target.get("kind") or []):
+        attrs["_binary_output_name"] = target.get("name") or package["name"]
     build_script = _cargo_build_script_target(package)
     if build_script != None:
         attrs["build_script"] = source_root + "/" + _cargo_source_rel(package, build_script)
@@ -2895,8 +2974,8 @@ def _cargo_workspace_dep_maps(metadata, external_names, local_names):
         target_names[package_id] = name
     return target_names
 
-def _cargo_workspace_target_spec(package, target, node, kind, source_root, target_names, build_target_names, local_library):
-    deps, aliases = _cargo_metadata_deps(node, target_names, False, True)
+def _cargo_workspace_target_spec(package, target, node, kind, source_root, target_names, build_target_names, local_library, rust_target = ""):
+    deps, aliases = _cargo_metadata_deps(node, target_names, False, True, kind == "test")
     build_deps, build_aliases = _cargo_metadata_build_deps(node, build_target_names, True)
     name = _cargo_workspace_target_name(
         package,
@@ -2908,7 +2987,7 @@ def _cargo_workspace_target_spec(package, target, node, kind, source_root, targe
         local_ref = "./" + local_library
         if local_ref not in deps:
             deps.append(local_ref)
-        library = _cargo_library_target(package)
+        library = _cargo_workspace_library_target(package)
         if library != None:
             aliases[local_library] = library.get("name") or package["name"].replace("-", "_")
     attrs = _cargo_workspace_attrs(
@@ -2918,6 +2997,8 @@ def _cargo_workspace_target_spec(package, target, node, kind, source_root, targe
         source_root,
         _cargo_merge_aliases(aliases, build_aliases),
     )
+    if rust_target and kind != "proc_macro":
+        attrs["target"] = rust_target
     target_kind = {
         "library": "rust_library",
         "proc_macro": "rust_proc_macro",
@@ -2935,25 +3016,45 @@ def _cargo_workspace_target_spec(package, target, node, kind, source_root, targe
         spec["dependencies"] = {"build_deps": build_deps}
     return spec
 
+def _cargo_workspace_target_specs(package, target, node, kind, source_root, target_names, build_target_names, local_library, rust_target = ""):
+    crate_types = _cargo_workspace_crate_types(target, kind)
+    if not crate_types:
+        return [_cargo_workspace_target_spec(package, target, node, kind, source_root, target_names, build_target_names, local_library, rust_target)]
+    specs = []
+    for index, crate_type in enumerate(crate_types):
+        spec = _cargo_workspace_target_spec(package, target, node, kind, source_root, target_names, build_target_names, local_library, rust_target)
+        spec["attrs"]["crate_type"] = crate_type
+        if index > 0:
+            spec["name"] += "_" + crate_type.replace("-", "_")
+        specs.append(spec)
+    return specs
+
 def _cargo_workspace_resolver(ctx):
     _cargo_require_resolver_file(ctx, "manifest", "Cargo.toml")
     _cargo_require_resolver_file(ctx, "lockfile", "Cargo.lock")
-    resolved = _cargo_resolved_metadata(ctx)
+    vendor_dir = _rust_attr(ctx, "vendor_dir", "")
+    resolved = _cargo_resolved_metadata(ctx, vendor_dir, not vendor_dir)
     metadata = resolved["metadata"]
     packages = metadata.get("packages") or []
+    workspace_member_ids = _cargo_workspace_member_ids(metadata, packages)
     workspace_packages = [
         package
         for package in packages
-        if package.get("source") == None
+        if workspace_member_ids.get(package.get("id"))
     ]
-    duplicate_counts = _cargo_duplicate_counts(packages)
+    default_member_ids = {
+        package_id: True
+        for package_id in (metadata.get("workspace_default_members") or metadata.get("workspace_members") or workspace_member_ids.keys())
+    }
+    duplicate_counts = _cargo_duplicate_counts(packages, workspace_member_ids)
     nodes = _cargo_resolve_nodes(metadata)
-    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes)
+    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, workspace_member_ids = workspace_member_ids)
     external_names, host_external_names = _cargo_dependency_name_maps(
         packages,
         duplicate_counts,
         host_dependency_ids,
         _rust_target(ctx),
+        workspace_member_ids,
     )
     library_names = _cargo_workspace_library_names(workspace_packages)
     target_names = _cargo_workspace_dep_maps(metadata, external_names, library_names)
@@ -2968,11 +3069,13 @@ def _cargo_workspace_resolver(ctx):
         node = nodes.get(package.get("id")) or {}
         local_library = library_names.get(package.get("id")) or ""
         for target in package.get("targets") or []:
+            if not _cargo_workspace_target_enabled(target, node):
+                continue
             kind = _cargo_workspace_target_kind(target)
             if not kind:
                 continue
             names = host_target_names if kind == "proc_macro" else target_names
-            spec = _cargo_workspace_target_spec(
+            specs = _cargo_workspace_target_specs(
                 package,
                 target,
                 node,
@@ -2981,10 +3084,11 @@ def _cargo_workspace_resolver(ctx):
                 names,
                 host_target_names,
                 local_library,
+                _rust_target(ctx),
             )
-            targets.append(spec)
-            if kind != "test":
-                roots.append(spec["name"])
+            targets.extend(specs)
+            if kind != "test" and default_member_ids.get(package.get("id")):
+                roots.extend([spec["name"] for spec in specs])
 
             if kind != "test" and target.get("test"):
                 test_spec = _cargo_workspace_target_spec(
@@ -2996,8 +3100,9 @@ def _cargo_workspace_resolver(ctx):
                     target_names,
                     host_target_names,
                     local_library if kind != "library" else "",
+                    _rust_target(ctx),
                 )
-                test_spec["name"] = spec["name"] + "_unit_tests"
+                test_spec["name"] = specs[0]["name"] + "_unit_tests"
                 targets.append(test_spec)
 
     return {
@@ -3041,6 +3146,9 @@ _RUST_COMMON_ATTRS = [
     attr("named_deps", "map<string, string>", default = "{}", docs = "Buck-compatible alias map from local extern crate name to dependency label or crate name.", configurable = False),
     attr("cargo_package", "string", docs = "Cargo package name used to select direct external deps from a cargo_dependencies dependency set. Defaults to CARGO_PKG_NAME when present.", configurable = False),
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
+    attr("_binary_output_name", "string", docs = "Resolver-owned executable name before the platform extension.", configurable = False),
+    attr("_cargo_source_root", "string", docs = "Resolver-owned absolute Cargo source directory materialized through a declared host-tree action.", configurable = False),
+    attr("_cargo_materialized_source_root", "string", docs = "Resolver-owned Once output directory for one materialized Cargo package.", configurable = False),
     attr("default_deps", "string", docs = "Reserved Buck-compatible default dependency mode.", configurable = False),
     attr("doc_deps", "list<string>", default = "[]", docs = "Reserved for Rust documentation-only dependencies.", configurable = False, implemented = False),
     attr("doc_env", "map<string, string>", default = "{}", docs = "Reserved for Rust documentation action environments.", configurable = False, implemented = False),
@@ -3099,7 +3207,7 @@ cargo_workspace = target_kind(
         attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native project resolution. Defaults to srcs when empty.", configurable = False),
         attr("metadata_file", "string", docs = "Optional checked-in JavaScript Object Notation output from cargo metadata.", configurable = False),
         attr("host_metadata_file", "string", docs = "Optional checked-in host Cargo metadata snapshot.", configurable = False),
-        attr("vendor_dir", "string", default = "vendor", docs = "Package-relative directory containing vendored crate sources.", configurable = False),
+        attr("vendor_dir", "string", docs = "Optional package-relative directory containing pre-vendored crate sources. When omitted, Once snapshots locked sources from Cargo's local cache into target outputs.", configurable = False),
         attr("features", "list<string>", default = "[]", docs = "Cargo features passed to `cargo metadata --features`.", configurable = True),
         attr("all_features", "bool", default = "false", docs = "Pass `--all-features` to Cargo metadata.", configurable = True),
         attr("no_default_features", "bool", default = "false", docs = "Pass `--no-default-features` to Cargo metadata.", configurable = True),
@@ -3127,7 +3235,7 @@ cargo = native_project(
     markers = ["Cargo.toml"],
     target_name = "cargo",
     inputs = ["Cargo.lock", "**/Cargo.toml", ".cargo/config", ".cargo/config.toml"],
-    exclude = ["target", "vendor", "third_party"],
+    exclude = _native_project_generated_dirs(),
     on_match = "stop",
     requires_tools = ["cargo", "rustc"],
 )

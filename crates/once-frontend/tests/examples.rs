@@ -164,6 +164,38 @@ fn every_impl_backed_target_kind_has_a_schema_example() {
 
 #[cfg(unix)]
 #[test]
+fn cargo_native_project_loads_without_a_once_manifest() {
+    let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
+    let schema = schemas
+        .iter()
+        .find(|schema| schema.kind == "cargo_workspace")
+        .expect("cargo_workspace schema");
+    let bundle = load_target_kind_example(schema, "cargo-workspace-native-project")
+        .expect("Cargo native project example materializes");
+    let tmp = TempDir::new().expect("tempdir");
+    materialize(tmp.path(), &bundle);
+    fs::remove_file(tmp.path().join("once.toml")).expect("remove explicit Once manifest");
+
+    let graph = once_frontend::load_graph_workspace(tmp.path())
+        .expect("Cargo native project graph loads without once.toml");
+    let kinds_by_id = graph
+        .iter()
+        .map(|target| (target.label.id.as_str(), target.kind.as_str()))
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(kinds_by_id.get("cargo"), Some(&"cargo_workspace"));
+    assert_eq!(
+        kinds_by_id.get("cargo_once_native_project_example"),
+        Some(&"rust_library")
+    );
+    assert_eq!(
+        kinds_by_id.get("cargo_once_native_project_example_unit_tests"),
+        Some(&"rust_test")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn mix_native_project_lints_in_the_development_environment() {
     let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
     let schema = schemas
