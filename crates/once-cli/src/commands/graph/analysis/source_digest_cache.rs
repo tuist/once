@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 const SCHEMA: &str = "once.source-digests.v1";
 
 #[derive(Clone)]
-pub(super) struct SourceDigestCache {
+pub struct SourceDigestCache {
     inner: Arc<Inner>,
 }
 

@@ -175,9 +175,15 @@ async fn execute_command(
         unreachable!("execute_command only accepts command actions")
     };
 
-    let redirect = local::Redirect {
-        stdout: stdout_path.as_deref(),
-        stderr: stderr_path.as_deref(),
+    let invocation = local::Invocation {
+        argv,
+        env,
+        cwd: cwd.as_ref(),
+        timeout_ms: *timeout_ms,
+        redirect: local::Redirect {
+            stdout: stdout_path.as_deref(),
+            stderr: stderr_path.as_deref(),
+        },
     };
 
     match (remote, stream_to_parent, sandbox) {
@@ -203,129 +209,87 @@ async fn execute_command(
         (None, _, SandboxMode::Inputs | SandboxMode::CopiedInputs) => {
             execute_sandboxed_command(
                 action,
-                argv,
-                env,
-                cwd.as_ref(),
-                inputs,
-                outputs,
-                *timeout_ms,
+                invocation,
+                SandboxPolicy {
+                    inputs,
+                    outputs,
+                    copy_inputs: *sandbox == SandboxMode::CopiedInputs,
+                    validate_contract,
+                },
                 workspace_root,
                 cache,
-                redirect,
                 stream_to_parent,
-                validate_contract,
-                *sandbox == SandboxMode::CopiedInputs,
             )
             .await
         }
         (None, true, SandboxMode::Off) => {
-            local::execute_command_streaming(
-                argv,
-                env,
-                cwd.as_ref(),
-                *timeout_ms,
-                workspace_root,
-                cache,
-                redirect,
-            )
-            .await
+            local::execute_command_streaming(invocation, workspace_root, cache).await
         }
         (None, false, SandboxMode::Off) => {
-            Box::pin(local::execute_command(
-                argv,
-                env,
-                cwd.as_ref(),
-                *timeout_ms,
-                workspace_root,
-                cache,
-                redirect,
-            ))
-            .await
+            local::execute_command(invocation, workspace_root, cache).await
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The filesystem contract a sandboxed run is held to.
+///
+/// Separate from the command itself because these describe the policy
+/// around the run rather than what is executed, and because three bare
+/// `bool`s in a positional argument list were unreadable at the call
+/// site.
+struct SandboxPolicy<'a> {
+    /// Paths the action declared it reads.
+    inputs: &'a [WorkspacePath],
+    /// Paths the action declared it writes.
+    outputs: &'a [WorkspacePath],
+    /// Copy inputs into the execroot instead of linking them.
+    copy_inputs: bool,
+    /// Audit the execroot against the declaration once the child exits.
+    validate_contract: bool,
+}
+
 async fn execute_sandboxed_command(
     action: &Action,
-    argv: &[String],
-    env: &BTreeMap<String, String>,
-    cwd: Option<&WorkspacePath>,
-    inputs: &[WorkspacePath],
-    outputs: &[WorkspacePath],
-    timeout_ms: Option<u64>,
+    invocation: local::Invocation<'_>,
+    policy: SandboxPolicy<'_>,
     workspace_root: &Path,
     cache: &CacheProvider,
-    redirect: local::Redirect<'_>,
     stream_to_parent: bool,
-    validate_contract: bool,
-    copy_inputs: bool,
 ) -> Result<ActionResult> {
-    let sandbox = prepare_input_sandbox(
-        action,
-        inputs,
-        outputs,
-        cwd,
-        workspace_root,
-        validate_contract,
-        copy_inputs,
-    )
-    .await?;
+    let sandbox = prepare_input_sandbox(action, &policy, invocation.cwd, workspace_root).await?;
     let result = if stream_to_parent {
-        local::execute_command_streaming(
-            argv,
-            env,
-            cwd,
-            timeout_ms,
-            &sandbox.execroot,
-            cache,
-            redirect,
-        )
-        .await
+        local::execute_command_streaming(invocation, &sandbox.execroot, cache).await
     } else {
-        local::execute_command(
-            argv,
-            env,
-            cwd,
-            timeout_ms,
-            &sandbox.execroot,
-            cache,
-            redirect,
-        )
-        .await
+        local::execute_command(invocation, &sandbox.execroot, cache).await
     };
 
-    match result {
-        Ok(result) => {
-            if validate_contract {
-                let violations = contract::audit_filesystem(
-                    &sandbox.execroot,
-                    workspace_root,
-                    inputs,
-                    outputs,
-                    &sandbox.before_execroot,
-                    &sandbox.before_workspace,
-                    &result,
-                    cache,
-                )
-                .await
-                .map_err(|source| Error::FileAction {
-                    action: "audit_sandbox",
-                    path: sandbox.execroot.display().to_string(),
-                    source,
-                })?;
-                if !violations.is_empty() {
-                    return Err(Error::ContractViolation { violations });
-                }
-                return Ok(result);
-            }
-            if action.accepts_exit_code(result.exit_code) {
-                copy_sandbox_outputs(outputs, &sandbox.execroot, workspace_root).await?;
-            }
-            Ok(result)
+    let result = result?;
+    if policy.validate_contract {
+        let violations = contract::audit_filesystem(
+            &sandbox.execroot,
+            workspace_root,
+            policy.inputs,
+            policy.outputs,
+            &sandbox.before_execroot,
+            &sandbox.before_workspace,
+            &result,
+            cache,
+        )
+        .await
+        .map_err(|source| Error::FileAction {
+            action: "audit_sandbox",
+            path: sandbox.execroot.display().to_string(),
+            source,
+        })?;
+        if !violations.is_empty() {
+            return Err(Error::ContractViolation { violations });
         }
-        Err(error) => Err(error),
+        return Ok(result);
     }
+    if action.accepts_exit_code(result.exit_code) {
+        copy_sandbox_outputs(policy.outputs, &sandbox.execroot, workspace_root).await?;
+    }
+    Ok(result)
 }
 
 struct PreparedSandbox {
@@ -355,13 +319,16 @@ impl Drop for PreparedSandbox {
 
 async fn prepare_input_sandbox(
     action: &Action,
-    inputs: &[WorkspacePath],
-    outputs: &[WorkspacePath],
+    policy: &SandboxPolicy<'_>,
     cwd: Option<&WorkspacePath>,
     workspace_root: &Path,
-    validate_contract: bool,
-    copy_inputs: bool,
 ) -> Result<PreparedSandbox> {
+    let SandboxPolicy {
+        inputs,
+        outputs,
+        copy_inputs,
+        validate_contract,
+    } = *policy;
     let root = workspace_root
         .join(".once")
         .join("sandboxes")

@@ -95,6 +95,7 @@ impl fmt::Debug for AnalysisEngine {
 }
 
 impl AnalysisEngine {
+    /// Engine over the built-in prelude only, with no workspace on disk.
     pub fn new() -> Result<Self> {
         Self::from_source_with_path(
             crate::modules::BUILT_IN_MODULE_PATH,
@@ -104,6 +105,8 @@ impl AnalysisEngine {
         )
     }
 
+    /// Engine over a workspace's prelude and configuration, with default
+    /// options.
     pub fn for_workspace(root: &Path) -> Result<Self> {
         Self::for_workspace_with_options(root, AnalysisOptions::default())
     }
@@ -123,6 +126,7 @@ impl AnalysisEngine {
         )
     }
 
+    /// [`for_workspace`](Self::for_workspace) with explicit options.
     pub fn for_workspace_with_options(root: &Path, options: AnalysisOptions) -> Result<Self> {
         let source = crate::modules::combined_module_source_for_workspace(root)?;
         let mut engine = Self::from_source_with_path(
@@ -135,7 +139,14 @@ impl AnalysisEngine {
         Ok(engine)
     }
 
-    pub fn for_workspace_with_options_and_target_kinds(
+    /// Like [`for_workspace_with_options`](Self::for_workspace_with_options)
+    /// but loads only the prelude modules the given target kinds need.
+    ///
+    /// A workspace that uses two target kinds pays for two, not for every
+    /// built-in module. Tool paths are layered on afterwards with
+    /// [`with_tool_paths`](Self::with_tool_paths) rather than through a
+    /// further constructor.
+    pub fn for_target_kinds(
         root: &Path,
         options: AnalysisOptions,
         target_kinds: &BTreeSet<String>,
@@ -152,14 +163,8 @@ impl AnalysisEngine {
         Ok(engine)
     }
 
-    pub fn for_workspace_with_options_and_tool_paths(
-        root: &Path,
-        options: AnalysisOptions,
-        tool_paths: BTreeMap<String, String>,
-    ) -> Result<Self> {
-        Ok(Self::for_workspace_with_options(root, options)?.with_tool_paths(tool_paths))
-    }
-
+    /// Engine over Starlark source held in memory. Mainly for tests and
+    /// for evaluating a module without a workspace behind it.
     pub fn from_source(source: impl Into<Arc<str>>) -> Result<Self> {
         Self::from_source_with_path(
             crate::modules::BUILT_IN_MODULE_PATH,

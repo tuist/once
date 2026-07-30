@@ -14,6 +14,10 @@ pub struct ActionKeyBuilder {
 }
 
 impl ActionKeyBuilder {
+    /// Start a key in `namespace`.
+    ///
+    /// The namespace is mixed in first, so two integrations that push
+    /// identical inputs still get distinct keys.
     pub fn new(namespace: impl AsRef<[u8]>) -> Self {
         let namespace = namespace.as_ref();
         let mut encoded = Vec::with_capacity(DOMAIN.len() + namespace.len() + 64);
@@ -22,6 +26,11 @@ impl ActionKeyBuilder {
         Self { encoded }
     }
 
+    /// Add an input that is already content-addressed.
+    ///
+    /// Prefer this over [`push_bytes`](Self::push_bytes) for file
+    /// contents: the digest is fixed width, so the key stays small no
+    /// matter how large the input is.
     pub fn push_digest(&mut self, label: impl AsRef<[u8]>, digest: Digest) -> &mut Self {
         self.encoded.push(1);
         push_field(&mut self.encoded, label.as_ref());
@@ -29,6 +38,10 @@ impl ActionKeyBuilder {
         self
     }
 
+    /// Add a literal input such as a tool name, flag, or version string.
+    ///
+    /// Label and value are both length-prefixed, so `("ab", "c")` and
+    /// `("a", "bc")` produce different keys.
     pub fn push_bytes(&mut self, label: impl AsRef<[u8]>, bytes: impl AsRef<[u8]>) -> &mut Self {
         self.encoded.push(2);
         push_field(&mut self.encoded, label.as_ref());
@@ -36,6 +49,11 @@ impl ActionKeyBuilder {
         self
     }
 
+    /// Consume the builder and return the action key.
+    ///
+    /// Use the result as the action digest passed to
+    /// [`Cache::get_action_result`](crate::Cache::get_action_result) and
+    /// [`Cache::put_action_result`](crate::Cache::put_action_result).
     pub fn finish(self) -> Digest {
         Digest::of_bytes(&self.encoded)
     }

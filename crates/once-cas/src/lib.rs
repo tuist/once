@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 //! Local content-addressed store and action-result cache.
 //!
 //! Blobs are addressed by their BLAKE3 digest; action results are keyed
@@ -60,6 +62,7 @@ impl Cas {
         Self { root: root.into() }
     }
 
+    /// Filesystem root this store reads and writes under.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -108,6 +111,8 @@ impl Cas {
         }
     }
 
+    /// Write a blob's contents to `destination`, streaming rather than
+    /// buffering, and creating parent directories as needed.
     pub async fn copy_blob_to_file(&self, digest: &Digest, destination: &Path) -> Result<()> {
         let stored_path = self.blob_path(digest);
         if !fs::try_exists(&stored_path).await.unwrap_or(false) {
@@ -305,6 +310,9 @@ impl Cas {
             .map_err(|source| Error::Io { path, source })
     }
 
+    /// Record an action result durably: the write is flushed and its
+    /// parent directory synchronized before the call returns, so a crash
+    /// cannot leave a half-written entry behind.
     pub async fn put_action_result(&self, action: &Digest, result: &ActionResult) -> Result<()> {
         let path = self.action_path(action);
         let bytes = serde_json::to_vec(result).expect("ActionResult is serializable");
@@ -321,6 +329,7 @@ impl Cas {
         write_atomically(&path, &bytes).await
     }
 
+    /// Look up a cached action result. `None` is a miss.
     pub async fn get_action_result(&self, action: &Digest) -> Result<Option<ActionResult>> {
         let path = self.action_path(action);
         match fs::read(&path).await {
@@ -344,6 +353,7 @@ impl Cas {
         }
     }
 
+    /// Count blobs and action records by walking the store.
     pub async fn stats(&self) -> Result<Stats> {
         let blobs_dir = self.blobs_dir();
         let actions_dir = self.actions_dir();

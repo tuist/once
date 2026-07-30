@@ -60,12 +60,18 @@ zstd = "0.13"
 tar = "0.4"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny` rather than `forbid` so the C ABI layer can carve out a single
+# `#[allow(unsafe_code)]` on the one module that needs it. `forbid`
+# cannot be relaxed locally, which previously forced the `once` crate to
+# opt out of this whole table and silently lose every workspace lint.
+# The FFI boundary is the only sanctioned exemption; grep for
+# `allow(unsafe_code)` to audit it.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-# Pragmatic carve-outs from the pedantic group: documentation and
-# enum-variant naming aren't worth gating builds on yet.
+# Pragmatic carve-outs from the pedantic group: enum-variant naming and
+# per-call error/panic prose aren't worth gating builds on.
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 module_name_repetitions = "allow"

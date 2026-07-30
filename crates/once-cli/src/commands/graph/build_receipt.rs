@@ -7,7 +7,7 @@ use once_cas::Digest;
 use once_core::SandboxMode;
 use serde::{Deserialize, Serialize};
 
-use super::CapabilityRunRecord;
+use super::capability::CapabilityRunRecord;
 use crate::commands::change_tracker::{ChangePosition, ChangeSnapshot};
 
 use self::path_fingerprint::PathFingerprint;
