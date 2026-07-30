@@ -12329,12 +12329,19 @@ result = repr([
     _xcode_product_kind("com.apple.product-type.watchkit2-extension"),
     _xcode_product_kind("com.apple.product-type.application.watchapp2"),
     _xcode_product_kind("com.apple.product-type.xpc-service"),
+    _xcode_product_kind("com.apple.product-type.library.dynamic"),
+    _xcode_product_kind("com.apple.product-type.application.on-demand-install-capable"),
+    _xcode_product_kind("com.apple.product-type.application.messages"),
+    _xcode_product_kind("com.apple.product-type.application.watchapp2-container"),
+    _xcode_product_kind("com.apple.product-type.driver-extension"),
+    _xcode_product_kind("com.apple.product-type.pluginkit-plugin"),
+    _xcode_product_kind("com.apple.product-type.app-extension.intents-service"),
 ])
 "#
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"["application", "framework", "framework", "library", "test", "test", "extension", "extension", "extension", "watch_app", "extension"]"#
+        r#"["application", "framework", "framework", "library", "test", "test", "extension", "extension", "extension", "watch_app", "extension", "library", "application", "application", "application", "extension", "extension", "extension"]"#
     );
 }
 
@@ -12540,6 +12547,77 @@ result = repr([
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"["app/Sources/Core/Client.swift", "app/Sources/Root.swift", "app/Generated.swift", "/opt/vendor/Vendor.swift"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_filters_excluded_source_file_names() {
+    let prelude = xcode_prelude_source();
+    // `EXCLUDED_SOURCE_FILE_NAMES` drops matching sources (by basename or path)
+    // and `INCLUDED_SOURCE_FILE_NAMES` re-includes a subset, matching Xcode's
+    // per-platform source filtering.
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_glob_match("*_iOS.swift", "View_iOS.swift"),
+    _xcode_glob_match("*_iOS.swift", "View_macOS.swift"),
+    _xcode_glob_match("*/Legacy/*", "App/Legacy/Old.swift"),
+    _xcode_filter_excluded_sources(
+        ["App/View.swift", "App/View_macOS.swift", "App/Legacy/Old.swift", "App/Keep_macOS.swift"],
+        {{
+            "EXCLUDED_SOURCE_FILE_NAMES": ["*_macOS.swift", "*/Legacy/*"],
+            "INCLUDED_SOURCE_FILE_NAMES": ["Keep_macOS.swift"],
+        }},
+    ),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[True, False, True, ["App/View.swift", "App/Keep_macOS.swift"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_synced_group_honors_membership_exceptions() {
+    let prelude = xcode_prelude_source();
+    // A synchronized root group owned by target `App` excludes a sibling
+    // extension's source and a resource through a membership exception set.
+    // Those files must not join the app's sources even though they live under
+    // the group directory.
+    let objects = serde_json::json!({
+        "APPTGT": {
+            "isa": "PBXNativeTarget",
+            "name": "App",
+            "fileSystemSynchronizedGroups": ["G"],
+        },
+        "G": {
+            "isa": "PBXFileSystemSynchronizedRootGroup",
+            "path": "App",
+            "sourceTree": "<group>",
+            "exceptions": ["EX"],
+        },
+        "EX": {
+            "isa": "PBXFileSystemSynchronizedBuildFileExceptionSet",
+            "target": "APPTGT",
+            "membershipExceptions": ["Widget/WidgetData.swift", "Info.plist"],
+        },
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+objects = json_decode({objects:?})
+
+def glob(patterns):
+    return ["App/Main.swift", "App/Widget/WidgetData.swift", "App/Info.plist", "App/Assets.xcassets"]
+
+files = _xcode_synced_group_files({{}}, objects, objects["APPTGT"], "")
+result = repr([files["sources"], files["asset_catalogs"], files["resources"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["App/Main.swift"], ["App/Assets.xcassets"], []]"#
     );
 }
 

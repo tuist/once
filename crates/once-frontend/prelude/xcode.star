@@ -361,6 +361,57 @@ def _xcode_walk_group(objects, group_id, prefix, project_dir, paths, seen):
             if resolved:
                 paths[child_id] = resolved
 
+def _xcode_glob_match(pattern, text):
+    # fnmatch-style match where `*` matches any run of characters (including
+    # `/`) and `?` matches a single character. Backs the
+    # `EXCLUDED_SOURCE_FILE_NAMES` / `INCLUDED_SOURCE_FILE_NAMES` build settings.
+    p = 0
+    t = 0
+    star = -1
+    star_t = 0
+    plen = len(pattern)
+    tlen = len(text)
+    for _ in range(plen + tlen + tlen + 2):
+        if p >= plen and t >= tlen:
+            return True
+        if p < plen and t < tlen and (pattern[p] == text[t] or pattern[p] == "?"):
+            p += 1
+            t += 1
+        elif p < plen and pattern[p] == "*":
+            star = p
+            star_t = t
+            p += 1
+        elif star >= 0:
+            p = star + 1
+            star_t += 1
+            t = star_t
+        else:
+            return False
+    return p >= plen and t >= tlen
+
+def _xcode_matches_any(patterns, path, base):
+    for pattern in patterns:
+        if _xcode_glob_match(pattern, base) or _xcode_glob_match(pattern, path):
+            return True
+    return False
+
+def _xcode_filter_excluded_sources(sources, settings):
+    # Drop sources matched by `EXCLUDED_SOURCE_FILE_NAMES` unless
+    # `INCLUDED_SOURCE_FILE_NAMES` matches them back in. Patterns match against
+    # both the file's basename and its package-relative path, mirroring how
+    # Xcode filters per-platform source variants out of a target.
+    excluded = _xcode_setting_to_list(settings.get("EXCLUDED_SOURCE_FILE_NAMES"))
+    if not excluded:
+        return sources
+    included = _xcode_setting_to_list(settings.get("INCLUDED_SOURCE_FILE_NAMES"))
+    out = []
+    for src in sources:
+        base = _basename(src)
+        if _xcode_matches_any(excluded, src, base) and not _xcode_matches_any(included, src, base):
+            continue
+        out.append(src)
+    return out
+
 _XCODE_SOURCE_EXTS = [".swift", ".m", ".mm", ".c", ".cc", ".cpp", ".cxx", ".c++", ".S"]
 _XCODE_HEADER_EXTS = [".h", ".hh", ".hpp", ".ipp", ".hxx"]
 _XCODE_RESOURCE_EXTS = [".storyboard", ".xib", ".strings", ".plist", ".json", ".xcdatamodeld", ".xcdatamodel", ".xcmappingmodel", ".entitlements"]
@@ -394,22 +445,54 @@ def _xcode_is_excluded_source_path(path):
             return True
     return False
 
-def _xcode_synced_group_files(ctx, objects, group_ids, project_dir):
-    # Xcode 16+ file-system synchronized root groups: every file under the
-    # group directory is a member of the owning target (subject to exception
-    # sets, which are not yet modeled). Enumerate the directories and classify.
+def _xcode_synced_exceptions(objects, group, target_name, base):
+    # Collect the package-relative paths a synchronized group excludes from the
+    # target named `target_name`. A membership exception path is relative to the
+    # group directory (a leading slash still means group-relative), so it is
+    # joined onto the group base.
+    excluded = {}
+    for exception_id in group.get("exceptions") or []:
+        exception = objects.get(exception_id) or {}
+        if exception.get("isa") != "PBXFileSystemSynchronizedBuildFileExceptionSet":
+            continue
+        exception_target = objects.get(exception.get("target")) or {}
+        if (exception_target.get("name") or "") != target_name:
+            continue
+        for relative in exception.get("membershipExceptions") or []:
+            trimmed = relative[1:] if relative.startswith("/") else relative
+            excluded[_xcode_join(base, trimmed)] = True
+    return excluded
+
+def _xcode_path_excluded(path, excluded):
+    if path in excluded:
+        return True
+    # An exception may name a directory; exclude everything beneath it.
+    for prefix in excluded:
+        if path.startswith(prefix + "/"):
+            return True
+    return False
+
+def _xcode_synced_group_files(ctx, objects, target, project_dir):
+    # Xcode 16+ file-system synchronized root groups: every file under the group
+    # directory is a member of the owning target, minus the files a membership
+    # exception set removes from that target (typically resources, or sources
+    # that belong to a sibling extension target). Enumerate and classify.
     sources = []
     headers = []
     resources = []
     asset_catalogs = []
-    for group_id in group_ids or []:
+    target_name = target.get("name") or ""
+    for group_id in target.get("fileSystemSynchronizedGroups") or []:
         group = objects.get(group_id) or {}
         base = _xcode_node_dir(project_dir, project_dir, group)
         if not base:
             continue
+        excluded = _xcode_synced_exceptions(objects, group, target_name, base)
         files = glob([base + "/**"])
         for path in files:
             if _xcode_is_excluded_source_path(path):
+                continue
+            if _xcode_path_excluded(path, excluded):
                 continue
             if _xcode_is_source(path):
                 sources.append(path)
@@ -479,7 +562,7 @@ def _xcode_classic_phase_files(ctx, objects, target, file_paths):
 
 def _xcode_target_files(ctx, objects, target, file_paths, project_dir):
     classic = _xcode_classic_phase_files(ctx, objects, target, file_paths)
-    synced = _xcode_synced_group_files(ctx, objects, target.get("fileSystemSynchronizedGroups"), project_dir)
+    synced = _xcode_synced_group_files(ctx, objects, target, project_dir)
     return {
         "sources": _unique(classic["sources"] + synced["sources"]),
         "headers": _unique(classic["headers"] + synced["headers"]),
@@ -518,20 +601,28 @@ def _xcode_sanitized_target_name(name):
     return "".join(out)
 
 def _xcode_product_kind(product_type):
-    if product_type == "com.apple.product-type.application":
+    # Application variants: plain apps, iMessage apps, App Clips
+    # (on-demand-install-capable), and the iOS container that ships a watch app.
+    if product_type in [
+        "com.apple.product-type.application",
+        "com.apple.product-type.application.messages",
+        "com.apple.product-type.application.on-demand-install-capable",
+        "com.apple.product-type.application.watchapp2-container",
+    ]:
         return "application"
     if product_type == "com.apple.product-type.framework" or product_type == "com.apple.product-type.framework.static":
         return "framework"
-    if product_type == "com.apple.product-type.library.static":
+    if product_type in ["com.apple.product-type.library.static", "com.apple.product-type.library.dynamic"]:
         return "library"
     if product_type in ["com.apple.product-type.bundle.unit-test", "com.apple.product-type.bundle.ui-testing"]:
         return "test"
     # App extensions (share, widget, notification-service, intents, sticker
-    # packs, ExtensionKit) and embedded watchOS apps are executable bundles.
-    # They lower to `apple_application` so their first-party sources compile and
-    # cache like any other app module. The bundle wrapper an `.appex`/watch app
-    # needs (extension point Info.plist, `.appex` suffix) is not modeled yet, so
-    # they build as app bundles rather than embedded extension bundles.
+    # packs, ExtensionKit, driver/system/PlugInKit/Spotlight/TV variants) and
+    # embedded watchOS apps are executable bundles. They lower to
+    # `apple_application` so their first-party sources compile and cache like any
+    # other app module. The bundle wrapper an `.appex`/watch app needs (extension
+    # point Info.plist, `.appex` suffix) is not modeled yet, so they build as app
+    # bundles rather than embedded extension bundles.
     if _xcode_is_extension_product(product_type):
         return "extension"
     if product_type in ["com.apple.product-type.application.watchapp2", "com.apple.product-type.application.watchapp"]:
@@ -549,10 +640,18 @@ def _xcode_is_extension_product(product_type):
         "com.apple.product-type.watchkit-extension",
         "com.apple.product-type.extensionkit-extension",
         "com.apple.product-type.xpc-service",
+        "com.apple.product-type.driver-extension",
+        "com.apple.product-type.system-extension",
+        "com.apple.product-type.pluginkit-plugin",
+        "com.apple.product-type.spotlight-importer",
+        "com.apple.product-type.xcode-extension",
+        "com.apple.product-type.tv-app-extension",
+        "com.apple.product-type.tv-broadcast-extension",
     ]:
         return True
     # Specialized extensions carry a suffix, e.g.
-    # `com.apple.product-type.app-extension.messages-sticker-pack`.
+    # `com.apple.product-type.app-extension.messages-sticker-pack` and
+    # `com.apple.product-type.app-extension.intents-service`.
     return product_type.startswith("com.apple.product-type.app-extension.")
 
 def _xcode_platform(sdkroot):
@@ -864,6 +963,7 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
     subs = _xcode_setting_subs(ctx, target_name, product_name_seed, sdkroot)
 
     files = _xcode_target_files(ctx, objects, target, file_paths, project_dir)
+    files["sources"] = _xcode_filter_excluded_sources(files["sources"], settings)
     direct_deps = _xcode_target_dependencies(objects, target)
     is_test = kind == "test"
     closure = dep_closure.get(target_name) or []
