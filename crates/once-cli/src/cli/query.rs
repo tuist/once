@@ -82,6 +82,23 @@ pub enum QueryCmd {
         target: String,
     },
 
+    /// Compute a deterministic, content-addressed digest of the whole graph.
+    ///
+    /// Folds every target declaration, resolved source contents, the pinned
+    /// Mise toolchain (`mise.toml` and `mise.lock`), and the root workspace
+    /// manifest into one stable digest with categorized components.
+    GraphFingerprint {
+        /// Exclude resolved source file contents from the digest.
+        #[arg(long)]
+        no_sources: bool,
+        /// Exclude the Mise toolchain declarations from the digest.
+        #[arg(long)]
+        no_toolchain: bool,
+        /// Exclude the root workspace manifest from the digest.
+        #[arg(long)]
+        no_manifest: bool,
+    },
+
     /// List targets that expose the generic test capability.
     Tests,
 
@@ -207,6 +224,7 @@ impl QueryCmd {
             Self::ModuleContract => vec!["module-contract"],
             Self::ExternalSource { .. } => vec!["external-source"],
             Self::Target { .. } => vec!["target"],
+            Self::GraphFingerprint { .. } => vec!["graph-fingerprint"],
             Self::Tests => vec!["tests"],
             Self::AffectedTests { .. } => vec!["affected-tests"],
             Self::TestPlan { .. } => vec!["test-plan"],

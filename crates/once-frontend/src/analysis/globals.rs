@@ -1342,7 +1342,7 @@ pub(super) fn expand_globs(
     expand_globs_with_excludes(workspace_root, package, patterns, &[])
 }
 
-fn expand_globs_with_excludes(
+pub fn expand_globs_with_excludes(
     workspace_root: &Path,
     package: &str,
     patterns: &[String],

@@ -428,6 +428,20 @@ async fn run_query_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
+        Some(cli::QueryCmd::GraphFingerprint {
+            no_sources,
+            no_toolchain,
+            no_manifest,
+        }) => {
+            let options = commands::fingerprint::GraphFingerprintOptions {
+                include_sources: !no_sources,
+                include_toolchain: !no_toolchain,
+                include_manifest: !no_manifest,
+            };
+            commands::query::graph_fingerprint(workspace, output, options)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
         Some(cli::QueryCmd::Tests) => commands::query::tests(workspace, output)
             .await
             .map(|()| ExitCode::SUCCESS),

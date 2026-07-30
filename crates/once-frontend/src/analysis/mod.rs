@@ -23,6 +23,7 @@ pub use engine::{
     analyze_target, target_kind_has_impl, AnalysisEngine, AnalysisFailure, AnalysisOptions,
     AnalysisResult,
 };
+pub use globals::expand_globs_with_excludes;
 pub use globals::globals_for_prelude;
 pub use store::{
     with_active_store, AnalysisStore, CachedToolCommand, DeclaredAction, DeclaredActionOperation,
