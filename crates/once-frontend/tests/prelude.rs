@@ -7344,6 +7344,169 @@ result = repr(provider["test_bundle_path"])
     }
 }
 
+fn apple_test_bundle_source(capability: &str, test_block: &str) -> String {
+    let prelude = all_prelude_source();
+    format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "xcrun":
+        return "/usr/bin/xcrun"
+    if name == "codesign":
+        return "/usr/bin/codesign"
+    if name == "sh":
+        return "/bin/sh"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--find" in argv:
+        if argv[len(argv) - 1] == "swiftc":
+            return "/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc\n"
+        return "/toolchain/" + argv[len(argv) - 1] + "\n"
+    if "--show-sdk-path" in argv:
+        return "/sdks/MacOSX.sdk\n"
+    if "--show-sdk-platform-path" in argv:
+        return "/Platforms/MacOSX.platform\n"
+    if "--version" in argv:
+        return "Swift version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{"package": "tests", "name": "PluginTests", "id": "tests/PluginTests"}},
+    "attr": {{"platform": "macos", "minimum_os": "14.0"}},
+    "deps": [],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/tests/PluginTests",
+    "capability": {capability:?},{test_block}
+}}
+provider = _apple_test_bundle_impl(ctx)
+result = repr(provider["test_info"])
+"#
+    )
+}
+
+fn apple_test_bundle_store() -> (AnalysisStore, TempDir) {
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("tests/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("PluginTests.swift"), "import XCTest\n").unwrap();
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "tests".to_string(),
+        ".once/out/tests/PluginTests".to_string(),
+    );
+    (store, workspace)
+}
+
+#[test]
+fn prelude_apple_test_bundle_manifest_advertises_case_sharding() {
+    let (store, _workspace) = apple_test_bundle_store();
+    let source = apple_test_bundle_source("build", "");
+    let (_store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let manifest = out.unwrap();
+    // The test bundle can be sharded case by case, and a shard's case subset is
+    // passed to the runner through arguments.
+    assert!(manifest.contains(r#""granularity": "case""#), "{manifest}");
+    assert!(
+        manifest.contains(r#""case_filtering": "runner_args""#),
+        "{manifest}"
+    );
+    assert!(
+        manifest.contains(r#""strategy": "normalized_results""#),
+        "{manifest}"
+    );
+    assert!(
+        manifest.contains(r#""supported": True"#),
+        "sharding must be supported: {manifest}"
+    );
+}
+
+#[test]
+fn prelude_apple_test_bundle_shard_filters_select_specific_cases() {
+    // With no shard filters the runner selects every case (`-XCTest All`); with
+    // a shard's unit ids it selects exactly those `Suite/method` cases, so each
+    // shard runs only its slice of the bundle.
+    let (store, _workspace) = apple_test_bundle_store();
+    let full = apple_test_bundle_source("test", "");
+    let (store, _) = with_active_store(store, || eval_prelude_source_to_repr(full));
+    let runner = action_by_identifier(&store, "apple_xctest:tests/PluginTests");
+    let script = runner.argv.last().expect("runner script");
+    assert!(script.contains("-XCTest"), "{script}");
+    assert!(
+        script.contains("All"),
+        "unfiltered run selects All: {script}"
+    );
+
+    let (store2, _workspace2) = apple_test_bundle_store();
+    let sharded = apple_test_bundle_source(
+        "test",
+        "\n    \"test\": {\"filters\": [\"tests/PluginTests::NetworkTests/testTimeout\", \"tests/PluginTests::NetworkTests/testRetry\"]},",
+    );
+    let (store2, _) = with_active_store(store2, || eval_prelude_source_to_repr(sharded));
+    let runner2 = action_by_identifier(&store2, "apple_xctest:tests/PluginTests");
+    let script2 = runner2.argv.last().expect("runner script");
+    assert!(
+        script2.contains("NetworkTests/testTimeout,NetworkTests/testRetry"),
+        "shard must select only its cases: {script2}"
+    );
+    assert!(
+        !script2.contains("-XCTest All"),
+        "sharded run must not select All: {script2}"
+    );
+    assert!(
+        !script2.contains("tests/PluginTests::"),
+        "the target prefix must be stripped from selectors: {script2}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_apple_test_cases_script_lists_xctest_and_swift_testing_cases() {
+    // Run the generated listing script against real sources and confirm the
+    // emitted case ids carry the `<target>::<Suite>/<method>` selector the
+    // shard runner turns back into `-XCTest` arguments.
+    let script = eval_prelude_string_function(
+        "_apple_test_cases_script",
+        r#"(["XCTests.swift", "Suite.swift"], "cases.jsonl", "tests/Bundle", "xctest")"#,
+    )
+    .unwrap();
+
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("XCTests.swift"),
+        "import XCTest\nclass NetworkTests: XCTestCase {\n  func testTimeout() {}\n  func testRetry() throws {}\n  func helper() {}\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("Suite.swift"),
+        "import Testing\nstruct MathSuite {\n  @Test func addsNumbers() {}\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("status=0\n{script}"))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let cases = std::fs::read_to_string(dir.path().join("cases.jsonl")).unwrap();
+
+    assert!(
+        cases.contains(r#""id":"tests/Bundle::NetworkTests/testTimeout""#),
+        "{cases}"
+    );
+    assert!(
+        cases.contains(r#""id":"tests/Bundle::NetworkTests/testRetry""#),
+        "{cases}"
+    );
+    assert!(
+        cases.contains(r#""id":"tests/Bundle::MathSuite/addsNumbers""#),
+        "{cases}"
+    );
+    // `helper` is not a test method and must not be listed as a case.
+    assert!(!cases.contains("helper"), "{cases}");
+}
+
 #[cfg(unix)]
 #[test]
 fn prelude_android_kotlin_compile_declares_merged_classes_action() {

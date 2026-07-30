@@ -852,25 +852,63 @@ exit "$status"
     )
     return provider
 
-def _swift_testing_cases_script(swift_srcs, cases_file, target, runner_type):
+def _apple_test_cases_script(swift_srcs, cases_file, target, runner_type):
+    # List every test case from the bundle's sources into `cases_file` as the
+    # `cases` array of the normalized results. The case `id` embeds the
+    # `Suite/method` selector after `{target}::` so the sharded re-run can turn a
+    # unit id back into an `-XCTest` selector. XCTest methods (`func testX`) take
+    # their enclosing `XCTestCase` subclass as the suite; Swift Testing
+    # functions (`@Test func x`) take their enclosing type, defaulting to the
+    # file name for free functions.
     specs = _shell_words(swift_srcs)
     return """total=0
 cases_file={cases_file}
 : > "$cases_file"
+emit_case() {{
+  case_name="$1"
+  case_suite="$2"
+  case_file="$3"
+  if [ "$status" -eq 0 ]; then case_status=passed; else case_status=unknown; fi
+  total=$((total + 1))
+  if [ "$total" -gt 1 ]; then printf ',\n' >> "$cases_file"; fi
+  printf '{{"id":"%s::%s/%s","name":"%s","suite":"%s","file":"%s","status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{"runner":"%s"}}}}' "{target}" "$case_suite" "$case_name" "$case_name" "$case_suite" "$case_file" "$case_status" "$case_status" "{runner_type}" >> "$cases_file"
+}}
 for spec in {specs}; do
   [ -f "$spec" ] || continue
-  suite=${{spec%.swift}}
-  suite=${{suite##*/}}
+  file_suite=${{spec%.swift}}
+  file_suite=${{file_suite##*/}}
+  current_suite="$file_suite"
   while IFS= read -r line; do
+    case "$line" in
+      *"class "*XCTestCase*)
+        decl=${{line#*class }}
+        decl=${{decl%%:*}}
+        decl=${{decl%%[!A-Za-z0-9_]*}}
+        [ -n "$decl" ] && current_suite="$decl"
+        ;;
+      *"struct "*|*"final class "*|*"actor "*)
+        decl=${{line#*struct }}
+        case "$line" in
+          *"final class "*) decl=${{line#*final class }} ;;
+          *"actor "*) decl=${{line#*actor }} ;;
+        esac
+        decl=${{decl%%:*}}
+        decl=${{decl%%[!A-Za-z0-9_]*}}
+        [ -n "$decl" ] && current_suite="$decl"
+        ;;
+    esac
     case "$line" in
       *"@Test func "*)
         name=${{line#*"@Test func "}}
         name=${{name%%"("*}}
-        total=$((total + 1))
-        case_id="{target}::$name"
-        if [ "$status" -eq 0 ]; then case_status=passed; else case_status=unknown; fi
-        if [ "$total" -gt 1 ]; then printf ',\n' >> "$cases_file"; fi
-        printf '{{"id":"%s","name":"%s","suite":"%s","file":"%s","status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{"runner":"%s"}}}}' "$case_id" "$name" "$suite" "$spec" "$case_status" "$case_status" "{runner_type}" >> "$cases_file"
+        emit_case "$name" "$current_suite" "$spec"
+        ;;
+      *"func test"*"("*)
+        name=${{line#*func }}
+        name=${{name%%"("*}}
+        case "$name" in
+          test*) emit_case "$name" "$current_suite" "$spec" ;;
+        esac
         ;;
     esac
   done < "$spec"
@@ -902,15 +940,21 @@ def _apple_test_info(ctx, runner_type, command_argv, command_env, labels, result
             "native_results": [native_results],
             "coverage": [],
         },
+        # Both runners list their cases from the normalized results the runner
+        # writes, and both accept a case subset through `-XCTest` selectors, so
+        # a bundle can be sharded case by case. Once a project's test bundles
+        # each shard by case, `once test` fans the whole group of bundles into
+        # one batch per case for parallel and remote execution.
         "listing": {
-            "supported": runner_type == "swift_testing",
-            "strategy": "parse_swift_testing_functions" if runner_type == "swift_testing" else "external_runner",
+            "supported": True,
+            "strategy": "normalized_results",
         },
         "filtering": {
-            "case_filtering": "unsupported",
+            "case_filtering": "runner_args",
         },
         "sharding": {
-            "supported": False,
+            "supported": True,
+            "granularity": "case",
         },
         "retries": {
             "supported": False,
@@ -2643,11 +2687,24 @@ def _apple_test_bundle_impl(ctx):
 
     if ctx["capability"] == "test":
         cases_file = test_dir + "/cases.jsonl"
+        # When a shard runs, the planner passes the batch's unit ids as
+        # `ctx["test"]["filters"]`. Each id is `<target>::<Suite>/<method>`, so
+        # dropping the `<target>::` prefix yields the `-XCTest` selector. With no
+        # filters the runner selects `All`, matching a plain full-bundle run.
+        case_filters = (ctx.get("test") or {}).get("filters") or []
+        selector_prefix = ctx["label"]["id"] + "::"
+        selectors = []
+        for case_filter in case_filters:
+            if case_filter.startswith(selector_prefix):
+                selectors.append(case_filter[len(selector_prefix):])
+            else:
+                selectors.append(case_filter)
+        xctest_spec = ",".join(selectors) if selectors else "All"
         if platform == "macos" or platform == "macosx":
             runner_command = """DYLD_LIBRARY_PATH={usr_lib}${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}} DYLD_FALLBACK_FRAMEWORK_PATH={frameworks}${{DYLD_FALLBACK_FRAMEWORK_PATH:+:$DYLD_FALLBACK_FRAMEWORK_PATH}} {command}""".format(
                 usr_lib = _shell_literal(xctest_usr_lib_dir),
                 frameworks = _shell_literal(xctest_framework_dir),
-                command = _shell_words([runner_xcrun, "xctest", test_bundle_path]),
+                command = _shell_words([runner_xcrun, "xctest", "-XCTest", xctest_spec, test_bundle_path]),
             )
         elif sdk_variant == "simulator":
             runner_command = _ios_simulator_selection_script(runner_xcrun) + """
@@ -2659,7 +2716,7 @@ cp -R {bundle} "$tmpdir/"
 find "$tmpdir/{bundle_name}" -type d -exec chmod 755 {{}} +
 find "$tmpdir/{bundle_name}" -type f -exec chmod 644 {{}} +
 chmod 755 "$tmpdir/{bundle_name}/{binary_name}"
-SIMCTL_CHILD_DYLD_LIBRARY_PATH={usr_lib} SIMCTL_CHILD_DYLD_FALLBACK_FRAMEWORK_PATH={frameworks} {xcrun} simctl spawn "$simulator_id" {xctest_agent} -XCTest All "$tmpdir/{bundle_name}"
+SIMCTL_CHILD_DYLD_LIBRARY_PATH={usr_lib} SIMCTL_CHILD_DYLD_FALLBACK_FRAMEWORK_PATH={frameworks} {xcrun} simctl spawn "$simulator_id" {xctest_agent} -XCTest {xctest_spec} "$tmpdir/{bundle_name}"
 """.format(
                 xcrun = _shell_literal(runner_xcrun),
                 bundle = _shell_literal(test_bundle_path),
@@ -2668,6 +2725,7 @@ SIMCTL_CHILD_DYLD_LIBRARY_PATH={usr_lib} SIMCTL_CHILD_DYLD_FALLBACK_FRAMEWORK_PA
                 usr_lib = _shell_literal(xctest_usr_lib_dir),
                 frameworks = _shell_literal(xctest_framework_dir),
                 xctest_agent = _shell_literal(platform_path + "/Developer/Library/Xcode/Agents/xctest"),
+                xctest_spec = _shell_literal(xctest_spec),
             )
         else:
             fail(ctx["label"]["id"] + ": apple_test_bundle execution supports macos and simulator targets; device runners need xctestrun support")
@@ -2698,7 +2756,7 @@ exit "$status"
             results = _shell_literal(results),
             native_results = _shell_literal(native_results),
             runner_command = runner_command,
-            cases_script = _swift_testing_cases_script(swift_srcs, cases_file, ctx["label"]["id"], runner_type),
+            cases_script = _apple_test_cases_script(swift_srcs, cases_file, ctx["label"]["id"], runner_type),
             target = ctx["label"]["id"],
             runner_type = runner_type,
         )
