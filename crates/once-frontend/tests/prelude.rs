@@ -12579,6 +12579,78 @@ result = repr([
 }
 
 #[test]
+fn prelude_xcode_spm_parses_refs_and_products() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "SPARKLE_REF": {
+            "isa": "XCRemoteSwiftPackageReference",
+            "repositoryURL": "https://github.com/sparkle-project/Sparkle.git",
+            "requirement": {"kind": "upToNextMajorVersion", "minimumVersion": "2.0.0"},
+        },
+        "MAS_REF": {
+            "isa": "XCRemoteSwiftPackageReference",
+            "repositoryURL": "https://github.com/rxhanson/MASShortcut",
+            "requirement": {"kind": "revision", "revision": "2f9fbb3f"},
+        },
+        "SPARKLE_PROD": {"isa": "XCSwiftPackageProductDependency", "productName": "Sparkle", "package": "SPARKLE_REF"},
+        "MAS_PROD": {"isa": "XCSwiftPackageProductDependency", "productName": "MASShortcut", "package": "MAS_REF"},
+        "APP": {"isa": "PBXNativeTarget", "name": "App", "packageProductDependencies": ["SPARKLE_PROD", "MAS_PROD"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+objects = json_decode({objects:?})
+refs = _xcode_spm_package_refs(objects)
+products = _xcode_target_spm_products(objects, objects["APP"], refs)
+result = repr([
+    refs["SPARKLE_REF"]["identity"],
+    refs["MAS_REF"]["identity"],
+    [p["name"] + "@" + p["package_identity"] for p in products],
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Sparkle", "MASShortcut", ["Sparkle@Sparkle", "MASShortcut@MASShortcut"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_spm_manifest_matches_buildable_package() {
+    // The synthesized manifest must match the shape proven to build against
+    // real packages: an aggregating static library target depending on every
+    // consumed product, with each requirement rendered to its SwiftPM clause.
+    let manifest = eval_prelude_string_function_in(
+        xcode_prelude_source(),
+        "_xcode_spm_manifest",
+        r#"("macos", "10.15", [{"url": "https://github.com/sparkle-project/Sparkle", "requirement": {"kind": "upToNextMajorVersion", "minimumVersion": "2.0.0"}}, {"url": "https://github.com/rxhanson/MASShortcut", "requirement": {"kind": "revision", "revision": "2f9fbb3f"}}], [{"name": "Sparkle", "package_identity": "Sparkle"}, {"name": "MASShortcut", "package_identity": "MASShortcut"}])"#,
+    )
+    .unwrap();
+    assert!(manifest.contains("swift-tools-version:5.9"), "{manifest}");
+    assert!(manifest.contains(r#".macOS("10.15")"#), "{manifest}");
+    assert!(
+        manifest.contains(r#".package(url: "https://github.com/sparkle-project/Sparkle", .upToNextMajor(from: "2.0.0"))"#),
+        "{manifest}"
+    );
+    assert!(
+        manifest.contains(
+            r#".package(url: "https://github.com/rxhanson/MASShortcut", revision: "2f9fbb3f")"#
+        ),
+        "{manifest}"
+    );
+    assert!(
+        manifest.contains(r#".product(name: "Sparkle", package: "Sparkle")"#),
+        "{manifest}"
+    );
+    assert!(
+        manifest.contains(
+            r#".library(name: "OnceXcodeDeps", type: .static, targets: ["OnceXcodeDeps"])"#
+        ),
+        "{manifest}"
+    );
+}
+
+#[test]
 fn prelude_xcode_synced_group_honors_membership_exceptions() {
     let prelude = xcode_prelude_source();
     // A synchronized root group owned by target `App` excludes a sibling

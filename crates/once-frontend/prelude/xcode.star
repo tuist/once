@@ -572,6 +572,129 @@ def _xcode_target_files(ctx, objects, target, file_paths, project_dir):
     }
 
 # ---------------------------------------------------------------------------
+# Swift Package Manager dependencies
+# ---------------------------------------------------------------------------
+
+def _xcode_spm_identity(url):
+    # The package identity Swift Package Manager derives from a remote URL is
+    # the last path component with any `.git` suffix removed.
+    identity = _basename(url)
+    if _ends_with(identity, ".git"):
+        identity = identity[:len(identity) - 4]
+    return identity
+
+def _xcode_spm_package_refs(objects):
+    # Map every package reference id to its identity, URL, and version
+    # requirement. Local package references are recorded with their path.
+    refs = {}
+    for object_id, value in objects.items():
+        isa = value.get("isa") or ""
+        if isa == "XCRemoteSwiftPackageReference":
+            url = value.get("repositoryURL") or ""
+            refs[object_id] = {
+                "kind": "remote",
+                "identity": _xcode_spm_identity(url),
+                "url": url,
+                "requirement": value.get("requirement") or {},
+            }
+        elif isa == "XCLocalSwiftPackageReference":
+            path = value.get("relativePath") or ""
+            refs[object_id] = {
+                "kind": "local",
+                "identity": _basename(path),
+                "path": path,
+                "requirement": {},
+            }
+    return refs
+
+def _xcode_target_spm_products(objects, target, package_refs):
+    # Resolve a native target's `packageProductDependencies` to
+    # `{name, package_identity}` records, skipping products whose package is
+    # declared in a workspace rather than the project (unresolved here).
+    products = []
+    for product_id in target.get("packageProductDependencies") or []:
+        product = objects.get(product_id) or {}
+        if product.get("isa") != "XCSwiftPackageProductDependency":
+            continue
+        name = product.get("productName") or ""
+        if not name:
+            continue
+        ref = package_refs.get(product.get("package")) or {}
+        products.append({
+            "name": name,
+            "package_identity": ref.get("identity") or "",
+        })
+    return products
+
+def _xcode_spm_dependency_clause(url, requirement):
+    # Render a `Package.swift` `.package(url:...)` clause from a pbxproj version
+    # requirement so a synthesized manifest resolves to the project's versions.
+    kind = requirement.get("kind") or ""
+    if kind == "upToNextMajorVersion":
+        return '.package(url: "' + url + '", .upToNextMajor(from: "' + (requirement.get("minimumVersion") or "0.0.0") + '"))'
+    if kind == "upToNextMinorVersion":
+        return '.package(url: "' + url + '", .upToNextMinor(from: "' + (requirement.get("minimumVersion") or "0.0.0") + '"))'
+    if kind == "exactVersion":
+        return '.package(url: "' + url + '", exact: "' + (requirement.get("version") or "0.0.0") + '")'
+    if kind == "versionRange":
+        return '.package(url: "' + url + '", "' + (requirement.get("minimumVersion") or "0.0.0") + '"..<"' + (requirement.get("maximumVersion") or "0.0.0") + '")'
+    if kind == "branch":
+        return '.package(url: "' + url + '", branch: "' + (requirement.get("branch") or "main") + '")'
+    if kind == "revision":
+        return '.package(url: "' + url + '", revision: "' + (requirement.get("revision") or "") + '")'
+    # Fall back to a permissive lower bound so resolution can still proceed.
+    return '.package(url: "' + url + '", .upToNextMajor(from: "0.0.0"))'
+
+def _xcode_spm_platform_clause(platform, minimum_os):
+    version = minimum_os or "10.15"
+    names = {
+        "ios": "iOS",
+        "macos": "macOS",
+        "tvos": "tvOS",
+        "watchos": "watchOS",
+        "visionos": "visionOS",
+    }
+    name = names.get(platform) or "macOS"
+    return "." + name + '("' + version + '")'
+
+def _xcode_spm_manifest(platform, minimum_os, packages, products):
+    # Synthesize an aggregating `Package.swift`: one static library target that
+    # depends on every product the Xcode targets consume, so a single
+    # `swift build` produces a linkable archive plus each dependency's module
+    # and framework. Proven to build against real packages (for example Sparkle
+    # and MASShortcut).
+    dependency_lines = []
+    for package in packages:
+        dependency_lines.append("        " + _xcode_spm_dependency_clause(package["url"], package["requirement"]) + ",")
+    product_lines = []
+    for product in products:
+        product_lines.append('            .product(name: "' + product["name"] + '", package: "' + product["package_identity"] + '"),')
+    return "\n".join([
+        "// swift-tools-version:5.9",
+        "import PackageDescription",
+        "",
+        "let package = Package(",
+        '    name: "OnceXcodeDeps",',
+        "    platforms: [" + _xcode_spm_platform_clause(platform, minimum_os) + "],",
+        "    products: [",
+        '        .library(name: "OnceXcodeDeps", type: .static, targets: ["OnceXcodeDeps"]),',
+        "    ],",
+        "    dependencies: [",
+    ] + dependency_lines + [
+        "    ],",
+        "    targets: [",
+        '        .target(',
+        '            name: "OnceXcodeDeps",',
+        "            dependencies: [",
+    ] + product_lines + [
+        "            ]",
+        "        ),",
+        "    ]",
+        ")",
+        "",
+    ])
+
+# ---------------------------------------------------------------------------
 # Target graph
 # ---------------------------------------------------------------------------
 
