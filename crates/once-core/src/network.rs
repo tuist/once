@@ -6,19 +6,26 @@
 //! fork. The install path calls only async-signal-safe syscalls (`prctl`), so
 //! it is safe to run between fork and exec. Every denied syscall number comes
 //! from `libc::SYS_*`, which the libc crate resolves per architecture, so the
-//! filter needs no hardcoded numbers and works on both x86_64 and aarch64.
+//! filter needs no hardcoded numbers and works on both `x86_64` and `aarch64`.
 
+// This module is the workspace's sanctioned FFI-boundary use of `unsafe`: it
+// installs a seccomp filter through `prctl` and `pre_exec`, which cannot be
+// expressed in safe Rust. Scoped here so the rest of the crate stays under the
+// workspace-wide `unsafe_code = "deny"`.
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
 mod filter {
-    use std::{io, ptr};
+    use std::io;
+
+    use tokio::process::Command;
 
     /// Network-related syscalls a denied action must not be able to issue.
     ///
-    /// `socketpair` is deliberately absent: it can only create AF_UNIX pairs,
-    /// which tools use for local IPC, and it never touches the network. The
-    /// set covers everything else from creating a socket to exchanging data,
-    /// so a denied action cannot reach the network even through a server that
-    /// binds and accepts.
+    /// `socketpair` is deliberately absent: it can only create `AF_UNIX`
+    /// pairs, which tools use for local inter-process communication, and it
+    /// never touches the network. The set covers everything else from creating
+    /// a socket to exchanging data, so a denied action cannot reach the network
+    /// even through a server that binds and accepts.
     const DENIED: &[libc::c_long] = &[
         libc::SYS_socket,
         libc::SYS_connect,
@@ -54,9 +61,8 @@ mod filter {
 
     /// Build the seccomp BPF program that denies every syscall in `DENIED`,
     /// returning `EACCES`, and allows everything else. Split out from
-    /// [`install`] so the program shape can be inspected without running it.
-    #[must_use]
-    pub(crate) fn deny_filter() -> Vec<libc::sock_filter> {
+    /// `install` so the program shape can be inspected without running it.
+    fn deny_filter() -> Vec<libc::sock_filter> {
         let m = DENIED.len();
         let mut prog = Vec::with_capacity(m + 3);
         prog.push(stmt(LD_NR, 0));
@@ -64,13 +70,14 @@ mod filter {
             // On match, jump forward over the remaining checks and the ALLOW
             // return to the ERRNO return at the end. BPF jump offsets are
             // relative to the next instruction; for the (i+1)th check, that is
-            // `m - i` instructions past it.
-            let jump_to_errno = (m - i) as u8;
+            // `m - i` instructions past it. `DENIED` is a small fixed list, so
+            // both the offset and each syscall number fit their fields.
+            let jump_to_errno = u8::try_from(m - i).expect("DENIED fits the u8 BPF jump offset");
             prog.push(libc::sock_filter {
                 code: JEQ_K,
                 jt: jump_to_errno,
                 jf: 0,
-                k: *sys as u32,
+                k: u32::try_from(*sys).expect("syscall numbers are small and positive"),
             });
         }
         prog.push(stmt(RET_K, libc::SECCOMP_RET_ALLOW));
@@ -83,23 +90,37 @@ mod filter {
     /// # Safety
     /// Calls `prctl`, which is async-signal-safe and the only thing this
     /// function does between fork and exec.
-    pub(crate) unsafe fn install(filter: &[libc::sock_filter]) -> io::Result<()> {
+    unsafe fn install(filter: &[libc::sock_filter]) -> io::Result<()> {
+        let len = u16::try_from(filter.len())
+            .map_err(|_| io::Error::other("seccomp filter exceeds the u16 length field"))?;
         if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
             return Err(io::Error::last_os_error());
         }
         let prog = libc::sock_fprog {
-            len: filter.len() as u16,
-            filter: filter.as_ptr() as *mut _,
+            len,
+            filter: filter.as_ptr().cast_mut(),
         };
         if libc::prctl(
             libc::PR_SET_SECCOMP,
             libc::SECCOMP_MODE_FILTER,
-            ptr::addr_of!(prog),
+            std::ptr::addr_of!(prog),
         ) != 0
         {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    /// Arrange for `command` to isolate its child from the network by
+    /// installing the seccomp filter after fork.
+    pub(crate) fn arm(command: &mut Command) {
+        let filter = deny_filter();
+        // SAFETY: `pre_exec` runs in the child after fork; `install` issues
+        // only async-signal-safe syscalls against a filter built here in the
+        // parent, which is safe to run between fork and exec.
+        unsafe {
+            command.pre_exec(move || install(&filter));
+        }
     }
 
     #[cfg(test)]
@@ -117,7 +138,7 @@ mod filter {
             assert_eq!(prog[prog.len() - 2].k, libc::SECCOMP_RET_ALLOW);
             assert_eq!(
                 prog[prog.len() - 1].k,
-                libc::SECCOMP_RET_ERRNO | libc::EACCES as u32
+                libc::SECCOMP_RET_ERRNO | (libc::EACCES as u32)
             );
         }
 
@@ -127,11 +148,11 @@ mod filter {
             let first_check = &prog[1];
             // First check (i = 0) jumps `m` instructions: over the remaining
             // m-1 checks and the ALLOW return, landing on ERRNO.
-            assert_eq!(first_check.jt as usize, DENIED.len());
+            assert_eq!(usize::from(first_check.jt), DENIED.len());
             assert_eq!(first_check.jf, 0);
         }
     }
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) use filter::{deny_filter, install};
+pub(crate) use filter::arm;

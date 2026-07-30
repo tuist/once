@@ -196,12 +196,7 @@ async fn spawn_and_capture(
     // but cannot enforce it; warn so the gap is visible rather than silent.
     #[cfg(target_os = "linux")]
     if network.is_denied() {
-        let filter = crate::network::deny_filter();
-        // Safe: `pre_exec` runs after fork, and `install` issues only
-        // async-signal-safe syscalls against a filter built in the parent.
-        unsafe {
-            command.pre_exec(move || crate::network::install(&filter));
-        }
+        crate::network::arm(&mut command);
     }
     #[cfg(not(target_os = "linux"))]
     if network.is_denied() {
