@@ -8,62 +8,30 @@
 mod action;
 mod analysis;
 mod build_receipt;
+mod capability;
 mod contract;
+mod lint;
 
 pub use contract::{validate_action_contracts, ActionContractValidation};
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
-use once_cas::{ActionResult, CacheProvider, Digest};
-use once_core::{
-    EvidenceCacheState, EvidenceSubject, LintResults, LintSeverity, ResourceLimits, RunOpts,
-    SandboxMode, WorkspacePath,
-};
+use once_cas::{CacheProvider, Digest};
+use once_core::{EvidenceCacheState, LintSeverity, ResourceLimits, SandboxMode};
 use once_frontend::analysis::AnalysisOptions;
 use once_frontend::GraphTarget;
-use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
 
-use crate::cli::{Format, Output};
-use crate::commands::util::cache_tag;
-use crate::render;
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct CapabilityRunRecord {
-    target: String,
-    kind: String,
-    capability: String,
-    status: String,
-    action_digest: String,
-    cache: String,
-    output_groups: Vec<String>,
-    required_outputs: Vec<String>,
-    outputs: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    test_results: Option<String>,
-    #[serde(skip, default)]
-    input_digest: Option<Digest>,
-    #[serde(skip, default = "default_cache_state")]
-    cache_state: EvidenceCacheState,
-    #[serde(skip, default = "default_action_result")]
-    result: ActionResult,
-}
-
-fn default_cache_state() -> EvidenceCacheState {
-    EvidenceCacheState::Hit
-}
-
-fn default_action_result() -> ActionResult {
-    ActionResult {
-        exit_code: 0,
-        stdout: None,
-        stderr: None,
-        outputs: BTreeMap::new(),
-    }
-}
+pub use self::capability::load_graph_for_capability;
+use self::capability::{
+    build_target, ensure_capability, record_capability_run, run_target_capability, write_record,
+    CapabilityRunRecord,
+};
+use self::lint::{
+    lint_provider_output_path, persist_lint_results, validate_lint_provider, write_lint_results,
+};
+use crate::cli::Output;
 
 #[derive(Debug, Clone, Default)]
 pub struct GraphRunOptions {
@@ -192,100 +160,6 @@ pub async fn lint(
     } else {
         ExitCode::SUCCESS
     })
-}
-
-fn validate_lint_provider(target: &GraphTarget, provider: &serde_json::Value) -> Result<()> {
-    lint_provider_output_path(target, provider, "sarif")?;
-    lint_provider_output_path(target, provider, "results")?;
-    Ok(())
-}
-
-fn lint_provider_output_path<'a>(
-    target: &GraphTarget,
-    provider: &'a serde_json::Value,
-    output_name: &str,
-) -> Result<&'a str> {
-    let attribute = format!("lint_info.outputs.{output_name}");
-    let pointer = format!("/lint_info/outputs/{output_name}");
-    let path = provider
-        .pointer(&pointer)
-        .and_then(serde_json::Value::as_str)
-        .filter(|path| !path.is_empty());
-    if let Some(path) = path {
-        if WorkspacePath::try_from(path).is_ok() {
-            return Ok(path);
-        }
-    }
-    let diagnostic = once_frontend::Diagnostic::new(
-        "invalid_lint_provider_output",
-        format!(
-            "lint provider for `{}` must return a non-empty workspace-relative path at `{attribute}`",
-            target.label.id
-        ),
-    )
-    .with_target(&target.label.id)
-    .with_attribute(&attribute)
-    .with_repair(format!(
-        "Return the declared {output_name} output path at `{attribute}`"
-    ));
-    Err(anyhow::Error::new(
-        once_frontend::analysis::AnalysisFailure { diagnostic },
-    ))
-}
-
-async fn persist_lint_results(workspace: &Path, path: &str, results: &LintResults) -> Result<()> {
-    let absolute = workspace.join(path);
-    if let Some(parent) = absolute.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let bytes = serde_json::to_vec_pretty(results)?;
-    tokio::fs::write(&absolute, bytes)
-        .await
-        .with_context(|| format!("writing normalized lint results `{}`", absolute.display()))
-}
-
-async fn write_lint_results(output: Output, results: &LintResults) -> Result<()> {
-    let body = match output.format {
-        Format::Human => render_lint_results(results),
-        Format::Json | Format::Toon => render::structured(output.format, results)?,
-    };
-    let mut out = tokio::io::stdout();
-    out.write_all(body.as_bytes()).await?;
-    out.flush().await?;
-    Ok(())
-}
-
-fn render_lint_results(results: &LintResults) -> String {
-    let mut out = format!(
-        "once: lint {} complete, {} errors, {} warnings, {} notes\n",
-        results.target, results.summary.errors, results.summary.warnings, results.summary.notes
-    );
-    for finding in &results.findings {
-        if let Some(location) = &finding.location {
-            if let Some(path) = &location.path {
-                out.push_str(path);
-                if let Some(line) = location.line {
-                    out.push(':');
-                    out.push_str(&line.to_string());
-                    if let Some(column) = location.column {
-                        out.push(':');
-                        out.push_str(&column.to_string());
-                    }
-                }
-                out.push_str(": ");
-            }
-        }
-        out.push_str(&format!("{:?}", finding.severity).to_lowercase());
-        if let Some(rule_id) = &finding.rule_id {
-            out.push('[');
-            out.push_str(rule_id);
-            out.push(']');
-        }
-        out.push_str(": ");
-        out.push_str(&finding.message);
-        out.push('\n');
-    }
-    out
 }
 
 pub async fn test(
@@ -470,223 +344,13 @@ pub async fn run(
 /// Build a target, walking deps first. If the target kind has an `impl`
 /// callable, execute the actions the impl declares; otherwise fall back to the
 /// generic marker action in [`action`].
-async fn build_target(
-    workspace: &Path,
-    cache: &CacheProvider,
-    target: &GraphTarget,
-    session: &analysis::BuildSession,
-    sandbox: SandboxMode,
-) -> Result<CapabilityRunRecord> {
-    let capability = ensure_capability(target, "build")?;
-    if let Some(outcome) = session.build_with_analysis(target).await? {
-        // Destructure the outcome so `outputs` moves into the record
-        // instead of being cloned. `action_digest` is `Copy`,
-        // `cache_tag` is `&'static str`, and `provider` is dropped on
-        // this path because the run record doesn't surface it yet.
-        let analysis::BuildOutcome {
-            action_digest,
-            input_digest,
-            outputs,
-            cache_state,
-            result,
-            cache_tag,
-            ..
-        } = outcome;
-        Ok(CapabilityRunRecord {
-            target: target.label.id.clone(),
-            kind: target.kind.clone(),
-            capability: capability.name.clone(),
-            status: "completed".to_string(),
-            action_digest: action_digest.to_string(),
-            cache: cache_tag.to_string(),
-            output_groups: capability.output_groups.clone(),
-            required_outputs: capability.requires_outputs.clone(),
-            outputs,
-            test_results: None,
-            input_digest,
-            cache_state,
-            result,
-        })
-    } else {
-        run_target_capability(workspace, cache, target, "build", sandbox).await
-    }
-}
-
-pub fn load_graph_for_capability(
-    workspace: &Path,
-    target_id: &str,
-    capability: &str,
-) -> Result<Option<Vec<GraphTarget>>> {
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    Ok(graph_supports(&graph, target_id, capability).then_some(graph))
-}
-
-fn graph_supports(graph: &[GraphTarget], target_id: &str, capability: &str) -> bool {
-    graph
-        .iter()
-        .find(|target| target.label.id == target_id)
-        .is_some_and(|target| {
-            target
-                .capabilities
-                .iter()
-                .any(|candidate| candidate.name == capability)
-        })
-}
-
-async fn run_target_capability(
-    workspace: &Path,
-    cache: &CacheProvider,
-    target: &GraphTarget,
-    capability_name: &str,
-    sandbox: SandboxMode,
-) -> Result<CapabilityRunRecord> {
-    let capability = ensure_capability(target, capability_name)?;
-    let outputs = action::output_paths(target, capability_name)?;
-    let mut action = action::action_for(target, capability_name, &outputs)?;
-    set_sandbox(&mut action, sandbox);
-    let outcome = once_core::run_with_cache(&action, workspace, cache, RunOpts::default())
-        .await
-        .with_context(|| format!("executing {capability_name} for {}", target.label.id))?;
-    if outcome.result.exit_code != 0 {
-        crate::commands::evidence::record_outcome(
-            workspace,
-            EvidenceSubject::target(target.label.id.as_str(), capability_name),
-            &action,
-            &outcome,
-        )
-        .await;
-        anyhow::bail!(
-            "{} failed for {} with exit code {}",
-            capability_name,
-            target.label.id,
-            outcome.result.exit_code
-        );
-    }
-    let cache = cache_tag(outcome.cache).to_string();
-    let cache_state = EvidenceCacheState::from(outcome.cache);
-    let result = outcome.result;
-    Ok(CapabilityRunRecord {
-        target: target.label.id.clone(),
-        kind: target.kind.clone(),
-        capability: capability.name.clone(),
-        status: "completed".to_string(),
-        action_digest: outcome.action.to_string(),
-        cache,
-        output_groups: capability.output_groups.clone(),
-        required_outputs: capability.requires_outputs.clone(),
-        outputs: outputs
-            .into_iter()
-            .map(|output| output.as_str().to_string())
-            .collect(),
-        test_results: None,
-        input_digest: action.input_digest(),
-        cache_state,
-        result,
-    })
-}
-
-fn set_sandbox(action: &mut once_core::Action, sandbox_mode: SandboxMode) {
-    if let once_core::Action::RunCommand { sandbox, .. } = action {
-        *sandbox = (*sandbox).stronger(sandbox_mode);
-    }
-}
-
-async fn record_capability_run(workspace: &Path, record: &CapabilityRunRecord) {
-    let Some(action_digest) = Digest::from_hex(&record.action_digest) else {
-        tracing::warn!(
-            target = %record.target,
-            capability = %record.capability,
-            action_digest = %record.action_digest,
-            "skipping evidence for invalid action digest"
-        );
-        return;
-    };
-    crate::commands::evidence::record_action_result(
-        workspace,
-        EvidenceSubject::target(record.target.as_str(), record.capability.as_str()),
-        action_digest,
-        record.input_digest,
-        record.cache_state,
-        &record.result,
-    )
-    .await;
-}
-
-fn ensure_capability<'a>(
-    target: &'a GraphTarget,
-    capability: &str,
-) -> Result<&'a once_frontend::Capability> {
-    target
-        .capabilities
-        .iter()
-        .find(|candidate| candidate.name == capability)
-        .ok_or_else(|| unsupported_capability(target, capability))
-}
-
-fn unsupported_capability(target: &GraphTarget, capability: &str) -> anyhow::Error {
-    let available = target
-        .capabilities
-        .iter()
-        .map(|capability| capability.name.as_str())
-        .collect::<Vec<_>>();
-    if available.is_empty() {
-        return anyhow!(
-            "{} ({}) does not expose any capabilities",
-            target.label.id,
-            target.kind
-        );
-    }
-    anyhow!(
-        "{} ({}) does not expose `{}`. Available capabilities: {}",
-        target.label.id,
-        target.kind,
-        capability,
-        available.join(", ")
-    )
-}
-
-async fn write_record(output: Output, record: &CapabilityRunRecord) -> Result<()> {
-    let body = match output.format {
-        Format::Human => render_human(record),
-        Format::Json | Format::Toon => render::structured(output.format, record)?,
-    };
-    let mut out = tokio::io::stdout();
-    out.write_all(body.as_bytes()).await?;
-    out.flush().await?;
-    Ok(())
-}
-
-fn render_human(record: &CapabilityRunRecord) -> String {
-    let groups = if record.output_groups.is_empty() {
-        "none".to_string()
-    } else {
-        record.output_groups.join(", ")
-    };
-    let mut out = format!(
-        "once: {} {} ({}) cache {}, exit=0\noutputs: {}\n",
-        record.capability, record.target, record.kind, record.cache, groups
-    );
-    if !record.required_outputs.is_empty() {
-        out.push_str("requires: ");
-        out.push_str(&record.required_outputs.join(", "));
-        out.push('\n');
-    }
-    if !record.outputs.is_empty() {
-        out.push_str("paths:\n");
-        for path in &record.outputs {
-            out.push_str("  ");
-            out.push_str(path);
-            out.push('\n');
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
+    use super::capability::{graph_supports, render_human};
     use super::*;
+    use once_cas::ActionResult;
     use once_frontend::{Capability, TargetLabel};
 
     fn action_result() -> ActionResult {

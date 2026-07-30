@@ -37,7 +37,7 @@ pub async fn validate_action_contracts(
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let session = BuildSession::new(workspace, cache, graph, SandboxMode::Off).await?;
     let target = session.target(target_id)?;
-    super::ensure_capability(target, capability)?;
+    super::capability::ensure_capability(target, capability)?;
     let validations = session
         .validate_actions(target, capability, selected_index)
         .await?;
