@@ -9,8 +9,13 @@ use sysinfo::System;
 use tokio::sync::Notify;
 use tracing::debug;
 
+/// Memory an action is assumed to need when it declares no estimate.
+///
+/// Admission control needs a number for every action, and guessing too
+/// low is what lets a wide graph oversubscribe the host.
 pub const DEFAULT_ACTION_MEMORY_BYTES: u64 = 250 * 1024 * 1024;
 
+/// What one action reserves before it is allowed to start.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceRequest {
     pub cpu_slots: usize,
@@ -29,6 +34,8 @@ pub struct ResourceRequest {
 }
 
 impl ResourceRequest {
+    /// Request `cpu_slots` and `memory_bytes`. A request for zero CPU
+    /// slots is raised to one, since every action occupies at least one.
     pub fn new(cpu_slots: usize, memory_bytes: u64) -> Self {
         Self {
             cpu_slots: if cpu_slots == 0 { 1 } else { cpu_slots },
@@ -52,6 +59,8 @@ impl ResourceRequest {
         self
     }
 
+    /// True when nothing was customised, which lets serialization skip
+    /// the field and keeps action digests stable.
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
@@ -95,10 +104,14 @@ impl Default for ResourceRequest {
     }
 }
 
+/// The budget every action is admitted against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceLimits {
+    /// Total CPU slots available, normally the host's core count.
     pub cpu_slots: usize,
+    /// Total memory the pool may hand out. Zero disables the memory axis.
     pub memory_bytes: u64,
+    /// Reservation charged to an action that declares no estimate.
     pub default_action_memory_bytes: u64,
     /// Per-name pool size for shared slots. A name absent from this
     /// map is treated as if its limit were 1, so even un-configured
@@ -108,6 +121,8 @@ pub struct ResourceLimits {
 }
 
 impl ResourceLimits {
+    /// Budget of `cpu_slots` and `memory_bytes`, with the per-action
+    /// default clamped so a single action can never exceed the total.
     pub fn new(cpu_slots: usize, memory_bytes: u64) -> Self {
         Self {
             cpu_slots: if cpu_slots == 0 { 1 } else { cpu_slots },
@@ -121,6 +136,7 @@ impl ResourceLimits {
         }
     }
 
+    /// Replace the memory budget, re-clamping the per-action default.
     #[must_use]
     pub fn with_memory_bytes(mut self, memory_bytes: u64) -> Self {
         self.memory_bytes = memory_bytes;
@@ -132,6 +148,8 @@ impl ResourceLimits {
         self
     }
 
+    /// Set the reservation charged to actions that declare no estimate,
+    /// capped by the total memory budget.
     #[must_use]
     pub fn with_default_action_memory_bytes(mut self, memory_bytes: u64) -> Self {
         self.default_action_memory_bytes = if self.memory_bytes == 0 {
@@ -159,6 +177,9 @@ impl ResourceLimits {
         self.slot_limits.get(name).copied().unwrap_or(default_value)
     }
 
+    /// How many default-sized actions fit at once, taking the tighter of
+    /// the CPU and memory axes. Always at least one, so a budget smaller
+    /// than a single action still makes progress rather than deadlocking.
     pub fn max_parallel_actions(&self) -> usize {
         if self.memory_bytes == 0 || self.default_action_memory_bytes == 0 {
             return self.cpu_slots;
@@ -204,6 +225,11 @@ struct State {
     slots: BTreeMap<String, usize>,
 }
 
+/// Admission control over a [`ResourceLimits`] budget.
+///
+/// [`acquire`](Self::acquire) parks a caller until its request fits
+/// alongside everything already running, so concurrency is bounded by the
+/// budget rather than by how many tasks were spawned.
 #[derive(Debug)]
 pub struct ResourcePool {
     limits: ResourceLimits,
@@ -212,6 +238,7 @@ pub struct ResourcePool {
 }
 
 impl ResourcePool {
+    /// Build an empty pool over `limits`.
     pub fn new(limits: ResourceLimits) -> Self {
         let limits = ResourceLimits {
             cpu_slots: if limits.cpu_slots == 0 {
@@ -230,10 +257,12 @@ impl ResourcePool {
         }
     }
 
+    /// See [`ResourceLimits::max_parallel_actions`].
     pub fn max_parallel_actions(&self) -> usize {
         self.limits.max_parallel_actions()
     }
 
+    /// Copy of the budget this pool admits against.
     pub fn limits(&self) -> ResourceLimits {
         self.limits.clone()
     }
@@ -293,6 +322,10 @@ fn can_acquire(state: &State, request: &ResourceRequest, limits: &ResourceLimits
     cpu_ok && memory_ok && slots_ok
 }
 
+/// Proof that a request was admitted.
+///
+/// Releasing is tied to `Drop`, so a panicking or cancelled action cannot
+/// leak its reservation and starve the pool.
 #[derive(Debug)]
 pub struct ResourcePermit {
     pool: Arc<ResourcePool>,

@@ -10,8 +10,13 @@ use serde::{Deserialize, Serialize, Serializer};
 pub struct Digest([u8; Self::LEN]);
 
 impl Digest {
+    /// Digest width in bytes.
     pub const LEN: usize = 32;
 
+    /// Hash a slice already held in memory.
+    ///
+    /// Prefer [`of_reader`](Self::of_reader) for anything file-sized so
+    /// the contents never need to be resident all at once.
     pub fn of_bytes(bytes: &[u8]) -> Self {
         Self(*blake3::hash(bytes).as_bytes())
     }
@@ -26,6 +31,10 @@ impl Digest {
         Ok(Self(*hasher.finalize().as_bytes()))
     }
 
+    /// Hash fixed prefix parts followed by a streaming reader.
+    ///
+    /// Used to bind a header (a format tag, a file mode) to a payload
+    /// without concatenating the two in memory first.
     pub fn of_parts_and_reader(parts: &[&[u8]], mut reader: impl Read) -> io::Result<Self> {
         let mut hasher = blake3::Hasher::new();
         for part in parts {
@@ -35,14 +44,19 @@ impl Digest {
         Ok(Self(*hasher.finalize().as_bytes()))
     }
 
+    /// Wrap raw digest bytes that were computed elsewhere.
+    ///
+    /// This does not hash: pass the digest itself, not the content.
     pub fn from_bytes(bytes: [u8; Self::LEN]) -> Self {
         Self(bytes)
     }
 
+    /// The raw digest bytes.
     pub fn as_bytes(&self) -> &[u8; Self::LEN] {
         &self.0
     }
 
+    /// Render as a 64-character lowercase hex string.
     pub fn to_hex(&self) -> String {
         hex::encode(self.0)
     }

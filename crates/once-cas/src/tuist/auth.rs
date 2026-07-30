@@ -22,6 +22,7 @@ use crate::{Error, Result};
 
 /// Public OAuth client id for Once's built-in Tuist app. This is not a secret.
 pub const TUIST_APP_OAUTH_CLIENT_ID: &str = "b3298a92-3deb-4f5e-a526-b7ad324979b5";
+/// Environment variable that overrides [`TUIST_APP_OAUTH_CLIENT_ID`].
 pub const TUIST_OAUTH_CLIENT_ID_ENV: &str = "TUIST_OAUTH_CLIENT_ID";
 const TUIST_TOKEN_ENV: &str = "TUIST_TOKEN";
 
@@ -32,6 +33,11 @@ const OIDC_EXCHANGE_PATH: &str = "api/auth/oidc/token";
 const OIDC_TOKEN_REFRESH_WINDOW_SECONDS: u64 = 60;
 const CI_ENVIRONMENT_VARIABLES: &[&str] = &["GITHUB_RUN_ID", "CI", "BUILD_NUMBER"];
 
+/// Credential handling for the Tuist remote tier.
+///
+/// Resolves a token from the environment, a cached CI exchange, or stored
+/// credentials, in that order, so an explicitly supplied token always
+/// wins over whatever is on disk.
 #[derive(Debug, Clone)]
 pub struct TuistAuth {
     credentials_root: PathBuf,
@@ -40,14 +46,20 @@ pub struct TuistAuth {
     ci_exchange_lock: Arc<StdMutex<()>>,
 }
 
+/// What the user must be shown to complete an interactive login.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TuistAuthPrompt {
+    /// URL the user has to visit to authorize.
     pub authorize_url: String,
+    /// Loopback address the authorization is redirected back to.
     pub redirect_uri: String,
+    /// Whether a browser will be opened automatically after prompting.
     pub opens_browser: bool,
 }
 
 impl TuistAuth {
+    /// Bind credential handling to a storage root and server config.
+    /// Does no I/O.
     pub fn new(credentials_root: impl AsRef<Path>, config: &TuistCacheConfig) -> Self {
         Self {
             credentials_root: credentials_root.as_ref().to_path_buf(),
@@ -57,6 +69,7 @@ impl TuistAuth {
         }
     }
 
+    /// Resolve a bearer token, erroring when the user is not signed in.
     pub fn token(&self) -> Result<String> {
         self.token_with_env(env_token(TUIST_TOKEN_ENV))
     }
@@ -83,11 +96,14 @@ impl TuistAuth {
         }
     }
 
+    /// Run an interactive login, printing the prompt to the terminal.
     pub fn login(&self, open_browser_after_prompt: bool) -> Result<()> {
         let mut handler = |prompt| print_prompt(&prompt);
         self.login_with_handler(open_browser_after_prompt, &mut handler)
     }
 
+    /// Interactive login that hands the prompt to `handler` instead of
+    /// printing it, so a caller can render it its own way.
     pub fn login_with_handler(
         &self,
         open_browser_after_prompt: bool,
@@ -119,6 +135,7 @@ impl TuistAuth {
         )
     }
 
+    /// Discard stored credentials, returning whether any existed.
     pub fn logout(&self) -> Result<bool> {
         let key = self.storage_key();
         let storage = self.storage()?;

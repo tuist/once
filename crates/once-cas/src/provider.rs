@@ -8,18 +8,32 @@ use crate::{ActionResult, Cas, Digest, GcReport, Result, Stats};
 
 const TUIST_STREAM_REMOTE_UPLOAD_LIMIT: u64 = 8 * 1024 * 1024;
 
+/// The cache a command talks to: a local store, optionally fronting a
+/// remote tier.
+///
+/// Every method dispatches to the selected tier, so callers do not branch
+/// on which provider is configured.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum CacheProvider {
+    /// Filesystem-backed store with no remote tier.
     Local(Cas),
+    /// Local store fronting a Tuist remote tier, which is consulted on a
+    /// local miss and mirrored to on write.
     Tuist(TuistCache),
 }
 
 impl CacheProvider {
+    /// Open a purely local store rooted at `root`.
     pub fn open_local(root: impl Into<PathBuf>) -> Self {
         Self::Local(Cas::open(root))
     }
 
+    /// Open a local store backed by the Tuist remote tier.
+    ///
+    /// `auth_root` holds the credentials the remote tier authenticates
+    /// with; it is kept separate from the cache root so clearing the
+    /// cache never signs the user out.
     pub fn tuist(
         local_root: impl Into<PathBuf>,
         auth_root: impl AsRef<Path>,
@@ -32,6 +46,7 @@ impl CacheProvider {
         )?))
     }
 
+    /// Filesystem root of the local tier, remote tier or not.
     pub fn root(&self) -> &Path {
         match self {
             Self::Local(cas) => cas.root(),
@@ -39,6 +54,9 @@ impl CacheProvider {
         }
     }
 
+    /// Store a blob already held in memory and return its digest.
+    ///
+    /// Prefer [`put_stream`](Self::put_stream) for anything file-sized.
     pub async fn put_blob(&self, bytes: &[u8]) -> Result<Digest> {
         match self {
             Self::Local(cas) => cas.put_blob(bytes).await,
@@ -46,6 +64,11 @@ impl CacheProvider {
         }
     }
 
+    /// Store a blob by streaming it, without holding it all in memory.
+    ///
+    /// Only blobs below an internal size limit are mirrored to a remote
+    /// tier, so a huge stream stays local rather than stalling the write
+    /// on a slow upload.
     pub async fn put_stream<R: AsyncRead + Unpin>(&self, reader: R) -> Result<Digest> {
         match self {
             Self::Local(cas) => cas.put_stream(reader).await,
@@ -60,6 +83,12 @@ impl CacheProvider {
         }
     }
 
+    /// Read a whole blob into memory, consulting the remote tier on a
+    /// local miss.
+    ///
+    /// Use [`copy_blob_to_file`](Self::copy_blob_to_file) or
+    /// [`read_blob_limited`](Self::read_blob_limited) when the blob may
+    /// be large.
     pub async fn get_blob(&self, digest: &Digest) -> Result<Vec<u8>> {
         match self {
             Self::Local(cas) => cas.get_blob(digest).await,
@@ -67,6 +96,8 @@ impl CacheProvider {
         }
     }
 
+    /// Materialize a blob at `destination`, streaming it rather than
+    /// buffering it in memory.
     pub async fn copy_blob_to_file(&self, digest: &Digest, destination: &Path) -> Result<()> {
         match self {
             Self::Local(cas) => cas.copy_blob_to_file(digest, destination).await,
@@ -77,6 +108,12 @@ impl CacheProvider {
         }
     }
 
+    /// Read at most `limit` bytes of a blob, from the start or, when
+    /// `from_end` is set, from the tail.
+    ///
+    /// Returns the bytes and whether the blob was longer than `limit`.
+    /// Reading the tail is what a caller wants when surfacing the end of
+    /// a long log without paying for the whole thing.
     pub async fn read_blob_limited(
         &self,
         digest: &Digest,
@@ -134,6 +171,7 @@ impl CacheProvider {
         }
     }
 
+    /// Record the result of an action under its action digest.
     pub async fn put_action_result(&self, action: &Digest, result: &ActionResult) -> Result<()> {
         match self {
             Self::Local(cas) => cas.put_action_result(action, result).await,
@@ -141,6 +179,8 @@ impl CacheProvider {
         }
     }
 
+    /// Look up a cached action result. `None` is a miss; a stored record
+    /// that fails to decode is also treated as a miss.
     pub async fn get_action_result(&self, action: &Digest) -> Result<Option<ActionResult>> {
         match self {
             Self::Local(cas) => cas.get_action_result(action).await,
@@ -148,6 +188,7 @@ impl CacheProvider {
         }
     }
 
+    /// Drop a cached action result, returning whether one was present.
     pub async fn forget_action(&self, action: &Digest) -> Result<bool> {
         match self {
             Self::Local(cas) => cas.forget_action(action).await,
@@ -155,6 +196,7 @@ impl CacheProvider {
         }
     }
 
+    /// Count what the local tier currently holds.
     pub async fn stats(&self) -> Result<Stats> {
         match self {
             Self::Local(cas) => cas.stats().await,

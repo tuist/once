@@ -28,6 +28,7 @@ fn is_default_success_exit_codes(codes: &[i32]) -> bool {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+/// What happens to a symbolic link found among an action's outputs.
 pub enum OutputSymlinkMode {
     Preserve,
     #[default]
@@ -35,6 +36,8 @@ pub enum OutputSymlinkMode {
 }
 
 impl OutputSymlinkMode {
+    /// True when unchanged from the default, so serialization can skip it
+    /// and leave existing action digests stable.
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
@@ -56,6 +59,7 @@ impl FromStr for OutputSymlinkMode {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
+/// How strongly an action is isolated from the workspace while it runs.
 pub enum SandboxMode {
     #[default]
     Off,
@@ -64,10 +68,15 @@ pub enum SandboxMode {
 }
 
 impl SandboxMode {
+    /// True when unchanged from the default, so serialization can skip it
+    /// and leave existing action digests stable.
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
 
+    /// The stricter of two modes. Combining requirements must never
+    /// weaken isolation, so this takes the maximum rather than the last
+    /// value set.
     #[must_use]
     pub fn stronger(self, other: Self) -> Self {
         std::cmp::max(self, other)
@@ -202,46 +211,74 @@ pub enum Action {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Container format an archive action writes.
 pub enum ArchiveFormat {
+    /// Uncompressed tar.
     Tar,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// One member of an archive.
+///
+/// Ownership, modes, and mtime are declared rather than copied from disk
+/// so the same inputs archive identically on any machine.
 pub struct ArchiveEntry {
+    /// Whether this entry is a file, a directory, or a whole subtree.
     pub kind: ArchiveEntryKind,
+    /// Workspace path the contents come from. Absent for an entry the
+    /// archive synthesises, such as a bare directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<WorkspacePath>,
+    /// Path recorded inside the archive.
     pub path: String,
+    /// Permission bits for a file entry.
     pub mode: u32,
+    /// Permission bits for a directory entry.
     pub directory_mode: u32,
+    /// Owner id recorded in the archive.
     pub owner_id: u64,
+    /// Group id recorded in the archive.
     pub group_id: u64,
+    /// Modification time recorded in the archive, in seconds.
     pub mtime: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Shape of an [`ArchiveEntry`].
 pub enum ArchiveEntryKind {
+    /// A single file.
     File,
+    /// A directory entry with no contents of its own.
     Directory,
+    /// A directory and everything beneath it.
     Tree,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Whether a copy action moves one file or a whole subtree.
 pub enum CopyPathMode {
+    /// Copy a single file.
     File,
+    /// Copy a directory and everything beneath it.
     Tree,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// What preparing a path does to it before an action runs.
 pub enum PreparePathMode {
+    /// Delete whatever is there.
     Remove,
+    /// Ensure a directory exists there.
     Directory,
 }
 
 impl Action {
+    /// Whether this exit code counts as success. Actions declare their
+    /// own accepted codes, since tools like linters use a nonzero exit to
+    /// report findings rather than failure.
     #[must_use]
     pub fn accepts_exit_code(&self, exit_code: i32) -> bool {
         match self {
@@ -298,6 +335,7 @@ impl Action {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Where an action runs when it is not run locally.
 pub struct RemoteExecution {
     /// Named infrastructure configuration used for placement and logs.
     pub provider: String,
@@ -307,13 +345,16 @@ pub struct RemoteExecution {
     /// Immutable toolchain image, snapshot, or template used for this action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
+    /// Account the remote work is billed and scoped to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// Project the remote work is scoped to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
 }
 
 impl RemoteExecution {
+    /// Target `provider` with every other field left at its default.
     pub fn provider(provider: impl Into<String>) -> Self {
         Self {
             provider: provider.into(),
