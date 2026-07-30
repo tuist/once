@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use self::actions::{run_declared_actions, validate_declared_actions, DeclaredActionValidation};
-use self::scheduler::BuildScheduler;
+use self::scheduler::{BuildScheduler, DependencyInputs};
 use self::source_digest_cache::SourceDigestCache;
 
 const GRAPH_TOOL_CACHE_SCHEMA: &str = "once.graph-tool-paths.v4";
@@ -146,11 +146,8 @@ impl BuildSession {
             .iter()
             .map(|target| target.kind.clone())
             .collect::<BTreeSet<_>>();
-        let analyzer = AnalysisEngine::for_workspace_with_options_and_target_kinds(
-            workspace,
-            AnalysisOptions::default(),
-            &target_kinds,
-        )?;
+        let analyzer =
+            AnalysisEngine::for_target_kinds(workspace, AnalysisOptions::default(), &target_kinds)?;
         let graph = analyzer
             .load_graph_workspace_from_targets(workspace, workspace_targets)
             .context("loading graph")?;
@@ -187,15 +184,11 @@ impl BuildSession {
             .iter()
             .map(|target| target.kind.clone())
             .collect::<BTreeSet<_>>();
-        let analyzer = AnalysisEngine::for_workspace_with_options_and_target_kinds(
-            workspace,
-            options,
-            &target_kinds,
-        )?
-        .with_tool_cache(
-            resolved_tools.paths.clone(),
-            resolved_tools.commands.clone(),
-        );
+        let analyzer = AnalysisEngine::for_target_kinds(workspace, options, &target_kinds)?
+            .with_tool_cache(
+                resolved_tools.paths.clone(),
+                resolved_tools.commands.clone(),
+            );
         let mut session = Self::new_with_analyzer(workspace, cache, graph, analyzer, sandbox);
         session.tool_paths = Arc::new(resolved_tools.paths);
         session.tool_cache_fingerprint = resolved_tools.fingerprint;
@@ -530,19 +523,27 @@ impl BuildSession {
     ) -> Result<HashMap<String, BuildOutcome>> {
         BuildScheduler::new(
             root_id,
-            &self.workspace,
-            &self.cache,
+            self.build_context(),
             &self.targets,
-            &self.analyzer,
-            &self.tool_paths,
-            &self.source_digest_cache,
             reachable,
             retained,
-            self.sandbox,
-            &self.resources,
         )
         .run()
         .await
+    }
+
+    /// Snapshot the per-build values every spawned task needs.
+    fn build_context(&self) -> BuildContext {
+        BuildContext {
+            workspace: self.workspace.clone(),
+            cache: self.cache.clone(),
+            analyzer: self.analyzer.clone(),
+            module_source_digest: Digest::of_bytes(self.analyzer.module_source().as_bytes()),
+            tool_paths: Arc::clone(&self.tool_paths),
+            source_digest_cache: self.source_digest_cache.clone(),
+            sandbox: self.sandbox,
+            resources: Arc::clone(&self.resources),
+        }
     }
 
     fn persist_graph_tool_cache(&self) {
@@ -908,29 +909,53 @@ fn graph_tool_paths_fingerprint(paths: &BTreeMap<String, String>) -> Option<Dige
     Some(Digest::of_bytes(&bytes))
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Everything a target build needs that is the same for every target in
+/// one graph build.
+///
+/// Cloned once per spawned build task. Every field is a handle or an
+/// `Arc`, so a clone is a few refcount bumps rather than a deep copy of
+/// the analyzer or the cache.
+#[derive(Clone)]
+struct BuildContext {
+    pub workspace: PathBuf,
+    pub cache: CacheProvider,
+    pub analyzer: AnalysisEngine,
+    pub module_source_digest: Digest,
+    pub tool_paths: Arc<BTreeMap<String, String>>,
+    pub source_digest_cache: SourceDigestCache,
+    pub sandbox: SandboxMode,
+    pub resources: Arc<ResourcePool>,
+}
+
 async fn build_one(
-    workspace: PathBuf,
-    cache: CacheProvider,
-    analyzer: AnalysisEngine,
-    module_source_digest: Digest,
+    context: BuildContext,
     target: Arc<GraphTarget>,
-    dep_providers: Vec<Arc<JsonValue>>,
-    dependency_providers: BTreeMap<String, Vec<Arc<JsonValue>>>,
-    dep_action_digests: Vec<(String, Digest)>,
-    available_inputs: BTreeMap<String, AvailableInput>,
-    tool_paths: Arc<BTreeMap<String, String>>,
-    source_digest_cache: SourceDigestCache,
-    sandbox: SandboxMode,
-    resources: Arc<ResourcePool>,
+    inputs: DependencyInputs,
 ) -> Result<(String, BuildOutcome)> {
+    let BuildContext {
+        workspace,
+        cache,
+        analyzer,
+        module_source_digest,
+        tool_paths,
+        source_digest_cache,
+        sandbox,
+        resources,
+    } = context;
+    let DependencyInputs {
+        providers,
+        providers_by_role,
+        action_digests,
+        available_inputs,
+    } = inputs;
+
     ensure_graph_target_valid(&target)?;
     let target_id = target.label.id.clone();
     tracing::trace!(
         target = %target_id,
-        dep_providers = dep_providers.len(),
-        dependency_roles = dependency_providers.len(),
-        dep_action_digests = dep_action_digests.len(),
+        dep_providers = providers.len(),
+        dependency_roles = providers_by_role.len(),
+        dep_action_digests = action_digests.len(),
         "starting graph target analysis"
     );
     // Cheap refcount bumps so the analyzer task and the action runner
@@ -942,8 +967,8 @@ async fn build_one(
             .analyze_target_capability_with_shared_dependency_roles(
                 &analysis_target,
                 &analysis_workspace,
-                &dep_providers,
-                &dependency_providers,
+                &providers,
+                &providers_by_role,
                 "build",
             )
             .with_context(|| format!("analysing {}", analysis_target.label.id))
@@ -964,7 +989,7 @@ async fn build_one(
         &target,
         "build",
         analysis,
-        &dep_action_digests,
+        &action_digests,
         &available_inputs,
         &tool_paths,
         Some(&source_digest_cache),

@@ -1,32 +1,22 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
-use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use once_cas::{CacheProvider, Digest};
-use once_core::{ResourcePool, SandboxMode};
-use once_frontend::analysis::AnalysisEngine;
+use once_cas::Digest;
 use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 
-use super::source_digest_cache::SourceDigestCache;
-use super::{build_one, materialize_cached_outputs, AvailableInput, BuildOutcome};
+use super::{build_one, materialize_cached_outputs, AvailableInput, BuildContext, BuildOutcome};
 
 pub(super) struct BuildScheduler<'a> {
     root_id: &'a str,
-    workspace: &'a Path,
-    cache: &'a CacheProvider,
+    /// Per-build values shared by every spawned task.
+    context: BuildContext,
     targets: &'a HashMap<String, Arc<GraphTarget>>,
-    analyzer: &'a AnalysisEngine,
-    tool_paths: &'a Arc<BTreeMap<String, String>>,
-    source_digest_cache: &'a SourceDigestCache,
-    module_source_digest: Digest,
     reachable: &'a HashSet<String>,
     retained: &'a HashSet<String>,
-    sandbox: SandboxMode,
-    resources: &'a Arc<ResourcePool>,
     /// Ceiling on build tasks in flight at once. A wide graph can have
     /// thousands of independently-ready targets; spawning a task (and its
     /// subprocess) for every one at once is how a build system exhausts
@@ -37,35 +27,20 @@ pub(super) struct BuildScheduler<'a> {
 }
 
 impl<'a> BuildScheduler<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         root_id: &'a str,
-        workspace: &'a Path,
-        cache: &'a CacheProvider,
+        context: BuildContext,
         targets: &'a HashMap<String, Arc<GraphTarget>>,
-        analyzer: &'a AnalysisEngine,
-        tool_paths: &'a Arc<BTreeMap<String, String>>,
-        source_digest_cache: &'a SourceDigestCache,
         reachable: &'a HashSet<String>,
         retained: &'a HashSet<String>,
-        sandbox: SandboxMode,
-        resources: &'a Arc<ResourcePool>,
     ) -> Self {
-        let module_source_digest = Digest::of_bytes(analyzer.module_source().as_bytes());
-        let max_in_flight = resources.max_parallel_actions();
+        let max_in_flight = context.resources.max_parallel_actions();
         Self {
             root_id,
-            workspace,
-            cache,
+            context,
             targets,
-            analyzer,
-            tool_paths,
-            source_digest_cache,
-            module_source_digest,
             reachable,
             retained,
-            sandbox,
-            resources,
             max_in_flight,
         }
     }
@@ -90,9 +65,9 @@ impl<'a> BuildScheduler<'a> {
             let (target_id, outcome) = joined.context("joining graph build task")??;
             materialize_cached_outputs(
                 &outcome,
-                self.workspace,
-                self.cache,
-                Some(self.source_digest_cache),
+                &self.context.workspace,
+                &self.context.cache,
+                Some(&self.context.source_digest_cache),
             )
             .await
             .with_context(|| format!("materializing outputs for {target_id}"))?;
@@ -134,31 +109,17 @@ impl<'a> BuildScheduler<'a> {
                 "spawning graph target build task"
             );
 
-            running.spawn(build_one(
-                self.workspace.to_path_buf(),
-                self.cache.clone(),
-                self.analyzer.clone(),
-                self.module_source_digest,
-                target,
-                inputs.providers,
-                inputs.providers_by_role,
-                inputs.action_digests,
-                inputs.available_inputs,
-                Arc::clone(self.tool_paths),
-                self.source_digest_cache.clone(),
-                self.sandbox,
-                Arc::clone(self.resources),
-            ));
+            running.spawn(build_one(self.context.clone(), target, inputs));
         }
         Ok(())
     }
 }
 
-struct DependencyInputs {
-    providers: Vec<Arc<JsonValue>>,
-    providers_by_role: BTreeMap<String, Vec<Arc<JsonValue>>>,
-    action_digests: Vec<(String, Digest)>,
-    available_inputs: BTreeMap<String, AvailableInput>,
+pub(super) struct DependencyInputs {
+    pub providers: Vec<Arc<JsonValue>>,
+    pub providers_by_role: BTreeMap<String, Vec<Arc<JsonValue>>>,
+    pub action_digests: Vec<(String, Digest)>,
+    pub available_inputs: BTreeMap<String, AvailableInput>,
 }
 
 struct BuildState {

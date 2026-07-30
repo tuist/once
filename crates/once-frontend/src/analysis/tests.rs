@@ -1561,12 +1561,9 @@ demo_kind = target_kind(
         .iter()
         .map(|target| target.kind.clone())
         .collect::<BTreeSet<_>>();
-    let engine = AnalysisEngine::for_workspace_with_options_and_target_kinds(
-        tmp.path(),
-        AnalysisOptions::default(),
-        &target_kinds,
-    )
-    .unwrap();
+    let engine =
+        AnalysisEngine::for_target_kinds(tmp.path(), AnalysisOptions::default(), &target_kinds)
+            .unwrap();
     assert!(!engine
         .module_source()
         .contains("apple_library = target_kind("));
