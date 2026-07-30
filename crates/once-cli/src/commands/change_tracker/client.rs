@@ -11,59 +11,130 @@ use tokio::time::sleep;
 use super::protocol::{Request, Response};
 use super::{ChangePosition, ChangeSnapshot};
 
+/// Read timeout for one barrier round trip.
+///
+/// Derived from the server's fence wait rather than set independently:
+/// the fence is the slow part, and a client that gave up first would
+/// report a bare timeout in place of the server's specific reason.
+fn response_timeout() -> Duration {
+    super::server::fence_timeout() + Duration::from_secs(3)
+}
+
+/// Take a barrier snapshot, starting the tracker daemon if it is not
+/// running yet.
+///
+/// Returns `None` when no snapshot could be obtained. Every cause is
+/// logged with its reason, because callers treat a missing snapshot as
+/// "fall back to full validation" and must not fail the build over it.
 pub(super) async fn snapshot(
     workspace: &Path,
     socket: &Path,
     outputs: &[String],
     since: Option<&ChangePosition>,
 ) -> Option<ChangeSnapshot> {
-    if let Some(snapshot) = request_snapshot(socket, outputs, since).await {
-        return Some(snapshot);
+    match request_snapshot(socket, outputs, since).await {
+        Ok(snapshot) => return Some(snapshot),
+        // Not being able to reach the socket is the expected first-run
+        // path, so it stays at trace level; everything else is a real
+        // surprise worth seeing at debug.
+        Err(error) if error.is_unreachable() => {
+            tracing::trace!(%error, "filesystem change tracker not running yet");
+        }
+        Err(error) => {
+            tracing::debug!(%error, "filesystem change tracker snapshot failed");
+        }
     }
     if let Err(error) = spawn_tracker(workspace, socket) {
         tracing::debug!(%error, "failed to start filesystem change tracker");
         return None;
     }
+    let mut last_error = None;
     for _ in 0..50 {
-        if let Some(snapshot) = request_snapshot(socket, outputs, since).await {
-            return Some(snapshot);
+        match request_snapshot(socket, outputs, since).await {
+            Ok(snapshot) => return Some(snapshot),
+            Err(error) => last_error = Some(error),
         }
         sleep(Duration::from_millis(10)).await;
     }
-    tracing::debug!("filesystem change tracker did not become ready");
+    if let Some(error) = last_error {
+        tracing::debug!(%error, "filesystem change tracker did not become ready");
+    } else {
+        tracing::debug!("filesystem change tracker did not become ready");
+    }
     None
+}
+
+/// Why a barrier request could not be answered.
+///
+/// Kept as a typed error rather than a bare `Option` so a failed
+/// snapshot reports its reason. The server already sends a precise
+/// message for a rejected barrier; collapsing that into `None` left
+/// callers and tests with no way to tell a cold socket apart from a
+/// fence timeout.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum SnapshotError {
+    #[error("connecting to tracker socket {socket}: {source}")]
+    Connect {
+        socket: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("sending barrier request: {0}")]
+    Send(#[source] std::io::Error),
+    #[error("reading barrier response: {0}")]
+    Receive(#[source] std::io::Error),
+    #[error("tracker did not answer within {0:?}")]
+    ResponseTimeout(Duration),
+    #[error("decoding barrier response: {0}")]
+    Decode(#[source] serde_json::Error),
+    #[error("tracker rejected the barrier: {0}")]
+    Rejected(String),
+    #[error("tracker answered with neither a snapshot nor an error")]
+    Empty,
+}
+
+impl SnapshotError {
+    /// True when the tracker simply is not listening yet, which is the
+    /// normal state before the daemon has been spawned.
+    fn is_unreachable(&self) -> bool {
+        matches!(self, Self::Connect { .. })
+    }
 }
 
 pub(super) async fn request_snapshot(
     socket: &Path,
     outputs: &[String],
     since: Option<&ChangePosition>,
-) -> Option<ChangeSnapshot> {
-    let stream = UnixStream::connect(socket).await.ok()?;
+) -> std::result::Result<ChangeSnapshot, SnapshotError> {
+    let stream = UnixStream::connect(socket)
+        .await
+        .map_err(|source| SnapshotError::Connect {
+            socket: socket.to_path_buf(),
+            source,
+        })?;
     let (read, mut write) = stream.into_split();
-    let raw = serde_json::to_vec(&Request {
+    let mut raw = serde_json::to_vec(&Request {
         command: "barrier".to_string(),
         outputs: outputs.to_vec(),
         since: since.cloned(),
     })
-    .ok()?;
-    write.write_all(&raw).await.ok()?;
-    write.write_all(b"\n").await.ok()?;
-    write.shutdown().await.ok()?;
+    // The request is built from owned local data, so the only way
+    // serialisation fails is a bug in this function.
+    .expect("barrier request is serializable");
+    raw.push(b'\n');
+    write.write_all(&raw).await.map_err(SnapshotError::Send)?;
+    write.shutdown().await.map_err(SnapshotError::Send)?;
     let mut line = String::new();
-    tokio::time::timeout(
-        Duration::from_secs(3),
-        BufReader::new(read).read_line(&mut line),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    let response = serde_json::from_str::<Response>(&line).ok()?;
+    let timeout = response_timeout();
+    tokio::time::timeout(timeout, BufReader::new(read).read_line(&mut line))
+        .await
+        .map_err(|_| SnapshotError::ResponseTimeout(timeout))?
+        .map_err(SnapshotError::Receive)?;
+    let response = serde_json::from_str::<Response>(&line).map_err(SnapshotError::Decode)?;
     if let Some(error) = response.error {
-        tracing::debug!(%error, "filesystem change tracker rejected snapshot");
-        return None;
+        return Err(SnapshotError::Rejected(error));
     }
-    response.snapshot
+    response.snapshot.ok_or(SnapshotError::Empty)
 }
 
 fn spawn_tracker(workspace: &Path, socket: &Path) -> std::io::Result<()> {

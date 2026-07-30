@@ -25,6 +25,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+thiserror.workspace = true
 toml.workspace = true
 toon-rust.workspace = true
 tokio.workspace = true
