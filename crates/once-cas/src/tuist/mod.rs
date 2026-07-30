@@ -11,12 +11,18 @@ pub use cache::TuistCache;
 const PROVIDER_NAME: &str = "tuist";
 const ENDPOINTS_PATH: &str = "api/cache/endpoints";
 
+/// How to reach a Tuist remote cache tier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TuistCacheConfig {
+    /// Base URL of the Tuist server.
     pub url: String,
+    /// Account handle the cache belongs to, when scoped to one.
     pub account: Option<String>,
+    /// Project handle the cache belongs to, when scoped to one.
     pub project: Option<String>,
+    /// OAuth client id to authenticate with, overriding the built-in one.
     pub oauth_client_id: Option<String>,
+    /// Name reported in errors and logs for this provider instance.
     pub provider_name: String,
 }
 

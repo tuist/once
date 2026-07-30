@@ -13,12 +13,21 @@
 //! # }
 //! ```
 
+#![deny(missing_docs)]
+
 pub use action_key::ActionKeyBuilder;
 pub use cache::{digest_from_hex, Cache, Error, Result};
 pub use once_cas::{ActionResult, CacheProvider, Digest, Stats, TuistCacheConfig};
 
 mod action_key;
 mod cache;
+
+// The C ABI entry points are the workspace's only sanctioned use of
+// `unsafe`: they dereference caller-supplied pointers and hand back
+// owned `CString`s, which cannot be expressed in safe Rust. Scoped to
+// this module so the rest of the crate stays under the workspace-wide
+// `unsafe_code = "deny"`.
+#[allow(unsafe_code)]
 mod ffi;
 
 #[cfg(test)]

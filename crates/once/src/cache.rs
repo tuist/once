@@ -2,12 +2,16 @@ use std::path::{Path, PathBuf};
 
 use once_cas::{ActionResult, CacheProvider, Digest, Stats, TuistCacheConfig};
 
+/// Result alias for every fallible SDK operation.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Everything that can go wrong in the embeddable cache surface.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// A hex digest string was not 64 valid hex characters.
     #[error("invalid digest: {0}")]
     InvalidDigest(String),
+    /// The underlying local or remote cache failed.
     #[error(transparent)]
     Cache(#[from] once_cas::Error),
 }
@@ -174,6 +178,10 @@ impl Default for Cache {
     }
 }
 
+/// Parse a 64-character lowercase hex string into a [`Digest`].
+///
+/// Useful for turning a digest that crossed a process or language
+/// boundary back into a value the cache accepts.
 pub fn digest_from_hex(hex: &str) -> Result<Digest> {
     Digest::from_hex(hex).ok_or_else(|| Error::InvalidDigest(hex.to_string()))
 }
