@@ -11,9 +11,48 @@
 use std::path::Path;
 
 use once_cas::Digest;
+use serde::{Deserialize, Serialize};
 
 use crate::directory_blob::digest_directory_blob;
 use crate::OutputSymlinkMode;
+
+pub const INPUT_FINGERPRINT_SCHEMA: &str = "once.input_fingerprint.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InputFingerprintComponent {
+    pub category: String,
+    pub label: String,
+    pub digest: Digest,
+}
+
+impl InputFingerprintComponent {
+    #[must_use]
+    pub fn new(category: impl Into<String>, label: impl Into<String>, digest: Digest) -> Self {
+        Self {
+            category: category.into(),
+            label: label.into(),
+            digest,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InputFingerprintManifest {
+    pub schema: String,
+    pub input_digest: Digest,
+    pub components: Vec<InputFingerprintComponent>,
+}
+
+impl InputFingerprintManifest {
+    #[must_use]
+    pub fn new(input_digest: Digest, components: Vec<InputFingerprintComponent>) -> Self {
+        Self {
+            schema: INPUT_FINGERPRINT_SCHEMA.to_string(),
+            input_digest,
+            components,
+        }
+    }
+}
 
 pub fn digest_source_path<P: AsRef<Path>>(
     workspace_root: P,
@@ -48,6 +87,7 @@ pub fn digest_source_path<P: AsRef<Path>>(
 #[must_use]
 pub struct InputDigestBuilder {
     buf: Vec<u8>,
+    components: Vec<InputFingerprintComponent>,
 }
 
 impl InputDigestBuilder {
@@ -58,7 +98,10 @@ impl InputDigestBuilder {
     pub fn new(domain: &[u8]) -> Self {
         let mut buf = Vec::with_capacity(domain.len() + 64);
         buf.extend_from_slice(domain);
-        Self { buf }
+        Self {
+            buf,
+            components: Vec::new(),
+        }
     }
 
     /// Append a `(label, digest)` pair. Most plugins use this for
@@ -72,11 +115,54 @@ impl InputDigestBuilder {
         self
     }
 
+    pub fn push_keyed_component(
+        &mut self,
+        category: impl Into<String>,
+        label: impl Into<String>,
+        encoded_label: &[u8],
+        digest: &Digest,
+    ) -> &mut Self {
+        self.push_keyed(encoded_label, digest);
+        self.components
+            .push(InputFingerprintComponent::new(category, label, *digest));
+        self
+    }
+
     /// Append arbitrary bytes (e.g. a toolchain identifier).
     pub fn push_bytes(&mut self, bytes: &[u8]) -> &mut Self {
         self.buf.extend_from_slice(bytes);
         self.buf.push(0);
         self
+    }
+
+    pub fn push_bytes_component(
+        &mut self,
+        category: impl Into<String>,
+        label: impl Into<String>,
+        bytes: &[u8],
+    ) -> &mut Self {
+        self.push_bytes(bytes);
+        self.record_bytes(category, label, bytes)
+    }
+
+    pub fn record_digest(
+        &mut self,
+        category: impl Into<String>,
+        label: impl Into<String>,
+        digest: Digest,
+    ) -> &mut Self {
+        self.components
+            .push(InputFingerprintComponent::new(category, label, digest));
+        self
+    }
+
+    pub fn record_bytes(
+        &mut self,
+        category: impl Into<String>,
+        label: impl Into<String>,
+        bytes: &[u8],
+    ) -> &mut Self {
+        self.record_digest(category, label, Digest::of_bytes(bytes))
     }
 
     /// Hash a workspace-relative source file, symbolic link, or
@@ -96,6 +182,12 @@ impl InputDigestBuilder {
     /// Finalise the buffer into a [`Digest`].
     pub fn finish(self) -> Digest {
         Digest::of_bytes(&self.buf)
+    }
+
+    #[must_use]
+    pub fn finish_with_fingerprint(self) -> InputFingerprintManifest {
+        let input_digest = Digest::of_bytes(&self.buf);
+        InputFingerprintManifest::new(input_digest, self.components)
     }
 }
 
@@ -126,6 +218,47 @@ mod tests {
             b.finish()
         };
         assert_ne!(one, two);
+    }
+
+    #[test]
+    fn fingerprint_recording_does_not_change_the_input_digest() {
+        let source = Digest::of_bytes(b"source");
+        let plain = {
+            let mut builder = InputDigestBuilder::new(b"domain");
+            builder.push_bytes(b"toolchain");
+            builder.push_keyed(b"src/lib.rs", &source);
+            builder.finish()
+        };
+        let fingerprinted = {
+            let mut builder = InputDigestBuilder::new(b"domain");
+            builder.push_bytes_component("toolchain", "identity", b"toolchain");
+            builder.push_keyed_component("source", "src/lib.rs", b"src/lib.rs", &source);
+            builder.finish_with_fingerprint()
+        };
+
+        assert_eq!(fingerprinted.input_digest, plain);
+        assert_eq!(
+            fingerprinted.components,
+            vec![
+                InputFingerprintComponent::new(
+                    "toolchain",
+                    "identity",
+                    Digest::of_bytes(b"toolchain"),
+                ),
+                InputFingerprintComponent::new("source", "src/lib.rs", source),
+            ]
+        );
+    }
+
+    #[test]
+    fn recorded_bytes_are_not_serialized_in_plaintext() {
+        let mut builder = InputDigestBuilder::new(b"domain");
+        builder.push_bytes_component("environment", "declared", b"secret-value");
+        let encoded = serde_json::to_string(&builder.finish_with_fingerprint()).unwrap();
+
+        assert!(!encoded.contains("secret-value"));
+        assert!(encoded.contains("\"category\":\"environment\""));
+        assert!(encoded.contains("\"label\":\"declared\""));
     }
 
     #[test]

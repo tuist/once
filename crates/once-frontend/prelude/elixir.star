@@ -2867,6 +2867,12 @@ def _mix_release_impl(ctx):
             "MIX_BUILD_ROOT": _elixir_from_package(ctx, build_root),
             "MIX_BUILD_PATH": _elixir_from_package(ctx, build_root + "/" + mix_env),
             "MIX_HOME": toolchain["mix_home"],
+            # Pin the archives directory to the detected Mix home. Assembling a
+            # release resolves each dependency's SCM, and a Hex dependency has no
+            # SCM until the Hex archive is on the load path. An inherited
+            # MIX_ARCHIVES can point at a different Mix home that never had Hex
+            # installed, which leaves Hex unloaded and fails resolution.
+            "MIX_ARCHIVES": toolchain["mix_home"] + "/archives",
             "HEX_HOME": _elixir_from_package(ctx, home_dir + "/hex"),
             "HEX_OFFLINE": "true",
             "ERL_LIBS": _elixir_from_package(ctx, build_root + "/" + mix_env + "/lib"),

@@ -2,7 +2,8 @@ use std::path::Path;
 
 use once_cas::{ActionResult, Digest};
 use once_core::{
-    Action, EvidenceCacheState, EvidenceRecord, EvidenceStore, EvidenceSubject, Outcome,
+    Action, EvidenceCacheState, EvidenceRecord, EvidenceStore, EvidenceSubject,
+    InputFingerprintManifest, Outcome,
 };
 
 pub async fn record_outcome(
@@ -24,10 +25,18 @@ pub async fn record_action_result(
     subject: EvidenceSubject,
     action_digest: Digest,
     input_digest: Option<Digest>,
+    input_fingerprint: Option<InputFingerprintManifest>,
     cache: EvidenceCacheState,
     result: &ActionResult,
 ) {
-    match EvidenceRecord::from_action_result(subject, action_digest, input_digest, cache, result) {
+    match EvidenceRecord::from_action_result_with_fingerprint(
+        subject,
+        action_digest,
+        input_digest,
+        input_fingerprint,
+        cache,
+        result,
+    ) {
         Ok(record) => append_record(workspace, &record).await,
         Err(err) => {
             tracing::warn!(error = %err, "failed to construct evidence record");

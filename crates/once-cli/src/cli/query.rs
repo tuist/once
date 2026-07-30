@@ -142,9 +142,11 @@ pub enum QueryCmd {
     /// Evidence records are provenance for action outcomes. They record
     /// what happened after `once exec`, `once run`, `once build`, `once lint`,
     /// or `once test`: the subject, status, action digest, input digest when
-    /// available, cache state, exit code, and captured output digests when
-    /// available. Evidence is queryable history; it does not change
-    /// action-cache reuse rules.
+    /// available, an input fingerprint manifest for declared graph actions,
+    /// cache state, exit code, and captured output digests when available.
+    /// Fingerprint components expose only their category, label, and digest,
+    /// not raw command or environment values. Evidence is queryable history;
+    /// it does not change action-cache reuse rules.
     Evidence {
         /// Subject id, e.g. `cli` or `cli:test`.
         subject: Option<String>,

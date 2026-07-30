@@ -1,5 +1,34 @@
 #shellcheck shell=bash
 
+# Run a command with a wall-clock limit and no controlling stdin. A starter
+# whose build blocks (for example on a stalled network fetch or an interactive
+# prompt) must fail fast and name itself instead of hanging the whole job until
+# the six-hour runner limit. `timeout`/`gtimeout` are not present on every
+# runner, so fall back to a portable Perl watchdog.
+starter_run() {
+  _label="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 300 "$@" </dev/null
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout 300 "$@" </dev/null
+  else
+    perl -e '
+      my $pid = fork();
+      if ($pid == 0) { open(STDIN, "<", "/dev/null"); exec @ARGV or exit 127; }
+      local $SIG{ALRM} = sub { kill "TERM", $pid; sleep 2; kill "KILL", $pid; waitpid($pid, 0); exit 124; };
+      alarm 300;
+      waitpid($pid, 0);
+      exit($? >> 8);
+    ' "$@"
+  fi
+  _status=$?
+  if [ "$_status" -eq 124 ] || [ "$_status" -eq 137 ]; then
+    echo "starter step timed out after 300s: $_label" >&2
+  fi
+  return "$_status"
+}
+
 verify_starter_example() {
   kind="$1"
   slug="$2"
@@ -7,9 +36,9 @@ verify_starter_example() {
   root="$WORKSPACE/starters/$kind-$slug"
   mkdir -p "$root"
 
-  "$ONCE_BIN" -C "$root" edit materialize-example "$kind" "$slug" >/dev/null || return
+  starter_run "$kind $slug materialize" "$ONCE_BIN" -C "$root" edit materialize-example "$kind" "$slug" >/dev/null || return
   target_ids="$(
-    "$ONCE_BIN" -C "$root" --format json query targets |
+    starter_run "$kind $slug query" "$ONCE_BIN" -C "$root" --format json query targets |
       jq -r --arg kind "$kind" '.[] | select(.kind == $kind) | .id'
   )" || return
   if [ -z "$target_ids" ]; then
@@ -19,7 +48,7 @@ verify_starter_example() {
 
   while IFS= read -r target_id; do
     [ -n "$target_id" ] || continue
-    "$ONCE_BIN" -C "$root" "$capability" "$target_id" --quiet || return
+    starter_run "$kind $slug $capability $target_id" "$ONCE_BIN" -C "$root" "$capability" "$target_id" --quiet || return
   done <<EOF
 $target_ids
 EOF

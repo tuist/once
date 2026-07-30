@@ -877,7 +877,7 @@ Returns actual schedule attempts recorded by `once_run_tests` or `once test --ch
 
 List durable evidence records, optionally filtered by subject.
 
-Returns the same record shape as `once query evidence --format json`: durable action evidence captured after `once exec`, `once run`, `once build`, `once lint`, or `once test`. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`. The tool returns the newest five matching records by default; set `limit` from 1 through 100 when more or fewer are useful. The matching command-line option is `once query evidence --limit <count>`. Evidence is historical provenance, not proof that inputs remain unchanged; run the relevant capability when a current result is required.
+Returns the same record shape as `once query evidence --format json`: durable action evidence captured after `once exec`, `once run`, `once build`, `once lint`, or `once test`. Declared graph actions include an input fingerprint manifest whose categorized components explain which hashed source, dependency, toolchain, command, environment, or module input changed without exposing raw command or environment values. Other action types omit the optional manifest. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`. The tool returns the newest five matching records by default; set `limit` from 1 through 100 when more or fewer are useful. The matching command-line option is `once query evidence --limit <count>`. Evidence is historical provenance, not proof that inputs remain unchanged; run the relevant capability when a current result is required.
 
 **Input schema**
 
@@ -912,6 +912,22 @@ Returns the same record shape as `once query evidence --format json`: durable ac
     "status": "passed",
     "action_digest": "0476bde2e7d8d1a64d9bd6f589ef5b443d0f60b71e2ad6f1c5bd7a2c4c41223f",
     "input_digest": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccd5f5814ccfb820e6a41",
+    "input_fingerprint": {
+      "schema": "once.input_fingerprint.v1",
+      "input_digest": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccd5f5814ccfb820e6a41",
+      "components": [
+        {
+          "category": "source",
+          "label": "src/lib.rs",
+          "digest": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        {
+          "category": "dependency",
+          "label": "core",
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ]
+    },
     "cache": "miss",
     "exit_code": 0,
     "stdout": "b439bb065d84034c2e7172c1709eb28797c9bd7f2c64c5d1a1d9c1118f6f9d7e",

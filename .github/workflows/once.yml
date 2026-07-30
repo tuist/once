@@ -246,6 +246,7 @@ jobs:
     needs: [changes, release-build]
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
