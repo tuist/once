@@ -426,6 +426,9 @@ fn hash_env_input(name: &str, value: &str) -> Digest {
 /// pool once per entry and serialise on the await; doing the work
 /// inline on one blocking thread is one dispatch total and lets the
 /// kernel page bytes through without async hops.
+///
+/// Entries stream into the hasher so peak memory stays at one buffered
+/// chunk rather than the size of the largest file in the tree.
 async fn hash_directory(root: &Path) -> Result<Digest> {
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<Digest> {
@@ -456,11 +459,13 @@ async fn hash_directory(root: &Path) -> Result<Digest> {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"once.hash.directory.v1\0");
         for (rel, abs) in entries {
-            let bytes = std::fs::read(&abs)
-                .with_context(|| format!("reading directory entry {}", abs.display()))?;
             hasher.update(rel.as_bytes());
             hasher.update(b"\0");
-            hasher.update(&bytes);
+            let file = std::fs::File::open(&abs)
+                .with_context(|| format!("reading directory entry {}", abs.display()))?;
+            hasher
+                .update_reader(std::io::BufReader::new(file))
+                .with_context(|| format!("reading directory entry {}", abs.display()))?;
             hasher.update(b"\0");
         }
         Ok(Digest::from_bytes(*hasher.finalize().as_bytes()))
