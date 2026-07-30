@@ -1940,7 +1940,13 @@ def _apple_application_impl(ctx):
     weak_sdk_frameworks = attrs.get("weak_sdk_frameworks") or []
     sdk_dylibs_attr = attrs.get("sdk_dylibs") or []
     linkopts = attrs.get("linkopts") or []
+    defines = attrs.get("defines") or []
     swift_flags = attrs.get("swift_flags") or []
+    enable_testing = attrs.get("enable_testing") or False
+    swiftmodule = declare_output(product_name + ".swiftmodule") if enable_testing else ""
+    swiftdoc = declare_output(product_name + ".swiftdoc") if enable_testing else ""
+    if enable_testing:
+        swift_flags = list(swift_flags) + ["-enable-testing"]
 
     all_srcs = glob(ctx["srcs"])
     swift_srcs = _filter_swift_sources(all_srcs)
@@ -2073,6 +2079,49 @@ def _apple_application_impl(ctx):
         identifier = "apple_application_compile_" + product_name,
     )
 
+    # Emit the application module separately so hosted test bundles can
+    # `@testable import` it. The main compile links prebuilt archives, which
+    # conflicts with `-emit-module` in a single swiftc invocation, so the
+    # module is produced by a compile-only action that reuses the same sources
+    # and search paths. `-parse-as-library` keeps the entry-point attribute
+    # (`@main`/`@NSApplicationMain`/`@UIApplicationMain`) valid: emitting a
+    # module treats a lone entry-point file as top-level script code otherwise,
+    # which those attributes reject.
+    if enable_testing:
+        module_argv = list(swiftc["argv"]) + [
+            "-module-name",
+            product_name,
+            "-target",
+            triple,
+            "-enable-testing",
+            "-parse-as-library",
+            "-emit-module",
+            "-emit-module-path",
+            swiftmodule,
+        ]
+        for d in compile_swiftmodule_dirs:
+            module_argv.extend(["-I", d])
+        for d in framework_search_dirs:
+            module_argv.extend(["-F", d])
+        for fw in framework_module_names:
+            module_argv.extend(["-framework", fw])
+        for fw in sdk_frameworks_attr:
+            module_argv.extend(["-framework", fw])
+        for define in defines:
+            module_argv.extend(["-D", define])
+        for flag in swift_flags:
+            module_argv.append(flag)
+        for src in swift_srcs:
+            module_argv.append(src)
+        run_action(
+            argv = module_argv,
+            inputs = swift_srcs,
+            outputs = [swiftmodule, swiftdoc],
+            env = swiftc["env"],
+            toolchain_identity = swiftc["identity"],
+            identifier = "apple_application_module_" + product_name,
+        )
+
     plist_entries = {
         "CFBundleDevelopmentRegion": "en",
         "CFBundleExecutable": product_name,
@@ -2124,16 +2173,25 @@ def _apple_application_impl(ctx):
         identifier = "apple_application_codesign_" + product_name,
     )
 
+    transitive_swiftmodule_dirs = []
+    if enable_testing:
+        transitive_swiftmodule_dirs.append(ctx["build_dir"])
+        for dep in deps:
+            for d in dep.get("transitive_swiftmodule_dirs") or []:
+                if d and d not in transitive_swiftmodule_dirs:
+                    transitive_swiftmodule_dirs.append(d)
     return {
         "label_id": ctx["label"]["id"],
         "target_kind": "apple_application",
         "app_path": app_path,
-        "app_files": [executable, info_plist, app_cs_stamp] + embedded_frameworks["files"],
+        "app_files": [executable, info_plist, app_cs_stamp] + embedded_frameworks["files"] + ([swiftmodule, swiftdoc] if enable_testing else []),
         "bundle_id": bundle_id,
         "platform": platform,
         "sdk_variant": sdk_variant,
         "xcode_developer_dir": xcode_developer_dir,
         "product_name": product_name,
+        "swiftmodule_dir": ctx["build_dir"] if enable_testing else "",
+        "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
     }
 
 def _apple_thinning_application(deps, label_id):
@@ -3357,6 +3415,7 @@ apple_application = target_kind(
         attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple SDK dynamic libraries linked by name"),
         attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
+        attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled so hosted test bundles can `@testable import` the application module"),
     ],
     deps = [
         dep("deps", ["apple_linkable", "apple_framework", "apple_resource", "apple_swift_plugin", "native_linkable"], "Libraries, frameworks, resources, native linkables, and Swift compiler plugins embedded in the app"),

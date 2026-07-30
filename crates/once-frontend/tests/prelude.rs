@@ -119,6 +119,15 @@ fn go_prelude_source() -> String {
     )
 }
 
+fn xcode_prelude_source() -> String {
+    format!(
+        "{}\n{}\n{}",
+        include_str!("../prelude/common.star"),
+        include_str!("../prelude/apple.star"),
+        include_str!("../prelude/xcode.star")
+    )
+}
+
 fn oci_prelude_source() -> String {
     format!(
         "{}\n{}",
@@ -143,6 +152,7 @@ fn all_prelude_source() -> String {
         include_str!("../prelude/android.star"),
         include_str!("../prelude/go.star"),
         include_str!("../prelude/rust.star"),
+        include_str!("../prelude/xcode.star"),
         include_str!("../prelude/c.star"),
         include_str!("../prelude/cmake.star"),
         include_str!("../prelude/zig.star"),
@@ -7946,6 +7956,34 @@ fn apple_library_swift_compile_is_split_into_module_and_archive_actions() {
 }
 
 #[test]
+fn apple_application_testable_module_is_parsed_as_library() {
+    // The `enable_testing` application module emission must pass
+    // `-parse-as-library` so an entry-point attribute
+    // (`@main`/`@NSApplicationMain`/`@UIApplicationMain`) stays valid; without
+    // it, emitting a module from a lone entry-point file fails because swiftc
+    // treats it as top-level script code. Regression guard for real single-file
+    // app targets (e.g. a login-item launcher).
+    let source = include_str!("../prelude/apple.star");
+
+    let block = source
+        .split("identifier = \"apple_application_module_\"")
+        .next()
+        .expect("application module action present");
+    let module_argv = block
+        .rsplit_once("module_argv = list(swiftc[\"argv\"]) + [")
+        .expect("application module argv assembled")
+        .1;
+    assert!(
+        module_argv.contains("\"-parse-as-library\""),
+        "application testable module must be compiled with -parse-as-library"
+    );
+    assert!(
+        module_argv.contains("\"-enable-testing\""),
+        "application testable module must be compiled with -enable-testing"
+    );
+}
+
+#[test]
 fn target_kind_has_impl_returns_true_for_swift_macro() {
     assert!(target_kind_has_impl("swift_macro").unwrap());
 }
@@ -12069,5 +12107,458 @@ fn prelude_resolve_attrs_rejects_select_on_non_configurable_attr() {
     assert!(
         err.contains("attribute `module_name` is not configurable but uses select()"),
         "{err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Native Xcode project resolver (`xcode_workspace`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prelude_xcode_workspace_declares_graph_resolver() {
+    let source = format!(
+        "{}\nresult = repr(xcode_workspace.get(\"resolver\") != None)\n",
+        all_prelude_source()
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), "True");
+
+    assert_target_kind_attrs(
+        "xcode_workspace",
+        &[
+            "project",
+            "configuration",
+            "sdk_variant",
+            "xcode_developer_dir",
+            "resolver_inputs",
+        ],
+    );
+
+    let schema = built_in_target_kind_schema("xcode_workspace").expect("xcode_workspace schema");
+    assert!(schema
+        .providers
+        .iter()
+        .any(|provider| provider == "xcode_workspace"));
+    assert!(schema
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "build"));
+}
+
+#[test]
+fn prelude_apple_application_exposes_enable_testing() {
+    assert_target_kind_attrs("apple_application", &["enable_testing"]);
+}
+
+#[test]
+fn prelude_xcode_product_kind_maps_apple_product_types() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_product_kind("com.apple.product-type.application"),
+    _xcode_product_kind("com.apple.product-type.framework"),
+    _xcode_product_kind("com.apple.product-type.framework.static"),
+    _xcode_product_kind("com.apple.product-type.library.static"),
+    _xcode_product_kind("com.apple.product-type.bundle.unit-test"),
+    _xcode_product_kind("com.apple.product-type.bundle.ui-testing"),
+    _xcode_product_kind("com.apple.product-type.app-extension"),
+    _xcode_product_kind("com.apple.product-type.app-extension.messages-sticker-pack"),
+    _xcode_product_kind("com.apple.product-type.watchkit2-extension"),
+    _xcode_product_kind("com.apple.product-type.application.watchapp2"),
+    _xcode_product_kind("com.apple.product-type.xpc-service"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["application", "framework", "framework", "library", "test", "test", "extension", "extension", "extension", "watch_app", "extension"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_platform_maps_sdkroots() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_platform("iphoneos"),
+    _xcode_platform("iphonesimulator"),
+    _xcode_platform("macosx"),
+    _xcode_platform("appletvos"),
+    _xcode_platform("watchsimulator"),
+    _xcode_platform("xros"),
+    _xcode_platform(""),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["ios", "ios", "macos", "tvos", "watchos", "visionos", "ios"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_families_decodes_targeted_device_family() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_families({{"TARGETED_DEVICE_FAMILY": "1,2"}}),
+    _xcode_families({{"TARGETED_DEVICE_FAMILY": "2"}}),
+    _xcode_families({{}}),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["iphone", "ipad"], ["ipad"], []]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_define_flags_normalize_debug_and_conditions() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+settings = {{
+    "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG FEATURE_X",
+    "GCC_PREPROCESSOR_DEFINITIONS": ["DEBUG=1", "$(inherited)", "MY_FLAG=2"],
+}}
+result = repr(_xcode_define_flags(settings))
+"#
+    );
+    // `$(inherited)` is stripped, `DEBUG=1` collapses to `DEBUG`, and the Swift
+    // active-compilation conditions are merged in without duplication.
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["DEBUG", "FEATURE_X", "MY_FLAG=2"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_merge_settings_resolves_inherited_lists() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+lower = {{"OTHER_SWIFT_FLAGS": "-DA -DB", "PRODUCT_NAME": "Base"}}
+higher = {{"OTHER_SWIFT_FLAGS": "$(inherited) -DC", "PRODUCT_NAME": "Override"}}
+merged = _xcode_merge_settings(lower, higher)
+result = repr([merged["OTHER_SWIFT_FLAGS"], merged["PRODUCT_NAME"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["-DA", "-DB", "-DC"], "Override"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_resolve_vars_expands_known_variables() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+subs = {{"TARGET_NAME": "App", "PRODUCT_NAME": "App"}}
+result = repr([
+    _xcode_resolve_vars("$(TARGET_NAME)Tests", subs),
+    _xcode_resolve_vars("dev.once.$(PRODUCT_NAME)", subs),
+    _xcode_resolve_vars("$(UNKNOWN_VAR)", subs),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["AppTests", "dev.once.App", "$(UNKNOWN_VAR)"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_read_xcconfig_flattens_includes() {
+    let prelude = xcode_prelude_source();
+    // The base .xcconfig includes a shared file; own keys win, included keys
+    // fill the gaps. Host file primitives are stubbed to serve both files.
+    let source = format!(
+        r##"{prelude}
+def workspace_root():
+    return ""
+
+def host_file_exists(path):
+    return path in ["Base.xcconfig", "Shared.xcconfig"]
+
+def host_file_read(path):
+    if path == "Base.xcconfig":
+        return "#include \"Shared.xcconfig\"\nPRODUCT_NAME = FromBase\n"
+    if path == "Shared.xcconfig":
+        return "PRODUCT_NAME = FromShared // overridden\nSWIFT_VERSION = 5.9\n"
+    return ""
+
+flat = _xcode_read_xcconfig({{}}, "Base.xcconfig")
+result = repr([flat.get("PRODUCT_NAME"), flat.get("SWIFT_VERSION")])
+"##
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["FromBase", "5.9"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_test_host_ref_resolves_host_application() {
+    let prelude = xcode_prelude_source();
+    // A standard TEST_HOST references the host `.app` through build-setting
+    // variables. The resolver must map the `/App.app` fragment back to the
+    // host application target name.
+    let source = format!(
+        r#"{prelude}
+settings = {{
+    "TEST_HOST": "$(BUILT_PRODUCTS_DIR)/App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/App",
+}}
+name_map = {{"App": "App", "Feature": "Feature"}}
+result = repr(_xcode_test_host_ref({{}}, settings, name_map))
+"#
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), r#""App""#);
+}
+
+#[test]
+fn prelude_xcode_group_file_paths_walk_the_group_tree() {
+    let prelude = xcode_prelude_source();
+    // Groups nest a leaf path relative to their parent, a `SOURCE_ROOT` group
+    // re-roots at the project directory, and `<absolute>` references pass
+    // through. The project itself lives in the `app` subdirectory, so
+    // `<group>` paths are prefixed with it.
+    let objects = serde_json::json!({
+        "ROOT": {"isa": "PBXProject", "mainGroup": "MAIN"},
+        "MAIN": {
+            "isa": "PBXGroup",
+            "sourceTree": "<group>",
+            "children": ["SRC", "GEN", "ABS"],
+        },
+        "SRC": {
+            "isa": "PBXGroup",
+            "path": "Sources",
+            "sourceTree": "<group>",
+            "children": ["NESTED", "TOP_FILE"],
+        },
+        "NESTED": {
+            "isa": "PBXGroup",
+            "path": "Core",
+            "sourceTree": "<group>",
+            "children": ["NESTED_FILE"],
+        },
+        "NESTED_FILE": {"isa": "PBXFileReference", "path": "Client.swift", "sourceTree": "<group>"},
+        "TOP_FILE": {"isa": "PBXFileReference", "path": "Root.swift", "sourceTree": "<group>"},
+        "GEN": {
+            "isa": "PBXGroup",
+            "sourceTree": "SOURCE_ROOT",
+            "children": ["GEN_FILE"],
+        },
+        "GEN_FILE": {"isa": "PBXFileReference", "path": "Generated.swift", "sourceTree": "<group>"},
+        "ABS": {
+            "isa": "PBXGroup",
+            "sourceTree": "<group>",
+            "children": ["ABS_FILE"],
+        },
+        "ABS_FILE": {"isa": "PBXFileReference", "path": "/opt/vendor/Vendor.swift", "sourceTree": "<absolute>"},
+    })
+    .to_string();
+
+    let source = format!(
+        r#"{prelude}
+objects = json_decode({objects:?})
+paths = _xcode_group_file_paths(objects, objects["ROOT"], "app")
+result = repr([
+    paths.get("NESTED_FILE"),
+    paths.get("TOP_FILE"),
+    paths.get("GEN_FILE"),
+    paths.get("ABS_FILE"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["app/Sources/Core/Client.swift", "app/Sources/Root.swift", "app/Generated.swift", "/opt/vendor/Vendor.swift"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_workspace_resolver_lowers_native_targets() {
+    let prelude = xcode_prelude_source();
+    let pbxproj = serde_json::json!({
+        "rootObject": "ROOT",
+        "objects": {
+            "ROOT": {
+                "isa": "PBXProject",
+                "buildConfigurationList": "PROJ_CL",
+                "targets": ["FW", "APP", "TEST"],
+                "mainGroup": "GRP",
+            },
+            "PROJ_CL": {
+                "isa": "XCConfigurationList",
+                "buildConfigurations": ["PROJ_DBG"],
+                "defaultConfigurationName": "Debug",
+            },
+            "PROJ_DBG": {
+                "isa": "XCBuildConfiguration",
+                "name": "Debug",
+                "buildSettings": {
+                    "SDKROOT": "iphoneos",
+                    "IPHONEOS_DEPLOYMENT_TARGET": "16.0",
+                },
+            },
+            // Feature.swift is nested two groups deep (Source/Core) so the
+            // resolver must reconstruct its path through the group chain; the
+            // application and test sources sit at the group root.
+            "GRP": {
+                "isa": "PBXGroup",
+                "children": ["SOURCE_GRP", "APP_FILE", "TEST_FILE"],
+                "sourceTree": "<group>",
+            },
+            "SOURCE_GRP": {
+                "isa": "PBXGroup",
+                "path": "Source",
+                "children": ["CORE_GRP"],
+                "sourceTree": "<group>",
+            },
+            "CORE_GRP": {
+                "isa": "PBXGroup",
+                "path": "Core",
+                "children": ["FW_FILE"],
+                "sourceTree": "<group>",
+            },
+
+            "FW": {
+                "isa": "PBXNativeTarget",
+                "name": "Feature",
+                "productType": "com.apple.product-type.framework",
+                "buildConfigurationList": "FW_CL",
+                "buildPhases": ["FW_SRC"],
+                "dependencies": [],
+            },
+            "FW_CL": {
+                "isa": "XCConfigurationList",
+                "buildConfigurations": ["FW_DBG"],
+                "defaultConfigurationName": "Debug",
+            },
+            "FW_DBG": {
+                "isa": "XCBuildConfiguration",
+                "name": "Debug",
+                "buildSettings": {
+                    "PRODUCT_NAME": "$(TARGET_NAME)",
+                    "PRODUCT_BUNDLE_IDENTIFIER": "dev.once.Feature",
+                    "ENABLE_TESTABILITY": "YES",
+                },
+            },
+            "FW_SRC": {"isa": "PBXSourcesBuildPhase", "files": ["FW_BF"]},
+            "FW_BF": {"isa": "PBXBuildFile", "fileRef": "FW_FILE"},
+            "FW_FILE": {
+                "isa": "PBXFileReference",
+                "path": "Feature.swift",
+                "sourceTree": "<group>",
+            },
+
+            "APP": {
+                "isa": "PBXNativeTarget",
+                "name": "App",
+                "productType": "com.apple.product-type.application",
+                "buildConfigurationList": "APP_CL",
+                "buildPhases": ["APP_SRC"],
+                "dependencies": ["APP_DEP"],
+            },
+            "APP_CL": {
+                "isa": "XCConfigurationList",
+                "buildConfigurations": ["APP_DBG"],
+                "defaultConfigurationName": "Debug",
+            },
+            "APP_DBG": {
+                "isa": "XCBuildConfiguration",
+                "name": "Debug",
+                "buildSettings": {
+                    "PRODUCT_NAME": "$(TARGET_NAME)",
+                    "PRODUCT_BUNDLE_IDENTIFIER": "dev.once.App",
+                    "TARGETED_DEVICE_FAMILY": "1,2",
+                    "ENABLE_TESTABILITY": "YES",
+                },
+            },
+            "APP_SRC": {"isa": "PBXSourcesBuildPhase", "files": ["APP_BF"]},
+            "APP_BF": {"isa": "PBXBuildFile", "fileRef": "APP_FILE"},
+            "APP_FILE": {
+                "isa": "PBXFileReference",
+                "path": "App.swift",
+                "sourceTree": "<group>",
+            },
+            "APP_DEP": {"isa": "PBXTargetDependency", "target": "FW"},
+
+            "TEST": {
+                "isa": "PBXNativeTarget",
+                "name": "AppTests",
+                "productType": "com.apple.product-type.bundle.unit-test",
+                "buildConfigurationList": "TEST_CL",
+                "buildPhases": ["TEST_SRC"],
+                "dependencies": [],
+            },
+            "TEST_CL": {
+                "isa": "XCConfigurationList",
+                "buildConfigurations": ["TEST_DBG"],
+                "defaultConfigurationName": "Debug",
+            },
+            "TEST_DBG": {
+                "isa": "XCBuildConfiguration",
+                "name": "Debug",
+                "buildSettings": {
+                    "PRODUCT_NAME": "$(TARGET_NAME)",
+                    "PRODUCT_BUNDLE_IDENTIFIER": "dev.once.AppTests",
+                    "TEST_HOST": "$(BUILT_PRODUCTS_DIR)/App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/App",
+                },
+            },
+            "TEST_SRC": {"isa": "PBXSourcesBuildPhase", "files": ["TEST_BF"]},
+            "TEST_BF": {"isa": "PBXBuildFile", "fileRef": "TEST_FILE"},
+            "TEST_FILE": {
+                "isa": "PBXFileReference",
+                "path": "AppTests.swift",
+                "sourceTree": "<group>",
+            },
+        },
+    })
+    .to_string();
+
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return ""
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    return {pbxproj:?}
+
+def host_file_exists(path):
+    return False
+
+def host_file_read(path):
+    return ""
+
+ctx = {{
+    "label": {{"package": "app", "name": "hello", "id": "app/hello"}},
+    "attr": {{"project": "App.xcodeproj"}},
+}}
+graph = _xcode_workspace_resolver(ctx)
+specs = {{spec["name"]: spec for spec in graph["targets"]}}
+result = repr([
+    graph["roots"],
+    [specs["Feature"]["kind"], specs["App"]["kind"], specs["AppTests"]["kind"]],
+    specs["App"]["deps"],
+    specs["AppTests"]["deps"],
+    specs["Feature"]["srcs"],
+    specs["App"]["srcs"],
+    specs["App"]["attrs"].get("bundle_id"),
+    specs["App"]["attrs"].get("families"),
+    specs["App"]["attrs"].get("minimum_os"),
+    specs["App"]["attrs"].get("enable_testing"),
+])
+"#
+    );
+
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    assert_eq!(
+        out,
+        r#"[["App"], ["apple_library", "apple_application", "apple_test_bundle"], ["./Feature"], ["./App"], ["Source/Core/Feature.swift"], ["App.swift"], "dev.once.App", ["iphone", "ipad"], "16.0", True]"#
     );
 }
