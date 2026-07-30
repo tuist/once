@@ -133,7 +133,9 @@ async fn run_command(
             cache_failures,
             remote,
             compute,
+            network,
             argv,
+            verify_reproducible,
         } => {
             dispatch_exec(
                 workspace,
@@ -148,7 +150,9 @@ async fn run_command(
                     cache_failures,
                     resource_limits: resource_limits.clone(),
                     remote: resolve_remote_execution(workspace, xdg, remote, compute.as_deref())?,
+                    network,
                     argv,
+                    verify_reproducible,
                 },
             )
             .await

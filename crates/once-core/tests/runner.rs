@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use once_cas::Cas;
 use once_core::{
-    Action, CacheState, OutputSymlinkMode, ResourceRequest, RunOpts, Runner, SandboxMode,
-    WorkspacePath,
+    Action, CacheState, NetworkPolicy, OutputSymlinkMode, ResourceRequest, RunOpts, Runner,
+    SandboxMode, WorkspacePath,
 };
 use tempfile::TempDir;
 
@@ -34,6 +34,7 @@ fn cmd(script: &str) -> Action {
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
         sandbox: SandboxMode::default(),
+        network: NetworkPolicy::default(),
         timeout_ms: Some(10_000),
         success_exit_codes: vec![0],
         remote: None,
@@ -137,6 +138,7 @@ async fn cache_keys_partition_by_workspace_path() {
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
         sandbox: SandboxMode::default(),
+        network: NetworkPolicy::default(),
         timeout_ms: Some(5_000),
         success_exit_codes: vec![0],
         remote: None,
@@ -188,6 +190,7 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
         sandbox: SandboxMode::default(),
+        network: NetworkPolicy::default(),
         timeout_ms: Some(5_000),
         success_exit_codes: vec![0],
         remote: None,
@@ -209,6 +212,7 @@ async fn failure_then_success_does_not_serve_stale_cache() {
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
         sandbox: SandboxMode::default(),
+        network: NetworkPolicy::default(),
         timeout_ms: Some(5_000),
         success_exit_codes: vec![0],
         remote: None,

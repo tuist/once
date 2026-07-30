@@ -344,6 +344,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            network: None,
             success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
@@ -398,6 +399,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            network: None,
             success_exit_codes: vec![0],
             cacheable: cacheable.unwrap_or(true),
             inherit_parent_env: false,
@@ -451,6 +453,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            network: None,
             success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
@@ -503,6 +506,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            network: None,
             success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
@@ -548,6 +552,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            network: None,
             success_exit_codes: vec![0],
             cacheable: false,
             inherit_parent_env: false,
@@ -596,6 +601,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            network: None,
             success_exit_codes: vec![0],
             cacheable: false,
             inherit_parent_env: false,
@@ -650,6 +656,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            network: None,
             success_exit_codes: vec![0],
             cacheable: cacheable.unwrap_or(true),
             inherit_parent_env: false,
@@ -712,6 +719,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd: None,
             env: BTreeMap::new(),
             sandbox: None,
+            network: None,
             success_exit_codes: vec![0],
             cacheable: cacheable.unwrap_or(true),
             inherit_parent_env: false,
@@ -802,9 +810,11 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         stdout: Option<String>,
         stderr: Option<String>,
         sandbox: Option<String>,
+        network: Option<String>,
         success_exit_codes: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
         validate_sandbox(sandbox.as_deref())?;
+        validate_network(network.as_deref())?;
         let argv = unpack_action_argv(argv, "argv")?;
         let inputs = inputs
             .map(|value| unpack_string_list(value, "inputs"))
@@ -870,6 +880,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cwd,
             env,
             sandbox,
+            network,
             success_exit_codes,
             cacheable,
             inherit_parent_env,
@@ -1081,6 +1092,15 @@ fn validate_sandbox(value: Option<&str>) -> Result<()> {
         None | Some("off" | "inputs" | "copied-inputs") => Ok(()),
         Some(other) => Err(anyhow!(
             "expected `sandbox` to be `off`, `inputs`, or `copied-inputs`, got `{other}`"
+        )),
+    }
+}
+
+fn validate_network(value: Option<&str>) -> Result<()> {
+    match value {
+        None | Some("unrestricted" | "deny") => Ok(()),
+        Some(other) => Err(anyhow!(
+            "expected `network` to be `unrestricted` or `deny`, got `{other}`"
         )),
     }
 }

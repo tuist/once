@@ -124,6 +124,11 @@ pub struct DeclaredAction {
     pub env: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
+    /// Network policy the action declares. `None` keeps the default
+    /// (unrestricted). Mirrors `sandbox`: a string parsed at lowering time
+    /// so the graph record stays a plain declaration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
     #[serde(
         default = "default_success_exit_codes",
         skip_serializing_if = "is_default_success_exit_codes"

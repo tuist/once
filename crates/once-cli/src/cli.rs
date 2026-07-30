@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use once_core::{LintSeverity, SandboxMode, WorkspacePath};
+use once_core::{LintSeverity, NetworkPolicy, SandboxMode, WorkspacePath};
 
 mod auth;
 mod cache;
@@ -304,9 +304,25 @@ pub enum Cmd {
         #[arg(long)]
         cache_failures: bool,
 
+        /// Run the action twice while bypassing the cache and report whether
+        /// the two trials produced identical results, instead of executing
+        /// normally. Exits non-zero when any divergence is found. Useful for
+        /// catching nondeterministic tools and undeclared inputs that leak
+        /// through the cache key.
+        #[arg(long)]
+        verify_reproducible: bool,
+
         /// Run the command on a compute provider.
         #[arg(long)]
         remote: bool,
+
+        /// Whether the command may reach the network. Defaults to
+        /// `unrestricted` (the host network is available, matching existing
+        /// behavior). `deny` isolates the command from the network on Linux
+        /// so an undeclared fetch fails loudly instead of leaking into the
+        /// cache key.
+        #[arg(long, value_parser = parse_network_policy, default_value = "unrestricted")]
+        network: NetworkPolicy,
 
         /// Compute provider used with --remote. Defaults to the configured execution provider.
         #[arg(long, value_name = "PROVIDER")]
@@ -555,6 +571,10 @@ fn parse_workspace_path(raw: &str) -> std::result::Result<WorkspacePath, String>
 }
 
 fn parse_sandbox_mode(raw: &str) -> std::result::Result<SandboxMode, String> {
+    raw.parse()
+}
+
+fn parse_network_policy(raw: &str) -> std::result::Result<NetworkPolicy, String> {
     raw.parse()
 }
 

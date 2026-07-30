@@ -169,6 +169,7 @@ async fn execute_command(
         stdout_path,
         stderr_path,
         sandbox,
+        network,
         ..
     } = action
     else {
@@ -184,6 +185,7 @@ async fn execute_command(
             stdout: stdout_path.as_deref(),
             stderr: stderr_path.as_deref(),
         },
+        network: *network,
     };
 
     match (remote, stream_to_parent, sandbox) {
