@@ -504,6 +504,32 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
             example_return: "[\n  {\n    \"schema\": \"once.evidence.v1\",\n    \"id\": \"8d65122cd9dcddc8d5d9a8458ff42a40fe3dd7acbd4e0563fd7f9e8fb19b0c44\",\n    \"kind\": \"action_result\",\n    \"subject\": { \"kind\": \"target\", \"id\": \"cli\", \"capability\": \"test\" },\n    \"status\": \"passed\",\n    \"action_digest\": \"0476bde2e7d8d1a64d9bd6f589ef5b443d0f60b71e2ad6f1c5bd7a2c4c41223f\",\n    \"input_digest\": \"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccd5f5814ccfb820e6a41\",\n    \"input_fingerprint\": {\n      \"schema\": \"once.input_fingerprint.v1\",\n      \"input_digest\": \"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccd5f5814ccfb820e6a41\",\n      \"components\": [\n        {\n          \"category\": \"source\",\n          \"label\": \"src/lib.rs\",\n          \"digest\": \"1111111111111111111111111111111111111111111111111111111111111111\"\n        },\n        {\n          \"category\": \"dependency\",\n          \"label\": \"core\",\n          \"digest\": \"2222222222222222222222222222222222222222222222222222222222222222\"\n        }\n      ]\n    },\n    \"cache\": \"miss\",\n    \"exit_code\": 0,\n    \"stdout\": \"b439bb065d84034c2e7172c1709eb28797c9bd7f2c64c5d1a1d9c1118f6f9d7e\",\n    \"created_at_unix_ms\": 1812345678901\n  }\n]",
         },
         ToolDefinition {
+            name: "once_query_graph_fingerprint",
+            description: "Compute a deterministic, content-addressed digest of the whole graph.",
+            long_description: "Returns the same record as `once query graph-fingerprint --format json`: a single stable digest that folds in every target declaration, the resolved contents of every declared source file, the pinned Mise toolchain (`mise.toml` and `mise.lock` when present), and the root workspace manifest. The digest changes whenever any of those inputs change, so two identical checkouts on different machines produce the same digest. `components` lists the categorized `(category, label, digest)` triples behind the digest, mirroring per-action input fingerprints, so a caller can see which target, source, toolchain, or manifest input contributed. Categories default to all on; set `include_sources`, `include_toolchain`, or `include_manifest` to false to scope the digest, for example to compare only graph structure across checkouts. The matching command-line operation is `once query graph-fingerprint [--no-sources --no-toolchain --no-manifest]`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "include_sources": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Fold resolved source file contents into the digest."
+                    },
+                    "include_toolchain": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Fold the `mise.toml` and `mise.lock` declarations into the digest."
+                    },
+                    "include_manifest": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Fold the root `once.toml` manifest into the digest."
+                    }
+                }
+            }),
+            example_return: "{\n  \"schema\": \"once.graph_fingerprint.v1\",\n  \"digest\": \"a046fc32a4c232b7320b4249d630ec5a4fef9ae8c3313a65754f33cc31375676\",\n  \"target_count\": 2,\n  \"source_count\": 1,\n  \"components\": [\n    { \"category\": \"target\", \"label\": \"pkg/lib\", \"digest\": \"1111111111111111111111111111111111111111111111111111111111111111\" },\n    { \"category\": \"source\", \"label\": \"pkg/lib.rs\", \"digest\": \"2222222222222222222222222222222222222222222221111111111111111111\" },\n    { \"category\": \"toolchain\", \"label\": \"mise.toml\", \"digest\": \"3333333333333333333333333333333333333333333333333333333333333333\" }\n  ]\n}",
+        },
+        ToolDefinition {
             name: "once_validate_script",
             description: "Parse and validate an annotated script's cache contract.",
             long_description: "Reads a workspace-relative script, validates its shebang and `once` directives, and returns the parsed runtime, inputs, outputs, dependency scripts, fingerprints, environment names, working directory, remote policy, and output symlink policy. Put singular directives with quoted values directly after the shebang, for example `# once input \"input.txt\"` and `# once output \"output.txt\"`. Plural names, colon syntax, and unquoted paths are invalid. Invalid contracts return `{ valid: false, diagnostics: [...] }`, so callers can repair directive typos before execution. The matching command-line operation is `once query script <path>`.",

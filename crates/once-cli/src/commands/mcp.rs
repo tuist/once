@@ -336,6 +336,7 @@ impl Server {
             "once_query_test_manifest" => self.tool_query_test_manifest(&call.arguments),
             "once_query_test_attempts" => self.tool_query_test_attempts(&call.arguments),
             "once_query_evidence" => self.tool_query_evidence(&call.arguments),
+            "once_query_graph_fingerprint" => self.tool_query_graph_fingerprint(&call.arguments),
             "once_query_module_contract" => crate::commands::query::module_contract_value(),
             "once_list_native_projects" => {
                 crate::commands::query::native_projects_value(&self.workspace)
@@ -545,6 +546,16 @@ impl Server {
             .await
         })?;
         Ok(serde_json::to_value(records)?)
+    }
+
+    fn tool_query_graph_fingerprint(&self, args: &Value) -> Result<Value> {
+        let args: GraphFingerprintArgs = serde_json::from_value(tool_args(args))?;
+        let options = crate::commands::fingerprint::GraphFingerprintOptions {
+            include_sources: args.include_sources,
+            include_toolchain: args.include_toolchain,
+            include_manifest: args.include_manifest,
+        };
+        crate::commands::query::graph_fingerprint_value(&self.workspace, options)
     }
 
     fn tool_fetch_external_source(args: &Value) -> Result<Value> {
@@ -994,6 +1005,21 @@ struct EvidenceQueryArgs {
     subject: Option<String>,
     #[serde(default = "default_evidence_limit")]
     limit: usize,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraphFingerprintArgs {
+    #[serde(default = "default_true")]
+    include_sources: bool,
+    #[serde(default = "default_true")]
+    include_toolchain: bool,
+    #[serde(default = "default_true")]
+    include_manifest: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -1722,6 +1748,7 @@ demo_kind = target_kind(
                 "once_query_test_manifest".to_string(),
                 "once_query_test_attempts".to_string(),
                 "once_query_evidence".to_string(),
+                "once_query_graph_fingerprint".to_string(),
                 "once_validate_script".to_string(),
                 "once_validate_workspace".to_string(),
                 "once_validate_target".to_string(),
@@ -2099,6 +2126,61 @@ script_runtime = "sh"
             result["suggested_calls"][0]["tool"],
             "once_list_target_kinds"
         );
+    }
+
+    #[test]
+    fn graph_fingerprint_returns_a_stable_digest_with_categorized_components() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("once.toml"),
+            "[workspace]\ninclude = [\"once.toml\", \"pkg/once.toml\"]\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("pkg")).unwrap();
+        std::fs::write(
+            tmp.path().join("pkg/once.toml"),
+            "[[target]]\nname = \"lib\"\nkind = \"library\"\nsrcs = [\"lib.rs\"]\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("pkg/lib.rs"), "fn lib() {}").unwrap();
+        std::fs::write(tmp.path().join("mise.toml"), "[tools]\nrust = \"1.96.0\"\n").unwrap();
+
+        let digest_for = |include_sources: bool| {
+            let response = server(tmp.path().to_path_buf()).dispatch(request(
+                "tools/call",
+                json!({
+                    "name": "once_query_graph_fingerprint",
+                    "arguments": { "include_sources": include_sources }
+                }),
+            ));
+            assert!(response.error.is_none(), "{response:?}");
+            response.result.unwrap()["structuredContent"]["result"].clone()
+        };
+
+        let with_sources = digest_for(true);
+        assert_eq!(with_sources["schema"], "once.graph_fingerprint.v1");
+        assert_eq!(with_sources["target_count"], 1);
+        assert_eq!(with_sources["source_count"], 1);
+        let digest = with_sources["digest"].as_str().unwrap().to_string();
+        assert_eq!(digest.len(), 64);
+
+        let categories = with_sources["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["category"].as_str().unwrap().to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(categories.contains("target"));
+        assert!(categories.contains("source"));
+        assert!(categories.contains("toolchain"));
+
+        // Same graph and inputs resolve to the same digest.
+        assert_eq!(digest_for(true)["digest"], digest);
+
+        // Excluding sources produces a different digest and no source component.
+        let structure_only = digest_for(false);
+        assert_ne!(structure_only["digest"], digest);
+        assert_eq!(structure_only["source_count"], 0);
     }
 
     #[test]

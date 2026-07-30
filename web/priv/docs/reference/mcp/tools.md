@@ -936,6 +936,53 @@ Returns the same record shape as `once query evidence --format json`: durable ac
 ]
 ```
 
+## `once_query_graph_fingerprint`
+
+Compute a deterministic, content-addressed digest of the whole graph.
+
+Returns the same record as `once query graph-fingerprint --format json`: a single stable digest that folds in every target declaration, the resolved contents of every declared source file, the pinned Mise toolchain (`mise.toml` and `mise.lock` when present), and the root workspace manifest. The digest changes whenever any of those inputs change, so two identical checkouts on different machines produce the same digest. `components` lists the categorized `(category, label, digest)` triples behind the digest, mirroring per-action input fingerprints, so a caller can see which target, source, toolchain, or manifest input contributed. Categories default to all on; set `include_sources`, `include_toolchain`, or `include_manifest` to false to scope the digest, for example to compare only graph structure across checkouts. The matching command-line operation is `once query graph-fingerprint [--no-sources --no-toolchain --no-manifest]`.
+
+**Input schema**
+
+```json
+{
+  "properties": {
+    "include_manifest": {
+      "default": true,
+      "description": "Fold the root `once.toml` manifest into the digest.",
+      "type": "boolean"
+    },
+    "include_sources": {
+      "default": true,
+      "description": "Fold resolved source file contents into the digest.",
+      "type": "boolean"
+    },
+    "include_toolchain": {
+      "default": true,
+      "description": "Fold the `mise.toml` and `mise.lock` declarations into the digest.",
+      "type": "boolean"
+    }
+  },
+  "type": "object"
+}
+```
+
+**Example return**
+
+```json
+{
+  "schema": "once.graph_fingerprint.v1",
+  "digest": "a046fc32a4c232b7320b4249d630ec5a4fef9ae8c3313a65754f33cc31375676",
+  "target_count": 2,
+  "source_count": 1,
+  "components": [
+    { "category": "target", "label": "pkg/lib", "digest": "1111111111111111111111111111111111111111111111111111111111111111" },
+    { "category": "source", "label": "pkg/lib.rs", "digest": "2222222222222222222222222222222222222222222221111111111111111111" },
+    { "category": "toolchain", "label": "mise.toml", "digest": "3333333333333333333333333333333333333333333333333333333333333333" }
+  ]
+}
+```
+
 ## `once_validate_script`
 
 Parse and validate an annotated script's cache contract.

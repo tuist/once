@@ -717,6 +717,49 @@ pub async fn target(workspace: &Path, output: Output, target_id: &str) -> Result
     write_body(output, || render_target_human(&target), &target).await
 }
 
+pub async fn graph_fingerprint(
+    workspace: &Path,
+    output: Output,
+    options: crate::commands::fingerprint::GraphFingerprintOptions,
+) -> Result<()> {
+    let fingerprint = graph_fingerprint_value(workspace, options)?;
+    let record: crate::commands::fingerprint::GraphFingerprint =
+        serde_json::from_value(fingerprint)?;
+    write_body(output, || render_graph_fingerprint_human(&record), &record).await
+}
+
+pub(crate) fn graph_fingerprint_value(
+    workspace: &Path,
+    options: crate::commands::fingerprint::GraphFingerprintOptions,
+) -> Result<serde_json::Value> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let fingerprint = crate::commands::fingerprint::graph_fingerprint(workspace, &graph, options)?;
+    Ok(serde_json::to_value(fingerprint)?)
+}
+
+fn render_graph_fingerprint_human(
+    fingerprint: &crate::commands::fingerprint::GraphFingerprint,
+) -> String {
+    use std::fmt::Write as _;
+    let mut counts = std::collections::BTreeMap::new();
+    for component in &fingerprint.components {
+        *counts.entry(component.category.as_str()).or_insert(0usize) += 1;
+    }
+    let mut out = String::new();
+    let _ = writeln!(out, "{}", fingerprint.digest);
+    let _ = writeln!(out, "schema: {}", fingerprint.schema);
+    let _ = writeln!(out, "targets: {}", fingerprint.target_count);
+    let _ = writeln!(out, "sources: {}", fingerprint.source_count);
+    if !counts.is_empty() {
+        out.push_str("components:");
+        for (category, count) in &counts {
+            let _ = write!(out, " {category}={count}");
+        }
+        out.push('\n');
+    }
+    out
+}
+
 pub async fn tests(workspace: &Path, output: Output) -> Result<()> {
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let records = test_records(workspace, &graph);
