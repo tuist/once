@@ -3,6 +3,7 @@ name = "once"
 kind = "rust_library"
 deps = [
   "crates/once-cas/once_cas",
+  "crates/once-host-tree/once_host_tree",
   "crates/once-core/once_core",
   "crates/once-frontend/once_frontend",
   "cargo_dependencies",

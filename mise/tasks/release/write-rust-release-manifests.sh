@@ -32,6 +32,7 @@ done
 manifest_files=(
   once.toml
   crates/once-cas/once.toml
+  crates/once-host-tree/once.toml
   crates/once-core/once.toml
   crates/once-frontend/once.toml
   crates/once/once.toml
@@ -126,6 +127,29 @@ CARGO_PKG_VERSION = "${version}"
 # once release generated targets end
 EOF
 
+cat >>crates/once-host-tree/once.toml <<EOF
+# once release generated targets start
+[[target]]
+name = "once_host_tree_${suffix}"
+kind = "rust_library"
+deps = ["${dependency_target}"]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "once_host_tree"
+crate_root = "src/lib.rs"
+edition = "2021"
+target = "${target}"
+rustc_flags = ${release_flags}
+cargo_package = "once-host-tree"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-host-tree"
+CARGO_PKG_NAME = "once-host-tree"
+CARGO_PKG_VERSION = "${version}"
+# once release generated targets end
+EOF
+
 cat >>crates/once-core/once.toml <<EOF
 # once release generated targets start
 [[target]]
@@ -133,6 +157,7 @@ name = "once_core_${suffix}"
 kind = "rust_library"
 deps = [
   "crates/once-cas/once_cas_${suffix}",
+  "crates/once-host-tree/once_host_tree_${suffix}",
   "${dependency_target}",
 ]
 srcs = ["src/**/*.rs"]
@@ -158,7 +183,10 @@ cat >>crates/once-frontend/once.toml <<EOF
 [[target]]
 name = "once_frontend_${suffix}"
 kind = "rust_library"
-deps = ["${dependency_target}"]
+deps = [
+  "crates/once-host-tree/once_host_tree_${suffix}",
+  "${dependency_target}",
+]
 srcs = ["src/**/*.rs", "prelude/**/*.star", "prelude/examples/**"]
 
 [target.attrs]
@@ -183,6 +211,7 @@ name = "once_cdylib_${suffix}"
 kind = "rust_library"
 deps = [
   "crates/once-cas/once_cas_${suffix}",
+  "crates/once-host-tree/once_host_tree_${suffix}",
   "crates/once-core/once_core_${suffix}",
   "crates/once-frontend/once_frontend_${suffix}",
   "${dependency_target}",
@@ -208,6 +237,7 @@ name = "once_staticlib_${suffix}"
 kind = "rust_library"
 deps = [
   "crates/once-cas/once_cas_${suffix}",
+  "crates/once-host-tree/once_host_tree_${suffix}",
   "crates/once-core/once_core_${suffix}",
   "crates/once-frontend/once_frontend_${suffix}",
   "${dependency_target}",
@@ -237,6 +267,7 @@ name = "once_cli_${suffix}"
 kind = "rust_binary"
 deps = [
   "crates/once-cas/once_cas_${suffix}",
+  "crates/once-host-tree/once_host_tree_${suffix}",
   "crates/once-core/once_core_${suffix}",
   "crates/once-frontend/once_frontend_${suffix}",
   "${dependency_target}",
