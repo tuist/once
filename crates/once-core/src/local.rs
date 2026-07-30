@@ -23,6 +23,32 @@ pub(crate) struct Redirect<'a> {
     pub stderr: Option<&'a WorkspacePath>,
 }
 
+/// One local child process: what to run, where, and how its streams are
+/// wired.
+///
+/// These five values travel together through every local execution path
+/// and through the sandboxed path above it. Grouping them keeps the entry
+/// points at three arguments instead of eight, and keeps the meaning of
+/// each value at the call site attached to a field name.
+#[derive(Clone, Copy)]
+pub(crate) struct Invocation<'a> {
+    pub argv: &'a [String],
+    pub env: &'a BTreeMap<String, String>,
+    pub cwd: Option<&'a WorkspacePath>,
+    pub timeout_ms: Option<u64>,
+    pub redirect: Redirect<'a>,
+}
+
+/// How a child's stdout and stderr are consumed.
+#[derive(Clone, Copy, Debug)]
+enum Capture {
+    /// Drain each pipe into the CAS and nowhere else.
+    Cached,
+    /// Mirror each pipe to this process's own stdout/stderr while
+    /// capturing it into the CAS.
+    Streaming,
+}
+
 fn open_redirect_file(path: &WorkspacePath, workspace_root: &Path) -> Result<std::fs::File> {
     let absolute = path.resolve(workspace_root);
     if let Some(parent) = absolute.parent() {
@@ -86,25 +112,61 @@ async fn capture_stream_streaming<R: AsyncRead + Unpin>(
     pipe: Option<R>,
     destination: Destination,
     cache: &CacheProvider,
-    stream_to_parent: bool,
 ) -> Result<Option<Digest>> {
     match pipe {
         Some(pipe) => Ok(Some(
-            stream::to_cache(pipe, destination, cache, stream_to_parent).await?,
+            stream::to_cache(pipe, destination, cache, true).await?,
         )),
         None => Ok(None),
     }
 }
 
 pub(crate) async fn execute_command(
-    argv: &[String],
-    env: &BTreeMap<String, String>,
-    cwd: Option<&WorkspacePath>,
-    timeout_ms: Option<u64>,
+    invocation: Invocation<'_>,
     workspace_root: &Path,
     cache: &CacheProvider,
-    redirect: Redirect<'_>,
 ) -> Result<ActionResult> {
+    Box::pin(spawn_and_capture(
+        invocation,
+        workspace_root,
+        cache,
+        Capture::Cached,
+    ))
+    .await
+}
+
+pub(crate) async fn execute_command_streaming(
+    invocation: Invocation<'_>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+) -> Result<ActionResult> {
+    Box::pin(spawn_and_capture(
+        invocation,
+        workspace_root,
+        cache,
+        Capture::Streaming,
+    ))
+    .await
+}
+
+/// Spawn one child under the workspace and collect its result.
+///
+/// The cached and streaming paths differ only in how the two pipes are
+/// drained, so they share this body; keeping them as separate copies let
+/// the spawn setup drift between them.
+async fn spawn_and_capture(
+    invocation: Invocation<'_>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    capture: Capture,
+) -> Result<ActionResult> {
+    let Invocation {
+        argv,
+        env,
+        cwd,
+        timeout_ms,
+        redirect,
+    } = invocation;
     let argv = resolve_execution_argv(argv, workspace_root);
     let env = resolve_execution_env(env, workspace_root);
     let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
@@ -130,106 +192,7 @@ pub(crate) async fn execute_command(
         env_count = env.len(),
         cwd = %command_cwd.display(),
         timeout_ms,
-        "spawning local command"
-    );
-
-    let mut child = command.spawn().map_err(|source| Error::Spawn {
-        program: program.clone(),
-        source,
-    })?;
-    let stdout_pipe = child.stdout.take();
-    let stderr_pipe = child.stderr.take();
-
-    let work = async {
-        let (stdout, stderr) = tokio::try_join!(
-            capture_stream(cache, stdout_pipe),
-            capture_stream(cache, stderr_pipe)
-        )?;
-        let status = child.wait().await.map_err(|source| Error::Wait {
-            program: program.clone(),
-            source,
-        })?;
-        let exit_code = status.code().unwrap_or(-1);
-        debug!(
-            program = %program,
-            exit_code,
-            "local command finished"
-        );
-        Ok::<_, Error>(ActionResult {
-            exit_code,
-            stdout,
-            stderr,
-            outputs: BTreeMap::new(),
-        })
-    };
-
-    Box::pin(with_timeout(program, timeout_ms, work)).await
-}
-
-pub(crate) async fn execute_command_streaming(
-    argv: &[String],
-    env: &BTreeMap<String, String>,
-    cwd: Option<&WorkspacePath>,
-    timeout_ms: Option<u64>,
-    workspace_root: &Path,
-    cache: &CacheProvider,
-    redirect: Redirect<'_>,
-) -> Result<ActionResult> {
-    Box::pin(execute_child_streaming(
-        argv,
-        env,
-        cwd,
-        timeout_ms,
-        workspace_root,
-        cache,
-        redirect,
-        true,
-        false,
-    ))
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn execute_child_streaming(
-    argv: &[String],
-    env: &BTreeMap<String, String>,
-    cwd: Option<&WorkspacePath>,
-    timeout_ms: Option<u64>,
-    workspace_root: &Path,
-    cache: &CacheProvider,
-    redirect: Redirect<'_>,
-    stream_to_parent: bool,
-    inherit_parent_env: bool,
-) -> Result<ActionResult> {
-    let argv = resolve_execution_argv(argv, workspace_root);
-    let env = resolve_execution_env(env, workspace_root);
-    let (program, rest) = argv.split_first().ok_or(Error::EmptyArgv)?;
-    tracing::Span::current().record("program", tracing::field::display(program));
-
-    let mut command = Command::new(program);
-    command.args(rest);
-    if !inherit_parent_env {
-        command.env_clear();
-    }
-    for (k, v) in &env {
-        command.env(k, v);
-    }
-    command.stdin(Stdio::null());
-    apply_redirect(&mut command, redirect, workspace_root)?;
-    let command_cwd = cwd.map_or_else(
-        || workspace_root.to_path_buf(),
-        |c| c.resolve(workspace_root),
-    );
-    command.current_dir(&command_cwd);
-    command.kill_on_drop(true);
-    debug!(
-        program = %program,
-        arg_count = rest.len(),
-        env_count = env.len(),
-        cwd = %command_cwd.display(),
-        timeout_ms,
-        stream_to_parent,
-        inherit_parent_env,
+        ?capture,
         "spawning local command"
     );
 
@@ -241,10 +204,16 @@ async fn execute_child_streaming(
     let stderr_pipe = child.stderr.take();
 
     let work = Box::pin(async {
-        let (stdout, stderr) = tokio::try_join!(
-            capture_stream_streaming(stdout_pipe, Destination::Stdout, cache, stream_to_parent),
-            capture_stream_streaming(stderr_pipe, Destination::Stderr, cache, stream_to_parent)
-        )?;
+        let (stdout, stderr) = match capture {
+            Capture::Cached => tokio::try_join!(
+                capture_stream(cache, stdout_pipe),
+                capture_stream(cache, stderr_pipe)
+            )?,
+            Capture::Streaming => tokio::try_join!(
+                capture_stream_streaming(stdout_pipe, Destination::Stdout, cache),
+                capture_stream_streaming(stderr_pipe, Destination::Stderr, cache)
+            )?,
+        };
         let status = child.wait().await.map_err(|source| Error::Wait {
             program: program.clone(),
             source,
