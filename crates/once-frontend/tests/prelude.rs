@@ -12810,7 +12810,8 @@ objects = json_decode({objects:?})
 def glob(patterns):
     return ["App/Main.swift", "App/Widget/WidgetData.swift", "App/Info.plist", "App/Assets.xcassets"]
 
-files = _xcode_synced_group_files({{}}, objects, objects["APPTGT"], "")
+path_maps = {{"files": {{}}, "groups": {{"G": "App"}}, "additive": {{}}}}
+files = _xcode_synced_group_files({{}}, objects, objects["APPTGT"], "", path_maps)
 result = repr([files["sources"], files["asset_catalogs"], files["resources"]])
 "#
     );

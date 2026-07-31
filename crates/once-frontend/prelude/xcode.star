@@ -356,7 +356,33 @@ def _xcode_group_file_paths(objects, root_project, project_dir):
     main_group = root_project.get("mainGroup")
     if main_group:
         _xcode_walk_group(objects, main_group, project_dir, project_dir, files, groups, {})
-    return {"files": files, "groups": groups}
+    return {"files": files, "groups": groups, "additive": _xcode_additive_membership(objects, groups)}
+
+def _xcode_additive_membership(objects, group_dirs):
+    # Precompute, once for the whole project, which synchronized groups add
+    # files to which target through an exception set. Scanning every object per
+    # target would be quadratic on large projects.
+    additive = {}
+    for group_id, group in objects.items():
+        if group.get("isa") != "PBXFileSystemSynchronizedRootGroup":
+            continue
+        base = group_dirs.get(group_id)
+        if base == None:
+            continue
+        for exception_id in group.get("exceptions") or []:
+            exception = objects.get(exception_id) or {}
+            if exception.get("isa") != "PBXFileSystemSynchronizedBuildFileExceptionSet":
+                continue
+            target_name = (objects.get(exception.get("target")) or {}).get("name") or ""
+            files = exception.get("membershipExceptions") or []
+            if not target_name or not files:
+                continue
+            entry = {"group_id": group_id, "base": base, "relatives": files}
+            if target_name in additive:
+                additive[target_name].append(entry)
+            else:
+                additive[target_name] = [entry]
+    return additive
 
 def _xcode_walk_group(objects, group_id, prefix, project_dir, files, groups, seen):
     if group_id == None or group_id in seen:
@@ -516,21 +542,23 @@ def _xcode_classify_synced_path(path, buckets):
     elif _xcode_is_resource(path):
         buckets["resources"].append(path)
 
-def _xcode_synced_group_files(ctx, objects, target, project_dir):
+def _xcode_synced_group_files(ctx, objects, target, project_dir, path_maps):
     # Xcode 16+ file-system synchronized root groups: every file under the group
     # directory is a member of the owning target, minus the files a membership
     # exception set removes from that target. An exception set that names a
     # target which does not own the group instead adds those files to that
     # target, which is how a shared source directory is compiled into several
-    # targets. Enumerate and classify both.
+    # targets. Enumerate and classify both. The group directory comes from the
+    # tree walk so a group nested under other groups resolves to its full path.
+    group_dirs = path_maps["groups"]
     buckets = {"sources": [], "headers": [], "resources": [], "asset_catalogs": []}
     target_name = target.get("name") or ""
     owned = {}
     for group_id in target.get("fileSystemSynchronizedGroups") or []:
         owned[group_id] = True
         group = objects.get(group_id) or {}
-        base = _xcode_node_dir(project_dir, project_dir, group)
-        if not base:
+        base = group_dirs.get(group_id)
+        if base == None:
             continue
         excluded = _xcode_synced_exceptions(objects, group, target_name, base)
         for path in glob([base + "/**"]):
@@ -538,22 +566,14 @@ def _xcode_synced_group_files(ctx, objects, target, project_dir):
                 continue
             _xcode_classify_synced_path(path, buckets)
 
-    # Additive membership from synchronized groups owned by other targets.
-    for group_id, group in objects.items():
-        if group.get("isa") != "PBXFileSystemSynchronizedRootGroup" or group_id in owned:
+    # Additive membership from synchronized groups owned by other targets,
+    # looked up from the precomputed map keyed by target.
+    for entry in path_maps["additive"].get(target_name) or []:
+        if entry["group_id"] in owned:
             continue
-        base = _xcode_node_dir(project_dir, project_dir, group)
-        if not base:
-            continue
-        for exception_id in group.get("exceptions") or []:
-            exception = objects.get(exception_id) or {}
-            if exception.get("isa") != "PBXFileSystemSynchronizedBuildFileExceptionSet":
-                continue
-            if (objects.get(exception.get("target")) or {}).get("name") != target_name:
-                continue
-            for relative in exception.get("membershipExceptions") or []:
-                trimmed = relative[1:] if relative.startswith("/") else relative
-                _xcode_classify_synced_path(_xcode_join(base, trimmed), buckets)
+        for relative in entry["relatives"]:
+            trimmed = relative[1:] if relative.startswith("/") else relative
+            _xcode_classify_synced_path(_xcode_join(entry["base"], trimmed), buckets)
 
     return {
         "sources": _unique(buckets["sources"]),
@@ -613,9 +633,9 @@ def _xcode_classic_phase_files(ctx, objects, target, file_paths):
         "frameworks": _unique(frameworks),
     }
 
-def _xcode_target_files(ctx, objects, target, file_paths, project_dir):
+def _xcode_target_files(ctx, objects, target, file_paths, project_dir, path_maps):
     classic = _xcode_classic_phase_files(ctx, objects, target, file_paths)
-    synced = _xcode_synced_group_files(ctx, objects, target, project_dir)
+    synced = _xcode_synced_group_files(ctx, objects, target, project_dir, path_maps)
     return {
         "sources": _unique(classic["sources"] + synced["sources"]),
         "headers": _unique(classic["headers"] + synced["headers"]),
@@ -1226,7 +1246,9 @@ def _xcode_workspace_resolver(ctx):
     # Build the name map first so test hosts can resolve to emitted target ids.
     specs_by_name = {}
     name_to_id = {}
+    native_by_name = {}
     for target in native_targets:
+        native_by_name[target.get("name") or ""] = target
         name = _xcode_sanitized_target_name(target.get("name") or "")
         if not name:
             continue
@@ -1239,7 +1261,7 @@ def _xcode_workspace_resolver(ctx):
     dep_closure = {}
     for target in native_targets:
         name = target.get("name") or ""
-        dep_closure[name] = _xcode_transitive_deps(objects, target, name_to_id)
+        dep_closure[name] = _xcode_transitive_deps(objects, target, name_to_id, native_by_name)
 
     # Swift Package Manager dependencies: collect the products every target
     # consumes so a single aggregating package can build them and every consumer
@@ -1409,7 +1431,7 @@ def _xcode_read_package_resolved(ctx, project_path):
             return host_file_read(_xcode_abs(candidate))
     return ""
 
-def _xcode_transitive_deps(objects, target, name_to_id, seen = None):
+def _xcode_transitive_deps(objects, target, name_to_id, native_by_name, seen = None):
     seen = seen or {}
     out = []
     for name in _xcode_target_dependencies(objects, target):
@@ -1418,18 +1440,12 @@ def _xcode_transitive_deps(objects, target, name_to_id, seen = None):
             continue
         seen[dep_id] = True
         out.append(dep_id)
-        dep_target = _xcode_find_native_target_by_name(objects, name)
+        dep_target = native_by_name.get(name)
         if dep_target != None:
-            for transitive in _xcode_transitive_deps(objects, dep_target, name_to_id, seen):
+            for transitive in _xcode_transitive_deps(objects, dep_target, name_to_id, native_by_name, seen):
                 if transitive not in out:
                     out.append(transitive)
     return out
-
-def _xcode_find_native_target_by_name(objects, name):
-    for value in objects.values():
-        if value.get("isa") == "PBXNativeTarget" and value.get("name") == name:
-            return value
-    return None
 
 def _xcode_roots(specs):
     applications = [spec["name"] for spec in specs if spec["kind"] == "apple_application"]
@@ -1456,7 +1472,7 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
     platform = _xcode_effective_platform(settings, project_settings)
     subs = _xcode_setting_subs(ctx, target_name, product_name_seed, sdkroot)
 
-    files = _xcode_target_files(ctx, objects, target, file_paths, project_dir)
+    files = _xcode_target_files(ctx, objects, target, file_paths, project_dir, path_maps)
     files["sources"] = _xcode_filter_excluded_sources(files["sources"], settings)
     direct_deps = _xcode_target_dependencies(objects, target)
     is_test = kind == "test"
