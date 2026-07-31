@@ -1066,6 +1066,15 @@ def _xcode_library_attrs(ctx, target, settings, subs, platform, files):
         attrs["enable_testing"] = True
     return attrs, product_name
 
+def _xcode_app_icon_exists(catalogs, name):
+    # An app icon set lives in an asset catalog as `<name>.appiconset` (or a
+    # sticker/icon-stack variant) containing a `Contents.json`.
+    for catalog in catalogs:
+        for suffix in [".appiconset", ".stickersiconset", ".icon", ".solidimagestacklayer"]:
+            if glob([catalog + "/**/" + name + suffix + "/Contents.json"]):
+                return True
+    return False
+
 def _xcode_bundle_id(settings, subs, product_name):
     # The bundle identifier is frequently set through an `.xcconfig` or a
     # variable that does not resolve here. Fall back to a stable synthesized
@@ -1096,7 +1105,10 @@ def _xcode_application_attrs(ctx, target, settings, subs, platform, files):
     if files["asset_catalogs"]:
         attrs["asset_catalogs"] = files["asset_catalogs"]
         app_icon = _xcode_scalar(settings.get("ASSETCATALOG_COMPILER_APPICON_NAME"))
-        if app_icon:
+        # Only ask `actool` to compile the app icon when a matching icon set is
+        # actually present; otherwise `actool` treats the missing icon as a hard
+        # error and fails the build.
+        if app_icon and _xcode_app_icon_exists(files["asset_catalogs"], app_icon):
             attrs["app_icon"] = app_icon
     # apple_application generates its own Info.plist and does not yet accept
     # arbitrary resources or an Info.plist template; those are recorded for
