@@ -445,6 +445,17 @@ def _xcode_is_excluded_source_path(path):
             return True
     return False
 
+def _xcode_asset_catalog_dir(path):
+    # If a path is a `.xcassets` bundle or lives inside one, return the catalog
+    # directory (up to and including `.xcassets`); otherwise the empty string.
+    marker = ".xcassets"
+    index = path.find(marker + "/")
+    if index >= 0:
+        return path[:index + len(marker)]
+    if _ends_with(path, marker):
+        return path
+    return ""
+
 def _xcode_synced_exceptions(objects, group, target_name, base):
     # Collect the package-relative paths a synchronized group excludes from the
     # target named `target_name`. A membership exception path is relative to the
@@ -493,6 +504,13 @@ def _xcode_synced_group_files(ctx, objects, target, project_dir):
             if _xcode_is_excluded_source_path(path):
                 continue
             if _xcode_path_excluded(path, excluded):
+                continue
+            # A synchronized glob returns files inside a `.xcassets`, not the
+            # catalog directory itself, so recover the catalog from the path and
+            # skip its contents.
+            catalog = _xcode_asset_catalog_dir(path)
+            if catalog:
+                asset_catalogs.append(catalog)
                 continue
             if _xcode_is_source(path):
                 sources.append(path)
@@ -919,8 +937,13 @@ def _xcode_application_attrs(ctx, target, settings, subs, platform, files):
         attrs["families"] = families
     if _xcode_scalar(settings.get("ENABLE_TESTABILITY")).upper() == "YES":
         attrs["enable_testing"] = True
+    if files["asset_catalogs"]:
+        attrs["asset_catalogs"] = files["asset_catalogs"]
+        app_icon = _xcode_scalar(settings.get("ASSETCATALOG_COMPILER_APPICON_NAME"))
+        if app_icon:
+            attrs["app_icon"] = app_icon
     # apple_application generates its own Info.plist and does not yet accept
-    # resources, asset catalogs, or an Info.plist template; record them for
+    # arbitrary resources or an Info.plist template; those are recorded for
     # future use without lowering them.
     return attrs, product_name
 
@@ -1030,25 +1053,33 @@ def _xcode_workspace_resolver(ctx):
 
     # Swift Package Manager dependencies: collect the products every target
     # consumes so a single aggregating package can build them and every consumer
-    # can link against the result.
+    # can link against the result. Only products backed by a remote package
+    # reference in the project are built here; products that resolve through a
+    # workspace-local package are not modeled yet and are skipped so the
+    # aggregate stays buildable.
     package_refs = _xcode_spm_package_refs(objects)
+    remote_identities = {}
+    for ref in package_refs.values():
+        if ref.get("kind") == "remote" and ref.get("identity"):
+            remote_identities[ref.get("identity")] = True
+
     used_products = {}
-    used_identities = {}
     target_uses_spm = {}
     for target in native_targets:
         products = _xcode_target_spm_products(objects, target, package_refs)
-        if products:
-            target_uses_spm[target.get("name") or ""] = True
+        uses_remote = False
         for product in products:
-            used_products[product["name"]] = product["package_identity"]
-            if product["package_identity"]:
-                used_identities[product["package_identity"]] = True
+            if product["package_identity"] in remote_identities:
+                used_products[product["name"]] = product["package_identity"]
+                uses_remote = True
+        if uses_remote:
+            target_uses_spm[target.get("name") or ""] = True
 
     spm_target_name = ""
     spm_spec = None
     if used_products:
         spm_target_name = "OnceSwiftPackages"
-        spm_spec = _xcode_spm_spec(ctx, objects, package_refs, used_products, used_identities, project_settings, project_path, project_dir, spm_target_name)
+        spm_spec = _xcode_spm_spec(ctx, objects, package_refs, used_products, project_settings, project_path, project_dir, spm_target_name)
 
     specs = []
     roots = []
@@ -1070,10 +1101,13 @@ def _xcode_workspace_resolver(ctx):
     # so `once test` can reach them, but applications take precedence in order.
     return {"targets": specs, "roots": _xcode_roots(specs)}
 
-def _xcode_spm_spec(ctx, objects, package_refs, used_products, used_identities, project_settings, project_path, project_dir, spm_target_name):
+def _xcode_spm_spec(ctx, objects, package_refs, used_products, project_settings, project_path, project_dir, spm_target_name):
     # Assemble the `xcode_spm_dependencies` target that builds the project's
     # Swift package products. Only remote packages are built here; workspace
     # local packages are not modeled yet.
+    used_identities = {}
+    for identity in used_products.values():
+        used_identities[identity] = True
     packages = []
     seen = {}
     for ref in package_refs.values():

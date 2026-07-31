@@ -243,6 +243,29 @@ def _resolve_codesign(xcode_developer_dir):
         "env": env,
     }
 
+def _resolve_actool(xcode_developer_dir):
+    env = _developer_env(xcode_developer_dir)
+    xcrun = host_which("xcrun")
+    actool_path = host_command([xcrun, "--find", "actool"], env = env).strip()
+    identity = "once.apple.actool.v1\x00" + actool_path + "\x00" + (xcode_developer_dir or "")
+    return {
+        "actool_path": actool_path,
+        "identity": identity,
+        "env": env,
+    }
+
+def _apple_actool_platform(platform, sdk_variant):
+    device = sdk_variant == "device"
+    if platform == "macos" or platform == "macosx":
+        return "macosx"
+    if platform == "tvos":
+        return "appletvos" if device else "appletvsimulator"
+    if platform == "watchos":
+        return "watchos" if device else "watchsimulator"
+    if platform == "visionos":
+        return "xros" if device else "xrsimulator"
+    return "iphoneos" if device else "iphonesimulator"
+
 def _resolve_apple_thinning_tools(xcode_developer_dir):
     env = _developer_env(xcode_developer_dir)
     xcrun = host_which("xcrun")
@@ -2013,7 +2036,7 @@ printf '%s%s%s\\n' {record_prefix} "$simulator_id" {record_suffix} > {record}
 
 def _apple_application_impl(ctx):
     attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["product_name"])
-    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["resources", "asset_catalogs", "info_plist", "info_plist_substitutions", "entitlements", "provisioning_profile", "signing_identity"])
+    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["resources", "info_plist", "info_plist_substitutions", "entitlements", "provisioning_profile", "signing_identity"])
     if attrs.get("signing") and attrs.get("signing") != "ad_hoc":
         fail(ctx["label"]["id"] + ": attribute `signing` only supports `ad_hoc` today")
     platform = attrs["platform"]
@@ -2041,6 +2064,68 @@ def _apple_application_impl(ctx):
     swift_srcs = _filter_swift_sources(all_srcs)
     if len(swift_srcs) == 0:
         fail("apple_application " + ctx["label"]["id"] + " has no Swift sources (.swift)")
+
+    # Asset catalogs: generate the type-safe `ImageResource`/`ColorResource`
+    # accessors so sources that reference them compile, and compile the catalog
+    # into the `Assets.car` the app loads at runtime. `actool` only emits the
+    # Swift symbols when a compile pass runs, and only emits `Assets.car` when
+    # the symbol pass is absent, so the two run as separate actions.
+    asset_catalogs = [_package_relative(ctx, catalog) for catalog in (attrs.get("asset_catalogs") or [])]
+    app_icon = attrs.get("app_icon") or ""
+    asset_car = ""
+    if asset_catalogs:
+        actool = _resolve_actool(xcode_developer_dir)
+        actool_platform = _apple_actool_platform(platform, sdk_variant)
+        asset_symbols = declare_output("GeneratedAssetSymbols.swift")
+        # `actool` only writes the Swift symbols when a compile pass runs, so a
+        # throwaway compile directory is supplied; it is not a declared output.
+        symbol_argv = [actool["actool_path"]] + asset_catalogs + [
+            "--compile",
+            ctx["build_dir"] + "/AssetSymbolsCompile",
+            "--generate-swift-asset-symbols",
+            asset_symbols,
+            "--platform",
+            actool_platform,
+            "--minimum-deployment-target",
+            minimum_os,
+            "--bundle-identifier",
+            bundle_id,
+        ]
+        run_action(
+            argv = symbol_argv,
+            inputs = asset_catalogs,
+            outputs = [asset_symbols],
+            create_dirs = [ctx["build_dir"] + "/AssetSymbolsCompile"],
+            clean_paths = [ctx["build_dir"] + "/AssetSymbolsCompile"],
+            env = actool["env"],
+            toolchain_identity = actool["identity"],
+            identifier = "apple_application_asset_symbols_" + product_name,
+        )
+        swift_srcs = swift_srcs + [asset_symbols]
+
+        app_dir = product_name + ".app"
+        asset_car = declare_output(app_dir + "/Assets.car")
+        car_partial_plist = declare_output("assets-partial.plist")
+        car_argv = [actool["actool_path"]] + asset_catalogs + [
+            "--compile",
+            ctx["build_dir"] + "/" + app_dir,
+            "--platform",
+            actool_platform,
+            "--minimum-deployment-target",
+            minimum_os,
+            "--output-partial-info-plist",
+            car_partial_plist,
+        ]
+        if app_icon:
+            car_argv.extend(["--app-icon", app_icon])
+        run_action(
+            argv = car_argv,
+            inputs = asset_catalogs,
+            outputs = [asset_car, car_partial_plist],
+            env = actool["env"],
+            toolchain_identity = actool["identity"],
+            identifier = "apple_application_assets_" + product_name,
+        )
 
     arch = host_arch()
     swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
@@ -2299,6 +2384,8 @@ def _apple_application_impl(ctx):
     # resource envelope.
     app_cs_stamp = declare_output(app_dir + "/_CodeSignature/CodeResources")
     cs_inputs = [executable, info_plist]
+    if asset_car:
+        cs_inputs.append(asset_car)
     for stamp in embedded_frameworks["stamps"]:
         cs_inputs.append(stamp)
     if embedded_dir_frameworks["stamp"]:
@@ -2323,7 +2410,7 @@ def _apple_application_impl(ctx):
         "label_id": ctx["label"]["id"],
         "target_kind": "apple_application",
         "app_path": app_path,
-        "app_files": [executable, info_plist, app_cs_stamp] + embedded_frameworks["files"] + ([embedded_dir_frameworks["tree"]] if embedded_dir_frameworks["tree"] else []) + ([swiftmodule, swiftdoc] if enable_testing else []),
+        "app_files": [executable, info_plist, app_cs_stamp] + embedded_frameworks["files"] + ([embedded_dir_frameworks["tree"]] if embedded_dir_frameworks["tree"] else []) + ([asset_car] if asset_car else []) + ([swiftmodule, swiftdoc] if enable_testing else []),
         "bundle_id": bundle_id,
         "platform": platform,
         "sdk_variant": sdk_variant,
@@ -3569,6 +3656,8 @@ apple_application = target_kind(
         attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
         attr("bridging_header", "string", docs = "ObjC bridging header imported into every Swift source (`-import-objc-header`), letting them see ObjC symbols and any frameworks the header imports"),
+        attr("asset_catalogs", "list<string>", default = "[]", docs = "Asset catalogs (`.xcassets`) compiled into the bundle's `Assets.car` and used to generate type-safe `ImageResource`/`ColorResource` accessors"),
+        attr("app_icon", "string", docs = "Asset catalog app-icon set name (`ASSETCATALOG_COMPILER_APPICON_NAME`) compiled into the app icon"),
         attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled so hosted test bundles can `@testable import` the application module"),
     ],
     deps = [

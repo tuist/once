@@ -12313,6 +12313,44 @@ fn prelude_apple_application_exposes_enable_testing() {
 }
 
 #[test]
+fn prelude_apple_application_compiles_asset_catalogs() {
+    // Asset catalogs drive two `actool` passes: one generates the Swift symbol
+    // accessors added to the compile, the other compiles `Assets.car` into the
+    // bundle.
+    assert_target_kind_attrs("apple_application", &["asset_catalogs", "app_icon"]);
+    let source = include_str!("../prelude/apple.star");
+    assert!(
+        source.contains("--generate-swift-asset-symbols"),
+        "must generate Swift asset symbols"
+    );
+    assert!(
+        source.contains("declare_output(app_dir + \"/Assets.car\")"),
+        "must compile Assets.car into the bundle"
+    );
+}
+
+#[test]
+fn prelude_xcode_asset_catalog_dir_recovers_catalog() {
+    // A synchronized glob yields files inside a `.xcassets`; the catalog is
+    // recovered as the directory up to `.xcassets`, and non-catalog paths yield
+    // nothing.
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_asset_catalog_dir("App/Assets.xcassets/AppIcon.appiconset/icon.png"),
+    _xcode_asset_catalog_dir("App/Assets.xcassets"),
+    _xcode_asset_catalog_dir("App/Sources/View.swift"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["App/Assets.xcassets", "App/Assets.xcassets", ""]"#
+    );
+}
+
+#[test]
 fn prelude_apple_application_exposes_bridging_header() {
     // An Xcode app whose `SWIFT_OBJC_BRIDGING_HEADER` imports a framework
     // (commonly AppKit) makes it visible to every Swift source; the application
