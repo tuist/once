@@ -52,7 +52,18 @@ pub(super) async fn snapshot(
     for _ in 0..50 {
         match request_snapshot(socket, outputs, since).await {
             Ok(snapshot) => return Some(snapshot),
-            Err(error) => last_error = Some(error),
+            // Keep polling only while the daemon is not accepting
+            // connections yet, since that is the only state a retry can
+            // clear. Any other outcome means the daemon answered, or its
+            // own bounded barrier wait elapsed; re-issuing a full barrier
+            // would multiply that per-request timeout by the remaining
+            // iterations and stall the build for minutes. Fall back to
+            // full validation instead.
+            Err(error) if error.is_unreachable() => last_error = Some(error),
+            Err(error) => {
+                last_error = Some(error);
+                break;
+            }
         }
         sleep(Duration::from_millis(10)).await;
     }
@@ -220,5 +231,48 @@ mod tests {
 
         // A second call for the same executable reuses the same copy.
         assert_eq!(tracker_launcher(&socket).unwrap(), launcher);
+    }
+
+    // A daemon that is reachable but keeps rejecting the barrier stands in
+    // for a workspace whose filesystem events never reach the watcher. The
+    // client must fall back to full validation after a single answered
+    // barrier rather than re-issuing it once per retry iteration, which
+    // would multiply the per-request timeout into a multi-minute stall.
+    #[tokio::test]
+    async fn snapshot_stops_polling_once_the_daemon_answers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        use tokio::net::UnixListener;
+
+        let directory = tempfile::TempDir::new().unwrap();
+        let socket = directory.path().join("tracker.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+
+        let barriers = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&barriers);
+        let server = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let (read, mut write) = stream.into_split();
+                let mut line = String::new();
+                let _ = BufReader::new(read).read_line(&mut line).await;
+                let _ = write.write_all(b"{\"error\":\"barrier rejected\"}\n").await;
+                let _ = write.shutdown().await;
+            }
+        });
+
+        let outcome = snapshot(directory.path(), &socket, &[], None).await;
+        server.abort();
+
+        assert!(
+            outcome.is_none(),
+            "a rejected barrier must fall back to full validation"
+        );
+        let observed = barriers.load(Ordering::SeqCst);
+        assert!(
+            observed <= 5,
+            "client re-issued the barrier {observed} times instead of falling back once the daemon answered"
+        );
     }
 }

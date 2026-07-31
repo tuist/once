@@ -135,6 +135,14 @@ pub enum Cmd {
         #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
         sandbox: SandboxMode,
 
+        /// Override the workspace build configuration. Recognized keys are
+        /// `os`, `arch`, and `token` (repeatable), supplied as `KEY=VALUE`.
+        /// Targets configured with `select` resolve against the merged
+        /// configuration, and their outputs are scoped so different values
+        /// never collide.
+        #[arg(long, value_name = "KEY=VALUE")]
+        config: Vec<String>,
+
         /// Target id, such as `services/api/Api` or `./Api`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
@@ -149,6 +157,10 @@ pub enum Cmd {
         /// Local filesystem sandbox policy for command actions.
         #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
         sandbox: SandboxMode,
+
+        /// Override the workspace build configuration. See `once build --config`.
+        #[arg(long, value_name = "KEY=VALUE")]
+        config: Vec<String>,
 
         /// Lowest finding severity that makes this command fail.
         #[arg(long, value_parser = parse_lint_severity, default_value = "warning")]
@@ -169,6 +181,10 @@ pub enum Cmd {
         /// Local filesystem sandbox policy for command actions.
         #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
         sandbox: SandboxMode,
+
+        /// Override the workspace build configuration. See `once build --config`.
+        #[arg(long, value_name = "KEY=VALUE")]
+        config: Vec<String>,
 
         /// Ask graph target kinds to open a visible runtime interface when supported.
         #[arg(long)]
@@ -213,6 +229,10 @@ pub enum Cmd {
         /// Local filesystem sandbox policy for command actions.
         #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
         sandbox: SandboxMode,
+
+        /// Override the workspace build configuration. See `once build --config`.
+        #[arg(long, value_name = "KEY=VALUE")]
+        config: Vec<String>,
 
         /// Maximum number of test batches to execute concurrently.
         /// Defaults to the host's available parallelism for an affected plan.

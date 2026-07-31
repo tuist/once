@@ -9,6 +9,7 @@ mod action;
 mod analysis;
 mod build_receipt;
 mod capability;
+mod configuration;
 mod contract;
 mod lint;
 
@@ -23,7 +24,7 @@ use once_core::{EvidenceCacheState, LintSeverity, ResourceLimits, SandboxMode};
 use once_frontend::analysis::AnalysisOptions;
 use once_frontend::GraphTarget;
 
-pub use self::capability::load_graph_for_capability;
+pub use self::capability::load_graph_for_capability_with_configuration;
 use self::capability::{
     build_target, ensure_capability, record_capability_run, run_target_capability, write_record,
     CapabilityRunRecord,
@@ -32,6 +33,19 @@ use self::lint::{
     lint_provider_output_path, persist_lint_results, validate_lint_provider, write_lint_results,
 };
 use crate::cli::Output;
+
+pub(crate) use configuration::ResolvedConfiguration;
+
+/// Parse `--config` override strings and merge them over the
+/// workspace-declared configuration into the invocation-scoped
+/// configuration that build, lint, run, and test consume.
+pub(crate) fn resolve_invocation_configuration(
+    workspace: &Path,
+    overrides: &[String],
+) -> Result<ResolvedConfiguration> {
+    let parsed = configuration::parse_overrides(overrides)?;
+    configuration::resolve(workspace, &parsed)
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct GraphRunOptions {
@@ -46,9 +60,11 @@ pub async fn build(
     target_id: &str,
     sandbox: SandboxMode,
     resource_limits: ResourceLimits,
+    resolved: &configuration::ResolvedConfiguration,
 ) -> Result<ExitCode> {
     let xdg = once_core::Xdg::from_env();
-    let stored_receipt = build_receipt::read(workspace, target_id, sandbox).await;
+    let stored_receipt =
+        build_receipt::read(workspace, target_id, sandbox, &resolved.path_suffix).await;
     let prior_position = stored_receipt.as_ref().map(build_receipt::position);
     let initial_snapshot =
         crate::commands::change_tracker::snapshot(workspace, &xdg, &[], prior_position).await;
@@ -56,6 +72,7 @@ pub async fn build(
         workspace,
         target_id,
         sandbox,
+        &resolved.path_suffix,
         initial_snapshot.as_ref(),
         stored_receipt,
     )
@@ -64,9 +81,11 @@ pub async fn build(
         write_record(output, &record).await?;
         return Ok(ExitCode::SUCCESS);
     }
-    let session = analysis::BuildSession::load_workspace(workspace, cache, sandbox)
-        .await?
-        .with_resource_limits(resource_limits);
+    let session = analysis::BuildSession::load_workspace_with_configuration(
+        workspace, cache, sandbox, resolved,
+    )
+    .await?
+    .with_resource_limits(resource_limits);
     let target = session.target(target_id)?;
     let record = build_target(workspace, cache, target, &session, sandbox).await?;
     record_capability_run(workspace, &record).await;
@@ -75,7 +94,7 @@ pub async fn build(
     // every invocation. Never persist a receipt for it, and drop any stale one,
     // so the fast path can never skip its mandatory work.
     if record.cache_state == EvidenceCacheState::Bypass {
-        build_receipt::clear(workspace, target_id, sandbox).await;
+        build_receipt::clear(workspace, target_id, sandbox, &resolved.path_suffix).await;
         write_record(output, &record).await?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -100,6 +119,8 @@ pub async fn build(
                 workspace,
                 target_id,
                 sandbox,
+                &resolved.path_suffix,
+                resolved.digest,
                 &final_snapshot,
                 build_receipt::Observations {
                     environment: &environment,
@@ -115,6 +136,7 @@ pub async fn build(
     Ok(ExitCode::SUCCESS)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn lint(
     workspace: &Path,
     cache: &CacheProvider,
@@ -123,11 +145,21 @@ pub async fn lint(
     sandbox: SandboxMode,
     fail_on: LintSeverity,
     resource_limits: ResourceLimits,
+    resolved: &configuration::ResolvedConfiguration,
 ) -> Result<ExitCode> {
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    let session = analysis::BuildSession::new(workspace, cache, graph, sandbox)
-        .await?
-        .with_resource_limits(resource_limits);
+    let graph =
+        once_frontend::load_graph_workspace_with_configuration(workspace, &resolved.configuration)
+            .context("loading graph")?;
+    let session = analysis::BuildSession::new_with_options_with_configuration(
+        workspace,
+        cache,
+        graph,
+        AnalysisOptions::default(),
+        sandbox,
+        resolved,
+    )
+    .await?
+    .with_resource_limits(resource_limits);
     let target = session.target(target_id)?;
     let capability = ensure_capability(target, "lint")?;
     let outcome = session
@@ -170,6 +202,7 @@ pub async fn test(
     target_id: &str,
     sandbox: SandboxMode,
     resource_limits: ResourceLimits,
+    resolved: &configuration::ResolvedConfiguration,
 ) -> Result<ExitCode> {
     test_with_filters(
         workspace,
@@ -180,6 +213,7 @@ pub async fn test(
         &[],
         None,
         resource_limits,
+        resolved,
     )
     .await
 }
@@ -194,13 +228,16 @@ pub async fn test_with_filters(
     test_filters: &[String],
     test_batch_id: Option<&str>,
     resource_limits: ResourceLimits,
+    resolved: &configuration::ResolvedConfiguration,
 ) -> Result<ExitCode> {
     if let Some(batch_id) = test_batch_id {
         if Digest::from_hex(batch_id).is_none() {
             anyhow::bail!("invalid internal test batch identifier");
         }
     }
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let graph =
+        once_frontend::load_graph_workspace_with_configuration(workspace, &resolved.configuration)
+            .context("loading graph")?;
     if !test_filters.is_empty() {
         let manifest =
             crate::commands::query::test_manifest_record_with_graph(workspace, target_id, &graph)?;
@@ -208,7 +245,7 @@ pub async fn test_with_filters(
             crate::commands::query::validate_test_unit(&manifest, target_id, test_filter)?;
         }
     }
-    let session = analysis::BuildSession::new_with_options(
+    let session = analysis::BuildSession::new_with_options_with_configuration(
         workspace,
         cache,
         graph,
@@ -218,6 +255,7 @@ pub async fn test_with_filters(
             ..AnalysisOptions::default()
         },
         sandbox,
+        resolved,
     )
     .await?
     .with_resource_limits(resource_limits);
@@ -286,8 +324,9 @@ pub async fn run(
     options: GraphRunOptions,
     sandbox: SandboxMode,
     resource_limits: ResourceLimits,
+    resolved: &configuration::ResolvedConfiguration,
 ) -> Result<ExitCode> {
-    let session = analysis::BuildSession::new_with_options(
+    let session = analysis::BuildSession::new_with_options_with_configuration(
         workspace,
         cache,
         graph,
@@ -297,6 +336,7 @@ pub async fn run(
             ..AnalysisOptions::default()
         },
         sandbox,
+        resolved,
     )
     .await?
     .with_resource_limits(resource_limits);
@@ -346,9 +386,6 @@ pub async fn run(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Build a target, walking deps first. If the target kind has an `impl`
-/// callable, execute the actions the impl declares; otherwise fall back to the
-/// generic marker action in [`action`].
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

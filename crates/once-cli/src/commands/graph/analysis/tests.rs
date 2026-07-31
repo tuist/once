@@ -340,6 +340,38 @@ async fn independent_dependencies_run_in_parallel() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn configuration_path_suffix_scopes_build_outputs() {
+    let workspace = tempfile::tempdir().unwrap();
+    let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+    let graph = vec![test_target("Scoped", &[], "printf scoped > \"$1\"")];
+    let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE)
+        .unwrap()
+        .with_configuration(
+            once_frontend::BuildConfiguration::default(),
+            "/cfg-abcd1234".to_string(),
+        );
+    let session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        analyzer,
+        SandboxMode::default(),
+    );
+
+    let outcome = session
+        .build_with_analysis(&graph[0])
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        outcome.outputs,
+        vec![".once/out/Scoped/cfg-abcd1234/Scoped-build.txt".to_string()]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn cached_dependency_outputs_are_materialized_before_dependents_run() {
     let workspace = tempfile::tempdir().unwrap();
     let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
@@ -571,10 +603,16 @@ kind = "custom"
     )
     .unwrap();
     let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
-    let build_session =
-        BuildSession::load_workspace(workspace.path(), &cache, SandboxMode::default())
-            .await
-            .unwrap();
+    let resolved =
+        crate::commands::graph::resolve_invocation_configuration(workspace.path(), &[]).unwrap();
+    let build_session = BuildSession::load_workspace_with_configuration(
+        workspace.path(),
+        &cache,
+        SandboxMode::default(),
+        &resolved,
+    )
+    .await
+    .unwrap();
     let graph = once_frontend::load_graph_workspace(workspace.path()).unwrap();
     let run_session = BuildSession::new_with_options(
         workspace.path(),

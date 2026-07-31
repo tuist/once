@@ -217,6 +217,10 @@ Attributes that choose the configuration, including `compile_sdk` and
 `min_sdk_version`, must remain literal. The target kind schema identifies any
 other non-configurable attributes.
 
+See the [configurations guide](/guide/graph/configuration) for how
+`--config` overrides these tokens per invocation and how the effective
+configuration scopes outputs.
+
 ## Connect Native Dependencies
 
 An `android_binary` can consume native shared libraries through normal

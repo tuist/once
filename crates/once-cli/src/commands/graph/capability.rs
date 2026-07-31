@@ -101,12 +101,15 @@ pub(super) async fn build_target(
     }
 }
 
-pub fn load_graph_for_capability(
+pub fn load_graph_for_capability_with_configuration(
     workspace: &Path,
     target_id: &str,
     capability: &str,
+    resolved: &super::ResolvedConfiguration,
 ) -> Result<Option<Vec<GraphTarget>>> {
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let graph =
+        once_frontend::load_graph_workspace_with_configuration(workspace, &resolved.configuration)
+            .context("loading graph")?;
     Ok(graph_supports(&graph, target_id, capability).then_some(graph))
 }
 
