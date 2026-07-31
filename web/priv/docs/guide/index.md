@@ -1,18 +1,33 @@
 # Guides
 
-Choose the smallest Once surface that solves the problem in front of you.
-Scripts are the fastest migration path. Typed graph targets add queryable
-dependencies and capabilities when a workflow needs more structure.
+Once meets a project where it is. Start from native project metadata, cache the
+automation that already works, and add a typed graph only where more structure
+helps.
 
-## Start with existing automation
+## Start with an existing project
+
+Once can recognize supported native projects and make their build, test, and
+run capabilities available without requiring changes to their project files.
+Native project descriptions and lockfiles remain authoritative. Read the
+[Typed Graph guide](/guide/graph/#start-from-a-native-project) to discover and
+preview supported projects without adding Once configuration.
+
+## Cache existing automation
 
 Use [Scripted automation](/guide/scripted/) to add explicit inputs, outputs,
-environment, and cache policy to commands or scripts that already work.
+environment, and cache policy to commands or scripts that already work. The
+existing script remains the source of truth, while Once caches operations such
+as packaging, generation, and checks.
 
-## Model builds and repository capabilities
+## Add structure when it helps
 
 Use the [Typed Graph guide](/guide/graph/) for named targets, typed
-dependencies, build and run capabilities, and ecosystem integrations.
+dependencies, build and run capabilities, and ecosystem integrations. You can
+keep native discovery and cacheable scripts beside typed targets while the
+graph grows. Add a package manifest when you want to keep a choice in the
+repository. Introduce a project [Starlark](https://starlark-lang.org/) module
+only when the built-in target kinds cannot express reusable behavior your
+project needs.
 
 - [Testing and scheduling](/guide/graph/testing) covers normalized test
   results, selection, batching, retries, and custom test runners.
@@ -22,23 +37,26 @@ dependencies, build and run capabilities, and ecosystem integrations.
 - [Ecosystems](/guide/graph/ecosystems) helps choose between typed targets and
   scripted automation.
 
-## Control local execution
+## Run work where it makes sense
 
-Use [Memory Limits](/guide/local-execution/memory-limits) to keep concurrent
-local actions within a scheduling budget on constrained or shared machines.
+Once runs actions locally first. As a project grows, control how much work runs
+at once, then share cached results or move suitable work to remote execution.
 
-## Share or move execution
+- **[Control local execution](/guide/local-execution/memory-limits):** use
+  Memory Limits to keep concurrent local actions within a scheduling budget on
+  constrained or shared machines.
+- **[Share or move execution](/guide/infrastructure/):** add shared cache
+  entries, isolated sandboxes, or hosted execution after the local workflow is
+  working well.
 
-Use [Infrastructure](/guide/infrastructure/) after local execution works and
-you want shared cache entries, isolated sandboxes, or hosted execution.
+## Bring Once into your workflow
 
-## Integrate Once into an application
+The command line works on its own. Use the following integrations when another
+application or a coding agent needs to work with the same cache, graph, and
+execution model.
 
-Use the [language library overview](/guide/sdk/) when application code needs
-direct access to Once cache primitives.
-
-## Connect a coding agent
-
-Use [Coding harnesses](/guide/harness) to give a coding agent query, editing,
-execution, validation, and evidence tools through the
-[Model Context Protocol](https://modelcontextprotocol.io/).
+- **[Integrate Once into an application](/guide/sdk/):** use a language library
+  when application code needs direct access to Once cache primitives.
+- **[Connect a coding agent](/guide/harness):** give a coding agent query,
+  editing, execution, validation, and evidence tools through the
+  [Model Context Protocol](https://modelcontextprotocol.io/).
