@@ -32,6 +32,8 @@ if port do
   config :once_site, OnceSiteWeb.Endpoint, http: [port: String.to_integer(port)]
 end
 
+config :once_site, :github_app_install_url, System.get_env("GITHUB_APP_INSTALL_URL")
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

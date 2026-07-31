@@ -1,0 +1,49 @@
+<Layouts.app flash={@flash}>
+  <section data-part="passport-page">
+    <header data-part="passport-header">
+      <nav data-part="passport-breadcrumb" aria-label="Breadcrumb">
+        <a href={@repository_url}>Passport</a><span>/</span><span>Integrate Once</span>
+      </nav>
+      <div>
+        <h1>Integrate {@account}/{@repository}</h1>
+        <p>Let Once inspect the repository and prepare an initial native project integration.</p>
+      </div>
+    </header>
+
+    <Card.card icon="git_branch" title="How it works" data-part="passport-card">
+      <Card.card_section>
+        <ol data-part="integration-list">
+          <li>
+            <strong>Join the queue</strong><span>Save this repository as an integration request.</span>
+          </li>
+          <li>
+            <strong>Install the GitHub App</strong><span>Grant access so Once can clone and inspect the repository.</span>
+          </li>
+          <li>
+            <strong>Receive an initial integration</strong><span>Once moves the repository into the queue after access is confirmed.</span>
+          </li>
+        </ol>
+      </Card.card_section>
+    </Card.card>
+
+    <Card.card icon="lock" title="Repository access" data-part="passport-card">
+      <Card.card_section>
+        <p data-part="passport-card-copy">
+          Once requests only the access needed to clone and analyze this repository for integration work.
+        </p>
+        <form method="post" action={"#{@repository_url}/integrate"}>
+          <input type="hidden" name="_csrf_token" value={Phoenix.Controller.get_csrf_token()} />
+          <Button.button
+            label={
+              if @install_url,
+                do: "Join queue and install GitHub App",
+                else: "Join integration queue"
+            }
+            variant="primary"
+            size="medium"
+          />
+        </form>
+      </Card.card_section>
+    </Card.card>
+  </section>
+</Layouts.app>

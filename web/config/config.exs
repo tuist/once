@@ -15,7 +15,11 @@ config :esbuild,
   once_site: [
     args:
       ~w(js/app.js css/app.css --bundle --target=es2022 --outdir=../priv/static/assets --entry-names=[dir]/[name] --external:/fonts/* --external:/images/* --external:/docs/*) ++
-        ["--alias:@=.", "--alias:noora/noora.css=#{noora_static_path}/noora.css"],
+        [
+          "--alias:@=.",
+          "--alias:noora=#{noora_static_path}/noora.js",
+          "--alias:noora/noora.css=#{noora_static_path}/noora.css"
+        ],
     cd: Path.expand("../assets", __DIR__),
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ],
