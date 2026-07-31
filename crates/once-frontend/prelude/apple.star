@@ -243,6 +243,29 @@ def _resolve_codesign(xcode_developer_dir):
         "env": env,
     }
 
+def _resolve_actool(xcode_developer_dir):
+    env = _developer_env(xcode_developer_dir)
+    xcrun = host_which("xcrun")
+    actool_path = host_command([xcrun, "--find", "actool"], env = env).strip()
+    identity = "once.apple.actool.v1\x00" + actool_path + "\x00" + (xcode_developer_dir or "")
+    return {
+        "actool_path": actool_path,
+        "identity": identity,
+        "env": env,
+    }
+
+def _apple_actool_platform(platform, sdk_variant):
+    device = sdk_variant == "device"
+    if platform == "macos" or platform == "macosx":
+        return "macosx"
+    if platform == "tvos":
+        return "appletvos" if device else "appletvsimulator"
+    if platform == "watchos":
+        return "watchos" if device else "watchsimulator"
+    if platform == "visionos":
+        return "xros" if device else "xrsimulator"
+    return "iphoneos" if device else "iphonesimulator"
+
 def _resolve_apple_thinning_tools(xcode_developer_dir):
     env = _developer_env(xcode_developer_dir)
     xcrun = host_which("xcrun")
@@ -852,25 +875,63 @@ exit "$status"
     )
     return provider
 
-def _swift_testing_cases_script(swift_srcs, cases_file, target, runner_type):
+def _apple_test_cases_script(swift_srcs, cases_file, target, runner_type):
+    # List every test case from the bundle's sources into `cases_file` as the
+    # `cases` array of the normalized results. The case `id` embeds the
+    # `Suite/method` selector after `{target}::` so the sharded re-run can turn a
+    # unit id back into an `-XCTest` selector. XCTest methods (`func testX`) take
+    # their enclosing `XCTestCase` subclass as the suite; Swift Testing
+    # functions (`@Test func x`) take their enclosing type, defaulting to the
+    # file name for free functions.
     specs = _shell_words(swift_srcs)
     return """total=0
 cases_file={cases_file}
 : > "$cases_file"
+emit_case() {{
+  case_name="$1"
+  case_suite="$2"
+  case_file="$3"
+  if [ "$status" -eq 0 ]; then case_status=passed; else case_status=unknown; fi
+  total=$((total + 1))
+  if [ "$total" -gt 1 ]; then printf ',\n' >> "$cases_file"; fi
+  printf '{{"id":"%s::%s/%s","name":"%s","suite":"%s","file":"%s","status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{"runner":"%s"}}}}' "{target}" "$case_suite" "$case_name" "$case_name" "$case_suite" "$case_file" "$case_status" "$case_status" "{runner_type}" >> "$cases_file"
+}}
 for spec in {specs}; do
   [ -f "$spec" ] || continue
-  suite=${{spec%.swift}}
-  suite=${{suite##*/}}
+  file_suite=${{spec%.swift}}
+  file_suite=${{file_suite##*/}}
+  current_suite="$file_suite"
   while IFS= read -r line; do
+    case "$line" in
+      *"class "*XCTestCase*)
+        decl=${{line#*class }}
+        decl=${{decl%%:*}}
+        decl=${{decl%%[!A-Za-z0-9_]*}}
+        [ -n "$decl" ] && current_suite="$decl"
+        ;;
+      *"struct "*|*"final class "*|*"actor "*)
+        decl=${{line#*struct }}
+        case "$line" in
+          *"final class "*) decl=${{line#*final class }} ;;
+          *"actor "*) decl=${{line#*actor }} ;;
+        esac
+        decl=${{decl%%:*}}
+        decl=${{decl%%[!A-Za-z0-9_]*}}
+        [ -n "$decl" ] && current_suite="$decl"
+        ;;
+    esac
     case "$line" in
       *"@Test func "*)
         name=${{line#*"@Test func "}}
         name=${{name%%"("*}}
-        total=$((total + 1))
-        case_id="{target}::$name"
-        if [ "$status" -eq 0 ]; then case_status=passed; else case_status=unknown; fi
-        if [ "$total" -gt 1 ]; then printf ',\n' >> "$cases_file"; fi
-        printf '{{"id":"%s","name":"%s","suite":"%s","file":"%s","status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{"runner":"%s"}}}}' "$case_id" "$name" "$suite" "$spec" "$case_status" "$case_status" "{runner_type}" >> "$cases_file"
+        emit_case "$name" "$current_suite" "$spec"
+        ;;
+      *"func test"*"("*)
+        name=${{line#*func }}
+        name=${{name%%"("*}}
+        case "$name" in
+          test*) emit_case "$name" "$current_suite" "$spec" ;;
+        esac
         ;;
     esac
   done < "$spec"
@@ -902,15 +963,21 @@ def _apple_test_info(ctx, runner_type, command_argv, command_env, labels, result
             "native_results": [native_results],
             "coverage": [],
         },
+        # Both runners list their cases from the normalized results the runner
+        # writes, and both accept a case subset through `-XCTest` selectors, so
+        # a bundle can be sharded case by case. Once a project's test bundles
+        # each shard by case, `once test` fans the whole group of bundles into
+        # one batch per case for parallel and remote execution.
         "listing": {
-            "supported": runner_type == "swift_testing",
-            "strategy": "parse_swift_testing_functions" if runner_type == "swift_testing" else "external_runner",
+            "supported": True,
+            "strategy": "normalized_results",
         },
         "filtering": {
-            "case_filtering": "unsupported",
+            "case_filtering": "runner_args",
         },
         "sharding": {
-            "supported": False,
+            "supported": True,
+            "granularity": "case",
         },
         "retries": {
             "supported": False,
@@ -1595,6 +1662,14 @@ def _collect_dep_compile_inputs(deps, build_dir):
             module_name = bundle.get("module_name") or ""
             if module_name and module_name not in framework_module_names:
                 framework_module_names.append(module_name)
+        # Framework search directories contributed without a specific framework
+        # bundle. Swift autolinks imported frameworks, so a consumer only needs
+        # the search path on the compile and link lines; the framework itself is
+        # embedded separately. Swift Package Manager dependency sets use this to
+        # expose a directory of built frameworks (binary package products).
+        for d in dep.get("transitive_framework_search_dirs") or []:
+            if d and d not in framework_search_dirs:
+                framework_search_dirs.append(d)
         for fw in dep.get("transitive_sdk_frameworks") or []:
             if fw and fw not in sdk_frameworks:
                 sdk_frameworks.append(fw)
@@ -1820,6 +1895,42 @@ def _apple_framework_impl(ctx):
         "transitive_linkopts": transitive_linkopts,
     }
 
+def _apple_embed_framework_dirs(ctx, deps, bundle_dir, frameworks_dir, codesign, identifier):
+    # Embed every built framework found in a dependency's framework directories
+    # into the app bundle and re-sign it. Swift Package Manager dependency sets
+    # expose these directories (their built binary framework products have names
+    # only known after the build), so the copy and signing happen in one action
+    # that stages whatever frameworks are present.
+    embed_dirs = []
+    for dep in deps:
+        for d in dep.get("transitive_embed_framework_dirs") or []:
+            if d and d not in embed_dirs:
+                embed_dirs.append(d)
+    if not embed_dirs:
+        return {"stamp": "", "tree": ""}
+    dest = ctx["build_dir"] + "/" + bundle_dir + "/" + frameworks_dir
+    stamp = declare_output("spm-frameworks.stamp")
+    lines = ["set -eu", "mkdir -p " + _shell_literal(dest)]
+    for d in embed_dirs:
+        lines.append("for fw in " + _shell_literal(d) + "/*.framework; do")
+        lines.append('  [ -e "$fw" ] || continue')
+        lines.append('  name=$(basename "$fw")')
+        lines.append("  rm -rf " + _shell_literal(dest) + '/"$name"')
+        lines.append("  cp -R \"$fw\" " + _shell_literal(dest) + "/")
+        lines.append("  " + _shell_literal(codesign["codesign_path"]) + " --force --sign - --timestamp=none " + _shell_literal(dest) + '/"$name"')
+        lines.append("done")
+    lines.append("touch " + _shell_literal(stamp))
+    run_action(
+        argv = [host_which("sh"), "-c", "\n".join(lines)],
+        inputs = embed_dirs,
+        outputs = [dest, stamp],
+        clean_paths = [dest],
+        env = codesign["env"],
+        toolchain_identity = "once.apple.embed.framework_dirs.v1\x00" + codesign["identity"],
+        identifier = identifier + ":" + ctx["label"]["id"],
+    )
+    return {"stamp": stamp, "tree": dest}
+
 def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesign, identifier_prefix):
     embedded_paths = []
     embedded_stamps = []
@@ -1923,9 +2034,23 @@ printf '%s%s%s\\n' {record_prefix} "$simulator_id" {record_suffix} > {record}
         command = command,
     )
 
+def _apple_swift_module_name(name):
+    # Turn a product name into a valid Swift module identifier the way Xcode's
+    # `c99extidentifier` transform does: non-identifier characters become
+    # underscores, and a leading digit is prefixed with an underscore.
+    out = ""
+    for ch in (name or "").elems():
+        if (ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z") or (ch >= "0" and ch <= "9") or ch == "_":
+            out += ch
+        else:
+            out += "_"
+    if out and out[0] >= "0" and out[0] <= "9":
+        out = "_" + out
+    return out or "Module"
+
 def _apple_application_impl(ctx):
     attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["product_name"])
-    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["resources", "asset_catalogs", "info_plist", "info_plist_substitutions", "entitlements", "provisioning_profile", "signing_identity"])
+    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["resources", "info_plist", "info_plist_substitutions", "entitlements", "provisioning_profile", "signing_identity"])
     if attrs.get("signing") and attrs.get("signing") != "ad_hoc":
         fail(ctx["label"]["id"] + ": attribute `signing` only supports `ad_hoc` today")
     platform = attrs["platform"]
@@ -1935,17 +2060,91 @@ def _apple_application_impl(ctx):
     sdk_variant = attrs.get("sdk_variant") or "simulator"
     xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
     product_name = attrs.get("product_name") or ctx["label"]["name"]
+    # The Swift module name must be a valid identifier, while the product name
+    # can contain spaces (a bundle displayed as "Ice Cubes" has module name
+    # "Ice_Cubes"), so derive the module name separately.
+    module_name = _apple_swift_module_name(attrs.get("module_name") or product_name)
     families = attrs.get("families") or ["iphone"]
     sdk_frameworks_attr = attrs.get("sdk_frameworks") or []
     weak_sdk_frameworks = attrs.get("weak_sdk_frameworks") or []
     sdk_dylibs_attr = attrs.get("sdk_dylibs") or []
     linkopts = attrs.get("linkopts") or []
+    defines = attrs.get("defines") or []
     swift_flags = attrs.get("swift_flags") or []
+    bridging_header = attrs.get("bridging_header") or ""
+    application_extension = attrs.get("application_extension") or False
+    enable_testing = attrs.get("enable_testing") or False
+    swiftmodule = declare_output(product_name + ".swiftmodule") if enable_testing else ""
+    swiftdoc = declare_output(product_name + ".swiftdoc") if enable_testing else ""
+    if enable_testing:
+        swift_flags = list(swift_flags) + ["-enable-testing"]
 
     all_srcs = glob(ctx["srcs"])
     swift_srcs = _filter_swift_sources(all_srcs)
     if len(swift_srcs) == 0:
         fail("apple_application " + ctx["label"]["id"] + " has no Swift sources (.swift)")
+
+    # Asset catalogs: generate the type-safe `ImageResource`/`ColorResource`
+    # accessors so sources that reference them compile, and compile the catalog
+    # into the `Assets.car` the app loads at runtime. `actool` only emits the
+    # Swift symbols when a compile pass runs, and only emits `Assets.car` when
+    # the symbol pass is absent, so the two run as separate actions.
+    asset_catalogs = [_package_relative(ctx, catalog) for catalog in (attrs.get("asset_catalogs") or [])]
+    app_icon = attrs.get("app_icon") or ""
+    asset_car = ""
+    if asset_catalogs:
+        actool = _resolve_actool(xcode_developer_dir)
+        actool_platform = _apple_actool_platform(platform, sdk_variant)
+        asset_symbols = declare_output("GeneratedAssetSymbols.swift")
+        # `actool` only writes the Swift symbols when a compile pass runs, so a
+        # throwaway compile directory is supplied; it is not a declared output.
+        symbol_argv = [actool["actool_path"]] + asset_catalogs + [
+            "--compile",
+            ctx["build_dir"] + "/AssetSymbolsCompile",
+            "--generate-swift-asset-symbols",
+            asset_symbols,
+            "--platform",
+            actool_platform,
+            "--minimum-deployment-target",
+            minimum_os,
+            "--bundle-identifier",
+            bundle_id,
+        ]
+        run_action(
+            argv = symbol_argv,
+            inputs = asset_catalogs,
+            outputs = [asset_symbols],
+            create_dirs = [ctx["build_dir"] + "/AssetSymbolsCompile"],
+            clean_paths = [ctx["build_dir"] + "/AssetSymbolsCompile"],
+            env = actool["env"],
+            toolchain_identity = actool["identity"],
+            identifier = "apple_application_asset_symbols_" + product_name,
+        )
+        swift_srcs = swift_srcs + [asset_symbols]
+
+        app_dir = product_name + ".app"
+        asset_car = declare_output(app_dir + "/Assets.car")
+        car_partial_plist = declare_output("assets-partial.plist")
+        car_argv = [actool["actool_path"]] + asset_catalogs + [
+            "--compile",
+            ctx["build_dir"] + "/" + app_dir,
+            "--platform",
+            actool_platform,
+            "--minimum-deployment-target",
+            minimum_os,
+            "--output-partial-info-plist",
+            car_partial_plist,
+        ]
+        if app_icon:
+            car_argv.extend(["--app-icon", app_icon])
+        run_action(
+            argv = car_argv,
+            inputs = asset_catalogs,
+            outputs = [asset_car, car_partial_plist],
+            env = actool["env"],
+            toolchain_identity = actool["identity"],
+            identifier = "apple_application_assets_" + product_name,
+        )
 
     arch = host_arch()
     swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
@@ -2004,7 +2203,7 @@ def _apple_application_impl(ctx):
 
     swift_argv = list(swiftc["argv"]) + [
         "-module-name",
-        product_name,
+        module_name,
         "-target",
         triple,
         "-parse-as-library",
@@ -2014,7 +2213,26 @@ def _apple_application_impl(ctx):
         "@executable_path/Frameworks",
         "-o",
         executable,
+        # Actions run with a cleared environment, so give the Clang importer an
+        # explicit, writable module cache under the build directory. Without it,
+        # importing a source-built module map (an Objective-C Swift package
+        # dependency) fails because the implicit cache has nowhere to go.
+        "-module-cache-path",
+        ctx["build_dir"] + "/ModuleCache",
     ]
+    if application_extension:
+        # An app extension is not a normal executable: it is entered through
+        # `NSExtensionMain` (from Foundation) rather than `main`, and is built
+        # against the app-extension-safe API surface.
+        swift_argv.extend([
+            "-application-extension",
+            "-Xlinker",
+            "-e",
+            "-Xlinker",
+            "_NSExtensionMain",
+        ])
+    if bridging_header:
+        swift_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
     for d in compile_swiftmodule_dirs:
         swift_argv.extend(["-I", d])
     for hdir in compile_header_dirs:
@@ -2054,6 +2272,19 @@ def _apple_application_impl(ctx):
         swift_argv.append(ar)
 
     swift_inputs = list(swift_srcs)
+    if bridging_header:
+        bridging_header_path = _package_relative(ctx, bridging_header)
+        if bridging_header_path not in swift_inputs:
+            swift_inputs.append(bridging_header_path)
+    for mmap in dep_modulemaps:
+        if mmap not in swift_inputs:
+            swift_inputs.append(mmap)
+    for hdir in compile_header_dirs:
+        if hdir not in swift_inputs:
+            swift_inputs.append(hdir)
+    for d in framework_search_dirs:
+        if d not in swift_inputs:
+            swift_inputs.append(d)
     for ar in dep_archives:
         if ar not in swift_inputs:
             swift_inputs.append(ar)
@@ -2072,6 +2303,68 @@ def _apple_application_impl(ctx):
         toolchain_identity = swiftc["identity"],
         identifier = "apple_application_compile_" + product_name,
     )
+
+    # Emit the application module separately so hosted test bundles can
+    # `@testable import` it. The main compile links prebuilt archives, which
+    # conflicts with `-emit-module` in a single swiftc invocation, so the
+    # module is produced by a compile-only action that reuses the same sources
+    # and search paths. `-parse-as-library` keeps the entry-point attribute
+    # (`@main`/`@NSApplicationMain`/`@UIApplicationMain`) valid: emitting a
+    # module treats a lone entry-point file as top-level script code otherwise,
+    # which those attributes reject.
+    if enable_testing:
+        module_argv = list(swiftc["argv"]) + [
+            "-module-name",
+            module_name,
+            "-target",
+            triple,
+            "-enable-testing",
+            "-parse-as-library",
+            "-emit-module",
+            "-emit-module-path",
+            swiftmodule,
+        ]
+        module_argv.extend(["-module-cache-path", ctx["build_dir"] + "/ModuleCache"])
+        if bridging_header:
+            module_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
+        for d in compile_swiftmodule_dirs:
+            module_argv.extend(["-I", d])
+        for hdir in compile_header_dirs:
+            module_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+        for mmap in dep_modulemaps:
+            module_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
+        for d in framework_search_dirs:
+            module_argv.extend(["-F", d])
+        for fw in framework_module_names:
+            module_argv.extend(["-framework", fw])
+        for fw in sdk_frameworks_attr:
+            module_argv.extend(["-framework", fw])
+        for define in defines:
+            module_argv.extend(["-D", define])
+        for flag in swift_flags:
+            module_argv.append(flag)
+        for src in swift_srcs:
+            module_argv.append(src)
+        module_inputs = list(swift_srcs)
+        if bridging_header and _package_relative(ctx, bridging_header) not in module_inputs:
+            module_inputs.append(_package_relative(ctx, bridging_header))
+        for mmap in dep_modulemaps:
+            if mmap not in module_inputs:
+                module_inputs.append(mmap)
+        for hdir in compile_header_dirs:
+            if hdir not in module_inputs:
+                module_inputs.append(hdir)
+        for d in framework_search_dirs:
+            if d not in module_inputs:
+                module_inputs.append(d)
+        run_action(
+            argv = module_argv,
+            inputs = module_inputs,
+            outputs = [swiftmodule, swiftdoc],
+            env = swiftc["env"],
+            toolchain_identity = swiftc["identity"],
+            identifier = "apple_application_module_" + product_name,
+        )
 
     plist_entries = {
         "CFBundleDevelopmentRegion": "en",
@@ -2107,14 +2400,26 @@ def _apple_application_impl(ctx):
         codesign,
         "apple_application_embed",
     )
+    embedded_dir_frameworks = _apple_embed_framework_dirs(
+        ctx,
+        deps,
+        app_dir,
+        "Frameworks",
+        codesign,
+        "apple_application_embed_frameworks",
+    )
 
     # Ad-hoc codesign the .app bundle itself. Must run after embedded
     # frameworks land so their signature is included in the bundle's
     # resource envelope.
     app_cs_stamp = declare_output(app_dir + "/_CodeSignature/CodeResources")
     cs_inputs = [executable, info_plist]
+    if asset_car:
+        cs_inputs.append(asset_car)
     for stamp in embedded_frameworks["stamps"]:
         cs_inputs.append(stamp)
+    if embedded_dir_frameworks["stamp"]:
+        cs_inputs.append(embedded_dir_frameworks["stamp"])
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + app_dir],
         inputs = cs_inputs,
@@ -2124,16 +2429,25 @@ def _apple_application_impl(ctx):
         identifier = "apple_application_codesign_" + product_name,
     )
 
+    transitive_swiftmodule_dirs = []
+    if enable_testing:
+        transitive_swiftmodule_dirs.append(ctx["build_dir"])
+        for dep in deps:
+            for d in dep.get("transitive_swiftmodule_dirs") or []:
+                if d and d not in transitive_swiftmodule_dirs:
+                    transitive_swiftmodule_dirs.append(d)
     return {
         "label_id": ctx["label"]["id"],
         "target_kind": "apple_application",
         "app_path": app_path,
-        "app_files": [executable, info_plist, app_cs_stamp] + embedded_frameworks["files"],
+        "app_files": [executable, info_plist, app_cs_stamp] + embedded_frameworks["files"] + ([embedded_dir_frameworks["tree"]] if embedded_dir_frameworks["tree"] else []) + ([asset_car] if asset_car else []) + ([swiftmodule, swiftdoc] if enable_testing else []),
         "bundle_id": bundle_id,
         "platform": platform,
         "sdk_variant": sdk_variant,
         "xcode_developer_dir": xcode_developer_dir,
         "product_name": product_name,
+        "swiftmodule_dir": ctx["build_dir"] if enable_testing else "",
+        "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
     }
 
 def _apple_thinning_application(deps, label_id):
@@ -2585,11 +2899,24 @@ def _apple_test_bundle_impl(ctx):
 
     if ctx["capability"] == "test":
         cases_file = test_dir + "/cases.jsonl"
+        # When a shard runs, the planner passes the batch's unit ids as
+        # `ctx["test"]["filters"]`. Each id is `<target>::<Suite>/<method>`, so
+        # dropping the `<target>::` prefix yields the `-XCTest` selector. With no
+        # filters the runner selects `All`, matching a plain full-bundle run.
+        case_filters = (ctx.get("test") or {}).get("filters") or []
+        selector_prefix = ctx["label"]["id"] + "::"
+        selectors = []
+        for case_filter in case_filters:
+            if case_filter.startswith(selector_prefix):
+                selectors.append(case_filter[len(selector_prefix):])
+            else:
+                selectors.append(case_filter)
+        xctest_spec = ",".join(selectors) if selectors else "All"
         if platform == "macos" or platform == "macosx":
             runner_command = """DYLD_LIBRARY_PATH={usr_lib}${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}} DYLD_FALLBACK_FRAMEWORK_PATH={frameworks}${{DYLD_FALLBACK_FRAMEWORK_PATH:+:$DYLD_FALLBACK_FRAMEWORK_PATH}} {command}""".format(
                 usr_lib = _shell_literal(xctest_usr_lib_dir),
                 frameworks = _shell_literal(xctest_framework_dir),
-                command = _shell_words([runner_xcrun, "xctest", test_bundle_path]),
+                command = _shell_words([runner_xcrun, "xctest", "-XCTest", xctest_spec, test_bundle_path]),
             )
         elif sdk_variant == "simulator":
             runner_command = _ios_simulator_selection_script(runner_xcrun) + """
@@ -2601,7 +2928,7 @@ cp -R {bundle} "$tmpdir/"
 find "$tmpdir/{bundle_name}" -type d -exec chmod 755 {{}} +
 find "$tmpdir/{bundle_name}" -type f -exec chmod 644 {{}} +
 chmod 755 "$tmpdir/{bundle_name}/{binary_name}"
-SIMCTL_CHILD_DYLD_LIBRARY_PATH={usr_lib} SIMCTL_CHILD_DYLD_FALLBACK_FRAMEWORK_PATH={frameworks} {xcrun} simctl spawn "$simulator_id" {xctest_agent} -XCTest All "$tmpdir/{bundle_name}"
+SIMCTL_CHILD_DYLD_LIBRARY_PATH={usr_lib} SIMCTL_CHILD_DYLD_FALLBACK_FRAMEWORK_PATH={frameworks} {xcrun} simctl spawn "$simulator_id" {xctest_agent} -XCTest {xctest_spec} "$tmpdir/{bundle_name}"
 """.format(
                 xcrun = _shell_literal(runner_xcrun),
                 bundle = _shell_literal(test_bundle_path),
@@ -2610,6 +2937,7 @@ SIMCTL_CHILD_DYLD_LIBRARY_PATH={usr_lib} SIMCTL_CHILD_DYLD_FALLBACK_FRAMEWORK_PA
                 usr_lib = _shell_literal(xctest_usr_lib_dir),
                 frameworks = _shell_literal(xctest_framework_dir),
                 xctest_agent = _shell_literal(platform_path + "/Developer/Library/Xcode/Agents/xctest"),
+                xctest_spec = _shell_literal(xctest_spec),
             )
         else:
             fail(ctx["label"]["id"] + ": apple_test_bundle execution supports macos and simulator targets; device runners need xctestrun support")
@@ -2640,7 +2968,7 @@ exit "$status"
             results = _shell_literal(results),
             native_results = _shell_literal(native_results),
             runner_command = runner_command,
-            cases_script = _swift_testing_cases_script(swift_srcs, cases_file, ctx["label"]["id"], runner_type),
+            cases_script = _apple_test_cases_script(swift_srcs, cases_file, ctx["label"]["id"], runner_type),
             target = ctx["label"]["id"],
             runner_type = runner_type,
         )
@@ -3357,6 +3685,11 @@ apple_application = target_kind(
         attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple SDK dynamic libraries linked by name"),
         attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
+        attr("bridging_header", "string", docs = "ObjC bridging header imported into every Swift source (`-import-objc-header`), letting them see ObjC symbols and any frameworks the header imports"),
+        attr("application_extension", "bool", default = "false", docs = "Build as an app extension: entered through `NSExtensionMain` and compiled against the app-extension-safe API surface"),
+        attr("asset_catalogs", "list<string>", default = "[]", docs = "Asset catalogs (`.xcassets`) compiled into the bundle's `Assets.car` and used to generate type-safe `ImageResource`/`ColorResource` accessors"),
+        attr("app_icon", "string", docs = "Asset catalog app-icon set name (`ASSETCATALOG_COMPILER_APPICON_NAME`) compiled into the app icon"),
+        attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled so hosted test bundles can `@testable import` the application module"),
     ],
     deps = [
         dep("deps", ["apple_linkable", "apple_framework", "apple_resource", "apple_swift_plugin", "native_linkable"], "Libraries, frameworks, resources, native linkables, and Swift compiler plugins embedded in the app"),
