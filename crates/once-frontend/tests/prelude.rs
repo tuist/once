@@ -12623,7 +12623,7 @@ fn prelude_xcode_group_file_paths_walk_the_group_tree() {
     let source = format!(
         r#"{prelude}
 objects = json_decode({objects:?})
-paths = _xcode_group_file_paths(objects, objects["ROOT"], "app")
+paths = _xcode_group_file_paths(objects, objects["ROOT"], "app")["files"]
 result = repr([
     paths.get("NESTED_FILE"),
     paths.get("TOP_FILE"),

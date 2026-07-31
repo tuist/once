@@ -117,6 +117,7 @@ def _xcode_read_xcconfig(ctx, path):
     # win; included values fill only the gaps, matching XcodeProj semantics.
     if not path or not host_file_exists(_xcode_abs(path)):
         return {}
+    base_dir = _parent_dir(path)
     content = host_file_read(_xcode_abs(path))
     own = {}
     includes = []
@@ -133,7 +134,10 @@ def _xcode_read_xcconfig(ctx, path):
             own[pair[0]] = pair[1]
     flattened = {}
     for include_path in includes:
-        for key, value in _xcode_read_xcconfig(ctx, include_path).items():
+        # An `#include` is relative to the including file's directory (a leading
+        # slash means package-relative).
+        resolved = include_path if include_path.startswith("/") else _xcode_join(base_dir, include_path)
+        for key, value in _xcode_read_xcconfig(ctx, resolved).items():
             if key not in own:
                 flattened[key] = value
     for key, value in own.items():
@@ -175,15 +179,22 @@ def _xcode_parse_setting(line):
         return None
     return (key, value)
 
-def _xcode_base_config_xcconfig(ctx, objects, config):
+def _xcode_base_config_xcconfig(ctx, objects, config, path_maps):
+    # Classic form: a direct file reference to the `.xcconfig`.
     ref = config.get("baseConfigurationReference")
-    if not ref:
-        return {}
-    file_ref = objects.get(ref) or {}
-    path = _xcode_file_ref_path(ctx, file_ref)
-    if not path:
-        return {}
-    return _xcode_read_xcconfig(ctx, path)
+    if ref:
+        file_ref = objects.get(ref) or {}
+        path = path_maps["files"].get(ref) or _xcode_file_ref_path(ctx, file_ref)
+        if path:
+            return _xcode_read_xcconfig(ctx, path)
+    # Newer form (Xcode 16): an anchor group plus a path relative to it.
+    anchor = config.get("baseConfigurationReferenceAnchor")
+    relative = config.get("baseConfigurationReferenceRelativePath")
+    if anchor and relative:
+        anchor_dir = path_maps["groups"].get(anchor)
+        if anchor_dir != None:
+            return _xcode_read_xcconfig(ctx, _xcode_join(anchor_dir, relative))
+    return {}
 
 def _xcode_merge_settings(lower, higher):
     # Overlay higher-priority settings onto lower. List settings keep
@@ -256,13 +267,13 @@ def _xcode_setting_subs(ctx, target_name, product_name, sdkroot):
         "CONFIGURATION": ctx["attr"].get("configuration") or "Debug",
     }
 
-def _xcode_effective_settings(ctx, objects, config_list, default_name, project_settings, target_name):
+def _xcode_effective_settings(ctx, objects, config_list, default_name, project_settings, target_name, path_maps):
     # Resolve the active configuration from a build configuration list, then
     # layer project settings < target xcconfig < target settings.
     configs = (config_list or {}).get("buildConfigurations") or []
     config_id = _xcode_choose_config(objects, configs, default_name, ctx["attr"].get("configuration") or "Debug")
     config = objects.get(config_id) or {}
-    xcconfig_settings = _xcode_base_config_xcconfig(ctx, objects, config)
+    xcconfig_settings = _xcode_base_config_xcconfig(ctx, objects, config, path_maps)
     target_settings = config.get("buildSettings") or {}
     layered = _xcode_merge_settings(project_settings, xcconfig_settings)
     layered = _xcode_merge_settings(layered, target_settings)
@@ -280,16 +291,17 @@ def _xcode_choose_config(objects, configs, default_name, wanted):
             return config_id
     return ids[0] if ids else None
 
-def _xcode_project_settings(objects, root, configuration):
+def _xcode_project_settings(ctx, objects, root, configuration, path_maps):
     config_list = objects.get((objects.get(root) or {}).get("buildConfigurationList")) or {}
     default_name = config_list.get("defaultConfigurationName") or "Release"
-    return _xcode_effective_settings_for_list(objects, config_list, default_name, configuration)
+    return _xcode_effective_settings_for_list(ctx, objects, config_list, default_name, configuration, path_maps)
 
-def _xcode_effective_settings_for_list(objects, config_list, default_name, configuration):
+def _xcode_effective_settings_for_list(ctx, objects, config_list, default_name, configuration, path_maps):
     configs = (config_list or {}).get("buildConfigurations") or []
     config_id = _xcode_choose_config(objects, configs, default_name, configuration)
     config = objects.get(config_id) or {}
-    return config.get("buildSettings") or {}
+    xcconfig_settings = _xcode_base_config_xcconfig(ctx, objects, config, path_maps)
+    return _xcode_merge_settings(xcconfig_settings, config.get("buildSettings") or {})
 
 # ---------------------------------------------------------------------------
 # File references and build phases
@@ -336,14 +348,17 @@ def _xcode_group_file_paths(objects, root_project, project_dir):
     # Walk the project's PBXGroup tree from `mainGroup`, accumulating the full
     # package-relative path of every PBXFileReference. Xcode stores file
     # references with a leaf `path` that is relative to the enclosing group, so
-    # the full path only exists as the concatenation of the group chain.
-    paths = {}
+    # the full path only exists as the concatenation of the group chain. Group
+    # directories are recorded too, so a reference given as an anchor group plus
+    # a relative path (the newer `.xcconfig` reference form) can be resolved.
+    files = {}
+    groups = {}
     main_group = root_project.get("mainGroup")
     if main_group:
-        _xcode_walk_group(objects, main_group, project_dir, project_dir, paths, {})
-    return paths
+        _xcode_walk_group(objects, main_group, project_dir, project_dir, files, groups, {})
+    return {"files": files, "groups": groups}
 
-def _xcode_walk_group(objects, group_id, prefix, project_dir, paths, seen):
+def _xcode_walk_group(objects, group_id, prefix, project_dir, files, groups, seen):
     if group_id == None or group_id in seen:
         return
     seen[group_id] = True
@@ -351,15 +366,16 @@ def _xcode_walk_group(objects, group_id, prefix, project_dir, paths, seen):
     base = _xcode_node_dir(prefix, project_dir, group)
     if base == None:
         return
+    groups[group_id] = base
     for child_id in group.get("children") or []:
         child = objects.get(child_id) or {}
         isa = child.get("isa") or ""
         if isa in ["PBXGroup", "PBXVariantGroup", "XCVersionGroup"]:
-            _xcode_walk_group(objects, child_id, base, project_dir, paths, seen)
+            _xcode_walk_group(objects, child_id, base, project_dir, files, groups, seen)
         elif isa == "PBXFileReference":
             resolved = _xcode_node_dir(base, project_dir, child)
             if resolved:
-                paths[child_id] = resolved
+                files[child_id] = resolved
 
 def _xcode_glob_match(pattern, text):
     # fnmatch-style match where `*` matches any run of characters (including
@@ -716,7 +732,7 @@ def _xcode_digits(text):
         out = out * 10 + digit
     return out
 
-def _xcode_spm_min_os(objects, native_targets, platform, configuration, project_settings):
+def _xcode_spm_min_os(ctx, objects, native_targets, platform, configuration, project_settings, path_maps):
     key = {
         "ios": "IPHONEOS_DEPLOYMENT_TARGET",
         "macos": "MACOSX_DEPLOYMENT_TARGET",
@@ -730,7 +746,7 @@ def _xcode_spm_min_os(objects, native_targets, platform, configuration, project_
     for target in native_targets:
         config_list = objects.get(target.get("buildConfigurationList")) or {}
         default_name = config_list.get("defaultConfigurationName") or "Release"
-        settings = _xcode_effective_settings_for_list(objects, config_list, default_name, configuration)
+        settings = _xcode_effective_settings_for_list(ctx, objects, config_list, default_name, configuration, path_maps)
         value = _xcode_scalar(settings.get(key))
         if value and (not best or _xcode_version_key(value) > _xcode_version_key(best)):
             best = value
@@ -1140,13 +1156,17 @@ def _xcode_workspace_resolver(ctx):
     root_project = objects[root_id] or {}
 
     configuration = ctx["attr"].get("configuration") or "Debug"
-    project_settings = _xcode_project_settings(objects, root_id, configuration)
 
     # File references store paths relative to their enclosing group, so resolve
-    # the full package-relative path of every file once by walking the group
-    # tree rooted at the project directory (the parent of the `.xcodeproj`).
+    # the full package-relative path of every file and group once by walking the
+    # group tree rooted at the project directory (the parent of the
+    # `.xcodeproj`). The group directories also resolve `.xcconfig` references
+    # given as an anchor group plus a relative path.
     project_dir = _xcode_project_dir(project_path)
-    file_paths = _xcode_group_file_paths(objects, root_project, project_dir)
+    path_maps = _xcode_group_file_paths(objects, root_project, project_dir)
+    file_paths = path_maps["files"]
+
+    project_settings = _xcode_project_settings(ctx, objects, root_id, configuration, path_maps)
 
     native_targets = [
         objects[target_id]
@@ -1223,8 +1243,8 @@ def _xcode_workspace_resolver(ctx):
     spm_spec = None
     if used_products:
         spm_target_name = "OnceSwiftPackages"
-        spm_platform = _xcode_spm_platform(objects, native_targets, project_settings, configuration)
-        spm_min_os = _xcode_spm_min_os(objects, native_targets, spm_platform, configuration, project_settings)
+        spm_platform = _xcode_spm_platform(ctx, objects, native_targets, project_settings, configuration, path_maps)
+        spm_min_os = _xcode_spm_min_os(ctx, objects, native_targets, spm_platform, configuration, project_settings, path_maps)
         required = local_platform_reqs.get(spm_platform)
         if required and _xcode_version_key(required) > _xcode_version_key(spm_min_os):
             spm_min_os = required
@@ -1233,7 +1253,7 @@ def _xcode_workspace_resolver(ctx):
     specs = []
     roots = []
     for target in native_targets:
-        spec = _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir)
+        spec = _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir, path_maps)
         if spec == None:
             continue
         if spm_spec != None and target_uses_spm.get(target.get("name") or ""):
@@ -1259,7 +1279,7 @@ def _xcode_workspace_resolver(ctx):
     # so `once test` can reach them, but applications take precedence in order.
     return {"targets": specs, "roots": _xcode_roots(specs)}
 
-def _xcode_spm_platform(objects, native_targets, project_settings, configuration):
+def _xcode_spm_platform(ctx, objects, native_targets, project_settings, configuration, path_maps):
     # The synthesized package builds for one platform. Prefer the project's
     # `SDKROOT`; multi-platform projects leave it empty, so fall back to a
     # consuming target's SDK.
@@ -1269,7 +1289,7 @@ def _xcode_spm_platform(objects, native_targets, project_settings, configuration
     for target in native_targets:
         config_list = objects.get(target.get("buildConfigurationList")) or {}
         default_name = config_list.get("defaultConfigurationName") or "Release"
-        settings = _xcode_effective_settings_for_list(objects, config_list, default_name, configuration)
+        settings = _xcode_effective_settings_for_list(ctx, objects, config_list, default_name, configuration, path_maps)
         if _xcode_scalar(settings.get("SDKROOT")) or _xcode_scalar(settings.get("SUPPORTED_PLATFORMS")) or _xcode_scalar(settings.get("MACOSX_DEPLOYMENT_TARGET")) or _xcode_scalar(settings.get("IPHONEOS_DEPLOYMENT_TARGET")):
             return _xcode_effective_platform(settings, project_settings)
     return "macos"
@@ -1312,6 +1332,7 @@ def _xcode_spm_spec(ctx, package_refs, used_products, local_packages, platform, 
         "platform": platform,
         "minimum_os": minimum_os,
     }
+    attrs["configuration"] = "release" if "release" in (ctx["attr"].get("configuration") or "Debug").lower() else "debug"
     sdk_variant = ctx["attr"].get("sdk_variant")
     if sdk_variant:
         attrs["sdk_variant"] = sdk_variant
@@ -1367,7 +1388,7 @@ def _xcode_roots(specs):
         return applications
     return [spec["name"] for spec in specs]
 
-def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir):
+def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir, path_maps):
     product_type = target.get("productType") or ""
     kind = _xcode_product_kind(product_type)
     if not kind:
@@ -1375,7 +1396,7 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
 
     config_list = objects.get(target.get("buildConfigurationList")) or {}
     default_name = config_list.get("defaultConfigurationName") or "Release"
-    settings = _xcode_effective_settings(ctx, objects, config_list, default_name, project_settings, target.get("name") or "")
+    settings = _xcode_effective_settings(ctx, objects, config_list, default_name, project_settings, target.get("name") or "", path_maps)
 
     target_name = target.get("name") or ""
     sanitized = _xcode_sanitized_target_name(target_name)
@@ -1474,7 +1495,10 @@ def _xcode_spm_dependencies_impl(ctx):
     minimum_os = attrs.get("minimum_os") or "10.15"
     sdk_variant = attrs.get("sdk_variant") or "simulator"
     arch = attrs.get("arch") or host_arch()
-    configuration = "release"
+    # Build the packages with the project's configuration (Debug by default),
+    # matching what Xcode builds and avoiding release-only optimizer crashes in
+    # some packages.
+    configuration = attrs.get("configuration") or "debug"
     xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
     manifest = attrs.get("manifest") or ""
     resolved = attrs.get("resolved") or ""
@@ -1603,6 +1627,7 @@ xcode_spm_dependencies = target_kind(
         attr("products", "list<string>", default = "[]", docs = "Consumed products as `product\\x1fpackage` records used to stage source package modules.", configurable = False),
         attr("platform", "string", default = "macos", docs = "Apple platform the packages are built for.", configurable = False),
         attr("minimum_os", "string", default = "10.15", docs = "Minimum OS version passed to the package build triple.", configurable = False),
+        attr("configuration", "string", default = "debug", docs = "`swift build` configuration (`debug` or `release`) matching the project's build configuration.", configurable = False),
         attr("sdk_variant", "string", default = "simulator", docs = "`simulator` or `device` SDK selection on non-macOS platforms.", configurable = False),
         attr("arch", "string", default = "", docs = "Build architecture. Defaults to the host architecture.", configurable = False),
         attr("swift", "string", default = "swift", docs = "Swift driver used to run `swift build`.", configurable = False),
