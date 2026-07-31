@@ -1008,6 +1008,24 @@ def _xcode_swift_flags(settings, subs):
         out.append(resolved)
     return _xcode_clean_flags(out)
 
+def _xcode_swift_language_flags(settings):
+    # Translate the Swift language-mode and concurrency build settings into
+    # compiler flags. Without these, code written for a specific Swift language
+    # version or for main-actor-by-default isolation does not type-check.
+    flags = []
+    version = _xcode_scalar(settings.get("SWIFT_VERSION"))
+    if version:
+        major = version.split(".")[0]
+        if version == "4.2":
+            flags.extend(["-swift-version", "4.2"])
+        elif major in ["4", "5", "6"]:
+            flags.extend(["-swift-version", major])
+    if _xcode_scalar(settings.get("SWIFT_DEFAULT_ACTOR_ISOLATION")) == "MainActor":
+        flags.extend(["-default-isolation", "MainActor"])
+    if _xcode_scalar(settings.get("SWIFT_APPROACHABLE_CONCURRENCY")).upper() == "YES":
+        flags.extend(["-enable-upcoming-feature", "NonisolatedNonsendingByDefault"])
+    return flags
+
 def _xcode_sdk_frameworks(settings, file_frameworks):
     frameworks = list(file_frameworks)
     return _unique([fw for fw in frameworks if fw])
@@ -1040,7 +1058,7 @@ def _xcode_common_attrs(ctx, target, settings, subs, platform, files):
     defines = _xcode_define_flags(settings)
     if defines:
         attrs["defines"] = defines
-    swift_flags = _xcode_swift_flags(settings, subs)
+    swift_flags = _xcode_swift_flags(settings, subs) + _xcode_swift_language_flags(settings)
     if swift_flags:
         attrs["swift_flags"] = swift_flags
     bridging_header = _xcode_resolve_vars(_xcode_scalar(settings.get("SWIFT_OBJC_BRIDGING_HEADER")), subs)
