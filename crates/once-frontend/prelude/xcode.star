@@ -644,6 +644,44 @@ def _xcode_target_spm_products(objects, target, package_refs):
         })
     return products
 
+def _xcode_local_package_products(ctx, wanted):
+    # Some products are consumed without a package reference in the project;
+    # Xcode resolves them from `Package.swift` folders in the workspace. Discover
+    # those local packages and map each wanted product to its package name and
+    # directory by reading each manifest with `swift package dump-package`
+    # (offline, no dependency resolution). Returns product name -> {package,
+    # path (absolute)}.
+    if not wanted:
+        return {}
+    remaining = {}
+    for name in wanted:
+        remaining[name] = True
+    xcrun = host_which("xcrun")
+    swift = host_command([xcrun, "--find", "swift"]).strip()
+    resolved = {}
+    for manifest in glob(["**/Package.swift"]):
+        if not remaining:
+            break
+        if _xcode_is_excluded_source_path(manifest):
+            continue
+        package_dir = _parent_dir(manifest)
+        absolute = _xcode_abs(package_dir)
+        raw = host_command([swift, "package", "dump-package", "--package-path", absolute])
+        info = json_decode(raw)
+        package_name = info.get("name") or _basename(package_dir)
+        platforms = {}
+        for entry in info.get("platforms") or []:
+            name = entry.get("platformName") or ""
+            version = entry.get("version") or ""
+            if name and version:
+                platforms[name] = version
+        for product in info.get("products") or []:
+            product_name = product.get("name") or ""
+            if product_name in remaining:
+                resolved[product_name] = {"package": package_name, "path": absolute, "platforms": platforms}
+                remaining.pop(product_name)
+    return resolved
+
 def _xcode_spm_dependency_clause(url, requirement):
     # Render a `Package.swift` `.package(url:...)` clause from a pbxproj version
     # requirement so a synthesized manifest resolves to the project's versions.
@@ -662,6 +700,41 @@ def _xcode_spm_dependency_clause(url, requirement):
         return '.package(url: "' + url + '", revision: "' + (requirement.get("revision") or "") + '")'
     # Fall back to a permissive lower bound so resolution can still proceed.
     return '.package(url: "' + url + '", .upToNextMajor(from: "0.0.0"))'
+
+def _xcode_version_key(version):
+    parts = (version or "0").split(".")
+    major = _xcode_digits(parts[0]) if len(parts) > 0 else 0
+    minor = _xcode_digits(parts[1]) if len(parts) > 1 else 0
+    return major * 1000 + minor
+
+def _xcode_digits(text):
+    out = 0
+    for ch in (text or "").elems():
+        digit = "0123456789".find(ch)
+        if digit < 0:
+            return out
+        out = out * 10 + digit
+    return out
+
+def _xcode_spm_min_os(objects, native_targets, platform, configuration, project_settings):
+    key = {
+        "ios": "IPHONEOS_DEPLOYMENT_TARGET",
+        "macos": "MACOSX_DEPLOYMENT_TARGET",
+        "tvos": "TVOS_DEPLOYMENT_TARGET",
+        "watchos": "WATCHOS_DEPLOYMENT_TARGET",
+        "visionos": "XROS_DEPLOYMENT_TARGET",
+    }.get(platform)
+    if not key:
+        return "11.0"
+    best = _xcode_scalar(project_settings.get(key))
+    for target in native_targets:
+        config_list = objects.get(target.get("buildConfigurationList")) or {}
+        default_name = config_list.get("defaultConfigurationName") or "Release"
+        settings = _xcode_effective_settings_for_list(objects, config_list, default_name, configuration)
+        value = _xcode_scalar(settings.get(key))
+        if value and (not best or _xcode_version_key(value) > _xcode_version_key(best)):
+            best = value
+    return best or "11.0"
 
 def _xcode_spm_platform_clause(platform, minimum_os):
     version = minimum_os or "10.15"
@@ -683,7 +756,11 @@ def _xcode_spm_manifest(platform, minimum_os, packages, products):
     # products distributed through Swift Package Manager.
     dependency_lines = []
     for package in packages:
-        dependency_lines.append("        " + _xcode_spm_dependency_clause(package["url"], package["requirement"]) + ",")
+        if package.get("path"):
+            clause = '.package(path: "' + package["path"] + '")'
+        else:
+            clause = _xcode_spm_dependency_clause(package["url"], package["requirement"])
+        dependency_lines.append("        " + clause + ",")
     product_lines = []
     for product in products:
         product_lines.append('            .product(name: "' + product["name"] + '", package: "' + product["package_identity"] + '"),')
@@ -1063,23 +1140,51 @@ def _xcode_workspace_resolver(ctx):
         if ref.get("kind") == "remote" and ref.get("identity"):
             remote_identities[ref.get("identity")] = True
 
-    used_products = {}
-    target_uses_spm = {}
+    # First pass: gather each target's products and note the ones with no
+    # remote package reference so they can be resolved against local packages.
+    per_target_products = {}
+    unresolved_names = {}
     for target in native_targets:
         products = _xcode_target_spm_products(objects, target, package_refs)
-        uses_remote = False
+        per_target_products[target.get("name") or ""] = products
         for product in products:
+            if product["package_identity"] not in remote_identities:
+                unresolved_names[product["name"]] = True
+
+    local_products = _xcode_local_package_products(ctx, [name for name in unresolved_names])
+
+    used_products = {}
+    local_packages = {}
+    local_platform_reqs = {}
+    target_uses_spm = {}
+    for target in native_targets:
+        uses = False
+        for product in per_target_products[target.get("name") or ""]:
+            name = product["name"]
             if product["package_identity"] in remote_identities:
-                used_products[product["name"]] = product["package_identity"]
-                uses_remote = True
-        if uses_remote:
+                used_products[name] = product["package_identity"]
+                uses = True
+            elif name in local_products:
+                info = local_products[name]
+                used_products[name] = info["package"]
+                local_packages[info["package"]] = info["path"]
+                for platform_name, version in (info.get("platforms") or {}).items():
+                    if platform_name not in local_platform_reqs or _xcode_version_key(version) > _xcode_version_key(local_platform_reqs[platform_name]):
+                        local_platform_reqs[platform_name] = version
+                uses = True
+        if uses:
             target_uses_spm[target.get("name") or ""] = True
 
     spm_target_name = ""
     spm_spec = None
     if used_products:
         spm_target_name = "OnceSwiftPackages"
-        spm_spec = _xcode_spm_spec(ctx, objects, package_refs, used_products, project_settings, project_path, project_dir, spm_target_name)
+        spm_platform = _xcode_spm_platform(objects, native_targets, project_settings, configuration)
+        spm_min_os = _xcode_spm_min_os(objects, native_targets, spm_platform, configuration, project_settings)
+        required = local_platform_reqs.get(spm_platform)
+        if required and _xcode_version_key(required) > _xcode_version_key(spm_min_os):
+            spm_min_os = required
+        spm_spec = _xcode_spm_spec(ctx, package_refs, used_products, local_packages, spm_platform, spm_min_os, project_path, spm_target_name)
 
     specs = []
     roots = []
@@ -1101,10 +1206,26 @@ def _xcode_workspace_resolver(ctx):
     # so `once test` can reach them, but applications take precedence in order.
     return {"targets": specs, "roots": _xcode_roots(specs)}
 
-def _xcode_spm_spec(ctx, objects, package_refs, used_products, project_settings, project_path, project_dir, spm_target_name):
+def _xcode_spm_platform(objects, native_targets, project_settings, configuration):
+    # The synthesized package builds for one platform. Prefer the project's
+    # `SDKROOT`; multi-platform projects leave it empty, so fall back to a
+    # consuming target's SDK.
+    sdkroot = _xcode_scalar(project_settings.get("SDKROOT"))
+    if sdkroot:
+        return _xcode_platform(sdkroot)
+    for target in native_targets:
+        config_list = objects.get(target.get("buildConfigurationList")) or {}
+        default_name = config_list.get("defaultConfigurationName") or "Release"
+        settings = _xcode_effective_settings_for_list(objects, config_list, default_name, configuration)
+        target_sdk = _xcode_scalar(settings.get("SDKROOT"))
+        if target_sdk:
+            return _xcode_platform(target_sdk)
+    return "macos"
+
+def _xcode_spm_spec(ctx, package_refs, used_products, local_packages, platform, minimum_os, project_path, spm_target_name):
     # Assemble the `xcode_spm_dependencies` target that builds the project's
-    # Swift package products. Only remote packages are built here; workspace
-    # local packages are not modeled yet.
+    # Swift package products: remote packages referenced in the project and
+    # workspace-local packages discovered from their `Package.swift`.
     used_identities = {}
     for identity in used_products.values():
         used_identities[identity] = True
@@ -1118,6 +1239,8 @@ def _xcode_spm_spec(ctx, objects, package_refs, used_products, project_settings,
             continue
         seen[identity] = True
         packages.append(ref)
+    for package_name in sorted(local_packages.keys()):
+        packages.append({"path": local_packages[package_name]})
 
     product_records = []
     product_specs = []
@@ -1126,9 +1249,6 @@ def _xcode_spm_spec(ctx, objects, package_refs, used_products, project_settings,
         product_records.append({"name": name, "package_identity": package_identity})
         product_specs.append(name + "\x1f" + package_identity)
 
-    sdkroot = _xcode_scalar(project_settings.get("SDKROOT"))
-    platform = _xcode_platform(sdkroot)
-    minimum_os = _xcode_minimum_os(project_settings, platform) or "11.0"
     manifest = _xcode_spm_manifest(platform, minimum_os, packages, product_records)
 
     resolved = _xcode_read_package_resolved(ctx, project_path)

@@ -12704,6 +12704,45 @@ result = repr([
 }
 
 #[test]
+fn prelude_xcode_spm_manifest_supports_local_packages() {
+    // Workspace-local packages are added by path and their products referenced
+    // by the discovered package name.
+    let manifest = eval_prelude_string_function_in(
+        xcode_prelude_source(),
+        "_xcode_spm_manifest",
+        r#"("macos", "15.0", [{"path": "/ws/Modules/RSCore"}], [{"name": "RSCore", "package_identity": "RSCore"}])"#,
+    )
+    .unwrap();
+    assert!(
+        manifest.contains(r#".package(path: "/ws/Modules/RSCore")"#),
+        "{manifest}"
+    );
+    assert!(
+        manifest.contains(r#".product(name: "RSCore", package: "RSCore")"#),
+        "{manifest}"
+    );
+    assert!(manifest.contains(r#".macOS("15.0")"#), "{manifest}");
+}
+
+#[test]
+fn prelude_xcode_version_key_orders_deployment_targets() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_version_key("17.0") > _xcode_version_key("12.0"),
+    _xcode_version_key("14.2") > _xcode_version_key("14.0"),
+    _xcode_version_key("9.0") < _xcode_version_key("10.0"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        "[True, True, True]"
+    );
+}
+
+#[test]
 fn prelude_xcode_spm_manifest_matches_buildable_package() {
     // The synthesized manifest must match the shape proven to build against
     // real packages: an aggregating static library target depending on every
