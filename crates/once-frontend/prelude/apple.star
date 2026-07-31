@@ -2054,6 +2054,7 @@ def _apple_application_impl(ctx):
     defines = attrs.get("defines") or []
     swift_flags = attrs.get("swift_flags") or []
     bridging_header = attrs.get("bridging_header") or ""
+    application_extension = attrs.get("application_extension") or False
     enable_testing = attrs.get("enable_testing") or False
     swiftmodule = declare_output(product_name + ".swiftmodule") if enable_testing else ""
     swiftdoc = declare_output(product_name + ".swiftdoc") if enable_testing else ""
@@ -2201,6 +2202,17 @@ def _apple_application_impl(ctx):
         "-module-cache-path",
         ctx["build_dir"] + "/ModuleCache",
     ]
+    if application_extension:
+        # An app extension is not a normal executable: it is entered through
+        # `NSExtensionMain` (from Foundation) rather than `main`, and is built
+        # against the app-extension-safe API surface.
+        swift_argv.extend([
+            "-application-extension",
+            "-Xlinker",
+            "-e",
+            "-Xlinker",
+            "_NSExtensionMain",
+        ])
     if bridging_header:
         swift_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
     for d in compile_swiftmodule_dirs:
@@ -3656,6 +3668,7 @@ apple_application = target_kind(
         attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
         attr("bridging_header", "string", docs = "ObjC bridging header imported into every Swift source (`-import-objc-header`), letting them see ObjC symbols and any frameworks the header imports"),
+        attr("application_extension", "bool", default = "false", docs = "Build as an app extension: entered through `NSExtensionMain` and compiled against the app-extension-safe API surface"),
         attr("asset_catalogs", "list<string>", default = "[]", docs = "Asset catalogs (`.xcassets`) compiled into the bundle's `Assets.car` and used to generate type-safe `ImageResource`/`ColorResource` accessors"),
         attr("app_icon", "string", docs = "Asset catalog app-icon set name (`ASSETCATALOG_COMPILER_APPICON_NAME`) compiled into the app icon"),
         attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled so hosted test bundles can `@testable import` the application module"),

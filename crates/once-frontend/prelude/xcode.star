@@ -1423,6 +1423,8 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
     if kind == "application" or kind == "extension" or kind == "watch_app":
         attrs, product_name = _xcode_application_attrs(ctx, target, settings, subs, platform, files)
         spec_kind = "apple_application"
+        if kind == "extension":
+            attrs["application_extension"] = True
     elif kind == "framework":
         attrs, product_name = _xcode_library_attrs(ctx, target, settings, subs, platform, files)
         spec_kind = "apple_library"
@@ -1462,15 +1464,21 @@ def _xcode_workspace_impl(ctx):
 # Swift Package Manager dependency set
 # ---------------------------------------------------------------------------
 
-def _xcode_spm_stage_script(checkouts_dir, include_dir):
+def _xcode_spm_stage_script(checkouts_dir, bin_dir, include_dir):
     # Stage every source package's Clang module (Objective-C shims, C shims such
     # as a Swift package's atomics support, and Objective-C libraries) into a
     # single include directory with one combined module map, so the consuming
-    # Apple targets can import any module a built swiftmodule references. Public
-    # Clang modules live at `<target>/include/module.modulemap`; the headers the
-    # module map references sit in that target's source directory. Binary
-    # framework products live in the build directory instead and are reached
-    # through the framework search path, so they are not in the checkouts.
+    # Apple targets can import any module a built swiftmodule references.
+    #
+    # Remote package modules live at `<target>/include/module.modulemap` in the
+    # checkouts and reference their headers relatively, so the headers are
+    # copied alongside the combined map. Local path packages instead have Swift
+    # Package Manager generate the Objective-C target module map under
+    # `<target>.build/module.modulemap` in the build directory with absolute
+    # header paths, so those maps are appended directly. The `<target>.build/
+    # include/module.modulemap` variant is a Swift module's generated
+    # compatibility header and is skipped. Binary framework products live in the
+    # build directory and are reached through the framework search path.
     return """set -eu
 mkdir -p {include}
 : > {include}/module.modulemap
@@ -1480,9 +1488,14 @@ find {checkouts} -path '*/include/module.modulemap' 2>/dev/null | while IFS= rea
   cat "$mm" >> {include}/module.modulemap
   printf '\\n' >> {include}/module.modulemap
 done
+find {bin} -path '*.build/module.modulemap' 2>/dev/null | while IFS= read -r mm; do
+  cat "$mm" >> {include}/module.modulemap
+  printf '\\n' >> {include}/module.modulemap
+done
 """.format(
         include = _shell_literal(include_dir),
         checkouts = _shell_literal(checkouts_dir),
+        bin = _shell_literal(bin_dir),
     )
 
 def _xcode_spm_dependencies_impl(ctx):
@@ -1554,7 +1567,7 @@ def _xcode_spm_dependencies_impl(ctx):
     )
 
     include_dir = ctx["build_dir"] + "/spmroot/include"
-    stage_script = _xcode_spm_stage_script(checkouts_dir, include_dir)
+    stage_script = _xcode_spm_stage_script(checkouts_dir, bin_dir, include_dir)
     run_action(
         argv = [host_which("sh"), "-c", stage_script],
         inputs = [bin_dir, checkouts_dir],
