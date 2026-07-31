@@ -9,9 +9,10 @@ This is a Phoenix application that serves the Once marketing site and the docume
 
 ## Changelog
 
-- When you ship a user-facing change, add an entry under `priv/changelog/` as a
-  markdown file named `YYYY-MM-DD-short-slug.md` with `title` and `date`
+- When you ship a substantive user-facing change, add an entry under `priv/changelog/`
+  as a markdown file named `YYYY-MM-DD-short-slug.md` with `title` and `date`
   frontmatter. Entries appear on `/changelog` and in the RSS/Atom feeds.
+- Small visual and aesthetic refinements do not need a changelog entry.
 
 ## Running
 
