@@ -370,7 +370,7 @@ def _xcode_walk_group(objects, group_id, prefix, project_dir, files, groups, see
     for child_id in group.get("children") or []:
         child = objects.get(child_id) or {}
         isa = child.get("isa") or ""
-        if isa in ["PBXGroup", "PBXVariantGroup", "XCVersionGroup"]:
+        if isa in ["PBXGroup", "PBXVariantGroup", "XCVersionGroup", "PBXFileSystemSynchronizedRootGroup"]:
             _xcode_walk_group(objects, child_id, base, project_dir, files, groups, seen)
         elif isa == "PBXFileReference":
             resolved = _xcode_node_dir(base, project_dir, child)
@@ -1462,32 +1462,28 @@ def _xcode_workspace_impl(ctx):
 # Swift Package Manager dependency set
 # ---------------------------------------------------------------------------
 
-def _xcode_spm_stage_script(checkouts_dir, bin_dir, include_dir, product_specs):
-    # Stage every Objective-C / C package module the aggregate consumes into a
+def _xcode_spm_stage_script(checkouts_dir, include_dir):
+    # Stage every source package's Clang module (Objective-C shims, C shims such
+    # as a Swift package's atomics support, and Objective-C libraries) into a
     # single include directory with one combined module map, so the consuming
-    # Apple targets import them through a stable path. Framework products (for
-    # binary xcframework products) stay in the build directory and are reached through the
-    # framework search path, so they are skipped here.
-    lines = [
-        "set -eu",
-        "mkdir -p " + _shell_literal(include_dir),
-        ": > " + _shell_literal(include_dir + "/module.modulemap"),
-    ]
-    for spec in product_specs:
-        parts = spec.split("\x1f")
-        name = parts[0]
-        package = parts[1] if len(parts) > 1 else parts[0]
-        checkout = _shell_literal(checkouts_dir) + "/" + _shell_literal(package)
-        framework = _shell_literal(bin_dir) + "/" + _shell_literal(name + ".framework")
-        lines.append("if [ ! -d " + framework + " ] && [ -d " + checkout + " ]; then")
-        lines.append("  mm=$(find " + checkout + " -path '*/include/module.modulemap' 2>/dev/null | head -n 1)")
-        lines.append('  if [ -z "$mm" ]; then mm=$(find ' + checkout + " -name module.modulemap 2>/dev/null | head -n 1); fi")
-        lines.append('  if [ -n "$mm" ]; then')
-        lines.append("    find " + checkout + " -name '*.h' -exec cp -f {} " + _shell_literal(include_dir) + "/ \\; 2>/dev/null || true")
-        lines.append('    cat "$mm" >> ' + _shell_literal(include_dir) + "/module.modulemap")
-        lines.append("  fi")
-        lines.append("fi")
-    return "\n".join(lines)
+    # Apple targets can import any module a built swiftmodule references. Public
+    # Clang modules live at `<target>/include/module.modulemap`; the headers the
+    # module map references sit in that target's source directory. Binary
+    # framework products live in the build directory instead and are reached
+    # through the framework search path, so they are not in the checkouts.
+    return """set -eu
+mkdir -p {include}
+: > {include}/module.modulemap
+find {checkouts} -path '*/include/module.modulemap' 2>/dev/null | while IFS= read -r mm; do
+  target_dir=$(dirname "$(dirname "$mm")")
+  find "$target_dir" -name '*.h' -exec cp -f {{}} {include}/ \\; 2>/dev/null || true
+  cat "$mm" >> {include}/module.modulemap
+  printf '\\n' >> {include}/module.modulemap
+done
+""".format(
+        include = _shell_literal(include_dir),
+        checkouts = _shell_literal(checkouts_dir),
+    )
 
 def _xcode_spm_dependencies_impl(ctx):
     attrs = ctx["attr"]
@@ -1558,7 +1554,7 @@ def _xcode_spm_dependencies_impl(ctx):
     )
 
     include_dir = ctx["build_dir"] + "/spmroot/include"
-    stage_script = _xcode_spm_stage_script(checkouts_dir, bin_dir, include_dir, product_specs)
+    stage_script = _xcode_spm_stage_script(checkouts_dir, include_dir)
     run_action(
         argv = [host_which("sh"), "-c", stage_script],
         inputs = [bin_dir, checkouts_dir],
