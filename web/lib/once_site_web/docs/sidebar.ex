@@ -70,6 +70,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
         items: [
           %Item{label: "Overview", slug: "/docs/guide/graph"},
           %Item{label: "Ecosystems", slug: "/docs/guide/graph/ecosystems"},
+          %Item{label: "Configurations", slug: "/docs/guide/graph/configuration"},
           %Item{label: "Testing and Scheduling", slug: "/docs/guide/graph/testing"},
           %Item{label: "Linting", slug: "/docs/guide/graph/linting"},
           %Item{label: "Apple", slug: "/docs/guide/graph/apple", icon: "apple"},
