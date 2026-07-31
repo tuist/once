@@ -90,6 +90,7 @@ defmodule OnceSite.MixProject do
         "esbuild docs --minify",
         "phx.digest"
       ],
+      "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       precommit: [
         "compile --warnings-as-errors",
