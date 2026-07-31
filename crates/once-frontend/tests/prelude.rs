@@ -12822,6 +12822,37 @@ result = repr([files["sources"], files["asset_catalogs"], files["resources"]])
 }
 
 #[test]
+fn prelude_xcode_parse_workspace_data_resolves_nested_project_paths() {
+    let prelude = xcode_prelude_source();
+    // A workspace that references the main project at the top level and a
+    // package project nested several groups deep, mirroring how a Tuist-
+    // generated workspace lists its dependency projects under `.build`.
+    let data = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Workspace version = "1.0">
+   <FileRef location = "group:Tuist.xcodeproj"></FileRef>
+   <Group location = "group:.build" name = ".build">
+      <Group location = "group:registry" name = "registry">
+         <Group location = "group:kolos65" name = "kolos65">
+            <Group location = "group:Mockable" name = "Mockable">
+               <FileRef location = "group:0.6.2/Mockable.xcodeproj"></FileRef>
+            </Group>
+         </Group>
+      </Group>
+   </Group>
+</Workspace>
+"#;
+    let source = format!(
+        r#"{prelude}
+result = repr(_xcode_parse_workspace_data({data:?}, ""))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Tuist.xcodeproj", ".build/registry/kolos65/Mockable/0.6.2/Mockable.xcodeproj"]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_workspace_resolver_lowers_native_targets() {
     let prelude = xcode_prelude_source();
     let pbxproj = serde_json::json!({

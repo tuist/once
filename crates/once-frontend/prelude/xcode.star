@@ -50,6 +50,79 @@ def _xcode_project_path(ctx):
         relative = relative[len(package) + 1:]
     return relative
 
+def _xcode_is_workspace(path):
+    return _ends_with(path, ".xcworkspace") or _ends_with(path, "/contents.xcworkspacedata")
+
+def _xcode_workspace_data_path(workspace_path):
+    if _ends_with(workspace_path, "/contents.xcworkspacedata"):
+        return workspace_path
+    return workspace_path + "/contents.xcworkspacedata"
+
+def _xcode_workspace_dir(workspace_path):
+    # The workspace directory is the parent of the `.xcworkspace` bundle. Project
+    # references inside `contents.xcworkspacedata` are resolved relative to it.
+    if _ends_with(workspace_path, "/contents.xcworkspacedata"):
+        return _parent_dir(_parent_dir(workspace_path))
+    return _parent_dir(workspace_path)
+
+def _xcode_workspace_location(line):
+    # A `location = "group:relative/path"` attribute. Return the reference kind
+    # ("group", "container", ...) and the path, or None for other attributes.
+    marker = "location = \""
+    start = line.find(marker)
+    if start < 0:
+        return None
+    rest = line[start + len(marker):]
+    end = rest.find("\"")
+    if end < 0:
+        return None
+    value = rest[:end]
+    colon = value.find(":")
+    if colon < 0:
+        return ("group", value)
+    return (value[:colon], value[colon + 1:])
+
+def _xcode_parse_workspace_data(raw, workspace_dir):
+    # Resolve the nested `<Group>`/`<FileRef>` tree in `contents.xcworkspacedata`
+    # into `.xcodeproj` paths relative to the workspace directory. Each group
+    # contributes one path segment; a file reference joins its own location onto
+    # the enclosing groups' segments.
+    stack = []
+    pending = None
+    projects = []
+    for line in raw.split("\n"):
+        stripped = line.strip()
+        # A group or file reference opens a scope whose `location` attribute may
+        # sit on the same line as the tag or on a following line.
+        if stripped.startswith("<Group"):
+            pending = "group"
+        elif stripped.startswith("<FileRef"):
+            pending = "fileref"
+        if pending != None and stripped.find("location = \"") >= 0:
+            parsed = _xcode_workspace_location(stripped)
+            if parsed != None:
+                kind, value = parsed
+                if kind == "container":
+                    base = value
+                else:
+                    base = value
+                    for segment in reversed(stack):
+                        base = _xcode_join(segment, base)
+                if pending == "group":
+                    stack.append(value)
+                elif _ends_with(base, ".xcodeproj"):
+                    projects.append(_xcode_join(workspace_dir, base) if workspace_dir else base)
+            pending = None
+        if stripped.find("</Group>") >= 0 and stack:
+            stack.pop()
+    return projects
+
+def _xcode_workspace_projects(ctx, workspace_path):
+    # Enumerate every `.xcodeproj` a workspace references.
+    workspace_dir = _xcode_workspace_dir(workspace_path)
+    raw = host_file_read(_xcode_abs(_xcode_workspace_data_path(workspace_path)))
+    return _xcode_parse_workspace_data(raw, workspace_dir)
+
 def _xcode_project_dir(project_path):
     # The project directory (`SOURCE_ROOT`) is the parent of the `.xcodeproj`
     # bundle, relative to the package. `project_path` is either the bundle path
