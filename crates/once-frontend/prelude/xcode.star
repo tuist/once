@@ -499,48 +499,67 @@ def _xcode_path_excluded(path, excluded):
             return True
     return False
 
+def _xcode_classify_synced_path(path, buckets):
+    if _xcode_is_excluded_source_path(path):
+        return
+    # A synchronized glob returns files inside a `.xcassets`, not the catalog
+    # directory itself, so recover the catalog from the path and skip contents.
+    catalog = _xcode_asset_catalog_dir(path)
+    if catalog:
+        buckets["asset_catalogs"].append(catalog)
+    elif _xcode_is_source(path):
+        buckets["sources"].append(path)
+    elif _xcode_is_header(path):
+        buckets["headers"].append(path)
+    elif _xcode_is_asset_catalog(path):
+        buckets["asset_catalogs"].append(path)
+    elif _xcode_is_resource(path):
+        buckets["resources"].append(path)
+
 def _xcode_synced_group_files(ctx, objects, target, project_dir):
     # Xcode 16+ file-system synchronized root groups: every file under the group
     # directory is a member of the owning target, minus the files a membership
-    # exception set removes from that target (typically resources, or sources
-    # that belong to a sibling extension target). Enumerate and classify.
-    sources = []
-    headers = []
-    resources = []
-    asset_catalogs = []
+    # exception set removes from that target. An exception set that names a
+    # target which does not own the group instead adds those files to that
+    # target, which is how a shared source directory is compiled into several
+    # targets. Enumerate and classify both.
+    buckets = {"sources": [], "headers": [], "resources": [], "asset_catalogs": []}
     target_name = target.get("name") or ""
+    owned = {}
     for group_id in target.get("fileSystemSynchronizedGroups") or []:
+        owned[group_id] = True
         group = objects.get(group_id) or {}
         base = _xcode_node_dir(project_dir, project_dir, group)
         if not base:
             continue
         excluded = _xcode_synced_exceptions(objects, group, target_name, base)
-        files = glob([base + "/**"])
-        for path in files:
-            if _xcode_is_excluded_source_path(path):
-                continue
+        for path in glob([base + "/**"]):
             if _xcode_path_excluded(path, excluded):
                 continue
-            # A synchronized glob returns files inside a `.xcassets`, not the
-            # catalog directory itself, so recover the catalog from the path and
-            # skip its contents.
-            catalog = _xcode_asset_catalog_dir(path)
-            if catalog:
-                asset_catalogs.append(catalog)
+            _xcode_classify_synced_path(path, buckets)
+
+    # Additive membership from synchronized groups owned by other targets.
+    for group_id, group in objects.items():
+        if group.get("isa") != "PBXFileSystemSynchronizedRootGroup" or group_id in owned:
+            continue
+        base = _xcode_node_dir(project_dir, project_dir, group)
+        if not base:
+            continue
+        for exception_id in group.get("exceptions") or []:
+            exception = objects.get(exception_id) or {}
+            if exception.get("isa") != "PBXFileSystemSynchronizedBuildFileExceptionSet":
                 continue
-            if _xcode_is_source(path):
-                sources.append(path)
-            elif _xcode_is_header(path):
-                headers.append(path)
-            elif _xcode_is_asset_catalog(path):
-                asset_catalogs.append(path)
-            elif _xcode_is_resource(path):
-                resources.append(path)
+            if (objects.get(exception.get("target")) or {}).get("name") != target_name:
+                continue
+            for relative in exception.get("membershipExceptions") or []:
+                trimmed = relative[1:] if relative.startswith("/") else relative
+                _xcode_classify_synced_path(_xcode_join(base, trimmed), buckets)
+
     return {
-        "sources": _unique(sources),
-        "headers": _unique(headers),
-        "resources": _unique(resources),
-        "asset_catalogs": _unique(asset_catalogs),
+        "sources": _unique(buckets["sources"]),
+        "headers": _unique(buckets["headers"]),
+        "resources": _unique(buckets["resources"]),
+        "asset_catalogs": _unique(buckets["asset_catalogs"]),
     }
 
 def _xcode_classic_phase_files(ctx, objects, target, file_paths):
