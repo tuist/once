@@ -2034,6 +2034,20 @@ printf '%s%s%s\\n' {record_prefix} "$simulator_id" {record_suffix} > {record}
         command = command,
     )
 
+def _apple_swift_module_name(name):
+    # Turn a product name into a valid Swift module identifier the way Xcode's
+    # `c99extidentifier` transform does: non-identifier characters become
+    # underscores, and a leading digit is prefixed with an underscore.
+    out = ""
+    for ch in (name or "").elems():
+        if (ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z") or (ch >= "0" and ch <= "9") or ch == "_":
+            out += ch
+        else:
+            out += "_"
+    if out and out[0] >= "0" and out[0] <= "9":
+        out = "_" + out
+    return out or "Module"
+
 def _apple_application_impl(ctx):
     attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["product_name"])
     _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["resources", "info_plist", "info_plist_substitutions", "entitlements", "provisioning_profile", "signing_identity"])
@@ -2046,6 +2060,10 @@ def _apple_application_impl(ctx):
     sdk_variant = attrs.get("sdk_variant") or "simulator"
     xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
     product_name = attrs.get("product_name") or ctx["label"]["name"]
+    # The Swift module name must be a valid identifier, while the product name
+    # can contain spaces (a bundle displayed as "Ice Cubes" has module name
+    # "Ice_Cubes"), so derive the module name separately.
+    module_name = _apple_swift_module_name(attrs.get("module_name") or product_name)
     families = attrs.get("families") or ["iphone"]
     sdk_frameworks_attr = attrs.get("sdk_frameworks") or []
     weak_sdk_frameworks = attrs.get("weak_sdk_frameworks") or []
@@ -2185,7 +2203,7 @@ def _apple_application_impl(ctx):
 
     swift_argv = list(swiftc["argv"]) + [
         "-module-name",
-        product_name,
+        module_name,
         "-target",
         triple,
         "-parse-as-library",
@@ -2297,7 +2315,7 @@ def _apple_application_impl(ctx):
     if enable_testing:
         module_argv = list(swiftc["argv"]) + [
             "-module-name",
-            product_name,
+            module_name,
             "-target",
             triple,
             "-enable-testing",
