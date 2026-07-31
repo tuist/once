@@ -66,6 +66,9 @@ defmodule OnceSite.MixProject do
       {:briefly, "~> 0.5"},
       {:hammer, "~> 7.0"},
       {:mimic, "~> 2.0", only: :test},
+      {:req, "~> 0.5"},
+      {:cachex, "~> 4.0"},
+      {:emcp, github: "addstar34/emcp", ref: "c687e279cf4f550f69934549a1303312ed3a23b5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:quokka, "~> 2.12", only: [:dev, :test], runtime: false}
     ]
