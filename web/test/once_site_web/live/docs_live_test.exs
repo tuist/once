@@ -17,6 +17,9 @@ defmodule OnceSiteWeb.DocsLiveTest do
     {:ok, _view, html} = live(conn, ~p"/docs/guide/why")
 
     assert html =~ "id=\"docs-sidebar\""
+    assert html =~ "id=\"docs-mobile-menu-trigger\""
+    assert html =~ "aria-controls=\"docs-sidebar\""
+    assert html =~ "id=\"docs-mobile-sidebar-overlay\""
     assert html =~ "data-prose"
   end
 

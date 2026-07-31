@@ -50,6 +50,44 @@
     </div>
   </div>
 </nav>
+<div id="docs-mobile-menu-bar" role="toolbar" aria-label="Page navigation">
+  <button
+    type="button"
+    data-part="mobile-menu-btn"
+    id="docs-mobile-menu-trigger"
+    aria-expanded="false"
+    aria-controls="docs-sidebar"
+    phx-click={
+      JS.toggle_attribute({"data-sidebar-open", ""}, to: "body")
+      |> JS.toggle_attribute({"data-mobile-open", ""}, to: "#docs-sidebar")
+      |> JS.toggle_attribute({"aria-expanded", "true", "false"}, to: "#docs-mobile-menu-trigger")
+    }
+  >
+    <.icon name="menu_3" />
+    <span>Menu</span>
+  </button>
+  <button
+    type="button"
+    data-part="mobile-toc-btn"
+    id="docs-mobile-toc-trigger"
+    aria-expanded="false"
+    aria-controls="docs-mobile-toc"
+    phx-click={JS.toggle_attribute({"data-state", "open", "closed"}, to: "#docs-mobile-toc")}
+  >
+    <span>On this page</span>
+    <.icon name="news" />
+  </button>
+</div>
+<div
+  id="docs-mobile-sidebar-overlay"
+  role="presentation"
+  phx-click={
+    JS.remove_attribute("data-sidebar-open", to: "body")
+    |> JS.remove_attribute("data-mobile-open", to: "#docs-sidebar")
+    |> JS.set_attribute({"aria-expanded", "false"}, to: "#docs-mobile-menu-trigger")
+  }
+>
+</div>
 <main id="docs-page-layout" data-part="page">
   <textarea :if={@markdown != ""} id="docs-page-markdown" hidden readonly>{@markdown}</textarea>
   <div
