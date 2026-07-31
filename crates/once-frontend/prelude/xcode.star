@@ -872,6 +872,36 @@ def _xcode_is_extension_product(product_type):
     # `com.apple.product-type.app-extension.intents-service`.
     return product_type.startswith("com.apple.product-type.app-extension.")
 
+def _xcode_effective_platform(settings, project_settings):
+    # Prefer `SDKROOT`, then infer from whichever deployment-target setting or
+    # `SUPPORTED_PLATFORMS` value is present, since projects that keep their
+    # settings in `.xcconfig` files often leave `SDKROOT` unset in the project.
+    sdkroot = _xcode_scalar(settings.get("SDKROOT")) or _xcode_scalar(project_settings.get("SDKROOT"))
+    if sdkroot:
+        return _xcode_platform(sdkroot)
+    deployment_platforms = [
+        ("MACOSX_DEPLOYMENT_TARGET", "macos"),
+        ("TVOS_DEPLOYMENT_TARGET", "tvos"),
+        ("WATCHOS_DEPLOYMENT_TARGET", "watchos"),
+        ("XROS_DEPLOYMENT_TARGET", "visionos"),
+        ("IPHONEOS_DEPLOYMENT_TARGET", "ios"),
+    ]
+    for key, name in deployment_platforms:
+        if _xcode_scalar(settings.get(key)):
+            return name
+    supported = _xcode_scalar(settings.get("SUPPORTED_PLATFORMS")).lower()
+    if "macosx" in supported:
+        return "macos"
+    if "appletv" in supported:
+        return "tvos"
+    if "watch" in supported:
+        return "watchos"
+    if "xr" in supported:
+        return "visionos"
+    if "iphone" in supported:
+        return "ios"
+    return "ios"
+
 def _xcode_platform(sdkroot):
     sdk = (sdkroot or "").lower()
     if sdk in ["iphoneos", "iphonesimulator"]:
@@ -1240,9 +1270,8 @@ def _xcode_spm_platform(objects, native_targets, project_settings, configuration
         config_list = objects.get(target.get("buildConfigurationList")) or {}
         default_name = config_list.get("defaultConfigurationName") or "Release"
         settings = _xcode_effective_settings_for_list(objects, config_list, default_name, configuration)
-        target_sdk = _xcode_scalar(settings.get("SDKROOT"))
-        if target_sdk:
-            return _xcode_platform(target_sdk)
+        if _xcode_scalar(settings.get("SDKROOT")) or _xcode_scalar(settings.get("SUPPORTED_PLATFORMS")) or _xcode_scalar(settings.get("MACOSX_DEPLOYMENT_TARGET")) or _xcode_scalar(settings.get("IPHONEOS_DEPLOYMENT_TARGET")):
+            return _xcode_effective_platform(settings, project_settings)
     return "macos"
 
 def _xcode_spm_spec(ctx, package_refs, used_products, local_packages, platform, minimum_os, project_path, spm_target_name):
@@ -1353,8 +1382,8 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
     product_name_seed = _xcode_resolve_vars(_xcode_scalar(settings.get("PRODUCT_NAME")), {"TARGET_NAME": target_name}) or target_name
     if not product_name_seed or product_name_seed.startswith("$("):
         product_name_seed = target_name
-    sdkroot = _xcode_scalar(project_settings.get("SDKROOT")) or _xcode_scalar(settings.get("SDKROOT"))
-    platform = _xcode_platform(sdkroot)
+    sdkroot = _xcode_scalar(settings.get("SDKROOT")) or _xcode_scalar(project_settings.get("SDKROOT"))
+    platform = _xcode_effective_platform(settings, project_settings)
     subs = _xcode_setting_subs(ctx, target_name, product_name_seed, sdkroot)
 
     files = _xcode_target_files(ctx, objects, target, file_paths, project_dir)
