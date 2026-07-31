@@ -1001,14 +1001,28 @@ def _xcode_library_attrs(ctx, target, settings, subs, platform, files):
         attrs["enable_testing"] = True
     return attrs, product_name
 
+def _xcode_bundle_id(settings, subs, product_name):
+    # The bundle identifier is frequently set through an `.xcconfig` or a
+    # variable that does not resolve here. Fall back to a stable synthesized
+    # identifier so bundle creation still succeeds.
+    bundle_id = _xcode_resolve_vars(_xcode_scalar(settings.get("PRODUCT_BUNDLE_IDENTIFIER")), subs)
+    if bundle_id and not bundle_id.startswith("$("):
+        return bundle_id
+    return "dev.once." + _xcode_bundle_id_component(product_name or "app")
+
+def _xcode_bundle_id_component(name):
+    out = []
+    for ch in name.elems():
+        allowed = (ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z") or (ch >= "0" and ch <= "9") or ch == "-" or ch == "."
+        out.append(ch if allowed else "-")
+    return "".join(out) or "app"
+
 def _xcode_application_attrs(ctx, target, settings, subs, platform, files):
     attrs = _xcode_common_attrs(ctx, target, settings, subs, platform, files)
     product_name = _xcode_product_name(settings, target, subs)
     if product_name:
         attrs["product_name"] = product_name
-    bundle_id = _xcode_resolve_vars(_xcode_scalar(settings.get("PRODUCT_BUNDLE_IDENTIFIER")), subs)
-    if bundle_id and not bundle_id.startswith("$("):
-        attrs["bundle_id"] = bundle_id
+    attrs["bundle_id"] = _xcode_bundle_id(settings, subs, product_name)
     families = _xcode_families(settings)
     if families:
         attrs["families"] = families
@@ -1199,6 +1213,15 @@ def _xcode_workspace_resolver(ctx):
         specs.append(spec)
         roots.append(spec["name"])
 
+    # Drop dependency edges to targets that were not lowered (for example a
+    # resource-only extension), so no consumer references a target that is not
+    # emitted.
+    emitted = {spec["name"]: True for spec in specs}
+    if spm_spec != None:
+        emitted[spm_spec["name"]] = True
+    for spec in specs:
+        spec["deps"] = [dep for dep in spec["deps"] if dep[2:] in emitted]
+
     if spm_spec != None:
         specs.append(spm_spec)
 
@@ -1362,19 +1385,19 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
     else:
         return None
 
-    spec = {
+    if not files["sources"]:
+        # A target with no compilable sources cannot be lowered to a code
+        # target: a resource-only bundle, or a script-only Safari App Extension
+        # whose only input is JavaScript.
+        return None
+
+    return {
         "name": sanitized,
         "kind": spec_kind,
         "deps": _unique(deps),
         "srcs": files["sources"],
         "attrs": attrs,
     }
-    if not files["sources"] and kind not in ["application"]:
-        # A target with no compilable sources (e.g. a resource-only bundle) is
-        # not lowered to avoid emitting an empty Swift module.
-        if kind in ["framework", "library"]:
-            return None
-    return spec
 
 def _xcode_dep_ref(name_to_id, name):
     target_name = name_to_id.get(name) or _xcode_sanitized_target_name(name)
