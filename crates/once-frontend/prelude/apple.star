@@ -998,7 +998,9 @@ def _apple_library_impl(ctx):
     target_sdk_version = attrs.get("target_sdk_version") or minimum_os
     sdk_variant = attrs.get("sdk_variant") or "simulator"
     xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
-    module_name = attrs.get("module_name") or ctx["label"]["name"]
+    # A product name may contain spaces; the Swift module name must be a valid
+    # identifier, so normalize it the way Xcode derives PRODUCT_MODULE_NAME.
+    module_name = _apple_swift_module_name(attrs.get("module_name") or ctx["label"]["name"])
     sdk_frameworks = attrs.get("sdk_frameworks") or []
     weak_sdk_frameworks = attrs.get("weak_sdk_frameworks") or []
     sdk_dylibs = attrs.get("sdk_dylibs") or []
@@ -2687,7 +2689,10 @@ def _apple_test_bundle_impl(ctx):
     sdk_variant = attrs.get("sdk_variant") or "simulator"
     xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
     product_name = attrs.get("product_name") or ctx["label"]["name"]
-    module_name = product_name
+    # The Swift module name must be a valid identifier, while the product name
+    # can contain spaces (a bundle named "Alamofire macOS Tests" has module name
+    # "Alamofire_macOS_Tests"), so derive the module name separately.
+    module_name = _apple_swift_module_name(attrs.get("module_name") or product_name)
     swift_flags = attrs.get("swift_flags") or []
     swift_testing = attrs.get("swift_testing") or False
     test_env = attrs.get("test_env") or {}
