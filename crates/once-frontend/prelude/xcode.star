@@ -935,13 +935,19 @@ def _xcode_target_dependencies(objects, target):
     names = []
     for dep_id in target.get("dependencies") or []:
         dep = objects.get(dep_id) or {}
+        proxy = objects.get(dep.get("targetProxy")) or {}
         remote = dep.get("target")
         if remote == None:
-            proxy = objects.get(dep.get("targetProxy")) or {}
             remote = proxy.get("remoteGlobalIDString")
         remote_target = objects.get(remote) or {}
         if remote_target.get("isa") == "PBXNativeTarget":
             names.append(remote_target.get("name") or "")
+        elif proxy.get("remoteInfo"):
+            # The referenced target lives in another project of the workspace
+            # (for example a CocoaPods library in `Pods.xcodeproj`). Its id is not
+            # in this project's objects, but the proxy records its name, which
+            # resolves against the workspace-wide name map.
+            names.append(proxy.get("remoteInfo"))
     return [name for name in names if name]
 
 def _xcode_sanitized_target_name(name):
@@ -1300,133 +1306,157 @@ def _xcode_test_host_ref(objects, settings, name_map):
 # ---------------------------------------------------------------------------
 
 def _xcode_workspace_resolver(ctx):
-    project_path = _xcode_project_path(ctx)
-    project = _xcode_read_pbxproj(ctx, project_path)
-    objects = project["objects"]
-    root_id = project["rootObject"]
-    root_project = objects[root_id] or {}
-
+    entry_path = _xcode_project_path(ctx)
     configuration = ctx["attr"].get("configuration") or "Debug"
 
-    # File references store paths relative to their enclosing group, so resolve
-    # the full package-relative path of every file and group once by walking the
-    # group tree rooted at the project directory (the parent of the
-    # `.xcodeproj`). The group directories also resolve `.xcconfig` references
-    # given as an anchor group plus a relative path.
-    project_dir = _xcode_project_dir(project_path)
-    path_maps = _xcode_group_file_paths(objects, root_project, project_dir)
-    file_paths = path_maps["files"]
+    # A `.xcworkspace` groups several `.xcodeproj` files: an application project
+    # plus, for example, the `Pods.xcodeproj` CocoaPods generates. Resolve every
+    # referenced project and merge their native targets into one graph so a
+    # dependency that crosses project boundaries (an app target that links a pod
+    # library) is wired. A bare `.xcodeproj` resolves as a single-project
+    # workspace.
+    if _xcode_is_workspace(entry_path):
+        project_paths = _xcode_workspace_projects(ctx, entry_path)
+    else:
+        project_paths = [entry_path]
 
-    project_settings = _xcode_project_settings(ctx, objects, root_id, configuration, path_maps)
-
-    native_targets = [
-        objects[target_id]
-        for target_id in (root_project.get("targets") or [])
-        if (objects.get(target_id) or {}).get("isa") == "PBXNativeTarget"
-    ]
-
-    # Build the name map first so test hosts can resolve to emitted target ids.
-    specs_by_name = {}
+    # Pass one: read every project and build a workspace-wide target name map so
+    # a dependency that crosses a project boundary resolves to the emitted id.
+    projects = []
     name_to_id = {}
-    native_by_name = {}
-    for target in native_targets:
-        native_by_name[target.get("name") or ""] = target
-        name = _xcode_sanitized_target_name(target.get("name") or "")
-        if not name:
-            continue
-        specs_by_name[name] = target
-        name_to_id[target.get("name") or ""] = name
+    for project_path in project_paths:
+        project = _xcode_read_pbxproj(ctx, project_path)
+        objects = project["objects"]
+        root_project = objects[project["rootObject"]] or {}
+        project_dir = _xcode_project_dir(project_path)
+        # File references store paths relative to their enclosing group, so
+        # resolve the full package-relative path of every file and group once by
+        # walking the group tree rooted at the project directory.
+        path_maps = _xcode_group_file_paths(objects, root_project, project_dir)
+        project_settings = _xcode_project_settings(ctx, objects, project["rootObject"], configuration, path_maps)
+        native_targets = [
+            objects[target_id]
+            for target_id in (root_project.get("targets") or [])
+            if (objects.get(target_id) or {}).get("isa") == "PBXNativeTarget"
+        ]
+        native_by_name = {}
+        for target in native_targets:
+            native_by_name[target.get("name") or ""] = target
+            name = _xcode_sanitized_target_name(target.get("name") or "")
+            if name:
+                name_to_id[target.get("name") or ""] = name
+        projects.append({
+            "objects": objects,
+            "path_maps": path_maps,
+            "file_paths": path_maps["files"],
+            "project_settings": project_settings,
+            "project_dir": project_dir,
+            "project_path": project_path,
+            "native_targets": native_targets,
+            "native_by_name": native_by_name,
+        })
 
-    # Transitive closure of native target dependencies, so a test bundle that
-    # imports a framework reached only through its host application still sees
-    # that framework's module on its compile path.
-    dep_closure = {}
-    for target in native_targets:
-        name = target.get("name") or ""
-        dep_closure[name] = _xcode_transitive_deps(objects, target, name_to_id, native_by_name)
+    # Pass two: lower every project's native targets, resolving dependencies and
+    # test hosts against the workspace-wide name map.
+    all_specs = []
+    spm_index = 0
+    for project in projects:
+        objects = project["objects"]
+        native_targets = project["native_targets"]
+        native_by_name = project["native_by_name"]
+        path_maps = project["path_maps"]
+        file_paths = project["file_paths"]
+        project_settings = project["project_settings"]
+        project_dir = project["project_dir"]
+        project_path = project["project_path"]
 
-    # Swift Package Manager dependencies: collect the products every target
-    # consumes so a single aggregating package can build them and every consumer
-    # can link against the result. Only products backed by a remote package
-    # reference in the project are built here; products that resolve through a
-    # workspace-local package are not modeled yet and are skipped so the
-    # aggregate stays buildable.
-    package_refs = _xcode_spm_package_refs(objects)
-    remote_identities = {}
-    for ref in package_refs.values():
-        if ref.get("kind") == "remote" and ref.get("identity"):
-            remote_identities[ref.get("identity")] = True
+        # Transitive closure of native target dependencies, so a test bundle that
+        # imports a framework reached only through its host application still sees
+        # that framework's module on its compile path.
+        dep_closure = {}
+        for target in native_targets:
+            dep_closure[target.get("name") or ""] = _xcode_transitive_deps(objects, target, name_to_id, native_by_name)
 
-    # First pass: gather each target's products and note the ones with no
-    # remote package reference so they can be resolved against local packages.
-    per_target_products = {}
-    unresolved_names = {}
-    for target in native_targets:
-        products = _xcode_target_spm_products(objects, target, package_refs)
-        per_target_products[target.get("name") or ""] = products
-        for product in products:
-            if product["package_identity"] not in remote_identities:
-                unresolved_names[product["name"]] = True
+        # Swift Package Manager dependencies: collect the products every target
+        # consumes so a single aggregating package can build them and every
+        # consumer can link against the result.
+        package_refs = _xcode_spm_package_refs(objects)
+        remote_identities = {}
+        for ref in package_refs.values():
+            if ref.get("kind") == "remote" and ref.get("identity"):
+                remote_identities[ref.get("identity")] = True
+        per_target_products = {}
+        unresolved_names = {}
+        for target in native_targets:
+            products = _xcode_target_spm_products(objects, target, package_refs)
+            per_target_products[target.get("name") or ""] = products
+            for product in products:
+                if product["package_identity"] not in remote_identities:
+                    unresolved_names[product["name"]] = True
+        local_products = _xcode_local_package_products(ctx, [name for name in unresolved_names])
+        used_products = {}
+        local_packages = {}
+        local_platform_reqs = {}
+        target_uses_spm = {}
+        for target in native_targets:
+            uses = False
+            for product in per_target_products[target.get("name") or ""]:
+                name = product["name"]
+                if product["package_identity"] in remote_identities:
+                    used_products[name] = product["package_identity"]
+                    uses = True
+                elif name in local_products:
+                    info = local_products[name]
+                    used_products[name] = info["package"]
+                    local_packages[info["package"]] = info["path"]
+                    for platform_name, version in (info.get("platforms") or {}).items():
+                        if platform_name not in local_platform_reqs or _xcode_version_key(version) > _xcode_version_key(local_platform_reqs[platform_name]):
+                            local_platform_reqs[platform_name] = version
+                    uses = True
+            if uses:
+                target_uses_spm[target.get("name") or ""] = True
 
-    local_products = _xcode_local_package_products(ctx, [name for name in unresolved_names])
+        # Each project builds its own package products; keep the aggregate name
+        # unique so two SPM-consuming projects in one workspace do not collide.
+        spm_target_name = ""
+        spm_spec = None
+        if used_products:
+            spm_target_name = "OnceSwiftPackages" if spm_index == 0 else "OnceSwiftPackages" + str(spm_index)
+            spm_index += 1
+            spm_platform = _xcode_spm_platform(ctx, objects, native_targets, project_settings, configuration, path_maps)
+            spm_min_os = _xcode_spm_min_os(ctx, objects, native_targets, spm_platform, configuration, project_settings, path_maps)
+            required = local_platform_reqs.get(spm_platform)
+            if required and _xcode_version_key(required) > _xcode_version_key(spm_min_os):
+                spm_min_os = required
+            spm_spec = _xcode_spm_spec(ctx, package_refs, used_products, local_packages, spm_platform, spm_min_os, project_path, spm_target_name)
 
-    used_products = {}
-    local_packages = {}
-    local_platform_reqs = {}
-    target_uses_spm = {}
-    for target in native_targets:
-        uses = False
-        for product in per_target_products[target.get("name") or ""]:
-            name = product["name"]
-            if product["package_identity"] in remote_identities:
-                used_products[name] = product["package_identity"]
-                uses = True
-            elif name in local_products:
-                info = local_products[name]
-                used_products[name] = info["package"]
-                local_packages[info["package"]] = info["path"]
-                for platform_name, version in (info.get("platforms") or {}).items():
-                    if platform_name not in local_platform_reqs or _xcode_version_key(version) > _xcode_version_key(local_platform_reqs[platform_name]):
-                        local_platform_reqs[platform_name] = version
-                uses = True
-        if uses:
-            target_uses_spm[target.get("name") or ""] = True
+        for target in native_targets:
+            spec = _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir, path_maps)
+            if spec == None:
+                continue
+            if spm_spec != None and target_uses_spm.get(target.get("name") or ""):
+                dep_ref = "./" + spm_target_name
+                if dep_ref not in spec["deps"]:
+                    spec["deps"] = _unique(spec["deps"] + [dep_ref])
+            all_specs.append(spec)
+        if spm_spec != None:
+            all_specs.append(spm_spec)
 
-    spm_target_name = ""
-    spm_spec = None
-    if used_products:
-        spm_target_name = "OnceSwiftPackages"
-        spm_platform = _xcode_spm_platform(ctx, objects, native_targets, project_settings, configuration, path_maps)
-        spm_min_os = _xcode_spm_min_os(ctx, objects, native_targets, spm_platform, configuration, project_settings, path_maps)
-        required = local_platform_reqs.get(spm_platform)
-        if required and _xcode_version_key(required) > _xcode_version_key(spm_min_os):
-            spm_min_os = required
-        spm_spec = _xcode_spm_spec(ctx, package_refs, used_products, local_packages, spm_platform, spm_min_os, project_path, spm_target_name)
-
+    # A target id can appear in more than one project (rare); keep the first.
     specs = []
-    roots = []
-    for target in native_targets:
-        spec = _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir, path_maps)
-        if spec == None:
+    seen_ids = {}
+    for spec in all_specs:
+        if spec["name"] in seen_ids:
             continue
-        if spm_spec != None and target_uses_spm.get(target.get("name") or ""):
-            dep_ref = "./" + spm_target_name
-            if dep_ref not in spec["deps"]:
-                spec["deps"] = _unique(spec["deps"] + [dep_ref])
+        seen_ids[spec["name"]] = True
         specs.append(spec)
-        roots.append(spec["name"])
 
-    # Drop dependency edges to targets that were not lowered (for example a
-    # resource-only extension), so no consumer references a target that is not
-    # emitted.
+    # Drop dependency edges to targets that were not emitted (for example a
+    # resource-only extension, or a pod linked only through an xcconfig), so no
+    # consumer references a target that is not in the graph.
     emitted = {spec["name"]: True for spec in specs}
-    if spm_spec != None:
-        emitted[spm_spec["name"]] = True
     for spec in specs:
         spec["deps"] = [dep for dep in spec["deps"] if dep[2:] in emitted]
-
-    if spm_spec != None:
-        specs.append(spm_spec)
 
     # The application targets are the natural build roots; tests are roots too
     # so `once test` can reach them, but applications take precedence in order.
