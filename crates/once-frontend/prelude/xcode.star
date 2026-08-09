@@ -118,9 +118,14 @@ def _xcode_parse_workspace_data(raw, workspace_dir):
     return projects
 
 def _xcode_workspace_projects(ctx, workspace_path):
-    # Enumerate every `.xcodeproj` a workspace references.
+    # Enumerate every `.xcodeproj` a workspace references. The workspace index
+    # itself can be generated (some projects produce `contents.xcworkspacedata`
+    # during setup), so a missing index yields no projects rather than failing.
     workspace_dir = _xcode_workspace_dir(workspace_path)
-    raw = host_file_read(_xcode_abs(_xcode_workspace_data_path(workspace_path)))
+    data_path = _xcode_workspace_data_path(workspace_path)
+    if not host_file_exists(_xcode_abs(data_path)):
+        return []
+    raw = host_file_read(_xcode_abs(data_path))
     return _xcode_parse_workspace_data(raw, workspace_dir)
 
 def _xcode_project_dir(project_path):
@@ -132,9 +137,14 @@ def _xcode_project_dir(project_path):
         return _parent_dir(_parent_dir(project_path))
     return _parent_dir(project_path)
 
+def _xcode_pbxproj_path(project_path):
+    # `project_path` is either the `.xcodeproj` bundle or its `project.pbxproj`.
+    if _ends_with(project_path, "/project.pbxproj"):
+        return project_path
+    return project_path + "/project.pbxproj"
+
 def _xcode_read_pbxproj(ctx, project_path):
-    pbxproj = project_path if _ends_with(project_path, "/project.pbxproj") else project_path + "/project.pbxproj"
-    raw = host_command(["plutil", "-convert", "json", "-o", "-", _xcode_abs(pbxproj)])
+    raw = host_command(["plutil", "-convert", "json", "-o", "-", _xcode_abs(_xcode_pbxproj_path(project_path))])
     return json_decode(raw)
 
 # ---------------------------------------------------------------------------
@@ -560,6 +570,17 @@ def _xcode_is_excluded_source_path(path):
             return True
     return False
 
+def _xcode_is_dependency_tree_path(path):
+    # A path inside a dependency, package-manager, or generated tree, rather than
+    # a first-party manifest. Discovering local Swift packages ignores these so a
+    # project's own build artifacts or vendored checkouts are not mistaken for
+    # workspace-local packages and fed to `swift package dump-package`.
+    lower = "/" + path.lower()
+    for needle in ["/.once/", "/checkouts/", "/pods/", "/carthage/", "/node_modules/", "/vendor/", "/.git/", "/deriveddata/"]:
+        if needle in lower:
+            return True
+    return False
+
 def _xcode_asset_catalog_dir(path):
     # If a path is a `.xcassets` bundle or lives inside one, return the catalog
     # directory (up to and including `.xcassets`); otherwise the empty string.
@@ -790,7 +811,7 @@ def _xcode_local_package_products(ctx, wanted):
     for manifest in glob(["**/Package.swift"]):
         if not remaining:
             break
-        if _xcode_is_excluded_source_path(manifest):
+        if _xcode_is_excluded_source_path(manifest) or _xcode_is_dependency_tree_path(manifest):
             continue
         package_dir = _parent_dir(manifest)
         # A `Package.swift` at the workspace root has no parent segment, so
@@ -1315,16 +1336,25 @@ def _xcode_workspace_resolver(ctx):
     # dependency that crosses project boundaries (an app target that links a pod
     # library) is wired. A bare `.xcodeproj` resolves as a single-project
     # workspace.
+    # A workspace can reference a project that is not materialized on disk (one a
+    # generator produces, or a `Pods.xcodeproj` before `pod install`). Skip those
+    # rather than failing the whole workspace, since the projects Once can read
+    # still resolve. A directly configured single project is always attempted so
+    # a genuine typo surfaces a clear error instead of an empty graph.
     if _xcode_is_workspace(entry_path):
         project_paths = _xcode_workspace_projects(ctx, entry_path)
+        skip_missing = True
     else:
         project_paths = [entry_path]
+        skip_missing = False
 
     # Pass one: read every project and build a workspace-wide target name map so
     # a dependency that crosses a project boundary resolves to the emitted id.
     projects = []
     name_to_id = {}
     for project_path in project_paths:
+        if skip_missing and not host_file_exists(_xcode_abs(_xcode_pbxproj_path(project_path))):
+            continue
         project = _xcode_read_pbxproj(ctx, project_path)
         objects = project["objects"]
         root_project = objects[project["rootObject"]] or {}
