@@ -793,7 +793,16 @@ def _xcode_local_package_products(ctx, wanted):
         if _xcode_is_excluded_source_path(manifest):
             continue
         package_dir = _parent_dir(manifest)
-        absolute = _xcode_abs(package_dir)
+        # A `Package.swift` at the workspace root has no parent segment, so
+        # resolve it against the workspace root rather than an empty path (an
+        # empty `--package-path` makes `swift package` search from its own
+        # working directory and fail). This is the common shape of an SPM
+        # monorepo whose Xcode project consumes the root package's products.
+        if package_dir:
+            absolute = _xcode_abs(package_dir)
+        else:
+            root = _xcode_workspace_root()
+            absolute = root if root else "."
         raw = host_command([swift, "package", "dump-package", "--package-path", absolute])
         info = json_decode(raw)
         package_name = info.get("name") or _basename(package_dir)
