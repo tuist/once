@@ -1761,6 +1761,7 @@ xcode_workspace = target_kind(
             "xcode-workspace-native-project",
             name = "Xcode native project seed",
             use_when = "Use this when an Xcode project should derive Apple application, framework, and test targets from project.pbxproj.",
+            platforms = ["macos"],
         ),
     ],
     impl = _xcode_workspace_impl,
@@ -1784,5 +1785,12 @@ xcode_spm_dependencies = target_kind(
     providers = ["xcode_spm_dependencies", "apple_linkable"],
     capabilities = [capability("build", ["default"])],
     tools = [_XCODE_TOOL],
+    examples = [
+        example(
+            "xcode-spm-dependencies-minimal",
+            name = "Xcode Swift package dependencies",
+            use_when = "Use this when an Xcode project's Swift package products should be built once and shared with its native targets.",
+        ),
+    ],
     impl = _xcode_spm_dependencies_impl,
 )

@@ -33,13 +33,14 @@ def tool(name, executables = []):
         "executables": executables or [name],
     }
 
-def example(slug, name, use_when, path = None):
+def example(slug, name, use_when, path = None, platforms = None):
     return {
         "_once_example": True,
         "slug": slug,
         "name": name,
         "use_when": use_when,
         "path": path or ("examples/" + slug),
+        "platforms": platforms or [],
     }
 
 def source_reference(system, symbol, url, use_when, content_digest = None):

@@ -47,6 +47,19 @@ fn every_schema_example_loads_without_diagnostics() {
     let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
     for schema in &schemas {
         for example in &schema.examples {
+            if !example.platforms.is_empty()
+                && !example
+                    .platforms
+                    .iter()
+                    .any(|platform| platform == std::env::consts::OS)
+            {
+                // Platform-specific starters (for example an Xcode project whose
+                // resolver reads `project.pbxproj` through `plutil`) only load
+                // where their toolchain exists. They still materialize and carry
+                // meta everywhere; their resolution is covered on the platforms
+                // they name.
+                continue;
+            }
             let bundle = load_target_kind_example(schema, &example.slug).unwrap_or_else(|err| {
                 panic!(
                     "example `{}` (target kind `{}`) failed to materialize: {err}",

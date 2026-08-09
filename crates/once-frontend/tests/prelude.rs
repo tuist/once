@@ -12853,6 +12853,7 @@ result = repr(_xcode_parse_workspace_data({data:?}, ""))
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn prelude_xcode_workspace_resolver_lowers_native_targets() {
     let prelude = xcode_prelude_source();
     let pbxproj = serde_json::json!({
