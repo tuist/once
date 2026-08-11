@@ -46,12 +46,54 @@ defmodule OnceSite.Passport do
     end
   end
 
+  def fetch_repository(account, repository) do
+    case Repo.get_by(Repository,
+           github_account: String.downcase(account),
+           github_repository: String.downcase(repository)
+         ) do
+      nil -> :error
+      repository -> {:ok, Repo.preload(repository, [:scans, :graphs, :integration_request])}
+    end
+  end
+
+  def submit_authorized_repository(%{"full_name" => full_name} = attributes) do
+    with [account, repository] <- String.split(full_name, "/", parts: 2),
+         {:ok, record} <-
+           %Repository{}
+           |> Repository.changeset(%{
+             github_account: account,
+             github_repository: repository,
+             github_description: attributes["description"],
+             default_branch: attributes["default_branch"],
+             public: not attributes["private"],
+             open_source: attributes["open_source"]
+           })
+           |> Repo.insert(
+             on_conflict:
+               {:replace,
+                [:github_description, :default_branch, :public, :open_source, :updated_at]},
+             conflict_target: [:github_account, :github_repository]
+           ) do
+      {:ok, record}
+    else
+      _ -> :error
+    end
+  end
+
   def list_public_repositories(params \\ %{}) do
-    query = from(repository in Repository, where: repository.public and repository.open_source)
+    query =
+      from(repository in Repository,
+        join: request in IntegrationRequest,
+        on: request.repository_id == repository.id,
+        where:
+          repository.public and repository.open_source and
+            request.status in [:awaiting_access, :queued, :integrating],
+        order_by: [desc: request.share_boost, asc: request.requested_at]
+      )
 
     case Flop.validate_and_run(query, params, for: Repository, repo: Repo) do
       {:ok, {repositories, meta}} ->
-        {Repo.preload(repositories, :scans), meta}
+        {Repo.preload(repositories, [:scans, :integration_request]), meta}
 
       {:error, meta} ->
         {[], meta}

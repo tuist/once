@@ -1792,7 +1792,8 @@ a {
   max-width: 560px;
 }
 
-[data-part="zero-to-once-submission"] input {
+[data-part="zero-to-once-submission"] input,
+[data-part="zero-to-once-submission"] select {
   min-width: 0;
   flex: 1;
   border: 1px solid var(--noora-surface-border-primary);

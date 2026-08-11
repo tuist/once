@@ -59,6 +59,8 @@ defmodule OnceSiteWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+    get "/zero-to-once/github", PassportController, :github_login
+    get "/zero-to-once/github/callback", PassportController, :github_callback
     get "/github.com/:account/:repository", PassportController, :show
     get "/github.com/:account/:repository/integrate", PassportController, :integration
     post "/github.com/:account/:repository/integrate", PassportController, :create_integration
@@ -71,7 +73,7 @@ defmodule OnceSiteWeb.Router do
 
     get "/docs-markdown/*path", DocsMarkdownController, :show
 
-    live_session :zero_to_once do
+    live_session :zero_to_once, session: {OnceSiteWeb.ZeroToOnceSession, :session, []} do
       live "/zero-to-once/", PassportLive, :index
     end
 

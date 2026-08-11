@@ -3,12 +3,57 @@ defmodule OnceSiteWeb.PassportController do
 
   alias OnceSite.Passport
   alias OnceSite.Passport.GitHubApp
+  alias OnceSite.Passport.GitHubOAuth
   alias OnceSiteWeb.Docs.OgImageRenderer
   alias OnceSiteWeb.PassportOgImage
   alias OnceSiteWeb.ZeroToOnceOgImage
 
   @cache OnceSite.Passport.Cache
   @cache_ttl :timer.hours(24)
+
+  def github_login(conn, _params) do
+    if GitHubOAuth.configured?() do
+      state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+      conn
+      |> put_session(:zero_to_once_oauth_state, state)
+      |> redirect(external: GitHubOAuth.authorize_url(state))
+    else
+      conn
+      |> put_flash(:error, "GitHub login is not configured yet.")
+      |> redirect(to: "/zero-to-once/")
+    end
+  end
+
+  def github_callback(conn, %{"code" => code, "state" => state}) do
+    with ^state <- get_session(conn, :zero_to_once_oauth_state),
+         {:ok, token} <- GitHubOAuth.exchange_code(code),
+         {:ok, repositories} <- GitHubOAuth.repositories(token) do
+      cache_key = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
+
+      {:ok, _} =
+        Cachex.put(@cache, {:zero_to_once_repositories, cache_key}, repositories,
+          ttl: :timer.minutes(10)
+        )
+
+      conn
+      |> delete_session(:zero_to_once_oauth_state)
+      |> put_session(:zero_to_once_repository_key, cache_key)
+      |> redirect(to: "/zero-to-once/")
+    else
+      _ ->
+        conn
+        |> delete_session(:zero_to_once_oauth_state)
+        |> put_flash(:error, "We could not load your repositories from GitHub.")
+        |> redirect(to: "/zero-to-once/")
+    end
+  end
+
+  def github_callback(conn, _params) do
+    conn
+    |> put_flash(:error, "GitHub did not return an authorization code.")
+    |> redirect(to: "/zero-to-once/")
+  end
 
   def index(conn, _params) do
     conn
@@ -84,7 +129,7 @@ defmodule OnceSiteWeb.PassportController do
   end
 
   def integration(conn, %{"account" => account, "repository" => repository}) do
-    case Passport.fetch_public_repository(account, repository) do
+    case Passport.fetch_repository(account, repository) do
       {:ok, passport} ->
         conn
         |> assign(
@@ -104,7 +149,7 @@ defmodule OnceSiteWeb.PassportController do
   end
 
   def create_integration(conn, %{"account" => account, "repository" => repository}) do
-    with {:ok, passport} <- Passport.fetch_public_repository(account, repository),
+    with {:ok, passport} <- Passport.fetch_repository(account, repository),
          {:ok, _request} <- Passport.request_integration(passport) do
       redirect_to_installation(conn, passport)
     else

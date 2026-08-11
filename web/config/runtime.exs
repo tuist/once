@@ -34,6 +34,11 @@ end
 
 config :once_site, :github_app_install_url, System.get_env("GITHUB_APP_INSTALL_URL")
 
+config :once_site,
+  github_oauth_client_id: System.get_env("GITHUB_OAUTH_CLIENT_ID"),
+  github_oauth_client_secret: System.get_env("GITHUB_OAUTH_CLIENT_SECRET"),
+  github_oauth_redirect_uri: System.get_env("GITHUB_OAUTH_REDIRECT_URI")
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

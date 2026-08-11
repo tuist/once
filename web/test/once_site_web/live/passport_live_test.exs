@@ -3,19 +3,29 @@ defmodule OnceSiteWeb.PassportLiveTest do
 
   import Phoenix.LiveViewTest
 
+  alias OnceSite.Passport.IntegrationRequest
   alias OnceSite.Passport.Repository
   alias OnceSite.Repo
 
   test "lists Zero-to-Once projects with URL-driven filters and pagination", %{conn: conn} do
     for repository <- ["once", "tuist", "xcodeproj", "xcodegen"] do
+      repository =
+        Repo.insert!(
+          Repository.changeset(%Repository{}, %{
+            github_account: "tuist",
+            github_repository: repository,
+            github_description: "#{repository} description",
+            default_branch: "main",
+            public: true,
+            open_source: true
+          })
+        )
+
       Repo.insert!(
-        Repository.changeset(%Repository{}, %{
-          github_account: "tuist",
-          github_repository: repository,
-          github_description: "#{repository} description",
-          default_branch: "main",
-          public: true,
-          open_source: true
+        IntegrationRequest.changeset(%IntegrationRequest{}, %{
+          repository_id: repository.id,
+          status: :queued,
+          requested_at: ~U[2026-07-31 00:00:00Z]
         })
       )
     end
@@ -35,5 +45,30 @@ defmodule OnceSiteWeb.PassportLiveTest do
 
     assert filtered_html =~ "tuist/once"
     refute filtered_html =~ "tuist/tuist"
+  end
+
+  test "only lists public open source projects in the queue", %{conn: conn} do
+    private_project =
+      Repo.insert!(
+        Repository.changeset(%Repository{}, %{
+          github_account: "acme",
+          github_repository: "private-project",
+          default_branch: "main",
+          public: false,
+          open_source: false
+        })
+      )
+
+    Repo.insert!(
+      IntegrationRequest.changeset(%IntegrationRequest{}, %{
+        repository_id: private_project.id,
+        status: :queued,
+        requested_at: ~U[2026-07-31 00:00:00Z]
+      })
+    )
+
+    {:ok, _view, html} = live(conn, "/zero-to-once/")
+
+    refute html =~ "acme/private-project"
   end
 end

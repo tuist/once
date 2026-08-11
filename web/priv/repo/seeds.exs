@@ -1,6 +1,7 @@
 alias OnceSite.Passport.Repository
 alias OnceSite.Passport.Scan
 alias OnceSite.Passport.Graph
+alias OnceSite.Passport.IntegrationRequest
 alias OnceSite.Repo
 
 import Ecto.Query
@@ -162,6 +163,26 @@ Enum.each(profiles, fn profile ->
       }),
       on_conflict: :nothing,
       conflict_target: [:repository_id, :branch, :commit_sha]
+    )
+
+    status =
+      case profile.repository do
+        "tuist" -> :integrating
+        "registry" -> :awaiting_access
+        _ -> :queued
+      end
+
+    Repo.insert!(
+      IntegrationRequest.changeset(%IntegrationRequest{}, %{
+        repository_id: repository.id,
+        status: status,
+        requested_at: ~U[2026-07-30 00:00:00Z],
+        queued_at: if(status == :awaiting_access, do: nil, else: ~U[2026-07-30 00:00:00Z]),
+        started_at: if(status == :integrating, do: ~U[2026-07-31 00:00:00Z], else: nil),
+        share_boost: if(profile.repository == "once", do: 2, else: 0)
+      }),
+      on_conflict: :nothing,
+      conflict_target: [:repository_id]
     )
   end
 end)

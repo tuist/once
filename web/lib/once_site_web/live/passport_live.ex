@@ -13,8 +13,11 @@ defmodule OnceSiteWeb.PassportLive do
   @page_size 3
 
   @impl true
-  def mount(_params, _session, socket) do
-    {:ok, assign(socket, available_filters: available_filters(), submission_error: nil)}
+  def mount(_params, session, socket) do
+    {:ok,
+     socket
+     |> assign(available_filters: available_filters(), submission_error: nil)
+     |> assign(:available_repositories, repositories_from_session(session))}
   end
 
   @impl true
@@ -62,13 +65,25 @@ defmodule OnceSiteWeb.PassportLive do
     {:noreply, push_patch(socket, to: zero_to_once_path(query))}
   end
 
-  def handle_event("submit_repository", %{"repository_url" => repository_url}, socket) do
-    case repository_path(repository_url) do
-      {:ok, path} ->
-        {:noreply, push_navigate(socket, to: path <> "/integrate")}
+  def handle_event("submit_repository", %{"repository" => repository}, socket) do
+    case Enum.find(socket.assigns.available_repositories, &(&1["full_name"] == repository)) do
+      nil ->
+        {:noreply,
+         assign(socket, :submission_error, "Select a repository from your GitHub account.")}
 
-      :error ->
-        {:noreply, assign(socket, :submission_error, "Enter a public GitHub repository URL.")}
+      attributes ->
+        with {:ok, project} <- Passport.submit_authorized_repository(attributes),
+             {:ok, _request} <- Passport.request_integration(project) do
+          {:noreply,
+           push_navigate(
+             socket,
+             to: "/github.com/#{project.github_account}/#{project.github_repository}/integrate"
+           )}
+        else
+          _ ->
+            {:noreply,
+             assign(socket, :submission_error, "We could not add that project to the queue.")}
+        end
     end
   end
 
@@ -81,27 +96,39 @@ defmodule OnceSiteWeb.PassportLive do
           <div>
             <h1>Zero-to-Once</h1>
             <p>
-              Submit your open source project. We will inspect it, queue the migration, and help it run with Once.
+              Submit your project. We will inspect it, queue the migration, and help it run with Once.
             </p>
           </div>
         </header>
 
+        <div :if={@available_repositories == []} data-part="zero-to-once-submission">
+          <strong>Bring your project to Once</strong>
+          <p>Log in with GitHub to choose from the repositories you can access.</p>
+          <Button.button
+            label="Log in with GitHub"
+            href="/zero-to-once/github"
+            variant="primary"
+            size="large"
+          />
+        </div>
+
         <form
+          :if={@available_repositories != []}
           id="zero-to-once-submission"
           data-part="zero-to-once-submission"
           phx-submit="submit_repository"
         >
-          <label for="repository_url">Your public GitHub repository</label>
+          <label for="repository">Choose a repository</label>
           <div>
-            <input
-              id="repository_url"
-              name="repository_url"
-              type="url"
-              placeholder="https://github.com/account/repository"
-              required
-            />
-            <Button.button label="Join the queue" variant="primary" size="medium" />
+            <select id="repository" name="repository" required>
+              <option value="">Select a repository</option>
+              <option :for={repository <- @available_repositories} value={repository["full_name"]}>
+                {repository["full_name"]}
+              </option>
+            </select>
+            <Button.button label="Add to the queue" variant="primary" size="medium" />
           </div>
+          <p>Private projects stay private. Public open source projects may appear in the queue.</p>
           <p :if={@submission_error} role="alert">{@submission_error}</p>
         </form>
 
@@ -142,8 +169,8 @@ defmodule OnceSiteWeb.PassportLive do
               <span>{repository.github_description}</span>
             </div>
             <.status_badge
-              status={if repository.scans == [], do: "in_progress", else: "success"}
-              label={if repository.scans == [], do: "Indexing", else: "Indexed"}
+              status={queue_badge_status(repository.integration_request.status)}
+              label={queue_badge_label(repository.integration_request.status)}
             />
           </a>
         </div>
@@ -197,13 +224,20 @@ defmodule OnceSiteWeb.PassportLive do
     end
   end
 
-  defp repository_path(repository_url) do
-    with %URI{host: "github.com", path: path} <- URI.parse(String.trim(repository_url)),
-         [account, repository] <- path |> String.split("/", trim: true) |> Enum.take(2),
-         true <- account != "" and repository != "" do
-      {:ok, "/github.com/#{account}/#{String.replace_suffix(repository, ".git", "")}"}
-    else
-      _ -> :error
+  defp repositories_from_session(%{"zero_to_once_repository_key" => key}) do
+    case Cachex.get(OnceSite.Passport.Cache, {:zero_to_once_repositories, key}) do
+      {:ok, repositories} when is_list(repositories) -> repositories
+      _ -> []
     end
   end
+
+  defp repositories_from_session(_session), do: []
+
+  defp queue_badge_status(:awaiting_access), do: "attention"
+  defp queue_badge_status(:queued), do: "in_progress"
+  defp queue_badge_status(:integrating), do: "success"
+
+  defp queue_badge_label(:awaiting_access), do: "Awaiting access"
+  defp queue_badge_label(:queued), do: "Queued"
+  defp queue_badge_label(:integrating), do: "Migrating"
 end
