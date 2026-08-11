@@ -46,6 +46,7 @@ defmodule OnceSiteWeb.Router do
     pipe_through :image
 
     get "/og/zero-to-once.jpg", PassportController, :og_image
+    get "/og/zero-to-once-campaign.jpg", PassportController, :campaign_og_image
   end
 
   scope "/" do

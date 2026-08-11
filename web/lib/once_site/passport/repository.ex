@@ -17,6 +17,7 @@ defmodule OnceSite.Passport.Repository do
     field(:github_description, :string)
     field(:default_branch, :string)
     field(:public, :boolean, default: true)
+    field(:open_source, :boolean, default: false)
 
     has_many(:scans, OnceSite.Passport.Scan, foreign_key: :repository_id)
     has_many(:graphs, OnceSite.Passport.Graph, foreign_key: :repository_id)
@@ -35,11 +36,18 @@ defmodule OnceSite.Passport.Repository do
       :github_repository,
       :github_description,
       :default_branch,
-      :public
+      :public,
+      :open_source
     ])
     |> update_change(:github_account, &String.downcase/1)
     |> update_change(:github_repository, &String.downcase/1)
-    |> validate_required([:github_account, :github_repository, :default_branch, :public])
+    |> validate_required([
+      :github_account,
+      :github_repository,
+      :default_branch,
+      :public,
+      :open_source
+    ])
     |> unique_constraint([:github_account, :github_repository])
   end
 end

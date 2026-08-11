@@ -14,7 +14,8 @@ defmodule OnceSiteWeb.PassportLiveTest do
           github_repository: repository,
           github_description: "#{repository} description",
           default_branch: "main",
-          public: true
+          public: true,
+          open_source: true
         })
       )
     end

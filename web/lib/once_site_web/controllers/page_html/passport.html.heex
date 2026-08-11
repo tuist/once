@@ -13,12 +13,24 @@
           <h1>{@account}/{@repository}</h1>
           <p>{@github_description}</p>
         </div>
-        <Button.button
-          label="Join Zero-to-Once"
-          variant="primary"
-          size="medium"
-          href={"/github.com/#{@account}/#{@repository}/integrate"}
-        />
+        <div data-part="passport-heading-actions">
+          <a
+            class="noora-button"
+            data-variant="secondary"
+            data-size="medium"
+            href={@share_url}
+            target="_blank"
+            rel="noopener"
+          >
+            <span>Share this project</span>
+          </a>
+          <Button.button
+            label="Join Zero-to-Once"
+            variant="primary"
+            size="medium"
+            href={"/github.com/#{@account}/#{@repository}/integrate"}
+          />
+        </div>
       </div>
     </header>
 

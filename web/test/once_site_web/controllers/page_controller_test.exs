@@ -25,7 +25,8 @@ defmodule OnceSiteWeb.PageControllerTest do
           github_account: "tuist",
           github_repository: "once",
           default_branch: "main",
-          public: true
+          public: true,
+          open_source: true
         })
       )
 

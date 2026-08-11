@@ -117,9 +117,11 @@ Enum.each(profiles, fn profile ->
         github_repository: profile.repository,
         github_description: profile.github_description,
         default_branch: "main",
-        public: true
+        public: true,
+        open_source: true
       }),
-      on_conflict: {:replace, [:github_description, :default_branch, :public, :updated_at]},
+      on_conflict:
+        {:replace, [:github_description, :default_branch, :public, :open_source, :updated_at]},
       conflict_target: [:github_account, :github_repository],
       returning: true
     )

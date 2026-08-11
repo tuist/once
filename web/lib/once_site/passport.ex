@@ -23,7 +23,8 @@ defmodule OnceSite.Passport do
     query =
       from(repository in Repository,
         where:
-          repository.public and repository.github_account == ^String.downcase(account) and
+          repository.public and repository.open_source and
+            repository.github_account == ^String.downcase(account) and
             repository.github_repository == ^String.downcase(repository),
         preload: [
           scans: ^from(scan in Scan, order_by: [desc: scan.checked_at], limit: 1),
@@ -46,7 +47,7 @@ defmodule OnceSite.Passport do
   end
 
   def list_public_repositories(params \\ %{}) do
-    query = from(repository in Repository, where: repository.public)
+    query = from(repository in Repository, where: repository.public and repository.open_source)
 
     case Flop.validate_and_run(query, params, for: Repository, repo: Repo) do
       {:ok, {repositories, meta}} ->
@@ -62,6 +63,7 @@ defmodule OnceSite.Passport do
 
     with {:ok, metadata} <- github_metadata(key, account, repository),
          false <- metadata["private"],
+         %{} <- metadata["license"],
          {:ok, record} <-
            %Repository{}
            |> Repository.changeset(%{
@@ -69,7 +71,8 @@ defmodule OnceSite.Passport do
              github_repository: repository,
              github_description: metadata["description"],
              default_branch: metadata["default_branch"],
-             public: true
+             public: true,
+             open_source: true
            })
            |> Repo.insert(
              on_conflict: :nothing,
@@ -78,6 +81,7 @@ defmodule OnceSite.Passport do
       {:ok, %{record | scans: []}}
     else
       true -> :error
+      nil -> :error
       {:error, _reason} -> :error
     end
   end

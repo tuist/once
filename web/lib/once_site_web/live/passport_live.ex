@@ -8,6 +8,7 @@ defmodule OnceSiteWeb.PassportLive do
   alias Noora.Filter
   alias OnceSite.Passport
   alias OnceSiteWeb.Layouts
+  alias OnceSiteWeb.ZeroToOnceOgImage
 
   @page_size 3
 
@@ -30,6 +31,12 @@ defmodule OnceSiteWeb.PassportLive do
     {:noreply,
      socket
      |> assign(:page_title, "Zero-to-Once")
+     |> assign(
+       :meta_description,
+       "Bring your open source project to Once. Share it, climb the queue, and build faster."
+     )
+     |> assign(:og_image, ZeroToOnceOgImage.url())
+     |> assign(:og_image_alt, "Zero-to-Once, the open source migration queue for Once")
      |> assign(:uri, URI.parse(uri))
      |> assign(:active_filters, active_filters)
      |> assign(:repositories, repositories)
@@ -97,6 +104,14 @@ defmodule OnceSiteWeb.PassportLive do
           </div>
           <p :if={@submission_error} role="alert">{@submission_error}</p>
         </form>
+
+        <div data-part="zero-to-once-queue-heading">
+          <div>
+            <h2>Projects in the queue</h2>
+            <p>Confirmed open source projects that are being evaluated for Once.</p>
+          </div>
+          <span>{@meta.total_count} projects</span>
+        </div>
 
         <div data-part="passport-directory-controls">
           <.inline_dropdown

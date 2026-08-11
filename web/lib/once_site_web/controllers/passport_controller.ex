@@ -5,6 +5,7 @@ defmodule OnceSiteWeb.PassportController do
   alias OnceSite.Passport.GitHubApp
   alias OnceSiteWeb.Docs.OgImageRenderer
   alias OnceSiteWeb.PassportOgImage
+  alias OnceSiteWeb.ZeroToOnceOgImage
 
   @cache OnceSite.Passport.Cache
   @cache_ttl :timer.hours(24)
@@ -45,6 +46,7 @@ defmodule OnceSiteWeb.PassportController do
     |> assign(:canonical_url, OnceSiteWeb.Endpoint.url() <> Passport.public_url(passport))
     |> assign(:og_image, PassportOgImage.url(passport))
     |> assign(:og_image_alt, PassportOgImage.social_alt(passport))
+    |> assign(:share_url, share_url(passport))
     |> assign(Passport.page_attributes(passport))
     |> put_view(OnceSiteWeb.PageHTML)
     |> render(:passport)
@@ -65,6 +67,18 @@ defmodule OnceSiteWeb.PassportController do
     else
       {:error, _reason} -> send_resp(conn, 503, "Zero-to-Once image is temporarily unavailable")
       :error -> send_resp(conn, 404, "Not found")
+      _ -> send_resp(conn, 404, "Not found")
+    end
+  end
+
+  def campaign_og_image(conn, params) do
+    with :ok <- ZeroToOnceOgImage.verify(params),
+         {:ok, image} <- cached_campaign_image() do
+      conn
+      |> put_resp_content_type("image/jpeg")
+      |> put_resp_header("cache-control", "public, max-age=86400, stale-while-revalidate=604800")
+      |> send_resp(200, image)
+    else
       _ -> send_resp(conn, 404, "Not found")
     end
   end
@@ -126,6 +140,20 @@ defmodule OnceSiteWeb.PassportController do
     end
   end
 
+  defp cached_campaign_image do
+    case Cachex.fetch(@cache, :zero_to_once_campaign_og_image, fn _key ->
+           case render_campaign_image() do
+             {:ok, image} -> {:commit, image, expire: @cache_ttl}
+             {:error, reason} -> {:ignore, reason}
+           end
+         end) do
+      {:ok, image} -> {:ok, image}
+      {:commit, image} -> {:ok, image}
+      {:ignore, reason} -> {:error, reason}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp cacheable_image(passport) do
     case render_image(passport) do
       {:ok, image} -> {:commit, image, expire: @cache_ttl}
@@ -137,6 +165,16 @@ defmodule OnceSiteWeb.PassportController do
     with {:ok, renderer} <- OgImageRenderer.start(1) do
       try do
         OgImageRenderer.render(renderer, PassportOgImage.render_html(passport))
+      after
+        OgImageRenderer.stop(renderer)
+      end
+    end
+  end
+
+  defp render_campaign_image do
+    with {:ok, renderer} <- OgImageRenderer.start(1) do
+      try do
+        OgImageRenderer.render(renderer, ZeroToOnceOgImage.render_html())
       after
         OgImageRenderer.stop(renderer)
       end
@@ -156,5 +194,12 @@ defmodule OnceSiteWeb.PassportController do
       url ->
         redirect(conn, external: url)
     end
+  end
+
+  defp share_url(passport) do
+    project_url = OnceSiteWeb.Endpoint.url() <> Passport.public_url(passport)
+    message = "#{passport.github_account}/#{passport.github_repository} is joining Zero-to-Once"
+
+    "https://x.com/intent/post?" <> URI.encode_query(%{"text" => message, "url" => project_url})
   end
 end

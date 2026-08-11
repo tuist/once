@@ -1608,6 +1608,12 @@ a {
   gap: 24px;
 }
 
+[data-part="passport-heading-actions"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 [data-part="passport-header"] h1 {
   margin: 0;
   color: var(--noora-surface-label-primary);
@@ -1800,6 +1806,30 @@ a {
   margin: 0;
   color: var(--noora-surface-label-secondary);
   font: var(--noora-font-body-small);
+}
+
+[data-part="zero-to-once-queue-heading"] {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 40px 0 16px;
+}
+
+[data-part="zero-to-once-queue-heading"] h2,
+[data-part="zero-to-once-queue-heading"] p {
+  margin: 0;
+}
+
+[data-part="zero-to-once-queue-heading"] h2 {
+  color: var(--noora-surface-label-primary);
+  font: var(--noora-font-heading-medium);
+}
+
+[data-part="zero-to-once-queue-heading"] p,
+[data-part="zero-to-once-queue-heading"] > span {
+  color: var(--noora-surface-label-secondary);
+  font: var(--noora-font-body-medium);
 }
 
 [data-part="passport-directory-controls"] > .noora-inline-dropdown {
