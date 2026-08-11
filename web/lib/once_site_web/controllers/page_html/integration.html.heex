@@ -28,6 +28,15 @@
       </Card.card_section>
     </Card.card>
 
+    <Card.card icon="clock" title="Your place in the queue" data-part="passport-card">
+      <Card.card_section>
+        <p data-part="passport-card-copy">
+          <strong :if={@integration.queue_position}>Position #{@integration.queue_position}</strong>
+          <span :if={@integration.queue_position}> · </span>{@integration.detail}
+        </p>
+      </Card.card_section>
+    </Card.card>
+
     <Card.card icon="lock" title="Repository access" data-part="passport-card">
       <Card.card_section>
         <p data-part="passport-card-copy">

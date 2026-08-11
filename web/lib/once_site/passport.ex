@@ -243,7 +243,7 @@ defmodule OnceSite.Passport do
     end)
   end
 
-  defp integration_attributes(%{integration_request: nil}) do
+  def integration_attributes(%{integration_request: nil}) do
     %{
       status: :not_requested,
       label: "Not requested",
@@ -253,7 +253,7 @@ defmodule OnceSite.Passport do
     }
   end
 
-  defp integration_attributes(%{integration_request: %{status: :awaiting_access} = request}) do
+  def integration_attributes(%{integration_request: %{status: :awaiting_access} = request}) do
     %{
       status: :awaiting_access,
       label: "Waiting for GitHub App access",
@@ -263,7 +263,7 @@ defmodule OnceSite.Passport do
     }
   end
 
-  defp integration_attributes(%{integration_request: %{status: :queued} = request}) do
+  def integration_attributes(%{integration_request: %{status: :queued} = request}) do
     %{
       status: :queued,
       label: "Queued for integration",
@@ -273,7 +273,7 @@ defmodule OnceSite.Passport do
     }
   end
 
-  defp integration_attributes(%{integration_request: %{status: :integrating} = request}) do
+  def integration_attributes(%{integration_request: %{status: :integrating} = request}) do
     %{
       status: :integrating,
       label: "Integration in progress",
@@ -283,7 +283,7 @@ defmodule OnceSite.Passport do
     }
   end
 
-  defp integration_attributes(%{integration_request: %{status: :complete} = request}) do
+  def integration_attributes(%{integration_request: %{status: :complete} = request}) do
     %{
       status: :complete,
       label: "Integrated",

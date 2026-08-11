@@ -139,6 +139,7 @@ defmodule OnceSiteWeb.PassportController do
         |> assign(:repository_url, Passport.public_url(passport))
         |> assign(:account, passport.github_account)
         |> assign(:repository, passport.github_repository)
+        |> assign(:integration, Passport.integration_attributes(passport))
         |> assign(:install_url, GitHubApp.install_url())
         |> put_view(OnceSiteWeb.PageHTML)
         |> render(:integration)
