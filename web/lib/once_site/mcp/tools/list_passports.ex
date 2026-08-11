@@ -8,7 +8,7 @@ defmodule OnceSite.MCP.Tools.ListPassports do
   def name, do: "list_zero_to_once_projects"
 
   @impl true
-  def description, do: "List public projects participating in Zero-to-Once."
+  def description, do: "List public repositories participating in Zero-to-Once."
 
   @impl true
   def input_schema do
@@ -23,7 +23,7 @@ defmodule OnceSite.MCP.Tools.ListPassports do
 
   @impl true
   def annotations,
-    do: %{title: "List Zero-to-Once projects", readOnlyHint: true, openWorldHint: false}
+    do: %{title: "List Zero-to-Once repositories", readOnlyHint: true, openWorldHint: false}
 
   @impl true
   def call(_conn, args) do

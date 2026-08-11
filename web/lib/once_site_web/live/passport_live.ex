@@ -36,7 +36,7 @@ defmodule OnceSiteWeb.PassportLive do
      |> assign(:page_title, "Zero-to-Once")
      |> assign(
        :meta_description,
-       "Bring your open source project to Once. Share it, climb the queue, and build faster."
+       "Bring your open source repository to Once. Share it, climb the queue, and build faster."
      )
      |> assign(:og_image, ZeroToOnceOgImage.url())
      |> assign(:og_image_alt, "Zero-to-Once, the open source migration queue for Once")
@@ -82,7 +82,7 @@ defmodule OnceSiteWeb.PassportLive do
         else
           _ ->
             {:noreply,
-             assign(socket, :submission_error, "We could not add that project to the queue.")}
+             assign(socket, :submission_error, "We could not add that repository to the queue.")}
         end
     end
   end
@@ -96,13 +96,13 @@ defmodule OnceSiteWeb.PassportLive do
           <div>
             <h1>Zero-to-Once</h1>
             <p>
-              Submit your project. We will inspect it, queue the migration, and help it run with Once.
+              Submit your repository. We will inspect it, queue the migration, and help it run with Once.
             </p>
           </div>
         </header>
 
         <div :if={@available_repositories == []} data-part="zero-to-once-submission">
-          <strong>Bring your project to Once</strong>
+          <strong>Bring your repository to Once</strong>
           <p>Log in with GitHub to choose from the repositories you can access.</p>
           <Button.button
             label="Log in with GitHub"
@@ -128,16 +128,18 @@ defmodule OnceSiteWeb.PassportLive do
             </select>
             <Button.button label="Add to the queue" variant="primary" size="medium" />
           </div>
-          <p>Private projects stay private. Public open source projects may appear in the queue.</p>
+          <p>
+            Private repositories stay private. Public open source repositories may appear in the queue.
+          </p>
           <p :if={@submission_error} role="alert">{@submission_error}</p>
         </form>
 
         <div data-part="zero-to-once-queue-heading">
           <div>
-            <h2>Projects in the queue</h2>
-            <p>Confirmed open source projects that are being evaluated for Once.</p>
+            <h2>Open source repositories in the queue</h2>
+            <p>Confirmed open source repositories that are being evaluated for Once.</p>
           </div>
-          <span>{@meta.total_count} projects</span>
+          <span>{@meta.total_count} repositories</span>
         </div>
 
         <div data-part="passport-directory-controls">

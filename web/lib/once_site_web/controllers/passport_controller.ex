@@ -58,7 +58,7 @@ defmodule OnceSiteWeb.PassportController do
   def index(conn, _params) do
     conn
     |> assign(:page_title, "Zero-to-Once")
-    |> assign(:meta_description, "A public queue for bringing open source projects to Once.")
+    |> assign(:meta_description, "A public queue for bringing open source repositories to Once.")
     |> assign(:repositories, Passport.list_public_repositories())
     |> put_view(OnceSiteWeb.PageHTML)
     |> render(:passport_index)
@@ -168,7 +168,7 @@ defmodule OnceSiteWeb.PassportController do
     with {:ok, project} <- Passport.fetch_public_repository(account, repository),
          {:ok, _request} <- Passport.share_project_page(project) do
       conn
-      |> put_flash(:info, "Your project received a community boost in the Zero-to-Once queue.")
+      |> put_flash(:info, "Your repository received a community boost in the Zero-to-Once queue.")
       |> redirect(to: Passport.public_url(project))
     else
       :error -> send_resp(conn, 404, "Not found")

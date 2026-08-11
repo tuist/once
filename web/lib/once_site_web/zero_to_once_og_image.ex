@@ -26,7 +26,7 @@ defmodule OnceSiteWeb.ZeroToOnceOgImage do
     OgImage.render_html(
       title: "Zero-to-Once",
       description:
-        "Bring your open source project to Once. Share it, climb the queue, and build faster.",
+        "Bring your open source repository to Once. Share it, climb the queue, and build faster.",
       category: "Open source migration queue",
       subtitle: "Zero-to-Once",
       fonts_dir: "priv/static/fonts",

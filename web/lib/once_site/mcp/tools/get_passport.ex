@@ -26,12 +26,12 @@ defmodule OnceSite.MCP.Tools.GetPassport do
 
   @impl true
   def annotations,
-    do: %{title: "Get Zero-to-Once project", readOnlyHint: true, openWorldHint: false}
+    do: %{title: "Get Zero-to-Once repository", readOnlyHint: true, openWorldHint: false}
 
   @impl true
   def call(_conn, %{"account" => account, "repository" => repository}) do
     case Passport.fetch_public_repository(account, repository) do
-      {:ok, %{scans: []}} -> EMCP.Tool.error("This Zero-to-Once project is still indexing.")
+      {:ok, %{scans: []}} -> EMCP.Tool.error("This Zero-to-Once repository is still indexing.")
       {:ok, passport} -> passport |> Passport.page_attributes() |> response()
       :error -> EMCP.Tool.error("Project not found.")
     end

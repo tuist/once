@@ -6,7 +6,7 @@ defmodule OnceSite.MCP.Server do
       name: "zero-to-once",
       version: "0.1.0",
       title: "Zero-to-Once",
-      description: "Query public Zero-to-Once project reports and repository graphs.",
+      description: "Query public Zero-to-Once repository reports and repository graphs.",
       tools: [OnceSite.MCP.Tools.ListPassports, OnceSite.MCP.Tools.GetPassport]
     )
   end
