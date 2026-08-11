@@ -58,7 +58,6 @@ defmodule OnceSiteWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
-    get "/passports/", PassportController, :legacy_index
     get "/github.com/:account/:repository", PassportController, :show
     get "/github.com/:account/:repository/integrate", PassportController, :integration
     post "/github.com/:account/:repository/integrate", PassportController, :create_integration

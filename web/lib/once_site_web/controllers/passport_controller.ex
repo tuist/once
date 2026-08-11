@@ -9,8 +9,6 @@ defmodule OnceSiteWeb.PassportController do
   @cache OnceSite.Passport.Cache
   @cache_ttl :timer.hours(24)
 
-  def legacy_index(conn, _params), do: redirect(conn, to: "/zero-to-once/")
-
   def index(conn, _params) do
     conn
     |> assign(:page_title, "Zero-to-Once")
