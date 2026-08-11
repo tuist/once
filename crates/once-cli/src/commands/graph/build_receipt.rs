@@ -19,6 +19,11 @@ pub(super) struct BuildReceipt {
     schema: String,
     target: String,
     sandbox: String,
+    /// Content digest of the effective build configuration. Defaults to
+    /// empty for receipts written before this field existed, which are
+    /// always the workspace-default configuration.
+    #[serde(default)]
+    configuration: String,
     environment: BTreeMap<String, Option<String>>,
     host_paths: BTreeMap<String, Option<PathFingerprint>>,
     source_digests: BTreeMap<String, Digest>,
@@ -37,8 +42,9 @@ pub(super) async fn read(
     workspace: &Path,
     target: &str,
     sandbox: SandboxMode,
+    configuration_path_suffix: &str,
 ) -> Option<BuildReceipt> {
-    let path = receipt_path(workspace, target, sandbox);
+    let path = receipt_path(workspace, target, sandbox, configuration_path_suffix);
     let raw = tokio::fs::read(&path).await.ok()?;
     serde_json::from_slice::<BuildReceipt>(&raw).ok()
 }
@@ -51,6 +57,7 @@ pub(super) async fn load(
     workspace: &Path,
     target: &str,
     sandbox: SandboxMode,
+    configuration_path_suffix: &str,
     snapshot: Option<&ChangeSnapshot>,
     receipt: Option<BuildReceipt>,
 ) -> Option<CapabilityRunRecord> {
@@ -105,7 +112,11 @@ pub(super) async fn load(
     if receipt.position != snapshot.position {
         receipt.position = snapshot.position.clone();
         receipt.source_digests.clear();
-        if let Err(error) = write_receipt(&receipt_path(workspace, target, sandbox), &receipt).await
+        if let Err(error) = write_receipt(
+            &receipt_path(workspace, target, sandbox, configuration_path_suffix),
+            &receipt,
+        )
+        .await
         {
             tracing::debug!(%error, target, "failed to advance reconciled build receipt");
         }
@@ -120,10 +131,13 @@ pub(super) async fn load(
     Some(receipt.record)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn store(
     workspace: &Path,
     target: &str,
     sandbox: SandboxMode,
+    configuration_path_suffix: &str,
+    configuration_digest: Digest,
     snapshot: &ChangeSnapshot,
     observations: Observations<'_>,
     record: &CapabilityRunRecord,
@@ -135,6 +149,7 @@ pub(super) async fn store(
         schema: SCHEMA.to_string(),
         target: target.to_string(),
         sandbox: sandbox_key(sandbox),
+        configuration: configuration_digest.to_hex(),
         environment: observations.environment.clone(),
         host_paths: path_fingerprint::capture(observations.host_paths),
         source_digests: observations.source_digests.clone(),
@@ -142,15 +157,23 @@ pub(super) async fn store(
         position: snapshot.position.clone(),
         record: record.clone(),
     };
-    if let Err(error) = write_receipt(&receipt_path(workspace, target, sandbox), &receipt).await {
+    if let Err(error) = write_receipt(
+        &receipt_path(workspace, target, sandbox, configuration_path_suffix),
+        &receipt,
+    )
+    .await
+    {
         tracing::debug!(%error, target, "failed to persist build receipt");
     }
 }
 
-/// Remove any stored receipt for a target so a later invocation cannot reuse
-/// it. Used when the completed build is uncacheable and must run every time.
-pub(super) async fn clear(workspace: &Path, target: &str, sandbox: SandboxMode) {
-    let path = receipt_path(workspace, target, sandbox);
+pub(super) async fn clear(
+    workspace: &Path,
+    target: &str,
+    sandbox: SandboxMode,
+    configuration_path_suffix: &str,
+) {
+    let path = receipt_path(workspace, target, sandbox, configuration_path_suffix);
     if let Err(error) = tokio::fs::remove_file(&path).await {
         if error.kind() != std::io::ErrorKind::NotFound {
             tracing::debug!(%error, target, "failed to clear build receipt");
@@ -169,8 +192,23 @@ async fn write_receipt(path: &Path, receipt: &BuildReceipt) -> anyhow::Result<()
     Ok(())
 }
 
-fn receipt_path(workspace: &Path, target: &str, sandbox: SandboxMode) -> PathBuf {
-    let key = Digest::of_bytes(format!("{target}\0{}", sandbox_key(sandbox)).as_bytes());
+fn receipt_path(
+    workspace: &Path,
+    target: &str,
+    sandbox: SandboxMode,
+    configuration_path_suffix: &str,
+) -> PathBuf {
+    // The configuration suffix is part of the hashed key so two
+    // configurations of the same target never share a receipt file. The
+    // workspace-default suffix is empty, so baseline receipts land at the
+    // same path as before.
+    let key = Digest::of_bytes(
+        format!(
+            "{target}{configuration_path_suffix}\0{}",
+            sandbox_key(sandbox)
+        )
+        .as_bytes(),
+    );
     workspace
         .join(".once")
         .join("build-receipts")
@@ -219,6 +257,12 @@ mod tests {
 
     use super::*;
 
+    const TEST_CONFIGURATION_PATH_SUFFIX: &str = "";
+
+    fn test_configuration_digest() -> Digest {
+        Digest::of_bytes(b"test-configuration")
+    }
+
     fn record() -> CapabilityRunRecord {
         CapabilityRunRecord {
             target: "app".to_string(),
@@ -256,6 +300,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn receipt_requires_the_same_tracker_snapshot_and_outputs() {
         let temporary = TempDir::new().unwrap();
         let output = temporary.path().join(".once/out/app/app");
@@ -271,6 +316,8 @@ mod tests {
             temporary.path(),
             "app",
             SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            test_configuration_digest(),
             &snapshot,
             Observations {
                 environment: &environment,
@@ -281,11 +328,18 @@ mod tests {
         )
         .await;
 
-        let receipt = read(temporary.path(), "app", SandboxMode::Off).await;
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
         let loaded = load(
             temporary.path(),
             "app",
             SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
             Some(&snapshot),
             receipt,
         )
@@ -301,11 +355,18 @@ mod tests {
             source_changes: None,
             ..snapshot.clone()
         };
-        let receipt = read(temporary.path(), "app", SandboxMode::Off).await;
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
         assert!(load(
             temporary.path(),
             "app",
             SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
             Some(&changed),
             receipt,
         )
@@ -319,6 +380,8 @@ mod tests {
             temporary.path(),
             "app",
             SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            test_configuration_digest(),
             &snapshot,
             Observations {
                 environment: &environment,
@@ -328,11 +391,18 @@ mod tests {
             &record(),
         )
         .await;
-        let receipt = read(temporary.path(), "app", SandboxMode::Off).await;
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
         assert!(load(
             temporary.path(),
             "app",
             SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
             Some(&snapshot),
             receipt,
         )
@@ -340,11 +410,18 @@ mod tests {
         .is_some());
 
         tokio::fs::write(host_tool, b"two").await.unwrap();
-        let receipt = read(temporary.path(), "app", SandboxMode::Off).await;
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
         assert!(load(
             temporary.path(),
             "app",
             SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
             Some(&snapshot),
             receipt,
         )
@@ -374,6 +451,8 @@ mod tests {
             temporary.path(),
             "app",
             SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            test_configuration_digest(),
             &initial,
             Observations {
                 environment: &environment,
@@ -392,11 +471,18 @@ mod tests {
             source_changes: Some(vec!["src/main.rs".to_string()]),
             ..initial.clone()
         };
-        let receipt = read(temporary.path(), "app", SandboxMode::Off).await;
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
         assert!(load(
             temporary.path(),
             "app",
             SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
             Some(&changed),
             receipt,
         )
@@ -412,11 +498,18 @@ mod tests {
             source_changes: Some(vec!["src/main.rs".to_string()]),
             ..changed
         };
-        let receipt = read(temporary.path(), "app", SandboxMode::Off).await;
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
         assert!(load(
             temporary.path(),
             "app",
             SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
             Some(&changed_again),
             receipt,
         )

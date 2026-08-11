@@ -77,6 +77,7 @@ pub struct AnalysisEngine {
     host_cache: HostCache,
     options: AnalysisOptions,
     configuration: crate::manifest::BuildConfiguration,
+    configuration_path_suffix: String,
 }
 
 impl fmt::Debug for AnalysisEngine {
@@ -90,6 +91,7 @@ impl fmt::Debug for AnalysisEngine {
             .field("host_cache", &self.host_cache)
             .field("options", &self.options)
             .field("configuration", &self.configuration)
+            .field("configuration_path_suffix", &self.configuration_path_suffix)
             .finish()
     }
 }
@@ -200,6 +202,7 @@ impl AnalysisEngine {
             host_cache: HostCache::default(),
             options,
             configuration: crate::manifest::BuildConfiguration::default(),
+            configuration_path_suffix: String::new(),
         })
     }
 
@@ -234,6 +237,23 @@ impl AnalysisEngine {
     #[must_use]
     pub fn with_tool_paths(mut self, tool_paths: BTreeMap<String, String>) -> Self {
         self.host_cache = HostCache::with_tool_paths(tool_paths);
+        self
+    }
+
+    /// Set the effective configuration and its output-path suffix.
+    ///
+    /// The configuration drives Starlark analysis and dependency selection;
+    /// the suffix scopes analysis output directories so two invocations
+    /// with different configurations never share build outputs. An empty
+    /// suffix keeps paths identical to the workspace-default case.
+    #[must_use]
+    pub fn with_configuration(
+        mut self,
+        configuration: crate::manifest::BuildConfiguration,
+        configuration_path_suffix: String,
+    ) -> Self {
+        self.configuration = configuration;
+        self.configuration_path_suffix = configuration_path_suffix;
         self
     }
 
@@ -356,6 +376,7 @@ impl AnalysisEngine {
             capability,
             options: self.options.clone(),
             configuration: &self.configuration,
+            configuration_path_suffix: &self.configuration_path_suffix,
         };
         analyze_target_with_host_cache(
             &self.module,
@@ -414,6 +435,7 @@ struct TargetAnalysis<'a> {
     capability: &'a str,
     options: AnalysisOptions,
     configuration: &'a crate::manifest::BuildConfiguration,
+    configuration_path_suffix: &'a str,
 }
 
 fn analyze_target_with_host_cache(
@@ -422,8 +444,14 @@ fn analyze_target_with_host_cache(
     host_cache: HostCache,
     analysis: &TargetAnalysis<'_>,
 ) -> Result<AnalysisResult> {
-    let build_dir = format!(".once/out/{}", analysis.target.label.id);
-    let scratch_dir = format!(".once/tmp/analysis/{}", analysis.target.label.id);
+    let build_dir = format!(
+        ".once/out/{}{}",
+        analysis.target.label.id, analysis.configuration_path_suffix
+    );
+    let scratch_dir = format!(
+        ".once/tmp/analysis/{}{}",
+        analysis.target.label.id, analysis.configuration_path_suffix
+    );
     let store = AnalysisStore::with_host_cache(
         analysis.workspace_root.to_path_buf(),
         analysis.target.label.package.clone(),
