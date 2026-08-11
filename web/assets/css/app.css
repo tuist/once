@@ -1781,13 +1781,13 @@ a {
   margin: 24px 0;
 }
 
+.zero-to-once-sign-in {
+  margin: 24px 0;
+}
+
 [data-part="zero-to-once-submission"] label {
   color: var(--noora-surface-label-primary);
   font: var(--noora-font-weight-medium) var(--noora-font-body-medium);
-}
-
-[data-part="zero-to-once-submission"] > .noora-button {
-  justify-self: start;
 }
 
 [data-part="zero-to-once-submission"] > div {

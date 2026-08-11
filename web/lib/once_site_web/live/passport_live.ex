@@ -5,6 +5,7 @@ defmodule OnceSiteWeb.PassportLive do
   use Noora
 
   alias Noora.Button
+  alias Noora.Card
   alias Noora.Filter
   alias OnceSite.Passport
   alias OnceSiteWeb.Layouts
@@ -101,16 +102,27 @@ defmodule OnceSiteWeb.PassportLive do
           </div>
         </header>
 
-        <div :if={@available_repositories == []} data-part="zero-to-once-submission">
-          <strong>Bring your repository to Once</strong>
-          <p>Log in with GitHub to choose from the repositories you can access.</p>
-          <Button.button
-            label="Log in with GitHub"
-            href="/zero-to-once/github"
-            variant="primary"
-            size="medium"
-          />
-        </div>
+        <Card.card
+          :if={@available_repositories == []}
+          icon="git_branch"
+          title="Bring your repository to Once"
+          data-part="passport-card"
+          class="zero-to-once-sign-in"
+        >
+          <:actions>
+            <Button.button
+              label="Log in with GitHub"
+              href="/zero-to-once/github"
+              variant="primary"
+              size="medium"
+            />
+          </:actions>
+          <Card.card_section>
+            <p data-part="passport-card-copy">
+              Log in with GitHub to choose from the repositories you can access.
+            </p>
+          </Card.card_section>
+        </Card.card>
 
         <form
           :if={@available_repositories != []}
