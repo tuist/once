@@ -12,6 +12,7 @@ defmodule OnceSite.Passport.IntegrationRequest do
     field(:access_granted_at, :utc_datetime)
     field(:queued_at, :utc_datetime)
     field(:started_at, :utc_datetime)
+    field(:share_boost, :integer, default: 0)
 
     belongs_to(:repository, OnceSite.Passport.Repository)
 
@@ -27,7 +28,8 @@ defmodule OnceSite.Passport.IntegrationRequest do
       :requested_at,
       :access_granted_at,
       :queued_at,
-      :started_at
+      :started_at,
+      :share_boost
     ])
     |> validate_required([:repository_id, :status, :requested_at])
     |> unique_constraint(:repository_id)

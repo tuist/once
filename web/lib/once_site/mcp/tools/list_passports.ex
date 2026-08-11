@@ -5,10 +5,10 @@ defmodule OnceSite.MCP.Tools.ListPassports do
   alias OnceSite.Passport
 
   @impl true
-  def name, do: "list_passports"
+  def name, do: "list_zero_to_once_projects"
 
   @impl true
-  def description, do: "List public repository compatibility records indexed by Once Passport."
+  def description, do: "List public projects participating in Zero-to-Once."
 
   @impl true
   def input_schema do
@@ -22,14 +22,15 @@ defmodule OnceSite.MCP.Tools.ListPassports do
   end
 
   @impl true
-  def annotations, do: %{title: "List Passports", readOnlyHint: true, openWorldHint: false}
+  def annotations,
+    do: %{title: "List Zero-to-Once projects", readOnlyHint: true, openWorldHint: false}
 
   @impl true
   def call(_conn, args) do
     {repositories, meta} = Passport.list_public_repositories(args)
 
     response(%{
-      passports: Enum.map(repositories, &summary/1),
+      projects: Enum.map(repositories, &summary/1),
       page: meta.current_page,
       total_pages: meta.total_pages,
       total_count: meta.total_count

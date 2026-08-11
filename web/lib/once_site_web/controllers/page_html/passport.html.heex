@@ -2,7 +2,7 @@
   <section data-part="passport-page">
     <header data-part="passport-header">
       <nav data-part="passport-breadcrumb" aria-label="Breadcrumb">
-        <a href="/github.com/tuist/once">Passport</a>
+        <a href="/zero-to-once/">Zero-to-Once</a>
         <span>/</span>
         <a href={"https://github.com/#{@account}"} target="_blank" rel="noopener">{@account}</a>
         <span>/</span>
@@ -14,7 +14,7 @@
           <p>{@github_description}</p>
         </div>
         <Button.button
-          label="Integrate Once"
+          label="Join Zero-to-Once"
           variant="primary"
           size="medium"
           href={"/github.com/#{@account}/#{@repository}/integrate"}
@@ -22,7 +22,7 @@
       </div>
     </header>
 
-    <Card.card icon="circle_check" title="Compatibility" data-part="passport-card">
+    <Card.card icon="circle_check" title="Once compatibility report" data-part="passport-card">
       <:actions>
         <Badge.status_badge status="success" label="Compatible" />
       </:actions>
@@ -67,7 +67,7 @@
       </Card.card_section>
     </Card.card>
 
-    <Card.card icon="sparkles" title="Optimization candidates" data-part="passport-card">
+    <Card.card icon="bulb" title="Optimization candidates" data-part="passport-card">
       <Card.card_section>
         <ol data-part="passport-candidates">
           <li :for={candidate <- @graph_analysis["candidates"]}>
@@ -99,7 +99,7 @@
         </Card.card_section>
       </Card.card>
 
-      <Card.card icon="git_branch" title="Native project integration" data-part="passport-card">
+      <Card.card icon="git_branch" title="Zero-to-Once queue" data-part="passport-card">
         <:actions>
           <Badge.status_badge
             status={if @integration.status == :queued, do: "in_progress", else: "attention"}
@@ -108,17 +108,41 @@
         </:actions>
         <Card.card_section>
           <p data-part="passport-card-copy">{@integration.detail}</p>
+          <p :if={@integration.queue_position} data-part="passport-card-copy">
+            Current position: #{@integration.queue_position}. Community boosts: #{@integration.share_boost}/3.
+          </p>
+          <a
+            :if={
+              @integration.status in [:awaiting_access, :queued] and @integration.share_boost < 3
+            }
+            class="noora-link-button"
+            href={"https://x.com/intent/post?text=#{URI.encode_www_form("I am bringing #{@account}/#{@repository} to Once with Zero-to-Once")}"}
+            target="_blank"
+            rel="noopener"
+          >
+            Share project page
+          </a>
           <Button.link_button
             :if={@integration.status in [:not_requested, :awaiting_access]}
             label={
               if @integration.status == :not_requested,
-                do: "Request integration",
+                do: "Join the queue",
                 else: "Grant access"
             }
             href={"/github.com/#{@account}/#{@repository}/integrate"}
             variant="primary"
             size="medium"
           />
+          <form
+            :if={
+              @integration.status in [:awaiting_access, :queued] and @integration.share_boost < 3
+            }
+            method="post"
+            action={"/github.com/#{@account}/#{@repository}/share"}
+          >
+            <input type="hidden" name="_csrf_token" value={Phoenix.Controller.get_csrf_token()} />
+            <Button.button label="Claim share boost" variant="secondary" size="medium" />
+          </form>
         </Card.card_section>
       </Card.card>
     </div>

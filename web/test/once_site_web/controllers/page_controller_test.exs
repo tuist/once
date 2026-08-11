@@ -18,7 +18,7 @@ defmodule OnceSiteWeb.PageControllerTest do
     assert response =~ ~s(aria-label="Discord")
   end
 
-  test "GET /github.com/:account/:repository renders a Passport profile", %{conn: conn} do
+  test "GET /github.com/:account/:repository renders a Zero-to-Once project report", %{conn: conn} do
     repository =
       Repo.insert!(
         Repository.changeset(%Repository{}, %{
@@ -37,7 +37,7 @@ defmodule OnceSiteWeb.PageControllerTest do
         compatibility_score: 92,
         estimated_weekly_hours: "8.4",
         features: ["cache", "remote_execution", "memory_scheduling"],
-        details: %{"summary" => "A public Once compatibility profile."},
+        details: %{"summary" => "A public Zero-to-Once compatibility report."},
         checked_at: ~U[2026-07-31 00:00:00Z]
       })
     )
@@ -45,9 +45,9 @@ defmodule OnceSiteWeb.PageControllerTest do
     conn = get(conn, "/github.com/tuist/once")
     response = html_response(conn, 200)
 
-    assert response =~ "Once Passport"
+    assert response =~ "Zero-to-Once"
     assert response =~ "Compatible"
-    assert response =~ "/og/passport.jpg?"
+    assert response =~ "/og/zero-to-once.jpg?"
     assert response =~ "8.4 developer hours each week"
   end
 end

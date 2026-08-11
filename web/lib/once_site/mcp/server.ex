@@ -3,10 +3,10 @@ defmodule OnceSite.MCP.Server do
 
   def server do
     EMCP.Server.new(
-      name: "once-passport",
+      name: "zero-to-once",
       version: "0.1.0",
-      title: "Once Passport",
-      description: "Query public Once Passport compatibility records and repository graphs.",
+      title: "Zero-to-Once",
+      description: "Query public Zero-to-Once project reports and repository graphs.",
       tools: [OnceSite.MCP.Tools.ListPassports, OnceSite.MCP.Tools.GetPassport]
     )
   end

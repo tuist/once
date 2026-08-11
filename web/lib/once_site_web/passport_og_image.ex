@@ -4,7 +4,7 @@ defmodule OnceSiteWeb.PassportOgImage do
   alias OnceSite.Passport
   alias OnceSiteWeb.Docs.OgImage
 
-  @token_salt "passport-og-image"
+  @token_salt "zero-to-once-og-image"
 
   def render_html(repository) do
     attributes = Passport.page_attributes(repository)
@@ -12,9 +12,9 @@ defmodule OnceSiteWeb.PassportOgImage do
     OgImage.render_html(
       title: "#{attributes.account}/#{attributes.repository}",
       description:
-        "Once Passport · #{attributes.score}/100 compatible · #{attributes.estimated_savings}",
+        "Zero-to-Once · #{attributes.score}/100 compatible · #{attributes.estimated_savings}",
       category: "Sandbox checked",
-      subtitle: "Passport",
+      subtitle: "Zero-to-Once",
       fonts_dir: "priv/static/fonts",
       logo_path: "priv/static/docs/nav-logo.png"
     )
@@ -26,7 +26,7 @@ defmodule OnceSiteWeb.PassportOgImage do
     scan = hd(repository.scans)
     content = content(repository, scan.commit_sha)
 
-    "/og/passport.jpg?" <>
+    "/og/zero-to-once.jpg?" <>
       URI.encode_query(%{
         "account" => repository.github_account,
         "repository" => repository.github_repository,

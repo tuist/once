@@ -9,10 +9,12 @@ defmodule OnceSiteWeb.PassportController do
   @cache OnceSite.Passport.Cache
   @cache_ttl :timer.hours(24)
 
+  def legacy_index(conn, _params), do: redirect(conn, to: "/zero-to-once/")
+
   def index(conn, _params) do
     conn
-    |> assign(:page_title, "Passport directory")
-    |> assign(:meta_description, "Public repository compatibility records from Once Passport.")
+    |> assign(:page_title, "Zero-to-Once")
+    |> assign(:meta_description, "A public queue for bringing open source projects to Once.")
     |> assign(:repositories, Passport.list_public_repositories())
     |> put_view(OnceSiteWeb.PageHTML)
     |> render(:passport_index)
@@ -63,7 +65,7 @@ defmodule OnceSiteWeb.PassportController do
       |> put_resp_header("cache-control", "public, max-age=86400, stale-while-revalidate=604800")
       |> send_resp(200, image)
     else
-      {:error, _reason} -> send_resp(conn, 503, "Passport image is temporarily unavailable")
+      {:error, _reason} -> send_resp(conn, 503, "Zero-to-Once image is temporarily unavailable")
       :error -> send_resp(conn, 404, "Not found")
       _ -> send_resp(conn, 404, "Not found")
     end
@@ -104,6 +106,17 @@ defmodule OnceSiteWeb.PassportController do
     end
   end
 
+  def share(conn, %{"account" => account, "repository" => repository}) do
+    with {:ok, project} <- Passport.fetch_public_repository(account, repository),
+         {:ok, _request} <- Passport.share_project_page(project) do
+      conn
+      |> put_flash(:info, "Your project received a community boost in the Zero-to-Once queue.")
+      |> redirect(to: Passport.public_url(project))
+    else
+      :error -> send_resp(conn, 404, "Not found")
+    end
+  end
+
   defp cached_image(passport) do
     key = PassportOgImage.cache_key(passport)
 
@@ -138,7 +151,7 @@ defmodule OnceSiteWeb.PassportController do
         conn
         |> put_flash(
           :info,
-          "Your request is saved. Configure the GitHub App install URL to grant access."
+          "Your Zero-to-Once request is saved. Configure the GitHub App install URL to grant access."
         )
         |> redirect(to: Passport.public_url(passport))
 

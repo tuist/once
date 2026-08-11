@@ -62,7 +62,7 @@ defmodule OnceSiteWeb.Layouts do
         </a>
 
         <nav data-part="site-nav" aria-label="Primary navigation">
-          <a href="/passports/">Passport</a>
+          <a href="/zero-to-once/">Zero-to-Once</a>
           <a href="/docs">Docs</a>
           <a href={~p"/blog"}>Blog</a>
           <a href={~p"/changelog"}>Changelog</a>

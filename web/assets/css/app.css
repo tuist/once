@@ -1769,6 +1769,39 @@ a {
   gap: 12px;
 }
 
+[data-part="zero-to-once-submission"] {
+  display: grid;
+  gap: 8px;
+  margin: 24px 0;
+}
+
+[data-part="zero-to-once-submission"] label {
+  color: var(--noora-surface-label-primary);
+  font: var(--noora-font-weight-medium) var(--noora-font-body-medium);
+}
+
+[data-part="zero-to-once-submission"] > div {
+  display: flex;
+  gap: 8px;
+  max-width: 560px;
+}
+
+[data-part="zero-to-once-submission"] input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--noora-surface-border-primary);
+  border-radius: var(--noora-radius-2);
+  padding: 8px 12px;
+  background: var(--noora-surface-background-primary);
+  color: var(--noora-surface-label-primary);
+}
+
+[data-part="zero-to-once-submission"] p {
+  margin: 0;
+  color: var(--noora-surface-label-secondary);
+  font: var(--noora-font-body-small);
+}
+
 [data-part="passport-directory-controls"] > .noora-inline-dropdown {
   width: fit-content;
 }

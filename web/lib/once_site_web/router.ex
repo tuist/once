@@ -45,7 +45,7 @@ defmodule OnceSiteWeb.Router do
   scope "/", OnceSiteWeb do
     pipe_through :image
 
-    get "/og/passport.jpg", PassportController, :og_image
+    get "/og/zero-to-once.jpg", PassportController, :og_image
   end
 
   scope "/" do
@@ -58,9 +58,11 @@ defmodule OnceSiteWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+    get "/passports/", PassportController, :legacy_index
     get "/github.com/:account/:repository", PassportController, :show
     get "/github.com/:account/:repository/integrate", PassportController, :integration
     post "/github.com/:account/:repository/integrate", PassportController, :create_integration
+    post "/github.com/:account/:repository/share", PassportController, :share
 
     get "/changelog", ChangelogController, :index
     get "/changelog/:slug", ChangelogController, :show
@@ -69,8 +71,8 @@ defmodule OnceSiteWeb.Router do
 
     get "/docs-markdown/*path", DocsMarkdownController, :show
 
-    live_session :passport do
-      live "/passports/", PassportLive, :index
+    live_session :zero_to_once do
+      live "/zero-to-once/", PassportLive, :index
     end
 
     live_session :docs, root_layout: {OnceSiteWeb.Docs.Layouts, :root} do

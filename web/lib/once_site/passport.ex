@@ -107,7 +107,7 @@ defmodule OnceSite.Passport do
       checked_at: Calendar.strftime(scan.checked_at, "%B %-d, %Y"),
       score: scan.compatibility_score,
       summary:
-        Map.get(scan.details, "summary", "This repository has been checked by Once Passport."),
+        Map.get(scan.details, "summary", "This repository has been checked by Zero-to-Once."),
       estimated_savings: estimated_savings(scan.estimated_weekly_hours),
       features: Enum.map(scan.features, &Map.fetch!(@feature_details, &1)),
       graph: current_graph(repository).graph,
@@ -118,7 +118,7 @@ defmodule OnceSite.Passport do
   end
 
   def title(repository),
-    do: "#{repository.github_account}/#{repository.github_repository} · Once Passport"
+    do: "#{repository.github_account}/#{repository.github_repository} · Zero-to-Once"
 
   def description(repository) do
     scan = current_scan(repository)
@@ -142,6 +142,16 @@ defmodule OnceSite.Passport do
     |> Repo.insert(on_conflict: :nothing, conflict_target: [:repository_id])
   end
 
+  def share_project_page(repository) do
+    {updated, _} =
+      from(request in IntegrationRequest,
+        where: request.repository_id == ^repository.id and request.share_boost < 3
+      )
+      |> Repo.update_all(inc: [share_boost: 1])
+
+    if updated > 0, do: {:ok, :boosted}, else: {:ok, :maximum_boost_reached}
+  end
+
   def grant_installation_access(repository, installation_id) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -160,6 +170,23 @@ defmodule OnceSite.Passport do
   defp current_scan(%{scans: [scan | _]}), do: scan
   defp current_graph(%{graphs: [graph | _]}), do: graph
 
+  defp current_graph(%{graphs: []}) do
+    %{
+      graph: %{
+        "summary" => %{
+          "actions" => 0,
+          "cached_actions" => 0,
+          "critical_path_ms" => 0,
+          "artifact_bytes" => 0,
+          "remote_executable" => 0
+        },
+        "nodes" => [],
+        "edges" => []
+      },
+      analysis: %{"observed_commits" => 0, "candidates" => []}
+    }
+  end
+
   defp estimated_savings(hours),
     do: "#{Decimal.to_string(hours, :normal)} developer hours each week"
 
@@ -174,39 +201,60 @@ defmodule OnceSite.Passport do
     %{
       status: :not_requested,
       label: "Not requested",
-      detail: "Request an integration to join the queue."
+      detail: "Join Zero-to-Once to enter the migration queue.",
+      queue_position: nil,
+      share_boost: 0
     }
   end
 
-  defp integration_attributes(%{integration_request: %{status: :awaiting_access}}) do
+  defp integration_attributes(%{integration_request: %{status: :awaiting_access} = request}) do
     %{
       status: :awaiting_access,
       label: "Waiting for GitHub App access",
-      detail: "Install the app to let Once clone and prepare the repository."
+      detail: "Install the app to confirm your queue position and let Once clone the repository.",
+      queue_position: queue_position(request),
+      share_boost: request.share_boost
     }
   end
 
-  defp integration_attributes(%{integration_request: %{status: :queued}}) do
+  defp integration_attributes(%{integration_request: %{status: :queued} = request}) do
     %{
       status: :queued,
       label: "Queued for integration",
-      detail: "Once has repository access and will prepare a native project integration."
+      detail: "Once has repository access and will prepare a native project integration.",
+      queue_position: queue_position(request),
+      share_boost: request.share_boost
     }
   end
 
-  defp integration_attributes(%{integration_request: %{status: :integrating}}) do
+  defp integration_attributes(%{integration_request: %{status: :integrating} = request}) do
     %{
       status: :integrating,
       label: "Integration in progress",
-      detail: "Once is inspecting the repository and preparing its native project integration."
+      detail: "Once is inspecting the repository and preparing its native project integration.",
+      queue_position: nil,
+      share_boost: request.share_boost
     }
   end
 
-  defp integration_attributes(%{integration_request: %{status: :complete}}) do
+  defp integration_attributes(%{integration_request: %{status: :complete} = request}) do
     %{
       status: :complete,
       label: "Integrated",
-      detail: "This repository has an active Once integration."
+      detail: "This repository has an active Once integration.",
+      queue_position: nil,
+      share_boost: request.share_boost
     }
+  end
+
+  defp queue_position(request) do
+    from(other in IntegrationRequest,
+      where:
+        other.status in [:awaiting_access, :queued] and
+          (other.share_boost > ^request.share_boost or
+             (other.share_boost == ^request.share_boost and
+                other.requested_at <= ^request.requested_at))
+    )
+    |> Repo.aggregate(:count)
   end
 end
