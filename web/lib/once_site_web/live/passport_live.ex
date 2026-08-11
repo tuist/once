@@ -108,7 +108,7 @@ defmodule OnceSiteWeb.PassportLive do
             label="Log in with GitHub"
             href="/zero-to-once/github"
             variant="primary"
-            size="large"
+            size="medium"
           />
         </div>
 

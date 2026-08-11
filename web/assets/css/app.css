@@ -1786,6 +1786,10 @@ a {
   font: var(--noora-font-weight-medium) var(--noora-font-body-medium);
 }
 
+[data-part="zero-to-once-submission"] > .noora-button {
+  justify-self: start;
+}
+
 [data-part="zero-to-once-submission"] > div {
   display: flex;
   gap: 8px;
