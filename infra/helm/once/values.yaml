@@ -95,6 +95,14 @@ externalSecrets:
   items:
     SECRET_KEY_BASE:
       remoteRef: "once-secret-key-base/password"
+    GITHUB_OAUTH_CLIENT_ID:
+      remoteRef: "once-github-app/client_id"
+    GITHUB_OAUTH_CLIENT_SECRET:
+      remoteRef: "once-github-app/client_secret"
+    GITHUB_OAUTH_REDIRECT_URI:
+      remoteRef: "once-github-app/redirect_uri"
+    GITHUB_APP_INSTALL_URL:
+      remoteRef: "once-github-app/install_url"
   # The image is public, so no registry pull secret is synced.
   pullSecret:
     enabled: false
