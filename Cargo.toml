@@ -40,7 +40,7 @@ sha2 = "0.11"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 starlark = "0.14.2"
 toml = "1.0"
-toon-rust = "0.1"
+toon-rust = { package = "toon-format", version = "0.5", default-features = false }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
