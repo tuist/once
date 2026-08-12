@@ -54,6 +54,22 @@ Describe 'apple graph'
     cp -R "$REPO_ROOT/fixtures/apple_swift_testing/." "$WORKSPACE/"
   }
 
+  copy_xcode_generated_source_fixture() {
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/xcode-generated-source-e2e/." "$WORKSPACE/"
+  }
+
+  copy_xcode_firefox_app_fixture() {
+    cp -R "$REPO_ROOT/fixtures/xcode_firefox_app/." "$WORKSPACE/"
+  }
+
+  copy_xcode_wikipedia_app_fixture() {
+    cp -R "$REPO_ROOT/fixtures/xcode_wikipedia_app/." "$WORKSPACE/"
+  }
+
+  copy_xcode_signal_app_fixture() {
+    cp -R "$REPO_ROOT/fixtures/xcode_signal_app/." "$WORKSPACE/"
+  }
+
   create_mock_apple_run_fixture() {
     mkdir -p "$WORKSPACE/bin" "$WORKSPACE/apps/ios/Sources/App"
     cat > "$WORKSPACE/apps/ios/Sources/App/App.swift" <<'SWIFT'
@@ -270,6 +286,152 @@ SH
     The path "$WORKSPACE/.once/out/apps/ios/App/App.app/Frameworks/DesignSystem.framework/DesignSystem" should be file
   End
 
+  It 'builds a generated Swift source from an Xcode shell phase'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_generated_source_fixture
+
+    When call once --format json build Generated
+    The status should be success
+    The stdout should include '"target":"Generated"'
+    The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/.once/out/Generated/Generated.swiftmodule" should be file
+    The path "$WORKSPACE/.once/out/Generated/Generated.swift" should be file
+  End
+
+  It 'lowers a Firefox-style multi-library project from a real .xcodeproj'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_firefox_app_fixture
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "FirefoxClient"
+kind = "xcode_workspace"
+srcs = ["Client.xcodeproj/project.pbxproj"]
+
+[target.attrs]
+project = "Client.xcodeproj"
+TOML
+
+    When call once --format json build FirefoxClient
+    The status should be success
+    The stdout should include '"target":"FirefoxClient"'
+    The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/.once/out/Client/Client.app/Client" should be file
+    The path "$WORKSPACE/.once/out/BrowserKit/BrowserKit.a" should be file
+    The path "$WORKSPACE/.once/out/Tabs/Tabs.a" should be file
+    The path "$WORKSPACE/.once/out/Bookmarks/Bookmarks.a" should be file
+    End
+
+  It 'lists the Firefox-style targets with their Once kinds'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_firefox_app_fixture
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "FirefoxClient"
+kind = "xcode_workspace"
+srcs = ["Client.xcodeproj/project.pbxproj"]
+
+[target.attrs]
+project = "Client.xcodeproj"
+TOML
+
+    When call once --format json query targets
+    The status should be success
+    The stdout should include '"name":"Client","kind":"apple_application"'
+    The stdout should include '"name":"BrowserKit","kind":"apple_library"'
+    The stdout should include '"name":"Tabs","kind":"apple_library"'
+    The stdout should include '"name":"Bookmarks","kind":"apple_library"'
+    The stdout should include '"name":"ClientTests","kind":"apple_test_bundle"'
+    The stdout should include 'apple_xcframework_import'
+  End
+
+  It 'lowers a Wikipedia-style design-system + feature modules from a real .xcodeproj'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_wikipedia_app_fixture
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "WikipediaWorkspace"
+kind = "xcode_workspace"
+srcs = ["Wikipedia.xcodeproj/project.pbxproj"]
+
+[target.attrs]
+project = "Wikipedia.xcodeproj"
+TOML
+
+    When call once --format json build WikipediaWorkspace
+    The status should be success
+    The stdout should include '"target":"WikipediaWorkspace"'
+    The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/.once/out/Client/Client.app/Client" should be file
+    The path "$WORKSPACE/.once/out/DesignSystem/DesignSystem.framework/DesignSystem" should be file
+    End
+
+  It 'lists the Wikipedia-style targets with their Once kinds'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_wikipedia_app_fixture
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "WikipediaWorkspace"
+kind = "xcode_workspace"
+srcs = ["Wikipedia.xcodeproj/project.pbxproj"]
+
+[target.attrs]
+project = "Wikipedia.xcodeproj"
+TOML
+
+    When call once --format json query targets
+    The status should be success
+    The stdout should include '"name":"Client","kind":"apple_application"'
+    The stdout should include '"name":"DesignSystem","kind":"apple_framework"'
+    The stdout should include '"name":"Article","kind":"apple_library"'
+    The stdout should include '"name":"Search","kind":"apple_library"'
+    The stdout should include '"name":"Settings","kind":"apple_library"'
+    The stdout should include '"name":"ClientTests","kind":"apple_test_bundle"'
+  End
+
+  It 'lowers a Signal-style app with embedded extensions from a real .xcodeproj'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_signal_app_fixture
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "SignalWorkspace"
+kind = "xcode_workspace"
+srcs = ["Signal.xcodeproj/project.pbxproj"]
+
+[target.attrs]
+project = "Signal.xcodeproj"
+TOML
+
+    When call once --format json build SignalWorkspace
+    The status should be success
+    The stdout should include '"target":"SignalWorkspace"'
+    The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/.once/out/SignalApp/SignalApp.app/SignalApp" should be file
+    The path "$WORKSPACE/.once/out/SignalShare/SignalShare.app/SignalShare" should be file
+    The path "$WORKSPACE/.once/out/SignalNotification/SignalNotification.app/SignalNotification" should be file
+    End
+
+  It 'lists the Signal-style targets with their Once kinds'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_signal_app_fixture
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "SignalWorkspace"
+kind = "xcode_workspace"
+srcs = ["Signal.xcodeproj/project.pbxproj"]
+
+[target.attrs]
+project = "Signal.xcodeproj"
+TOML
+
+    When call once --format json query targets
+    The status should be success
+    The stdout should include '"name":"SignalApp","kind":"apple_application"'
+    The stdout should include '"name":"SignalShare","kind":"apple_application"'
+    The stdout should include '"name":"SignalNotification","kind":"apple_application"'
+    The stdout should include '"name":"SignalCore","kind":"apple_library"'
+    The stdout should include '"name":"SignalAppTests","kind":"apple_test_bundle"'
+  End
+
   It 'runs Apple application artifacts through the simulator launch path'
     create_mock_apple_run_fixture
 
@@ -417,7 +579,7 @@ printf "spawn_count=%s\n" "$(grep -c "simctl spawn" "$2/xcrun.log")"' sh "$ONCE_
       The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.a" should be file
       The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftmodule" should be file
       The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftdoc" should be file
-      The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore-Swift.h" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/AppCore/Headers/AppCore/AppCore-Swift.h" should be file
     End
 
     It 'recursively builds apple_library dependencies'
@@ -475,7 +637,7 @@ printf "spawn_count=%s\n" "$(grep -c "simctl spawn" "$2/xcrun.log")"' sh "$ONCE_
       The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed.a" should be file
       The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed-swift.a" should be file
       The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed.swiftmodule" should be file
-      The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed-Swift.h" should be file
+      The path "$WORKSPACE/.once/out/apps/ios/Mixed/Headers/Mixed/Mixed-Swift.h" should be file
       The path "$WORKSPACE/.once/out/apps/ios/Mixed/apps_ios_Mixed_Sources_MixedObjC.m.o" should be file
     End
 
@@ -489,13 +651,13 @@ printf "spawn_count=%s\n" "$(grep -c "simctl spawn" "$2/xcrun.log")"' sh "$ONCE_
         xxd -p -l 6 "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed.hmap"
       }
 
-      # The hmap byte format starts with magic 0x68616D70 ("pmah" in
+      # The hmap byte format starts with magic 0x686D6170 ("pamh" in
       # little-endian) followed by a version-1 u16. Reading the first
       # six bytes catches any drift in the byte layout.
       When call hmap_first_bytes
       The status should be success
       The path "$WORKSPACE/.once/out/apps/ios/Mixed/Mixed.hmap" should be file
-      The stdout should include '706d6168'
+      The stdout should include '70616d68'
       The stdout should include '0100'
     End
 
@@ -563,7 +725,7 @@ EOF
 
       When call once build apps/ios/Bad
       The status should not equal 0
-      The stderr should include 'attribute `module_name` is not configurable but uses select()'
+      The stderr should include 'attribute `module_name` is not configurable but uses `select()`'
     End
 
     It 'fails analysis when select() targets a configuration-input attribute'
@@ -584,7 +746,7 @@ EOF
 
       When call once build apps/ios/Bad
       The status should not equal 0
-      The stderr should include 'attribute `platform` cannot use select()'
+      The stderr should include 'attribute `platform` is not configurable but uses `select()`'
     End
 
     It 'invalidates the parent cache slot when a dep source changes'
@@ -616,7 +778,7 @@ EOF
       The path "$WORKSPACE/.once/out/ui/UI/UI.framework/UI" should be file
       The path "$WORKSPACE/.once/out/ui/UI/UI.framework/Info.plist" should be file
       The path "$WORKSPACE/.once/out/ui/UI/UI.framework/Modules/module.modulemap" should be file
-      The path "$WORKSPACE/.once/out/ui/UI/UI.framework/Modules/UI.swiftmodule" should be file
+      The path "$WORKSPACE/.once/out/ui/UI/UI.framework/Modules/UI.swiftmodule/arm64-apple-ios-simulator.swiftmodule" should be file
       The path "$WORKSPACE/.once/out/ui/UI/UI.framework/_CodeSignature/CodeResources" should be file
       # App bundle with embedded framework
       The path "$WORKSPACE/.once/out/apps/ios/App/App.app/App" should be file
@@ -708,7 +870,7 @@ EOF
   End
 
   Describe 'swift_macro plugin compile'
-    It 'compiles a swift_macro target into a loadable plugin dylib'
+    It 'compiles a swift_macro target into a loadable plugin executable'
       Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
       copy_swift_macro_fixture
 
@@ -716,23 +878,23 @@ EOF
       The status should be success
       The stdout should include '"target":"macros/Stringify"'
       The stdout should include '"status":"completed"'
-      The path "$WORKSPACE/.once/out/macros/Stringify/libStringify.dylib" should be file
+      The path "$WORKSPACE/.once/out/macros/Stringify/Stringify-tool" should be file
       The path "$WORKSPACE/.once/out/macros/Stringify/Stringify.swiftmodule" should be file
     End
 
-    It 'produces a Mach-O dylib for swift_macro plugin output'
+    It 'produces a Mach-O executable for swift_macro plugin output'
       Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
       copy_swift_macro_fixture
       once --format json build macros/Stringify >/dev/null 2>&1 || true
 
-      dylib_kind() {
-        file "$WORKSPACE/.once/out/macros/Stringify/libStringify.dylib"
+      plugin_kind() {
+        file "$WORKSPACE/.once/out/macros/Stringify/Stringify-tool"
       }
 
-      When call dylib_kind
+      When call plugin_kind
       The status should be success
       The stdout should include 'Mach-O'
-      The stdout should include 'dynamically linked shared library'
+      The stdout should include 'executable'
     End
 
     It 'threads swift_macro plugin into a consuming apple_library'
@@ -740,15 +902,15 @@ EOF
       copy_swift_macro_fixture
 
       # The consumer apple_library deps on macros/Stringify, which
-      # exposes a plugin_dylib provider. apple_library auto-detects
-      # the plugin and appends `-load-plugin-library <dylib>` to its
-      # swiftc invocation; a successful build means swiftc accepted
-      # the flag and the dylib path resolved correctly.
+      # exposes a plugin executable provider. apple_library auto-detects
+      # the plugin and appends `-load-plugin-executable <path>#<module>` to
+      # its swiftc invocation; a successful build means swiftc accepted
+      # the flag and the executable path resolved correctly.
       When call once --format json build apps/macos/Consumer
       The status should be success
       The stdout should include '"target":"apps/macos/Consumer"'
       The stdout should include '"status":"completed"'
-      The path "$WORKSPACE/.once/out/macros/Stringify/libStringify.dylib" should be file
+      The path "$WORKSPACE/.once/out/macros/Stringify/Stringify-tool" should be file
       The path "$WORKSPACE/.once/out/apps/macos/Consumer/Consumer.a" should be file
     End
   End
