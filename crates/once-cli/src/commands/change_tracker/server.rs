@@ -95,18 +95,30 @@ pub(super) async fn serve(workspace: &Path, socket: &Path) -> Result<()> {
         .lock()
         .expect("change tracker watcher lock poisoned") = Some(source_watcher);
     let listener = bind_listener(socket).await?;
+    let mut workspace_check = tokio::time::interval(Duration::from_millis(100));
+    workspace_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    workspace_check.tick().await;
     loop {
-        let (stream, _) = listener
-            .accept()
-            .await
-            .context("accepting tracker client")?;
-        let state = Arc::clone(&state);
-        tokio::spawn(async move {
-            if let Err(error) = handle_client(stream, state).await {
-                tracing::debug!(%error, "filesystem change tracker client failed");
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, _) = accepted.context("accepting tracker client")?;
+                let state = Arc::clone(&state);
+                tokio::spawn(async move {
+                    if let Err(error) = handle_client(stream, state).await {
+                        tracing::debug!(%error, "filesystem change tracker client failed");
+                    }
+                });
             }
-        });
+            _ = workspace_check.tick() => {
+                if !state.workspace.exists() {
+                    break;
+                }
+            }
+        }
     }
+    drop(listener);
+    let _ = tokio::fs::remove_file(socket).await;
+    Ok(())
 }
 
 async fn bind_listener(socket: &Path) -> Result<UnixListener> {
@@ -831,6 +843,27 @@ mod tests {
         .await;
         let _ = rebuilt_output_changed;
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn tracker_exits_after_its_workspace_is_removed() {
+        let temporary = TempDir::new().unwrap();
+        let workspace = temporary.path().join("workspace");
+        tokio::fs::create_dir_all(&workspace).await.unwrap();
+        let socket = temporary.path().join("tracker.sock");
+        let server_workspace = workspace.clone();
+        let server_socket = socket.clone();
+        let task = tokio::spawn(async move { serve(&server_workspace, &server_socket).await });
+        wait_until_listening(&socket).await;
+
+        tokio::fs::remove_dir_all(&workspace).await.unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("tracker did not stop after workspace removal")
+            .expect("tracker task panicked")
+            .expect("tracker failed while stopping");
+        assert!(!socket.exists());
     }
 
     #[test]

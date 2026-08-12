@@ -983,6 +983,10 @@ fn copy_directory_contents_blocking(source: &Path, destination: &Path) -> std::i
             copy_file_blocking(&child_path, &child_destination)?;
         }
     }
+    std::fs::set_permissions(
+        destination,
+        std::fs::symlink_metadata(source)?.permissions(),
+    )?;
     Ok(())
 }
 
@@ -1204,6 +1208,28 @@ mod tests {
         assert_eq!(
             std::fs::read(dest.path().join("nested").join("deep.txt")).unwrap(),
             b"deep"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_tree_contents_preserves_the_host_tree_digest() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::TempDir::new().unwrap();
+        let nested = source.path().join("Framework.framework");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o775)).unwrap();
+        let executable = nested.join("Framework");
+        std::fs::write(&executable, b"binary").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let destination = tempfile::TempDir::new().unwrap();
+        copy_tree_contents_blocking(source.path(), destination.path()).unwrap();
+
+        assert_eq!(
+            once_host_tree::host_tree_sha256_hex(source.path()).unwrap(),
+            once_host_tree::host_tree_sha256_hex(destination.path()).unwrap()
         );
     }
 

@@ -41,7 +41,8 @@ pub(super) async fn snapshot(
             tracing::trace!(%error, "filesystem change tracker not running yet");
         }
         Err(error) => {
-            tracing::debug!(%error, "filesystem change tracker snapshot failed");
+            tracing::debug!(%error, "filesystem change tracker snapshot failed; falling back to full validation");
+            return None;
         }
     }
     if let Err(error) = spawn_tracker(workspace, socket) {
@@ -52,7 +53,11 @@ pub(super) async fn snapshot(
     for _ in 0..50 {
         match request_snapshot(socket, outputs, since).await {
             Ok(snapshot) => return Some(snapshot),
-            Err(error) => last_error = Some(error),
+            Err(error) if error.is_unreachable() => last_error = Some(error),
+            Err(error) => {
+                tracing::debug!(%error, "filesystem change tracker rejected snapshot; falling back to full validation");
+                return None;
+            }
         }
         sleep(Duration::from_millis(10)).await;
     }
@@ -199,6 +204,16 @@ fn launcher_fingerprint(exe: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_barrier_is_not_a_retryable_startup_error() {
+        assert!(!SnapshotError::Rejected("fence timeout".to_owned()).is_unreachable());
+    }
+
+    #[test]
+    fn response_timeout_is_not_a_retryable_startup_error() {
+        assert!(!SnapshotError::ResponseTimeout(Duration::from_secs(1)).is_unreachable());
+    }
 
     #[test]
     fn launcher_is_a_private_copy_under_the_runtime_directory() {
