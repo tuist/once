@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use once_core::{LintSeverity, SandboxMode, WorkspacePath};
+use once_core::{LintSeverity, NetworkPolicy, SandboxMode, WorkspacePath};
 
 mod auth;
 mod cache;
@@ -135,6 +135,14 @@ pub enum Cmd {
         #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
         sandbox: SandboxMode,
 
+        /// Override the workspace build configuration. Recognized keys are
+        /// `os`, `arch`, and `token` (repeatable), supplied as `KEY=VALUE`.
+        /// Targets configured with `select` resolve against the merged
+        /// configuration, and their outputs are scoped so different values
+        /// never collide.
+        #[arg(long, value_name = "KEY=VALUE")]
+        config: Vec<String>,
+
         /// Target id, such as `services/api/Api` or `./Api`.
         #[arg(required_unless_present = "list")]
         target: Option<String>,
@@ -149,6 +157,10 @@ pub enum Cmd {
         /// Local filesystem sandbox policy for command actions.
         #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
         sandbox: SandboxMode,
+
+        /// Override the workspace build configuration. See `once build --config`.
+        #[arg(long, value_name = "KEY=VALUE")]
+        config: Vec<String>,
 
         /// Lowest finding severity that makes this command fail.
         #[arg(long, value_parser = parse_lint_severity, default_value = "warning")]
@@ -169,6 +181,10 @@ pub enum Cmd {
         /// Local filesystem sandbox policy for command actions.
         #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
         sandbox: SandboxMode,
+
+        /// Override the workspace build configuration. See `once build --config`.
+        #[arg(long, value_name = "KEY=VALUE")]
+        config: Vec<String>,
 
         /// Ask graph target kinds to open a visible runtime interface when supported.
         #[arg(long)]
@@ -213,6 +229,10 @@ pub enum Cmd {
         /// Local filesystem sandbox policy for command actions.
         #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
         sandbox: SandboxMode,
+
+        /// Override the workspace build configuration. See `once build --config`.
+        #[arg(long, value_name = "KEY=VALUE")]
+        config: Vec<String>,
 
         /// Maximum number of test batches to execute concurrently.
         /// Defaults to the host's available parallelism for an affected plan.
@@ -304,9 +324,25 @@ pub enum Cmd {
         #[arg(long)]
         cache_failures: bool,
 
+        /// Run the action twice while bypassing the cache and report whether
+        /// the two trials produced identical results, instead of executing
+        /// normally. Exits non-zero when any divergence is found. Useful for
+        /// catching nondeterministic tools and undeclared inputs that leak
+        /// through the cache key.
+        #[arg(long)]
+        verify_reproducible: bool,
+
         /// Run the command on a compute provider.
         #[arg(long)]
         remote: bool,
+
+        /// Whether the command may reach the network. Defaults to
+        /// `unrestricted` (the host network is available, matching existing
+        /// behavior). `deny` isolates the command from the network on Linux
+        /// so an undeclared fetch fails loudly instead of leaking into the
+        /// cache key.
+        #[arg(long, value_parser = parse_network_policy, default_value = "unrestricted")]
+        network: NetworkPolicy,
 
         /// Compute provider used with --remote. Defaults to the configured execution provider.
         #[arg(long, value_name = "PROVIDER")]
@@ -555,6 +591,10 @@ fn parse_workspace_path(raw: &str) -> std::result::Result<WorkspacePath, String>
 }
 
 fn parse_sandbox_mode(raw: &str) -> std::result::Result<SandboxMode, String> {
+    raw.parse()
+}
+
+fn parse_network_policy(raw: &str) -> std::result::Result<NetworkPolicy, String> {
     raw.parse()
 }
 

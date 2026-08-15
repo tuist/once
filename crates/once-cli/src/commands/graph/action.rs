@@ -8,7 +8,9 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use once_core::{Action, OutputSymlinkMode, ResourceRequest, SandboxMode, WorkspacePath};
+use once_core::{
+    Action, NetworkPolicy, OutputSymlinkMode, ResourceRequest, SandboxMode, WorkspacePath,
+};
 use once_frontend::GraphTarget;
 use serde::Serialize;
 
@@ -44,6 +46,7 @@ pub(super) fn action_for(
         output_symlink_mode: OutputSymlinkMode::default(),
         resources: ResourceRequest::default(),
         sandbox: SandboxMode::default(),
+        network: NetworkPolicy::default(),
         timeout_ms: None,
         success_exit_codes: vec![0],
         remote: None,

@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use once_cas::Digest;
 use once_core::{
-    tool_env, workspace_tool_command, workspace_tool_env, Action, OutputSymlinkMode,
+    tool_env, workspace_tool_command, workspace_tool_env, Action, NetworkPolicy, OutputSymlinkMode,
     RemoteExecution, ResourceRequest, SandboxMode, WorkspacePath,
 };
 
@@ -111,6 +111,7 @@ async fn file_script_action(
             output_symlink_mode,
             resources,
             sandbox: SandboxMode::default(),
+            network: NetworkPolicy::default(),
             timeout_ms,
             success_exit_codes: vec![0],
             remote: remote.map(Box::new),

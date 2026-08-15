@@ -1312,5 +1312,6 @@ a {
   [data-part="hero-actions"] [data-part="button"] {
     flex: 1 1 140px;
     justify-content: center;
+    white-space: nowrap;
   }
 }

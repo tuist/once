@@ -406,6 +406,47 @@ fn run_action_rejects_invalid_sandbox_policy() {
 }
 
 #[test]
+fn run_action_records_network_policy() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "apps/ios/App");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+run_action(
+    argv = ["tool", "input"],
+    inputs = ["apps/ios/App/input"],
+    outputs = [".once/out/apps/ios/App/output"],
+    network = "deny",
+)
+"#)
+        .unwrap();
+    });
+    assert_eq!(store.actions.len(), 1);
+    assert_eq!(store.actions[0].network.as_deref(), Some("deny"));
+}
+
+#[test]
+fn run_action_defaults_network_to_unrestricted() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "apps/ios/App");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"run_action(argv = ["tool"])"#).unwrap();
+    });
+    assert_eq!(store.actions.len(), 1);
+    assert_eq!(store.actions[0].network, None);
+}
+
+#[test]
+fn run_action_rejects_invalid_network_policy() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "apps/ios/App");
+    let (_, err) = with_active_store(store, || {
+        run(r#"run_action(argv = ["tool"], network = "open")"#).unwrap_err()
+    });
+    let message = format!("{err:?}");
+    assert!(message.contains("expected `network`"), "{message}");
+}
+
+#[test]
 fn run_action_can_skip_prior_action_dependencies() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "tools/split");

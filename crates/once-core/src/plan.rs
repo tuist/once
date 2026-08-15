@@ -336,7 +336,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::{OutputSymlinkMode, ResourceRequest, RunOpts, SandboxMode, WorkspacePath};
+    use crate::{
+        NetworkPolicy, OutputSymlinkMode, ResourceRequest, RunOpts, SandboxMode, WorkspacePath,
+    };
     use once_cas::Cas;
     use tempfile::TempDir;
 
@@ -360,6 +362,7 @@ mod tests {
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
+            network: NetworkPolicy::default(),
             timeout_ms: Some(10_000),
             success_exit_codes: vec![0],
             remote: None,
@@ -421,6 +424,7 @@ mod tests {
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
+            network: NetworkPolicy::default(),
             timeout_ms: Some(5_000),
             success_exit_codes: vec![0],
             remote: None,
@@ -475,6 +479,7 @@ mod tests {
             output_symlink_mode: OutputSymlinkMode::default(),
                 resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
+            network: NetworkPolicy::default(),
                 timeout_ms: Some(5_000),
                 success_exit_codes: vec![0],
                 remote: None,
@@ -543,6 +548,7 @@ mod tests {
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
+            network: NetworkPolicy::default(),
             timeout_ms: Some(5_000),
             success_exit_codes: vec![0],
             remote: None,
@@ -559,6 +565,7 @@ mod tests {
             output_symlink_mode: OutputSymlinkMode::default(),
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
+            network: NetworkPolicy::default(),
             timeout_ms: Some(5_000),
             success_exit_codes: vec![0],
             remote: None,

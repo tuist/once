@@ -8,6 +8,7 @@ pub mod change_tracker;
 pub mod edit;
 pub mod evidence;
 pub mod exec;
+pub mod fingerprint;
 pub mod graph;
 pub mod mcp;
 pub mod query;

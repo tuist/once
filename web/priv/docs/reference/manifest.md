@@ -63,6 +63,11 @@ operating-system and architecture combinations, their aliases, the individual
 values, the additional `tokens`, and `default`. Use `once query workspace` to
 inspect the exact configuration seen by target kinds.
 
+`once build`, `once lint`, `once run`, and `once test` accept `--config`
+overrides that layer on top of these workspace defaults for a single
+invocation. See the [configurations guide](/guide/graph/configuration) for
+the override model, precedence, and how outputs stay separated.
+
 An execution-only provider can select a sandbox adapter and immutable tool
 environment:
 

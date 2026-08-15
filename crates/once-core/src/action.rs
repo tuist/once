@@ -98,6 +98,48 @@ impl FromStr for SandboxMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+/// Whether an action may reach the network while it runs.
+///
+/// The default leaves the host network available, matching the behavior
+/// scripts have always had, so adding the field never breaks an existing
+/// action. `Deny` declares that the action must not use the network, and the
+/// executor enforces it where the platform allows (an empty network
+/// namespace on Linux). The eventual goal is default-deny; the staged
+/// default keeps the change non-breaking while the plumbing lands.
+pub enum NetworkPolicy {
+    #[default]
+    Unrestricted,
+    Deny,
+}
+
+impl NetworkPolicy {
+    /// True when unchanged from the default, so serialization can skip it
+    /// and leave existing action digests stable.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// True when the action declares it must not use the network.
+    #[must_use]
+    pub fn is_denied(&self) -> bool {
+        matches!(self, Self::Deny)
+    }
+}
+
+impl FromStr for NetworkPolicy {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw {
+            "unrestricted" => Ok(Self::Unrestricted),
+            "deny" => Ok(Self::Deny),
+            _ => Err(format!("expected `unrestricted` or `deny`, got `{raw}`")),
+        }
+    }
+}
+
 /// All actions Once can execute.
 ///
 /// The wire format of this enum is part of the action digest (see
@@ -141,6 +183,13 @@ pub enum Action {
         resources: ResourceRequest,
         #[serde(default, skip_serializing_if = "SandboxMode::is_default")]
         sandbox: SandboxMode,
+        /// Whether the action may reach the network. Defaults to
+        /// unrestricted to stay non-breaking; `Deny` asks the executor to
+        /// isolate the child from the network. Part of the action digest so
+        /// two runs that differ only in network policy never share a cache
+        /// slot.
+        #[serde(default, skip_serializing_if = "NetworkPolicy::is_default")]
+        network: NetworkPolicy,
         /// Per-action timeout in milliseconds. None = no timeout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
@@ -392,6 +441,7 @@ mod tests {
             output_symlink_mode,
             resources: ResourceRequest::default(),
             sandbox: SandboxMode::default(),
+            network: NetworkPolicy::default(),
             timeout_ms: None,
             success_exit_codes: vec![0],
             remote: None,
@@ -411,6 +461,51 @@ mod tests {
         assert_eq!("off".parse(), Ok(SandboxMode::Off));
         assert_eq!("inputs".parse(), Ok(SandboxMode::Inputs));
         assert_eq!("copied-inputs".parse(), Ok(SandboxMode::CopiedInputs));
+    }
+
+    #[test]
+    fn network_policies_parse_from_their_public_names() {
+        assert_eq!("unrestricted".parse(), Ok(NetworkPolicy::Unrestricted));
+        assert_eq!("deny".parse(), Ok(NetworkPolicy::Deny));
+        assert!("open".parse::<NetworkPolicy>().is_err());
+    }
+
+    #[test]
+    fn default_network_policy_keeps_action_digest_stable() {
+        // A RunCommand whose network policy is the default must serialize
+        // identically to before the field existed, so old cache entries
+        // stay valid.
+        let base = Action::RunCommand {
+            argv: vec!["true".to_string()],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: None,
+            inputs: vec![],
+            outputs: vec![],
+            stdout_path: None,
+            stderr_path: None,
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            sandbox: SandboxMode::default(),
+            network: NetworkPolicy::default(),
+            timeout_ms: None,
+            success_exit_codes: vec![0],
+            remote: None,
+        };
+        // Snapshot taken before the network field landed on this digest
+        // domain. Updating the domain above invalidates this value.
+        let expected = "a3b89e9c8e49eff501798b83efe755f91af14a6d57eadd3f2292775815b83255";
+        assert_eq!(base.digest().to_string(), expected);
+    }
+
+    #[test]
+    fn deny_network_policy_changes_action_digest() {
+        let base = action(OutputSymlinkMode::default());
+        let mut denied = base.clone();
+        if let Action::RunCommand { network, .. } = &mut denied {
+            *network = NetworkPolicy::Deny;
+        }
+        assert_ne!(base.digest(), denied.digest());
     }
 
     #[test]

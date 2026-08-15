@@ -46,6 +46,28 @@ pub struct BuildConfiguration {
     pub tokens: Vec<String>,
 }
 
+/// Invocation-time overrides layered on top of the workspace-default
+/// [`BuildConfiguration`].
+///
+/// `os` and `arch` replace the workspace values; `tokens` are appended.
+/// The merged configuration drives dependency selection and Starlark
+/// analysis, and its canonical encoding participates in configured-target
+/// identity so two invocations with different overrides never share outputs
+/// or receipts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigurationOverrides {
+    pub os: Option<String>,
+    pub arch: Option<String>,
+    pub tokens: Vec<String>,
+}
+
+impl ConfigurationOverrides {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.os.is_none() && self.arch.is_none() && self.tokens.is_empty()
+    }
+}
+
 impl BuildConfiguration {
     fn host() -> Self {
         Self::new(std::env::consts::OS, std::env::consts::ARCH, Vec::new())
@@ -92,6 +114,51 @@ impl BuildConfiguration {
             tokens.push("default".to_string());
         }
         Self { os, arch, tokens }
+    }
+}
+
+impl BuildConfiguration {
+    /// Merge invocation-time overrides over this configuration.
+    ///
+    /// Platform-derived tokens (for the original operating system and
+    /// architecture) are re-derived for the resulting platform, while
+    /// any extra workspace tokens are preserved and the override tokens
+    /// are appended. This keeps the token list consistent when an override
+    /// changes the target platform.
+    #[must_use]
+    pub fn merged_with(&self, overrides: &ConfigurationOverrides) -> Self {
+        let os = overrides.os.clone().unwrap_or_else(|| self.os.clone());
+        let arch = overrides.arch.clone().unwrap_or_else(|| self.arch.clone());
+        let baseline_platform = select_tokens_for(&self.os, &self.arch);
+        let extra: Vec<String> = self
+            .tokens
+            .iter()
+            .filter(|token| *token != "default" && !baseline_platform.contains(token))
+            .cloned()
+            .chain(overrides.tokens.iter().cloned())
+            .collect();
+        Self::new(&os, &arch, extra)
+    }
+
+    /// Canonical, content-addressed encoding of this configuration.
+    ///
+    /// Callers hash these bytes to form a stable configuration identity.
+    /// The domain prefix partitions this encoding from other hashed
+    /// payloads so a configuration digest can never collide with an
+    /// unrelated one.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(48 + self.os.len() + self.arch.len());
+        bytes.extend_from_slice(b"once.configuration.v1\0");
+        bytes.extend_from_slice(self.os.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(self.arch.as_bytes());
+        bytes.push(0);
+        for token in &self.tokens {
+            bytes.extend_from_slice(token.as_bytes());
+            bytes.push(0);
+        }
+        bytes
     }
 }
 
@@ -844,5 +911,48 @@ deps = { select = { release = ["./Optimized"], default = ["./Portable"] } }
                 "aarch64"
             ]
         );
+    }
+
+    #[test]
+    fn configuration_canonical_bytes_are_stable() {
+        let left = BuildConfiguration::new("macos", "aarch64", Vec::new());
+        let right = BuildConfiguration::new("macos", "aarch64", Vec::new());
+        assert_eq!(left.canonical_bytes(), right.canonical_bytes());
+    }
+
+    #[test]
+    fn configuration_canonical_bytes_differ_when_tokens_differ() {
+        let debug = BuildConfiguration::new("macos", "aarch64", Vec::new());
+        let release = BuildConfiguration::new("macos", "aarch64", vec!["release".to_string()]);
+        assert_ne!(debug.canonical_bytes(), release.canonical_bytes());
+    }
+
+    #[test]
+    fn configuration_merge_appends_tokens_and_preserves_extra_tokens() {
+        let baseline =
+            BuildConfiguration::new("macos", "aarch64", vec!["distribution".to_string()]);
+        let merged = baseline.merged_with(&ConfigurationOverrides {
+            tokens: vec!["release".to_string()],
+            ..ConfigurationOverrides::default()
+        });
+        // Platform tokens are re-derived for the unchanged platform.
+        assert!(merged.tokens.contains(&"macos-arm64".to_string()));
+        // Workspace extra tokens survive a merge.
+        assert!(merged.tokens.contains(&"distribution".to_string()));
+        // Override tokens are appended.
+        assert!(merged.tokens.contains(&"release".to_string()));
+    }
+
+    #[test]
+    fn configuration_merge_rederives_platform_tokens_when_architecture_changes() {
+        let baseline = BuildConfiguration::new("macos", "aarch64", Vec::new());
+        let merged = baseline.merged_with(&ConfigurationOverrides {
+            arch: Some("x86_64".to_string()),
+            ..ConfigurationOverrides::default()
+        });
+        assert_eq!(merged.arch, "x86_64");
+        // The old platform token must not survive an architecture change.
+        assert!(!merged.tokens.contains(&"macos-arm64".to_string()));
+        assert!(merged.tokens.contains(&"macos-x86_64".to_string()));
     }
 }

@@ -14,8 +14,9 @@ use starlark::values::Value;
 
 use crate::analysis::select_branches;
 use crate::error::{Error, Result};
+use crate::manifest::BuildConfiguration;
 use crate::target::{AttrValue, Target};
-use crate::workspace::load_workspace;
+use crate::workspace::{load_workspace, load_workspace_with_configuration};
 
 /// Fully qualified graph target label.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -312,7 +313,22 @@ pub struct DepSchema {
 
 pub fn load_graph_workspace(root: &Path) -> Result<Vec<GraphTarget>> {
     let schemas = target_kind_schemas_for_workspace(root)?;
-    load_graph_workspace_with_schemas(root, &schemas)
+    load_graph_workspace_with_targets_and_schemas(root, load_workspace(root)?, &schemas)
+}
+
+/// Load the graph using an explicit configuration, layered over the
+/// workspace-declared one. Mirrors [`load_graph_workspace`] for callers
+/// that carry invocation-time overrides.
+pub fn load_graph_workspace_with_configuration(
+    root: &Path,
+    configuration: &BuildConfiguration,
+) -> Result<Vec<GraphTarget>> {
+    let schemas = target_kind_schemas_for_workspace(root)?;
+    load_graph_workspace_with_targets_and_schemas(
+        root,
+        load_workspace_with_configuration(root, configuration)?,
+        &schemas,
+    )
 }
 
 pub(crate) fn load_graph_workspace_with_compiled_schemas(
@@ -333,13 +349,6 @@ pub(crate) fn load_graph_workspace_with_compiled_schemas_and_targets(
 ) -> Result<Vec<GraphTarget>> {
     let schemas = target_kind_schemas_for_workspace_from_compiled(root, compiled_schemas)?;
     load_graph_workspace_with_targets_and_schemas(root, targets, &schemas)
-}
-
-fn load_graph_workspace_with_schemas(
-    root: &Path,
-    schemas: &[TargetKindSchema],
-) -> Result<Vec<GraphTarget>> {
-    load_graph_workspace_with_targets_and_schemas(root, load_workspace(root)?, schemas)
 }
 
 pub(crate) fn load_graph_workspace_with_targets_and_schemas(

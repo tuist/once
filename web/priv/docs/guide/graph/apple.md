@@ -215,6 +215,10 @@ Attributes that determine the configuration, including `platform`,
 `sdk_variant`, `archs`, and `mac_catalyst`, must remain literal. The target
 kind schema identifies any other non-configurable attributes.
 
+See the [configurations guide](/guide/graph/configuration) for how
+`--config` overrides these tokens per invocation and how the effective
+configuration scopes outputs.
+
 ## Connect Native Dependencies
 
 Apple targets can consume native outputs from other ecosystems through normal

@@ -18,10 +18,13 @@ mod file_blob;
 mod input_digest;
 mod lint_results;
 mod local;
+#[cfg(target_os = "linux")]
+mod network;
 mod outputs;
 mod path;
 mod plan;
 mod remote;
+mod reproducibility;
 mod resources;
 mod runner;
 mod store;
@@ -33,8 +36,8 @@ mod test_schedule;
 mod xdg;
 
 pub use action::{
-    Action, ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode, OutputSymlinkMode,
-    PreparePathMode, RemoteExecution, SandboxMode,
+    Action, ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode, NetworkPolicy,
+    OutputSymlinkMode, PreparePathMode, RemoteExecution, SandboxMode,
 };
 pub use contract::{
     validate_action_contract, validate_action_contract_with_options, ActionContractDiagnostic,
@@ -64,6 +67,7 @@ pub use lint_results::{
 };
 pub use path::{WorkspacePath, WorkspacePathError};
 pub use plan::{BuiltPlan, NodeInfo, Plan, PlanError, PlanNode, PlanOutcome};
+pub use reproducibility::{verify_reproducible, ReproducibilityDifference, ReproducibilityReport};
 pub use resources::{ResourceLimits, ResourcePool, ResourceRequest};
 pub use runner::{
     materialize_outputs, run, run_uncached, run_uncached_contract, run_with_cache,

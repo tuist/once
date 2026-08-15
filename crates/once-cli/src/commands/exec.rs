@@ -22,9 +22,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
-    tool_env, workspace_tool_command, workspace_tool_env, Action, CacheState, EvidenceSubject,
-    InputDigestBuilder, OutputSymlinkMode, RemoteExecution, ResourceLimits, ResourceRequest,
-    RunOpts, SandboxMode, WorkspacePath, Xdg,
+    tool_env, verify_reproducible, workspace_tool_command, workspace_tool_env, Action, CacheState,
+    EvidenceSubject, InputDigestBuilder, NetworkPolicy, OutputSymlinkMode, RemoteExecution,
+    ReproducibilityReport, ResourceLimits, ResourceRequest, RunOpts, SandboxMode, WorkspacePath,
+    Xdg,
 };
 use once_frontend::{parse_script_annotations, ScriptAnnotations};
 use serde::Serialize;
@@ -58,7 +59,11 @@ pub struct ExecArgs {
     pub cache_failures: bool,
     pub resource_limits: ResourceLimits,
     pub remote: Option<RemoteExecution>,
+    pub network: NetworkPolicy,
     pub argv: Vec<String>,
+    /// Run the action twice while bypassing the cache and report whether the
+    /// two trials produced identical results, instead of executing normally.
+    pub verify_reproducible: bool,
 }
 
 #[derive(Clone)]
@@ -125,11 +130,15 @@ pub async fn exec(
     args: ExecArgs,
     output: Output,
 ) -> Result<ExitCode> {
+    let verify_reproducible = args.verify_reproducible;
     let opts = RunOpts {
         cache_failures: args.cache_failures,
     };
     let resource_limits = args.resource_limits.clone();
     let (workspace, action) = plan_exec_action(workspace, xdg, cache, opts, args).await?;
+    if verify_reproducible {
+        return verify_and_report(&workspace, cache, &action, output).await;
+    }
     let streams_live = action_remote(&action).is_some() && output.format == Format::Human;
     let outcome = run_exec_action(
         cache,
@@ -152,6 +161,63 @@ pub async fn exec(
     Ok(exit_from(outcome.result.exit_code))
 }
 
+async fn verify_and_report(
+    workspace: &Path,
+    cache: &CacheProvider,
+    action: &Action,
+    output: Output,
+) -> Result<ExitCode> {
+    let report = verify_reproducible(action, workspace, cache)
+        .await
+        .context("verifying reproducibility")?;
+    print_reproducibility_report(&report, output).await?;
+    Ok(if report.reproducible {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
+async fn print_reproducibility_report(
+    report: &ReproducibilityReport,
+    output: Output,
+) -> Result<()> {
+    if output.format == Format::Human {
+        let mut out = tokio::io::stdout();
+        if report.reproducible {
+            out.write_all(
+                format!("reproducible: {} trials, no divergence\n", report.trials).as_bytes(),
+            )
+            .await?;
+        } else {
+            let noun = if report.differences.len() == 1 {
+                "difference"
+            } else {
+                "differences"
+            };
+            out.write_all(
+                format!(
+                    "not reproducible: {} {} across {} trials\n",
+                    report.differences.len(),
+                    noun,
+                    report.trials
+                )
+                .as_bytes(),
+            )
+            .await?;
+            for difference in &report.differences {
+                out.write_all(format!("  - {}\n", difference.summary()).as_bytes())
+                    .await?;
+            }
+        }
+        out.flush().await?;
+    } else {
+        let body = render::structured(output.format, report)?;
+        println!("{body}");
+    }
+    Ok(())
+}
+
 async fn plan_exec_action(
     workspace: &Path,
     xdg: &Xdg,
@@ -161,6 +227,7 @@ async fn plan_exec_action(
 ) -> Result<(PathBuf, Action)> {
     let ExecArgs {
         sandbox,
+        network,
         script,
         env,
         cwd,
@@ -169,6 +236,7 @@ async fn plan_exec_action(
         resource_limits,
         remote,
         argv,
+        verify_reproducible: _,
     } = args;
     let options = ScriptExecutionOptions {
         explicit_env: env,
@@ -201,6 +269,7 @@ async fn plan_exec_action(
                 output_symlink_mode: OutputSymlinkMode::default(),
                 resources: ResourceRequest::default(),
                 sandbox,
+                network,
                 timeout_ms: options.timeout_ms_override,
                 success_exit_codes: vec![0],
                 remote: options.remote_override.map(Box::new),
@@ -383,6 +452,7 @@ async fn action_from_script_invocation(
         output_symlink_mode: invocation.output_symlink_mode,
         resources: ResourceRequest::default(),
         sandbox: invocation.sandbox,
+        network: NetworkPolicy::default(),
         timeout_ms: invocation.timeout_ms,
         success_exit_codes: vec![0],
         remote: invocation.remote.clone().map(Box::new),

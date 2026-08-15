@@ -3463,6 +3463,7 @@ dependencies = [
  "fd-lock",
  "futures",
  "jsonwebtoken",
+ "libc",
  "microsandbox",
  "once-cas",
  "once-host-tree",
