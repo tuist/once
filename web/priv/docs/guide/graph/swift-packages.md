@@ -10,6 +10,12 @@ products to Apple libraries, frameworks, applications, and tests. Swift Package
 Manager remains authoritative for package manifests, version selection, and
 `Package.resolved`; Once makes the locked result queryable and cacheable.
 
+When the Xcode workspace resolver lowers package sources into Apple targets,
+compiler language and access-control flags follow the manifest tools version.
+Once adds the semantic package name only for tools version 5.9 or newer, where
+package-scoped access is part of the manifest contract. Older manifests remain
+isolated by module.
+
 ## Prerequisites
 
 Install Xcode and its command-line tools, then verify the selected Swift

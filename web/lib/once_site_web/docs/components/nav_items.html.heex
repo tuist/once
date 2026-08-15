@@ -33,6 +33,9 @@
                   label={item.label}
                   data-selected={Sidebar.item_active?(item, @current_slug)}
                 >
+                  <:icon_left :if={item.icon}>
+                    <span data-part="nav-item-icon" data-icon={item.icon} aria-hidden="true"></span>
+                  </:icon_left>
                 </.tab_menu_vertical>
               </.link>
               <button

@@ -12,8 +12,8 @@ Call this first when filesystem tools and the Once server may have different wor
 
 ```json
 {
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -47,13 +47,13 @@ Returns the same record shape as `once query targets --format json`: one entry p
 
 ```json
 {
+  "type": "object",
   "properties": {
     "kind": {
-      "description": "Restrict results to a target kind discovered through `once_list_target_kinds`.",
-      "type": "string"
+      "type": "string",
+      "description": "Restrict results to a target kind discovered through `once_list_target_kinds`."
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -81,16 +81,16 @@ Returns the same record `once query capabilities <target> --format json` emits: 
 
 ```json
 {
+  "type": "object",
   "properties": {
     "target": {
-      "description": "Canonical target id, such as `apps/service/Service`.",
-      "type": "string"
+      "type": "string",
+      "description": "Canonical target id, such as `apps/service/Service`."
     }
   },
   "required": [
     "target"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -119,16 +119,16 @@ Returns the target kind schema (the typed contract a target of that kind must ma
 
 ```json
 {
+  "type": "object",
   "properties": {
     "kind": {
-      "description": "Target kind to introspect. Discover names with `once_list_target_kinds`.",
-      "type": "string"
+      "type": "string",
+      "description": "Target kind to introspect. Discover names with `once_list_target_kinds`."
     }
   },
   "required": [
     "kind"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -169,21 +169,21 @@ Returns the same record as `once query example <kind> <slug> --format json`: the
 
 ```json
 {
+  "type": "object",
   "properties": {
     "kind": {
-      "description": "Target kind that owns the example.",
-      "type": "string"
+      "type": "string",
+      "description": "Target kind that owns the example."
     },
     "slug": {
-      "description": "Example slug from the target kind schema.",
-      "type": "string"
+      "type": "string",
+      "description": "Example slug from the target kind schema."
     }
   },
   "required": [
     "kind",
     "slug"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -210,26 +210,26 @@ This collision-safe setup tool is available only when the server starts with `on
 
 ```json
 {
+  "type": "object",
   "properties": {
-    "destination": {
-      "default": "",
-      "description": "Workspace-relative destination directory. Use an empty string for the workspace root.",
-      "type": "string"
-    },
     "kind": {
-      "description": "Target kind that owns the example.",
-      "type": "string"
+      "type": "string",
+      "description": "Target kind that owns the example."
     },
     "slug": {
-      "description": "Example slug from `once_list_target_kinds` or `once_query_schema`.",
-      "type": "string"
+      "type": "string",
+      "description": "Example slug from `once_list_target_kinds` or `once_query_schema`."
+    },
+    "destination": {
+      "type": "string",
+      "default": "",
+      "description": "Workspace-relative destination directory. Use an empty string for the workspace root."
     }
   },
   "required": [
     "kind",
     "slug"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -265,13 +265,13 @@ Lightweight discovery entry point. Returns matching target kinds with documentat
 
 ```json
 {
+  "type": "object",
   "properties": {
     "query": {
-      "description": "Short ecosystem, target-kind family, or intent text copied from the user's request.",
-      "type": "string"
+      "type": "string",
+      "description": "Short ecosystem, target-kind family, or intent text copied from the user's request."
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -304,8 +304,8 @@ Returns each enabled native project's name, documentation, marker files, additio
 
 ```json
 {
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -332,20 +332,20 @@ Runs the selected native project's ordinary target-kind resolver without writing
 
 ```json
 {
+  "type": "object",
   "properties": {
     "name": {
-      "description": "Name discovered with `once_list_native_projects`.",
-      "type": "string"
+      "type": "string",
+      "description": "Name discovered with `once_list_native_projects`."
     },
     "package": {
-      "description": "Package path from the native project match. Use an empty string for the workspace root.",
-      "type": "string"
+      "type": "string",
+      "description": "Package path from the native project match. Use an empty string for the workspace root."
     }
   },
   "required": [
     "name"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -370,20 +370,20 @@ This state-changing tool is available only when the server starts with `once mcp
 
 ```json
 {
+  "type": "object",
   "properties": {
     "name": {
-      "description": "Name discovered with `once_list_native_projects`.",
-      "type": "string"
+      "type": "string",
+      "description": "Name discovered with `once_list_native_projects`."
     },
     "package": {
-      "description": "Package path from the native project match. Use an empty string for the workspace root.",
-      "type": "string"
+      "type": "string",
+      "description": "Package path from the native project match. Use an empty string for the workspace root."
     }
   },
   "required": [
     "name"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -410,8 +410,8 @@ Use this when no discovered target kind covers an external rule or plugin. The r
 
 ```json
 {
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -452,23 +452,23 @@ Fetches an authoritative external rule, plugin, registry record, or build-system
 
 ```json
 {
+  "type": "object",
   "properties": {
-    "max_bytes": {
-      "default": 262144,
-      "description": "Maximum response bytes to return.",
-      "maximum": 1048576,
-      "minimum": 1,
-      "type": "integer"
-    },
     "url": {
-      "description": "Public HTTPS address for external source code, metadata, or documentation.",
-      "type": "string"
+      "type": "string",
+      "description": "Public HTTPS address for external source code, metadata, or documentation."
+    },
+    "max_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1048576,
+      "default": 262144,
+      "description": "Maximum response bytes to return."
     }
   },
   "required": [
     "url"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -495,16 +495,16 @@ Reads one workspace-relative module file, evaluates it with the public Once decl
 
 ```json
 {
+  "type": "object",
   "properties": {
     "path": {
-      "description": "Workspace-relative path to a Starlark module file.",
-      "type": "string"
+      "type": "string",
+      "description": "Workspace-relative path to a Starlark module file."
     }
   },
   "required": [
     "path"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -531,16 +531,16 @@ Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one 
 
 ```json
 {
+  "type": "object",
   "properties": {
     "target": {
-      "description": "Canonical target id, such as `packages/core/Core`.",
-      "type": "string"
+      "type": "string",
+      "description": "Canonical target id, such as `packages/core/Core`."
     }
   },
   "required": [
     "target"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -570,8 +570,8 @@ Returns every target with a `test` capability, including its target kind, depend
 
 ```json
 {
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -600,16 +600,16 @@ Maps changed paths to test targets using graph relationships, declared inputs, a
 
 ```json
 {
+  "type": "object",
   "properties": {
     "changed_paths": {
-      "description": "Workspace-relative changed paths. An empty list returns every test target.",
+      "type": "array",
       "items": {
         "type": "string"
       },
-      "type": "array"
+      "description": "Workspace-relative changed paths. An empty list returns every test target."
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -635,24 +635,24 @@ Returns the selection policy, normalized changed paths, unmatched paths, selecte
 
 ```json
 {
+  "type": "object",
   "properties": {
     "changed_paths": {
-      "description": "Workspace-relative changed paths. An empty list creates a full test plan.",
+      "type": "array",
       "items": {
         "type": "string"
       },
-      "type": "array"
+      "description": "Workspace-relative changed paths. An empty list creates a full test plan."
     },
     "target": {
-      "description": "Explicit canonical test target. When set, changed paths are ignored.",
-      "type": "string"
+      "type": "string",
+      "description": "Explicit canonical test target. When set, changed paths are ignored."
     },
     "test_unit": {
-      "description": "One stable unit identifier from once_query_test_manifest. Requires target.",
-      "type": "string"
+      "type": "string",
+      "description": "One stable unit identifier from once_query_test_manifest. Requires target."
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -683,41 +683,41 @@ Creates the same immutable plan as `once_query_test_plan`, then pulls stable bat
 
 ```json
 {
+  "type": "object",
   "properties": {
-    "changed_paths": {
-      "description": "Workspace-relative changed paths. Used only when no explicit target is supplied; an empty list runs every discovered test target.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
-    },
-    "jobs": {
-      "description": "Maximum local workers. Defaults to available host parallelism and never changes plan or batch identity.",
-      "maximum": 256,
-      "minimum": 1,
-      "type": "integer"
-    },
-    "summary_only": {
-      "description": "Replace case-level normalized results with compact once.test_results_summary.v1 totals.",
-      "type": "boolean"
-    },
     "target": {
-      "description": "Single canonical target id to run, such as `tests/unit`.",
-      "type": "string"
+      "type": "string",
+      "description": "Single canonical target id to run, such as `tests/unit`."
     },
     "targets": {
-      "description": "Canonical target ids to run. Used with `target`, this is deduplicated before execution.",
+      "type": "array",
       "items": {
         "type": "string"
       },
-      "type": "array"
+      "description": "Canonical target ids to run. Used with `target`, this is deduplicated before execution."
+    },
+    "changed_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Workspace-relative changed paths. Used only when no explicit target is supplied; an empty list runs every discovered test target."
+    },
+    "jobs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256,
+      "description": "Maximum local workers. Defaults to available host parallelism and never changes plan or batch identity."
     },
     "test_unit": {
-      "description": "Run one stable unit identifier returned by once_query_test_manifest. Requires exactly one explicit target.",
-      "type": "string"
+      "type": "string",
+      "description": "Run one stable unit identifier returned by once_query_test_manifest. Requires exactly one explicit target."
+    },
+    "summary_only": {
+      "type": "boolean",
+      "description": "Replace case-level normalized results with compact once.test_results_summary.v1 totals."
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -759,20 +759,20 @@ Reads the normalized result file produced by the target's `test` capability. Thi
 
 ```json
 {
+  "type": "object",
   "properties": {
-    "summary_only": {
-      "description": "Return once.test_results_summary.v1 status, totals, runner, and artifacts without case-level records.",
-      "type": "boolean"
-    },
     "target": {
-      "description": "Canonical target id, such as `tests/unit`.",
-      "type": "string"
+      "type": "string",
+      "description": "Canonical target id, such as `tests/unit`."
+    },
+    "summary_only": {
+      "type": "boolean",
+      "description": "Return once.test_results_summary.v1 status, totals, runner, and artifacts without case-level records."
     }
   },
   "required": [
     "target"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -800,16 +800,16 @@ Returns an immutable `once.test_manifest.v1` projection of the target's current 
 
 ```json
 {
+  "type": "object",
   "properties": {
     "target": {
-      "description": "Canonical target identifier, such as `tests/unit`.",
-      "type": "string"
+      "type": "string",
+      "description": "Canonical target identifier, such as `tests/unit`."
     }
   },
   "required": [
     "target"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -838,20 +838,20 @@ Returns actual schedule attempts recorded by `once_run_tests` or `once test --ch
 
 ```json
 {
+  "type": "object",
   "properties": {
-    "limit": {
-      "default": 20,
-      "description": "Newest matching attempts to return.",
-      "maximum": 100,
-      "minimum": 1,
-      "type": "integer"
-    },
     "target": {
-      "description": "Optional canonical test target id.",
-      "type": "string"
+      "type": "string",
+      "description": "Optional canonical test target id."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 20,
+      "description": "Newest matching attempts to return."
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -883,20 +883,20 @@ Returns the same record shape as `once query evidence --format json`: durable ac
 
 ```json
 {
+  "type": "object",
   "properties": {
-    "limit": {
-      "default": 5,
-      "description": "Maximum number of newest matching records to return.",
-      "maximum": 100,
-      "minimum": 1,
-      "type": "integer"
-    },
     "subject": {
-      "description": "Optional subject id or subject-capability pair, such as `cli` or `cli:test`.",
-      "type": "string"
+      "type": "string",
+      "description": "Optional subject id or subject-capability pair, such as `cli` or `cli:test`."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 5,
+      "description": "Maximum number of newest matching records to return."
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -946,16 +946,16 @@ Reads a workspace-relative script, validates its shebang and `once` directives, 
 
 ```json
 {
+  "type": "object",
   "properties": {
     "path": {
-      "description": "Workspace-relative annotated script path.",
-      "type": "string"
+      "type": "string",
+      "description": "Workspace-relative annotated script path."
     }
   },
   "required": [
     "path"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -988,23 +988,23 @@ Opt-in tool exposed only when the Model Context Protocol server starts with `onc
 
 ```json
 {
+  "type": "object",
   "properties": {
+    "path": {
+      "type": "string",
+      "description": "Workspace-relative annotated script path."
+    },
     "args": {
-      "description": "Arguments passed to the script after its path.",
+      "type": "array",
       "items": {
         "type": "string"
       },
-      "type": "array"
-    },
-    "path": {
-      "description": "Workspace-relative annotated script path.",
-      "type": "string"
+      "description": "Arguments passed to the script after its path."
     }
   },
   "required": [
     "path"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -1037,16 +1037,16 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
 
 ```json
 {
+  "type": "object",
   "properties": {
     "target": {
-      "description": "Target id to build, such as `apps/service/Service` or `./Service`.",
-      "type": "string"
+      "type": "string",
+      "description": "Target id to build, such as `apps/service/Service` or `./Service`."
     }
   },
   "required": [
     "target"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -1079,16 +1079,16 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
 
 ```json
 {
+  "type": "object",
   "properties": {
     "target": {
-      "description": "Target id whose lint capability should run.",
-      "type": "string"
+      "type": "string",
+      "description": "Target id whose lint capability should run."
     }
   },
   "required": [
     "target"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -1122,26 +1122,26 @@ Runs the same declared action analysis used by the graph, bypasses the action ca
 
 ```json
 {
+  "type": "object",
   "properties": {
-    "action": {
-      "description": "Optional zero-based action index.",
-      "minimum": 0,
-      "type": "integer"
+    "target": {
+      "type": "string",
+      "description": "Canonical target id."
     },
     "capability": {
+      "type": "string",
       "default": "build",
-      "description": "Capability to validate.",
-      "type": "string"
+      "description": "Capability to validate."
     },
-    "target": {
-      "description": "Canonical target id.",
-      "type": "string"
+    "action": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional zero-based action index."
     }
   },
   "required": [
     "target"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -1161,27 +1161,27 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
 
 ```json
 {
+  "type": "object",
   "properties": {
+    "target": {
+      "type": "string",
+      "description": "Target id to run, such as `apps/service/Service` or `./Service`."
+    },
+    "visible": {
+      "type": "boolean",
+      "description": "Request a visible runtime interface when the target kind supports one."
+    },
     "arguments": {
-      "description": "Target-kind-specific arguments supplied to the generic run capability. Inspect the target-kind schema before setting this field.",
+      "type": "array",
       "items": {
         "type": "string"
       },
-      "type": "array"
-    },
-    "target": {
-      "description": "Target id to run, such as `apps/service/Service` or `./Service`.",
-      "type": "string"
-    },
-    "visible": {
-      "description": "Request a visible runtime interface when the target kind supports one.",
-      "type": "boolean"
+      "description": "Target-kind-specific arguments supplied to the generic run capability. Inspect the target-kind schema before setting this field."
     }
   },
   "required": [
     "target"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -1214,16 +1214,16 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
 
 ```json
 {
+  "type": "object",
   "properties": {
     "target": {
-      "description": "Target id to start, such as `tools/demo/LaunchService` or `./LaunchService`.",
-      "type": "string"
+      "type": "string",
+      "description": "Target id to start, such as `tools/demo/LaunchService` or `./LaunchService`."
     }
   },
   "required": [
     "target"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -1250,16 +1250,16 @@ Reads `.once/runtime/<session_id>/session.json` and returns the latest status. S
 
 ```json
 {
+  "type": "object",
   "properties": {
     "session_id": {
-      "description": "Session id returned by `once_start_target`.",
-      "type": "string"
+      "type": "string",
+      "description": "Session id returned by `once_start_target`."
     }
   },
   "required": [
     "session_id"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -1284,32 +1284,32 @@ Reads persisted line-oriented standard output and standard error records from a 
 
 ```json
 {
+  "type": "object",
   "properties": {
-    "cursor": {
-      "description": "Cursor returned by a previous log record.",
-      "type": "string"
-    },
-    "limit": {
-      "description": "Maximum number of records to return.",
-      "type": "integer"
-    },
     "session_id": {
-      "description": "Session id returned by `once_start_target`.",
-      "type": "string"
+      "type": "string",
+      "description": "Session id returned by `once_start_target`."
     },
     "source": {
-      "description": "`stdout` or `stderr`.",
+      "type": "string",
       "enum": [
         "stdout",
         "stderr"
       ],
-      "type": "string"
+      "description": "`stdout` or `stderr`."
+    },
+    "cursor": {
+      "type": "string",
+      "description": "Cursor returned by a previous log record."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum number of records to return."
     }
   },
   "required": [
     "session_id"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -1334,16 +1334,16 @@ Requests that the process stop and updates the session status as the request is 
 
 ```json
 {
+  "type": "object",
   "properties": {
     "session_id": {
-      "description": "Session id returned by `once_start_target`.",
-      "type": "string"
+      "type": "string",
+      "description": "Session id returned by `once_start_target`."
     }
   },
   "required": [
     "session_id"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -1367,8 +1367,8 @@ Loads every manifest and target kind schema, then checks target attributes, targ
 
 ```json
 {
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -1400,16 +1400,16 @@ Schema-only validation: checks that the target declares a known target kind, eve
 
 ```json
 {
+  "type": "object",
   "properties": {
     "target": {
-      "description": "Raw `[[target]]` table shape with `name`, `kind`, optional `deps`, `dependencies`, `srcs`, and `attrs`.",
-      "type": "object"
+      "type": "object",
+      "description": "Raw `[[target]]` table shape with `name`, `kind`, optional `deps`, `dependencies`, `srcs`, and `attrs`."
     }
   },
   "required": [
     "target"
-  ],
-  "type": "object"
+  ]
 }
 ```
 
@@ -1439,24 +1439,24 @@ Reads the manifest at `<workspace>/<package>/once.toml` and applies the operatio
 
 ```json
 {
+  "type": "object",
   "properties": {
+    "package": {
+      "type": "string",
+      "description": "Package directory relative to the workspace root, such as `packages/core`. Use `\"\"` for the root manifest."
+    },
     "operations": {
+      "type": "array",
       "description": "Ordered list of operations. Each is `{ op: \"create\", target: {...} }`, `{ op: \"update\", target_name: \"...\", set: {...} }`, or `{ op: \"delete\", target_name: \"...\" }`.",
       "items": {
         "type": "object"
-      },
-      "type": "array"
-    },
-    "package": {
-      "description": "Package directory relative to the workspace root, such as `packages/core`. Use `\"\"` for the root manifest.",
-      "type": "string"
+      }
     }
   },
   "required": [
     "package",
     "operations"
-  ],
-  "type": "object"
+  ]
 }
 ```
 

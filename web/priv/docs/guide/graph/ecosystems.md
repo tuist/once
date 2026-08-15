@@ -70,6 +70,9 @@ query-before-build workflow, current limitations, and follow-up steps:
 
 - [Apple](/guide/graph/apple) covers libraries, frameworks, applications, and
   tests written in Swift, Objective-C, C, and C++.
+- [Xcode Projects](/guide/graph/apple/xcode) covers reading an existing
+  `.xcodeproj` or `.xcworkspace` and deriving those Apple targets from it
+  instead of declaring them.
 - [Swift Packages](/guide/graph/swift-packages) covers locked package import,
   static products, and Apple consumers.
 - [Android](/guide/graph/android) covers resources, Java and Kotlin libraries,
