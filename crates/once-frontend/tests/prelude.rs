@@ -128,6 +128,47 @@ fn xcode_prelude_source() -> String {
     )
 }
 
+#[test]
+fn prelude_common_deduplicates_complete_argument_groups() {
+    let source = format!(
+        r#"{}
+result = repr(_unique_args(
+    [
+        "--profile",
+        "--forward", "--needs-value", "--forward", "first",
+        "--forward", "--flag",
+        "--forward", "--needs-value", "--forward", "second",
+        "--forward", "--flag",
+        "--pair", "one",
+        "--pair", "two",
+    ],
+    option_arity = {{"--pair": 1}},
+    forwarder = "--forward",
+    forwarded_option_arity = {{"--needs-value": 1}},
+))
+"#,
+        include_str!("../prelude/common.star")
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["--profile", "--forward", "--needs-value", "--forward", "first", "--forward", "--flag", "--forward", "--needs-value", "--forward", "second", "--pair", "one", "--pair", "two"]"#
+    );
+}
+
+#[test]
+fn prelude_apple_merges_link_options_as_complete_argument_groups() {
+    let source = include_str!("../prelude/apple.star");
+    assert!(
+        source
+            .matches("_apple_unique_linkopts(linkopts + dep_linkopts)")
+            .count()
+            >= 2,
+        "framework and application links must merge complete argument groups"
+    );
+    assert!(!source.contains("if opt not in linkopts"));
+    assert!(!source.contains("swift_argv.extend([\"-Xlinker\", opt])"));
+}
+
 fn oci_prelude_source() -> String {
     format!(
         "{}\n{}",
@@ -6848,12 +6889,32 @@ result = repr(provider["transitive_data"])
 
 #[cfg(unix)]
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the inline Starlark fixture keeps this action contract in one test"
+)]
 fn prelude_apple_application_embeds_framework_self_path_output() {
     let prelude = all_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("app/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
     std::fs::write(package_dir.join("App.swift"), "import Shared\n").unwrap();
+    std::fs::write(
+        package_dir.join("Legacy.m"),
+        "#import \"App-Swift.h\"\nvoid legacy(void) {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.path().join("app/App.entitlements"),
+        "<plist><dict><key>com.apple.security.application-groups</key><array><string>$(APP_GROUP)</string></array></dict></plist>",
+    )
+    .unwrap();
+    std::fs::create_dir_all(workspace.path().join("shared/include")).unwrap();
+    std::fs::write(
+        workspace.path().join("shared/include/Shared.h"),
+        "void shared(void);\n",
+    )
+    .unwrap();
     let source = format!(
         r#"{prelude}
 def host_which(name):
@@ -6884,6 +6945,12 @@ ctx = {{
         "minimum_os": "17.0",
         "sdk_variant": "simulator",
         "families": ["iphone"],
+        "enable_testing": True,
+        "defines": ["DEBUG"],
+        "private_header_dirs": ["Sources"],
+        "entitlements": "App.entitlements",
+        "entitlements_substitutions": {{"APP_GROUP": "group.dev.once.App"}},
+        "development_team": "TEAM123",
     }},
     "deps": [{{
         "label_id": "shared/Shared",
@@ -6894,13 +6961,40 @@ ctx = {{
             ".once/out/shared/Shared.framework/Shared",
         ],
         "transitive_frameworks": [".once/out/shared/Shared.framework"],
+        "transitive_archives": [".once/out/shared/Shared.a"],
+        "transitive_alwayslink_archives": [".once/out/shared/Shared.a"],
+        "absorbed_static_archives": [".once/out/shared/Shared.a"],
+        "transitive_exported_header_dirs": ["/toolchain/include", "shared/include"],
+        "transitive_modulemaps": [".once/out/shared/module.modulemap"],
+        "transitive_hmaps": [".once/out/shared/Shared.hmap"],
+        "transitive_framework_search_dirs": ["/toolchain/frameworks"],
+        "transitive_generated_headers": [
+            ".once/out/shared/Headers/Shared/Shared-Swift.h",
+        ],
+        "transitive_exported_headers": ["shared/include/Shared.h"],
+        "transitive_vfs_overlays": [
+            ".once/out/shared/framework-headers-overlay.yaml",
+        ],
+        "transitive_resource_bundles": [{{
+                "path": ".once/out/shared/SharedResources.bundle",
+                "files": [
+                    ".once/out/shared/SharedResources.bundle/Info.plist",
+                    ".once/out/shared/SharedResources.bundle/message.json",
+                ],
+                "label_id": "shared/Shared",
+        }}],
     }}],
-    "srcs": ["Sources/**/*.swift"],
+    "srcs": ["Sources/**/*.swift", "Sources/**/*.m"],
     "build_dir": ".once/out/app/App",
     "capability": "build",
 }}
 provider = _apple_application_impl(ctx)
-result = repr(provider["app_path"])
+result = repr([
+    provider["app_path"],
+    provider["transitive_exported_header_dirs"],
+    provider["transitive_modulemaps"],
+    provider["transitive_hmaps"],
+])
 "#
     );
     let store = store_for(workspace.path(), "app");
@@ -6909,6 +7003,9 @@ result = repr(provider["app_path"])
 
     let out = out.unwrap();
     assert!(out.contains("App.app"), "{out}");
+    assert!(out.contains("app/Sources"), "{out}");
+    assert!(out.contains(".once/out/shared/module.modulemap"), "{out}");
+    assert!(out.contains(".once/out/shared/Shared.hmap"), "{out}");
     let embed = store
         .actions
         .iter()
@@ -6927,7 +7024,164 @@ result = repr(provider["app_path"])
         "{:?}",
         embed.outputs
     );
+    let generated_header = ".once/out/shared/Headers/Shared/Shared-Swift.h";
+    let compile = action_by_identifier(&store, "apple_application_compile_App");
+    assert!(compile.inputs.iter().any(|input| input == generated_header));
+    assert!(compile
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/shared/module.modulemap"));
+    assert!(compile
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/shared/Shared.hmap"));
+    assert!(compile.argv.windows(4).any(|args| {
+        args == [
+            "-Xlinker",
+            "-force_load",
+            "-Xlinker",
+            ".once/out/shared/Shared.a",
+        ]
+    }));
+    let module = action_by_identifier(&store, "apple_application_module_App");
+    assert!(module.inputs.iter().any(|input| input == generated_header));
+    assert!(module
+        .inputs
+        .iter()
+        .any(|input| input == "shared/include/Shared.h"));
+    assert!(!module.inputs.iter().any(|input| input == "shared/include"));
+    assert!(!module.inputs.iter().any(|input| input.starts_with('/')));
+    assert!(
+        module.argv.windows(2).any(|args| {
+            args == [
+                "-emit-objc-header-path".to_string(),
+                ".once/out/app/App-Swift.h".to_string(),
+            ]
+        }),
+        "{:?}",
+        module.argv
+    );
+    assert!(module
+        .outputs
+        .iter()
+        .any(|output| output == ".once/out/app/App-Swift.h"));
+    let clang = action_by_identifier(
+        &store,
+        "apple_application_clang_compile_App_app_Sources_Legacy.m",
+    );
+    assert!(clang
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/app/App-Swift.h"));
+    assert!(clang.argv.iter().any(|arg| arg == "-DDEBUG"));
+    let legacy_object = ".once/out/app/Objects/app_Sources_Legacy.m.o";
+    assert!(
+        compile.inputs.iter().any(|input| input == legacy_object),
+        "{:?}",
+        compile.inputs
+    );
+    assert!(
+        compile.argv.iter().any(|arg| arg == legacy_object),
+        "{:?}",
+        compile.argv
+    );
+    assert!(compile.argv.windows(4).any(|args| {
+        args == [
+            "-Xlinker".to_string(),
+            "-force_load".to_string(),
+            "-Xlinker".to_string(),
+            ".once/out/shared/Shared.a".to_string(),
+        ]
+    }));
+    let overlay = ".once/out/shared/framework-headers-overlay.yaml";
+    assert!(compile.inputs.iter().any(|input| input == overlay));
+    assert!(module.inputs.iter().any(|input| input == overlay));
+    assert!(compile.argv.windows(4).any(|args| {
+        args == [
+            "-Xcc".to_string(),
+            "-ivfsoverlay".to_string(),
+            "-Xcc".to_string(),
+            overlay.to_string(),
+        ]
+    }));
+    assert!(module.argv.windows(4).any(|args| {
+        args == [
+            "-Xcc".to_string(),
+            "-ivfsoverlay".to_string(),
+            "-Xcc".to_string(),
+            overlay.to_string(),
+        ]
+    }));
+    assert!(compile
+        .argv
+        .windows(2)
+        .any(|args| { args == ["-Xcc".to_string(), "-DDEBUG".to_string()] }));
+    assert!(module
+        .argv
+        .windows(2)
+        .any(|args| { args == ["-Xcc".to_string(), "-DDEBUG".to_string()] }));
+    assert!(compile.argv.windows(2).any(|args| {
+        args == [
+            "-module-cache-path".to_string(),
+            ".once/out/app/App/ModuleCache/Compile".to_string(),
+        ]
+    }));
+    assert!(module.argv.windows(2).any(|args| {
+        args == [
+            "-module-cache-path".to_string(),
+            ".once/out/app/App/ModuleCache/TestableModule".to_string(),
+        ]
+    }));
     let codesign = action_by_identifier(&store, "apple_application_codesign_App");
+    assert!(
+        !codesign.argv.iter().any(|arg| arg == "--entitlements"),
+        "{:?}",
+        codesign.argv
+    );
+    assert!(compile.argv.windows(8).any(|args| {
+        args == [
+            "-Xlinker".to_string(),
+            "-sectcreate".to_string(),
+            "-Xlinker".to_string(),
+            "__TEXT".to_string(),
+            "-Xlinker".to_string(),
+            "__entitlements".to_string(),
+            "-Xlinker".to_string(),
+            ".once/out/app/App/processed-entitlements.plist".to_string(),
+        ]
+    }));
+    assert!(compile.argv.windows(8).any(|args| {
+        args == [
+            "-Xlinker".to_string(),
+            "-sectcreate".to_string(),
+            "-Xlinker".to_string(),
+            "__TEXT".to_string(),
+            "-Xlinker".to_string(),
+            "__ents_der".to_string(),
+            "-Xlinker".to_string(),
+            ".once/out/app/App/processed-entitlements.der".to_string(),
+        ]
+    }));
+    let der = action_by_identifier(&store, "apple_application_der_entitlements_App");
+    assert_eq!(
+        der.argv.first().map(String::as_str),
+        Some("/toolchain/derq")
+    );
+    assert!(der
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/app/App/processed-entitlements.plist"));
+    let entitlements = action_by_identifier(
+        &store,
+        "write_path:.once/out/app/App/processed-entitlements.plist",
+    );
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &entitlements.operation else {
+        panic!("entitlements action must write its property list");
+    };
+    let entitlements = std::str::from_utf8(bytes).unwrap();
+    assert!(entitlements.contains("group.dev.once.App"));
+    assert!(entitlements.contains("<key>application-identifier</key>"));
+    assert!(entitlements.contains("<string>TEAM123.dev.once.App</string>"));
     assert!(
         codesign
             .outputs
@@ -6943,6 +7197,149 @@ result = repr(provider["app_path"])
     let plist = String::from_utf8(bytes.clone()).unwrap();
     assert!(plist.contains("<key>CFBundleSupportedPlatforms</key>"));
     assert!(plist.contains("<string>iPhoneSimulator</string>"));
+    let resource_copy = action_by_identifier(
+        &store,
+        "apple_application_embed_resource_copy_SharedResources.bundle",
+    );
+    assert_eq!(
+        resource_copy.outputs,
+        [".once/out/app/App/App.app/SharedResources.bundle"]
+    );
+    assert!(resource_copy
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("SharedResources.bundle/message.json")));
+    let resource_sign = action_by_identifier(
+        &store,
+        "apple_application_embed_resource_sign_SharedResources.bundle",
+    );
+    assert!(resource_sign
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("SharedResources.bundle/_CodeSignature/CodeResources")));
+    assert!(codesign
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("SharedResources.bundle/_CodeSignature/CodeResources")));
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_apple_resource_bundle_propagates_declared_files() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    std::fs::create_dir_all(workspace.path().join("Resources")).unwrap();
+    std::fs::write(
+        workspace.path().join("Resources/PrivacyInfo.xcprivacy"),
+        "<plist><dict/></plist>",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "", "name": "Privacy", "id": "Privacy"}},
+    "attr": {{
+        "platform": "ios",
+        "minimum_os": "15.0",
+        "sdk_variant": "simulator",
+        "bundle_name": "PrivacyResources",
+        "bundle_id": "dev.once.privacy",
+        "resources": ["Resources/PrivacyInfo.xcprivacy"],
+    }},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/Privacy",
+    "capability": "build",
+}}
+provider = _apple_resource_bundle_target_impl(ctx)
+result = repr(provider["transitive_resource_bundles"])
+"#
+    );
+    let store = store_for(workspace.path(), "");
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let out = out.unwrap();
+    assert!(out.contains("PrivacyResources.bundle"), "{out}");
+    assert!(out.contains("PrivacyInfo.xcprivacy"), "{out}");
+    assert!(store.actions.iter().any(|action| {
+        action
+            .identifier
+            .as_deref()
+            .is_some_and(|id| id.contains("apple_resource_bundle_PrivacyResources"))
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn prelude_apple_application_materializes_a_custom_property_list() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("app/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("App.swift"), "import SwiftUI\n@main struct App: SwiftUI.App { var body: some Scene { WindowGroup { Text(\"Hello\") } } }\n").unwrap();
+    std::fs::write(
+        workspace.path().join("app/App-Info.plist"),
+        "<plist><dict><key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string><key>CFBundleIdentifier</key><string>${PRODUCT_BUNDLE_IDENTIFIER}</string><key>UILaunchStoryboardName</key><string>LaunchScreen</string></dict></plist>",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "xcrun":
+        return "/usr/bin/xcrun"
+    if name == "codesign":
+        return "/usr/bin/codesign"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--find" in argv:
+        return "/toolchain/" + argv[len(argv) - 1] + "\n"
+    if "--show-sdk-path" in argv:
+        return "/sdks/iPhoneSimulator.sdk\n"
+    if "--version" in argv:
+        return "Swift version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "app",
+        "name": "App",
+        "id": "app/App",
+    }},
+    "attr": {{
+        "platform": "ios",
+        "bundle_id": "dev.once.App",
+        "minimum_os": "17.0",
+        "sdk_variant": "simulator",
+        "info_plist": "App-Info.plist",
+        "info_plist_substitutions": {{
+            "EXECUTABLE_NAME": "App",
+            "PRODUCT_BUNDLE_IDENTIFIER": "dev.once.App",
+        }},
+    }},
+    "deps": [],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/app/App",
+    "capability": "build",
+}}
+provider = _apple_application_impl(ctx)
+result = repr(provider["app_path"])
+"#
+    );
+    let store = store_for(workspace.path(), "app");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), r#"".once/out/app/App/App.app""#);
+    let plist = action_by_identifier(&store, "write_path:.once/out/app/App.app/Info.plist");
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &plist.operation else {
+        panic!("expected custom application property list");
+    };
+    let plist = std::str::from_utf8(bytes).unwrap();
+    assert!(plist.contains("<string>App</string>"));
+    assert!(plist.contains("<string>dev.once.App</string>"));
+    assert!(plist.contains("<key>UILaunchStoryboardName</key>"));
+    assert!(!plist.contains("$(EXECUTABLE_NAME)"));
+    assert!(!plist.contains("${PRODUCT_BUNDLE_IDENTIFIER}"));
 }
 
 #[cfg(unix)]
@@ -7081,6 +7478,7 @@ result = repr(provider)
     assert_eq!(
         stage.inputs,
         vec![
+            ".once/out/apps/App/App.app",
             ".once/out/apps/App/App.app/App",
             ".once/out/apps/App/App.app/Info.plist",
             ".once/out/apps/App/App.app/_CodeSignature/CodeResources",
@@ -7116,12 +7514,23 @@ fn prelude_apple_thinned_package_rejects_multiple_applications() {
 
 #[cfg(unix)]
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the inline Starlark fixture keeps this provider contract in one test"
+)]
 fn prelude_apple_framework_stops_static_links_and_propagates_runtime_frameworks() {
     let prelude = all_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("framework/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
     std::fs::write(package_dir.join("Plugin.swift"), "import Support\n").unwrap();
+    std::fs::write(package_dir.join("Plugin.h"), "void plugin(void);\n").unwrap();
+    std::fs::write(
+        package_dir.join("Plugin.m"),
+        "#import \"Plugin.h\"\nvoid plugin(void) {}\n",
+    )
+    .unwrap();
+    std::fs::write(package_dir.join("Resource.txt"), "resource\n").unwrap();
     let source = format!(
         r#"{prelude}
 def host_which(name):
@@ -7129,9 +7538,13 @@ def host_which(name):
         return "/usr/bin/xcrun"
     if name == "codesign":
         return "/usr/bin/codesign"
+    if name == "find":
+        return "/usr/bin/find"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
+    if argv[0] == "/usr/bin/find":
+        return ""
     if "--find" in argv:
         return "/toolchain/" + argv[len(argv) - 1] + "\n"
     if "--show-sdk-path" in argv:
@@ -7146,6 +7559,19 @@ support = {{
     "files": [".once/out/support/Support.framework/Support"],
     "label_id": "support/Support",
 }}
+runtime = {{
+    "path": ".once/out/runtime/Runtime.framework",
+    "module_name": "Runtime",
+    "files": [".once/out/runtime/Runtime.framework/Runtime"],
+    "label_id": "runtime/Runtime",
+}}
+binary = {{
+    "path": ".once/vendor/Binary.framework",
+    "module_name": "Binary",
+    "files": [".once/vendor/Binary.framework/Binary"],
+    "label_id": "vendor/Binary",
+    "linkage": "static",
+}}
 ctx = {{
     "label": {{
         "package": "framework",
@@ -7157,14 +7583,18 @@ ctx = {{
         "bundle_id": "dev.once.Plugin",
         "minimum_os": "17.0",
         "sdk_variant": "simulator",
+        "resources": ["Sources/Resource.txt"],
+        "enable_modules": True,
+        "exported_headers": ["Sources/Plugin.h"],
     }},
     "deps": [{{
         "label_id": "static/Static",
-        "transitive_archives": [".once/out/static/Static.a"],
-        "transitive_link_framework_bundles": [support],
-        "transitive_framework_bundles": [support],
+        "transitive_archives": [".once/out/static/Static.a", ".once/vendor/Binary.framework/Binary"],
+        "transitive_alwayslink_archives": [".once/out/static/Static.a"],
+        "transitive_link_framework_bundles": [support, binary],
+        "transitive_framework_bundles": [support, runtime],
     }}],
-    "srcs": ["Sources/**/*.swift"],
+    "srcs": ["Sources/**/*.swift", "Sources/**/*.m"],
     "build_dir": ".once/out/framework/Plugin",
     "capability": "build",
 }}
@@ -7174,56 +7604,64 @@ result = repr([
     provider["absorbed_static_archives"],
     [bundle["path"] for bundle in provider["transitive_link_framework_bundles"]],
     [bundle["path"] for bundle in provider["transitive_framework_bundles"]],
+    provider["transitive_vfs_overlays"],
 ])
 "#
     );
     let store = store_for(workspace.path(), "framework");
 
-    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     assert_eq!(
         out.unwrap(),
-        "[[], [\".once/out/static/Static.a\"], [\".once/out/framework/Plugin/Plugin.framework\"], [\".once/out/framework/Plugin/Plugin.framework\", \".once/out/support/Support.framework\"]]"
+        "[[], [\".once/out/framework/Plugin.a\", \".once/out/static/Static.a\", \".once/vendor/Binary.framework/Binary\"], [\".once/out/framework/Plugin/Plugin.framework\"], [\".once/out/framework/Plugin/Plugin.framework\", \".once/out/support/Support.framework\", \".once/out/runtime/Runtime.framework\"], [\".once/out/framework/framework-headers-overlay.yaml\"]]"
     );
-}
-
-#[test]
-fn prelude_apple_link_reports_static_framework_diamonds() {
-    let error = eval_prelude_function(
-        "_apple_validate_static_framework_diamonds",
-        r#"(
-            "app/App",
-            [".once/out/shared/Shared.a"],
-            [{
-                "path": ".once/out/plugin/Plugin.framework",
-                "label_id": "plugin/Plugin",
-                "absorbed_static_archives": [".once/out/shared/Shared.a"],
-            }],
-        )"#,
-    )
-    .unwrap_err();
-
-    assert!(error.contains("app/App"), "{error}");
-    assert!(error.contains("plugin/Plugin"), "{error}");
-    assert!(
-        error.contains("remove the duplicate static dependency"),
-        "{error}"
-    );
-
-    let sibling_error = eval_prelude_function(
-        "_apple_validate_static_framework_diamonds",
-        r#"(
-            "app/App",
-            [],
-            [
-                {"label_id": "plugin/One", "absorbed_static_archives": ["Shared.a"]},
-                {"label_id": "plugin/Two", "absorbed_static_archives": ["Shared.a"]},
-            ],
-        )"#,
-    )
-    .unwrap_err();
-    assert!(sibling_error.contains("plugin/One"), "{sibling_error}");
-    assert!(sibling_error.contains("plugin/Two"), "{sibling_error}");
+    let link = action_by_identifier(&store, "apple_framework_link_Plugin");
+    assert!(link.argv.windows(4).any(|args| {
+        args == [
+            "-Xlinker",
+            "-force_load",
+            "-Xlinker",
+            ".once/out/static/Static.a",
+        ]
+    }));
+    assert!(link
+        .argv
+        .iter()
+        .any(|arg| arg == ".once/vendor/Binary.framework/Binary"));
+    assert!(!link.argv.windows(4).any(|args| {
+        args == [
+            "-Xlinker",
+            "-force_load",
+            "-Xlinker",
+            ".once/vendor/Binary.framework/Binary",
+        ]
+    }));
+    assert!(!link
+        .argv
+        .windows(2)
+        .any(|args| args == ["-framework", "Binary"]));
+    assert!(link
+        .argv
+        .windows(2)
+        .any(|args| args == ["-F", ".once/out/runtime"]));
+    assert!(link
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/runtime/Runtime.framework/Runtime"));
+    let swift_compile = action_by_identifier(&store, "swift_module_compile_Plugin");
+    assert!(swift_compile.argv.windows(4).any(|args| {
+        args == [
+            "-Xfrontend",
+            "-disable-autolink-framework",
+            "-Xfrontend",
+            "Binary",
+        ]
+    }));
+    assert!(link
+        .argv
+        .iter()
+        .any(|arg| arg == ".once/out/framework/Plugin-framework-link-anchor.swift"));
 }
 
 #[cfg(unix)]
@@ -7235,6 +7673,30 @@ fn prelude_apple_test_bundle_stages_transitive_framework_runtime_closure() {
     let package_dir = workspace.path().join("tests/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
     std::fs::write(package_dir.join("PluginTests.swift"), "import XCTest\n").unwrap();
+    std::fs::write(package_dir.join("Legacy.h"), "void legacy(void);\n").unwrap();
+    std::fs::write(
+        package_dir.join("Legacy.m"),
+        "#import <XCTest/XCTest.h>\n#import \"Legacy.h\"\nvoid legacy(void) {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("PluginTests-Bridging-Header.h"),
+        "#import \"Legacy.h\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("PluginTests-Prefix.pch"),
+        "#import \"Legacy.h\"\n",
+    )
+    .unwrap();
+    let fixtures_dir = workspace.path().join("tests/Fixtures/Nested");
+    std::fs::create_dir_all(&fixtures_dir).unwrap();
+    std::fs::write(fixtures_dir.join("fixture.json"), "{}\n").unwrap();
+    std::fs::write(
+        workspace.path().join("tests/Info.plist"),
+        "<plist><dict><key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string><key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string><key>SOURCE_ROOT_DIR</key><string>$(SRCROOT)</string></dict></plist>",
+    )
+    .unwrap();
     let source = format!(
         r#"{prelude}
 def host_which(name):
@@ -7244,9 +7706,17 @@ def host_which(name):
         return "/usr/bin/codesign"
     if name == "sh":
         return "/bin/sh"
+    if name == "find":
+        return "/usr/bin/find"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
+    if argv[0] == "/usr/bin/find":
+        if "-name" in argv:
+            return ""
+        if "-type" in argv and "f" in argv:
+            return argv[1] + "/Nested/fixture.json\n"
+        return argv[1] + "\n"
     if "--find" in argv:
         if argv[len(argv) - 1] == "swiftc":
             return "/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc\n"
@@ -7279,13 +7749,41 @@ ctx = {{
     "attr": {{
         "platform": "macos",
         "minimum_os": "14.0",
+        "bridging_header": "Sources/PluginTests-Bridging-Header.h",
+        "prefix_header": "Sources/PluginTests-Prefix.pch",
+        "private_header_dirs": ["Sources"],
+        "defines": ["DEBUG"],
+        "sdk_frameworks": ["Security"],
+        "weak_sdk_frameworks": ["Contacts"],
+        "sdk_dylibs": ["sqlite3"],
+        "linkopts": ["-Xlinker", "-ObjC"],
+        "bundle_id": "dev.once.PluginTests",
+        "resources": ["Fixtures"],
+        "structured_resources": ["Fixtures"],
+        "info_plist": "Info.plist",
+        "info_plist_substitutions": {{
+            "EXECUTABLE_NAME": "PluginTests",
+            "PRODUCT_BUNDLE_IDENTIFIER": "dev.once.PluginTests",
+            "SRCROOT": "/workspace/tests",
+        }},
     }},
     "deps": [{{
         "label_id": "plugin/Plugin",
         "transitive_link_framework_bundles": [plugin],
         "transitive_framework_bundles": [plugin, support],
+        "transitive_archives": [".once/out/plugin/Plugin.a"],
+    }}, {{
+        "label_id": "app/WidgetExtension",
+        "target_kind": "apple_application",
+        "app_executable": ".once/out/app/WidgetExtension.app/WidgetExtension",
+        "application_extension": True,
+    }}, {{
+        "label_id": "app/App",
+        "target_kind": "apple_application",
+        "app_executable": ".once/out/app/App.app/App",
+        "host_link_archives": [".once/out/plugin/Plugin.a"],
     }}],
-    "srcs": ["Sources/**/*.swift"],
+    "srcs": ["Sources/**/*.swift", "Sources/**/*.m"],
     "build_dir": ".once/out/tests/PluginTests",
     "capability": "test",
 }}
@@ -7303,6 +7801,78 @@ result = repr(provider["test_bundle_path"])
 
     assert!(out.unwrap().contains("PluginTests.xctest"));
     let compile = action_by_identifier(&store, "apple_test_bundle_compile_PluginTests");
+    assert!(compile.argv.windows(2).any(|args| {
+        args == [
+            "-I".to_string(),
+            "/Platforms/MacOSX.platform/Developer/usr/lib".to_string(),
+        ]
+    }));
+    assert!(compile.argv.iter().any(|arg| arg == "-lXCTestSwiftSupport"));
+    assert!(compile
+        .argv
+        .windows(2)
+        .any(|args| { args == ["-framework".to_string(), "Security".to_string()] }));
+    assert!(compile.argv.windows(4).any(|args| {
+        args == [
+            "-Xlinker".to_string(),
+            "-weak_framework".to_string(),
+            "-Xlinker".to_string(),
+            "Contacts".to_string(),
+        ]
+    }));
+    assert!(compile.argv.iter().any(|arg| arg == "-lsqlite3"));
+    assert!(compile
+        .argv
+        .windows(2)
+        .any(|args| { args == ["-Xlinker".to_string(), "-ObjC".to_string()] }));
+    assert!(compile.argv.windows(4).any(|args| {
+        args == [
+            "-Xlinker".to_string(),
+            "-bundle_loader".to_string(),
+            "-Xlinker".to_string(),
+            ".once/out/app/App.app/App".to_string(),
+        ]
+    }));
+    assert!(compile
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/app/App.app/App"));
+    assert!(!compile
+        .argv
+        .iter()
+        .any(|arg| arg == ".once/out/plugin/Plugin.a"));
+    assert!(compile.argv.windows(2).any(|args| {
+        args == [
+            "-import-objc-header".to_string(),
+            "tests/Sources/PluginTests-Bridging-Header.h".to_string(),
+        ]
+    }));
+    let clang = action_by_identifier(
+        &store,
+        "apple_test_bundle_clang_compile_PluginTests_tests_Sources_Legacy.m",
+    );
+    assert!(clang.argv.iter().any(|arg| arg == "-DDEBUG"));
+    assert!(clang.argv.windows(2).any(|args| {
+        args == [
+            "-include".to_string(),
+            "tests/Sources/PluginTests-Prefix.pch".to_string(),
+        ]
+    }));
+    assert!(clang
+        .inputs
+        .iter()
+        .any(|input| input == "tests/Sources/PluginTests-Prefix.pch"));
+    let legacy_object = ".once/out/tests/PluginTests/Objects/tests_Sources_Legacy.m.o";
+    assert!(
+        compile.inputs.iter().any(|input| input == legacy_object),
+        "{:?}",
+        compile.inputs
+    );
+    assert!(
+        compile.argv.iter().any(|arg| arg == legacy_object),
+        "{:?}",
+        compile.argv
+    );
     assert!(compile
         .argv
         .windows(2)
@@ -7321,6 +7891,44 @@ result = repr(provider["test_bundle_path"])
         [".once/out/tests/PluginTests/PluginTests.xctest/Contents/Frameworks/Support.framework"]
     );
     let codesign = action_by_identifier(&store, "apple_test_bundle_codesign_PluginTests");
+    let plist = action_by_identifier(
+        &store,
+        "write_path:.once/out/tests/PluginTests/PluginTests.xctest/Contents/Info.plist",
+    );
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &plist.operation else {
+        panic!("test property-list action must write the custom template");
+    };
+    let contents = std::str::from_utf8(bytes).unwrap();
+    assert!(contents.contains("dev.once.PluginTests"), "{contents}");
+    assert!(contents.contains("/workspace/tests"), "{contents}");
+    let resource = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .outputs
+                .iter()
+                .any(|output| output.ends_with("Contents/Resources/Fixtures/Nested/fixture.json"))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing structured test resource action: {:?}",
+                store
+                    .actions
+                    .iter()
+                    .map(|action| (&action.identifier, &action.outputs))
+                    .collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(resource.inputs, ["tests/Fixtures/Nested/fixture.json"]);
+    assert_eq!(
+        resource.outputs,
+        [".once/out/tests/PluginTests/PluginTests.xctest/Contents/Resources/Fixtures/Nested/fixture.json"]
+    );
+    assert!(codesign
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("Contents/Resources/Fixtures/Nested/fixture.json")));
     assert!(action_has_input_suffix(
         codesign,
         "Contents/Frameworks/Support.framework/_CodeSignature/CodeResources"
@@ -7338,10 +7946,177 @@ result = repr(provider["test_bundle_path"])
         runner,
         "Contents/Frameworks/Support.framework"
     ));
+    assert!(action_has_input_suffix(
+        runner,
+        "Contents/Resources/Fixtures/Nested/fixture.json"
+    ));
     assert!(!runner.cacheable);
     for action in [compile, plugin_embed, support_copy, support_embed, codesign] {
         assert!(action.cacheable);
     }
+}
+
+#[cfg(unix)]
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the inline Starlark fixture keeps this test runner contract in one test"
+)]
+fn prelude_apple_test_bundle_runs_ios_hosted_tests_with_xctestrun() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("tests/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("HostedTests.swift"),
+        "import XCTest\nfinal class HostedTests: XCTestCase { func testHost() {} }\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    return "/usr/bin/" + name
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--find" in argv:
+        if argv[len(argv) - 1] == "swiftc":
+            return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc\n"
+        return "/toolchain/" + argv[len(argv) - 1] + "\n"
+    if "--show-sdk-path" in argv:
+        return "/sdks/iPhoneSimulator.sdk\n"
+    if "--show-sdk-platform-path" in argv:
+        return "/Platforms/iPhoneSimulator.platform\n"
+    if "--version" in argv:
+        return "Swift version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "tests",
+        "name": "HostedTests",
+        "id": "tests/HostedTests",
+    }},
+    "attr": {{
+        "platform": "ios",
+        "minimum_os": "17.0",
+        "sdk_variant": "simulator",
+        "test_env": {{
+            "AppleLanguages": "(en)",
+            "AppleLocale": "en_US",
+            "TZ": "America/New_York",
+        }},
+        "skipped_tests": ["SlowTests", "FeatureTests/testManual"],
+    }},
+    "deps": [{{
+        "label_id": "app/App",
+        "target_kind": "apple_application",
+        "app_path": ".once/out/app/App/App.app",
+        "app_executable": ".once/out/app/App/App.app/App",
+        "app_files": [
+            ".once/out/app/App/App.app/App",
+            ".once/out/app/App/App.app/Info.plist",
+        ],
+        "bundle_id": "dev.once.App",
+        "product_name": "App",
+    }}],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/tests/HostedTests",
+    "capability": "test",
+}}
+provider = _apple_test_bundle_impl(ctx)
+result = repr(provider["test_info"]["command"]["argv"])
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "tests".to_string(),
+        ".once/out/tests/HostedTests".to_string(),
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let out = out.unwrap();
+    assert!(out.contains("/usr/bin/xcodebuild"), "{out}");
+    assert!(out.contains("test-without-building"), "{out}");
+    let xctestrun = action_by_identifier(
+        &store,
+        "write_path:.once/out/tests/HostedTests/runner/tests.xctestrun",
+    );
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &xctestrun.operation else {
+        panic!("xctestrun action must write its property list");
+    };
+    let contents = std::str::from_utf8(bytes).unwrap();
+    assert!(contents.contains("<key>IsAppHostedTestBundle</key><true/>"));
+    assert!(contents.contains(".once/out/app/App/App.app"));
+    assert!(contents.contains("libXCTestBundleInject.dylib"));
+    assert!(contents.contains("<key>AppleLanguages</key><string>(en)</string>"));
+    assert!(contents.contains("<key>AppleLocale</key><string>en_US</string>"));
+    assert!(contents.contains("<key>TZ</key><string>America/New_York</string>"));
+    assert!(contents.contains("<string>SlowTests</string>"));
+    let run = action_by_identifier(&store, "apple_xctest:tests/HostedTests");
+    let script = run.argv.last().unwrap();
+    assert!(script.contains("test-without-building"), "{script}");
+    assert!(
+        script.contains("-skip-testing:HostedTests/SlowTests"),
+        "{script}"
+    );
+    assert!(
+        script.contains("-skip-testing:HostedTests/FeatureTests/testManual"),
+        "{script}"
+    );
+    assert!(
+        script.contains("-destination \"id=$simulator_id\""),
+        "{script}"
+    );
+    assert!(run
+        .inputs
+        .iter()
+        .any(|input| input == ".once/out/app/App/App.app/Info.plist"));
+    assert!(run
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("runner/tests.xctestrun")));
+}
+
+#[test]
+fn prelude_apple_ui_xctestrun_uses_the_runner_and_application_under_test() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+result = _apple_ui_xctestrun(
+    "InterfaceTests",
+    ".once/out/InterfaceTests/InterfaceTests-Runner.app/PlugIns/InterfaceTests.xctest",
+    ".once/out/InterfaceTests/InterfaceTests-Runner.app",
+    "org.example.InterfaceTests.xctrunner",
+    {{
+        "app_path": ".once/out/App/App.app",
+    }},
+    "/Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks",
+    "/Platforms/iPhoneSimulator.platform/Developer/usr/lib",
+    {{
+        "AppleLanguages": "(en)",
+        "AppleLocale": "en_US",
+        "CONFIG_VALUE": "configured",
+    }},
+    ["-ExampleMode", "testing"],
+    ["InterfaceTests/testManual"],
+)
+"#
+    );
+
+    let contents = eval_prelude_source_to_repr(source).unwrap();
+    assert!(contents.contains("<key>IsUITestBundle</key><true/>"));
+    assert!(contents.contains("<key>IsXCTRunnerHostedTestBundle</key><true/>"));
+    assert!(contents.contains("/workspace/.once/out/InterfaceTests/InterfaceTests-Runner.app"));
+    assert!(contents
+        .contains("<key>UITargetAppPath</key><string>/workspace/.once/out/App/App.app</string>"));
+    assert!(contents.contains("<string>-ExampleMode</string><string>testing</string>"));
+    assert!(contents.contains("<key>UITargetAppCommandLineArguments</key><array><string>-AppleLanguages</string><string>(en)</string><string>-AppleLocale</string><string>en_US</string></array>"));
+    assert!(contents.contains("<key>CONFIG_VALUE</key><string>configured</string>"));
+    assert!(contents.contains("<string>InterfaceTests/testManual</string>"));
 }
 
 fn apple_test_bundle_source(capability: &str, test_block: &str) -> String {
@@ -7505,6 +8280,26 @@ fn prelude_apple_test_cases_script_lists_xctest_and_swift_testing_cases() {
     );
     // `helper` is not a test method and must not be listed as a case.
     assert!(!cases.contains("helper"), "{cases}");
+
+    let filtered_script = eval_prelude_string_function(
+        "_apple_test_cases_script",
+        r#"(["XCTests.swift", "Suite.swift"], "filtered.jsonl", "tests/Bundle", "xctest", ["NetworkTests/testRetry"])"#,
+    )
+    .unwrap();
+    let filtered_output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("status=0\n{filtered_script}"))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(filtered_output.status.success(), "{filtered_output:?}");
+    let filtered = std::fs::read_to_string(dir.path().join("filtered.jsonl")).unwrap();
+    assert!(
+        filtered.contains(r#""id":"tests/Bundle::NetworkTests/testRetry""#),
+        "{filtered}"
+    );
+    assert!(!filtered.contains("testTimeout"), "{filtered}");
+    assert!(!filtered.contains("addsNumbers"), "{filtered}");
 }
 
 #[cfg(unix)]
@@ -8109,13 +8904,53 @@ fn apple_library_schema_exposes_multi_arch_attributes() {
 }
 
 #[test]
-fn apple_library_swift_compile_is_split_into_module_and_archive_actions() {
+fn apple_library_swift_compile_emits_module_and_objects_in_one_action() {
     let source = include_str!("../prelude/apple.star");
 
     assert!(source.contains("identifier = \"swift_module_compile_"));
-    assert!(source.contains("outputs = [swiftmodule, swiftdoc, swift_objc_header]"));
-    assert!(source.contains("identifier = \"swift_archive_compile_"));
-    assert!(source.contains("outputs = [swift_archive]"));
+    assert!(source.contains(
+        "swift_compile_outputs = [swiftmodule, swiftdoc, swift_objc_header] + swift_objects"
+    ));
+    assert!(source.contains("identifier = \"libtool_swift_archive_"));
+    assert!(source.contains("-output-file-map"));
+}
+
+#[test]
+fn prelude_apple_swift_whole_module_output_shape_tracks_threading() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _apple_swift_emits_single_object(["-whole-module-optimization"]),
+    _apple_swift_emits_single_object(["-Owholemodule"]),
+    _apple_swift_emits_single_object(["-wmo", "-num-threads", "8"]),
+    _apple_swift_emits_single_object(["-Onone"]),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        "[True, True, False, False]"
+    );
+}
+
+#[test]
+fn prelude_apple_disables_batch_mode_for_combined_swift_links() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr(_apple_swift_link_flags([
+    "-Onone",
+    "-j1",
+    "-enable-batch-mode",
+    "-enable-testing",
+]))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["-Onone", "-j1", "-enable-testing"]"#
+    );
 }
 
 #[test]
@@ -8149,6 +8984,47 @@ fn apple_application_testable_module_is_parsed_as_library() {
 #[test]
 fn target_kind_has_impl_returns_true_for_swift_macro() {
     assert!(target_kind_has_impl("swift_macro").unwrap());
+}
+
+#[test]
+fn swift_macro_preserves_exact_sources_outside_glob_discovery() {
+    let source = include_str!("../prelude/apple.star");
+    let implementation = source
+        .split_once("def _swift_macro_impl(ctx):")
+        .expect("Swift macro implementation")
+        .1
+        .split_once("# --- Bundle helpers")
+        .expect("end of Swift macro implementation")
+        .0;
+    assert!(
+        implementation.contains("glob(ctx[\"srcs\"]) + _apple_declared_source_paths(ctx)"),
+        "exact package and generated sources must remain available when glob discovery excludes their directory"
+    );
+    assert!(
+        implementation.contains("_collect_dep_compile_inputs(deps, ctx[\"build_dir\"])")
+            && implementation.contains("\"-fmodule-map-file=\" + modulemap")
+            && implementation.contains("for modulemap in dep_modulemaps:"),
+        "Swift macros must compile with transitive C module metadata and declare it as action input"
+    );
+}
+
+#[test]
+fn prelude_apple_collects_transitive_swift_macro_plugins() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr(_collect_dep_compile_inputs([
+    {{"transitive_plugin_dylibs": ["libIndirect.dylib"]}},
+    {{"plugin_dylib": "libDirect.dylib"}},
+    {{"transitive_plugin_executables": ["Indirect-tool#Indirect"]}},
+    {{"plugin_executable": "Direct-tool", "plugin_module_name": "Direct"}},
+], ".once/out/App")[12:])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"(["libIndirect.dylib", "libDirect.dylib"], ["Indirect-tool#Indirect", "Direct-tool#Direct"])"#
+    );
 }
 
 #[test]
@@ -9390,6 +10266,23 @@ fn prelude_swift_package_build_directory_uses_canonical_triple() {
     )
     .unwrap();
     assert_eq!(ios, "arm64-apple-ios-simulator");
+}
+
+#[test]
+fn prelude_apple_swiftmodule_triple_uses_framework_module_layout() {
+    let ios = eval_prelude_string_function(
+        "_apple_swiftmodule_triple",
+        r#"("ios", "simulator", "arm64", False)"#,
+    )
+    .unwrap();
+    assert_eq!(ios, "arm64-apple-ios-simulator");
+
+    let catalyst = eval_prelude_string_function(
+        "_apple_swiftmodule_triple",
+        r#"("macos", "simulator", "arm64", True)"#,
+    )
+    .unwrap();
+    assert_eq!(catalyst, "arm64-apple-ios-macabi");
 }
 
 #[test]
@@ -11565,6 +12458,28 @@ fn prelude_ios_simulator_selection_filters_to_iphone_and_ipad() {
     assert!(!out.contains("sed -n 's/.*"), "{out}");
 }
 
+#[test]
+fn prelude_apple_ui_test_install_replaces_the_application_under_test() {
+    let script = eval_prelude_string_function(
+        "_apple_ui_test_install_script",
+        r#"("/usr/bin/xcrun", "org.example.App", ".once/out/App/App.app")"#,
+    )
+    .unwrap();
+
+    assert!(
+        script.contains("simctl terminate \"$simulator_id\" 'org.example.App'"),
+        "{script}"
+    );
+    assert!(
+        script.contains("simctl uninstall \"$simulator_id\" 'org.example.App'"),
+        "{script}"
+    );
+    assert!(
+        script.contains("simctl install \"$simulator_id\" '.once/out/App/App.app'"),
+        "{script}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn prelude_ios_simulator_selection_script_picks_booted_ios_device() {
@@ -11774,7 +12689,7 @@ fn prelude_serialize_hmap_lays_out_canonical_header_and_entries() {
     let bytes = bytes.unwrap();
 
     // magic + version + reserved
-    assert_eq!(&bytes[0..4], &0x6861_6D70_u32.to_le_bytes());
+    assert_eq!(&bytes[0..4], &0x686D_6170_u32.to_le_bytes());
     assert_eq!(&bytes[4..6], &1u16.to_le_bytes());
     assert_eq!(&bytes[6..8], &0u16.to_le_bytes());
 
@@ -12232,8 +13147,21 @@ result = repr(provider["archive"])
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     out.unwrap();
-    assert!(!store.actions.is_empty(), "expected swiftc actions");
-    for action in &store.actions {
+    let compiler_actions = store
+        .actions
+        .iter()
+        .filter(|action| !action.argv.is_empty())
+        .collect::<Vec<_>>();
+    assert!(!compiler_actions.is_empty(), "expected compiler actions");
+    let swiftc = "/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc";
+    let libtool = "/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/libtool";
+    assert!(
+        compiler_actions
+            .iter()
+            .any(|action| action.argv[0] == swiftc),
+        "expected at least one Swift compiler action"
+    );
+    for action in compiler_actions {
         for arg in &action.argv {
             assert!(
                 !arg.contains("xcrun"),
@@ -12241,10 +13169,10 @@ result = repr(provider["archive"])
                 action.argv
             );
         }
-        assert_eq!(
-            action.argv[0],
-            "/opt/Xcode/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
-            "first argv element should be the resolved swiftc"
+        assert!(
+            action.argv[0] == swiftc || action.argv[0] == libtool,
+            "first argument should be a resolved toolchain executable: {:?}",
+            action.argv
         );
         // The action env carries DEVELOPER_DIR through to the tool so
         // it can find ancillary resources next to swiftc.
@@ -12253,6 +13181,522 @@ result = repr(provider["archive"])
             Some("/opt/Xcode/Developer"),
         );
     }
+}
+
+#[test]
+fn prelude_apple_library_preserves_one_canonical_authored_modulemap() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let source_dir = workspace.path().join("ios/CLib/Sources");
+    let include_dir = workspace.path().join("ios/CLib/include");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::create_dir_all(&include_dir).unwrap();
+    std::fs::write(source_dir.join("CLib.m"), "#include \"CLib.h\"\n").unwrap();
+    std::fs::write(source_dir.join("Fast.S"), "#if 0\n#endif\n").unwrap();
+    std::fs::write(
+        source_dir.join("CLib-Prefix.pch"),
+        "#include <Foundation/Foundation.h>\n",
+    )
+    .unwrap();
+    std::fs::write(include_dir.join("CLib.h"), "void clib(void);\n").unwrap();
+    std::fs::write(
+        include_dir.join("module.modulemap"),
+        "module CLib { header \"CLib.h\" export * }\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode")
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--version" in argv:
+        return "Apple clang version 18.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{"package": "ios/CLib", "name": "CLib", "id": "ios/CLib/CLib"}},
+    "attr": {{
+        "platform": "ios",
+        "sdk_variant": "simulator",
+        "xcode_developer_dir": "/opt/Xcode/Developer",
+        "enable_modules": True,
+        "modulemap": "ios/CLib/include/module.modulemap",
+        "prefix_header": "Sources/CLib-Prefix.pch",
+        "exported_headers": ["include/CLib.h"],
+        "exported_header_dirs": ["include"],
+    }},
+    "deps": [],
+    "srcs": ["Sources/CLib.m", "Sources/Fast.S"],
+    "build_dir": ".once/out/ios/CLib/CLib",
+    "capability": "build",
+}}
+provider = _apple_library_impl(ctx)
+result = repr(provider)
+"#
+    );
+    let store = store_for(workspace.path(), "ios/CLib");
+    let (store, provider) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let provider = provider.unwrap();
+    let canonical = "ios/CLib/include/module.modulemap";
+    assert!(provider.contains(&format!(r#""modulemap": "{canonical}""#)));
+    assert!(provider.contains(r#""transitive_swiftmodule_dirs": []"#));
+    assert!(!store.actions.iter().any(|action| action
+        .outputs
+        .iter()
+        .any(|output| output.ends_with("authored.modulemap"))));
+    let compiler = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .identifier
+                .as_deref()
+                .is_some_and(|identifier| identifier.starts_with("clang_compile_CLib"))
+        })
+        .expect("Clang compiler action");
+    assert!(compiler
+        .argv
+        .contains(&format!("-fmodule-map-file={canonical}")));
+    assert!(compiler.inputs.contains(&canonical.to_string()));
+    assert!(compiler
+        .argv
+        .windows(2)
+        .any(|args| { args == ["-include", "ios/CLib/Sources/CLib-Prefix.pch"] }));
+    assert!(compiler
+        .inputs
+        .contains(&"ios/CLib/Sources/CLib-Prefix.pch".to_string()));
+    let assembler = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .identifier
+                .as_deref()
+                .is_some_and(|identifier| identifier.contains("Fast.S"))
+        })
+        .expect("assembly compiler action");
+    assert!(assembler
+        .argv
+        .windows(2)
+        .any(|args| args == ["-x", "assembler-with-cpp"]));
+    assert!(!assembler.argv.iter().any(|arg| arg == "-fmodules"));
+    assert!(!assembler
+        .argv
+        .iter()
+        .any(|arg| arg.starts_with("-fmodule-map-file=")));
+    assert!(!assembler.argv.iter().any(|arg| arg == "-include"));
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the inline Starlark fixture keeps this module map contract in one test"
+)]
+fn prelude_apple_library_stages_authored_framework_modulemap() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let source_dir = workspace.path().join("ios/Logging/Sources");
+    let support_dir = workspace.path().join("ios/Logging/Support");
+    let auxiliary_dir = workspace.path().join("ios/Logging/Auxiliary");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::create_dir_all(&support_dir).unwrap();
+    std::fs::create_dir_all(&auxiliary_dir).unwrap();
+    std::fs::write(source_dir.join("Logging.swift"), "public func log() {}\n").unwrap();
+    std::fs::write(source_dir.join("Private.h"), "void private_log(void);\n").unwrap();
+    std::fs::write(
+        support_dir.join("Logging.modulemap"),
+        "framework module Logging {\n  umbrella header \"Logging-umbrella.h\"\n  explicit module Internal { header \"Private.h\" }\n  export *\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        support_dir.join("Logging-umbrella.h"),
+        "void logging(void);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        auxiliary_dir.join("module.modulemap"),
+        "module LoggingNative { header \"LoggingNative.h\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        auxiliary_dir.join("LoggingNative.h"),
+        "void logging_native(void);\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode")
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--version" in argv:
+        return "Swift version 6.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{"package": "", "name": "Logging", "id": "Logging"}},
+    "attr": {{
+        "platform": "ios",
+        "sdk_variant": "simulator",
+        "xcode_developer_dir": "/opt/Xcode/Developer",
+        "enable_modules": True,
+        "modulemap": "ios/Logging/Support/Logging.modulemap",
+        "modulemap_headers": ["ios/Logging/Sources/Private.h"],
+        "auxiliary_modulemaps": ["ios/Logging/Auxiliary/module.modulemap"],
+    }},
+    "deps": [],
+    "srcs": ["ios/Logging/Sources/Logging.swift"],
+    "build_dir": ".once/out/Logging",
+    "capability": "build",
+}}
+provider = _apple_library_impl(ctx)
+result = repr(provider)
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        String::new(),
+        ".once/out/Logging".to_string(),
+    );
+    let (store, provider) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let provider = provider.unwrap();
+    let consumer_map = ".once/out/Logging/Logging.framework/Modules/module.modulemap";
+    let compile_map = ".once/out/Logging/Unextended/Logging.framework/Modules/module.modulemap";
+    let compile_header =
+        ".once/out/Logging/Unextended/Logging.framework/Headers/Logging-umbrella.h";
+    let private_header = ".once/out/Logging/Unextended/Logging.framework/Headers/Private.h";
+    assert!(provider.contains(consumer_map), "{provider}");
+    assert!(
+        provider.contains("ios/Logging/Auxiliary/module.modulemap"),
+        "{provider}"
+    );
+    assert!(
+        provider.contains("ios/Logging/Auxiliary/LoggingNative.h"),
+        "{provider}"
+    );
+    assert!(provider.contains(r#""transitive_framework_search_dirs": [".once/out/Logging"]"#));
+    assert!(store.actions.iter().any(|action| {
+        action
+            .identifier
+            .as_deref()
+            .is_some_and(|identifier| identifier == "clean_framework_module_Logging")
+    }));
+    assert!(store.actions.iter().any(|action| {
+        action
+            .identifier
+            .as_deref()
+            .is_some_and(|identifier| identifier == "clean_unextended_framework_module_Logging")
+    }));
+    let compiler = action_by_identifier(&store, "swift_module_compile_Logging");
+    assert!(compiler
+        .argv
+        .iter()
+        .any(|arg| arg == "-explicit-module-build"));
+    assert!(compiler.inputs.contains(&compile_map.to_string()));
+    assert!(compiler
+        .inputs
+        .contains(&"ios/Logging/Auxiliary/module.modulemap".to_string()));
+    assert!(compiler
+        .inputs
+        .contains(&"ios/Logging/Auxiliary/LoggingNative.h".to_string()));
+    assert!(compiler.inputs.contains(&private_header.to_string()));
+    assert!(compiler
+        .argv
+        .iter()
+        .any(|arg| arg == "-fmodule-map-file=ios/Logging/Auxiliary/module.modulemap"));
+    assert!(
+        compiler.inputs.contains(&compile_header.to_string()),
+        "{:?}",
+        compiler.inputs
+    );
+    assert!(!compiler
+        .argv
+        .iter()
+        .any(|arg| arg == "-fmodule-map-file=ios/Logging/Support/Logging.modulemap"));
+    let consumer_action = store
+        .actions
+        .iter()
+        .find(|action| action.outputs.contains(&consumer_map.to_string()))
+        .expect("consumer framework module map action");
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &consumer_action.operation else {
+        panic!("consumer module map must be written deterministically");
+    };
+    let contents = std::str::from_utf8(bytes).unwrap();
+    assert!(contents.contains("framework module Logging"));
+    assert!(contents.contains("module Logging.Swift"));
+}
+
+#[test]
+fn prelude_apple_library_lists_public_headers_in_generated_modulemap() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let source_dir = workspace.path().join("ios/CMark/Sources");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("cmark.c"), "#include \"cmark.h\"\n").unwrap();
+    std::fs::write(source_dir.join("cmark.h"), "void cmark(void);\n").unwrap();
+    std::fs::write(source_dir.join("node.h"), "void node(void);\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode")
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--version" in argv:
+        return "Apple clang version 18.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{"package": "ios/CMark", "name": "libcmark", "id": "ios/CMark/libcmark"}},
+    "attr": {{
+        "platform": "ios",
+        "sdk_variant": "simulator",
+        "xcode_developer_dir": "/opt/Xcode/Developer",
+        "module_name": "libcmark",
+        "enable_modules": True,
+        "exported_headers": ["Sources/cmark.h", "Sources/node.h"],
+        "exported_header_dirs": ["Sources"],
+    }},
+    "deps": [],
+    "srcs": ["Sources/cmark.c"],
+    "build_dir": ".once/out/ios/CMark/libcmark",
+    "capability": "build",
+}}
+provider = _apple_library_impl(ctx)
+result = repr(provider)
+"#
+    );
+    let store = store_for(workspace.path(), "ios/CMark");
+    let (store, provider) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let provider = provider.unwrap();
+    assert!(provider.contains(r#""transitive_swiftmodule_dirs": []"#));
+    let action = store
+        .actions
+        .iter()
+        .find(|action| {
+            matches!(
+                &action.operation,
+                Some(DeclaredActionOperation::WriteFile { bytes, .. })
+                    if bytes.starts_with(b"module libcmark {")
+            )
+        })
+        .expect("generated module map action");
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &action.operation else {
+        panic!("module map action must write its contents");
+    };
+    let contents = std::str::from_utf8(bytes).expect("module map contents are UTF-8");
+    assert!(contents.starts_with("module libcmark {"));
+    assert!(contents.contains("header \"../../../../../ios/CMark/Sources/cmark.h\""));
+    assert!(contents.contains("header \"../../../../../ios/CMark/Sources/node.h\""));
+    assert!(!contents.contains("umbrella"));
+    assert!(!contents.contains("module cmark"));
+    assert!(!contents.contains("module node"));
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the inline Starlark fixture keeps this header distribution contract in one test"
+)]
+fn prelude_apple_library_stages_distributed_umbrella_headers() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("ios/Lib/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::create_dir_all(workspace.path().join("ios/Lib/Public")).unwrap();
+    std::fs::write(package_dir.join("Lib.swift"), "public func hello() {}\n").unwrap();
+    std::fs::write(package_dir.join("Lib.h"), "void lib_log(void);\n").unwrap();
+    std::fs::write(package_dir.join("Private.h"), "void private_log(void);\n").unwrap();
+    std::fs::write(
+        workspace.path().join("ios/Lib/Public/Logging.h"),
+        "void log_message(void);\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode (asked for " + name + ")")
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--version" in argv:
+        return "Swift version 6.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "ios/Lib",
+        "name": "Lib",
+        "id": "ios/Lib/Lib",
+    }},
+    "attr": {{
+        "platform": "ios",
+        "sdk_variant": "simulator",
+        "xcode_developer_dir": "/opt/Xcode/Developer",
+        "enable_modules": True,
+        "defines": ["DEBUG"],
+        "exported_headers": ["Sources/Lib.h", "Public/Logging.h"],
+        "private_header_dirs": ["Sources"],
+    }},
+    "deps": [],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/ios/Lib/Lib",
+    "capability": "build",
+}}
+provider = _apple_library_impl(ctx)
+result = repr(provider)
+"#
+    );
+    let store = store_for(workspace.path(), "ios/Lib");
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let provider = result.unwrap();
+    assert!(
+        provider.contains(
+            "\"transitive_generated_headers\": [\".once/out/ios/Lib/Lib.framework/Headers/Lib-Swift.h\"]"
+        ),
+        "generated compatibility headers must be exposed as compile dependencies: {provider}"
+    );
+    assert!(
+        provider.contains("\"transitive_modulemaps\": []"),
+        "framework modules must be discovered through their framework search path: {provider}"
+    );
+    assert!(
+        provider.contains("\"transitive_framework_search_dirs\": [\".once/out/ios/Lib\"]"),
+        "the consumer framework search path must be exported: {provider}"
+    );
+    assert!(
+        provider.contains(
+            "\"transitive_framework_files\": [\".once/out/ios/Lib/Lib.framework/Modules/module.modulemap\""
+        ),
+        "the complete consumer framework must be exposed as action inputs: {provider}"
+    );
+    assert!(
+        provider.contains(
+            "\"transitive_vfs_overlays\": [\".once/out/ios/Lib/framework-headers-overlay.yaml\"]"
+        ),
+        "the framework header overlay must be exported: {provider}"
+    );
+
+    let underlying_modulemap =
+        ".once/out/ios/Lib/Unextended/Lib.framework/Modules/module.modulemap";
+    let modulemap_action = store
+        .actions
+        .iter()
+        .find(|action| action.outputs.contains(&underlying_modulemap.to_string()))
+        .expect("modulemap action");
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &modulemap_action.operation else {
+        panic!("modulemap action must write its contents");
+    };
+    let underlying_contents = std::str::from_utf8(bytes).expect("modulemap contents are UTF-8");
+    assert!(underlying_contents.starts_with("framework module Lib {"));
+    assert!(underlying_contents.contains("umbrella header \"Lib.h\""));
+    assert!(underlying_contents.contains("module * { export * }"));
+    assert!(!underlying_contents.contains("module Logging"));
+    let compiler = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .identifier
+                .as_deref()
+                .is_some_and(|identifier| identifier.starts_with("swift_module_compile_Lib"))
+        })
+        .expect("swift compiler action");
+    assert!(
+        compiler.argv.windows(2).any(|args| {
+            args == [
+                "-F".to_string(),
+                ".once/out/ios/Lib/Unextended".to_string(),
+            ]
+        }),
+        "compiler must discover its synthetic framework module through a framework search path: {:?}",
+        compiler.argv
+    );
+    assert!(
+        compiler.argv.contains(&"-explicit-module-build".to_string()),
+        "the Swift driver must preserve imports of inferred submodules while compiling the parent module: {:?}",
+        compiler.argv
+    );
+    assert!(
+        !compiler
+            .argv
+            .contains(&".once/out/ios/Lib/Lib.hmap".to_string()),
+        "the synthetic framework headers must retain one physical identity during explicit module scanning: {:?}",
+        compiler.argv
+    );
+    let hmap_action = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .outputs
+                .contains(&".once/out/ios/Lib/Lib.hmap".to_string())
+        })
+        .expect("header map action");
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &hmap_action.operation else {
+        panic!("header map action must write its contents");
+    };
+    assert!(
+        bytes
+            .windows(b"Lib/Private.h".len())
+            .any(|window| window == b"Lib/Private.h"),
+        "the target's own header map must include module-qualified private headers"
+    );
+    assert!(
+        !compiler
+            .argv
+            .contains(&format!("-fmodule-map-file={underlying_modulemap}")),
+        "framework module discovery must preserve inferred submodules: {:?}",
+        compiler.argv
+    );
+    assert!(
+        compiler
+            .argv
+            .contains(&"-import-underlying-module".to_string()),
+        "Swift must import the Clang module formed by its own Objective-C headers: {:?}",
+        compiler.argv
+    );
+    assert!(compiler
+        .argv
+        .windows(2)
+        .any(|args| { args == ["-Xcc".to_string(), "-DDEBUG".to_string()] }));
+    assert!(
+        compiler.inputs.contains(&underlying_modulemap.to_string()),
+        "compiler must declare its own module map as an input: {:?}",
+        compiler.inputs
+    );
+    assert!(
+        compiler
+            .outputs
+            .contains(&".once/out/ios/Lib/Lib.framework/Headers/Lib-Swift.h".to_string()),
+        "Swift interop header must be reachable through the consumer framework: {:?}",
+        compiler.outputs
+    );
+    assert_eq!(
+        compiler.clean_paths,
+        vec![
+            ".once/out/ios/Lib/Lib/module.modulemap",
+            ".once/out/ios/Lib/Lib/swift.modulemap",
+            ".once/out/ios/Lib/Lib/underlying.modulemap",
+        ]
+    );
+    let consumer_modulemap = ".once/out/ios/Lib/Lib.framework/Modules/module.modulemap";
+    let consumer_action = store
+        .actions
+        .iter()
+        .find(|action| action.outputs.contains(&consumer_modulemap.to_string()))
+        .expect("consumer framework module map");
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &consumer_action.operation else {
+        panic!("consumer framework module map must be a write action");
+    };
+    let consumer_contents = std::str::from_utf8(bytes).expect("module map contents are UTF-8");
+    assert!(consumer_contents.contains("module Lib.Swift {"));
+    assert!(consumer_contents.contains("header \"Lib-Swift.h\""));
+    assert!(
+        !compiler
+            .argv
+            .contains(&format!("-fmodule-map-file={consumer_modulemap}")),
+        "the library must not import its generated compatibility header while producing it"
+    );
 }
 
 /// `_resolve_attrs` must reject `select()` on attributes the target kind
@@ -12273,9 +13717,771 @@ fn prelude_resolve_attrs_rejects_select_on_non_configurable_attr() {
     );
 }
 
+#[test]
+fn prelude_apple_framework_compile_files_exclude_bundle_resources() {
+    assert_eq!(
+        eval_prelude_function(
+            "_apple_framework_compile_files",
+            r#"({"path": ".once/out/Lib/Lib.framework", "module_name": "Lib", "files": [".once/out/Lib/Lib.framework/Lib", ".once/out/Lib/Lib.framework/Modules/module.modulemap", ".once/out/Lib/Lib.framework/Modules/Lib.swiftmodule/arm64-apple-ios-simulator.swiftmodule", ".once/out/Lib/Lib.framework/Headers/Lib-Swift.h", ".once/out/Lib/Lib.framework/en.lproj/Localizable.strings", ".once/out/Lib/Lib.framework/Assets.car", ".once/out/Lib/Lib.framework/_CodeSignature/CodeResources"]},)"#,
+        )
+        .unwrap(),
+        r#"[".once/out/Lib/Lib.framework/Lib", ".once/out/Lib/Lib.framework/Modules/module.modulemap", ".once/out/Lib/Lib.framework/Modules/Lib.swiftmodule/arm64-apple-ios-simulator.swiftmodule", ".once/out/Lib/Lib.framework/Headers/Lib-Swift.h"]"#
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Native Xcode project resolver (`xcode_workspace`)
 // ---------------------------------------------------------------------------
+
+#[test]
+fn prelude_apple_prebuild_actions_precede_generated_source_compilation() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("App/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("App.swift"), "public func app() {}\n").unwrap();
+    std::fs::write(package_dir.join("Private.h"), "void private_api(void);\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "sh":
+        return "/bin/sh"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--version" in argv:
+        return "Swift version 6.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{"package": "App", "name": "App", "id": "App/App"}},
+    "attr": {{
+        "platform": "macos",
+        "xcode_developer_dir": "/opt/Xcode/Developer",
+        "private_header_dirs": ["Sources"],
+        "prebuild_actions": [_json_encode({{
+            "name": "Secrets",
+            "shell": "/bin/sh",
+            "script": "printf 'public let secret = 1\\n' > .once/out/App/App/Generated.swift",
+            "inputs": ["App/Sources/App.swift"],
+            "outputs": [".once/out/App/App/Generated.swift"],
+            "cwd": "",
+            "env": {{"SRCROOT": "/workspace/App"}},
+            "cacheable": True,
+        }})],
+    }},
+    "deps": [],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/App/App",
+    "capability": "build",
+}}
+_apple_library_impl(ctx)
+result = repr(True)
+"#
+    );
+    let store = store_for(workspace.path(), "App");
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    result.unwrap();
+    assert!(
+        store.actions.len() >= 2,
+        "expected generator and compiler actions"
+    );
+    let generator = &store.actions[0];
+    assert_eq!(generator.argv[0], "/bin/sh");
+    assert_eq!(generator.argv[1], "-c");
+    assert_eq!(generator.outputs, [".once/out/App/App/Generated.swift"]);
+    assert_eq!(generator.create_dirs, [".once/out/App/App"]);
+    assert!(generator.cacheable);
+    assert!(!generator.inherit_parent_env);
+    assert!(generator
+        .toolchain_identity
+        .as_deref()
+        .is_some_and(|identity| identity.starts_with("once.apple.prebuild.shell.v1\0/bin/sh\0")));
+    assert_eq!(
+        generator.env.get("SRCROOT"),
+        Some(&"/workspace/App".to_string())
+    );
+    let compiler = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .identifier
+                .as_deref()
+                .is_some_and(|identifier| identifier.starts_with("swift_module_compile_App"))
+        })
+        .expect("swift compiler action");
+    assert!(compiler
+        .inputs
+        .contains(&".once/out/App/App/Generated.swift".to_string()));
+    assert!(compiler
+        .inputs
+        .contains(&"App/Sources/Private.h".to_string()));
+    assert!(!compiler.inputs.contains(&"App/Sources".to_string()));
+}
+
+#[test]
+fn prelude_xcode_shell_phase_models_declared_generated_source() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "PHASE": {
+            "isa": "PBXShellScriptBuildPhase",
+            "name": "Generate Secrets",
+            "shellPath": "/bin/sh",
+            "shellScript": "generate-secrets",
+            "inputPaths": ["$(SRCROOT)/buildscripts/secrets.gyb"],
+            "outputPaths": ["$(DERIVED_FILE_DIR)/SecretKey.swift"],
+        },
+        "TARGET": {"buildPhases": ["PHASE"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+objects = json_decode({objects:?})
+phase = _xcode_shell_script_phases(
+    {{"label": {{"package": "App", "id": "App/Seed"}}, "attr": {{"project": "App.xcodeproj"}}}},
+    objects,
+    objects["TARGET"],
+    {{"PRODUCT_NAME": "App", "CONFIGURATION": "Debug", "DEPENDENCY_ROOT": "${{SRCROOT}}/Dependencies"}},
+    "App",
+    "App",
+)
+action = json_decode(phase["actions"][0])
+result = repr([phase["sources"], action["inputs"], action["outputs"], action["cwd"], action["env"]["DERIVED_FILE_DIR"], action["env"]["DEPENDENCY_ROOT"], action["env"]["PROJECT"], action["cacheable"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[[".once/out/App/App/SecretKey.swift"], ["App/buildscripts/secrets.gyb"], [".once/out/App/App/SecretKey.swift"], "App", "/workspace/.once/out/App/App", "/workspace/App/Dependencies", "App", True]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_shell_phase_keeps_always_run_action_uncached() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "PHASE": {
+            "isa": "PBXShellScriptBuildPhase",
+            "name": "Generate Sources",
+            "shellScript": "generate",
+            "inputPaths": ["$(SRCROOT)/schema.json"],
+            "outputPaths": ["$(DERIVED_FILE_DIR)/Generated.swift"],
+            "alwaysOutOfDate": "1",
+        },
+        "TARGET": {"buildPhases": ["PHASE"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+objects = json_decode({objects:?})
+phase = _xcode_shell_script_phases(
+    {{"label": {{"package": "App", "id": "App/Seed"}}, "attr": {{"project": "App.xcodeproj"}}}},
+    objects,
+    objects["TARGET"],
+    {{"PRODUCT_NAME": "App", "CONFIGURATION": "Debug"}},
+    "App",
+    "App",
+)
+result = repr(json_decode(phase["actions"][0])["cacheable"])
+"#
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), "False");
+}
+
+#[test]
+fn prelude_xcode_shell_phase_models_generated_link_input_and_its_preparation() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "DOWNLOAD": {
+            "isa": "PBXShellScriptBuildPhase",
+            "name": "Download archive",
+            "shellPath": "/bin/sh",
+            "shellScript": "download-archive",
+        },
+        "EXTRACT": {
+            "isa": "PBXShellScriptBuildPhase",
+            "name": "Extract archive",
+            "shellPath": "/bin/sh",
+            "shellScript": "extract-archive",
+            "inputPaths": ["$(USER_LIBRARY_DIR)/Caches/archive.tar.gz"],
+            "outputPaths": ["$(PROJECT_TEMP_DIR)/native/libNative.a"],
+        },
+        "TARGET": {"buildPhases": ["DOWNLOAD", "EXTRACT"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+objects = json_decode({objects:?})
+phase = _xcode_shell_script_phases(
+    {{"label": {{"package": "", "id": "Seed"}}, "attr": {{"project": "App.xcodeproj"}}}},
+    objects,
+    objects["TARGET"],
+    {{"PRODUCT_NAME": "Native", "CONFIGURATION": "Debug", "USER_LIBRARY_DIR": "/Users/test/Library"}},
+    "",
+    "Native",
+)
+download = json_decode(phase["actions"][0])
+extract = json_decode(phase["actions"][1])
+result = repr([
+    download["name"],
+    extract["name"],
+    extract["inputs"],
+    extract["outputs"],
+    extract["env"]["SCRIPT_INPUT_FILE_0"],
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Download archive", "Extract archive", [], [".once/out/Native/Intermediates/native/libNative.a"], "/Users/test/Library/Caches/archive.tar.gz"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_setting_substitutions_use_selected_configuration() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_env(name):
+    return "/Users/test" if name == "HOME" else ""
+
+ctx = {{"attr": {{"configuration": "Debug"}}}}
+result = repr(_xcode_setting_subs(ctx, "Client", "Client", "/SDK", configuration = "Fennec")["CONFIGURATION"])
+"#
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), r#""Fennec""#);
+}
+
+#[test]
+fn prelude_xcode_translates_swift_compilation_and_optimization_settings() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_swift_compilation_flags({{"SWIFT_OPTIMIZATION_LEVEL": "-Owholemodule"}}),
+    _xcode_swift_compilation_flags({{"SWIFT_OPTIMIZATION_LEVEL": "-Osize", "SWIFT_COMPILATION_MODE": "wholemodule"}}),
+    _xcode_swift_compilation_flags({{"SWIFT_OPTIMIZATION_LEVEL": "-Onone"}}),
+    _xcode_swift_compilation_flags({{"SWIFT_OPTIMIZATION_LEVEL": "-Onone", "SWIFT_ENABLE_BATCH_MODE": "NO"}}),
+    _xcode_swift_compilation_flags({{"SWIFT_WHOLE_MODULE_OPTIMIZATION": "YES"}}),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["-O", "-whole-module-optimization"], ["-Osize", "-whole-module-optimization"], ["-Onone", "-j1", "-enable-batch-mode"], ["-Onone", "-j1", "-disable-batch-mode"], ["-whole-module-optimization"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_expands_identifier_build_setting_modifiers() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_resolve_vars("org.example.$(PRODUCT_NAME:rfc1034identifier)", {{"PRODUCT_NAME": "Example Tests"}}),
+    _xcode_resolve_vars("$(TARGET_NAME:c99extidentifier)", {{"TARGET_NAME": "9 Example-Tests"}}),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["org.example.Example-Tests", "_9_Example_Tests"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_shell_phase_lowers_resource_directory_copy() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "PHASE": {
+            "isa": "PBXShellScriptBuildPhase",
+            "name": "Copy Fixtures",
+            "shellPath": "/bin/sh",
+            "shellScript": "cp -R \"${SCRIPT_INPUT_FILE_0}/\" \"${SCRIPT_OUTPUT_FILE_0}/\"",
+            "inputPaths": ["$(SRCROOT)/Tests/Fixtures", "$(SRCROOT)/Tests/Fixtures/Manifest.json"],
+            "outputPaths": ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Fixtures"],
+        },
+        "TARGET": {"buildPhases": ["PHASE"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+objects = json_decode({objects:?})
+phase = _xcode_shell_script_phases(
+    {{"label": {{"package": "", "id": "Tests"}}, "attr": {{"project": "App.xcodeproj"}}}},
+    objects,
+    objects["TARGET"],
+    {{
+        "PRODUCT_NAME": "AppTests",
+        "CONFIGURATION": "Debug",
+        "UNLOCALIZED_RESOURCES_FOLDER_PATH": "AppTests.xctest",
+    }},
+    "",
+    "AppTests",
+)
+result = repr([phase["actions"], phase["resource_inputs"], phase["structured_resource_inputs"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[[], ["Tests/Fixtures"], ["Tests/Fixtures"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_test_attrs_preserve_resources_and_custom_property_list() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_file_exists(path):
+    return path == "/workspace/Tests/Info.plist"
+
+def host_file_read(path):
+    return "<plist>$(EXECUTABLE_NAME)|$(PRODUCT_BUNDLE_IDENTIFIER)|$(SRCROOT)</plist>"
+
+attrs, product_name = _xcode_test_attrs(
+    {{"attr": {{}}}},
+    {{"name": "Example Tests"}},
+    {{
+        "PRODUCT_NAME": "Example Tests",
+        "PRODUCT_BUNDLE_IDENTIFIER": "org.example.$(PRODUCT_NAME:rfc1034identifier)",
+        "GENERATE_INFOPLIST_FILE": "NO",
+        "INFOPLIST_FILE": "Tests/Info.plist",
+    }},
+    {{"PRODUCT_NAME": "Example Tests", "PROJECT_DIR": ""}},
+    "ios",
+    {{
+        "sources": [],
+        "headers": [],
+        "resources": ["Tests/Fixtures"],
+        "structured_resources": ["Tests/Fixtures"],
+        "asset_catalogs": ["Tests/Assets.xcassets"],
+        "frameworks": [],
+        "source_flags": {{}},
+        "project_header_dirs": [],
+    }},
+)
+result = repr([product_name, attrs["bundle_id"], attrs["resources"], attrs["structured_resources"], attrs["asset_catalogs"], attrs["info_plist"], attrs["info_plist_substitutions"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Example Tests", "org.example.Example-Tests", ["Tests/Fixtures"], ["Tests/Fixtures"], ["Tests/Assets.xcassets"], "Tests/Info.plist", {"EXECUTABLE_NAME": "Example Tests", "PRODUCT_BUNDLE_IDENTIFIER": "org.example.Example-Tests", "SRCROOT": "/workspace"}]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_application_attrs_preserve_custom_property_list() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_file_exists(path):
+    return path == "/workspace/App/Info.plist"
+
+def host_file_read(path):
+    return "<plist>$(EXECUTABLE_NAME)|$(PRODUCT_BUNDLE_IDENTIFIER)|$(SRCROOT)</plist>"
+
+attrs, product_name = _xcode_application_attrs(
+    {{"attr": {{}}}},
+    {{"name": "Example App"}},
+    {{
+        "PRODUCT_NAME": "Example App",
+        "PRODUCT_BUNDLE_IDENTIFIER": "org.example.$(PRODUCT_NAME:rfc1034identifier)",
+        "GENERATE_INFOPLIST_FILE": "NO",
+        "INFOPLIST_FILE": "App/Info.plist",
+    }},
+    {{"PRODUCT_NAME": "Example App", "PROJECT_DIR": ""}},
+    "ios",
+    {{
+        "sources": [],
+        "headers": [],
+        "resources": [],
+        "structured_resources": [],
+        "asset_catalogs": [],
+        "frameworks": [],
+        "source_flags": {{}},
+        "project_header_dirs": [],
+    }},
+)
+result = repr([product_name, attrs["bundle_id"], attrs["info_plist"], attrs["info_plist_substitutions"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Example App", "org.example.Example-App", "App/Info.plist", {"EXECUTABLE_NAME": "Example App", "PRODUCT_BUNDLE_IDENTIFIER": "org.example.Example-App", "SRCROOT": "/workspace"}]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_reads_referenced_test_plan_environment_and_skips() {
+    let prelude = xcode_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let scheme_dir = workspace
+        .path()
+        .join("App.xcodeproj/xcshareddata/xcschemes");
+    std::fs::create_dir_all(&scheme_dir).unwrap();
+    std::fs::create_dir_all(workspace.path().join("Test Plans")).unwrap();
+    std::fs::write(
+        scheme_dir.join("App.xcscheme"),
+        r#"<Scheme><TestAction><TestPlans><TestPlanReference reference = "container:Test Plans/App.xctestplan" default = "YES"></TestPlanReference></TestPlans></TestAction></Scheme>"#,
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.path().join("Test Plans/App.xctestplan"),
+        serde_json::json!({
+            "configurations": [{
+                "name": "Default",
+                "options": {
+                    "environmentVariableEntries": [
+                        {"key": "CONFIG_VALUE", "value": "configured"}
+                    ],
+                    "commandLineArgumentEntries": [
+                        {"argument": "-ConfiguredMode"},
+                        {"argument": "ignored", "enabled": false}
+                    ]
+                }
+            }],
+            "defaultOptions": {
+                "environmentVariableEntries": [
+                    {"key": "TZ", "value": "America/New_York"},
+                    {"key": "DISABLED", "value": "ignored", "enabled": false}
+                ],
+                "commandLineArgumentEntries": [
+                    {"argument": "-DefaultMode"}
+                ],
+                "language": "en",
+                "region": "US"
+            },
+            "testTargets": [{
+                "target": {"name": "AppTests"},
+                "skippedTests": ["ManualTests", "FeatureTests/testSlow"]
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+ctx = {{"label": {{"package": "", "name": "App", "id": "App"}}, "attr": {{"project": "App.xcodeproj"}}}}
+result = repr(_xcode_test_plan_settings(ctx))
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        String::new(),
+        ".once/out/Test".to_string(),
+    );
+    let (_store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    assert_eq!(
+        result.unwrap(),
+        r#"{"AppTests": {"test_env": {"TZ": "America/New_York", "CONFIG_VALUE": "configured", "AppleLanguages": "(en)", "AppleLocale": "en_US"}, "test_arguments": ["-DefaultMode", "-ConfiguredMode"], "skipped_tests": ["ManualTests", "FeatureTests/testSlow"]}}"#
+    );
+}
+
+#[test]
+fn prelude_xcode_shell_phase_ignores_non_source_outputs() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "PHASE": {
+            "isa": "PBXShellScriptBuildPhase",
+            "name": "Embed Frameworks",
+            "shellPath": "/bin/sh",
+            "shellScript": "copy-frameworks",
+            "outputPaths": ["$(TARGET_BUILD_DIR)/Frameworks/Example.framework"],
+        },
+        "TARGET": {"buildPhases": ["PHASE"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+objects = json_decode({objects:?})
+phase = _xcode_shell_script_phases(
+    {{"label": {{"package": "App", "id": "App/Seed"}}, "attr": {{"project": "App.xcodeproj"}}}},
+    objects,
+    objects["TARGET"],
+    {{"PRODUCT_NAME": "App", "CONFIGURATION": "Debug"}},
+    "App",
+    "App",
+)
+result = repr([phase["sources"], phase["actions"]])
+"#
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), r"[[], []]");
+}
+
+#[test]
+fn prelude_xcode_spm_local_product_uses_path_identity() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+objects = {{"ref": {{"isa": "XCLocalSwiftPackageReference", "relativePath": "MozillaRustComponents"}}}}
+result = repr(_xcode_spm_package_refs(objects)["ref"]["identity"])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#""MozillaRustComponents""#
+    );
+}
+
+#[test]
+fn prelude_xcode_reconciles_local_package_products_into_native_targets() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+infos = [{{
+    "identity": "FixtureShared",
+    "path": "Packages/Shared",
+    "info": {{
+        "products": [{{"name": "Shared", "targets": ["Shared"]}}],
+        "targets": [{{"name": "Shared", "type": "regular", "dependencies": [], "exclude": [], "settings": []}}],
+    }},
+}}]
+graph = _xcode_local_swift_package_specs({{}}, infos, "macos", "13.0", "simulator")
+result = repr(graph["products"]["FixtureShared\x1fShared"])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#""SwiftPackage_FixtureShared_Shared""#
+    );
+}
+
+#[test]
+fn prelude_xcode_adds_package_identity_only_when_package_access_is_available() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+legacy = {{"identity": "Legacy", "info": {{"name": "Legacy Package", "toolsVersion": {{"_version": "5.8.0"}}}}}}
+modern = {{"identity": "Modern", "info": {{"name": "Modern Package", "toolsVersion": {{"_version": "5.9.0"}}}}}}
+result = repr([
+    _xcode_swift_package_name_flags(legacy),
+    _xcode_swift_package_name_flags(modern),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[[], ["-package-name", "Modern Package"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_lowers_swift_macros_as_transitive_host_tools() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def glob(patterns):
+    pattern = patterns[0]
+    if "AppMacros" in pattern:
+        return ["Packages/AppMacros/Sources/AppMacros/Plugin.swift"]
+    if "SyntaxSupport" in pattern:
+        return ["Packages/Syntax/Sources/SyntaxSupport/Support.swift"]
+    return []
+
+def host_file_read(path):
+    return "import SwiftSyntaxMacros"
+
+infos = [
+    {{
+        "identity": "AppMacrosPackage",
+        "path": "Packages/AppMacros",
+        "info": {{
+            "name": "AppMacrosPackage",
+            "products": [],
+            "targets": [{{
+                "name": "AppMacros",
+                "type": "macro",
+                "dependencies": [{{"product": ["SyntaxSupport", "SyntaxPackage", None, None]}}],
+                "exclude": [],
+                "settings": [],
+            }}],
+        }},
+    }},
+    {{
+        "identity": "SyntaxPackage",
+        "path": "Packages/Syntax",
+        "info": {{
+            "name": "SyntaxPackage",
+            "products": [{{"name": "SyntaxSupport", "targets": ["SyntaxSupport"]}}],
+            "targets": [{{
+                "name": "SyntaxSupport",
+                "type": "regular",
+                "dependencies": [],
+                "exclude": [],
+                "settings": [],
+            }}],
+        }},
+    }},
+]
+graph = _xcode_local_swift_package_specs({{"label": {{"package": ""}}}}, infos, "ios", "17.0", "simulator")
+result = repr([
+    graph["specs"][0]["kind"],
+    graph["specs"][0]["deps"],
+    graph["specs"][1]["attrs"]["platform"],
+    graph["specs"][2]["name"],
+    graph["specs"][2]["attrs"]["platform"],
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["swift_macro", ["./SwiftPackage_SyntaxPackage_SyntaxSupport_MacroHost"], "ios", "SwiftPackage_SyntaxPackage_SyntaxSupport_MacroHost", "macos"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_reconciles_cross_package_product_dependencies() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+target_ids = {{"One\x1fOne": "SwiftPackage_One_One"}}
+product_ids = {{"Two\x1fTwo": "SwiftPackage_Two_Two"}}
+target = {{"dependencies": [{{"product": ["Two", "Two", None, None]}}]}}
+result = repr(_xcode_swift_package_dependencies(target, "One", target_ids, product_ids, "macos"))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["./SwiftPackage_Two_Two"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_reads_core_data_generated_class_metadata() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+swift = '<model sourceLanguage="Swift"><entity name="Page" codeGenerationType="class"><entity name="Tag" codeGenerationType="category">'
+objc = '<model sourceLanguage="Objective-C"><entity name="Page" codeGenerationType="class">'
+result = repr([
+    _xcode_xml_attribute(' name="Page" codeGenerationType="class"', "name"),
+    _xcode_xml_attribute(' name="Page" codeGenerationType="class"', "codeGenerationType"),
+    _xcode_plist_string('<key>_XCCurrentVersionName</key><string>Model 2.xcdatamodel</string>', "_XCCurrentVersionName"),
+    _xcode_datamodel_generated_outputs(swift, "Model", "out"),
+    _xcode_datamodel_generated_outputs(objc, "Model", "out"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Page", "class", "Model 2.xcdatamodel", ["out/Model+CoreDataModel.swift", "out/Page+CoreDataClass.swift", "out/Page+CoreDataProperties.swift", "out/Tag+CoreDataProperties.swift"], ["out/Model+CoreDataModel.h", "out/Model+CoreDataModel.m", "out/Page+CoreDataClass.h", "out/Page+CoreDataClass.m", "out/Page+CoreDataProperties.h", "out/Page+CoreDataProperties.m"]]"#
+    );
+    assert!(
+        apple_prelude_source().contains("action.get(\"tool\") == \"momc\""),
+        "Apple prebuild actions must resolve the Core Data compiler directly"
+    );
+}
+
+#[test]
+fn prelude_xcode_preserves_versioned_core_data_models_from_sources_phase() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+objects = {{
+    "PROJECT": {{"mainGroup": "ROOT"}},
+    "ROOT": {{"isa": "PBXGroup", "children": ["MODELS"]}},
+    "MODELS": {{"isa": "PBXGroup", "path": "WMF/Models", "children": ["MODEL"]}},
+    "MODEL": {{
+        "isa": "XCVersionGroup",
+        "path": "RemoteNotifications.xcdatamodeld",
+        "children": ["VERSION"],
+        "currentVersion": "VERSION",
+    }},
+    "VERSION": {{"isa": "PBXFileReference", "path": "RemoteNotifications 3.xcdatamodel"}},
+    "SOURCES": {{"isa": "PBXSourcesBuildPhase", "files": ["BUILD"]}},
+    "BUILD": {{"isa": "PBXBuildFile", "fileRef": "MODEL"}},
+}}
+paths = _xcode_group_file_paths(objects, objects["PROJECT"], "")
+files = _xcode_classic_phase_files(
+    {{}},
+    objects,
+    {{"buildPhases": ["SOURCES"]}},
+    paths["files"],
+)
+result = repr([paths["files"].get("MODEL"), files["resources"], files["sources"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["WMF/Models/RemoteNotifications.xcdatamodeld", ["WMF/Models/RemoteNotifications.xcdatamodeld"], []]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_selects_base_intent_definition_from_variant_group() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+objects = {{
+    "SOURCES": {{"isa": "PBXSourcesBuildPhase", "files": ["BUILD"]}},
+    "BUILD": {{"isa": "PBXBuildFile", "fileRef": "VARIANT"}},
+    "VARIANT": {{"isa": "PBXVariantGroup", "children": ["FR", "BASE"]}},
+    "FR": {{"isa": "PBXFileReference", "name": "fr", "path": "fr.lproj/Actions.intentdefinition"}},
+    "BASE": {{"isa": "PBXFileReference", "name": "Base", "path": "Base.lproj/Actions.intentdefinition"}},
+}}
+files = _xcode_classic_phase_files(
+    {{}},
+    objects,
+    {{"buildPhases": ["SOURCES"]}},
+    {{"FR": "App/fr.lproj/Actions.intentdefinition", "BASE": "App/Base.lproj/Actions.intentdefinition"}},
+)
+result = repr(files["intent_definitions"])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["App/Base.lproj/Actions.intentdefinition"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_preserves_localized_resource_variant_paths() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+objects = {{
+    "RESOURCES": {{"isa": "PBXResourcesBuildPhase", "files": ["BUILD"]}},
+    "BUILD": {{"isa": "PBXBuildFile", "fileRef": "VARIANT"}},
+    "VARIANT": {{"isa": "PBXVariantGroup", "children": ["EN", "BASE"]}},
+    "EN": {{"isa": "PBXFileReference", "name": "en", "path": "en.lproj/InfoPlist.strings"}},
+    "BASE": {{"isa": "PBXFileReference", "name": "Base", "path": "Base.lproj/Main.storyboard"}},
+}}
+files = _xcode_classic_phase_files(
+    {{}},
+    objects,
+    {{"buildPhases": ["RESOURCES"]}},
+    {{"EN": "Widget/en.lproj/InfoPlist.strings", "BASE": "Widget/Base.lproj/Main.storyboard"}},
+)
+result = repr(files["resources"])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Widget/en.lproj/InfoPlist.strings", "Widget/Base.lproj/Main.storyboard"]"#
+    );
+}
 
 #[test]
 fn prelude_xcode_workspace_declares_graph_resolver() {
@@ -12340,13 +14546,15 @@ fn prelude_xcode_asset_catalog_dir_recovers_catalog() {
 result = repr([
     _xcode_asset_catalog_dir("App/Assets.xcassets/AppIcon.appiconset/icon.png"),
     _xcode_asset_catalog_dir("App/Assets.xcassets"),
+    _xcode_asset_catalog_dir("App/AppIcon.icon/icon.json"),
+    _xcode_asset_catalog_dir("App/AppIcon.icon"),
     _xcode_asset_catalog_dir("App/Sources/View.swift"),
 ])
 "#
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"["App/Assets.xcassets", "App/Assets.xcassets", ""]"#
+        r#"["App/Assets.xcassets", "App/Assets.xcassets", "App/AppIcon.icon", "App/AppIcon.icon", ""]"#
     );
 }
 
@@ -12371,18 +14579,6 @@ fn prelude_apple_application_exposes_bridging_header() {
 }
 
 #[test]
-fn prelude_xcode_spm_dependencies_registered() {
-    let schema =
-        built_in_target_kind_schema("xcode_spm_dependencies").expect("xcode_spm_dependencies");
-    assert!(target_kind_has_impl("xcode_spm_dependencies").unwrap());
-    assert!(schema.providers.iter().any(|p| p == "apple_linkable"));
-    assert_target_kind_attrs(
-        "xcode_spm_dependencies",
-        &["manifest", "resolved", "products", "platform"],
-    );
-}
-
-#[test]
 fn prelude_apple_consumes_framework_search_dirs() {
     // A dependency can contribute a bare framework search directory (Swift
     // autolinks the imported framework, so no framework name is needed). The
@@ -12397,6 +14593,37 @@ result = repr(_collect_dep_compile_inputs(deps, "build")[5])
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"["out/spm/frameworks"]"#
+    );
+}
+
+#[test]
+fn prelude_apple_makes_runtime_frameworks_available_to_the_linker() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+deps = [{{
+    "transitive_link_framework_bundles": [{{
+        "path": "out/Direct.framework",
+        "module_name": "Direct",
+        "files": ["out/Direct.framework/Direct"],
+    }}],
+    "transitive_framework_bundles": [{{
+        "path": "out/Direct.framework",
+        "module_name": "Direct",
+        "files": ["out/Direct.framework/Direct"],
+    }}, {{
+        "path": "vendor/Runtime.framework",
+        "module_name": "Runtime",
+        "files": ["vendor/Runtime.framework/Runtime"],
+    }}],
+}}]
+inputs = _collect_dep_compile_inputs(deps, "build")
+result = repr([inputs[5], inputs[6], inputs[7]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["out", "vendor"], ["Direct"], ["out/Direct.framework/Direct", "vendor/Runtime.framework/Runtime"]]"#
     );
 }
 
@@ -12474,22 +14701,170 @@ result = repr([
 }
 
 #[test]
-fn prelude_xcode_define_flags_normalize_debug_and_conditions() {
+fn prelude_xcode_keeps_swift_and_clang_defines_separate() {
     let prelude = xcode_prelude_source();
     let source = format!(
         r#"{prelude}
 settings = {{
     "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG FEATURE_X",
-    "GCC_PREPROCESSOR_DEFINITIONS": ["DEBUG=1", "$(inherited)", "MY_FLAG=2"],
+    "GCC_PREPROCESSOR_DEFINITIONS": ["DEBUG=1", "$(inherited)", "MY_FLAG=2", "APP_GROUP=$(APP_GROUP)"],
 }}
-result = repr(_xcode_define_flags(settings))
+result = repr([
+    _xcode_swift_defines(settings, {{"APP_GROUP": "group.dev.once.App"}}),
+    _xcode_clang_defines(settings, {{"APP_GROUP": "group.dev.once.App"}}),
+])
 "#
     );
-    // `$(inherited)` is stripped, `DEBUG=1` collapses to `DEBUG`, and the Swift
-    // active-compilation conditions are merged in without duplication.
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"["DEBUG", "FEATURE_X", "MY_FLAG=2"]"#
+        r#"[["DEBUG", "FEATURE_X"], ["DEBUG=1", "MY_FLAG=2", "APP_GROUP=group.dev.once.App"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_translates_swift_feature_settings_generically() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr(_xcode_swift_feature_flags({{
+    "SWIFT_UPCOMING_FEATURE_INTERNAL_IMPORTS_BY_DEFAULT": "YES",
+    "SWIFT_UPCOMING_FEATURE_IMPORT_OBJC_FORWARD_DECLS": "YES",
+    "SWIFT_UPCOMING_FEATURE_DISABLE_OUTWARD_ACTOR_ISOLATION": "YES",
+    "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "MIGRATE",
+    "SWIFT_EXPERIMENTAL_FEATURE_DEBUG_DESCRIPTION_MACRO": "YES",
+    "SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY": "NO",
+}}))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["-enable-experimental-feature", "DebugDescriptionMacro", "-enable-upcoming-feature", "DisableOutwardActorInference", "-enable-upcoming-feature", "ImportObjcForwardDeclarations", "-enable-upcoming-feature", "InternalImportsByDefault", "-enable-upcoming-feature", "MemberImportVisibility:migrate"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_maps_prefix_headers_for_every_product_kind() {
+    let prelude = xcode_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let support = workspace.path().join("Pods/Support");
+    std::fs::create_dir_all(&support).unwrap();
+    std::fs::write(support.join("Library-Prefix.pch"), "").unwrap();
+    let source = format!(
+        r#"{prelude}
+ctx = {{"attr": {{"sdk_variant": "simulator"}}}}
+files = {{
+    "source_flags": {{}},
+    "project_header_dirs": [],
+    "sources": [],
+    "headers": [],
+    "exported_headers": [],
+    "frameworks": [],
+}}
+attrs = _xcode_common_attrs(
+    ctx,
+    {{"name": "Library"}},
+    {{"GCC_PREFIX_HEADER": "Support/Library-Prefix.pch"}},
+    {{"PROJECT_DIR": "Pods"}},
+    "ios",
+    files,
+)
+result = repr(attrs["prefix_header"])
+"#
+    );
+    let store = store_for(workspace.path(), "");
+    let (_store, output) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    assert_eq!(output.unwrap(), r#""Pods/Support/Library-Prefix.pch""#);
+}
+
+#[test]
+fn prelude_xcode_keeps_toolchain_header_paths_out_of_workspace_inputs() {
+    let prelude = xcode_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let workspace_headers = workspace.path().join("Sources");
+    let toolchain = TempDir::new().unwrap();
+    let toolchain_headers = toolchain.path().join("usr/include");
+    std::fs::create_dir_all(&workspace_headers).unwrap();
+    std::fs::create_dir_all(&toolchain_headers).unwrap();
+    std::fs::write(
+        workspace_headers.join("module.modulemap"),
+        "module WorkspaceHeaders { export * }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        toolchain_headers.join("module.modulemap"),
+        "module ToolchainHeaders { export * }\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+ctx = {{"attr": {{"sdk_variant": "simulator"}}}}
+files = {{
+    "source_flags": {{}},
+    "project_header_dirs": [],
+    "sources": [],
+    "headers": [],
+    "exported_headers": [],
+    "frameworks": [],
+}}
+settings = {{"HEADER_SEARCH_PATHS": [{workspace_headers:?}, {toolchain_headers:?}]}}
+attrs = _xcode_common_attrs(ctx, {{"name": "Library"}}, settings, {{}}, "ios", files)
+result = repr([_xcode_auxiliary_modulemaps(settings, {{}}, ""), attrs["private_header_dirs"], attrs["clang_flags"]])
+"#,
+        workspace_headers = workspace_headers.display().to_string(),
+        toolchain_headers = toolchain_headers.display().to_string(),
+    );
+    let store = store_for(workspace.path(), "");
+    let (_store, output) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let output = output.unwrap();
+    assert!(
+        output.contains(r#"["Sources/module.modulemap"]"#),
+        "{output}"
+    );
+    assert!(output.contains(r#"["Sources"]"#), "{output}");
+    assert!(
+        output.contains(&toolchain_headers.display().to_string()),
+        "the compiler flag must preserve the toolchain search path: {output}"
+    );
+    assert!(
+        !output.contains("ToolchainHeaders"),
+        "the external module map must not become a workspace input: {output}"
+    );
+}
+
+#[test]
+fn prelude_xcode_lowers_native_search_and_link_flags() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+settings = {{
+    "OTHER_CFLAGS": ["$(inherited)", "-DSQLITE_HAS_CODEC"],
+    "HEADER_SEARCH_PATHS": ["$(SRCROOT)/Pods/SQLCipher", "$(inherited)"],
+    "OTHER_LDFLAGS": ["$(inherited)", "-ObjC", "-fprofile-instr-generate", "-no_application_extension"],
+}}
+subs = {{"SRCROOT": ""}}
+result = repr([_xcode_clang_flags(settings, subs), _xcode_linkopts(settings, subs)])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["-DSQLITE_HAS_CODEC", "-I", "/Pods/SQLCipher"], ["-Xlinker", "-ObjC", "-profile-generate", "-Xlinker", "-no_application_extension"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_preserves_pre_grouped_linker_forwarding() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+settings = {{
+    "OTHER_LDFLAGS": ["-ObjC", "-Xlinker", "-no_application_extension", "-dead_strip"],
+}}
+result = repr(_xcode_linkopts(settings, {{}}))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["-Xlinker", "-ObjC", "-Xlinker", "-no_application_extension", "-Xlinker", "-dead_strip"]"#
     );
 }
 
@@ -12515,47 +14890,112 @@ fn prelude_xcode_resolve_vars_expands_known_variables() {
     let prelude = xcode_prelude_source();
     let source = format!(
         r#"{prelude}
-subs = {{"TARGET_NAME": "App", "PRODUCT_NAME": "App"}}
+subs = {{"TARGET_NAME": "App", "PRODUCT_NAME": "App", "PODS_ROOT": "Pods", "PODS_TARGET_SRCROOT": "${{PODS_ROOT}}/Library"}}
 result = repr([
     _xcode_resolve_vars("$(TARGET_NAME)Tests", subs),
     _xcode_resolve_vars("dev.once.$(PRODUCT_NAME)", subs),
+    _xcode_resolve_vars("${{TARGET_NAME}}/${{PRODUCT_NAME}}", subs),
+    _xcode_resolve_vars("$(PODS_TARGET_SRCROOT)/Sources", subs),
     _xcode_resolve_vars("$(UNKNOWN_VAR)", subs),
 ])
 "#
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"["AppTests", "dev.once.App", "$(UNKNOWN_VAR)"]"#
+        r#"["AppTests", "dev.once.App", "App/App", "Pods/Library/Sources", "$(UNKNOWN_VAR)"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_setting_subs_include_resolved_configuration_values() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_env(name):
+    return "/Users/test" if name == "HOME" else ""
+
+ctx = {{"attr": {{"configuration": "Debug"}}}}
+subs = _xcode_setting_subs(
+    ctx,
+    "App",
+    "App",
+    "iphonesimulator",
+    {{"DEPENDENCY_ROOT": "Dependencies", "PRODUCT_NAME": "Ignored"}},
+)
+result = repr([
+    _xcode_resolve_vars("${{DEPENDENCY_ROOT}}/Framework.framework", subs),
+    subs["PRODUCT_NAME"],
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Dependencies/Framework.framework", "App"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_root_project_source_root_stays_workspace_relative() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_file_exists(path):
+    return path == "/workspace/App/App-Info.plist"
+
+def host_file_read(path):
+    if path == "/workspace/App/App-Info.plist":
+        return "<plist><dict></dict></plist>"
+    fail("unexpected host_file_read: " + path)
+
+ctx = {{"label": {{"package": ""}}, "attr": {{"configuration": "Debug"}}}}
+subs = _xcode_setting_subs(ctx, "App", "App", "/SDK", project_dir = "")
+attrs = {{}}
+_xcode_add_info_plist_attrs(
+    attrs,
+    {{"INFOPLIST_FILE": "$(SRCROOT)/App/App-Info.plist"}},
+    subs,
+    "App",
+    "dev.example.App",
+)
+result = repr([subs["SRCROOT"], attrs["info_plist"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[".", "App/App-Info.plist"]"#
     );
 }
 
 #[test]
 fn prelude_xcode_read_xcconfig_flattens_includes() {
     let prelude = xcode_prelude_source();
-    // The base .xcconfig includes a shared file; own keys win, included keys
-    // fill the gaps. Host file primitives are stubbed to serve both files.
     let source = format!(
         r##"{prelude}
 def workspace_root():
     return ""
 
 def host_file_exists(path):
-    return path in ["Base.xcconfig", "Shared.xcconfig"]
+    return path in ["Base.xcconfig", "Shared.xcconfig", "User.xcconfig"]
 
 def host_file_read(path):
     if path == "Base.xcconfig":
-        return "#include \"Shared.xcconfig\"\nPRODUCT_NAME = FromBase\n"
+        return "#include \"Shared.xcconfig\"\nPRODUCT_NAME = FromBase\nOTHER_SWIFT_FLAGS = $(inherited) -warnings-as-errors\n#include? \"User.xcconfig\"\n"
     if path == "Shared.xcconfig":
-        return "PRODUCT_NAME = FromShared // overridden\nSWIFT_VERSION = 5.9\n"
+        return "PRODUCT_NAME = FromShared // overridden\nSWIFT_VERSION = 5.9\nOTHER_SWIFT_FLAGS = -D SHARED\n"
+    if path == "User.xcconfig":
+        return "OTHER_SWIFT_FLAGS = $(inherited) -no-warnings-as-errors\n"
     return ""
 
 flat = _xcode_read_xcconfig({{}}, "Base.xcconfig")
-result = repr([flat.get("PRODUCT_NAME"), flat.get("SWIFT_VERSION")])
+result = repr([flat.get("PRODUCT_NAME"), flat.get("SWIFT_VERSION"), _xcode_setting_to_list(flat.get("OTHER_SWIFT_FLAGS"))])
 "##
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"["FromBase", "5.9"]"#
+        r#"["FromBase", "5.9", ["-D", "SHARED", "-warnings-as-errors", "-no-warnings-as-errors"]]"#
     );
 }
 
@@ -12575,6 +15015,151 @@ result = repr(_xcode_test_host_ref({{}}, settings, name_map))
 "#
     );
     assert_eq!(eval_prelude_source_to_repr(source).unwrap(), r#""App""#);
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the inline Starlark fixture keeps this interoperability contract in one test"
+)]
+fn prelude_apple_library_exposes_pure_swift_to_objective_c_consumers() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("ios/SwiftModel/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("Model.swift"),
+        "public final class Model: NSObject {}\n",
+    )
+    .unwrap();
+    std::fs::write(package_dir.join("Consumer.m"), "@import SwiftModel;\n").unwrap();
+    std::fs::write(package_dir.join("Consumer.h"), "void consume(void);\n").unwrap();
+    std::fs::write(
+        package_dir.join("Mixed-Bridging.h"),
+        "#include \"Consumer.h\"\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode")
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--version" in argv:
+        return "Swift version 6.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{"package": "ios/SwiftModel", "name": "SwiftModel", "id": "ios/SwiftModel/SwiftModel"}},
+    "attr": {{"platform": "ios", "sdk_variant": "simulator", "xcode_developer_dir": "/opt/Xcode/Developer"}},
+    "deps": [],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/ios/SwiftModel/SwiftModel",
+    "capability": "build",
+}}
+swift_model = _apple_library_impl(ctx)
+consumer_ctx = {{
+    "label": {{"package": "ios/SwiftModel", "name": "ObjectiveCConsumer", "id": "ios/SwiftModel/ObjectiveCConsumer"}},
+    "attr": {{"platform": "ios", "sdk_variant": "simulator", "xcode_developer_dir": "/opt/Xcode/Developer", "enable_modules": True}},
+    "deps": [swift_model],
+    "srcs": ["Sources/**/*.m"],
+    "build_dir": ".once/out/ios/SwiftModel/ObjectiveCConsumer",
+    "capability": "build",
+}}
+_apple_library_impl(consumer_ctx)
+mixed_ctx = {{
+    "label": {{"package": "ios/SwiftModel", "name": "MixedModel", "id": "ios/SwiftModel/MixedModel"}},
+    "attr": {{"platform": "ios", "sdk_variant": "simulator", "xcode_developer_dir": "/opt/Xcode/Developer", "enable_modules": True, "bridging_header": "Sources/Mixed-Bridging.h", "exported_headers": ["Sources/Consumer.h"]}},
+    "deps": [],
+    "srcs": ["Sources/**/*.swift", "Sources/**/*.m"],
+    "build_dir": ".once/out/ios/SwiftModel/MixedModel",
+    "capability": "build",
+}}
+_apple_library_impl(mixed_ctx)
+result = repr(True)
+"#
+    );
+    let store = store_for(workspace.path(), "ios/SwiftModel");
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    result.unwrap();
+
+    let modulemap = ".once/out/ios/SwiftModel/Headers/SwiftModel/module.modulemap";
+    let map_action = store
+        .actions
+        .iter()
+        .find(|action| action.outputs.contains(&modulemap.to_string()))
+        .expect("pure Swift interop modulemap action");
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &map_action.operation else {
+        panic!("pure Swift interop map must be a write action");
+    };
+    assert!(std::str::from_utf8(bytes)
+        .expect("modulemap contents are UTF-8")
+        .contains("SwiftModel-Swift.h"),);
+    let compiler = action_by_identifier(&store, "swift_module_compile_SwiftModel");
+    assert!(compiler
+        .outputs
+        .contains(&".once/out/ios/SwiftModel/Headers/SwiftModel/SwiftModel-Swift.h".to_string()));
+    assert!(
+        !compiler
+            .argv
+            .contains(&"-import-underlying-module".to_string()),
+        "a pure Swift target must not import its generated Objective-C module while compiling"
+    );
+    assert!(
+        compiler.argv.contains(&"-parse-as-library".to_string()),
+        "a Swift-only library retains library parsing semantics"
+    );
+    let consumer_compiler = store
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .argv
+                .last()
+                .is_some_and(|arg| arg.ends_with("Consumer.m"))
+        })
+        .expect("Objective-C consumer compile action");
+    assert!(
+        consumer_compiler
+            .argv
+            .contains(&format!("-fmodule-map-file={modulemap}")),
+        "Objective-C consumers must receive a pure Swift dependency's modulemap"
+    );
+    assert!(
+        consumer_compiler.inputs.contains(&modulemap.to_string()),
+        "the dependency modulemap must participate in the consumer action digest"
+    );
+    let mixed_compiler = action_by_identifier(&store, "swift_module_compile_MixedModel");
+    assert!(
+        mixed_compiler
+            .argv
+            .contains(&"-parse-as-library".to_string()),
+        "mixed library object compilation must retain library parsing semantics"
+    );
+    assert!(
+        !mixed_compiler
+            .argv
+            .contains(&"-import-underlying-module".to_string()),
+        "a bridging header and an underlying module cannot be imported together"
+    );
+    assert!(
+        !mixed_compiler
+            .argv
+            .iter()
+            .any(|arg| arg.starts_with("-fmodule-map-file=")),
+        "the target's own module map must not hide declarations imported by its bridging header"
+    );
+    assert!(
+        mixed_compiler.argv.windows(4).any(|args| {
+            args == [
+                "-Xfrontend",
+                "-emit-clang-header-min-access",
+                "-Xfrontend",
+                "internal",
+            ]
+        }),
+        "mixed targets must expose internal Objective-C declarations in their generated header"
+    );
 }
 
 #[test]
@@ -12639,6 +15224,24 @@ result = repr([
 }
 
 #[test]
+fn prelude_xcode_normalizes_project_relative_dot_segments() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_join("Framework", "../Sources/File.swift"),
+    _xcode_join("app/./Sources", "../Generated/File.swift"),
+    _xcode_normalize_path("../../outside.swift"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Sources/File.swift", "app/Generated/File.swift", "../../outside.swift"]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_filters_excluded_source_file_names() {
     let prelude = xcode_prelude_source();
     // `EXCLUDED_SOURCE_FILE_NAMES` drops matching sources (by basename or path)
@@ -12663,6 +15266,152 @@ result = repr([
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"[True, False, True, ["App/View.swift", "App/Keep_macOS.swift"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_excludes_matching_resources_from_the_build() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr(_xcode_filter_excluded_files(
+    ["Assets/Required.dat", "Tests/Fixtures/Optional.mov"],
+    {{"EXCLUDED_SOURCE_FILE_NAMES": ["Tests/Fixtures/Optional.mov"]}},
+))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Assets/Required.dat"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_selects_conditional_build_settings() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+settings = _xcode_select_conditional_settings(
+    {{
+        "CARGO_BUILD_TARGET[sdk=iphoneos*]": "aarch64-apple-ios",
+        "CARGO_BUILD_TARGET[sdk=iphoneos*][arch=arm64e]": "arm64e-apple-ios",
+        "CARGO_BUILD_TARGET[sdk=iphonesimulator*][arch=*]": "x86_64-apple-ios",
+        "CARGO_BUILD_TARGET[sdk=iphonesimulator*][arch=arm64]": "aarch64-apple-ios-sim",
+        "LIBRARY_PATH": "target/$(CARGO_BUILD_TARGET)/release/libexample.a",
+        "ONLY_DEBUG[config=Debug]": "enabled",
+        "MISSING_PARAMETER[variant=*]": "fallback",
+    }},
+    {{"arch": "arm64", "config": "Debug", "sdk": "iphonesimulator"}},
+)
+result = repr([
+    _xcode_parse_setting("CARGO_BUILD_TARGET[sdk=iphonesimulator*][arch=arm64] = aarch64-apple-ios-sim"),
+    settings.get("CARGO_BUILD_TARGET"),
+    _xcode_resolve_vars(settings["LIBRARY_PATH"], settings),
+    settings.get("ONLY_DEBUG"),
+    settings.get("MISSING_PARAMETER"),
+    settings.get("CARGO_BUILD_TARGET[sdk=iphonesimulator*][arch=arm64]"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[("CARGO_BUILD_TARGET[sdk=iphonesimulator*][arch=arm64]", "aarch64-apple-ios-sim"), "aarch64-apple-ios-sim", "target/aarch64-apple-ios-sim/release/libexample.a", "enabled", "fallback", None]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_tokenizes_quoted_build_settings() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_split_setting('$(LIBRARY) $(inherited) -u _symbol -l"z" -framework "Vendor Kit"'),
+    _xcode_split_setting('"Path With Spaces/File.a" -ObjC'),
+    _xcode_linkopts(
+        {{"OTHER_LDFLAGS": '$(LIBRARY) $(inherited) -u _symbol -l"z" -framework "Vendor Kit" -weak_framework OptionalKit'}},
+        {{"LIBRARY": "Vendor/libExample.a"}},
+    ),
+    _apple_collect_transitive_linkopts(
+        [{{"transitive_linkopts": ["-Xlinker", "-weak_framework", "-Xlinker", "SecondKit"]}}],
+        ["-Xlinker", "-weak_framework", "-Xlinker", "FirstKit"],
+    ),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["$(LIBRARY)", "$(inherited)", "-u", "_symbol", "-lz", "-framework", "Vendor Kit"], ["Path With Spaces/File.a", "-ObjC"], ["Vendor/libExample.a", "-Xlinker", "-u", "-Xlinker", "_symbol", "-lz", "-framework", "Vendor Kit", "-Xlinker", "-weak_framework", "-Xlinker", "OptionalKit"], ["-Xlinker", "-weak_framework", "-Xlinker", "FirstKit", "-Xlinker", "-weak_framework", "-Xlinker", "SecondKit"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_package_target_excludes_cover_target_relative_paths() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_swift_package_target_path_is_excluded(
+        ".once/packages/Example/",
+        "Sources/Example",
+        ["Supporting Files"],
+        ".once/packages/Example/Sources/Example/Supporting Files/Example.h",
+    ),
+    _xcode_swift_package_target_path_is_excluded(
+        ".once/packages/Example/",
+        "Sources/Example",
+        ["Supporting Files"],
+        ".once/packages/Example/Sources/Example/Public/Example.h",
+    ),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        "[True, False]"
+    );
+}
+
+#[test]
+fn prelude_xcode_package_public_headers_path_controls_headers_and_modulemap() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_path_exists(path):
+    return True
+
+def host_file_exists(path):
+    return False
+
+def _xcode_host_directory_exists(path):
+    return True
+
+def host_which(name):
+    return "/usr/bin/" + name
+
+def host_command(argv, env = None, merge_stderr = None):
+    if len(argv) < 3 or argv[1] != "-L":
+        fail("public header discovery must follow symbolic links: " + str(argv))
+    return "/workspace/.once/packages/Down/Sources/cmark/cmark.h\n/workspace/.once/packages/Down/Sources/cmark/node.h\n"
+
+target = {{
+    "name": "libcmark",
+    "path": "Sources/cmark",
+    "publicHeadersPath": "./",
+    "exclude": ["include"],
+}}
+result = repr([
+    _xcode_swift_package_target_headers(".once/packages/Down", target),
+    _xcode_swift_package_include_dirs(".once/packages/Down", target),
+    _xcode_swift_package_target_modulemap(".once/packages/Down", target),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[[".once/packages/Down/Sources/cmark/cmark.h", ".once/packages/Down/Sources/cmark/node.h"], [".once/packages/Down/Sources/cmark"], ""]"#
     );
 }
 
@@ -12704,24 +15453,164 @@ result = repr([
 }
 
 #[test]
-fn prelude_xcode_spm_manifest_supports_local_packages() {
-    // Workspace-local packages are added by path and their products referenced
-    // by the discovered package name.
-    let manifest = eval_prelude_string_function_in(
-        xcode_prelude_source(),
-        "_xcode_spm_manifest",
-        r#"("macos", "15.0", [{"path": "/ws/Modules/RSCore"}], [{"name": "RSCore", "package_identity": "RSCore"}])"#,
-    )
-    .unwrap();
-    assert!(
-        manifest.contains(r#".package(path: "/ws/Modules/RSCore")"#),
-        "{manifest}"
+fn prelude_xcode_spm_collects_framework_phase_product_refs() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "LOCAL_PRODUCT": {"isa": "XCSwiftPackageProductDependency", "productName": "SharedKit"},
+        "BUILD_FILE": {"isa": "PBXBuildFile", "productRef": "LOCAL_PRODUCT"},
+        "FRAMEWORKS": {"isa": "PBXFrameworksBuildPhase", "files": ["BUILD_FILE"]},
+        "APP": {"isa": "PBXNativeTarget", "name": "App", "buildPhases": ["FRAMEWORKS"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+objects = json_decode({objects:?})
+products = _xcode_target_spm_products(objects, objects["APP"], {{}})
+result = repr([[product["name"], product["package_identity"]] for product in products])
+"#
     );
-    assert!(
-        manifest.contains(r#".product(name: "RSCore", package: "RSCore")"#),
-        "{manifest}"
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["SharedKit", ""]]"#
     );
-    assert!(manifest.contains(r#".macOS("15.0")"#), "{manifest}");
+}
+
+#[test]
+fn prelude_xcode_recovers_built_framework_target_dependencies() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "FRAMEWORK": {"isa": "PBXFileReference", "name": "Pods_Sample.framework", "sourceTree": "BUILT_PRODUCTS_DIR"},
+        "BUILD": {"isa": "PBXBuildFile", "fileRef": "FRAMEWORK"},
+        "PHASE": {"isa": "PBXFrameworksBuildPhase", "files": ["BUILD"]},
+        "APP": {"isa": "PBXNativeTarget", "buildPhases": ["PHASE"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+objects = json_decode({objects:?})
+result = repr(_xcode_framework_product_dependencies(objects, objects["APP"], {{"Pods-Sample": "Pods-Sample"}}))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Pods-Sample"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_does_not_treat_built_resource_products_as_sources() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "PRODUCT": {
+            "isa": "PBXFileReference",
+            "path": "Privacy.bundle",
+            "sourceTree": "BUILT_PRODUCTS_DIR"
+        },
+        "SOURCE": {
+            "isa": "PBXFileReference",
+            "path": "PrivacyInfo.xcprivacy",
+            "sourceTree": "<group>"
+        },
+        "PRODUCT_BUILD": {"isa": "PBXBuildFile", "fileRef": "PRODUCT"},
+        "SOURCE_BUILD": {"isa": "PBXBuildFile", "fileRef": "SOURCE"},
+        "RESOURCES": {
+            "isa": "PBXResourcesBuildPhase",
+            "files": ["PRODUCT_BUILD", "SOURCE_BUILD"]
+        },
+        "TARGET": {"isa": "PBXNativeTarget", "buildPhases": ["RESOURCES"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+objects = json_decode({objects:?})
+result = repr(_xcode_classic_phase_files(
+    {{}},
+    objects,
+    objects["TARGET"],
+    {{"SOURCE": "Resources/PrivacyInfo.xcprivacy"}},
+)["resources"])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Resources/PrivacyInfo.xcprivacy"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_preserves_public_header_visibility() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "PUBLIC": {"isa": "PBXFileReference", "path": "Public.h"},
+        "PRIVATE": {"isa": "PBXFileReference", "path": "Private.h"},
+        "PROJECT": {"isa": "PBXFileReference", "path": "Project.h"},
+        "PUBLIC_BUILD": {
+            "isa": "PBXBuildFile",
+            "fileRef": "PUBLIC",
+            "settings": {"ATTRIBUTES": ["Public"]}
+        },
+        "PRIVATE_BUILD": {
+            "isa": "PBXBuildFile",
+            "fileRef": "PRIVATE",
+            "settings": {"ATTRIBUTES": ["Private"]}
+        },
+        "PROJECT_BUILD": {"isa": "PBXBuildFile", "fileRef": "PROJECT"},
+        "HEADERS": {
+            "isa": "PBXHeadersBuildPhase",
+            "files": ["PUBLIC_BUILD", "PRIVATE_BUILD", "PROJECT_BUILD"]
+        },
+        "TARGET": {"isa": "PBXNativeTarget", "buildPhases": ["HEADERS"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+objects = json_decode({objects:?})
+files = _xcode_classic_phase_files(
+    {{}},
+    objects,
+    objects["TARGET"],
+    {{"PUBLIC": "Headers/Public.h", "PRIVATE": "Headers/Private.h", "PROJECT": "Headers/Project.h"}},
+)
+result = repr([files["headers"], files["exported_headers"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["Headers/Public.h", "Headers/Private.h", "Headers/Project.h"], ["Headers/Public.h"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_resolves_headers_named_by_modulemaps() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return ""
+
+def host_file_exists(path):
+    return path == "Support/Main.modulemap"
+
+def host_file_read(path):
+    if path == "Support/Main.modulemap":
+        return '''framework module Main {{
+  umbrella header "Public.h"
+  explicit module Internal {{
+    private textual header "Private.h"
+  }}
+}}'''
+    fail("unexpected host_file_read: " + path)
+
+result = repr(_xcode_modulemap_headers(
+    "Support/Main.modulemap",
+    ["Sources/Public.h", "Vendor/Private.h", "Sources/Unrelated.h"],
+))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Sources/Public.h", "Vendor/Private.h"]"#
+    );
 }
 
 #[test]
@@ -12739,41 +15628,6 @@ result = repr([
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         "[True, True, True]"
-    );
-}
-
-#[test]
-fn prelude_xcode_spm_manifest_matches_buildable_package() {
-    // The synthesized manifest must match the shape proven to build against
-    // real packages: an aggregating static library target depending on every
-    // consumed product, with each requirement rendered to its SwiftPM clause.
-    let manifest = eval_prelude_string_function_in(
-        xcode_prelude_source(),
-        "_xcode_spm_manifest",
-        r#"("macos", "10.15", [{"url": "https://github.com/sparkle-project/Sparkle", "requirement": {"kind": "upToNextMajorVersion", "minimumVersion": "2.0.0"}}, {"url": "https://github.com/rxhanson/MASShortcut", "requirement": {"kind": "revision", "revision": "2f9fbb3f"}}], [{"name": "Sparkle", "package_identity": "Sparkle"}, {"name": "MASShortcut", "package_identity": "MASShortcut"}])"#,
-    )
-    .unwrap();
-    assert!(manifest.contains("swift-tools-version:5.9"), "{manifest}");
-    assert!(manifest.contains(r#".macOS("10.15")"#), "{manifest}");
-    assert!(
-        manifest.contains(r#".package(url: "https://github.com/sparkle-project/Sparkle", .upToNextMajor(from: "2.0.0"))"#),
-        "{manifest}"
-    );
-    assert!(
-        manifest.contains(
-            r#".package(url: "https://github.com/rxhanson/MASShortcut", revision: "2f9fbb3f")"#
-        ),
-        "{manifest}"
-    );
-    assert!(
-        manifest.contains(r#".product(name: "Sparkle", package: "Sparkle")"#),
-        "{manifest}"
-    );
-    assert!(
-        manifest.contains(
-            r#".library(name: "OnceXcodeDeps", type: .static, targets: ["OnceXcodeDeps"])"#
-        ),
-        "{manifest}"
     );
 }
 
@@ -12922,7 +15776,11 @@ fn prelude_xcode_workspace_resolver_lowers_native_targets() {
                 },
             },
             "FW_SRC": {"isa": "PBXSourcesBuildPhase", "files": ["FW_BF"]},
-            "FW_BF": {"isa": "PBXBuildFile", "fileRef": "FW_FILE"},
+            "FW_BF": {
+                "isa": "PBXBuildFile",
+                "fileRef": "FW_FILE",
+                "settings": {"COMPILER_FLAGS": "-DNDEBUG -fno-objc-arc"},
+            },
             "FW_FILE": {
                 "isa": "PBXFileReference",
                 "path": "Feature.swift",
@@ -12948,6 +15806,7 @@ fn prelude_xcode_workspace_resolver_lowers_native_targets() {
                 "buildSettings": {
                     "PRODUCT_NAME": "$(TARGET_NAME)",
                     "PRODUCT_BUNDLE_IDENTIFIER": "dev.once.App",
+                    "DEVELOPMENT_TEAM": "TEAM123",
                     "TARGETED_DEVICE_FAMILY": "1,2",
                     "ENABLE_TESTABILITY": "YES",
                 },
@@ -13020,8 +15879,10 @@ result = repr([
     specs["App"]["deps"],
     specs["AppTests"]["deps"],
     specs["Feature"]["srcs"],
+    specs["Feature"]["attrs"].get("per_source_clang_flags"),
     specs["App"]["srcs"],
     specs["App"]["attrs"].get("bundle_id"),
+    specs["App"]["attrs"].get("development_team"),
     specs["App"]["attrs"].get("families"),
     specs["App"]["attrs"].get("minimum_os"),
     specs["App"]["attrs"].get("enable_testing"),
@@ -13032,6 +15893,6 @@ result = repr([
     let out = eval_prelude_source_to_repr(source).unwrap();
     assert_eq!(
         out,
-        r#"[["App"], ["apple_library", "apple_application", "apple_test_bundle"], ["./Feature"], ["./App"], ["Source/Core/Feature.swift"], ["App.swift"], "dev.once.App", ["iphone", "ipad"], "16.0", True]"#
+        r#"[["App"], ["apple_framework", "apple_application", "apple_test_bundle"], ["./Feature"], ["./App"], ["Source/Core/Feature.swift"], {"Source/Core/Feature.swift": "[\"-DNDEBUG\",\"-fno-objc-arc\"]"}, ["App.swift"], "dev.once.App", "TEAM123", ["iphone", "ipad"], "16.0", True]"#
     );
 }

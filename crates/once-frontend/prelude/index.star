@@ -47,6 +47,8 @@ PRELUDE_TARGET_KINDS = {
         "swift_package_dependencies",
         "swift_package_pin",
         "apple_library",
+        "apple_resource_bundle",
+        "apple_xcframework_import",
         "apple_framework",
         "apple_application",
         "apple_thinned_package",
@@ -73,7 +75,6 @@ PRELUDE_TARGET_KINDS = {
     ],
     "xcode.star": [
         "xcode_workspace",
-        "xcode_spm_dependencies",
     ],
     "c.star": ["c_library"],
     "cmake.star": [

@@ -118,7 +118,7 @@ pub(crate) fn synthesized_workspace_seeds(
                     matched.native_project
                 ),
             })?;
-        let target = seed_target(schema, &matched.package);
+        let target = seed_target(schema, &matched.package, &matched.markers);
         if let Some(previous_native_project) =
             ids.insert(target.id(), matched.native_project.clone())
         {
@@ -150,17 +150,15 @@ pub fn native_project_seed_target(root: &Path, name: &str, package: &str) -> Res
     let matched = catalog
         .matches
         .into_iter()
-        .any(|matched| matched.native_project == name && matched.package == package);
-    if !matched {
-        return Err(Error::Eval {
+        .find(|matched| matched.native_project == name && matched.package == package)
+        .ok_or_else(|| Error::Eval {
             path: name.to_string(),
             message: format!(
                 "native project `{name}` does not match package `{}`",
                 if package.is_empty() { "." } else { package }
             ),
-        });
-    }
-    Ok(seed_target(&schema, package))
+        })?;
+    Ok(seed_target(&schema, package, &matched.markers))
 }
 
 pub fn preview_native_project(
@@ -191,7 +189,7 @@ pub fn preview_native_project(
                 if package.is_empty() { "." } else { package }
             ),
         })?;
-    let seed = seed_target(&schema, package);
+    let seed = seed_target(&schema, package, &selected_match.markers);
     let targets = crate::graph::load_graph_workspace_with_targets_and_schemas(
         root,
         vec![seed.clone()],
@@ -205,9 +203,11 @@ pub fn preview_native_project(
     })
 }
 
-fn seed_target(schema: &NativeProjectSchema, package: &str) -> Target {
-    let resolver_inputs = schema
-        .markers
+/// Build the ephemeral seed for one match. `markers` are the marker paths as
+/// they were resolved against the package, so a wildcard marker contributes the
+/// concrete file it matched rather than the declared pattern.
+fn seed_target(schema: &NativeProjectSchema, package: &str, markers: &[String]) -> Target {
+    let resolver_inputs = markers
         .iter()
         .chain(schema.inputs.iter())
         .cloned()
@@ -219,7 +219,7 @@ fn seed_target(schema: &NativeProjectSchema, package: &str) -> Target {
         name: schema.target_name.clone(),
         deps: Vec::new(),
         dependency_edges: BTreeMap::new(),
-        srcs: schema.markers.clone(),
+        srcs: markers.to_vec(),
         visibility: Vec::new(),
         attrs: BTreeMap::new(),
         typed_attrs: BTreeMap::from([(
@@ -299,7 +299,22 @@ fn parse_native_project_schemas(path: &str, source: &str) -> Result<Vec<NativePr
                     positive_usize(required_i32(&dict, "max_depth")?, &name, "max_depth")?;
                 let requires_tools = string_list(&dict, "requires_tools")?;
                 for marker in &markers {
-                    validate_relative_literal(&name, "marker", marker)?;
+                    validate_marker(&name, marker)?;
+                }
+                // Descend matching indexes the primary marker by file name as the
+                // walk visits files, so a primary marker that needs directory
+                // expansion or a parent segment can only be matched by the
+                // stop-mode directory pass.
+                if (marker_is_pattern(&markers[0]) || markers[0].contains('/'))
+                    && on_match != "stop"
+                {
+                    return Err(native_project_error(
+                        &name,
+                        format!(
+                            "native project `{name}` marker `{}` spans a directory, so it requires on_match = \"stop\"",
+                            markers[0]
+                        ),
+                    ));
                 }
                 for excluded in &exclude {
                     validate_relative_literal(&name, "excluded directory", excluded)?;
@@ -338,6 +353,42 @@ fn validate_relative_literal(native_project: &str, field: &str, value: &str) -> 
         ));
     }
     Ok(())
+}
+
+/// Validate one marker, which is a normalized relative path whose segments may
+/// each be a literal name or a leading-wildcard pattern such as
+/// `*.xcodeproj`. A wildcard segment matches the directory entries that end
+/// with its literal suffix, so a project bundle whose name varies by repository
+/// is still discoverable.
+fn validate_marker(native_project: &str, marker: &str) -> Result<()> {
+    validate_relative_literal(native_project, "marker", marker)?;
+    for segment in marker.split('/') {
+        let Some(suffix) = segment.strip_prefix('*') else {
+            if segment.contains('*') {
+                return Err(native_project_error(
+                    native_project,
+                    format!(
+                        "native project marker `{marker}` may only use `*` at the start of a path segment"
+                    ),
+                ));
+            }
+            continue;
+        };
+        if suffix.is_empty() || suffix.contains('*') {
+            return Err(native_project_error(
+                native_project,
+                format!(
+                    "native project marker `{marker}` wildcard segment must be `*` followed by one literal suffix"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether a marker needs directory expansion before it can be matched.
+pub(crate) fn marker_is_pattern(marker: &str) -> bool {
+    marker.contains('*')
 }
 
 fn validate_source_pattern(native_project: &str, value: &str) -> Result<()> {
@@ -463,6 +514,114 @@ mod tests {
                 .unwrap();
         assert_eq!(matches.len(), 1);
         assert!(matches[0].package.is_empty());
+    }
+
+    #[test]
+    fn wildcard_markers_resolve_to_the_files_they_matched() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temporary.path().join("Browser.xcodeproj")).unwrap();
+        std::fs::write(
+            temporary.path().join("Browser.xcodeproj/project.pbxproj"),
+            "// !$*UTF8*$!\n",
+        )
+        .unwrap();
+        let source = format!(
+            "{}\ndemo = native_project(target_kind = \"demo_workspace\", docs = \"Demo\", markers = [\"*.xcodeproj/project.pbxproj\"], on_match = \"stop\")\n",
+            crate::modules::common_module_source()
+        );
+        let schemas = parse_native_project_schemas("demo.star", &source).unwrap();
+
+        let boundary = crate::workspace::load_workspace_scan(temporary.path()).unwrap();
+        let (matches, _) =
+            discovery::detect_native_projects_with_schemas(temporary.path(), &schemas, &boundary)
+                .unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].package.is_empty());
+        // The match and its seed carry the concrete path, not the pattern, so
+        // the resolver reads the project that was actually found.
+        assert_eq!(
+            matches[0].markers,
+            vec!["Browser.xcodeproj/project.pbxproj".to_string()]
+        );
+        let seed = seed_target(&schemas[0], &matches[0].package, &matches[0].markers);
+        assert_eq!(seed.srcs, vec!["Browser.xcodeproj/project.pbxproj"]);
+    }
+
+    #[test]
+    fn wildcard_markers_do_not_match_a_bundle_without_its_manifest() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temporary.path().join("Browser.xcodeproj")).unwrap();
+        let source = format!(
+            "{}\ndemo = native_project(target_kind = \"demo_workspace\", docs = \"Demo\", markers = [\"*.xcodeproj/project.pbxproj\"], on_match = \"stop\")\n",
+            crate::modules::common_module_source()
+        );
+        let schemas = parse_native_project_schemas("demo.star", &source).unwrap();
+
+        let boundary = crate::workspace::load_workspace_scan(temporary.path()).unwrap();
+        let (matches, _) =
+            discovery::detect_native_projects_with_schemas(temporary.path(), &schemas, &boundary)
+                .unwrap();
+
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn a_directory_spanning_marker_requires_stop_matching() {
+        let source = format!(
+            "{}\ndemo = native_project(target_kind = \"demo_workspace\", docs = \"Demo\", markers = [\"*.xcodeproj/project.pbxproj\"])\n",
+            crate::modules::common_module_source()
+        );
+        let error = parse_native_project_schemas("demo.star", &source).unwrap_err();
+        assert!(
+            error.to_string().contains("on_match = \"stop\""),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn a_marker_wildcard_is_only_allowed_at_the_start_of_a_segment() {
+        let source = format!(
+            "{}\ndemo = native_project(target_kind = \"demo_workspace\", docs = \"Demo\", markers = [\"project.*proj\"], on_match = \"stop\")\n",
+            crate::modules::common_module_source()
+        );
+        let error = parse_native_project_schemas("demo.star", &source).unwrap_err();
+        assert!(
+            error.to_string().contains("only use `*` at the start"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn built_in_native_projects_detect_xcode_projects_at_the_workspace_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temporary.path().join("Browser.xcodeproj")).unwrap();
+        std::fs::write(
+            temporary.path().join("Browser.xcodeproj/project.pbxproj"),
+            "// !$*UTF8*$!\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temporary.path().join("ios/Nested.xcodeproj")).unwrap();
+        std::fs::write(
+            temporary
+                .path()
+                .join("ios/Nested.xcodeproj/project.pbxproj"),
+            "// !$*UTF8*$!\n",
+        )
+        .unwrap();
+
+        let matches = detect_native_projects(temporary.path()).unwrap();
+
+        let xcode = matches
+            .iter()
+            .filter(|matched| matched.native_project == "xcode")
+            .collect::<Vec<_>>();
+        assert_eq!(xcode.len(), 1);
+        assert!(xcode[0].package.is_empty());
+        assert_eq!(
+            xcode[0].markers,
+            vec!["Browser.xcodeproj/project.pbxproj".to_string()]
+        );
     }
 
     #[test]

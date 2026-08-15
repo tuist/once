@@ -1,0 +1,9 @@
+[[target]]
+name = "ExampleResources"
+kind = "apple_resource_bundle"
+
+[target.attrs]
+platform = "ios"
+bundle_name = "ExampleResources"
+bundle_id = "dev.once.ExampleResources"
+resources = ["Resources/Message.txt"]
