@@ -10,6 +10,8 @@ use super::entity;
 use super::{EvidenceCacheState, EvidenceRecord, EvidenceStatus, EvidenceSubject};
 use crate::WorkspaceStore;
 
+const EVIDENCE_INSERT_BATCH_SIZE: usize = 128;
+
 type EvidenceDatabaseLock = Arc<tokio::sync::Mutex<()>>;
 type EvidenceDatabase = Arc<tokio::sync::OnceCell<DatabaseConnection>>;
 
@@ -47,14 +49,16 @@ impl EvidenceStore {
         let _guard = lock.lock().await;
         let db = self.database().await?;
         let transaction = db.begin().await.context("starting evidence transaction")?;
-        let models = records
-            .iter()
-            .map(record_to_active_model)
-            .collect::<Result<Vec<_>>>()?;
-        entity::Entity::insert_many(models)
-            .exec(&transaction)
-            .await
-            .with_context(|| format!("writing {} evidence records", records.len()))?;
+        for batch in records.chunks(EVIDENCE_INSERT_BATCH_SIZE) {
+            let models = batch
+                .iter()
+                .map(record_to_active_model)
+                .collect::<Result<Vec<_>>>()?;
+            entity::Entity::insert_many(models)
+                .exec(&transaction)
+                .await
+                .with_context(|| format!("writing {} evidence records", batch.len()))?;
+        }
         transaction
             .commit()
             .await
@@ -241,6 +245,34 @@ mod tests {
             )
             .unwrap()
         });
+
+        store.append_many(&records).await.unwrap();
+
+        assert_eq!(store.load().await.unwrap(), records);
+    }
+
+    #[tokio::test]
+    async fn evidence_store_bounds_large_inserts() {
+        let tmp = TempDir::new().unwrap();
+        let store = EvidenceStore::open_workspace(tmp.path());
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::new(),
+        };
+        let records = (0..=(EVIDENCE_INSERT_BATCH_SIZE * 3))
+            .map(|index| {
+                EvidenceRecord::from_action_result(
+                    EvidenceSubject::target("cli", "build"),
+                    Digest::of_bytes(index.to_string().as_bytes()),
+                    None,
+                    EvidenceCacheState::Hit,
+                    &result,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
 
         store.append_many(&records).await.unwrap();
 

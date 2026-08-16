@@ -33,13 +33,14 @@ def tool(name, executables = []):
         "executables": executables or [name],
     }
 
-def example(slug, name, use_when, path = None):
+def example(slug, name, use_when, path = None, platforms = None):
     return {
         "_once_example": True,
         "slug": slug,
         "name": name,
         "use_when": use_when,
         "path": path or ("examples/" + slug),
+        "platforms": platforms or [],
     }
 
 def source_reference(system, symbol, url, use_when, content_digest = None):
@@ -189,6 +190,45 @@ def _collect_transitive(deps, key, own_values):
         for value in dep.get(key) or []:
             out.append(value)
     return _unique(out)
+
+def _unique_args(values, option_arity = {}, forwarder = "", forwarded_option_arity = {}):
+    seen = {}
+    out = []
+    consumed_until = 0
+    for index in range(len(values)):
+        if index < consumed_until:
+            continue
+        value = values[index]
+        group = [value]
+        if forwarder and value == forwarder and index + 1 < len(values):
+            forwarded_option = values[index + 1]
+            group.append(forwarded_option)
+            cursor = index + 2
+            for _unused in range(forwarded_option_arity.get(forwarded_option) or 0):
+                if cursor < len(values) and values[cursor] == forwarder and cursor + 1 < len(values):
+                    group.extend([values[cursor], values[cursor + 1]])
+                    cursor += 2
+                elif cursor < len(values):
+                    group.append(values[cursor])
+                    cursor += 1
+            consumed_until = cursor
+        else:
+            arity = option_arity.get(value) or 0
+            consumed_until = index + 1 + arity
+            if consumed_until > len(values):
+                consumed_until = len(values)
+            group.extend(values[index + 1:consumed_until])
+        key = repr(group)
+        if key not in seen:
+            seen[key] = True
+            out.extend(group)
+    return out
+
+def _collect_transitive_args(deps, key, own_values):
+    out = list(own_values)
+    for dep in deps:
+        out.extend(dep.get(key) or [])
+    return out
 
 def _once_executable_fields(path, runtime_files = [], os = "", architecture = "", variant = "", linkage = "unknown"):
     return {

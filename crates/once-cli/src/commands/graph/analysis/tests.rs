@@ -22,6 +22,7 @@ def _impl(ctx):
     if ctx["attr"].get("read_dependency_output"):
         run_action(
             argv = ["/bin/sh", "-c", "cat \"$1\" > \"$2\"", "sh", ctx["deps"][0]["out"], out],
+            inputs = [ctx["deps"][0]["out"]],
             outputs = [out],
             identifier = ctx["label"]["name"] + "-dependency-output",
         )
@@ -681,7 +682,13 @@ async fn capability_runs_are_salted_by_dependency_action_digests() {
     let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
     let graph = vec![
         target_with_capabilities("Dep", &[], &["dep.txt"], &["build"], []),
-        target_with_capabilities("Root", &["Dep"], &[], &["test"], []),
+        target_with_capabilities(
+            "Root",
+            &["Dep"],
+            &[],
+            &["test"],
+            [("read_dependency_output".to_string(), AttrValue::Bool(true))],
+        ),
     ];
     let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
 

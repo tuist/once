@@ -23,6 +23,7 @@ Describe 'release SDK packaging scripts'
       "$WORKSPACE/crates/once-cas" \
       "$WORKSPACE/crates/once-core" \
       "$WORKSPACE/crates/once-frontend" \
+      "$WORKSPACE/crates/once-host-tree" \
       "$WORKSPACE/crates/once" \
       "$WORKSPACE/crates/once-cli"
     touch \
@@ -32,6 +33,7 @@ Describe 'release SDK packaging scripts'
       "$WORKSPACE/crates/once-cas/once.toml" \
       "$WORKSPACE/crates/once-core/once.toml" \
       "$WORKSPACE/crates/once-frontend/once.toml" \
+      "$WORKSPACE/crates/once-host-tree/once.toml" \
       "$WORKSPACE/crates/once/once.toml" \
       "$WORKSPACE/crates/once-cli/once.toml"
   }

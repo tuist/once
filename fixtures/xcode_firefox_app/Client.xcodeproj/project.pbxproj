@@ -1,0 +1,64 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		ROOT = {isa = PBXProject; buildConfigurationList = PROJECT_CONFIGS; mainGroup = GROUP; targets = (CLIENT, BROWSERKIT, TABS, BOOKMARKS, RESOURCE_BUNDLE, CLIENT_TESTS); };
+		PROJECT_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (PROJECT_DEBUG); defaultConfigurationName = Debug; };
+		PROJECT_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; }; };
+		GROUP = {isa = PBXGroup; children = (BROWSERKIT_GROUP, TABS_GROUP, BOOKMARKS_GROUP, RESOURCE_BUNDLE_GROUP, RUST_COMPONENTS_REF, CLIENT_GROUP, CLIENT_TESTS_GROUP); sourceTree = "<group>"; };
+		BROWSERKIT_GROUP = {isa = PBXGroup; children = (BROWSERKIT_FILE); path = BrowserKit/Sources; sourceTree = "<group>"; };
+		TABS_GROUP = {isa = PBXGroup; children = (TABS_FILE); path = Tabs/Sources; sourceTree = "<group>"; };
+		BOOKMARKS_GROUP = {isa = PBXGroup; children = (BOOKMARKS_FILE); path = Bookmarks/Sources; sourceTree = "<group>"; };
+		RESOURCE_BUNDLE_GROUP = {isa = PBXGroup; children = (RESOURCE_BUNDLE_RES); path = ResourceBundle; sourceTree = "<group>"; };
+		CLIENT_GROUP = {isa = PBXGroup; children = (CLIENT_FILE); path = Client/Sources; sourceTree = "<group>"; };
+		CLIENT_TESTS_GROUP = {isa = PBXGroup; children = (CLIENT_TESTS_FILE); path = ClientTests/Sources; sourceTree = "<group>"; };
+		CLIENT_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientApp.swift; sourceTree = "<group>"; };
+		CLIENT_BUILD = {isa = PBXBuildFile; fileRef = CLIENT_FILE; };
+		CLIENT_SOURCES = {isa = PBXSourcesBuildPhase; files = (CLIENT_BUILD); };
+		CLIENT_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (CLIENT_DEBUG); defaultConfigurationName = Debug; };
+		CLIENT_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_NAME = "$(TARGET_NAME)"; }; };
+		CLIENT = {isa = PBXNativeTarget; buildConfigurationList = CLIENT_CONFIGS; buildPhases = (CLIENT_SOURCES); name = Client; productType = "com.apple.product-type.application"; productName = Client; };
+		BROWSERKIT_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserKit.swift; sourceTree = "<group>"; };
+		BROWSERKIT_BUILD = {isa = PBXBuildFile; fileRef = BROWSERKIT_FILE; };
+		BROWSERKIT_SOURCES = {isa = PBXSourcesBuildPhase; files = (BROWSERKIT_BUILD); };
+		BROWSERKIT_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (BROWSERKIT_DEBUG); defaultConfigurationName = Debug; };
+		BROWSERKIT_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_NAME = "$(TARGET_NAME)"; }; };
+		BROWSERKIT = {isa = PBXNativeTarget; buildConfigurationList = BROWSERKIT_CONFIGS; buildPhases = (BROWSERKIT_SOURCES); name = BrowserKit; productType = "com.apple.product-type.library.static"; productName = BrowserKit; };
+		TABS_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tabs.swift; sourceTree = "<group>"; };
+		TABS_BUILD = {isa = PBXBuildFile; fileRef = TABS_FILE; };
+		TABS_SOURCES = {isa = PBXSourcesBuildPhase; files = (TABS_BUILD); };
+		TABS_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (TABS_DEBUG); defaultConfigurationName = Debug; };
+		TABS_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_NAME = "$(TARGET_NAME)"; }; };
+		TABS_DEP_BROWSERKIT = {isa = PBXTargetDependency; target = BROWSERKIT; };
+		TABS = {isa = PBXNativeTarget; buildConfigurationList = TABS_CONFIGS; buildPhases = (TABS_SOURCES); dependencies = (TABS_DEP_BROWSERKIT); name = Tabs; productType = "com.apple.product-type.library.static"; productName = Tabs; };
+
+		BOOKMARKS_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bookmarks.swift; sourceTree = "<group>"; };
+		BOOKMARKS_BUILD = {isa = PBXBuildFile; fileRef = BOOKMARKS_FILE; };
+		BOOKMARKS_SOURCES = {isa = PBXSourcesBuildPhase; files = (BOOKMARKS_BUILD); };
+		BOOKMARKS_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (BOOKMARKS_DEBUG); defaultConfigurationName = Debug; };
+		BOOKMARKS_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_NAME = "$(TARGET_NAME)"; }; };
+		BOOKMARKS_DEP_BROWSERKIT = {isa = PBXTargetDependency; target = BROWSERKIT; };
+		BOOKMARKS = {isa = PBXNativeTarget; buildConfigurationList = BOOKMARKS_CONFIGS; buildPhases = (BOOKMARKS_SOURCES); dependencies = (BOOKMARKS_DEP_BROWSERKIT); name = Bookmarks; productType = "com.apple.product-type.library.static"; productName = Bookmarks; };
+
+		RESOURCE_BUNDLE_RES = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources; sourceTree = "<group>"; };
+		RESOURCE_BUNDLE_RES_BUILD = {isa = PBXBuildFile; fileRef = RESOURCE_BUNDLE_RES; };
+		RESOURCE_BUNDLE_RESOURCES_PHASE = {isa = PBXResourcesBuildPhase; files = (RESOURCE_BUNDLE_RES_BUILD); };
+		RESOURCE_BUNDLE_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (RESOURCE_BUNDLE_DEBUG); defaultConfigurationName = Debug; };
+		RESOURCE_BUNDLE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_NAME = "$(TARGET_NAME)"; }; };
+		RESOURCE_BUNDLE = {isa = PBXNativeTarget; buildConfigurationList = RESOURCE_BUNDLE_CONFIGS; buildPhases = (RESOURCE_BUNDLE_RESOURCES_PHASE); name = ResourceBundle; productType = "com.apple.product-type.bundle"; productName = ResourceBundle; };
+
+		RUST_COMPONENTS_REF = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = RustComponents.xcframework; sourceTree = "<group>"; };
+		RUST_COMPONENTS_BUILD = {isa = PBXBuildFile; fileRef = RUST_COMPONENTS_REF; };
+
+		CLIENT_TESTS_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientTests.swift; sourceTree = "<group>"; };
+		CLIENT_TESTS_BUILD = {isa = PBXBuildFile; fileRef = CLIENT_TESTS_FILE; };
+		CLIENT_TESTS_SOURCES = {isa = PBXSourcesBuildPhase; files = (CLIENT_TESTS_BUILD); };
+		CLIENT_TESTS_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (CLIENT_TESTS_DEBUG); defaultConfigurationName = Debug; };
+		CLIENT_TESTS_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Client.app/Client"; }; };
+		CLIENT_TESTS_DEP_CLIENT = {isa = PBXTargetDependency; target = CLIENT; };
+		CLIENT_TESTS = {isa = PBXNativeTarget; buildConfigurationList = CLIENT_TESTS_CONFIGS; buildPhases = (CLIENT_TESTS_SOURCES); dependencies = (CLIENT_TESTS_DEP_CLIENT); name = ClientTests; productType = "com.apple.product-type.bundle.unit-test"; productName = ClientTests; };
+	};
+	rootObject = ROOT;
+}

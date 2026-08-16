@@ -159,6 +159,7 @@ Preview one match without changing the repository:
 ```sh
 once query native-project mix
 once query native-project cargo
+once query native-project xcode
 ```
 
 The preview includes the exact seed and every resolver-emitted target. Normal
@@ -169,6 +170,7 @@ Initialize the seed when the native project selection should be reviewed and sto
 ```sh
 once edit init-native-project mix
 once edit init-native-project cargo
+once edit init-native-project xcode
 ```
 
 Initialization writes only the seed target to `once.toml`. The native project
@@ -183,6 +185,21 @@ from the built-in target kinds.
 An explicit Once target for the same target kind takes precedence in its
 package. Unrelated targets do not hide a native project in the same package or
 elsewhere in the workspace.
+
+An Xcode project checked in beside the repository root is recognized the same
+way. Its seed resolves every native target into Apple applications,
+frameworks, libraries, resource bundles, and test bundles, so a repository with
+no `once.toml` at all can be queried and built directly:
+
+```sh
+once query native-project xcode
+once query targets
+once build MyApp
+```
+
+[Xcode Projects](/guide/graph/apple/xcode) walks through the full flow,
+including workspaces with several projects, build configurations, and current
+limitations.
 
 Every built-in target kind also ships a complete starter with manifests and
 source files. Discover the available slugs, then materialize one directly:

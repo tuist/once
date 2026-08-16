@@ -514,6 +514,12 @@ separate update workflow.
   mebibytes.
 - `host_file_exists(path)` checks whether a host path is currently a
   file.
+- `host_path_exists(path)` checks whether a host path currently exists,
+  including directories and symbolic links. Use it when a resolver probes a
+  source tree rather than reads a regular file.
+- `host_path_is_within(path, root)` canonicalizes two existing host paths and
+  reports whether the first is contained by the second. Symbolic links are
+  resolved before the containment check.
 - `host_file_read(path)` reads a host file as
   [Unicode Transformation Format, 8-bit (UTF-8)](https://www.unicode.org/faq/utf_bom.html#UTF8)
   text. Analysis rejects files larger than 16 mebibytes.
@@ -529,6 +535,10 @@ separate update workflow.
   package-relative directory and returns sorted workspace-relative file and
   symbolic-link paths. Exact root-relative exclusions and file names prune
   whole trees before traversal.
+- `walk_workspace_files(root, excluded_paths = [], excluded_names = [])` walks
+  a workspace-relative directory without following symbolic links. Use it
+  when a resolver must inspect a path shared by targets in different packages
+  or explicitly snapshot a symbolic link whose destination is host managed.
 - `declare_output(name)` reserves an output under the target build
   directory.
 - `execution_path(path)` returns a stable command value for a
@@ -550,8 +560,11 @@ separate update workflow.
   files through normal actions.
 - `copy_path(source, destination, inputs = [])` copies one workspace
   path by value. A directory symlink is materialized at the destination.
+  Source paths are always action inputs; `inputs` adds any other paths read
+  while deciding what to copy.
 - `copy_path(source, destination, kind = "tree", inputs = [])` copies
-  one or more directory contents while preserving their symlink layout.
+  one or more directory contents while preserving their symlink layout. Each
+  source tree is automatically hashed as an input.
 - `materialize_host_file(source, destination)` snapshots one absolute host
   toolchain file into a workspace output. Analysis records its
   [256-bit Secure Hash Algorithm digest](https://csrc.nist.gov/pubs/fips/180-4/upd1/final),
@@ -561,14 +574,16 @@ separate update workflow.
   its content, file modes, and symbolic links before the output enters the
   cache.
 - `link_path(source, destination)` declares an uncached, relative workspace
-  link. The source must exist. Linked contents are not copied into the action
-  cache, while downstream actions still hash them when they declare the link
-  as an input. Windows hosts require permission to create symbolic links.
+  link. The source must exist and is automatically declared as an input.
+  Linked contents are not copied into the action cache, while downstream
+  actions still hash them when they declare the link as an input. Windows
+  hosts require permission to create symbolic links.
 - `prepare_path(path, kind = "remove")` and
   `prepare_path(path, kind = "directory")` declare uncached cleanup and
   setup actions for workspace paths.
 - `write_tree_digest(root, output, include_suffixes = [])` writes a
-  deterministic digest listing for a workspace tree.
+  deterministic digest listing for a workspace tree. The root is
+  automatically declared as an input.
 - `write_archive(entries, output, sha256_output = None, format = "tar")`
   writes a deterministic uncompressed
   [tar archive](https://www.gnu.org/software/tar/manual/html_node/Standard.html).
@@ -579,6 +594,13 @@ separate update workflow.
   digest.
 - `toml_decode(src)` and `json_decode(src)` decode data into Starlark
   values.
+
+Portable file actions derive their cache keys from their operation and consumed
+inputs, not from unrelated actions declared earlier by the same target. Copy,
+link, tree-digest, and archive actions infer their direct source inputs. Use the
+`inputs` argument for additional paths that influence the operation. Portable
+actions still execute in declaration order, and Once hashes generated inputs
+directly.
 
 Use these primitives to express resolver commands, source filtering, file
 formats, tool selection, compiler flags, provider conventions, and action
@@ -591,7 +613,9 @@ layout.
 - `argv`: command and arguments as strings or `cmd_args` fragments.
 - `inputs`: workspace-relative files and directories hashed into the
   action digest.
-- `outputs`: workspace-relative outputs the action must produce.
+- `outputs`: workspace-relative outputs the action must produce. Once creates
+  their parent directories. If a previous action version left a file where a
+  managed output now requires a directory, Once replaces the stale file.
 - `clean_paths`: workspace-relative paths to remove before a fresh
   command execution. Cache hits restore outputs without running the
   command.
@@ -624,6 +648,13 @@ layout.
   independent actions that do not read earlier same-target outputs.
 - `toolchain_identity`: optional string folded into the action digest.
 - `identifier`: stable diagnostic label.
+
+The declared action is its executable cache contract. Once hashes its operation,
+arguments, argument files, environment, working directory, path setup,
+toolchain identity, declared input contents, and dependency action digests.
+Changing target-kind module source without changing that declaration does not
+invalidate the action. A rule edit that changes any declared behavior or input
+still produces a new digest.
 
 Actions inside one target run in declaration order because later actions
 may consume earlier outputs. Independent graph targets run concurrently

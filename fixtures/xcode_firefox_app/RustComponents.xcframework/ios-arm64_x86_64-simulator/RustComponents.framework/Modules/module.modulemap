@@ -1,0 +1,5 @@
+framework module RustComponents {
+    umbrella header "RustComponents.h"
+    export *
+    module * { export * }
+}

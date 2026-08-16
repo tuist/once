@@ -189,9 +189,29 @@ jobs:
 
           "${once_bin}" auth login --provider tuist --no-browser
 
-          XDG_CACHE_HOME="${smoke_root}/cache-first" \
-            "${once_bin}" exec --format json -- /bin/sh -c 'exit 0' \
-            2>"${smoke_root}/first.json"
+          # Seeding the remote cache is a network round trip, so retry it
+          # the way the lookup below is retried. Without this a transient
+          # write failure aborted the step under `set -e`, and because the
+          # command's stderr goes to a file that only the lookup failure
+          # path prints, the job reported a bare exit code and no reason.
+          seed_json=""
+          for attempt in 1 2 3 4 5; do
+            first_json="${smoke_root}/first-${attempt}.json"
+            if XDG_CACHE_HOME="${smoke_root}/cache-first-${attempt}" \
+              "${once_bin}" exec --format json -- /bin/sh -c 'exit 0' \
+              2>"${first_json}"; then
+              seed_json="${first_json}"
+              break
+            fi
+            echo "Seeding the Tuist remote cache failed on attempt ${attempt}:"
+            cat "${first_json}"
+            sleep "$((attempt * 2))"
+          done
+
+          if [ -z "${seed_json}" ]; then
+            echo "Expected a Tuist-backed Once execution to populate the remote cache."
+            exit 1
+          fi
 
           hit_json=""
           for attempt in 1 2 3 4 5; do
@@ -208,7 +228,7 @@ jobs:
 
           if [ -z "${hit_json}" ]; then
             echo "Expected a Tuist-backed Once execution to hit the remote cache after retrying."
-            cat "${smoke_root}/first.json"
+            cat "${seed_json}"
             cat "${smoke_root}"/second-*.json
             exit 1
           fi

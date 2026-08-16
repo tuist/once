@@ -1,15 +1,15 @@
 # `swift_macro`
 
-Swift compiler-plugin dylib built for the host.
+Swift compiler-plugin executable built for the host.
 
 ## Description
 
-Compiles Swift sources into a loadable plugin (`lib<module_name>.dylib`)
-that the Swift compiler loads at compile time. The macro implementation
-typically depends on a swift-syntax checkout the user provides via
-`deps`. Any [`apple_library`](/reference/prelude/apple_library) dep
-edge that points at a `swift_macro` target picks up
-`-load-plugin-library <dylib>` automatically.
+Compiles Swift sources into a macOS host executable that the Swift compiler
+loads at compile time. The macro implementation typically depends on a
+swift-syntax checkout supplied through `deps`. Any
+[`apple_library`](/reference/prelude/apple_library) dependency edge that
+reaches a `swift_macro` target picks up the executable and declaring module
+automatically.
 
 ## Attributes
 
@@ -34,21 +34,22 @@ The target emits `apple_swift_plugin`.
 
 | Capability | Output groups |
 | --- | --- |
-| `build` | `default`, `plugin_dylib`, `swiftmodule` |
+| `build` | `default`, `plugin_executable`, `swiftmodule` |
 
 ## Provider record
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `label_id` | string | Canonical target id |
-| `plugin_dylib` | string | Path to the produced `lib<module_name>.dylib` |
-| `plugin_module_name` | string | Module name a downstream `apple_library` passes to `-load-plugin-library` |
+| `plugin_executable` | string | Path to the produced macOS host executable |
+| `plugin_module_name` | string | Declaring module name paired with the executable by downstream compilers |
+| `transitive_plugin_executables` | list&lt;string&gt; | `<path>#<module>` descriptors propagated through libraries and frameworks |
 
 ## Outputs
 
 | Output | Location |
 | --- | --- |
-| Plugin dylib | `.once/out/<target>/lib<module_name>.dylib` |
+| Plugin executable | `.once/out/<target>/<module_name>-tool` |
 | Swift module | `.once/out/<target>/<module_name>.swiftmodule` |
 
 ## Example
@@ -63,10 +64,3 @@ deps = [
   "//third_party/swift-syntax:SwiftCompilerPlugin",
 ]
 ```
-
-## Limitations
-
-The target kind does not vendor swift-syntax. The user supplies it as a
-regular dep edge, which matches how established Apple build systems handle
-the same dependency. Until a swift-syntax checkout is available as
-an `apple_library`, `swift_macro` targets cannot build end to end.

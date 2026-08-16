@@ -47,6 +47,7 @@ impl RetainedMatches {
         schema_index: usize,
         schema: &NativeProjectSchema,
         package: &str,
+        markers: Vec<String>,
     ) -> Result<()> {
         if schema.on_match == "stop" {
             if self.stop_roots[schema_index]
@@ -83,7 +84,7 @@ impl RetainedMatches {
             0
         };
         let projected_bytes =
-            projected_owned_match_bytes(schema, package).saturating_add(stop_root_bytes);
+            projected_owned_match_bytes(schema, package, &markers).saturating_add(stop_root_bytes);
         if projected_bytes > self.limit_bytes.saturating_sub(self.retained_bytes) {
             return Err(discovery_memory_error(root, self.limit_bytes));
         }
@@ -115,7 +116,7 @@ impl RetainedMatches {
         let matched = NativeProjectMatch {
             native_project: schema.name.clone(),
             package: package.to_string(),
-            markers: schema.markers.clone(),
+            markers,
             seed_target,
         };
         let stop_root = (schema.on_match == "stop").then(|| package.to_string());
@@ -185,7 +186,11 @@ fn reserve_one<T>(
     Ok(allocated_bytes)
 }
 
-fn projected_owned_match_bytes(schema: &NativeProjectSchema, package: &str) -> usize {
+fn projected_owned_match_bytes(
+    schema: &NativeProjectSchema,
+    package: &str,
+    markers: &[String],
+) -> usize {
     let seed_target_bytes = if package.is_empty() {
         schema.target_name.len()
     } else {
@@ -194,11 +199,10 @@ fn projected_owned_match_bytes(schema: &NativeProjectSchema, package: &str) -> u
             .saturating_add(1)
             .saturating_add(schema.target_name.len())
     };
-    schema
-        .markers
+    markers
         .iter()
         .fold(0usize, |bytes, marker| bytes.saturating_add(marker.len()))
-        .saturating_add(schema.markers.len().saturating_mul(size_of::<String>()))
+        .saturating_add(markers.len().saturating_mul(size_of::<String>()))
         .saturating_add(schema.name.len())
         .saturating_add(package.len())
         .saturating_add(seed_target_bytes)
@@ -243,6 +247,10 @@ fn package_is_within(package: &str, root: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn markers() -> Vec<String> {
+        vec!["native.project".to_string()]
+    }
+
     fn schema() -> NativeProjectSchema {
         NativeProjectSchema {
             name: "native".to_string(),
@@ -266,14 +274,14 @@ mod tests {
             RetainedMatches::new(temporary.path(), 1, MAX_RETAINED_MATCH_BYTES).unwrap();
 
         retained
-            .insert(temporary.path(), 0, &native, "workspace/a")
+            .insert(temporary.path(), 0, &native, "workspace/a", markers())
             .unwrap();
         retained
-            .insert(temporary.path(), 0, &native, "workspace/b")
+            .insert(temporary.path(), 0, &native, "workspace/b", markers())
             .unwrap();
         let nested_bytes = retained.retained_bytes;
         retained
-            .insert(temporary.path(), 0, &native, "workspace")
+            .insert(temporary.path(), 0, &native, "workspace", markers())
             .unwrap();
 
         assert_eq!(retained.matches.len(), 1);

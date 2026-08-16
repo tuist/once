@@ -233,7 +233,7 @@ EOF
     seed_query_expression_workspace
     When call once --format toon query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id AS target'
     The status should be success
-    The stdout should include 'columns[1]:target'
+    The stdout should include 'columns[1]: target'
     The stdout should include 'apps/Hello/AppTests'
   End
 

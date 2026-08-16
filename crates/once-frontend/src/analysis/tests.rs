@@ -147,6 +147,43 @@ fn host_file_read_returns_host_file_text() {
 }
 
 #[test]
+fn host_path_exists_recognizes_directories() {
+    let tmp = TempDir::new().unwrap();
+    let directory = tmp.path().join("checkout");
+    std::fs::create_dir(&directory).unwrap();
+    let source = format!(
+        "value = host_path_exists({})",
+        serde_json::to_string(directory.to_str().unwrap()).unwrap()
+    );
+
+    let store = store_for(tmp.path(), "pkg");
+    let (_, exists) = with_active_store(store, || eval_bool(&source).unwrap());
+    assert!(exists);
+}
+
+#[cfg(unix)]
+#[test]
+fn host_path_is_within_resolves_symbolic_links() {
+    let workspace = TempDir::new().unwrap();
+    let external = TempDir::new().unwrap();
+    let nested = workspace.path().join("nested");
+    let external_link = workspace.path().join("external-link");
+    std::fs::create_dir(&nested).unwrap();
+    std::os::unix::fs::symlink(external.path(), &external_link).unwrap();
+
+    for (path, expected) in [(&nested, true), (&external_link, false)] {
+        let source = format!(
+            "value = host_path_is_within({}, {})",
+            serde_json::to_string(path.to_str().unwrap()).unwrap(),
+            serde_json::to_string(workspace.path().to_str().unwrap()).unwrap(),
+        );
+        let store = store_for(workspace.path(), "pkg");
+        let (_, within) = with_active_store(store, || eval_bool(&source).unwrap());
+        assert_eq!(within, expected);
+    }
+}
+
+#[test]
 fn host_file_read_rejects_files_above_the_analysis_limit() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("large.txt");
@@ -743,6 +780,7 @@ fn write_path_records_text_operation() {
         vec![".once/out/apps/ios/Mixed/module.modulemap".to_string()]
     );
     assert!(action.argv.is_empty());
+    assert!(!action.depends_on_prior_actions);
     assert_eq!(
         action.operation,
         Some(DeclaredActionOperation::WriteFile {
@@ -797,7 +835,10 @@ fn link_path_records_an_uncached_portable_operation() {
         vec![".once/out/app/node_modules".to_string()]
     );
     assert_eq!(action.identifier.as_deref(), Some("link-dependencies"));
-    assert!(action.inputs.is_empty());
+    assert_eq!(
+        action.inputs,
+        vec![".once/out/deps/node_modules".to_string()]
+    );
     assert!(!action.cacheable);
 }
 
@@ -819,6 +860,10 @@ write_tree_digest(".once/out/p/staged", ".once/out/p/staged.sha256", include_suf
     });
 
     assert_eq!(store.actions.len(), 5);
+    assert!(store
+        .actions
+        .iter()
+        .all(|action| !action.depends_on_prior_actions));
     assert_eq!(
         store.actions[0].operation,
         Some(DeclaredActionOperation::CopyPath {
@@ -828,6 +873,7 @@ write_tree_digest(".once/out/p/staged", ".once/out/p/staged.sha256", include_suf
         })
     );
     assert_eq!(store.actions[0].identifier.as_deref(), Some("copy-a"));
+    assert_eq!(store.actions[0].inputs, vec!["src/a.txt".to_string()]);
     assert_eq!(
         store.actions[1].operation,
         Some(DeclaredActionOperation::CopyPath {
@@ -835,6 +881,15 @@ write_tree_digest(".once/out/p/staged", ".once/out/p/staged.sha256", include_suf
             destination: ".once/out/p/staged".to_string(),
             mode: DeclaredCopyPathMode::Tree,
         })
+    );
+    assert_eq!(
+        store.actions[1].inputs,
+        vec![
+            "src/assets".to_string(),
+            "src/assets/a.txt".to_string(),
+            "src/res".to_string(),
+            "src/res/v.txt".to_string(),
+        ]
     );
     assert_eq!(
         store.actions[2].operation,
@@ -859,6 +914,10 @@ write_tree_digest(".once/out/p/staged", ".once/out/p/staged.sha256", include_suf
             output: ".once/out/p/staged.sha256".to_string(),
             include_suffixes: vec![".txt".to_string()],
         })
+    );
+    assert_eq!(
+        store.actions[4].inputs,
+        vec![".once/out/p/staged".to_string()]
     );
 }
 
@@ -907,6 +966,7 @@ write_archive(
         ]
     );
     assert_eq!(action.identifier.as_deref(), Some("write-layer"));
+    assert!(!action.depends_on_prior_actions);
     assert_eq!(
         action.operation,
         Some(DeclaredActionOperation::WriteArchive {
@@ -950,6 +1010,7 @@ fn materialize_host_file_records_a_content_addressed_operation() {
     let (store, ()) = with_active_store(store, || run(&script).unwrap());
 
     assert_eq!(store.actions.len(), 1);
+    assert!(!store.actions[0].depends_on_prior_actions);
     assert_eq!(
         store.actions[0].operation,
         Some(DeclaredActionOperation::MaterializeHostFile {
@@ -973,6 +1034,7 @@ fn materialize_host_tree_records_a_content_addressed_operation() {
     let (store, ()) = with_active_store(store, || run(&script).unwrap());
 
     assert_eq!(store.actions.len(), 1);
+    assert!(!store.actions[0].depends_on_prior_actions);
     assert!(matches!(
         store.actions[0].operation,
         Some(DeclaredActionOperation::MaterializeHostTree {
@@ -1160,6 +1222,40 @@ fn glob_preserves_an_internal_directory_symlinks_logical_path() {
     let matches = expand_globs(workspace.path(), "app", &["priv/**/*".to_string()]).unwrap();
 
     assert_eq!(matches, vec!["app/priv/resources"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn walk_workspace_files_exposes_external_symlink_without_following_it() {
+    let workspace = TempDir::new().unwrap();
+    let external = TempDir::new().unwrap();
+    let headers = workspace.path().join("App/Headers");
+    std::fs::create_dir_all(&headers).unwrap();
+    std::fs::write(headers.join("Local.h"), "local").unwrap();
+    std::fs::write(external.path().join("External.h"), "external").unwrap();
+    std::os::unix::fs::symlink(
+        external.path().join("External.h"),
+        headers.join("External.h"),
+    )
+    .unwrap();
+
+    let store = store_for(workspace.path(), "App");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+matches = walk_workspace_files("App/Headers")
+run_action(argv = ["echo"] + matches, outputs = ["out"])
+"#)
+        .unwrap();
+    });
+
+    assert_eq!(
+        store.actions[0].argv,
+        vec![
+            "echo".to_string(),
+            "App/Headers/External.h".to_string(),
+            "App/Headers/Local.h".to_string(),
+        ]
+    );
 }
 
 #[cfg(unix)]

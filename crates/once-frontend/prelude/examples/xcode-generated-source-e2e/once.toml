@@ -1,0 +1,7 @@
+[[target]]
+name = "generated"
+kind = "xcode_workspace"
+srcs = ["Generated.xcodeproj/project.pbxproj", "Hello.swift"]
+
+[target.attrs]
+project = "Generated.xcodeproj"
