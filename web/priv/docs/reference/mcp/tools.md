@@ -946,24 +946,24 @@ Returns the same record as `once query graph-fingerprint --format json`: a singl
 
 ```json
 {
+  "type": "object",
   "properties": {
-    "include_manifest": {
-      "default": true,
-      "description": "Fold the root `once.toml` manifest into the digest.",
-      "type": "boolean"
-    },
     "include_sources": {
+      "type": "boolean",
       "default": true,
-      "description": "Fold resolved source file contents into the digest.",
-      "type": "boolean"
+      "description": "Fold resolved source file contents into the digest."
     },
     "include_toolchain": {
+      "type": "boolean",
       "default": true,
-      "description": "Fold the `mise.toml` and `mise.lock` declarations into the digest.",
-      "type": "boolean"
+      "description": "Fold the `mise.toml` and `mise.lock` declarations into the digest."
+    },
+    "include_manifest": {
+      "type": "boolean",
+      "default": true,
+      "description": "Fold the root `once.toml` manifest into the digest."
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
