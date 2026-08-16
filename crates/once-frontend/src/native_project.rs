@@ -268,74 +268,78 @@ fn parse_native_project_schemas(path: &str, source: &str) -> Result<Vec<NativePr
                         format!("native project `{name}` is declared more than once"),
                     ));
                 }
-                let markers = string_list(&dict, "markers")?;
-                if markers.is_empty() {
-                    return Err(native_project_error(
-                        &name,
-                        format!("native project `{name}` must declare markers"),
-                    ));
-                }
-                let target_kind = required_string(&dict, "target_kind")?;
-                if target_kind.is_empty() {
-                    return Err(native_project_error(
-                        &name,
-                        format!("native project `{name}` has an empty target kind"),
-                    ));
-                }
-                let target_name =
-                    optional_string(&dict, "target_name")?.unwrap_or_else(|| name.clone());
-                crate::target_ref::validate_target_name(&target_name)
-                    .map_err(|source| native_project_error(&name, source.to_string()))?;
-                let inputs = string_list(&dict, "inputs")?;
-                let exclude = string_list(&dict, "exclude")?;
-                let on_match = required_string(&dict, "on_match")?;
-                if on_match != "stop" && on_match != "descend" {
-                    return Err(native_project_error(
-                        &name,
-                        format!("native project `{name}` on_match must be `stop` or `descend`"),
-                    ));
-                }
-                let max_depth =
-                    positive_usize(required_i32(&dict, "max_depth")?, &name, "max_depth")?;
-                let requires_tools = string_list(&dict, "requires_tools")?;
-                for marker in &markers {
-                    validate_marker(&name, marker)?;
-                }
-                // Descend matching indexes the primary marker by file name as the
-                // walk visits files, so a primary marker that needs directory
-                // expansion or a parent segment can only be matched by the
-                // stop-mode directory pass.
-                if (marker_is_pattern(&markers[0]) || markers[0].contains('/'))
-                    && on_match != "stop"
-                {
-                    return Err(native_project_error(
+                native_project_schema(name, &dict)
+            })
+            .collect()
+    })
+}
+
+/// Validate one native project export and turn it into its schema.
+///
+/// The caller has already resolved the export's name, since that is
+/// what deduplicates declarations across the prelude.
+fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProjectSchema> {
+    let markers = string_list(dict, "markers")?;
+    if markers.is_empty() {
+        return Err(native_project_error(
+            &name,
+            format!("native project `{name}` must declare markers"),
+        ));
+    }
+    let target_kind = required_string(dict, "target_kind")?;
+    if target_kind.is_empty() {
+        return Err(native_project_error(
+            &name,
+            format!("native project `{name}` has an empty target kind"),
+        ));
+    }
+    let target_name = optional_string(dict, "target_name")?.unwrap_or_else(|| name.clone());
+    crate::target_ref::validate_target_name(&target_name)
+        .map_err(|source| native_project_error(&name, source.to_string()))?;
+    let inputs = string_list(dict, "inputs")?;
+    let exclude = string_list(dict, "exclude")?;
+    let on_match = required_string(dict, "on_match")?;
+    if on_match != "stop" && on_match != "descend" {
+        return Err(native_project_error(
+            &name,
+            format!("native project `{name}` on_match must be `stop` or `descend`"),
+        ));
+    }
+    let max_depth = positive_usize(required_i32(dict, "max_depth")?, &name, "max_depth")?;
+    let requires_tools = string_list(dict, "requires_tools")?;
+    for marker in &markers {
+        validate_marker(&name, marker)?;
+    }
+    // Descend matching indexes the primary marker by file name as the
+    // walk visits files, so a primary marker that needs directory
+    // expansion or a parent segment can only be matched by the
+    // stop-mode directory pass.
+    if (marker_is_pattern(&markers[0]) || markers[0].contains('/')) && on_match != "stop" {
+        return Err(native_project_error(
                         &name,
                         format!(
                             "native project `{name}` marker `{}` spans a directory, so it requires on_match = \"stop\"",
                             markers[0]
                         ),
                     ));
-                }
-                for excluded in &exclude {
-                    validate_relative_literal(&name, "excluded directory", excluded)?;
-                }
-                for input in &inputs {
-                    validate_source_pattern(&name, input)?;
-                }
-                Ok(NativeProjectSchema {
-                    name,
-                    docs: required_string(&dict, "docs")?,
-                    markers,
-                    target_name,
-                    target_kind,
-                    inputs,
-                    exclude,
-                    on_match,
-                    max_depth,
-                    requires_tools,
-                })
-            })
-            .collect()
+    }
+    for excluded in &exclude {
+        validate_relative_literal(&name, "excluded directory", excluded)?;
+    }
+    for input in &inputs {
+        validate_source_pattern(&name, input)?;
+    }
+    Ok(NativeProjectSchema {
+        name,
+        docs: required_string(dict, "docs")?,
+        markers,
+        target_name,
+        target_kind,
+        inputs,
+        exclude,
+        on_match,
+        max_depth,
+        requires_tools,
     })
 }
 
