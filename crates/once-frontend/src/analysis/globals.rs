@@ -237,7 +237,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             return Ok(false);
         }
         observe_host_path(Path::new(path))?;
-        Ok(Path::new(path).exists())
+        let exists = Path::new(path).exists();
+        observe(Observation::PathExists {
+            path: path.to_string(),
+            exists,
+        });
+        Ok(exists)
     }
 
     /// Return whether one existing host path resolves within another existing
@@ -254,7 +259,15 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .with_context(|| format!("canonicalizing host path `{}`", path.display()))?;
         let canonical_root = std::fs::canonicalize(root)
             .with_context(|| format!("canonicalizing host root `{}`", root.display()))?;
-        Ok(canonical_path.starts_with(canonical_root))
+        // Both sides are resolved through their symlinks, so the answer follows
+        // from where those links point and not only from the two strings.
+        let within = canonical_path.starts_with(canonical_root);
+        observe(Observation::PathWithin {
+            path: path.to_string_lossy().into_owned(),
+            root: root.to_string_lossy().into_owned(),
+            within,
+        });
+        Ok(within)
     }
 
     /// Read one host file as UTF-8 text.
@@ -394,18 +407,20 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .map(|value| unpack_string_list(value, "excluded_names"))
             .transpose()?
             .unwrap_or_default();
-        let resolved = with_store(|store| -> Result<Vec<String>> {
-            let store =
-                store.ok_or_else(|| anyhow!("walk_workspace_files called outside analysis"))?;
-            walk_package_files(
-                &store.workspace_root,
-                "",
-                root,
-                &excluded_paths,
-                &excluded_names,
-            )
-        })?;
-        Ok(heap.alloc(resolved))
+        // Recorded and memoised like the other walks, and anchored at the
+        // workspace root, which is what this one walks whichever target asks.
+        let excludes = excluded_paths
+            .iter()
+            .map(|path| format!("path:{path}"))
+            .chain(excluded_names.iter().map(|name| format!("name:{name}")))
+            .collect::<Vec<_>>();
+        let resolved = observed_paths_anchored(
+            "walk_workspace_files",
+            Some(""),
+            &[root.to_string()],
+            &excludes,
+        )?;
+        Ok(heap.alloc(resolved.as_ref().clone()))
     }
 
     /// Reserve a workspace-relative output path under the active
@@ -1481,25 +1496,33 @@ fn read_host_dir_names(path: &str) -> Vec<String> {
 /// `kind` selects the expansion rule and keeps two kinds of answer from being
 /// mistaken for one another, both in the memo and in the record.
 fn observed_paths(kind: &'static str, patterns: &[String], excludes: &[String]) -> Result<PathSet> {
+    observed_paths_anchored(kind, None, patterns, excludes)
+}
+
+/// As [`observed_paths`], for an expansion anchored somewhere other than the
+/// package of the target that ran it.
+///
+/// A walk over the whole workspace gives the same answer to every target, so it
+/// is keyed and recorded at the root. Anchoring it under the calling package
+/// instead would make one walk per package out of what is one question.
+fn observed_paths_anchored(
+    kind: &'static str,
+    anchor: Option<&str>,
+    patterns: &[String],
+    excludes: &[String],
+) -> Result<PathSet> {
     let (package, resolved) = with_store(|store| -> Result<(String, PathSet)> {
         let store = store.ok_or_else(|| anyhow!("{kind} called outside analysis"))?;
+        let package = anchor.unwrap_or(store.package.as_str());
         let resolved = store.host_cache.globs(
             kind,
             &store.workspace_root,
-            &store.package,
+            package,
             patterns,
             excludes,
-            || {
-                expand_observed_paths(
-                    kind,
-                    &store.workspace_root,
-                    &store.package,
-                    patterns,
-                    excludes,
-                )
-            },
+            || expand_observed_paths(kind, &store.workspace_root, package, patterns, excludes),
         )?;
-        Ok((store.package.clone(), resolved))
+        Ok((package.to_string(), resolved))
     })?;
     observe(Observation::Paths {
         expansion: kind.to_string(),
@@ -1524,10 +1547,10 @@ fn expand_observed_paths(
 ) -> Result<Vec<String>> {
     match kind {
         "glob" => expand_globs_with_excludes(workspace_root, package, patterns, excludes),
-        "walk_files" => {
+        "walk_files" | "walk_workspace_files" => {
             let root = patterns
                 .first()
-                .ok_or_else(|| anyhow!("walk_files requires a root"))?;
+                .ok_or_else(|| anyhow!("{kind} requires a root"))?;
             let excluded_paths = excludes
                 .iter()
                 .filter_map(|entry| entry.strip_prefix("path:"))
@@ -1714,6 +1737,16 @@ fn observation_holds(
                     .is_ok_and(|actual| &actual == sha256)
         }
         Observation::FileExists { path, exists } => Path::new(path).is_file() == *exists,
+        Observation::PathExists { path, exists } => Path::new(path).exists() == *exists,
+        Observation::PathWithin { path, root, within } => {
+            let resolved = |value: &str| std::fs::canonicalize(Path::new(value)).ok();
+            match (resolved(path), resolved(root)) {
+                (Some(path), Some(root)) => path.starts_with(root) == *within,
+                // One of them no longer resolves, so the question the record
+                // answered is not the question being asked now.
+                _ => false,
+            }
+        }
         Observation::FileText { path, sha256 } => {
             read_bounded_host_file(path).is_ok_and(|bytes| &sha256_hex(&bytes) == sha256)
         }
@@ -1774,6 +1807,7 @@ fn path_expansion_kind(kind: &str) -> &'static str {
     match kind {
         "glob" => "glob",
         "walk_files" => "walk_files",
+        "walk_workspace_files" => "walk_workspace_files",
         _ => "unknown",
     }
 }
@@ -2402,11 +2436,14 @@ mod observation_completeness_tests {
         "host_file_read",
         "host_file_sha256",
         "host_os",
+        "host_path_exists",
+        "host_path_is_within",
         "host_read_dir",
         "host_which",
         "host_which_optional",
         "glob",
         "walk_files",
+        "walk_workspace_files",
         "materialize_host_file",
         "materialize_host_tree",
     ];

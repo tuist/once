@@ -239,6 +239,20 @@ pub enum Observation {
         path: String,
         exists: bool,
     },
+    /// Whether anything is at the path, of any kind. Distinct from
+    /// `FileExists`, which asks whether a regular file is.
+    PathExists {
+        path: String,
+        exists: bool,
+    },
+    /// Whether one path resolves to somewhere inside another. Both sides are
+    /// resolved through their symlinks, so this is a question about the
+    /// filesystem and not only about the two strings.
+    PathWithin {
+        path: String,
+        root: String,
+        within: bool,
+    },
     FileText {
         path: String,
         sha256: String,
