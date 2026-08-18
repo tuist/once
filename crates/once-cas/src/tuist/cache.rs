@@ -241,10 +241,17 @@ impl TuistCache {
     /// failure is treated as "not present" so a transient outage degrades
     /// to a cache miss instead of a hard error.
     pub async fn has_blob(&self, digest: &Digest) -> Result<bool> {
-        if self.local.has_blob(digest).await? {
+        if self.has_local_blob(digest).await? {
             return Ok(true);
         }
         Ok(self.head_blob_remote(digest).await.unwrap_or(false))
+    }
+
+    /// Whether the local tier already holds the blob, without asking the
+    /// remote one. For callers that only want to know whether something is
+    /// available at no cost.
+    pub async fn has_local_blob(&self, digest: &Digest) -> Result<bool> {
+        self.local.has_blob(digest).await
     }
 
     pub async fn get_action_result(&self, action: &Digest) -> Result<Option<ActionResult>> {

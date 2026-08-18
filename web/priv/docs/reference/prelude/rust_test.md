@@ -41,8 +41,11 @@ binary exit status to Once.
 | `named_deps` | map&lt;string, string&gt; | no | `{}` | Buck-compatible alias map from local extern crate name to dependency label or crate name |
 | `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set |
 | `build_script` | string | no | empty | Package-relative Cargo build script path run before `rustc` |
+| `build_script_tools` | list&lt;string&gt; | no | `[]` | Host tool names the build script invokes; each is resolved on the search path during graph loading |
+| `cargo_config_env` | map&lt;string, string&gt; | no | `{}` | Environment declared by Cargo configuration, applied below `env`, `rustc_env`, and `test_env` |
 | `args` | list&lt;string&gt; | no | `[]` | Arguments passed to the compiled test binary |
 | `test_env` | map&lt;string, string&gt; | no | `{}` | Environment variables passed to the test runner |
+| `test_cwd` | string | no | workspace root | Package-relative working directory for the test process |
 | `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited by the test runner before `test_env` overrides |
 | `crate` | target | no | empty | Reserved Bazel-compatible reference to an already-built crate under test |
 | `use_libtest_harness` | bool | no | `true` | Whether to use the Rust libtest harness. Only `true` is supported |
@@ -62,6 +65,7 @@ Use the dependency roles with the same names under `[target.dependencies]`.
 | `deps` | `rust_crate`, `rust_proc_macro`, `rust_dependency_set`, `c_provider` | Rust crate dependencies consumed through `--extern`; C provider libraries and linker options are linked into the test executable |
 | `proc_macro_deps` | `rust_proc_macro` | Procedural macros compiled for the execution host and passed to `rustc` through `--extern` |
 | `link_deps` | `c_provider` | Native libraries and linker options consumed by the test executable |
+| `bin_deps` | `rust_binary` | Executables the test spawns, exposed to the compiler and the test process as `CARGO_BIN_EXE_<binary name>` |
 
 ## Providers
 
@@ -83,7 +87,29 @@ The target emits `rust_test` and `once_test_info`.
 | Test log | `.once/out/<target>/test/rust-libtest.log` |
 | Native runner output | `.once/out/<target>/test/native_results.txt` |
 
+## Environment
+
+The test process starts with a cleared environment. Once gives it a private
+`HOME` under the target's output directory, the standard system tool
+directories on `PATH`, the package's `CARGO_*` description, a
+`CARGO_BIN_EXE_<name>` entry for every `bin_deps` executable, and any
+`cargo_config_env` entries. `env_inherit` names host variables to add, and
+`test_env` overrides everything else.
+
 ## Limitations
+
+A test that reads `CARGO_BIN_EXE_<name>` through the `env!` macro captures the
+path at compile time, so the value belongs to the compiling action's execution
+root. That is the same root the test runs in for an ordinary local build, but
+not under a sandbox policy or remote execution, where each action gets its own
+root. A test that reads the variable at run time instead works in every mode.
+
+Test and run processes start with a fixed search path holding the standard
+system tool directories. A test that invokes a program found there depends on
+that program, and the action key records the search path rather than the
+contents of what it finds, so a system tool upgraded in place does not
+invalidate a cached test result. Pin such a tool through a target that
+declares it instead of relying on the search path.
 
 The `test` capability runs only host-target test binaries. A cross-target
 `rust_test` can still be built, but running it needs a platform runner that is

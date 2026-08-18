@@ -1,0 +1,9 @@
+# `walk` is an example, so Cargo resolves it with the development
+# dependencies of its package rather than the shipping dependency set.
+[package]
+name = "ignore"
+version = "0.1.0"
+edition.workspace = true
+
+[dev-dependencies]
+grep = { version = "0.1.0", path = "../grep" }

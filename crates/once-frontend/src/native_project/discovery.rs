@@ -324,6 +324,7 @@ mod tests {
             target_kind: format!("{name}_workspace"),
             inputs: Vec::new(),
             exclude: exclude.iter().map(|value| (*value).to_string()).collect(),
+            input_exclude: Vec::new(),
             on_match: "descend".to_string(),
             max_depth: 16,
             requires_tools: Vec::new(),

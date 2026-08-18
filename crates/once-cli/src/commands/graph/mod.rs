@@ -47,6 +47,29 @@ pub(crate) fn resolve_invocation_configuration(
     configuration::resolve(workspace, &parsed)
 }
 
+/// The earlier of two watcher positions, or `None` when they cannot be
+/// compared because they came from different watcher instances.
+fn earliest_position<'a>(
+    left: Option<&'a crate::commands::change_tracker::ChangePosition>,
+    right: Option<&'a crate::commands::change_tracker::ChangePosition>,
+) -> Option<&'a crate::commands::change_tracker::ChangePosition> {
+    match (left, right) {
+        (Some(left), Some(right)) if left.instance_id == right.instance_id => {
+            if left.source_generation.min(left.output_generation)
+                <= right.source_generation.min(right.output_generation)
+            {
+                Some(left)
+            } else {
+                Some(right)
+            }
+        }
+        // Different instances describe different histories, so neither window
+        // covers the other and there is nothing to reuse.
+        (Some(_), Some(_)) => None,
+        (found, None) | (None, found) => found,
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GraphRunOptions {
     pub visible: bool,
@@ -65,7 +88,13 @@ pub async fn build(
     let xdg = once_core::Xdg::from_env();
     let stored_receipt =
         build_receipt::read(workspace, target_id, sandbox, &resolved.path_suffix).await;
-    let prior_position = stored_receipt.as_ref().map(build_receipt::position);
+    let receipt_position = stored_receipt.as_ref().map(build_receipt::position);
+    // Two things want to know what moved and they were last written at
+    // different moments: this target's receipt, and the workspace's recorded
+    // digests. Ask about the window covering both, so one round trip serves
+    // them. A window wider than either needs is only ever conservative.
+    let digest_position = analysis::recorded_digest_position(workspace);
+    let prior_position = earliest_position(receipt_position, digest_position.as_ref());
     let initial_snapshot =
         crate::commands::change_tracker::snapshot(workspace, &xdg, &[], prior_position).await;
     if let Some(record) = build_receipt::load(
@@ -81,11 +110,14 @@ pub async fn build(
         write_record(output, &record).await?;
         return Ok(ExitCode::SUCCESS);
     }
-    let session = analysis::BuildSession::load_workspace_with_configuration(
-        workspace, cache, sandbox, resolved,
+    let changes = analysis::known_changes(initial_snapshot.as_ref(), digest_position.as_ref());
+    let mut session = analysis::BuildSession::load_workspace_with_configuration(
+        workspace, cache, sandbox, resolved, &changes,
     )
     .await?
     .with_resource_limits(resource_limits);
+    session.with_known_changes(changes);
+    let session = session;
     let target = session.target(target_id)?;
     let record = build_target(workspace, cache, target, &session, sandbox).await?;
     record_capability_run(workspace, &record).await;
@@ -98,14 +130,23 @@ pub async fn build(
         write_record(output, &record).await?;
         return Ok(ExitCode::SUCCESS);
     }
-    if let Some(final_snapshot) = crate::commands::change_tracker::snapshot(
+    // Where the journal stands, not where it will stand once the platform has
+    // finished telling the watcher about the outputs this build just wrote.
+    // Waiting for that costs hundreds of milliseconds and buys nothing: the
+    // next invocation recognises those writes as ours.
+    let final_snapshot = crate::commands::change_tracker::position(
         workspace,
         &xdg,
         &record.outputs,
         initial_snapshot.as_ref().map(|snapshot| &snapshot.position),
     )
-    .await
-    {
+    .await;
+    if let Some(final_snapshot) = final_snapshot {
+        // The recorded digests now describe the workspace as of this position,
+        // which is what the next invocation asks the watcher about.
+        session.record_digest_position(Some(final_snapshot.position.clone()));
+        session.record_resolution(Some(&final_snapshot.position));
+        session.record_target_outcomes(Some(&final_snapshot.position));
         if initial_snapshot.as_ref().is_some_and(|initial| {
             initial.position.instance_id == final_snapshot.position.instance_id
                 && (initial.position.source_generation == final_snapshot.position.source_generation
@@ -115,6 +156,7 @@ pub async fn build(
             let host_paths = session.observed_host_paths();
             let source_digests =
                 session.observed_source_digests(final_snapshot.source_changes.as_deref());
+            let produced = session.recorded_output_digests(&record.outputs);
             build_receipt::store(
                 workspace,
                 target_id,
@@ -126,6 +168,7 @@ pub async fn build(
                     environment: &environment,
                     host_paths: &host_paths,
                     source_digests: &source_digests,
+                    produced: &produced,
                 },
                 &record,
             )

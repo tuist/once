@@ -698,14 +698,26 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     if cacheable {
         run_cacheable_declared_action(context, action, &declared).await
     } else {
-        materialize_prior_cached_results(workspace, cache, prior_cached_results).await?;
-        materialize_available_inputs(workspace, cache, &declared, available_inputs)
-            .await
-            .with_context(|| {
-                format!(
+        materialize_prior_cached_results(
+            workspace,
+            cache,
+            prior_cached_results,
+            source_digest_cache,
+        )
+        .await?;
+        materialize_available_inputs(
+            workspace,
+            cache,
+            &declared,
+            available_inputs,
+            source_digest_cache,
+        )
+        .await
+        .with_context(|| {
+            format!(
                 "materializing inputs for action {index} for {target_id} ({identifier_for_error})"
             )
-            })?;
+        })?;
         prepare_declared_command_paths(workspace, &declared)
             .await
             .with_context(|| {
@@ -873,6 +885,15 @@ async fn action_result_blobs_present(
         }
     }
     for (relative, digest) in &result.outputs {
+        // The question here is only whether this result can be reused, which
+        // holds as soon as the bytes are available from somewhere. Ask in
+        // increasing order of cost. The store on this machine answers with one
+        // file existence check; describing the output on disk means walking it,
+        // which for a directory output costs orders of magnitude more; asking a
+        // remote tier costs a round trip.
+        if cache.has_local_blob(digest).await? {
+            continue;
+        }
         if source_digest_cache
             .is_some_and(|digests| digests.output_matches(workspace, relative, *digest))
         {
@@ -898,6 +919,7 @@ async fn execute_declared_cache_miss(
         context.workspace,
         context.cache,
         context.prior_cached_results,
+        context.source_digest_cache,
     )
     .await
     .with_context(|| {
@@ -911,6 +933,7 @@ async fn execute_declared_cache_miss(
         context.cache,
         declared,
         context.available_inputs,
+        context.source_digest_cache,
     )
     .await
     .with_context(|| {
@@ -959,13 +982,35 @@ async fn materialize_prior_cached_results(
     workspace: &Path,
     cache: &CacheProvider,
     results: &[ActionResult],
+    source_digest_cache: Option<&SourceDigestCache>,
 ) -> Result<()> {
     for result in results {
-        once_core::materialize_outputs(result, workspace, cache)
-            .await
-            .map_err(anyhow::Error::from)?;
+        restore_outputs(workspace, cache, result, source_digest_cache).await?;
     }
     Ok(())
+}
+
+/// Put an action's outputs back on disk, skipping the ones already there.
+///
+/// Deciding "already there" is the whole cost: the restore primitive answers it
+/// by reading every byte of every output, which for a link step means hashing
+/// every library it links against. The recorded descriptions answer it from
+/// metadata, and from the watcher when one is running.
+async fn restore_outputs(
+    workspace: &Path,
+    cache: &CacheProvider,
+    result: &ActionResult,
+    source_digest_cache: Option<&SourceDigestCache>,
+) -> Result<()> {
+    match source_digest_cache {
+        Some(digests) => digests
+            .materialize_outputs(result, workspace, cache)
+            .await
+            .map_err(anyhow::Error::from),
+        None => once_core::materialize_outputs(result, workspace, cache)
+            .await
+            .map_err(anyhow::Error::from),
+    }
 }
 
 async fn materialize_available_inputs(
@@ -973,34 +1018,30 @@ async fn materialize_available_inputs(
     cache: &CacheProvider,
     declared: &DeclaredAction,
     available_inputs: &BTreeMap<String, AvailableInput>,
+    source_digest_cache: Option<&SourceDigestCache>,
 ) -> Result<()> {
-    let declared_inputs = declared
+    let outputs = declared
         .inputs
         .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    let outputs = available_inputs
-        .iter()
-        .filter(|(path, input)| {
-            !input.same_target && !input.materialized && declared_inputs.contains(path.as_str())
-        })
+        .filter_map(|input| enclosing_available_output(available_inputs, input))
+        .filter(|(_, input)| !input.same_target && !input.materialized)
         .map(|(path, input)| (path.clone(), input.blob_digest))
         .collect::<BTreeMap<_, _>>();
     if outputs.is_empty() {
         return Ok(());
     }
-    once_core::materialize_outputs(
+    restore_outputs(
+        workspace,
+        cache,
         &ActionResult {
             exit_code: 0,
             stdout: None,
             stderr: None,
             outputs,
         },
-        workspace,
-        cache,
+        source_digest_cache,
     )
     .await
-    .map_err(anyhow::Error::from)
 }
 
 async fn run_uncacheable_declared_action(
@@ -2036,6 +2077,52 @@ fn compose_input_digest_with_available(
     .input_digest)
 }
 
+/// Find the action output a declared input comes from: an exact match, or the
+/// closest enclosing directory output.
+///
+/// A rule may declare one file inside a directory that another action emits,
+/// such as the build script inside a snapshot of a package's sources. That
+/// file is only on disk once the producing action's outputs are materialized,
+/// and a cache hit defers materialization until some later action misses. The
+/// digest therefore has to come from the producer, not from the filesystem,
+/// or hashing the input fails outright on a hit and disagrees with the miss
+/// path when it succeeds.
+fn resolve_available_input<'a>(
+    available_inputs: &'a BTreeMap<String, AvailableInput>,
+    input: &str,
+) -> Option<&'a AvailableInput> {
+    if let Some(available) = available_inputs.get(input) {
+        return Some(available);
+    }
+    let mut candidate = input;
+    while let Some((parent, _)) = candidate.rsplit_once('/') {
+        if let Some(available) = available_inputs.get(parent) {
+            return Some(available);
+        }
+        candidate = parent;
+    }
+    None
+}
+
+/// The output path whose materialization puts `input` on disk, paired with its
+/// blob digest. Mirrors [`resolve_available_input`] for the staging step.
+fn enclosing_available_output<'a>(
+    available_inputs: &'a BTreeMap<String, AvailableInput>,
+    input: &str,
+) -> Option<(&'a String, &'a AvailableInput)> {
+    if let Some((path, available)) = available_inputs.get_key_value(input) {
+        return Some((path, available));
+    }
+    let mut candidate = input;
+    while let Some((parent, _)) = candidate.rsplit_once('/') {
+        if let Some((path, available)) = available_inputs.get_key_value(parent) {
+            return Some((path, available));
+        }
+        candidate = parent;
+    }
+    None
+}
+
 fn compose_input_fingerprint_with_available(
     workspace: &Path,
     declared: &DeclaredAction,
@@ -2055,7 +2142,7 @@ fn compose_input_fingerprint_with_available(
     sorted_inputs.sort_unstable();
     sorted_inputs.dedup();
     for input in &sorted_inputs {
-        if let Some(available) = available_inputs.get(*input) {
+        if let Some(available) = resolve_available_input(available_inputs, input) {
             let digest = if available.same_target {
                 &available.blob_digest
             } else {
@@ -2335,7 +2422,7 @@ mod tests {
             outputs: BTreeMap::from([(path.to_string(), blob)]),
         };
 
-        materialize_prior_cached_results(workspace.path(), &cache, &[result])
+        materialize_prior_cached_results(workspace.path(), &cache, &[result], None)
             .await
             .unwrap();
 
@@ -2983,6 +3070,7 @@ mod tests {
             }],
             provider: serde_json::json!({}),
             declared_outputs: Vec::new(),
+            observations: once_frontend::analysis::AnalysisObservations::default(),
         };
 
         let outcome = run_declared_actions(
@@ -3087,6 +3175,7 @@ mod tests {
             }],
             provider: serde_json::json!({}),
             declared_outputs: Vec::new(),
+            observations: once_frontend::analysis::AnalysisObservations::default(),
         }
     }
 
@@ -3518,6 +3607,7 @@ mod tests {
             actions: vec![action("one"), action("two")],
             provider: serde_json::json!({}),
             declared_outputs: Vec::new(),
+            observations: once_frontend::analysis::AnalysisObservations::default(),
         };
 
         let outcome = run_declared_actions(
@@ -3640,6 +3730,7 @@ mod tests {
             ],
             provider: serde_json::json!({}),
             declared_outputs: Vec::new(),
+            observations: once_frontend::analysis::AnalysisObservations::default(),
         };
 
         let first = run_declared_actions(

@@ -6,8 +6,6 @@ use crate::graph::GraphTarget;
 use crate::target::{AttrValue, Target};
 use serde::Serialize;
 use starlark::environment::Module;
-use starlark::eval::Evaluator;
-use starlark::syntax::{AstModule, Dialect};
 use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 
@@ -22,6 +20,15 @@ pub struct NativeProjectSchema {
     pub target_kind: String,
     pub inputs: Vec<String>,
     pub exclude: Vec<String>,
+    /// Directory names to skip when gathering the project's resolver inputs.
+    ///
+    /// Separate from `exclude`, which says where not to look for a project at
+    /// all. A vendored dependency's directory is excluded from discovery, so it
+    /// is not mistaken for a project of its own, while its manifest is still an
+    /// input to the project that vendored it. What belongs here is a directory
+    /// that cannot hold an input under any reading: a build output tree, a
+    /// version control directory.
+    pub input_exclude: Vec<String>,
     pub on_match: String,
     pub max_depth: usize,
     pub requires_tools: Vec<String>,
@@ -59,8 +66,13 @@ pub(crate) fn native_project_schemas_for_workspace_with_target_kinds(
     target_kinds: &[crate::graph::TargetKindSchema],
 ) -> Result<Vec<NativeProjectSchema>> {
     let source = crate::modules::combined_module_source_for_workspace(root)?;
-    let native_projects =
-        parse_native_project_schemas(crate::modules::COMBINED_MODULE_PATH, &source)?;
+    let native_projects = crate::graph::prelude_exports(&source)
+        .native_projects
+        .clone()
+        .map_err(|message| Error::Eval {
+            path: crate::modules::COMBINED_MODULE_PATH.to_string(),
+            message,
+        })?;
     let target_kinds = target_kinds
         .iter()
         .map(|schema| schema.kind.as_str())
@@ -226,52 +238,45 @@ fn seed_target(schema: &NativeProjectSchema, package: &str, markers: &[String]) 
             "resolver_inputs".to_string(),
             AttrValue::List(resolver_inputs),
         )]),
+        resolver_input_exclude: schema.input_exclude.clone(),
     }
 }
 
-fn parse_native_project_schemas(path: &str, source: &str) -> Result<Vec<NativeProjectSchema>> {
-    Module::with_temp_heap(|module| {
-        let ast =
-            AstModule::parse(path, source.to_string(), &Dialect::Standard).map_err(|error| {
-                Error::Parse {
-                    path: path.to_string(),
-                    message: format!("{error:?}"),
-                }
+/// Read the native project declarations out of an already-evaluated module.
+///
+/// Split from evaluation so one evaluation of a prelude source answers both
+/// this and the target kind schemas, which is what an invocation asks for.
+/// Errors come back as text because the caller knows which path to report them
+/// under: the same source reaches here under more than one name.
+pub(crate) fn native_project_schemas_from_module(
+    module: &Module<'_>,
+) -> std::result::Result<Vec<NativeProjectSchema>, String> {
+    let exports = crate::modules::exported_native_project_values(module);
+    let mut names = BTreeSet::new();
+    exports
+        .into_iter()
+        .map(|export| {
+            let dict = DictRef::from_value(export.value).ok_or_else(|| Error::Eval {
+                path: crate::modules::COMBINED_MODULE_PATH.to_string(),
+                message: format!("native project export `{}` should be a dict", export.name),
             })?;
-        let globals = crate::analysis::globals_for_prelude();
-        let mut eval = Evaluator::new(&module);
-        eval.eval_module(ast, &globals)
-            .map_err(|error| Error::Eval {
-                path: path.to_string(),
-                message: format!("{error:?}"),
-            })?;
-        let exports = crate::modules::exported_native_project_values(&module);
-        let mut names = BTreeSet::new();
-        exports
-            .into_iter()
-            .map(|export| {
-                let dict = DictRef::from_value(export.value).ok_or_else(|| Error::Eval {
-                    path: path.to_string(),
-                    message: format!("native project export `{}` should be a dict", export.name),
-                })?;
-                let name =
-                    optional_string(&dict, "name")?.unwrap_or_else(|| export.name.to_string());
-                if name.is_empty() {
-                    return Err(native_project_error(
-                        &name,
-                        format!("native project export `{}` has an empty name", export.name),
-                    ));
-                }
-                if !names.insert(name.clone()) {
-                    return Err(native_project_error(
-                        &name,
-                        format!("native project `{name}` is declared more than once"),
-                    ));
-                }
-                native_project_schema(name, &dict)
-            })
-            .collect()
-    })
+            let name = optional_string(&dict, "name")?.unwrap_or_else(|| export.name.to_string());
+            if name.is_empty() {
+                return Err(native_project_error(
+                    &name,
+                    format!("native project export `{}` has an empty name", export.name),
+                ));
+            }
+            if !names.insert(name.clone()) {
+                return Err(native_project_error(
+                    &name,
+                    format!("native project `{name}` is declared more than once"),
+                ));
+            }
+            native_project_schema(name, &dict)
+        })
+        .collect::<Result<Vec<_>>>()
+        .map_err(|error| error.to_string())
 }
 
 /// Validate one native project export and turn it into its schema.
@@ -298,6 +303,7 @@ fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProje
         .map_err(|source| native_project_error(&name, source.to_string()))?;
     let inputs = string_list(dict, "inputs")?;
     let exclude = string_list(dict, "exclude")?;
+    let input_exclude = string_list(dict, "input_exclude")?;
     let on_match = required_string(dict, "on_match")?;
     if on_match != "stop" && on_match != "descend" {
         return Err(native_project_error(
@@ -323,7 +329,7 @@ fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProje
                         ),
                     ));
     }
-    for excluded in &exclude {
+    for excluded in exclude.iter().chain(input_exclude.iter()) {
         validate_relative_literal(&name, "excluded directory", excluded)?;
     }
     for input in &inputs {
@@ -337,6 +343,7 @@ fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProje
         target_kind,
         inputs,
         exclude,
+        input_exclude,
         on_match,
         max_depth,
         requires_tools,
@@ -500,6 +507,18 @@ fn display_relative(root: &Path, path: &Path) -> String {
 mod tests {
     use super::*;
 
+    /// Evaluate a module source and read its native project declarations.
+    ///
+    /// Production code reaches these through the shared prelude evaluation,
+    /// which is keyed by the source text, so there is no path to name here.
+    fn native_project_schemas_from_source(
+        source: &str,
+    ) -> std::result::Result<Vec<NativeProjectSchema>, String> {
+        crate::graph::prelude_exports(source)
+            .native_projects
+            .clone()
+    }
+
     #[test]
     fn parses_and_detects_a_native_project() {
         let temporary = tempfile::tempdir().unwrap();
@@ -508,7 +527,7 @@ mod tests {
             "{}\ndemo = native_project(target_kind = \"demo_workspace\", docs = \"Demo\", markers = [\"native.project\"])\n",
             crate::modules::common_module_source()
         );
-        let schemas = parse_native_project_schemas("demo.star", &source).unwrap();
+        let schemas = native_project_schemas_from_source(&source).unwrap();
         assert_eq!(schemas[0].name, "demo");
         assert_eq!(schemas[0].target_kind, "demo_workspace");
 
@@ -533,7 +552,7 @@ mod tests {
             "{}\ndemo = native_project(target_kind = \"demo_workspace\", docs = \"Demo\", markers = [\"*.xcodeproj/project.pbxproj\"], on_match = \"stop\")\n",
             crate::modules::common_module_source()
         );
-        let schemas = parse_native_project_schemas("demo.star", &source).unwrap();
+        let schemas = native_project_schemas_from_source(&source).unwrap();
 
         let boundary = crate::workspace::load_workspace_scan(temporary.path()).unwrap();
         let (matches, _) =
@@ -560,7 +579,7 @@ mod tests {
             "{}\ndemo = native_project(target_kind = \"demo_workspace\", docs = \"Demo\", markers = [\"*.xcodeproj/project.pbxproj\"], on_match = \"stop\")\n",
             crate::modules::common_module_source()
         );
-        let schemas = parse_native_project_schemas("demo.star", &source).unwrap();
+        let schemas = native_project_schemas_from_source(&source).unwrap();
 
         let boundary = crate::workspace::load_workspace_scan(temporary.path()).unwrap();
         let (matches, _) =
@@ -576,9 +595,9 @@ mod tests {
             "{}\ndemo = native_project(target_kind = \"demo_workspace\", docs = \"Demo\", markers = [\"*.xcodeproj/project.pbxproj\"])\n",
             crate::modules::common_module_source()
         );
-        let error = parse_native_project_schemas("demo.star", &source).unwrap_err();
+        let error = native_project_schemas_from_source(&source).unwrap_err();
         assert!(
-            error.to_string().contains("on_match = \"stop\""),
+            error.contains("on_match = \"stop\""),
             "unexpected error: {error}"
         );
     }
@@ -589,9 +608,9 @@ mod tests {
             "{}\ndemo = native_project(target_kind = \"demo_workspace\", docs = \"Demo\", markers = [\"project.*proj\"], on_match = \"stop\")\n",
             crate::modules::common_module_source()
         );
-        let error = parse_native_project_schemas("demo.star", &source).unwrap_err();
+        let error = native_project_schemas_from_source(&source).unwrap_err();
         assert!(
-            error.to_string().contains("only use `*` at the start"),
+            error.contains("only use `*` at the start"),
             "unexpected error: {error}"
         );
     }

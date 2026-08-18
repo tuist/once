@@ -1,0 +1,13 @@
+# Shape borrowed from hyperfine: several files under `tests/` become several
+# separate test targets, including one that only holds helpers and therefore
+# reports no cases.
+[package]
+name = "hyperfine"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hyperfine"
+path = "src/main.rs"
+
+[workspace]

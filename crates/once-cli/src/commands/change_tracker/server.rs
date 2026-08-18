@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -37,6 +37,55 @@ const FENCE_ATTEMPTS: u32 = 3;
 /// heavily loaded or slow-filesystem host buy more headroom without a
 /// rebuild.
 const FENCE_TIMEOUT_ENV: &str = "ONCE_CHANGE_TRACKER_FENCE_TIMEOUT_SECS";
+
+/// How long the daemon gives the platform's change notification service to
+/// accept its watch registrations before deciding the service is unavailable.
+const DEFAULT_WATCH_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Override for [`DEFAULT_WATCH_REGISTRATION_TIMEOUT`], in whole seconds.
+const WATCH_REGISTRATION_TIMEOUT_ENV: &str = "ONCE_CHANGE_TRACKER_WATCH_TIMEOUT_SECS";
+
+/// Ends the process if it is not disarmed in time.
+///
+/// Used to bound work that blocks inside the platform's change notification
+/// service, where no cooperative cancellation is available.
+struct WatchdogTimer {
+    disarmed: Arc<AtomicBool>,
+}
+
+impl WatchdogTimer {
+    fn start(after: Duration) -> Self {
+        let disarmed = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&disarmed);
+        std::thread::spawn(move || {
+            std::thread::sleep(after);
+            if flag.load(Ordering::Relaxed) {
+                return;
+            }
+            tracing::error!(
+                ?after,
+                "registering filesystem watches did not finish; the platform change \
+                 notification service is not responding, so the tracker is exiting"
+            );
+            // A normal return would unwind into a runtime that waits for the
+            // blocked thread, so leave immediately.
+            std::process::exit(1);
+        });
+        Self { disarmed }
+    }
+
+    fn disarm(self) {
+        self.disarmed.store(true, Ordering::Relaxed);
+    }
+}
+
+fn watch_registration_timeout() -> Duration {
+    std::env::var(WATCH_REGISTRATION_TIMEOUT_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map_or(DEFAULT_WATCH_REGISTRATION_TIMEOUT, Duration::from_secs)
+}
 
 /// Effective fence wait, honouring [`FENCE_TIMEOUT_ENV`].
 pub(super) fn fence_timeout() -> Duration {
@@ -89,7 +138,23 @@ pub(super) async fn serve(workspace: &Path, socket: &Path) -> Result<()> {
         callback_state.handle_event(event);
     })
     .context("creating filesystem change tracker")?;
+    // Registering a watch is a blocking call into the platform's change
+    // notification service, and that service can stop answering: on macOS a
+    // wedged `fseventsd` leaves `FSEventStreamStart` waiting on a Mach reply
+    // that never comes. A daemon parked there never reaches its socket, so
+    // every later invocation finds the socket cold, waits, and gives up.
+    //
+    // A timeout around the call cannot rescue this. Dropping a blocking task
+    // does not cancel it, and the runtime waits for blocking tasks on
+    // shutdown, so the process would stay alive holding the same descriptors.
+    // A watchdog thread that ends the process is the only thing that reliably
+    // stops a thread blocked in a system call, and ending it is the right
+    // outcome: a tracker that cannot watch has nothing to offer, and the
+    // client already treats a tracker that never appears as "fall back to full
+    // validation".
+    let watchdog = WatchdogTimer::start(watch_registration_timeout());
     watch_sources(&mut source_watcher, &state.workspace)?;
+    watchdog.disarm();
     *state
         .source_watcher
         .lock()
@@ -153,6 +218,14 @@ async fn handle_client(stream: UnixStream, state: Arc<TrackerState>) -> Result<(
                 Err(error) => Response::error(error.to_string()),
             }
         }
+        // A position with no barrier. The caller is asking where the journal
+        // stands right now, accepting that writes it made moments ago may not
+        // be in it yet, because it already knows what it wrote and can account
+        // for those itself.
+        Ok(request) if request.command == "position" => match state.register(&request.outputs) {
+            Ok(()) => Response::success(state.snapshot_since(request.since.as_ref())),
+            Err(error) => Response::error(error.to_string()),
+        },
         Ok(request) => Response::error(format!("unknown tracker command `{}`", request.command)),
         Err(error) => Response::error(format!("invalid tracker request: {error}")),
     };
@@ -163,14 +236,19 @@ async fn handle_client(stream: UnixStream, state: Arc<TrackerState>) -> Result<(
 }
 
 impl TrackerState {
+    /// Bring the watch set up to date without waiting for anything.
+    fn register(self: &Arc<Self>, outputs: &[String]) -> Result<()> {
+        self.ensure_fence_watch()?;
+        self.refresh_source_watcher()?;
+        self.track_outputs(outputs)
+    }
+
     async fn barrier(
         self: &Arc<Self>,
         outputs: &[String],
         since: Option<&ChangePosition>,
     ) -> Result<ChangeSnapshot> {
-        self.ensure_fence_watch()?;
-        self.refresh_source_watcher()?;
-        self.track_outputs(outputs)?;
+        self.register(outputs)?;
         let budget = fence_timeout();
         let per_attempt = budget / FENCE_ATTEMPTS;
         // Retry rather than fail on the first miss. The three calls above
@@ -411,9 +489,20 @@ impl TrackerState {
         let watcher = watcher
             .as_mut()
             .context("build output change tracker is not initialized")?;
-        for output in outputs {
-            let path = self.workspace.join(output);
-            if !path.starts_with(self.workspace.join(".once").join("out")) || !path.exists() {
+        // Watch the directory a target's outputs live in, not each output.
+        //
+        // A build replaces its outputs, which gives each of them a new inode
+        // and forces the watch to be re-pointed. The directory holding them is
+        // not replaced, so watching it re-points nothing on an ordinary build,
+        // and it still reports every write beneath it by path. The saving is
+        // not in the number of watches but in how rarely the list changes: see
+        // below for why changing it at all is expensive.
+        let roots = outputs
+            .iter()
+            .filter_map(|output| self.output_watch_root(output))
+            .collect::<BTreeSet<_>>();
+        for path in roots {
+            if !path.exists() {
                 continue;
             }
             // On Linux an inotify watch is bound to the inode, so replacing a
@@ -440,6 +529,19 @@ impl TrackerState {
             watched_outputs.insert(path, identity);
         }
         Ok(())
+    }
+
+    /// The directory under the build output tree that holds `output`.
+    ///
+    /// One level below the output root, which is where a target's outputs live
+    /// together. `None` for anything outside the output tree, which this
+    /// tracker does not watch as an output.
+    fn output_watch_root(&self, output: &str) -> Option<PathBuf> {
+        let out = self.workspace.join(".once").join("out");
+        let path = self.workspace.join(output);
+        let relative = path.strip_prefix(&out).ok()?;
+        let first = relative.components().next()?;
+        Some(out.join(first))
     }
 
     fn remove_fence(&self, token: &str) {

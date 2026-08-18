@@ -9,7 +9,18 @@
 //!
 //! The digest is stable and order-independent: directory entries are visited
 //! sorted by file name, and each entry contributes its kind, workspace-relative
-//! path, mode, and either its symlink target or its file content hash.
+//! path, and either its symlink target or its file content hash. Files and
+//! symlinks also contribute their mode; directories do not.
+//!
+//! Directory permission bits are deliberately excluded. The same digest is
+//! computed over a source tree and over the copy that materialization writes
+//! next to it, and neither the copy nor a restore from the content-addressed
+//! cache carries a directory's permission bits: both create directories with
+//! the process umask. Hashing them would make every snapshot of a tree whose
+//! directories are not exactly umask-shaped, such as a package unpacked into
+//! Cargo's registry cache, fail verification against its own copy. File modes
+//! survive both paths and stay in the digest, so the executable bit that a
+//! build actually depends on is still an input.
 //!
 //! Symlinks contribute only their target text, not the contents behind them.
 //! That is sound for links that stay inside the tree, but a link whose target
@@ -21,6 +32,10 @@
 use std::path::Path;
 
 use sha2::Digest as _;
+
+mod digest_cache;
+
+pub use digest_cache::{tree_stat_fingerprint, TreeDigestCache};
 
 /// Hash the directory rooted at `root` into a lowercase hex digest.
 ///
@@ -63,7 +78,9 @@ fn hash_host_tree_directory(
         hasher.update([kind]);
         hasher.update(relative.as_bytes());
         hasher.update([0]);
-        hasher.update(host_file_mode(&metadata).to_le_bytes());
+        if kind != b'd' {
+            hasher.update(host_file_mode(&metadata).to_le_bytes());
+        }
         if metadata.file_type().is_symlink() {
             let target = std::fs::read_link(&path)?;
             if symlink_target_escapes(root_canonical, &path, &target) {
@@ -127,7 +144,7 @@ fn file_sha256_hex(path: &Path) -> std::io::Result<String> {
 }
 
 #[cfg(unix)]
-fn host_file_mode(metadata: &std::fs::Metadata) -> u32 {
+pub(crate) fn host_file_mode(metadata: &std::fs::Metadata) -> u32 {
     use std::os::unix::fs::PermissionsExt;
     metadata.permissions().mode()
 }
@@ -137,7 +154,7 @@ fn host_file_mode(_metadata: &std::fs::Metadata) -> u32 {
     0
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -210,6 +227,41 @@ mod tests {
         // Unresolvable links carry no external contents, so hashing the link
         // text alone stays sound and must not error.
         assert_eq!(host_tree_sha256_hex(tmp.path()).unwrap().len(), 64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_permissions_do_not_change_the_digest() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let nested = tmp.path().join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("lib.rs"), b"payload").unwrap();
+
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let umask_shaped = host_tree_sha256_hex(tmp.path()).unwrap();
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let private = host_tree_sha256_hex(tmp.path()).unwrap();
+
+        assert_eq!(umask_shaped, private);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_permissions_change_the_digest() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let script = tmp.path().join("configure");
+        std::fs::write(&script, b"payload").unwrap();
+
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let plain = host_tree_sha256_hex(tmp.path()).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let executable = host_tree_sha256_hex(tmp.path()).unwrap();
+
+        assert_ne!(plain, executable);
     }
 
     #[test]

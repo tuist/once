@@ -171,6 +171,19 @@ impl CacheProvider {
         }
     }
 
+    /// Whether the blob is already in the store this machine holds, asking no
+    /// remote tier.
+    ///
+    /// Separate from [`has_blob`](Self::has_blob) so a caller with a cheaper
+    /// local alternative can ask the free question first and only reach for the
+    /// network when the answer matters.
+    pub async fn has_local_blob(&self, digest: &Digest) -> Result<bool> {
+        match self {
+            Self::Local(cas) => cas.has_blob(digest).await,
+            Self::Tuist(cache) => cache.has_local_blob(digest).await,
+        }
+    }
+
     /// Record the result of an action under its action digest.
     pub async fn put_action_result(&self, action: &Digest, result: &ActionResult) -> Result<()> {
         match self {

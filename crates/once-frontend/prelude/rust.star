@@ -439,6 +439,18 @@ def _rust_unix_tool_dirs():
         return ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
     return []
 
+# A fixed search path for processes Once launches from a target's own
+# artifacts, such as a test binary or `once run`. Programs that shell out to
+# `sh`, `git`, or a pager find nothing under Once's cleared environment, yet
+# inheriting the host's PATH would make the action depend on whatever happens
+# to be installed. The standard system directories are the same everywhere the
+# platform runs, so they stay part of the action key without importing the
+# host's configuration.
+def _rust_process_path():
+    if host_os() == "windows":
+        return _rust_windows_tool_env().get("PATH") or ""
+    return ":".join(_rust_unix_tool_dirs())
+
 def _rust_tool_path(tools):
     dirs = []
     for tool in tools:
@@ -525,8 +537,38 @@ def _workspace_absolute(path):
         return path
     return root + "/" + path
 
+def _rust_bin_exe_deps(ctx):
+    return _rust_dependency_role(ctx, "bin_deps")
+
+# Cargo exposes every binary of the package under test to its integration
+# tests as `CARGO_BIN_EXE_<name>`, so a test can spawn the executable it
+# exercises. The value has to be absolute because the test process picks its
+# own working directory, and it resolves against the execution root rather
+# than this machine's workspace so a sandboxed or remote action names the
+# staged copy instead of a path that only exists here.
+def _rust_bin_exe_env(ctx):
+    env = {}
+    for dep in _rust_bin_exe_deps(ctx):
+        binary = dep.get("binary")
+        name = dep.get("binary_name") or dep.get("crate_name")
+        if binary and name:
+            env["CARGO_BIN_EXE_" + name] = execution_path(binary)
+    return env
+
+def _rust_bin_exe_inputs(ctx):
+    return _unique([
+        dep["binary"]
+        for dep in _rust_bin_exe_deps(ctx)
+        if dep.get("binary")
+    ])
+
+def _rust_cargo_config_env(ctx):
+    return _rust_attr(ctx, "cargo_config_env", {})
+
 def _rust_compile_env(ctx):
     env = _rust_env(ctx)
+    _rust_merge_env_lower_precedence(env, _rust_bin_exe_env(ctx))
+    _rust_merge_env_lower_precedence(env, _rust_cargo_config_env(ctx))
     for key, value in _rust_windows_tool_env().items():
         if key not in env:
             env[key] = value
@@ -998,9 +1040,35 @@ def _rust_builtin_extern_args(crate_type):
         return ["--extern", "proc_macro"]
     return []
 
-def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path):
+# A Cargo build script is an ordinary host program and may shell out to a
+# build tool that is not part of the Rust toolchain. Resolving the declared
+# names during graph loading keeps that dependency visible, and hashing each
+# resolved tool puts its contents in the action identity: upgrading a tool in
+# place leaves its path unchanged, so a path alone would let a build script's
+# cached output survive a change in what produced it.
+def _rust_build_script_tool_paths(ctx):
+    resolved = []
+    for name in _rust_attr(ctx, "build_script_tools", []):
+        path = host_which_optional(name)
+        if path:
+            resolved.append(path)
+    return _unique(resolved)
+
+def _rust_build_script_tool_identity(tool_paths):
+    if not tool_paths:
+        return ""
+    parts = []
+    for path in tool_paths:
+        parts.append(path)
+        parts.append(host_file_sha256(path))
+    return "\x00tools\x00" + "\x00".join(parts)
+
+def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path, tool_paths = []):
     env = _rust_compile_env(ctx)
     _rust_merge_env_lower_precedence(env, _rust_c_tool_env(target or host_triple, host_triple))
+    tool_path = _rust_tool_path(tool_paths) if tool_paths else ""
+    if tool_path:
+        env["PATH"] = _rust_merge_paths(env.get("PATH") or "", tool_path)
     for key, value in _rust_cfg_env(rustc, target).items():
         if key not in env:
             env[key] = value
@@ -1019,6 +1087,7 @@ def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path
     if "PROFILE" not in env:
         env["PROFILE"] = "debug"
     env["RUSTC"] = rustc
+    env["RUSTDOC"] = _parent_dir(rustc) + "/" + _host_exe("rustdoc")
     env["TARGET"] = target or host_triple
     if "CARGO_ENCODED_RUSTFLAGS" not in env:
         env["CARGO_ENCODED_RUSTFLAGS"] = _rust_encoded_rustflags(ctx)
@@ -1137,17 +1206,34 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
         toolchain_identity = identity + linker_identity + "\x00build-script",
         identifier = _rust_action_identifier(ctx, "build-script-rustc"),
     )
-    run_env = _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path)
+    tool_paths = _rust_build_script_tool_paths(ctx)
+    run_env = _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path, tool_paths)
     metadata_exports, metadata_inputs = _rust_dep_metadata_exports(metadata_deps)
-    prepare_path(out_dir, kind = "directory", identifier = _rust_action_identifier(ctx, "build-script-out-dir"))
-    prepare_path(out_dir + "/.once-build-script-status", kind = "remove", identifier = _rust_action_identifier(ctx, "build-script-status-clean"))
     run_script = _rust_build_script_run_shell(runner, stdout, run_env, metadata_exports)
+    # Cargo's default: a build script that prints no `rerun-if` directive
+    # depends on every file in its package. Narrowing to a script's declared
+    # set needs those directives, which are only knowable after it has run, and
+    # reading them back from the previous run made the action's inputs depend
+    # on build history. That is unsound here in a way it is not for Cargo: two
+    # configurations share one output path, so directives learned under one can
+    # narrow the other's inputs and hide a change. Until the directives are
+    # recorded per configuration alongside the identity of the run that
+    # produced them, the whole package stays the dependency.
     run_action(
         argv = [host_which("sh"), "-c", run_script],
         inputs = _unique([runner] + metadata_inputs + source_inputs + build_script_inputs + _rust_extra_inputs(ctx)),
         outputs = [out_dir, stdout],
+        # Emptying the output directory belongs to the script's own setup, not
+        # to a step before it. Declared as separate actions, the wipe ran even
+        # when the script's result was already cached, and the cache hit then
+        # had to write the directory back out again. Every package with a build
+        # script paid that on every build, and no such target could report a
+        # cache hit. As command setup these only run when the command does, so
+        # an unchanged build script leaves its output where it is.
+        clean_paths = [out_dir],
+        create_dirs = [out_dir],
         env = run_env,
-        toolchain_identity = identity + "\x00build-script-run",
+        toolchain_identity = identity + "\x00build-script-run" + _rust_build_script_tool_identity(tool_paths),
         identifier = _rust_action_identifier(ctx, "build-script"),
     )
     compile_env = _rust_compile_action_env(ctx, target, host_triple)
@@ -1572,6 +1658,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
         "build_script_stdout": build_stdout,
         "rlib": output if crate_type == "rlib" else None,
         "binary": output if crate_type == "bin" else None,
+        "binary_name": _rust_attr(ctx, "_binary_output_name", crate_name) if crate_type == "bin" else "",
         "staticlib": output if crate_type == "staticlib" else None,
         "dylib": output if crate_type == "cdylib" or crate_type == "dylib" else None,
         "proc_macro": output if crate_type == "proc-macro" else None,
@@ -1742,8 +1829,15 @@ def _android_materialize_native_dep(ctx, dep, state = None):
 def _rust_runtime_data(ctx):
     return _collect_transitive(_rust_resolved_deps(ctx), "transitive_data", _rust_data_inputs(ctx))
 
+def _rust_run_args(ctx):
+    return (ctx.get("run") or {}).get("args") or []
+
 def _rust_binary_run_env(ctx, run_dir):
-    env = {"HOME": run_dir + "/home"}
+    env = {"HOME": execution_path(run_dir + "/home")}
+    process_path = _rust_process_path()
+    if process_path:
+        env["PATH"] = process_path
+    _rust_merge_env_lower_precedence(env, _rust_cargo_config_env(ctx))
     for key, value in _rust_host_env(_rust_attr(ctx, "env_inherit", [])).items():
         env[key] = value
     for key, value in _rust_attr(ctx, "run_env", {}).items():
@@ -1759,7 +1853,7 @@ def _rust_binary_impl(ctx):
         log = run_dir + "/stdout.log"
         prepare_path(run_dir, kind = "directory", identifier = _rust_action_identifier(ctx, "run-prepare"))
         run_action(
-            argv = [binary] + _rust_attr(ctx, "args", []),
+            argv = [binary] + _rust_attr(ctx, "args", []) + _rust_run_args(ctx),
             inputs = _unique([binary] + runtime_data),
             outputs = [run_dir, log],
             stdout = log,
@@ -1778,8 +1872,44 @@ def _rust_binary_impl(ctx):
         }
     return _rust_compile(ctx, "bin", "src/main.rs", _rust_output_name(ctx, "bin"))
 
+# Cargo runs a test binary from its package root and hands it the same
+# `CARGO_*` description of the package that the compiler saw, so a test can
+# locate fixtures with a package-relative path or read its own version.
+def _rust_test_cwd(ctx):
+    directory = _rust_attr(ctx, "test_cwd", "")
+    if not directory:
+        return None
+    resolved = _rust_manifest_dir(ctx, directory)
+    return resolved if resolved and resolved != "." else None
+
+# A test that runs from its package root reaches for fixtures with
+# package-relative paths, and Cargo has no way to tell which files those are.
+# Declaring the package's own sources as run inputs is the honest
+# over-approximation: it is the same set the test binary compiled from, so it
+# adds nothing to the cache key that was not already there, and it is what a
+# sandboxed or remote run needs staged beside the binary.
+def _rust_test_package_inputs(ctx):
+    if not _rust_test_cwd(ctx):
+        return []
+    return _rust_source_inputs(ctx)
+
+def _rust_cargo_runtime_env(ctx):
+    return {
+        key: value
+        for key, value in _rust_compile_env(ctx).items()
+        if key.startswith("CARGO_")
+    }
+
 def _rust_test_env(ctx, test_dir):
-    env = {"HOME": test_dir + "/home"}
+    env = {"HOME": execution_path(test_dir + "/home")}
+    process_path = _rust_process_path()
+    if process_path:
+        env["PATH"] = process_path
+    for key, value in _rust_cargo_runtime_env(ctx).items():
+        env[key] = value
+    for key, value in _rust_bin_exe_env(ctx).items():
+        env[key] = value
+    _rust_merge_env_lower_precedence(env, _rust_cargo_config_env(ctx))
     for key, value in _rust_host_env(_rust_attr(ctx, "env_inherit", [])).items():
         env[key] = value
     for key, value in _rust_attr(ctx, "test_env", {}).items():
@@ -2037,9 +2167,22 @@ def _rust_test_impl(ctx):
         identifier = _rust_action_identifier(ctx, "test-runner-rustc"),
     )
     run_action(
-        argv = [runner, provider["test_binary"], results, log, native_results, ctx["label"]["id"]] + _rust_attr(ctx, "args", []) + _rust_test_filter_args(ctx),
-        inputs = _unique([runner, provider["test_binary"]] + (provider.get("transitive_data") or [])),
+        argv = [
+            execution_path(runner),
+            execution_path(provider["test_binary"]),
+            execution_path(results),
+            execution_path(log),
+            execution_path(native_results),
+            ctx["label"]["id"],
+        ] + _rust_attr(ctx, "args", []) + _rust_test_filter_args(ctx),
+        inputs = _unique(
+            [runner, provider["test_binary"]] +
+            _rust_bin_exe_inputs(ctx) +
+            _rust_test_package_inputs(ctx) +
+            (provider.get("transitive_data") or [])
+        ),
         outputs = [test_dir, results, log, native_results],
+        cwd = _rust_test_cwd(ctx),
         env = _rust_test_env(ctx, test_dir),
         toolchain_identity = runner_identity + "\x00once.rust_test.run.v1",
         identifier = _rust_action_identifier(ctx, "test"),
@@ -2105,6 +2248,7 @@ def _cargo_resolved_metadata(ctx, default_vendor_dir = "third_party/rust/vendor"
         snapshot_host_triple = ""
         if not target or host_metadata_file:
             _, _, snapshot_host_triple = _rustc_toolchain("")
+        host_triple = snapshot_host_triple
         metadata = _cargo_resolver_json_file(ctx, metadata_file, "Cargo metadata snapshot")
         _cargo_validate_metadata_snapshot(ctx, metadata, metadata_file, False, snapshot_host_triple)
         host_metadata = _cargo_resolver_json_file(ctx, host_metadata_file, "host Cargo metadata snapshot") if host_metadata_file else None
@@ -2121,7 +2265,8 @@ def _cargo_resolved_metadata(ctx, default_vendor_dir = "third_party/rust/vendor"
     _cargo_attach_locked_checksums(metadata, _cargo_lock_document(ctx))
     if host_metadata != None:
         _cargo_attach_locked_checksums(host_metadata, _cargo_lock_document(ctx))
-    resolver_attrs = {"vendor_dir": vendor_dir}
+    split_host = _cargo_requires_host_variants(ctx, target, host_triple)
+    resolver_attrs = {"vendor_dir": vendor_dir, "split_host_variants": split_host}
     if target:
         resolver_attrs["target"] = target
     resolver_ctx = {
@@ -2134,12 +2279,83 @@ def _cargo_resolved_metadata(ctx, default_vendor_dir = "third_party/rust/vendor"
         "specs": resolution["specs"],
         "workspace_deps": resolution["workspace_deps"],
         "workspace_dep_aliases": resolution["workspace_dep_aliases"],
+        "split_host": split_host,
     }
 
+# Cargo compiles a package a second time for the execution host only when that
+# second build would actually differ: when the requested target is not the
+# host, or when the dependency flags carry a panic strategy that a compiler
+# plugin or build script must not inherit. Emitting a `-host` twin in every
+# other case doubles the work and, worse, splits one package into two crate
+# identities, so a build script that mixes a workspace member with a host twin
+# of a shared dependency stops type-checking.
+def _cargo_requires_host_variants(ctx, target, host_triple):
+    if target and target != host_triple:
+        return True
+    flags = _rust_attr(ctx, "dep_rustc_flags", [])
+    return _rust_strip_panic_flags(flags) != flags
+
+# Cargo build scripts are the one place a locked package reaches outside the
+# Rust toolchain, and `*-sys` packages reach for the same handful of build
+# tools. Seeding that list keeps a project buildable without a manifest while
+# leaving the set overridable when a package needs something else or a
+# repository wants a narrower surface.
+_CARGO_BUILD_SCRIPT_TOOLS = ["cmake", "nasm", "perl", "pkg-config", "protoc", "python3"]
+
+def _cargo_build_script_tools(ctx):
+    return _rust_attr(ctx, "build_script_tools", _CARGO_BUILD_SCRIPT_TOOLS)
+
+# Cargo reads the extensionless `.cargo/config` first and only falls back to
+# `.cargo/config.toml`, so a repository migrating between the two keeps the
+# settings Cargo itself applies.
+_CARGO_CONFIG_PATHS = [".cargo/config", ".cargo/config.toml"]
+
+def _cargo_config_document(ctx):
+    files = ctx.get("files") or {}
+    for path in _CARGO_CONFIG_PATHS:
+        content = files.get(path)
+        if content != None:
+            return toml_decode(content)
+    return {}
+
+# Cargo applies its configuration's `[env]` table to every process it starts,
+# so a repository can pin something like the libtest thread count for its own
+# test suite. A value marked `relative` is a path resolved against the
+# directory holding the `.cargo` folder.
+def _cargo_config_env(ctx):
+    entries = _cargo_config_document(ctx).get("env")
+    if type(entries) != type({}):
+        return {}
+    package = ctx["label"]["package"]
+    base = _workspace_absolute(package) if package else workspace_root()
+    env = {}
+    for key, value in entries.items():
+        if type(value) == type(""):
+            env[key] = value
+        elif type(value) == type({}):
+            raw = value.get("value")
+            if type(raw) == type(""):
+                env[key] = base + "/" + raw if value.get("relative") else raw
+    return env
+
+def _cargo_shared_attrs(ctx):
+    return {
+        "build_script_tools": _cargo_build_script_tools(ctx),
+        "cargo_config_env": _cargo_config_env(ctx),
+    }
+
+def _cargo_apply_shared_attrs(attrs, shared):
+    if shared["build_script_tools"] and attrs.get("build_script"):
+        attrs["build_script_tools"] = shared["build_script_tools"]
+    if shared["cargo_config_env"]:
+        attrs["cargo_config_env"] = shared["cargo_config_env"]
+    return attrs
+
 def _cargo_resolver_target_specs(ctx, specs):
+    shared = _cargo_shared_attrs(ctx)
     targets = []
     for spec in specs:
-        attrs = _cargo_copy_attrs(spec.get("attrs") or {})
+        attrs = _cargo_apply_shared_attrs(_cargo_copy_attrs(spec.get("attrs") or {}), shared)
         attrs["rustc_flags"] = _cargo_spec_rustc_flags(ctx, spec)
         target = {
             "name": spec["name"],
@@ -2319,7 +2535,7 @@ def _cargo_metadata_for_platform(ctx, cargo, manifest, platform):
 
 def _cargo_resolver_config(ctx):
     files = ctx.get("files") or {}
-    for path in [".cargo/config.toml", ".cargo/config"]:
+    for path in _CARGO_CONFIG_PATHS:
         if path in files:
             package = ctx["label"]["package"]
             return package + "/" + path if package else path
@@ -2554,7 +2770,7 @@ def _cargo_host_dependency_ids(packages, nodes, host_nodes = None, workspace_mem
                     stack.append(dep_id)
     return needed
 
-def _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, target = "", workspace_member_ids = {}):
+def _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, target = "", workspace_member_ids = {}, split_host = True):
     target_names = {}
     host_names = {}
     for package in packages:
@@ -2563,7 +2779,7 @@ def _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids,
             continue
         target_name = _cargo_target_name(package, duplicate_counts, target)
         target_names[package_id] = target_name
-        if _cargo_package_is_proc_macro(package):
+        if not split_host or _cargo_package_is_proc_macro(package):
             host_names[package_id] = target_name
         elif host_dependency_ids.get(package_id):
             host_names[package_id] = _cargo_host_variant_name(package, duplicate_counts, target)
@@ -2785,10 +3001,13 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None, materialize_
     duplicate_counts = _cargo_duplicate_counts(packages, workspace_member_ids)
     nodes = _cargo_resolve_nodes(metadata)
     host_nodes = _cargo_resolve_nodes(host_metadata) if host_metadata != None else nodes
-    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, host_nodes, workspace_member_ids)
+    split_host = ctx["attrs"].get("split_host_variants")
+    if split_host == None:
+        split_host = True
+    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, host_nodes, workspace_member_ids) if split_host else {}
     vendor_dir = _trim_trailing_slash(ctx["attrs"].get("vendor_dir") or "vendor")
     rust_target = ctx["attrs"].get("target") or ""
-    id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, rust_target, workspace_member_ids)
+    id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, rust_target, workspace_member_ids, split_host)
     targets = []
     for package in packages:
         if workspace_member_ids.get(package.get("id")):
@@ -2819,7 +3038,7 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None, materialize_
             targets.append(_cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), rust_target, host_source_root = host_source_root))
 
         host_name = id_to_host_name.get(package_id)
-        if host_name:
+        if host_name and host_name != name:
             host_materialized_source_root = _cargo_materialized_source_root(ctx, host_name) if materialize_sources else source_root
             host_deps, host_aliases = _cargo_metadata_deps(host_node, id_to_host_name, False, True)
             host_build_deps, host_build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name, True) if has_build_script else ([], {})
@@ -2966,6 +3185,14 @@ def _cargo_workspace_attrs(package, target, node, source_root, aliases):
         attrs["build_script"] = source_root + "/" + _cargo_source_rel(package, build_script)
     return attrs
 
+# Cargo resolves development dependencies for anything that exercises the
+# package rather than shipping with it: tests, benchmarks, and examples. A
+# library or binary built for release never sees them.
+def _cargo_target_uses_dev_dependencies(target, kind):
+    if kind == "test":
+        return True
+    return "example" in (target.get("kind") or [])
+
 def _cargo_workspace_dep_maps(metadata, external_names, local_names):
     target_names = {}
     for package_id, name in external_names.items():
@@ -2975,7 +3202,7 @@ def _cargo_workspace_dep_maps(metadata, external_names, local_names):
     return target_names
 
 def _cargo_workspace_target_spec(package, target, node, kind, source_root, target_names, build_target_names, local_library, rust_target = ""):
-    deps, aliases = _cargo_metadata_deps(node, target_names, False, True, kind == "test")
+    deps, aliases = _cargo_metadata_deps(node, target_names, False, True, _cargo_target_uses_dev_dependencies(target, kind))
     build_deps, build_aliases = _cargo_metadata_build_deps(node, build_target_names, True)
     name = _cargo_workspace_target_name(
         package,
@@ -2999,6 +3226,8 @@ def _cargo_workspace_target_spec(package, target, node, kind, source_root, targe
     )
     if rust_target and kind != "proc_macro":
         attrs["target"] = rust_target
+    if kind == "test":
+        attrs["test_cwd"] = source_root
     target_kind = {
         "library": "rust_library",
         "proc_macro": "rust_proc_macro",
@@ -3029,6 +3258,26 @@ def _cargo_workspace_target_specs(package, target, node, kind, source_root, targ
         specs.append(spec)
     return specs
 
+# Cargo hands an integration test or benchmark the executables of its own
+# package, never the binaries of other workspace members, so the reference set
+# is scoped to one package.
+def _cargo_workspace_binary_refs(package, node):
+    refs = []
+    for target in package.get("targets") or []:
+        if not _cargo_workspace_target_enabled(target, node):
+            continue
+        if "bin" not in (target.get("kind") or []):
+            continue
+        refs.append("./" + _cargo_workspace_target_name(package, target, "binary", {}))
+    return refs
+
+def _cargo_attach_bin_deps(spec, binary_refs):
+    if not binary_refs:
+        return
+    dependencies = spec.get("dependencies") or {}
+    dependencies["bin_deps"] = binary_refs
+    spec["dependencies"] = dependencies
+
 def _cargo_workspace_resolver(ctx):
     _cargo_require_resolver_file(ctx, "manifest", "Cargo.toml")
     _cargo_require_resolver_file(ctx, "lockfile", "Cargo.lock")
@@ -3048,13 +3297,15 @@ def _cargo_workspace_resolver(ctx):
     }
     duplicate_counts = _cargo_duplicate_counts(packages, workspace_member_ids)
     nodes = _cargo_resolve_nodes(metadata)
-    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, workspace_member_ids = workspace_member_ids)
+    split_host = resolved["split_host"]
+    host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, workspace_member_ids = workspace_member_ids) if split_host else {}
     external_names, host_external_names = _cargo_dependency_name_maps(
         packages,
         duplicate_counts,
         host_dependency_ids,
         _rust_target(ctx),
         workspace_member_ids,
+        split_host,
     )
     library_names = _cargo_workspace_library_names(workspace_packages)
     target_names = _cargo_workspace_dep_maps(metadata, external_names, library_names)
@@ -3062,12 +3313,14 @@ def _cargo_workspace_resolver(ctx):
     for package_id, name in host_external_names.items():
         host_target_names[package_id] = name
     targets = _cargo_resolver_target_specs(ctx, resolved["specs"])
+    shared_attrs = _cargo_shared_attrs(ctx)
     roots = []
 
     for package in workspace_packages:
         source_root = _cargo_workspace_source_root(ctx, package)
         node = nodes.get(package.get("id")) or {}
         local_library = library_names.get(package.get("id")) or ""
+        package_binaries = _cargo_workspace_binary_refs(package, node)
         for target in package.get("targets") or []:
             if not _cargo_workspace_target_enabled(target, node):
                 continue
@@ -3086,6 +3339,10 @@ def _cargo_workspace_resolver(ctx):
                 local_library,
                 _rust_target(ctx),
             )
+            for spec in specs:
+                _cargo_apply_shared_attrs(spec["attrs"], shared_attrs)
+                if kind == "test":
+                    _cargo_attach_bin_deps(spec, package_binaries)
             targets.extend(specs)
             if kind != "test" and default_member_ids.get(package.get("id")):
                 roots.extend([spec["name"] for spec in specs])
@@ -3103,6 +3360,7 @@ def _cargo_workspace_resolver(ctx):
                     _rust_target(ctx),
                 )
                 test_spec["name"] = specs[0]["name"] + "_unit_tests"
+                _cargo_apply_shared_attrs(test_spec["attrs"], shared_attrs)
                 targets.append(test_spec)
 
     return {
@@ -3146,6 +3404,8 @@ _RUST_COMMON_ATTRS = [
     attr("named_deps", "map<string, string>", default = "{}", docs = "Buck-compatible alias map from local extern crate name to dependency label or crate name.", configurable = False),
     attr("cargo_package", "string", docs = "Cargo package name used to select direct external deps from a cargo_dependencies dependency set. Defaults to CARGO_PKG_NAME when present.", configurable = False),
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
+    attr("build_script_tools", "list<string>", default = "[]", docs = "Host tool names the build script invokes, such as `cmake`. Each name is resolved on PATH during graph loading; the resolved directory joins the build script's search path and the resolved path joins the action identity. Names that resolve to nothing are ignored, so a script that only needs a tool on some platforms still loads.", configurable = False),
+    attr("cargo_config_env", "map<string, string>", default = "{}", docs = "Environment variables declared by Cargo configuration, applied to the compiler, the build script, the test process, and `once run`. They sit below `env`, `rustc_env`, `test_env`, and `run_env`, matching how Cargo lets its own variables win.", configurable = False),
     attr("_binary_output_name", "string", docs = "Resolver-owned executable name before the platform extension.", configurable = False),
     attr("_cargo_source_root", "string", docs = "Resolver-owned absolute Cargo source directory materialized through a declared host-tree action.", configurable = False),
     attr("_cargo_materialized_source_root", "string", docs = "Resolver-owned Once output directory for one materialized Cargo package.", configurable = False),
@@ -3188,6 +3448,7 @@ _RUST_MOBILE_ATTRS = [
     attr("data", "list<string>", default = "[]", docs = "Package-relative runtime data file globs propagated through each materialized platform provider.", configurable = False),
     attr("compile_data", "list<string>", default = "[]", docs = "Bazel-compatible compile-time data file globs included in each rustc action input set.", configurable = False),
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before each platform rustc invocation and consumes common cargo:rustc-* stdout directives.", configurable = False),
+    attr("build_script_tools", "list<string>", default = "[]", docs = "Host tool names the build script invokes, such as `cmake`. Each name is resolved on PATH during graph loading; the resolved directory joins the build script's search path and the resolved path joins the action identity.", configurable = False),
 ]
 
 _RUST_DEP_PROVIDERS = ["rust_crate", "rust_proc_macro", "rust_dependency_set", "c_provider"]
@@ -3195,6 +3456,9 @@ _RUST_NAMED_DEP_ROLES = [
     dep("proc_macro_deps", ["rust_proc_macro"], "Procedural macros compiled for the execution host and passed to rustc through --extern."),
     dep("link_deps", ["c_provider"], "Native libraries and linker options consumed by final Rust artifacts."),
 ]
+# Every Rust target kind that accepts `build_script` can also need crates
+# compiled for that script, so the role travels with the attribute rather
+# than being reserved for the packages the Cargo resolver generates.
 _RUST_CARGO_DEP_ROLES = [
     dep("build_deps", _RUST_DEP_PROVIDERS, "Rust crates and procedural macros compiled for a Cargo build script and passed to its rustc invocation."),
 ] + _RUST_NAMED_DEP_ROLES
@@ -3213,6 +3477,7 @@ cargo_workspace = target_kind(
         attr("no_default_features", "bool", default = "false", docs = "Pass `--no-default-features` to Cargo metadata.", configurable = True),
         attr("target", "string", docs = "Rust target triple passed to Cargo as `--filter-platform`.", configurable = False),
         attr("dep_rustc_flags", "list<string>", default = "[]", docs = "Additional compiler flags applied to resolved external packages.", configurable = False),
+        attr("build_script_tools", "list<string>", default = str(_CARGO_BUILD_SCRIPT_TOOLS), docs = "Host tool names that package build scripts may invoke. Each name is resolved on PATH during graph loading and its directory joins the build script's search path; names that resolve to nothing are ignored. Set an empty list to give build scripts nothing beyond the Rust and C toolchains.", configurable = False),
     ],
     resolver = _cargo_workspace_resolver,
     deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_binary"], "Default first-party Cargo products emitted by native project discovery.")],
@@ -3236,6 +3501,11 @@ cargo = native_project(
     target_name = "cargo",
     inputs = ["Cargo.lock", "**/Cargo.toml", ".cargo/config", ".cargo/config.toml"],
     exclude = _native_project_generated_dirs(),
+    # A vendored dependency's manifest is a resolver input, so `third_party`
+    # and `vendor` stay in. What cannot be one is a build output tree or a
+    # version control directory, and descending into either to find a handful
+    # of manifests is the largest cost of loading a large workspace.
+    input_exclude = ["target", ".git"],
     on_match = "stop",
     requires_tools = ["cargo", "rustc"],
 )
@@ -3255,6 +3525,7 @@ cargo_dependencies = target_kind(
         attr("no_default_features", "bool", default = "false", docs = "Pass `--no-default-features` to Cargo metadata.", configurable = True),
         attr("target", "string", docs = "Rust target triple passed to Cargo as `--filter-platform`. Defaults to the host target.", configurable = False),
         attr("dep_rustc_flags", "list<string>", default = "[]", docs = "Additional rustc flags applied to each resolved crate build. The panic strategy is stripped for proc-macro and host-tool crates so they keep the compiler's unwind strategy.", configurable = False),
+        attr("build_script_tools", "list<string>", default = str(_CARGO_BUILD_SCRIPT_TOOLS), docs = "Host tool names that package build scripts may invoke. Each name is resolved on PATH during graph loading and its directory joins the build script's search path; names that resolve to nothing are ignored. Set an empty list to give build scripts nothing beyond the Rust and C toolchains.", configurable = False),
         attr("_cargo_resolved", "bool", default = "false", docs = "Resolver-owned marker indicating that Cargo packages were expanded into graph targets.", configurable = False),
         attr("_cargo_workspace_deps", "map<string, list<string>>", default = "{}", docs = "Resolver-owned target names for each workspace package's direct external dependencies.", configurable = False),
         attr("_cargo_workspace_dep_aliases", "map<string, map<string, string>>", default = "{}", docs = "Resolver-owned Cargo rename mappings for workspace package dependencies.", configurable = False),
@@ -3279,7 +3550,7 @@ rust_library = target_kind(
     attrs = _RUST_COMMON_ATTRS + [
         attr("crate_type", "string", default = "rlib", docs = "Rust crate type for the library output. Defaults to `rlib`; final artifacts may use `staticlib`, `cdylib`, or `dylib`.", configurable = False),
     ],
-    deps = [dep("deps", _RUST_DEP_PROVIDERS, "Rust crate dependencies consumed through --extern and C providers linked into final artifacts.")] + _RUST_NAMED_DEP_ROLES,
+    deps = [dep("deps", _RUST_DEP_PROVIDERS, "Rust crate dependencies consumed through --extern and C providers linked into final artifacts.")] + _RUST_CARGO_DEP_ROLES,
     providers = ["rust_crate", "native_linkable", "apple_linkable", "android_native_library"],
     capabilities = [capability("build", ["library"])],
     tools = [_RUST_TOOL],
@@ -3318,11 +3589,11 @@ rust_mobile_library = target_kind(
 rust_binary = target_kind(
     docs = "Rust executable compiled with rustc from a main crate and Rust crate deps.",
     attrs = _RUST_COMMON_ATTRS + [
-        attr("args", "list<string>", default = "[]", docs = "Arguments passed to the executable during `once run`.", configurable = False),
+        attr("args", "list<string>", default = "[]", docs = "Arguments passed to the executable during `once run`, before any arguments supplied on the command line.", configurable = False),
         attr("run_env", "map<string, string>", default = "{}", docs = "Environment variables passed to the executable during `once run`.", configurable = False),
         attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited during `once run` before `run_env` overrides.", configurable = False),
     ],
-    deps = [dep("deps", _RUST_DEP_PROVIDERS, "Rust crate dependencies consumed through --extern and C providers linked into the executable.")] + _RUST_NAMED_DEP_ROLES,
+    deps = [dep("deps", _RUST_DEP_PROVIDERS, "Rust crate dependencies consumed through --extern and C providers linked into the executable.")] + _RUST_CARGO_DEP_ROLES,
     providers = ["rust_binary", "once_executable"],
     capabilities = [
         capability("build", ["binary"]),
@@ -3349,13 +3620,17 @@ rust_test = target_kind(
     attrs = _RUST_COMMON_ATTRS + [
         attr("args", "list<string>", default = "[]", docs = "Arguments passed to the compiled libtest binary when running the test capability.", configurable = False),
         attr("test_env", "map<string, string>", default = "{}", docs = "Environment variables passed to the test runner.", configurable = False),
+        attr("test_cwd", "string", docs = "Package-relative working directory for the test process. Targets derived from Cargo metadata set it to the package root, matching where Cargo runs a test binary; leave it unset to run from the workspace root.", configurable = False),
         attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited by the test runner before `test_env` overrides.", configurable = False),
         attr("crate", "target", docs = "Reserved Bazel-compatible reference to an already-built crate under test.", configurable = False),
         attr("use_libtest_harness", "bool", default = "true", docs = "Whether to use the Rust libtest harness. Only `true` is currently supported.", configurable = False),
         attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
         attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
     ],
-    deps = [dep("deps", _RUST_DEP_PROVIDERS, "Rust crate dependencies consumed through --extern and C providers linked into the test executable.")] + _RUST_NAMED_DEP_ROLES,
+    deps = [
+        dep("deps", _RUST_DEP_PROVIDERS, "Rust crate dependencies consumed through --extern and C providers linked into the test executable."),
+        dep("bin_deps", ["rust_binary"], "Executables the test spawns. Each one is exposed to the compiler and to the test process as `CARGO_BIN_EXE_<binary name>` holding its absolute path, matching what Cargo gives an integration test."),
+    ] + _RUST_CARGO_DEP_ROLES,
     providers = ["rust_test", "once_test_info"],
     capabilities = [
         capability("build", ["binary"]),

@@ -260,6 +260,7 @@ mod tests {
             target_kind: "native_workspace".to_string(),
             inputs: Vec::new(),
             exclude: Vec::new(),
+            input_exclude: Vec::new(),
             on_match: "stop".to_string(),
             max_depth: 16,
             requires_tools: Vec::new(),

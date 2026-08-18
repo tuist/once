@@ -1,0 +1,21 @@
+# Shape borrowed from mise: a root package with workspace members, the 2024
+# edition, and a build script that reads Cargo's build-script environment and
+# a workspace member compiled for the execution host.
+[package]
+name = "mise"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[[bin]]
+name = "mise"
+path = "src/main.rs"
+
+[dependencies]
+mise-cache-core = { version = "0.1.0", path = "crates/mise-cache-core" }
+
+[build-dependencies]
+mise-registry = { version = "0.1.0", path = "crates/mise-registry" }
+
+[workspace]
+members = ["crates/mise-cache-core", "crates/mise-registry"]

@@ -15,6 +15,7 @@ mod manifest_editor;
 mod module_contract;
 mod modules;
 mod native_project;
+pub use resolution::{ResolutionRecord, ResolverInputs};
 mod resolution;
 mod script;
 mod target;
@@ -28,6 +29,7 @@ pub const TOML_BUILD_FILE_NAME: &str = "once.toml";
 
 pub const BUILD_FILE_NAME: &str = TOML_BUILD_FILE_NAME;
 
+pub use analysis::flush_host_tree_digest_caches;
 pub use cache_provider::{
     CacheProviderConfig, DaytonaExecutionProviderConfig, E2bExecutionProviderConfig,
     ExecutionProviderConfig, InfrastructureConfig, InfrastructureProviderConfig,

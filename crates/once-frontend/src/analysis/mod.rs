@@ -12,6 +12,8 @@
 
 mod engine;
 mod globals;
+
+pub use globals::flush_host_tree_digest_caches;
 mod store;
 mod values;
 
@@ -24,11 +26,14 @@ pub use engine::{
     AnalysisResult,
 };
 pub use globals::expand_globs_with_excludes;
+pub use globals::expansion_could_differ;
 pub use globals::globals_for_prelude;
+pub use globals::UnchangedWorkspace;
 pub use store::{
-    with_active_store, AnalysisStore, CachedToolCommand, DeclaredAction, DeclaredActionOperation,
-    DeclaredArchiveEntry, DeclaredArchiveEntryKind, DeclaredArchiveFormat, DeclaredArgFile,
-    DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
+    with_active_store, AnalysisObservations, AnalysisStore, CachedToolCommand, CommandPolicy,
+    DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntry, DeclaredArchiveEntryKind,
+    DeclaredArchiveFormat, DeclaredArgFile, DeclaredArgFileFormat, DeclaredCopyPathMode,
+    DeclaredPreparePathMode, Observation,
 };
 /// If `value` is the canonical select-shape Map (`{ "select": { ... }
 /// }`), return the inner branch map. Otherwise return `None`. The

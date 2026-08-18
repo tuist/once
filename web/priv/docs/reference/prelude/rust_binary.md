@@ -40,9 +40,11 @@ identity.
 | `named_deps` | map&lt;string, string&gt; | no | `{}` | Buck-compatible alias map from local extern crate name to dependency label or crate name |
 | `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set. Defaults to `CARGO_PKG_NAME` when present |
 | `build_script` | string | no | empty | Package-relative Cargo build script path run before `rustc`; common `cargo:rustc-*` stdout directives are consumed, dependency `cargo:rustc-link-search` outputs are replayed downstream, and direct dependency `links` metadata is consumed |
-| `args` | list&lt;string&gt; | no | `[]` | Arguments passed to the executable during `once run` |
+| `args` | list&lt;string&gt; | no | `[]` | Arguments passed to the executable during `once run`, before any given on the command line |
 | `run_env` | map&lt;string, string&gt; | no | `{}` | Environment variables passed to the executable during `once run` |
 | `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited during `once run` before `run_env` overrides |
+| `build_script_tools` | list&lt;string&gt; | no | `[]` | Host tool names the build script invokes; each is resolved on the search path during graph loading |
+| `cargo_config_env` | map&lt;string, string&gt; | no | `{}` | Environment declared by Cargo configuration, applied below `env`, `rustc_env`, and `run_env` |
 
 Accepted but unsupported attributes: `default_deps`, `doc_deps`, `doc_env`, `doc_link_style`,
 `doc_linker_flags`, `doc_named_deps`, `link_deps`, `link_style`,

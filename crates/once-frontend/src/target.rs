@@ -24,6 +24,15 @@ pub struct Target {
     pub attrs: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub typed_attrs: BTreeMap<String, AttrValue>,
+    /// Directory names that cannot hold one of this target's resolver inputs.
+    ///
+    /// Not an attribute: a target kind does not declare it and a manifest
+    /// cannot set it. It comes from the native project that synthesized the
+    /// target, which is the only thing that knows a build output tree from a
+    /// vendored dependency tree, and it exists so gathering resolver inputs
+    /// does not descend into the former.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolver_input_exclude: Vec<String>,
 }
 
 impl Target {
@@ -85,6 +94,7 @@ mod tests {
             visibility: vec![],
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
+            resolver_input_exclude: Vec::new(),
         };
         assert_eq!(t.id(), "crates/foo/bar");
         let root_t = Target {

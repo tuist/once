@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value as JsonValue;
@@ -14,9 +15,10 @@ use starlark::values::Value;
 use walkdir::WalkDir;
 
 use super::store::{
-    analysis_active, with_store, with_store_mut, DeclaredAction, DeclaredActionOperation,
-    DeclaredArchiveEntry, DeclaredArchiveEntryKind, DeclaredArchiveFormat, DeclaredArgFile,
-    DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode,
+    analysis_active, observe, with_store, with_store_mut, AnalysisObservations, CommandPolicy,
+    DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntry, DeclaredArchiveEntryKind,
+    DeclaredArchiveFormat, DeclaredArgFile, DeclaredArgFileFormat, DeclaredCopyPathMode,
+    DeclaredPreparePathMode, HostCache, Observation,
 };
 use super::values::{
     json_to_value, toml_value_to_starlark, unpack_byte_list, unpack_string_dict, unpack_string_list,
@@ -47,6 +49,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(String::new());
         }
+        observe_platform();
         Ok(host_arch_str().to_string())
     }
 
@@ -57,6 +60,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(String::new());
         }
+        observe_platform();
         Ok(host_os_str().to_string())
     }
 
@@ -67,10 +71,15 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(String::new());
         }
-        with_store(|store| -> Result<String> {
+        let value = with_store(|store| -> Result<Option<String>> {
             let store = store.ok_or_else(|| anyhow!("host_env called outside analysis"))?;
-            Ok(store.host_cache.env(name).unwrap_or_default())
-        })
+            Ok(store.host_cache.env(name))
+        })?;
+        observe(Observation::Env {
+            name: name.to_string(),
+            value: value.clone(),
+        });
+        Ok(value.unwrap_or_default())
     }
 
     /// Active workspace root as an absolute path. Schema parsing
@@ -119,10 +128,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(String::new());
         }
-        let resolved = with_store(|store| -> Result<Option<String>> {
-            let store = store.ok_or_else(|| anyhow!("host_which called outside analysis"))?;
-            store.host_cache.which(name)
-        })?;
+        let resolved = observed_which(name, "host_which")?;
         resolved.ok_or_else(|| anyhow!("`{name}` not found on PATH"))
     }
 
@@ -133,12 +139,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(String::new());
         }
-        let resolved = with_store(|store| -> Result<Option<String>> {
-            let store =
-                store.ok_or_else(|| anyhow!("host_which_optional called outside analysis"))?;
-            store.host_cache.which(name)
-        })?;
-        Ok(resolved.unwrap_or_default())
+        Ok(observed_which(name, "host_which_optional")?.unwrap_or_default())
     }
 
     /// Run `argv[0]` with `argv[1..]` as arguments and return its
@@ -164,7 +165,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .transpose()?
             .unwrap_or_default();
         let merge_stderr = merge_stderr.unwrap_or(false);
-        with_store(|store| -> Result<String> {
+        let output = with_store(|store| -> Result<String> {
             let store = store.ok_or_else(|| anyhow!("host_command called outside analysis"))?;
             if let Some(cwd) = cwd {
                 if !Path::new(cwd).is_absolute() {
@@ -174,7 +175,22 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             store
                 .host_cache
                 .command(&argv, &env, cwd.map(Path::new), merge_stderr)
-        })
+        })?;
+        // The output digest rather than the output: a discovery command's
+        // answer can be megabytes, and replay only needs to know whether the
+        // answer is the same one.
+        let program = argv.first().and_then(|program| {
+            with_store(|store| store.and_then(|store| store.host_cache.program_identity(program)))
+        });
+        observe(Observation::Command {
+            argv,
+            env,
+            cwd: cwd.map(ToOwned::to_owned),
+            merge_stderr,
+            output_sha256: sha256_hex(output.as_bytes()),
+            program,
+        });
+        Ok(output)
     }
 
     /// Return the SHA-256 digest of one host file as lowercase hex.
@@ -185,7 +201,18 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             return Ok(String::new());
         }
         observe_host_path(Path::new(path))?;
-        file_sha256_hex(Path::new(path)).with_context(|| format!("hashing host file `{path}`"))
+        let digest = with_store(|store| {
+            let store = store.ok_or_else(|| anyhow!("host_file_sha256 called outside analysis"))?;
+            store.host_cache.host_file_digest(Path::new(path), || {
+                file_sha256_hex(Path::new(path))
+                    .with_context(|| format!("hashing host file `{path}`"))
+            })
+        })?;
+        observe(Observation::FileDigest {
+            path: path.to_string(),
+            sha256: digest.clone(),
+        });
+        Ok(digest)
     }
 
     /// Return whether one host path currently exists as a file.
@@ -194,7 +221,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             return Ok(false);
         }
         observe_host_path(Path::new(path))?;
-        Ok(Path::new(path).is_file())
+        let exists = Path::new(path).is_file();
+        observe(Observation::FileExists {
+            path: path.to_string(),
+            exists,
+        });
+        Ok(exists)
     }
 
     /// Return whether one host path currently exists, including directories
@@ -205,7 +237,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             return Ok(false);
         }
         observe_host_path(Path::new(path))?;
-        Ok(Path::new(path).exists())
+        let exists = Path::new(path).exists();
+        observe(Observation::PathExists {
+            path: path.to_string(),
+            exists,
+        });
+        Ok(exists)
     }
 
     /// Return whether one existing host path resolves within another existing
@@ -222,7 +259,15 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .with_context(|| format!("canonicalizing host path `{}`", path.display()))?;
         let canonical_root = std::fs::canonicalize(root)
             .with_context(|| format!("canonicalizing host root `{}`", root.display()))?;
-        Ok(canonical_path.starts_with(canonical_root))
+        // Both sides are resolved through their symlinks, so the answer follows
+        // from where those links point and not only from the two strings.
+        let within = canonical_path.starts_with(canonical_root);
+        observe(Observation::PathWithin {
+            path: path.to_string_lossy().into_owned(),
+            root: root.to_string_lossy().into_owned(),
+            within,
+        });
+        Ok(within)
     }
 
     /// Read one host file as UTF-8 text.
@@ -232,6 +277,10 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         }
         observe_host_path(Path::new(path))?;
         let bytes = read_bounded_host_file(path)?;
+        observe(Observation::FileText {
+            path: path.to_string(),
+            sha256: sha256_hex(&bytes),
+        });
         String::from_utf8(bytes).with_context(|| format!("host file `{path}` is not UTF-8 text"))
     }
 
@@ -241,13 +290,20 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             return Ok(false);
         }
         observe_host_path(Path::new(path))?;
-        if needle.is_empty() {
-            return Ok(true);
-        }
-        let content = read_bounded_host_file(path)?;
-        Ok(content
-            .windows(needle.len())
-            .any(|window| window == needle.as_bytes()))
+        let found = if needle.is_empty() {
+            true
+        } else {
+            let content = read_bounded_host_file(path)?;
+            content
+                .windows(needle.len())
+                .any(|window| window == needle.as_bytes())
+        };
+        observe(Observation::FileContains {
+            path: path.to_string(),
+            needle: needle.to_string(),
+            found,
+        });
+        Ok(found)
     }
 
     /// Return the sorted entry names of host directory `path`. Missing or
@@ -263,14 +319,11 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             return Ok(heap.alloc(Vec::<String>::new()));
         }
         observe_host_path(Path::new(path))?;
-        let mut names = match std::fs::read_dir(path) {
-            Ok(entries) => entries
-                .filter_map(std::result::Result::ok)
-                .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
-            Err(_) => Vec::new(),
-        };
-        names.sort();
+        let names = read_host_dir_names(path);
+        observe(Observation::ReadDir {
+            path: path.to_string(),
+            names: names.clone(),
+        });
         Ok(heap.alloc(names))
     }
 
@@ -291,11 +344,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .map(|value| unpack_string_list(value, "exclude"))
             .transpose()?
             .unwrap_or_default();
-        let resolved = with_store(|store| -> Result<Vec<String>> {
-            let store = store.ok_or_else(|| anyhow!("glob called outside analysis"))?;
-            expand_globs_with_excludes(&store.workspace_root, &store.package, &patterns, &excludes)
-        })?;
-        Ok(heap.alloc(resolved))
+        let resolved = observed_paths("glob", &patterns, &excludes)?;
+        Ok(heap.alloc(resolved.as_ref().clone()))
     }
 
     /// Walk a package-relative directory and return sorted,
@@ -321,17 +371,18 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .map(|value| unpack_string_list(value, "excluded_names"))
             .transpose()?
             .unwrap_or_default();
-        let resolved = with_store(|store| -> Result<Vec<String>> {
-            let store = store.ok_or_else(|| anyhow!("walk_files called outside analysis"))?;
-            walk_package_files(
-                &store.workspace_root,
-                &store.package,
-                root,
-                &excluded_paths,
-                &excluded_names,
-            )
-        })?;
-        Ok(heap.alloc(resolved))
+        // Memoised like `glob`: a target that walks the same tree for several
+        // action input sets pays one walk, and the recorded answer is what a
+        // later validation compares against. The two exclusion kinds are
+        // tagged into one list so the memo key and the recorded answer keep
+        // them apart.
+        let excludes = excluded_paths
+            .iter()
+            .map(|path| format!("path:{path}"))
+            .chain(excluded_names.iter().map(|name| format!("name:{name}")))
+            .collect::<Vec<_>>();
+        let resolved = observed_paths("walk_files", &[root.to_string()], &excludes)?;
+        Ok(heap.alloc(resolved.as_ref().clone()))
     }
 
     /// Walk a workspace-relative directory and return sorted, deduplicated,
@@ -356,18 +407,20 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .map(|value| unpack_string_list(value, "excluded_names"))
             .transpose()?
             .unwrap_or_default();
-        let resolved = with_store(|store| -> Result<Vec<String>> {
-            let store =
-                store.ok_or_else(|| anyhow!("walk_workspace_files called outside analysis"))?;
-            walk_package_files(
-                &store.workspace_root,
-                "",
-                root,
-                &excluded_paths,
-                &excluded_names,
-            )
-        })?;
-        Ok(heap.alloc(resolved))
+        // Recorded and memoised like the other walks, and anchored at the
+        // workspace root, which is what this one walks whichever target asks.
+        let excludes = excluded_paths
+            .iter()
+            .map(|path| format!("path:{path}"))
+            .chain(excluded_names.iter().map(|name| format!("name:{name}")))
+            .collect::<Vec<_>>();
+        let resolved = observed_paths_anchored(
+            "walk_workspace_files",
+            Some(""),
+            &[root.to_string()],
+            &excludes,
+        )?;
+        Ok(heap.alloc(resolved.as_ref().clone()))
     }
 
     /// Reserve a workspace-relative output path under the active
@@ -503,6 +556,13 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         observe_host_path(source_path)?;
         let source_sha256 = file_sha256_hex(source_path)
             .with_context(|| format!("hashing host file `{source}`"))?;
+        // The digest is baked into the action, so a replay of this analysis
+        // would hand the executor a digest for content that may have moved on.
+        // Record it as the answer it is, so the replay is refused instead.
+        observe(Observation::FileDigest {
+            path: source.to_string(),
+            sha256: source_sha256.clone(),
+        });
         let action = DeclaredAction {
             operation: Some(DeclaredActionOperation::MaterializeHostFile {
                 source: source.to_string(),
@@ -555,8 +615,24 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             ));
         }
         observe_host_path(source_path)?;
-        let source_sha256 = once_host_tree::host_tree_sha256_hex(source_path)
-            .with_context(|| format!("hashing host directory `{source}`"))?;
+        // The trees this snapshots are package sources in a dependency
+        // cache: large, numerous, and immutable once unpacked. Hashing every
+        // one of them on every graph load is the bulk of what an unchanged
+        // build spends its time on, so consult the stat-described cache
+        // first and only read bytes when the tree looks different.
+        let source_sha256 = with_store(|store| {
+            let store =
+                store.ok_or_else(|| anyhow!("materialize_host_tree called outside analysis"))?;
+            host_tree_digest_cache(&store.workspace_root)
+                .digest("host-tree", source_path, || {
+                    once_host_tree::host_tree_sha256_hex(source_path)
+                })
+                .with_context(|| format!("hashing host directory `{source}`"))
+        })?;
+        observe(Observation::TreeDigest {
+            path: source.to_string(),
+            sha256: source_sha256.clone(),
+        });
         let action = DeclaredAction {
             operation: Some(DeclaredActionOperation::MaterializeHostTree {
                 source: source.to_string(),
@@ -1354,12 +1430,414 @@ fn optional_string_field(dict: &DictRef<'_>, name: &str) -> anyhow::Result<Optio
         .transpose()
 }
 
+/// Record where an unresolvable symlink pointed, so that a target appearing
+/// later counts as a change.
+///
+/// Only meaningful for a link, and harmless for anything else: a path that
+/// simply vanished mid-walk is observed as absent, which is what it is.
+fn observe_absent_link_target(path: &Path) {
+    let target = match std::fs::read_link(path) {
+        Ok(target) if target.is_absolute() => target,
+        Ok(target) => match path.parent() {
+            Some(parent) => parent.join(target),
+            None => return,
+        },
+        Err(_) => path.to_path_buf(),
+    };
+    let _ = observe_host_path(&target);
+}
+
 fn observe_host_path(path: &Path) -> Result<()> {
     with_store(|store| {
         let store = store.ok_or_else(|| anyhow!("host path observed outside analysis"))?;
         store.host_cache.observe_path(path);
         Ok(())
     })
+}
+
+fn observe_platform() {
+    observe(Observation::Platform {
+        arch: host_arch_str().to_string(),
+        os: host_os_str().to_string(),
+    });
+}
+
+/// Resolve `name` on `PATH` and record the answer, including a miss.
+///
+/// A miss matters as much as a hit: a rule that took the optional branch
+/// because a tool was absent has to be re-run once the tool appears, and
+/// nothing else in the record would say so.
+fn observed_which(name: &str, caller: &str) -> Result<Option<String>> {
+    let resolved = with_store(|store| -> Result<Option<String>> {
+        let store = store.ok_or_else(|| anyhow!("{caller} called outside analysis"))?;
+        store.host_cache.which(name)
+    })?;
+    observe(Observation::Which {
+        name: name.to_string(),
+        resolved: resolved.clone(),
+    });
+    Ok(resolved)
+}
+
+fn read_host_dir_names(path: &str) -> Vec<String> {
+    let mut names = match std::fs::read_dir(path) {
+        Ok(entries) => entries
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    names.sort();
+    names
+}
+
+/// Expand a set of patterns through the shared memo and record the answer.
+///
+/// `kind` selects the expansion rule and keeps two kinds of answer from being
+/// mistaken for one another, both in the memo and in the record.
+fn observed_paths(kind: &'static str, patterns: &[String], excludes: &[String]) -> Result<PathSet> {
+    observed_paths_anchored(kind, None, patterns, excludes)
+}
+
+/// As [`observed_paths`], for an expansion anchored somewhere other than the
+/// package of the target that ran it.
+///
+/// A walk over the whole workspace gives the same answer to every target, so it
+/// is keyed and recorded at the root. Anchoring it under the calling package
+/// instead would make one walk per package out of what is one question.
+fn observed_paths_anchored(
+    kind: &'static str,
+    anchor: Option<&str>,
+    patterns: &[String],
+    excludes: &[String],
+) -> Result<PathSet> {
+    let (package, resolved) = with_store(|store| -> Result<(String, PathSet)> {
+        let store = store.ok_or_else(|| anyhow!("{kind} called outside analysis"))?;
+        let package = anchor.unwrap_or(store.package.as_str());
+        let resolved = store.host_cache.globs(
+            kind,
+            &store.workspace_root,
+            package,
+            patterns,
+            excludes,
+            || expand_observed_paths(kind, &store.workspace_root, package, patterns, excludes),
+        )?;
+        Ok((package.to_string(), resolved))
+    })?;
+    observe(Observation::Paths {
+        expansion: kind.to_string(),
+        package,
+        patterns: patterns.to_vec(),
+        excludes: excludes.to_vec(),
+        matches: resolved.as_ref().clone(),
+    });
+    Ok(resolved)
+}
+
+type PathSet = Arc<Vec<String>>;
+
+/// The expansion behind each path-returning global, in one place so recording
+/// and replay cannot drift apart.
+fn expand_observed_paths(
+    kind: &str,
+    workspace_root: &Path,
+    package: &str,
+    patterns: &[String],
+    excludes: &[String],
+) -> Result<Vec<String>> {
+    match kind {
+        "glob" => expand_globs_with_excludes(workspace_root, package, patterns, excludes),
+        "walk_files" | "walk_workspace_files" => {
+            let root = patterns
+                .first()
+                .ok_or_else(|| anyhow!("{kind} requires a root"))?;
+            let excluded_paths = excludes
+                .iter()
+                .filter_map(|entry| entry.strip_prefix("path:"))
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            let excluded_names = excludes
+                .iter()
+                .filter_map(|entry| entry.strip_prefix("name:"))
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            walk_package_files(
+                workspace_root,
+                package,
+                root,
+                &excluded_paths,
+                &excluded_names,
+            )
+        }
+        other => Err(anyhow!("unknown path expansion `{other}`")),
+    }
+}
+
+/// Whether every answer in `observations` is still the answer the host gives.
+///
+/// This is the whole of the replay decision. Anything it cannot check, it
+/// reports as changed, so a record that mentions a channel this function does
+/// not understand can never be reused.
+pub(super) fn observations_hold(
+    workspace_root: &Path,
+    host_cache: &HostCache,
+    observations: &AnalysisObservations,
+    policy: CommandPolicy,
+    unchanged: &UnchangedWorkspace,
+) -> bool {
+    if !observations.is_complete() {
+        return false;
+    }
+    observations.entries().iter().all(|observation| {
+        observation_holds(workspace_root, host_cache, observation, policy, unchanged)
+    })
+}
+
+/// What a caller already knows about which workspace paths cannot have moved.
+///
+/// Re-expanding a path pattern is the most expensive kind of check here: it
+/// walks a package to find out whether the same files are still there. A caller
+/// holding a watcher's account of the window can skip that for any package the
+/// watcher did not see a change under, which on a workspace of a few hundred
+/// packages is the difference between one walk and hundreds.
+pub enum UnchangedWorkspace {
+    /// Nothing is known; every answer is checked by asking again.
+    Unknown,
+    /// Exactly these workspace-relative paths changed, and nothing else did.
+    Except(std::collections::BTreeSet<String>),
+}
+
+impl UnchangedWorkspace {
+    /// Whether re-expanding these patterns could produce a different answer.
+    ///
+    /// A changed path matters when the expansion would have selected it, which
+    /// covers a file edited, created, or deleted: the watcher reports all three,
+    /// and a pattern that matches the path is a pattern whose answer moved.
+    ///
+    /// Matching the patterns rather than the package is what makes this worth
+    /// having. A graph derived from a package manifest anchors every target at
+    /// the workspace root, so asking "did anything under the package change"
+    /// answers yes for every target as soon as one file is edited, and every
+    /// one of them re-walks.
+    fn expansion_could_differ(&self, expansion: &str, package: &str, patterns: &[String]) -> bool {
+        let Self::Except(changed) = self else {
+            return true;
+        };
+        expansion_could_differ(changed, expansion, package, patterns)
+    }
+}
+
+/// Whether an expansion selects whole subtrees rather than matching patterns.
+///
+/// A walk is handed a directory and returns what is under it, so anything
+/// beneath that directory is part of its answer. Getting this wrong in the
+/// quiet direction means a file added under a walked directory looks
+/// irrelevant, and whatever read that walk is reused when it should not be.
+fn expansion_selects_subtrees(expansion: &str) -> bool {
+    matches!(expansion, "walk_files" | "walk_workspace_files")
+}
+
+/// Whether re-running one recorded expansion could produce a different answer,
+/// given everything that changed since it ran.
+///
+/// Shared so the two places that ask it, replaying an analysis and reusing a
+/// target's outcome, cannot answer it differently.
+pub fn expansion_could_differ(
+    changed: &std::collections::BTreeSet<String>,
+    expansion: &str,
+    package: &str,
+    patterns: &[String],
+) -> bool {
+    if changed.is_empty() {
+        return false;
+    }
+    // A pattern that climbs out of its package is expanded against the whole
+    // workspace, so there is no prefix that bounds what it can select.
+    if patterns.iter().any(|pattern| pattern.contains("..")) {
+        return true;
+    }
+    let prefix = if package.is_empty() {
+        String::new()
+    } else {
+        format!("{package}/")
+    };
+    let compiled = (!expansion_selects_subtrees(expansion)).then(|| {
+        patterns
+            .iter()
+            .filter_map(|pattern| {
+                glob::Pattern::new(pattern.strip_prefix("./").unwrap_or(pattern)).ok()
+            })
+            .collect::<Vec<_>>()
+    });
+    changed.iter().any(|path| {
+        let Some(relative) = path.strip_prefix(prefix.as_str()) else {
+            return false;
+        };
+        match &compiled {
+            Some(patterns) => patterns.iter().any(|pattern| pattern.matches(relative)),
+            None => patterns.iter().any(|root| {
+                let root = root.strip_prefix("./").unwrap_or(root);
+                relative == root || relative.starts_with(&format!("{root}/"))
+            }),
+        }
+    })
+}
+
+/// Name the first recorded answer that no longer matches, or `None` when they
+/// all still do. Only for reporting: the decision is `observations_hold`.
+pub(super) fn first_stale_observation(
+    workspace_root: &Path,
+    host_cache: &HostCache,
+    observations: &AnalysisObservations,
+    policy: CommandPolicy,
+    unchanged: &UnchangedWorkspace,
+) -> Option<String> {
+    if !observations.is_complete() {
+        return Some("analysis read something the ledger cannot describe".to_string());
+    }
+    observations
+        .entries()
+        .iter()
+        .find(|observation| {
+            !observation_holds(workspace_root, host_cache, observation, policy, unchanged)
+        })
+        .map(|observation| format!("{observation:?}"))
+}
+
+fn observation_holds(
+    workspace_root: &Path,
+    host_cache: &HostCache,
+    observation: &Observation,
+    policy: CommandPolicy,
+    unchanged: &UnchangedWorkspace,
+) -> bool {
+    match observation {
+        Observation::Platform { arch, os } => arch == host_arch_str() && os == host_os_str(),
+        Observation::Env { name, value } => &host_cache.env(name) == value,
+        Observation::Which { name, resolved } => {
+            host_cache.which(name).ok().as_ref() == Some(resolved)
+        }
+        Observation::Command {
+            argv,
+            env,
+            cwd,
+            merge_stderr,
+            output_sha256,
+            program,
+        } => match policy {
+            // Ask the command again rather than reasoning about what it reads.
+            // It is memoised for the whole invocation, so this costs one run
+            // however many targets recorded it. A version probe answered from
+            // the persisted tool cache is gated on the fingerprints of the tool
+            // binaries themselves, so that answer is not older than the
+            // toolchain it describes.
+            CommandPolicy::Rerun => host_cache
+                .command(argv, env, cwd.as_deref().map(Path::new), *merge_stderr)
+                .is_ok_and(|output| &sha256_hex(output.as_bytes()) == output_sha256),
+            // The caller cannot afford to ask again, so the most it can
+            // establish is that the same program would answer. What it takes on
+            // in exchange is that the command's answer follows from the inputs
+            // the caller declared and from the rest of this ledger. A record
+            // written before the program was described cannot even establish
+            // that much.
+            CommandPolicy::TrustDeclaredInputs => program.as_ref().is_some_and(|recorded| {
+                argv.first()
+                    .and_then(|name| host_cache.program_identity(name))
+                    .is_some_and(|actual| &actual == recorded)
+            }),
+        },
+        Observation::FileDigest { path, sha256 } => host_cache
+            .host_file_digest(Path::new(path), || file_sha256_hex(Path::new(path)))
+            .is_ok_and(|actual| &actual == sha256),
+        Observation::TreeDigest { path, sha256 } => {
+            let source = Path::new(path);
+            source.is_dir()
+                && host_tree_digest_cache(workspace_root)
+                    .digest("host-tree", source, || {
+                        once_host_tree::host_tree_sha256_hex(source)
+                    })
+                    .is_ok_and(|actual| &actual == sha256)
+        }
+        Observation::FileExists { path, exists } => Path::new(path).is_file() == *exists,
+        Observation::PathExists { path, exists } => Path::new(path).exists() == *exists,
+        Observation::PathWithin { path, root, within } => {
+            let resolved = |value: &str| std::fs::canonicalize(Path::new(value)).ok();
+            match (resolved(path), resolved(root)) {
+                (Some(path), Some(root)) => path.starts_with(root) == *within,
+                // One of them no longer resolves, so the question the record
+                // answered is not the question being asked now.
+                _ => false,
+            }
+        }
+        Observation::FileText { path, sha256 } => {
+            read_bounded_host_file(path).is_ok_and(|bytes| &sha256_hex(&bytes) == sha256)
+        }
+        Observation::FileContains {
+            path,
+            needle,
+            found,
+        } => {
+            let actual = if needle.is_empty() {
+                true
+            } else {
+                read_bounded_host_file(path).is_ok_and(|content| {
+                    content
+                        .windows(needle.len())
+                        .any(|window| window == needle.as_bytes())
+                })
+            };
+            actual == *found
+        }
+        Observation::ReadDir { path, names } => &read_host_dir_names(path) == names,
+        Observation::Paths {
+            expansion,
+            package,
+            patterns,
+            excludes,
+            matches,
+        } => {
+            if !unchanged.expansion_could_differ(expansion, package, patterns) {
+                return true;
+            }
+            host_cache
+                .globs(
+                    path_expansion_kind(expansion),
+                    workspace_root,
+                    package,
+                    patterns,
+                    excludes,
+                    || {
+                        expand_observed_paths(
+                            expansion,
+                            workspace_root,
+                            package,
+                            patterns,
+                            excludes,
+                        )
+                    },
+                )
+                .is_ok_and(|actual| actual.as_ref() == matches)
+        }
+    }
+}
+
+/// Map a recorded expansion name back to the `'static` key the memo uses.
+///
+/// An unrecognised name resolves to a key no expansion answers to, so the
+/// replay fails rather than quietly reading another kind's answer.
+fn path_expansion_kind(kind: &str) -> &'static str {
+    match kind {
+        "glob" => "glob",
+        "walk_files" => "walk_files",
+        "walk_workspace_files" => "walk_workspace_files",
+        _ => "unknown",
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(bytes);
+    hex_lower(&hasher.finalize())
 }
 
 fn file_sha256_hex(path: &Path) -> Result<String> {
@@ -1377,6 +1855,11 @@ fn file_sha256_hex(path: &Path) -> Result<String> {
         hasher.update(&buf[..read]);
     }
     Ok(hex_lower(&hasher.finalize()))
+}
+
+/// Lowercase hexadecimal of a finished digest, for callers outside this module.
+pub(super) fn hex_digest(bytes: &[u8]) -> String {
+    hex_lower(bytes)
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -1640,8 +2123,31 @@ fn collect_glob_matches(
         if is_excluded || excluded_symlink_tree {
             continue;
         }
-        let canonical = std::fs::canonicalize(path)
-            .with_context(|| format!("canonicalizing `{}`", path.display()))?;
+        // Canonicalizing proves the match cannot reach outside the workspace
+        // through a symlink. It fails on a path that resolves to nothing:
+        // a file that vanished between the walk and this check, or a link with
+        // no target. Drop the match rather than failing the whole graph load,
+        // because real trees carry stray links left behind by test suites and
+        // interrupted tooling, and one of those should not make a workspace
+        // unloadable.
+        //
+        // Dropping alone is not enough when the link names something outside
+        // the workspace. Nothing watches outside the workspace, so if that
+        // target were created later no change would be seen, a stored receipt
+        // would stay valid, and the source would silently never enter the
+        // build. Record the absent target as an observed host path so its
+        // appearance invalidates what was built without it.
+        let canonical = match std::fs::canonicalize(path) {
+            Ok(canonical) => canonical,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                observe_absent_link_target(path);
+                continue;
+            }
+            Err(error) => {
+                return Err(anyhow::Error::from(error)
+                    .context(format!("canonicalizing `{}`", path.display())))
+            }
+        };
         canonical
             .strip_prefix(canonical_workspace)
             .with_context(|| {
@@ -1656,6 +2162,44 @@ fn collect_glob_matches(
         }
     }
     Ok(out)
+}
+
+static HOST_TREE_DIGEST_CACHES: OnceLock<
+    Mutex<BTreeMap<PathBuf, Arc<once_host_tree::TreeDigestCache>>>,
+> = OnceLock::new();
+
+/// Write every tree digest learned during this process back to disk.
+///
+/// The caches hang off a process-wide map that nothing drops, so the run has
+/// to hand back what it learned before it ends.
+pub fn flush_host_tree_digest_caches() {
+    let Some(caches) = HOST_TREE_DIGEST_CACHES.get() else {
+        return;
+    };
+    let caches = caches
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for cache in caches.values() {
+        cache.save();
+    }
+}
+
+/// One tree digest cache per workspace, shared across every analysis in the
+/// process and persisted so the next invocation starts warm.
+fn host_tree_digest_cache(workspace_root: &Path) -> Arc<once_host_tree::TreeDigestCache> {
+    let caches = HOST_TREE_DIGEST_CACHES.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut caches = caches
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::clone(
+        caches
+            .entry(workspace_root.to_path_buf())
+            .or_insert_with_key(|root| {
+                Arc::new(once_host_tree::TreeDigestCache::open(
+                    root.join(".once").join("host-tree-digests"),
+                ))
+            }),
+    )
 }
 
 fn workspace_path_relative_to_package(package: &str, workspace_path: &str) -> String {
@@ -1875,5 +2419,204 @@ mod narrow_walk_root_tests {
             narrow_walk_root(package, &compile(&["/abs/src/*.rs"])),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod observation_completeness_tests {
+    use super::globals_for_prelude;
+
+    /// Globals that cannot tell an implementation anything about the host.
+    ///
+    /// Either they only declare work for later, or their result follows from
+    /// their arguments. Nothing about them needs recording, because replaying
+    /// the same call with the same arguments cannot produce a different answer.
+    const PURE: &[&str] = &[
+        "cmd_args",
+        "copy_path",
+        "declare_output",
+        "execution_path",
+        "json_decode",
+        "link_path",
+        "prepare_path",
+        "run_action",
+        "toml_decode",
+        "workspace_root",
+        "write_archive",
+        "write_path",
+        "write_tree_digest",
+    ];
+
+    /// Globals whose answer comes from the host and is written into the
+    /// observation ledger, so a replay can ask again and compare.
+    const RECORDED: &[&str] = &[
+        "host_arch",
+        "host_command",
+        "host_env",
+        "host_file_contains",
+        "host_file_exists",
+        "host_file_read",
+        "host_file_sha256",
+        "host_os",
+        "host_path_exists",
+        "host_path_is_within",
+        "host_read_dir",
+        "host_which",
+        "host_which_optional",
+        "glob",
+        "walk_files",
+        "walk_workspace_files",
+        "materialize_host_file",
+        "materialize_host_tree",
+    ];
+
+    /// A global that is neither pure nor recorded is a way for the host to
+    /// change without a stored analysis noticing, which would make a replay
+    /// hand back actions built from state that has since moved. Adding one
+    /// fails here until its author has said which it is.
+    #[test]
+    fn every_global_is_classified() {
+        let globals = globals_for_prelude();
+        let standard = starlark::environment::Globals::standard();
+        let standard_names = standard
+            .names()
+            .map(|name| name.as_str().to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        let unclassified = globals
+            .names()
+            .map(|name| name.as_str().to_string())
+            .filter(|name| !standard_names.contains(name))
+            .filter(|name| !PURE.contains(&name.as_str()) && !RECORDED.contains(&name.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(
+            unclassified.is_empty(),
+            "these globals are neither listed as pure nor as recorded: {unclassified:?}. \
+             A global that reads host state must write an Observation, or call \
+             observe_unrecordable so analyses that use it are never stored."
+        );
+    }
+
+    /// The other direction: a name listed here that no longer exists means the
+    /// lists have drifted from the globals and are no longer evidence of
+    /// anything.
+    #[test]
+    fn no_classification_names_a_global_that_is_gone() {
+        let globals = globals_for_prelude();
+        let names = globals
+            .names()
+            .map(|name| name.as_str().to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        let missing = PURE
+            .iter()
+            .chain(RECORDED.iter())
+            .filter(|name| !names.contains(**name))
+            .collect::<Vec<_>>();
+
+        assert!(
+            missing.is_empty(),
+            "classified globals that do not exist: {missing:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod unchanged_workspace_tests {
+    use std::collections::BTreeSet;
+
+    use super::UnchangedWorkspace;
+
+    fn since(paths: &[&str]) -> UnchangedWorkspace {
+        UnchangedWorkspace::Except(
+            paths
+                .iter()
+                .map(|p| (*p).to_string())
+                .collect::<BTreeSet<_>>(),
+        )
+    }
+
+    fn patterns(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    /// The case this exists for. A graph derived from a package manifest gives
+    /// every target the workspace root as its package, so a package-level test
+    /// would call every expansion in the workspace suspect for one edit.
+    #[test]
+    fn an_edit_elsewhere_leaves_a_root_anchored_pattern_alone() {
+        let changed = since(&["crates/core/main.rs"]);
+
+        assert!(!changed.expansion_could_differ("glob", "", &patterns(&["crates/ignore/*.rs"])));
+        assert!(changed.expansion_could_differ("glob", "", &patterns(&["crates/core/*.rs"])));
+    }
+
+    #[test]
+    fn a_file_that_appears_under_a_matching_pattern_is_a_difference() {
+        let changed = since(&["src/added.rs"]);
+
+        assert!(changed.expansion_could_differ("glob", "", &patterns(&["src/**/*.rs"])));
+    }
+
+    #[test]
+    fn a_pattern_is_matched_relative_to_its_package() {
+        let changed = since(&["apps/tool/src/lib.rs"]);
+
+        assert!(changed.expansion_could_differ("glob", "apps/tool", &patterns(&["src/*.rs"])));
+        assert!(!changed.expansion_could_differ("glob", "apps/other", &patterns(&["src/*.rs"])));
+    }
+
+    /// A walk is given a directory, not a pattern, so everything beneath it is
+    /// part of the answer.
+    #[test]
+    fn a_walk_covers_everything_beneath_its_root() {
+        let changed = since(&["assets/images/logo.png"]);
+
+        assert!(changed.expansion_could_differ("walk_files", "", &patterns(&["assets"])));
+        assert!(!changed.expansion_could_differ("walk_files", "", &patterns(&["docs"])));
+    }
+
+    /// Every kind of walk owns its subtree, not just the package-relative one.
+    /// Treating a workspace walk's directory as a glob pattern would match the
+    /// directory itself and nothing under it, so a header dropped into a
+    /// searched directory would look irrelevant.
+    #[test]
+    fn a_workspace_walk_covers_everything_beneath_its_root() {
+        let changed = since(&["apps/Hello/Sources/Extra.h"]);
+
+        assert!(changed.expansion_could_differ(
+            "walk_workspace_files",
+            "",
+            &patterns(&["apps/Hello/Sources"])
+        ));
+        assert!(!changed.expansion_could_differ(
+            "walk_workspace_files",
+            "",
+            &patterns(&["apps/Other/Sources"])
+        ));
+    }
+
+    /// A pattern that climbs out of its package is expanded against the whole
+    /// workspace, so nothing bounds what it can select.
+    #[test]
+    fn a_pattern_leaving_its_package_is_always_suspect() {
+        let changed = since(&["somewhere/else.rs"]);
+
+        assert!(changed.expansion_could_differ(
+            "glob",
+            "apps/tool",
+            &patterns(&["../shared/*.rs"])
+        ));
+    }
+
+    #[test]
+    fn nothing_changed_leaves_every_expansion_alone() {
+        assert!(!since(&[]).expansion_could_differ("glob", "", &patterns(&["**/*.rs"])));
+    }
+
+    /// With no watcher there is nothing to reason from, so every expansion is
+    /// re-run.
+    #[test]
+    fn an_unknown_window_settles_nothing() {
+        assert!(UnchangedWorkspace::Unknown.expansion_could_differ("glob", "", &patterns(&["a"])));
     }
 }

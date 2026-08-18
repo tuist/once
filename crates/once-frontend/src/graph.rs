@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use starlark::environment::Module;
 use starlark::eval::Evaluator;
 use starlark::syntax::{AstModule, Dialect};
@@ -19,7 +19,7 @@ use crate::target::{AttrValue, Target};
 use crate::workspace::{load_workspace, load_workspace_with_configuration};
 
 /// Fully qualified graph target label.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TargetLabel {
     /// Package path that owns the target.
     pub package: String,
@@ -30,7 +30,7 @@ pub struct TargetLabel {
 }
 
 /// Target record after manifest loading and target kind metadata attachment.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Deserialize, Debug, Clone, Serialize, PartialEq)]
 pub struct GraphTarget {
     /// Canonical target label.
     pub label: TargetLabel,
@@ -76,7 +76,7 @@ impl GraphTarget {
 }
 
 /// Operation exposed by a target kind, such as build, lint, run, or test.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Capability {
     /// Capability name.
     pub name: String,
@@ -88,7 +88,7 @@ pub struct Capability {
 }
 
 /// A tool made available to a target through the workspace tool environment.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolRequirement {
     /// Logical tool name declared by the workspace.
     pub name: String,
@@ -97,7 +97,7 @@ pub struct ToolRequirement {
 }
 
 /// Diagnostic emitted while constructing the typed graph.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Diagnostic {
     /// Stable diagnostic code.
     pub code: String,
@@ -347,8 +347,23 @@ pub(crate) fn load_graph_workspace_with_compiled_schemas_and_targets(
     compiled_schemas: &[TargetKindSchema],
     targets: Vec<Target>,
 ) -> Result<Vec<GraphTarget>> {
+    Ok(
+        load_graph_workspace_with_compiled_schemas_and_targets_recorded(
+            root,
+            compiled_schemas,
+            targets,
+        )?
+        .0,
+    )
+}
+
+pub(crate) fn load_graph_workspace_with_compiled_schemas_and_targets_recorded(
+    root: &Path,
+    compiled_schemas: &[TargetKindSchema],
+    targets: Vec<Target>,
+) -> Result<(Vec<GraphTarget>, crate::resolution::ResolutionRecord)> {
     let schemas = target_kind_schemas_for_workspace_from_compiled(root, compiled_schemas)?;
-    load_graph_workspace_with_targets_and_schemas(root, targets, &schemas)
+    load_graph_workspace_recorded(root, targets, &schemas)
 }
 
 pub(crate) fn load_graph_workspace_with_targets_and_schemas(
@@ -356,7 +371,18 @@ pub(crate) fn load_graph_workspace_with_targets_and_schemas(
     targets: Vec<Target>,
     schemas: &[TargetKindSchema],
 ) -> Result<Vec<GraphTarget>> {
+    Ok(load_graph_workspace_recorded(root, targets, schemas)?.0)
+}
+
+/// Load the graph and report what deriving it read, so a caller that can tell
+/// whether any of it moved may skip deriving it next time.
+pub(crate) fn load_graph_workspace_recorded(
+    root: &Path,
+    targets: Vec<Target>,
+    schemas: &[TargetKindSchema],
+) -> Result<(Vec<GraphTarget>, crate::resolution::ResolutionRecord)> {
     let mut expanded = crate::resolution::expand_workspace_targets(root, targets, schemas)?;
+    let record = std::mem::take(&mut expanded.record);
     let mut graph = graph_from_owned_targets_with_schemas(expanded.targets, schemas);
     for target in &mut graph {
         let Some(diagnostics) = expanded.diagnostics.remove(&target.label.id) else {
@@ -368,7 +394,7 @@ pub(crate) fn load_graph_workspace_with_targets_and_schemas(
             }
         }
     }
-    Ok(graph)
+    Ok((graph, record))
 }
 
 #[must_use]
@@ -548,6 +574,9 @@ pub(crate) fn graph_target_from_schema(
 
 fn graph_target_from_owned_schema(target: Target, schemas: &[TargetKindSchema]) -> GraphTarget {
     let Target {
+        // Only meaningful while gathering resolver inputs, which has already
+        // happened by the time a target becomes a graph target.
+        resolver_input_exclude: _,
         package,
         kind,
         name,
@@ -713,11 +742,88 @@ fn starlark_prelude_target_kind_schemas() -> Result<Vec<TargetKindSchema>> {
 /// without depending on the compiled-in prelude staying valid, and so they
 /// keep working if the prelude ever becomes user-configurable.
 fn parse_target_kind_schemas(path: &str, source: &str) -> Result<Vec<TargetKindSchema>> {
-    parse_target_kind_schemas_with_context(
-        path,
-        source,
-        &TargetKindSchemaSource::built_in_prelude(),
-    )
+    prelude_exports(source)
+        .target_kinds
+        .clone()
+        .map_err(|message| prelude_message(path, &message))
+}
+
+/// What one evaluation of a prelude source declares.
+///
+/// Both halves are kept as results rather than being combined, so a workspace
+/// whose native project declarations are malformed still answers questions
+/// about target kinds, exactly as it did when the two were read separately.
+pub(crate) struct PreludeExports {
+    pub(crate) target_kinds: std::result::Result<Vec<TargetKindSchema>, String>,
+    pub(crate) native_projects:
+        std::result::Result<Vec<crate::native_project::NativeProjectSchema>, String>,
+}
+
+/// Everything a prelude source declares, evaluated at most once per process.
+///
+/// Target kinds and native projects are two questions about the same megabyte
+/// of Starlark, and an invocation asks both. Evaluating it twice is the largest
+/// fixed cost of loading a workspace, so the source is evaluated once and both
+/// answers are read out of the same module.
+///
+/// Keyed by the source rather than by the path it was given, because the same
+/// text reaches this under two names. A failure is not remembered, so the
+/// caller that hit it reports it under its own path.
+pub(crate) fn prelude_exports(source: &str) -> std::sync::Arc<PreludeExports> {
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    static EVALUATED: OnceLock<Mutex<BTreeMap<String, Arc<PreludeExports>>>> = OnceLock::new();
+
+    let evaluated = EVALUATED.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(exports) = evaluated
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(source)
+    {
+        return Arc::clone(exports);
+    }
+    let exports = Arc::new(evaluate_prelude_exports(source));
+    evaluated
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(source.to_string(), Arc::clone(&exports));
+    exports
+}
+
+fn evaluate_prelude_exports(source: &str) -> PreludeExports {
+    let path = crate::modules::BUILT_IN_MODULE_PATH;
+    Module::with_temp_heap(|module| {
+        let ast = match AstModule::parse(path, source.to_string(), &Dialect::Standard) {
+            Ok(ast) => ast,
+            Err(error) => {
+                let message = format!("{error:?}");
+                return PreludeExports {
+                    target_kinds: Err(message.clone()),
+                    native_projects: Err(message),
+                };
+            }
+        };
+        let globals = crate::analysis::globals_for_prelude();
+        let mut eval = Evaluator::new(&module);
+        if let Err(error) = eval.eval_module(ast, &globals) {
+            let message = format!("{error:?}");
+            return PreludeExports {
+                target_kinds: Err(message.clone()),
+                native_projects: Err(message),
+            };
+        }
+        let exported = crate::modules::exported_target_kind_values(&module);
+        let target_kinds = if exported.is_empty() {
+            Err("no target kind symbols exported".to_string())
+        } else {
+            target_kind_schemas_from_exports(&exported, &TargetKindSchemaSource::built_in_prelude())
+        };
+        let native_projects = crate::native_project::native_project_schemas_from_module(&module);
+        PreludeExports {
+            target_kinds,
+            native_projects,
+        }
+    })
 }
 
 fn parse_target_kind_schemas_with_context(
@@ -1597,6 +1703,7 @@ demo_kind = target_kind(
             visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
+            resolver_input_exclude: Vec::new(),
         };
 
         let graph = graph_from_targets(&[target]);
@@ -1624,6 +1731,7 @@ demo_kind = target_kind(
             visibility: Vec::new(),
             attrs,
             typed_attrs: BTreeMap::new(),
+            resolver_input_exclude: Vec::new(),
         };
 
         let graph = graph_from_targets(&[target]);
@@ -1645,6 +1753,7 @@ demo_kind = target_kind(
             visibility: Vec::new(),
             attrs: BTreeMap::from([("script_runtime".to_string(), "python".to_string())]),
             typed_attrs: BTreeMap::new(),
+            resolver_input_exclude: Vec::new(),
         };
 
         let graph = graph_from_targets(&[target]);
@@ -1670,6 +1779,7 @@ demo_kind = target_kind(
             visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
+            resolver_input_exclude: Vec::new(),
         });
 
         let graph = graph_from_targets(&targets);
@@ -1701,6 +1811,7 @@ demo_kind = target_kind(
             visibility: Vec::new(),
             attrs,
             typed_attrs,
+            resolver_input_exclude: Vec::new(),
         };
 
         let graph = graph_from_targets(&[target]);
@@ -1728,6 +1839,7 @@ demo_kind = target_kind(
             visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
+            resolver_input_exclude: Vec::new(),
         };
         let schemas = vec![TargetKindSchema {
             kind: "demo_kind".to_string(),

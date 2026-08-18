@@ -1,6 +1,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use once_cas::Digest;
@@ -32,8 +33,49 @@ pub(super) async fn snapshot(
     outputs: &[String],
     since: Option<&ChangePosition>,
 ) -> Option<ChangeSnapshot> {
-    match request_snapshot(socket, outputs, since).await {
-        Ok(snapshot) => return Some(snapshot),
+    snapshot_with(workspace, socket, outputs, since, "barrier").await
+}
+
+/// Where the journal stands, without waiting for the platform to report writes
+/// this process just made.
+///
+/// Waiting for those is the expensive part of a barrier: after a compiler has
+/// written its output the platform's notification service takes hundreds of
+/// milliseconds to deliver the burst, and the barrier sits behind it. A caller
+/// that produced those writes does not need to be told about them, so long as
+/// whatever reads the resulting position can recognise them later.
+pub(super) async fn position(
+    workspace: &Path,
+    socket: &Path,
+    outputs: &[String],
+    since: Option<&ChangePosition>,
+) -> Option<ChangeSnapshot> {
+    snapshot_with(workspace, socket, outputs, since, "position").await
+}
+
+async fn snapshot_with(
+    workspace: &Path,
+    socket: &Path,
+    outputs: &[String],
+    since: Option<&ChangePosition>,
+    command: &str,
+) -> Option<ChangeSnapshot> {
+    let first = request(socket, outputs, since, command).await;
+    let first = match first {
+        Err(error) if error.is_unknown_command() => {
+            tracing::debug!(
+                command,
+                "filesystem change tracker predates this request; falling back to a barrier"
+            );
+            request(socket, outputs, since, "barrier").await
+        }
+        other => other,
+    };
+    match first {
+        Ok(snapshot) => {
+            clear_startup_failure(socket);
+            return Some(snapshot);
+        }
         // Not being able to reach the socket is the expected first-run
         // path, so it stays at trace level; everything else is a real
         // surprise worth seeing at debug.
@@ -45,14 +87,43 @@ pub(super) async fn snapshot(
             return None;
         }
     }
+    // A build asks for a barrier twice, once before the work and once after.
+    // When the first attempt could not get the tracker up, the second cannot
+    // either, and paying the startup wait again doubles a cost the build
+    // already decided to do without.
+    if startup_already_failed() {
+        tracing::trace!("skipping tracker startup that already failed in this process");
+        return None;
+    }
+    // A startup that failed recently is not worth repeating on every
+    // invocation. Without a cooldown each build launches another daemon and
+    // waits for it, so a host whose change notification service is unhealthy
+    // pays the wait forever and accumulates processes; with one, the cost is
+    // a single slow build per cooldown window.
+    if let Some(remaining) = startup_cooldown_remaining(socket) {
+        tracing::debug!(
+            ?remaining,
+            "skipping filesystem change tracker startup after a recent failure"
+        );
+        // Only the in-process flag. Rewriting the marker would reset its
+        // timestamp, so a workspace built more often than the cooldown window
+        // would push the window forward forever and never retry the tracker
+        // even after the watch service recovered.
+        STARTUP_FAILED.store(true, Ordering::Relaxed);
+        return None;
+    }
     if let Err(error) = spawn_tracker(workspace, socket) {
         tracing::debug!(%error, "failed to start filesystem change tracker");
+        record_startup_failure(socket);
         return None;
     }
     let mut last_error = None;
     for _ in 0..50 {
-        match request_snapshot(socket, outputs, since).await {
-            Ok(snapshot) => return Some(snapshot),
+        match request(socket, outputs, since, command).await {
+            Ok(snapshot) => {
+                clear_startup_failure(socket);
+                return Some(snapshot);
+            }
             // Keep polling only while the daemon is not accepting
             // connections yet, since that is the only state a retry can
             // clear. Any other outcome means the daemon answered, or its
@@ -73,7 +144,54 @@ pub(super) async fn snapshot(
     } else {
         tracing::debug!("filesystem change tracker did not become ready");
     }
+    record_startup_failure(socket);
     None
+}
+
+/// Whether starting the tracker already failed in this process.
+static STARTUP_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// How long to leave the tracker alone after a startup attempt failed.
+///
+/// Short enough that a machine which recovers picks the tracker back up
+/// within a build or two, long enough that a machine which does not stops
+/// paying the startup wait on every invocation.
+const STARTUP_COOLDOWN: Duration = Duration::from_mins(1);
+
+fn startup_already_failed() -> bool {
+    STARTUP_FAILED.load(Ordering::Relaxed)
+}
+
+fn startup_cooldown_path(socket: &Path) -> PathBuf {
+    socket.with_extension("startup-failed")
+}
+
+/// How much of the cooldown from a previous failed startup is left, or `None`
+/// when the tracker is free to be started again.
+fn startup_cooldown_remaining(socket: &Path) -> Option<Duration> {
+    let modified = std::fs::metadata(startup_cooldown_path(socket))
+        .ok()?
+        .modified()
+        .ok()?;
+    let elapsed = modified.elapsed().ok()?;
+    STARTUP_COOLDOWN.checked_sub(elapsed)
+}
+
+fn record_startup_failure(socket: &Path) {
+    STARTUP_FAILED.store(true, Ordering::Relaxed);
+    let path = startup_cooldown_path(socket);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // The marker's timestamp is the whole payload, so an empty file is
+    // enough and a failure to write it only costs the next invocation a
+    // retry.
+    let _ = std::fs::write(&path, b"");
+}
+
+/// Forget a past failure once the tracker answers again.
+fn clear_startup_failure(socket: &Path) {
+    let _ = std::fs::remove_file(startup_cooldown_path(socket));
 }
 
 /// Why a barrier request could not be answered.
@@ -106,6 +224,17 @@ pub(super) enum SnapshotError {
 }
 
 impl SnapshotError {
+    /// True when a daemon that predates this executable does not recognise the
+    /// request.
+    ///
+    /// The daemon outlives the invocation that started it, so upgrading Once
+    /// leaves the old one running until the working copy goes quiet. A request
+    /// it has never heard of is not a failure, it is an older peer, and the
+    /// caller falls back to a request every version understands.
+    fn is_unknown_command(&self) -> bool {
+        matches!(self, Self::Rejected(message) if message.contains("unknown tracker command"))
+    }
+
     /// True when the tracker simply is not listening yet, which is the
     /// normal state before the daemon has been spawned.
     fn is_unreachable(&self) -> bool {
@@ -113,10 +242,20 @@ impl SnapshotError {
     }
 }
 
+#[cfg(test)]
 pub(super) async fn request_snapshot(
     socket: &Path,
     outputs: &[String],
     since: Option<&ChangePosition>,
+) -> std::result::Result<ChangeSnapshot, SnapshotError> {
+    request(socket, outputs, since, "barrier").await
+}
+
+async fn request(
+    socket: &Path,
+    outputs: &[String],
+    since: Option<&ChangePosition>,
+    command: &str,
 ) -> std::result::Result<ChangeSnapshot, SnapshotError> {
     let stream = UnixStream::connect(socket)
         .await
@@ -126,13 +265,13 @@ pub(super) async fn request_snapshot(
         })?;
     let (read, mut write) = stream.into_split();
     let mut raw = serde_json::to_vec(&Request {
-        command: "barrier".to_string(),
+        command: command.to_string(),
         outputs: outputs.to_vec(),
         since: since.cloned(),
     })
     // The request is built from owned local data, so the only way
     // serialisation fails is a bug in this function.
-    .expect("barrier request is serializable");
+    .expect("tracker request is serializable");
     raw.push(b'\n');
     write.write_all(&raw).await.map_err(SnapshotError::Send)?;
     write.shutdown().await.map_err(SnapshotError::Send)?;
@@ -149,9 +288,45 @@ pub(super) async fn request_snapshot(
     response.snapshot.ok_or(SnapshotError::Empty)
 }
 
+/// Shell prologue that closes every descriptor above stderr and then replaces
+/// itself with the daemon.
+///
+/// The ceiling comes from the process's own descriptor limit rather than a
+/// fixed number, because a pipe can sit above any guess and one left open is
+/// enough to hang a harness. It is capped so a host with an enormous limit
+/// does not spend the daemon's startup closing descriptors that cannot exist.
+///
+/// The standard library marks the descriptors it opens close-on-exec, but one
+/// this process inherited from its own parent carries no such mark, and the
+/// daemon is meant to outlive the build that started it. A harness that reads
+/// the build's output through a pipe would then wait forever for an end of
+/// file the daemon still holds open: `shellspec` finished every example and
+/// hung before its summary, because the daemon had inherited two duplicates of
+/// the harness's output file. Closing the range needs `close` on each
+/// descriptor, which the standard library does not expose without unsafe code,
+/// so the shell does it instead.
+const DETACH_AND_EXEC: &str = r#"limit=$(ulimit -n 2>/dev/null || echo 256)
+case "$limit" in
+  unlimited|*[!0-9]*) limit=4096 ;;
+esac
+if [ "$limit" -gt 4096 ]; then limit=4096; fi
+fd=3
+while [ "$fd" -lt "$limit" ]; do
+  eval "exec $fd>&-" 2>/dev/null || true
+  fd=$((fd + 1))
+done
+exec "$@"
+"#;
+
 fn spawn_tracker(workspace: &Path, socket: &Path) -> std::io::Result<()> {
     let launcher = tracker_launcher(socket)?;
-    std::process::Command::new(&launcher)
+    std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(DETACH_AND_EXEC)
+        // `sh -c script name args...` binds `name` to `$0`, so the daemon and
+        // its arguments start at `$1` where `exec "$@"` picks them up.
+        .arg("once-change-tracker")
+        .arg(&launcher)
         .arg("-C")
         .arg(workspace)
         .arg("__change-tracker")

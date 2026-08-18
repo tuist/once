@@ -18,6 +18,73 @@ const MAX_RESOLVER_FILES_BYTES: u64 = 64 * 1024 * 1024;
 pub(crate) struct ExpandedWorkspaceTargets {
     pub(crate) targets: Vec<Target>,
     pub(crate) diagnostics: BTreeMap<String, Vec<crate::Diagnostic>>,
+    pub(crate) record: ResolutionRecord,
+}
+
+/// What resolving a workspace read, so a later invocation can decide whether
+/// resolving it again would produce the same answer.
+///
+/// Deriving a graph from a package manifest is the single most expensive thing
+/// an invocation does when there is nothing to build: it runs the package
+/// manager's own resolver as a subprocess and turns its answer into thousands
+/// of targets. The answer follows from the files listed here and the host state
+/// in the ledger, so recording both is what makes reuse decidable.
+#[derive(Debug, Default, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct ResolutionRecord {
+    /// One entry per resolver that ran.
+    pub resolvers: Vec<ResolverInputs>,
+    /// Everything the resolvers learned from outside the workspace.
+    pub observations: crate::analysis::AnalysisObservations,
+}
+
+/// The workspace files one resolver was given, and the patterns that selected
+/// them.
+///
+/// Both are needed: the paths say which files it read, and the patterns say
+/// which files it *would* have read, so a file appearing later is recognised as
+/// a change to the resolver's input even though it was never read.
+#[derive(Debug, Default, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct ResolverInputs {
+    pub package: String,
+    pub patterns: Vec<String>,
+    pub excludes: Vec<String>,
+    pub paths: Vec<String>,
+}
+
+impl ResolutionRecord {
+    /// Whether any of `changed` could alter what a resolver was given.
+    ///
+    /// A path counts when it is one of the files a resolver read, or when it
+    /// matches a pattern that selects a resolver's inputs. The second case is
+    /// what catches a manifest that did not exist last time.
+    #[must_use]
+    pub fn touched_by(&self, changed: &BTreeSet<String>) -> bool {
+        self.resolvers.iter().any(|resolver| {
+            let prefix = if resolver.package.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", resolver.package)
+            };
+            let patterns = resolver
+                .patterns
+                .iter()
+                .filter_map(|pattern| glob::Pattern::new(pattern).ok())
+                .collect::<Vec<_>>();
+            changed.iter().any(|path| {
+                if resolver
+                    .paths
+                    .iter()
+                    .any(|input| path == input || path == &format!("{prefix}{input}"))
+                {
+                    return true;
+                }
+                let Some(relative) = path.strip_prefix(prefix.as_str()) else {
+                    return false;
+                };
+                patterns.iter().any(|pattern| pattern.matches(relative))
+            })
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -74,15 +141,27 @@ pub(crate) fn expand_workspace_targets(
         return Ok(ExpandedWorkspaceTargets {
             targets,
             diagnostics: BTreeMap::new(),
+            record: ResolutionRecord::default(),
         });
     }
-    AnalysisEngine::resolve_workspace_targets(root, |resolve| {
-        Ok(expand_resolver_targets(root, targets, schemas, resolve))
-    })
-    .map_err(|source| Error::Eval {
-        path: crate::modules::COMBINED_MODULE_PATH.to_string(),
-        message: source.to_string(),
-    })?
+    let mut record = ResolutionRecord::default();
+    let mut expanded =
+        AnalysisEngine::resolve_workspace_targets(root, &mut record.observations, |resolve| {
+            Ok(expand_resolver_targets(
+                root,
+                targets,
+                schemas,
+                resolve,
+                &mut record.resolvers,
+            ))
+        })
+        .map_err(|source| Error::Eval {
+            path: crate::modules::COMBINED_MODULE_PATH.to_string(),
+            message: source.to_string(),
+        })??;
+    expanded.record.resolvers = std::mem::take(&mut record.resolvers);
+    expanded.record.observations = std::mem::take(&mut record.observations);
+    Ok(expanded)
 }
 
 fn expand_resolver_targets<F>(
@@ -90,6 +169,7 @@ fn expand_resolver_targets<F>(
     mut targets: Vec<Target>,
     schemas: &[TargetKindSchema],
     resolve: &mut F,
+    inputs: &mut Vec<ResolverInputs>,
 ) -> Result<ExpandedWorkspaceTargets>
 where
     F: FnMut(&GraphTarget, &BTreeMap<String, String>) -> anyhow::Result<Option<serde_json::Value>>
@@ -111,7 +191,8 @@ where
                 index += 1;
                 continue;
             }
-            let files = resolver_files(root, &target)?;
+            let (files, gathered) = resolver_files_recorded(root, &target)?;
+            inputs.push(gathered);
             let raw = match resolve(&graph_target, &files) {
                 Ok(Some(raw)) => raw,
                 Ok(None) => {
@@ -191,6 +272,7 @@ where
     Ok(ExpandedWorkspaceTargets {
         targets,
         diagnostics,
+        record: ResolutionRecord::default(),
     })
 }
 
@@ -293,6 +375,9 @@ fn resolved_target(owner: &Target, spec: ResolvedTargetSpec) -> Result<Target> {
         visibility: spec.visibility,
         attrs: BTreeMap::new(),
         typed_attrs: spec.attrs,
+        // A resolver's own output is never itself resolved further, so it has
+        // no resolver inputs to gather.
+        resolver_input_exclude: Vec::new(),
     })
 }
 
@@ -325,7 +410,17 @@ fn resolve_root(
     normalize_manifest_target(package, root_ref).map_err(|source| source.to_string())
 }
 
+#[cfg(test)]
 fn resolver_files(root: &Path, target: &Target) -> Result<BTreeMap<String, String>> {
+    Ok(resolver_files_recorded(root, target)?.0)
+}
+
+/// Read a resolver's declared input files, reporting what selected them.
+#[allow(clippy::too_many_lines)]
+fn resolver_files_recorded(
+    root: &Path,
+    target: &Target,
+) -> Result<(BTreeMap<String, String>, ResolverInputs)> {
     let package_root = root.join(&target.package);
     let canonical_package_root =
         std::fs::canonicalize(&package_root).map_err(|source| Error::Read {
@@ -335,24 +430,27 @@ fn resolver_files(root: &Path, target: &Target) -> Result<BTreeMap<String, Strin
     let mut files = BTreeMap::new();
     let mut total_bytes = 0_u64;
     let source_patterns = resolver_source_patterns(target)?;
+    let excludes = resolver_exclude_patterns(target);
     for source_pattern in &source_patterns {
-        let pattern = package_root
-            .join(source_pattern)
-            .to_string_lossy()
-            .into_owned();
-        let entries = glob::glob(&pattern).map_err(|source| {
+        // The same pruning walk the `glob` global uses. A plain glob descends
+        // into every directory under the package, so a `**` pattern over a
+        // repository that keeps a build output tree, a version control
+        // directory, or a vendored dependency tree in place walks all of it to
+        // find a handful of manifests.
+        let matches = crate::analysis::expand_globs_with_excludes(
+            root,
+            &target.package,
+            std::slice::from_ref(source_pattern),
+            &excludes,
+        )
+        .map_err(|source| {
             resolution_error(
                 &target.id(),
-                format!("invalid resolver source glob `{source_pattern}`: {source}"),
+                format!("resolving source glob `{source_pattern}`: {source}"),
             )
         })?;
-        for entry in entries {
-            let path = entry.map_err(|source| {
-                resolution_error(
-                    &target.id(),
-                    format!("resolving source glob `{source_pattern}`: {source}"),
-                )
-            })?;
+        for workspace_relative in matches {
+            let path = root.join(&workspace_relative);
             if !path.is_file() {
                 continue;
             }
@@ -423,7 +521,26 @@ fn resolver_files(root: &Path, target: &Target) -> Result<BTreeMap<String, Strin
             files.insert(key, contents);
         }
     }
-    Ok(files)
+    let gathered = ResolverInputs {
+        package: target.package.clone(),
+        patterns: source_patterns,
+        excludes,
+        paths: files.keys().cloned().collect(),
+    };
+    Ok((files, gathered))
+}
+
+/// Exclude globs for the resolver input walk, from the directory names the
+/// target declares as impossible places for one.
+///
+/// A name becomes a pattern for that directory both directly under the package
+/// and at any depth below it, matching where discovery looks for the same names.
+fn resolver_exclude_patterns(target: &Target) -> Vec<String> {
+    target
+        .resolver_input_exclude
+        .iter()
+        .flat_map(|name| [format!("{name}/**"), format!("**/{name}/**")])
+        .collect()
 }
 
 fn resolver_source_patterns(target: &Target) -> Result<Vec<String>> {
@@ -796,6 +913,7 @@ kind = "rust_library"
             visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
+            resolver_input_exclude: Vec::new(),
         };
 
         // A binary input is skipped rather than failing the load: a resolver
@@ -805,6 +923,56 @@ kind = "rust_library"
         // An oversized input still fails: it signals a misconfigured glob.
         let large_error = resolver_files(temp.path(), &target("large.lock")).unwrap_err();
         assert!(large_error.to_string().contains("per-file limit"));
+    }
+
+    /// A directory the native project declares as an impossible place for an
+    /// input is not descended into, so a manifest that happens to sit in a
+    /// build output tree is neither read nor made part of graph derivation.
+    #[test]
+    fn declared_input_exclusions_are_not_descended_into() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"root\"\n",
+        );
+        std::fs::create_dir_all(temp.path().join("target/debug/build/inner")).unwrap();
+        write(
+            temp.path().join("target/debug/build/inner/Cargo.toml"),
+            "[package]\nname = \"leftover\"\n",
+        );
+        std::fs::create_dir_all(temp.path().join("vendor/kept")).unwrap();
+        write(
+            temp.path().join("vendor/kept/Cargo.toml"),
+            "[package]\nname = \"vendored\"\n",
+        );
+        let mut typed_attrs = BTreeMap::new();
+        typed_attrs.insert(
+            "resolver_inputs".to_string(),
+            AttrValue::List(vec![AttrValue::String("**/Cargo.toml".to_string())]),
+        );
+        let target = Target {
+            package: String::new(),
+            kind: "resolved_set".to_string(),
+            name: "packages".to_string(),
+            deps: Vec::new(),
+            dependency_edges: BTreeMap::new(),
+            srcs: Vec::new(),
+            visibility: Vec::new(),
+            attrs: BTreeMap::new(),
+            typed_attrs,
+            resolver_input_exclude: vec!["target".to_string()],
+        };
+
+        let files = resolver_files(temp.path(), &target).unwrap();
+
+        assert_eq!(
+            files.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "Cargo.toml".to_string(),
+                "vendor/kept/Cargo.toml".to_string()
+            ],
+            "a vendored manifest is an input; one under a build output tree is not"
+        );
     }
 
     #[test]
@@ -827,6 +995,7 @@ kind = "rust_library"
             visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
+            resolver_input_exclude: Vec::new(),
         };
 
         let files = resolver_files(temp.path(), &target).unwrap();
@@ -853,6 +1022,7 @@ kind = "rust_library"
             visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
+            resolver_input_exclude: Vec::new(),
         };
 
         let files = resolver_files(temp.path(), &target).unwrap();
@@ -878,6 +1048,7 @@ kind = "rust_library"
             visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
+            resolver_input_exclude: Vec::new(),
         };
 
         let files = resolver_files(temp.path(), &target).unwrap();
@@ -909,6 +1080,7 @@ kind = "rust_library"
             visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs,
+            resolver_input_exclude: Vec::new(),
         };
 
         let error = resolver_files(temp.path(), &target).unwrap_err();

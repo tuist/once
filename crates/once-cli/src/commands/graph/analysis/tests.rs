@@ -1,3 +1,4 @@
+use super::source_digest_cache::KnownChanges;
 use super::*;
 
 use once_frontend::{AttrValue, Capability, TargetLabel};
@@ -611,6 +612,7 @@ kind = "custom"
         &cache,
         SandboxMode::default(),
         &resolved,
+        &KnownChanges::default(),
     )
     .await
     .unwrap();

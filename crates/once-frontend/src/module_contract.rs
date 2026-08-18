@@ -203,7 +203,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
         ],
         native_project_contract: vec![
             entry(
-                "native_project(target_kind, markers, name = None, target_name = None, docs = \"\", inputs = [], exclude = [], on_match = \"descend\", max_depth = 16, requires_tools = [])",
+                "native_project(target_kind, markers, name = None, target_name = None, docs = \"\", inputs = [], exclude = [], input_exclude = [], on_match = \"descend\", max_depth = 16, requires_tools = [])",
                 "Declare how Once recognizes native project roots and maps each match to one ordinary seed target.",
             ),
             entry(
@@ -221,6 +221,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry(
                 "exclude",
                 "Directory names skipped while discovering native project roots.",
+            ),
+            entry(
+                "input_exclude",
+                "Directory names that cannot hold a resolver input, skipped while gathering them. Separate from exclude: a vendored dependency directory is not a project of its own, yet its manifest is an input to the project that vendored it, while a build output tree or a version control directory is neither.",
             ),
             entry(
                 "explicit target precedence",

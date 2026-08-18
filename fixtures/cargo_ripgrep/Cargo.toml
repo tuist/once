@@ -1,0 +1,25 @@
+# Shape borrowed from ripgrep: a root package that lives beside its workspace
+# members, a binary whose sources sit outside `src/`, `autotests = false` with
+# one explicitly declared integration test, and inherited workspace fields.
+[package]
+name = "ripgrep"
+version = "0.1.0"
+edition.workspace = true
+autotests = false
+
+[[bin]]
+name = "rg"
+path = "crates/core/main.rs"
+
+[[test]]
+name = "integration"
+path = "tests/tests.rs"
+
+[dependencies]
+grep = { version = "0.1.0", path = "crates/grep" }
+
+[workspace]
+members = ["crates/grep", "crates/ignore"]
+
+[workspace.package]
+edition = "2021"
