@@ -8,6 +8,19 @@ metadata:
 spec:
   instances: {{ .Values.postgres.instances }}
   imageName: {{ .Values.postgres.imageName }}
+  # No PodDisruptionBudget. CNPG's default emits a `<cluster>-primary` PDB
+  # with `minAvailable: 1` selecting the primary; at a single instance the
+  # primary is the only pod, so `disruptionsAllowed` is structurally 0 and
+  # the pod can never be evicted. A CAPI node drain then blocks forever,
+  # because the cluster's ClusterClass sets `nodeDrainTimeoutSeconds: 0` so
+  # a drain never kills an in-flight CI job. This pod wedged the deletion of
+  # a `tuist-md-processor` Machine from 2026-07-31.
+  #
+  # CNPG documents disabling PDBs as the right setting for a cluster that is
+  # not run for availability, which is this one: the database is empty and
+  # unused (no migrations, no `Repo.` call sites), kept only because the app
+  # still starts the Repo unconditionally.
+  enablePDB: false
   storage:
     size: {{ .Values.postgres.storageSize }}
     storageClass: {{ .Values.postgres.storageClass }}

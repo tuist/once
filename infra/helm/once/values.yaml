@@ -106,6 +106,10 @@ postgres:
   # replica pod and its 20Gi volume. Dropping Postgres entirely needs app
   # changes (Repo is started unconditionally and runtime.exs requires
   # DATABASE_URL), so that is left for the larger restructure.
+  #
+  # A single instance also requires `enablePDB: false` on the Cluster, or
+  # the pod becomes unevictable and deadlocks CAPI node drains. See the
+  # comment in templates/postgres-cluster.yaml.
   enabled: true
   instances: 1
   storageSize: 20Gi
