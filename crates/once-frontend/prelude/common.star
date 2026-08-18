@@ -52,7 +52,7 @@ def source_reference(system, symbol, url, use_when, content_digest = None):
         "content_digest": content_digest,
     }
 
-def native_project(target_kind, markers, name = None, target_name = None, docs = "", inputs = [], exclude = [], on_match = "descend", max_depth = 16, requires_tools = []):
+def native_project(target_kind, markers, name = None, target_name = None, docs = "", inputs = [], exclude = [], input_exclude = [], on_match = "descend", max_depth = 16, requires_tools = []):
     return {
         "_once_native_project": True,
         "target_kind": target_kind,
@@ -62,6 +62,7 @@ def native_project(target_kind, markers, name = None, target_name = None, docs =
         "markers": markers,
         "inputs": inputs,
         "exclude": exclude,
+        "input_exclude": input_exclude,
         "on_match": on_match,
         "max_depth": max_depth,
         "requires_tools": requires_tools,

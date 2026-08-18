@@ -27,6 +27,13 @@ pub(super) struct BuildReceipt {
     environment: BTreeMap<String, Option<String>>,
     host_paths: BTreeMap<String, Option<PathFingerprint>>,
     source_digests: BTreeMap<String, Digest>,
+    /// What this build produced, by content.
+    ///
+    /// A build does not wait for the platform to report the writes it just
+    /// made, so the next invocation is the one told about them. This is how it
+    /// recognises them as ours rather than as someone else's edit.
+    #[serde(default)]
+    produced: BTreeMap<String, Digest>,
     executable_fingerprint: PathFingerprint,
     position: ChangePosition,
     record: CapabilityRunRecord,
@@ -36,6 +43,7 @@ pub(super) struct Observations<'a> {
     pub environment: &'a BTreeMap<String, Option<String>>,
     pub host_paths: &'a BTreeSet<PathBuf>,
     pub source_digests: &'a BTreeMap<String, Digest>,
+    pub produced: &'a BTreeMap<String, Digest>,
 }
 
 pub(super) async fn read(
@@ -81,7 +89,13 @@ pub(super) async fn load(
         )
     {
         Some("source change")
-    } else if receipt.position.output_generation != snapshot.position.output_generation {
+    } else if receipt.position.output_generation != snapshot.position.output_generation
+        && !output_changes_are_our_own(
+            workspace,
+            &receipt.produced,
+            snapshot.output_changes.as_deref(),
+        )
+    {
         Some("output change")
     } else if !changed_environment.is_empty() {
         Some("environment")
@@ -153,6 +167,7 @@ pub(super) async fn store(
         environment: observations.environment.clone(),
         host_paths: path_fingerprint::capture(observations.host_paths),
         source_digests: observations.source_digests.clone(),
+        produced: observations.produced.clone(),
         executable_fingerprint,
         position: snapshot.position.clone(),
         record: record.clone(),
@@ -225,6 +240,49 @@ fn changed_environment(expected: &BTreeMap<String, Option<String>>) -> Vec<Strin
         .filter(|(name, expected)| std::env::var(name).ok() != **expected)
         .map(|(name, _)| name.clone())
         .collect()
+}
+
+/// Whether every reported output change is one this receipt's own build made.
+///
+/// A build does not wait for the platform to report the writes it just made:
+/// after a compiler writes its output that report takes hundreds of
+/// milliseconds to arrive, and waiting for it would put that on the end of
+/// every build. The writes are reported to the next invocation instead, which
+/// recognises them here by hashing what is on disk and comparing against what
+/// the build recorded producing.
+///
+/// Anything else, including a path inside an output that the build did not
+/// record, is a change by someone else and invalidates the receipt.
+fn output_changes_are_our_own(
+    workspace: &Path,
+    produced: &BTreeMap<String, Digest>,
+    changes: Option<&[String]>,
+) -> bool {
+    let Some(changes) = changes else {
+        return false;
+    };
+    if changes.is_empty() {
+        return true;
+    }
+    if produced.is_empty() {
+        return false;
+    }
+    let mut affected = BTreeSet::new();
+    for path in changes {
+        let Some(output) = produced
+            .keys()
+            .find(|output| *output == path || path.starts_with(&format!("{output}/")))
+        else {
+            return false;
+        };
+        affected.insert(output.clone());
+    }
+    let recorded = crate::commands::graph::analysis::RecordedDigests::open(workspace);
+    affected.iter().all(|output| {
+        produced
+            .get(output)
+            .is_some_and(|expected| recorded.output_matches(workspace, output, *expected))
+    })
 }
 
 fn source_changes_match(
@@ -323,6 +381,7 @@ mod tests {
                 environment: &environment,
                 host_paths: &no_host_paths,
                 source_digests: &source_digests,
+                produced: &BTreeMap::new(),
             },
             &record(),
         )
@@ -387,6 +446,7 @@ mod tests {
                 environment: &environment,
                 host_paths: &host_paths,
                 source_digests: &source_digests,
+                produced: &BTreeMap::new(),
             },
             &record(),
         )
@@ -458,6 +518,7 @@ mod tests {
                 environment: &environment,
                 host_paths: &host_paths,
                 source_digests: &source_digests,
+                produced: &BTreeMap::new(),
             },
             &record(),
         )

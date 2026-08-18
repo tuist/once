@@ -16,8 +16,11 @@
 //! parent's input digest composes its deps' action digests.
 
 mod actions;
+mod analysis_memo;
+mod resolution_cache;
 mod scheduler;
 mod source_digest_cache;
+mod target_outcomes;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::future::Future;
@@ -30,15 +33,52 @@ use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     EvidenceCacheState, InputFingerprintManifest, ResourceLimits, ResourcePool, SandboxMode,
 };
-use once_frontend::analysis::{AnalysisEngine, AnalysisOptions, CachedToolCommand};
+use once_frontend::analysis::{
+    AnalysisEngine, AnalysisOptions, CachedToolCommand, CommandPolicy, UnchangedWorkspace,
+};
 use once_frontend::ConfigurationOverrides;
 use once_frontend::GraphTarget;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use self::actions::{run_declared_actions, validate_declared_actions, DeclaredActionValidation};
+use self::analysis_memo::AnalysisMemo;
+use self::resolution_cache::ResolutionCache;
 use self::scheduler::{BuildScheduler, DependencyInputs};
-use self::source_digest_cache::SourceDigestCache;
+use self::source_digest_cache::{KnownChanges, SourceDigestCache};
+use self::target_outcomes::TargetOutcomes;
+use crate::commands::change_tracker::{ChangePosition, ChangeSnapshot};
+
+pub(super) use self::source_digest_cache::stored_position as recorded_digest_position;
+pub(super) use self::source_digest_cache::SourceDigestCache as RecordedDigests;
+
+/// Turn a watcher snapshot into a statement about the recorded digests.
+///
+/// The snapshot answers "what changed since the position I asked about". That
+/// is only useful here when the position asked about is at or before the one
+/// the digests were written at, and when the watcher could actually enumerate
+/// the changes rather than reporting that it lost track.
+pub(super) fn known_changes(
+    snapshot: Option<&ChangeSnapshot>,
+    recorded_at: Option<&ChangePosition>,
+) -> KnownChanges {
+    let (Some(snapshot), Some(recorded_at)) = (snapshot, recorded_at) else {
+        return KnownChanges::Unknown;
+    };
+    if snapshot.position.instance_id != recorded_at.instance_id {
+        return KnownChanges::Unknown;
+    }
+    let (Some(sources), Some(outputs)) = (
+        snapshot.source_changes.as_ref(),
+        snapshot.output_changes.as_ref(),
+    ) else {
+        return KnownChanges::Unknown;
+    };
+    KnownChanges::Since {
+        sources: sources.iter().cloned().collect(),
+        outputs: outputs.iter().cloned().collect(),
+    }
+}
 
 use super::configuration::ResolvedConfiguration;
 
@@ -102,7 +142,7 @@ pub(super) struct BuildOutcome {
     pub cached_results: Vec<ActionResult>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub(super) struct AvailableInput {
     pub blob_digest: Digest,
     pub producer_action_digest: Digest,
@@ -137,7 +177,26 @@ pub(super) struct BuildSession {
     cached_tool_commands: Arc<[CachedToolCommand]>,
     resources: Arc<ResourcePool>,
     source_digest_cache: SourceDigestCache,
+    analysis_memo: AnalysisMemo,
+    /// Present when this session derived (or reused) a graph that is worth
+    /// remembering. Absent for commands handed a graph they did not derive.
+    resolution: Option<Resolution>,
+    /// What a watcher says cannot have moved, so a stored analysis is not
+    /// re-checked against packages nothing touched.
+    unchanged: Arc<UnchangedWorkspace>,
+    /// The same statement in the form the outcome store reads, which needs the
+    /// paths themselves rather than a question about patterns.
+    changes: Arc<KnownChanges>,
+    target_outcomes: Arc<TargetOutcomes>,
     sandbox: SandboxMode,
+}
+
+struct Resolution {
+    cache: ResolutionCache,
+    key: Option<String>,
+    /// What deriving the graph read, or `None` when it was reused rather than
+    /// derived and so is already recorded.
+    derivation: Option<once_frontend::ResolutionRecord>,
 }
 
 impl BuildSession {
@@ -146,6 +205,7 @@ impl BuildSession {
         cache: &CacheProvider,
         sandbox: SandboxMode,
         resolved: &ResolvedConfiguration,
+        changes: &KnownChanges,
     ) -> Result<Self> {
         let workspace_targets =
             once_frontend::load_workspace_with_configuration(workspace, &resolved.configuration)
@@ -157,9 +217,26 @@ impl BuildSession {
         let analyzer =
             AnalysisEngine::for_target_kinds(workspace, AnalysisOptions::default(), &target_kinds)?
                 .with_configuration(resolved.configuration.clone(), resolved.path_suffix.clone());
-        let graph = analyzer
-            .load_graph_workspace_from_targets(workspace, workspace_targets)
-            .context("loading graph")?;
+        let resolution_cache = ResolutionCache::open(workspace);
+        let memo = AnalysisMemo::open(workspace);
+        let resolution_key = resolution_cache::key(
+            analyzer.module_source(),
+            workspace,
+            resolved.digest,
+            memo.executable_identity(),
+            &workspace_targets,
+        );
+        let reused = resolution_key
+            .as_deref()
+            .and_then(|key| resolution_cache.reuse(&analyzer, workspace, key, changes));
+        let (graph, derivation) = if let Some(graph) = reused {
+            (graph, None)
+        } else {
+            let (graph, record) = analyzer
+                .load_graph_workspace_from_targets_recorded(workspace, workspace_targets)
+                .context("loading graph")?;
+            (graph, Some(record))
+        };
         let resolved_tools = resolve_graph_tools(workspace, &graph).await?;
         let analyzer = analyzer.with_tool_cache(
             resolved_tools.paths.clone(),
@@ -169,6 +246,11 @@ impl BuildSession {
         session.tool_paths = Arc::new(resolved_tools.paths);
         session.tool_cache_fingerprint = resolved_tools.fingerprint;
         session.cached_tool_commands = resolved_tools.commands.into();
+        session.resolution = Some(Resolution {
+            cache: resolution_cache,
+            key: resolution_key,
+            derivation,
+        });
         Ok(session)
     }
 
@@ -247,6 +329,17 @@ impl BuildSession {
             cached_tool_commands: Arc::from([]),
             resources: Arc::new(ResourcePool::new(ResourceLimits::default())),
             source_digest_cache: SourceDigestCache::open(workspace),
+            analysis_memo: AnalysisMemo::open(workspace),
+            resolution: None,
+            unchanged: Arc::new(UnchangedWorkspace::Unknown),
+            changes: Arc::new(KnownChanges::Unknown),
+            target_outcomes: Arc::new(TargetOutcomes::open(
+                workspace,
+                "build",
+                sandbox,
+                "",
+                recorded_digest_position(workspace).as_ref(),
+            )),
             sandbox,
         }
     }
@@ -254,6 +347,56 @@ impl BuildSession {
     pub(super) fn with_resource_limits(mut self, limits: ResourceLimits) -> Self {
         self.resources = Arc::new(ResourcePool::new(limits));
         self
+    }
+
+    /// Tell this session what a watcher says moved since the recorded digests
+    /// were written, so unchanged paths need not be looked at again.
+    pub(super) fn with_known_changes(&mut self, changes: KnownChanges) {
+        self.unchanged = Arc::new(changes.unchanged_workspace());
+        self.changes = Arc::new(changes.clone());
+        self.source_digest_cache.with_known_changes(changes);
+    }
+
+    /// Write back what building this graph produced, against the position it
+    /// describes, so the next invocation can skip the targets nothing touched.
+    pub(super) fn record_target_outcomes(&self, position: Option<&ChangePosition>) {
+        self.target_outcomes.save(position);
+    }
+
+    /// The digests recorded for a build's outputs, so a receipt can name what
+    /// it produced and recognise those writes when the watcher reports them.
+    pub(super) fn recorded_output_digests(&self, outputs: &[String]) -> BTreeMap<String, Digest> {
+        outputs
+            .iter()
+            .filter_map(|path| {
+                self.source_digest_cache
+                    .recorded_output_digest(path)
+                    .map(|digest| (path.clone(), digest))
+            })
+            .collect()
+    }
+
+    /// Stamp the watcher position the recorded digests now describe.
+    pub(super) fn record_digest_position(&self, position: Option<ChangePosition>) {
+        self.source_digest_cache.set_position(position);
+    }
+
+    /// Remember the derived graph against the position it describes, so the
+    /// next invocation can skip deriving it.
+    pub(super) fn record_resolution(&self, position: Option<&ChangePosition>) {
+        let Some(resolution) = &self.resolution else {
+            return;
+        };
+        let (Some(key), Some(record)) = (resolution.key.as_deref(), resolution.derivation.as_ref())
+        else {
+            return;
+        };
+        let graph = self
+            .targets
+            .values()
+            .map(|target| target.as_ref().clone())
+            .collect::<Vec<_>>();
+        resolution.cache.store(key, position, &graph, record);
     }
 
     pub(super) fn target(&self, target_id: &str) -> Result<&GraphTarget> {
@@ -414,16 +557,17 @@ impl BuildSession {
                 (role.clone(), providers)
             })
             .collect::<BTreeMap<_, _>>();
-        let analysis = self
-            .analyzer
-            .analyze_target_capability_with_shared_dependency_roles(
-                target,
-                &self.workspace,
-                &dep_providers,
-                &dependency_providers,
-                capability,
-            )
-            .with_context(|| format!("analysing {}", target.label.id))?;
+        let analysis = analyze_with_memo(
+            &self.analyzer,
+            &self.analysis_memo,
+            &self.unchanged,
+            None,
+            target,
+            &self.workspace,
+            &dep_providers,
+            &dependency_providers,
+            capability,
+        )?;
         Ok(AnalyzedCapability {
             analysis,
             dep_action_digests,
@@ -567,6 +711,10 @@ impl BuildSession {
             module_source_digest: Digest::of_bytes(self.analyzer.module_source().as_bytes()),
             tool_paths: Arc::clone(&self.tool_paths),
             source_digest_cache: self.source_digest_cache.clone(),
+            analysis_memo: self.analysis_memo.clone(),
+            unchanged: Arc::clone(&self.unchanged),
+            changes: Arc::clone(&self.changes),
+            target_outcomes: Arc::clone(&self.target_outcomes),
             sandbox: self.sandbox,
             resources: Arc::clone(&self.resources),
         }
@@ -576,13 +724,7 @@ impl BuildSession {
         let Some(fingerprint) = self.tool_cache_fingerprint else {
             return;
         };
-        let commands = match self.analyzer.cacheable_tool_commands() {
-            Ok(commands) => commands,
-            Err(error) => {
-                tracing::debug!(%error, "failed to read cached graph tool commands");
-                return;
-            }
-        };
+        let commands = self.analyzer.cacheable_tool_commands();
         if commands.as_slice() == self.cached_tool_commands.as_ref() {
             return;
         }
@@ -949,8 +1091,79 @@ struct BuildContext {
     pub module_source_digest: Digest,
     pub tool_paths: Arc<BTreeMap<String, String>>,
     pub source_digest_cache: SourceDigestCache,
+    pub analysis_memo: AnalysisMemo,
+    pub unchanged: Arc<UnchangedWorkspace>,
+    pub changes: Arc<KnownChanges>,
+    pub target_outcomes: Arc<TargetOutcomes>,
     pub sandbox: SandboxMode,
     pub resources: Arc<ResourcePool>,
+}
+
+/// Analyse one target, reusing a stored analysis when its recorded answers
+/// still hold.
+///
+/// Reuse is decided in two steps, and both have to pass. The name says the
+/// call is the same one: same target definition, same dependency providers,
+/// same capability, options, configuration, prelude, and executable. The
+/// recorded answers say the host has not moved under it. Either check failing
+/// means running the implementation, which is also what happens when there is
+/// nothing stored.
+#[allow(clippy::too_many_arguments)]
+fn analyze_with_memo(
+    analyzer: &AnalysisEngine,
+    memo: &AnalysisMemo,
+    unchanged: &UnchangedWorkspace,
+    precomputed_key: Option<&str>,
+    target: &GraphTarget,
+    workspace: &Path,
+    dep_providers: &[Arc<JsonValue>],
+    dependency_providers: &BTreeMap<String, Vec<Arc<JsonValue>>>,
+    capability: &str,
+) -> Result<once_frontend::analysis::AnalysisResult> {
+    let key = if memo.is_enabled() {
+        precomputed_key.map(ToOwned::to_owned).or_else(|| {
+            analyzer.analysis_key(
+                target,
+                workspace,
+                dep_providers,
+                dependency_providers,
+                capability,
+                memo.executable_identity(),
+            )
+        })
+    } else {
+        None
+    };
+    if let Some((analysis, observations)) = key.as_deref().and_then(|key| memo.read(key)) {
+        if analyzer.observations_hold(workspace, &observations, CommandPolicy::Rerun, unchanged) {
+            tracing::trace!(target = %target.label.id, capability, "reused a stored analysis");
+            return Ok(analysis);
+        }
+        tracing::debug!(
+            target = %target.label.id,
+            capability,
+            stale = ?analyzer.first_stale_observation(
+                workspace,
+                &observations,
+                CommandPolicy::Rerun,
+                unchanged,
+            ),
+            "stored analysis no longer describes the host"
+        );
+    }
+    let analysis = analyzer
+        .analyze_target_capability_with_shared_dependency_roles(
+            target,
+            workspace,
+            dep_providers,
+            dependency_providers,
+            capability,
+        )
+        .with_context(|| format!("analysing {}", target.label.id))?;
+    if let Some(key) = key.as_deref() {
+        memo.write(key, &analysis);
+    }
+    Ok(analysis)
 }
 
 async fn build_one(
@@ -965,6 +1178,10 @@ async fn build_one(
         module_source_digest,
         tool_paths,
         source_digest_cache,
+        analysis_memo,
+        unchanged,
+        changes,
+        target_outcomes,
         sandbox,
         resources,
     } = context;
@@ -977,6 +1194,27 @@ async fn build_one(
 
     ensure_graph_target_valid(&target)?;
     let target_id = target.label.id.clone();
+    // Names this build: the same target definition, reached through the same
+    // dependency outcomes, analysed by the same code against the same
+    // configuration. Computed once and used both to look for a recorded
+    // outcome and, failing that, for a recorded analysis.
+    let analysis_key = analyzer.analysis_key(
+        &target,
+        &workspace,
+        &providers,
+        &providers_by_role,
+        "build",
+        analysis_memo.executable_identity(),
+    );
+    if let Some(key) = analysis_key
+        .as_deref()
+        .map(|key| target_outcomes::key(key, &action_digests))
+    {
+        if let Some(outcome) = target_outcomes.reuse(&target, &key, &changes) {
+            target_outcomes.carry_forward(&target_id);
+            return Ok((target_id, outcome));
+        }
+    }
     tracing::trace!(
         target = %target_id,
         dep_providers = providers.len(),
@@ -988,19 +1226,28 @@ async fn build_one(
     // both reach the same `GraphTarget` without deep-cloning it.
     let analysis_target = Arc::clone(&target);
     let analysis_workspace = workspace.clone();
+    let memo_key = analysis_key.clone();
     let analysis = tokio::task::spawn_blocking(move || {
-        analyzer
-            .analyze_target_capability_with_shared_dependency_roles(
-                &analysis_target,
-                &analysis_workspace,
-                &providers,
-                &providers_by_role,
-                "build",
-            )
-            .with_context(|| format!("analysing {}", analysis_target.label.id))
+        analyze_with_memo(
+            &analyzer,
+            &analysis_memo,
+            &unchanged,
+            memo_key.as_deref(),
+            &analysis_target,
+            &analysis_workspace,
+            &providers,
+            &providers_by_role,
+            "build",
+        )
     })
     .await
     .context("joining graph analysis task")??;
+    let observations = analysis.observations.clone();
+    let declared_inputs = analysis
+        .actions
+        .iter()
+        .flat_map(|action| action.inputs.iter().cloned())
+        .collect::<BTreeSet<_>>();
     tracing::trace!(
         target = %target_id,
         declared_actions = analysis.actions.len(),
@@ -1023,6 +1270,12 @@ async fn build_one(
         &resources,
     )
     .await?;
+    if let Some(key) = analysis_key
+        .as_deref()
+        .map(|key| target_outcomes::key(key, &action_digests))
+    {
+        target_outcomes.record(&target, key, &observations, &declared_inputs, &outcome);
+    }
     Ok((target_id, outcome))
 }
 

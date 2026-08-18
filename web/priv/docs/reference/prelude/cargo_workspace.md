@@ -16,8 +16,17 @@ snapshots locked external package trees from Cargo's local cache into each
 target's output. The repository stays unchanged. A pre-existing vendored source
 directory can be selected explicitly.
 Targets whose `required-features` are not selected are omitted, matching
-Cargo's target selection. Generated test targets include development
-dependencies. Cargo target names are normalized to valid Rust crate
+Cargo's target selection. Generated tests, benchmarks, and examples include
+development dependencies. Each generated test runs from its own package root
+and receives a `CARGO_BIN_EXE_<name>` entry for every binary in its package,
+matching what Cargo gives an integration test. Entries in the `[env]` table of
+Cargo configuration reach the compiler, the build scripts, the test processes,
+and `once run`.
+
+Packages are compiled once for the execution host. A second, host-only build
+of a package appears only when it would differ: when `target` names something
+other than the host, or when `dep_rustc_flags` carries a panic strategy that
+compiler plugins and build scripts must not inherit. Cargo target names are normalized to valid Rust crate
 identifiers while binary names retain their manifest spelling. Multi-output
 libraries emit one target per declared Rust library crate type. Cargo's
 workspace member list determines which packages are first-party, so local path
@@ -38,6 +47,7 @@ dependencies outside that list remain ordinary dependency targets.
 | `no_default_features` | bool | no | `false` | Disable default Cargo features |
 | `target` | string | no | host | Destination Rust target triple |
 | `dep_rustc_flags` | list&lt;string&gt; | no | `[]` | Additional flags for external packages |
+| `build_script_tools` | list&lt;string&gt; | no | `cmake`, `nasm`, `perl`, `pkg-config`, `protoc`, `python3` | Host tool names package build scripts may invoke; each is resolved on the search path during graph loading |
 
 ## Providers
 

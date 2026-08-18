@@ -1,0 +1,12 @@
+# Shape borrowed from fd: the package is published as `fd-find` while its
+# binary is `fd`, so the derived target ids carry both names.
+[package]
+name = "fd-find"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fd"
+path = "src/main.rs"
+
+[workspace]

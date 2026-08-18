@@ -1,0 +1,25 @@
+# Shape borrowed from bat: one package with a library, several binaries, an
+# example, and integration tests that spawn a program found on the search
+# path. It also resolves a locked third-party package from a checked-in
+# vendor directory, so the graph covers dependency reconciliation offline.
+[package]
+name = "bat"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bat"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bat"
+path = "src/bin/bat.rs"
+
+[[bin]]
+name = "cat"
+path = "src/bin/cat.rs"
+
+[dependencies]
+itoa = "1"
+
+[workspace]

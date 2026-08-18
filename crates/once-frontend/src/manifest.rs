@@ -369,6 +369,8 @@ impl TargetToml {
             visibility: self.visibility,
             attrs,
             typed_attrs,
+            // A target written in a manifest has no native project behind it.
+            resolver_input_exclude: Vec::new(),
         })
     }
 }

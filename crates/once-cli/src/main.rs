@@ -41,7 +41,11 @@ async fn main() -> ExitCode {
         "session started"
     );
 
-    match Box::pin(dispatch::dispatch(cli).instrument(session)).await {
+    let outcome = Box::pin(dispatch::dispatch(cli).instrument(session)).await;
+    // The cache hangs off a process-wide map that nothing drops, so the run
+    // has to hand back what it learned before it ends.
+    once_frontend::flush_host_tree_digest_caches();
+    match outcome {
         Ok(code) => {
             tracing::info!(session_id = %session_id, exit_code = ?code, "session finished");
             code

@@ -51,6 +51,7 @@ package without synthetic target collisions.
 | `no_default_features` | bool | no | `false` | Pass `--no-default-features` to Cargo metadata |
 | `target` | string | no | host target | Rust target triple passed to Cargo as `--filter-platform` |
 | `dep_rustc_flags` | list&lt;string&gt; | no | `[]` | Additional rustc flags applied to resolved crate builds. Panic strategy flags are stripped for procedural macro and host-tool crates so they keep the compiler's unwind strategy |
+| `build_script_tools` | list&lt;string&gt; | no | `cmake`, `nasm`, `perl`, `pkg-config`, `protoc`, `python3` | Host tool names package build scripts may invoke; each is resolved on the search path during graph loading |
 | `_cargo_resolved` | bool | resolver-owned | `false` | Marks an owner whose locked packages were expanded into graph targets |
 | `_cargo_workspace_deps` | map&lt;string, list&lt;string&gt;&gt; | resolver-owned | `{}` | Records generated direct dependency target names by workspace package |
 | `_cargo_workspace_dep_aliases` | map&lt;string, map&lt;string, string&gt;&gt; | resolver-owned | `{}` | Records Cargo dependency renames by workspace package and generated target |

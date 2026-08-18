@@ -5,6 +5,12 @@ Describe 'rust graph'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
+  rust_toolchain_unavailable() {
+    command -v cargo >/dev/null 2>&1 || return 0
+    command -v rustc >/dev/null 2>&1 || return 0
+    return 1
+  }
+
   create_failing_build_script_fixture() {
     mkdir -p "$WORKSPACE/crates/failing/src"
     cat > "$WORKSPACE/once.toml" <<'TOML'

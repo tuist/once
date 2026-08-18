@@ -275,6 +275,7 @@ mod tests {
             visibility: Vec::new(),
             attrs: BTreeMap::new(),
             typed_attrs: BTreeMap::new(),
+            resolver_input_exclude: Vec::new(),
         }
     }
 

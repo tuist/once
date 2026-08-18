@@ -620,7 +620,7 @@ fn tool_version_commands_can_seed_a_later_analysis_engine() {
     let first = HostCache::with_tool_cache(paths.clone(), Vec::new());
 
     assert_eq!(first.command(&argv, &env, None, false).unwrap(), "demo 1.0");
-    let commands = first.cacheable_tool_commands().unwrap();
+    let commands = first.cacheable_tool_commands();
     assert_eq!(commands.len(), 1);
 
     let seeded = HostCache::with_tool_cache(paths, commands);
@@ -1142,6 +1142,52 @@ run_action(argv = ["echo"] + matches, outputs = ["out"])
         store.actions[0].argv,
         vec!["echo".to_string(), "packages/app/lib/app.ex".to_string()]
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn glob_skips_a_symlink_whose_target_is_gone() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("packages/app");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("app.rs"), "").unwrap();
+    std::os::unix::fs::symlink("gone.rs", package.join("dangling.rs")).unwrap();
+
+    let matches = expand_globs(workspace.path(), "packages/app", &["*.rs".to_string()]).unwrap();
+
+    assert_eq!(matches, vec!["packages/app/app.rs".to_string()]);
+}
+
+#[cfg(unix)]
+#[test]
+fn glob_skips_a_missing_symlink_target_outside_the_workspace() {
+    let workspace = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    let package = workspace.path().join("packages/app");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("app.rs"), "").unwrap();
+    // Test suites and interrupted tooling leave links like this behind. The
+    // target is gone, so the match names nothing and is dropped; refusing to
+    // load the graph would make the whole workspace unusable.
+    std::os::unix::fs::symlink(outside.path().join("gone.rs"), package.join("stale.rs")).unwrap();
+
+    let matches = expand_globs(workspace.path(), "packages/app", &["*.rs".to_string()]).unwrap();
+
+    assert_eq!(matches, vec!["packages/app/app.rs".to_string()]);
+}
+
+#[cfg(unix)]
+#[test]
+fn glob_skips_a_missing_relative_symlink_target_inside_the_workspace() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("packages/app");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("app.rs"), "").unwrap();
+    std::os::unix::fs::symlink("../shared/generated.rs", package.join("generated.rs")).unwrap();
+
+    let matches = expand_globs(workspace.path(), "packages/app", &["*.rs".to_string()]).unwrap();
+
+    assert_eq!(matches, vec!["packages/app/app.rs".to_string()]);
 }
 
 #[cfg(unix)]

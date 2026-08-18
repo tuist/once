@@ -12,19 +12,32 @@ use starlark::syntax::{AstModule, Dialect};
 use starlark::values::dict::{AllocDict, DictRef};
 use starlark::values::Value;
 
-use super::globals::globals_for_prelude;
+use sha2::Digest as _;
+
+use super::globals::{globals_for_prelude, UnchangedWorkspace};
 use super::store::{
-    with_active_store, AnalysisStore, CachedToolCommand, DeclaredAction, HostCache,
+    with_active_store, AnalysisObservations, AnalysisStore, CachedToolCommand, CommandPolicy,
+    DeclaredAction, HostCache,
 };
 use super::values::{attr_value_to_starlark, json_to_value, value_to_json};
 use crate::graph::{Diagnostic, GraphTarget, TargetKindSchema};
 use crate::Target;
 
+/// Bump when the meaning of an analysis key or a stored analysis changes in a
+/// way an older record would not notice.
+const ANALYSIS_KEY_SCHEMA: &str = "once.analysis.v1";
+
+/// Resolve a workspace root to one spelling, so two paths naming the same tree
+/// through a symlink or a relative prefix do not get separate records.
+fn canonical_root(root: &Path) -> PathBuf {
+    std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
+}
+
 type ResolverCallback<'a> =
     dyn FnMut(&GraphTarget, &BTreeMap<String, String>) -> Result<Option<JsonValue>> + 'a;
 
 /// Extra execution context supplied by command surfaces.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct AnalysisOptions {
     /// Request a visible runtime surface for run capabilities when the target
     /// kind supports one.
@@ -46,6 +59,10 @@ pub struct AnalysisResult {
     pub provider: JsonValue,
     /// Workspace-relative outputs declared during this analysis.
     pub declared_outputs: Vec<String>,
+    /// Everything the impl read from outside itself. Empty when the result was
+    /// replayed rather than computed, since the answers were just checked.
+    #[serde(skip)]
+    pub observations: AnalysisObservations,
 }
 
 #[derive(Debug)]
@@ -115,6 +132,7 @@ impl AnalysisEngine {
 
     pub(crate) fn resolve_workspace_targets<T>(
         root: &Path,
+        observations: &mut AnalysisObservations,
         operation: impl FnOnce(&mut ResolverCallback<'_>) -> Result<T>,
     ) -> Result<T> {
         let source = crate::modules::combined_module_source_for_workspace(root)?;
@@ -124,6 +142,7 @@ impl AnalysisEngine {
             root,
             &HostCache::default(),
             &crate::manifest::load_workspace_configuration(root)?,
+            observations,
             operation,
         )
     }
@@ -226,7 +245,21 @@ impl AnalysisEngine {
         root: &Path,
         targets: Vec<Target>,
     ) -> Result<Vec<GraphTarget>> {
-        crate::graph::load_graph_workspace_with_compiled_schemas_and_targets(
+        Ok(self
+            .load_graph_workspace_from_targets_recorded(root, targets)?
+            .0)
+    }
+
+    /// Load the graph and report what deriving it read.
+    ///
+    /// The record is what lets a caller decide, next time, whether deriving it
+    /// again could produce anything different.
+    pub fn load_graph_workspace_from_targets_recorded(
+        &self,
+        root: &Path,
+        targets: Vec<Target>,
+    ) -> Result<(Vec<GraphTarget>, crate::ResolutionRecord)> {
+        crate::graph::load_graph_workspace_with_compiled_schemas_and_targets_recorded(
             root,
             &self.target_kind_schemas,
             targets,
@@ -267,7 +300,8 @@ impl AnalysisEngine {
         self
     }
 
-    pub fn cacheable_tool_commands(&self) -> Result<Vec<CachedToolCommand>> {
+    #[must_use]
+    pub fn cacheable_tool_commands(&self) -> Vec<CachedToolCommand> {
         self.host_cache.cacheable_tool_commands()
     }
 
@@ -357,6 +391,97 @@ impl AnalysisEngine {
             &dep_providers,
             &dependency_providers,
             capability,
+        )
+    }
+
+    /// Name for one analysis: the same name means the same call, so a stored
+    /// result under it describes this exact question.
+    ///
+    /// Everything that reaches the impl has to be in here. The target
+    /// definition and its dependencies' providers are the arguments; the
+    /// capability, the options, and the configuration select which branch it
+    /// takes; the workspace root and the module source say which code runs
+    /// against which tree. The running executable is in it too, because the
+    /// globals the impl calls are implemented here, in Rust, and their
+    /// behaviour can change with no Starlark edit to show for it.
+    ///
+    /// What is deliberately absent is the resolved tool paths and any cached
+    /// discovery command output: those reach the impl only through globals,
+    /// whose answers are recorded as observations and checked on replay.
+    pub fn analysis_key(
+        &self,
+        target: &GraphTarget,
+        workspace_root: &Path,
+        dep_providers: &[Arc<JsonValue>],
+        dependency_providers: &BTreeMap<String, Vec<Arc<JsonValue>>>,
+        capability: &str,
+        executable_identity: &str,
+    ) -> Option<String> {
+        let mut hasher = sha2::Sha256::new();
+        let mut part = |bytes: &[u8]| {
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        };
+        part(ANALYSIS_KEY_SCHEMA.as_bytes());
+        part(executable_identity.as_bytes());
+        part(self.source_path.as_bytes());
+        part(self.source.as_bytes());
+        part(canonical_root(workspace_root).to_string_lossy().as_bytes());
+        part(capability.as_bytes());
+        part(&serde_json::to_vec(target).ok()?);
+        part(&serde_json::to_vec(&self.options).ok()?);
+        part(&serde_json::to_vec(&self.configuration).ok()?);
+        part(self.configuration_path_suffix.as_bytes());
+        part(&(dep_providers.len() as u64).to_le_bytes());
+        for provider in dep_providers {
+            part(&serde_json::to_vec(provider.as_ref()).ok()?);
+        }
+        for (role, providers) in dependency_providers {
+            part(role.as_bytes());
+            part(&(providers.len() as u64).to_le_bytes());
+            for provider in providers {
+                part(&serde_json::to_vec(provider.as_ref()).ok()?);
+            }
+        }
+        Some(super::globals::hex_digest(&hasher.finalize()))
+    }
+
+    /// Whether every answer a stored analysis recorded is still the answer the
+    /// host gives, in which case replaying it produces what re-running would.
+    ///
+    /// Runs against this engine's own host cache, so a lookup shared by many
+    /// targets is paid once for the invocation rather than once per target.
+    pub fn observations_hold(
+        &self,
+        workspace_root: &Path,
+        observations: &AnalysisObservations,
+        policy: CommandPolicy,
+        unchanged: &UnchangedWorkspace,
+    ) -> bool {
+        super::globals::observations_hold(
+            workspace_root,
+            &self.host_cache,
+            observations,
+            policy,
+            unchanged,
+        )
+    }
+
+    /// The first recorded answer that no longer matches, for diagnosing why a
+    /// stored analysis was not reused.
+    pub fn first_stale_observation(
+        &self,
+        workspace_root: &Path,
+        observations: &AnalysisObservations,
+        policy: CommandPolicy,
+        unchanged: &UnchangedWorkspace,
+    ) -> Option<String> {
+        super::globals::first_stale_observation(
+            workspace_root,
+            &self.host_cache,
+            observations,
+            policy,
+            unchanged,
         )
     }
 
@@ -473,6 +598,7 @@ fn analyze_target_with_host_cache(
         actions: store.actions,
         provider,
         declared_outputs: store.declared_outputs,
+        observations: store.observations,
     })
 }
 
@@ -573,9 +699,11 @@ fn resolve_targets_in_starlark<T>(
     workspace_root: &Path,
     host_cache: &HostCache,
     configuration: &crate::manifest::BuildConfiguration,
+    observations: &mut AnalysisObservations,
     operation: impl FnOnce(&mut ResolverCallback<'_>) -> Result<T>,
 ) -> Result<T> {
-    Module::with_temp_heap(|module| {
+    let recorded = std::cell::RefCell::new(AnalysisObservations::default());
+    let result = Module::with_temp_heap(|module| {
         let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
             .map_err(|error| anyhow!("prelude parse failed: {error:?}"))?;
         let globals = globals_for_prelude();
@@ -611,10 +739,16 @@ fn resolve_targets_in_starlark<T>(
                     target.label.id
                 ));
             }
+            // One ledger for the whole expansion: the resolvers run in sequence
+            // against one host, and what any of them read is what the derived
+            // graph depends on.
+            recorded.borrow_mut().absorb(store.observations);
             Ok(value)
         };
         operation(&mut resolve)
-    })
+    });
+    *observations = recorded.into_inner();
+    result
 }
 
 fn analysis_failure(target: &GraphTarget, stage: &str, message: &str) -> anyhow::Error {

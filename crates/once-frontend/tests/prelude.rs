@@ -2063,6 +2063,7 @@ fn apple_application_exposes_build_and_run() {
         visibility: Vec::new(),
         attrs: BTreeMap::new(),
         typed_attrs: BTreeMap::new(),
+        resolver_input_exclude: Vec::new(),
     };
 
     let graph = graph_from_targets(&[target]);
@@ -8767,6 +8768,67 @@ result = repr(len(owner_specs) == 1 and owner_specs[0].get("build_deps") == None
     );
 
     assert_eq!(eval_prelude_source_to_repr(source).unwrap(), "True");
+}
+
+#[test]
+fn prelude_cargo_host_build_compiles_a_build_dependency_once() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def package(name):
+    return {{
+        "id": "registry+https://registry.example/index#" + name + "@1.0.0",
+        "name": name,
+        "version": "1.0.0",
+        "source": "registry+https://registry.example/index",
+        "manifest_path": "/workspace/vendor/" + name + "/Cargo.toml",
+        "targets": [{{
+            "name": name,
+            "kind": ["lib"],
+            "crate_types": ["lib"],
+            "src_path": "/workspace/vendor/" + name + "/src/lib.rs",
+            "edition": "2021",
+        }}],
+    }}
+owner = package("owner")
+owner["targets"].append({{
+    "name": "build-script-build",
+    "kind": ["custom-build"],
+    "crate_types": ["bin"],
+    "src_path": "/workspace/vendor/owner/build.rs",
+    "edition": "2021",
+}})
+helper = package("helper")
+metadata = {{
+    "packages": [owner, helper],
+    "resolve": {{"nodes": [
+        {{
+            "id": owner["id"],
+            "features": [],
+            "deps": [{{
+                "name": "helper",
+                "pkg": helper["id"],
+                "dep_kinds": [{{"kind": "build"}}],
+            }}],
+        }},
+        {{"id": helper["id"], "features": [], "deps": []}},
+    ]}},
+}}
+def names(split_host):
+    resolution = _cargo_metadata_resolution({{
+        "label": {{"package": "", "name": "deps", "id": "deps"}},
+        "attrs": {{"vendor_dir": "vendor", "split_host_variants": split_host}},
+    }}, metadata)
+    return sorted([spec["name"] for spec in resolution["specs"]])
+result = repr([names(False), names(True)])
+"#
+    );
+
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        "[[\"helper-1.0.0\", \"owner-1.0.0\"],          [\"helper-1.0.0\", \"helper-1.0.0-host\", \"owner-1.0.0\"]]"
+            .replace("         ", "")
+    );
 }
 
 #[test]

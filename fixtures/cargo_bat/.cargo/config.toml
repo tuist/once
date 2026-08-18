@@ -1,0 +1,8 @@
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "third_party/rust/vendor"
+
+[env]
+BAT_FIXTURE_ENV = "from-cargo-config"

@@ -65,6 +65,11 @@ pub use lint_results::{
     read_sarif_results, LintArtifacts, LintFinding, LintLocation, LintResults, LintSeverity,
     LintSummary, LINT_RESULTS_SCHEMA,
 };
+/// Describe a directory tree by the metadata of everything in it, so a caller
+/// can tell whether the tree is still the one it hashed without reading it
+/// again. See the module documentation for what the description does and does
+/// not settle.
+pub use once_host_tree::tree_stat_fingerprint;
 pub use path::{WorkspacePath, WorkspacePathError};
 pub use plan::{BuiltPlan, NodeInfo, Plan, PlanError, PlanNode, PlanOutcome};
 pub use reproducibility::{verify_reproducible, ReproducibilityDifference, ReproducibilityReport};

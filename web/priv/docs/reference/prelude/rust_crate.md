@@ -42,6 +42,8 @@ Once graph target. `rust_crate` compiles to an rlib and emits the same
 | `named_deps` | map&lt;string, string&gt; | no | `{}` | Buck-compatible alias map from local extern crate name to dependency label or crate name |
 | `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set. Defaults to `CARGO_PKG_NAME` when present |
 | `build_script` | string | no | empty | Package-relative Cargo build script path run before `rustc`; common `cargo:rustc-*` stdout directives are consumed, dependency `cargo:rustc-link-search` outputs are replayed downstream, and direct dependency `links` metadata is consumed |
+| `build_script_tools` | list&lt;string&gt; | no | `[]` | Host tool names the build script invokes; each is resolved on the search path during graph loading |
+| `cargo_config_env` | map&lt;string, string&gt; | no | `{}` | Environment declared by Cargo configuration, applied below `env` and `rustc_env` |
 | `_build_script_inputs` | list&lt;string&gt; | resolver-owned | `[]` | Generated package source inputs made available to its Cargo build script |
 | `source` | string | no |  | Cargo source identifier |
 | `checksum` | string | no |  | Cargo.lock checksum for registry packages |

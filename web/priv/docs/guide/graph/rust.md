@@ -102,10 +102,25 @@ manage pre-vendored Cargo sources. Graph loading never acquires sources or
 changes `Cargo.lock`.
 
 Targets gated by Cargo `required-features` appear only when every required
-feature is selected. Generated test targets include the package's development
-dependencies, and hyphenated Cargo target names are normalized for the Rust
-compiler automatically. Multi-output libraries expose each declared Rust
-library crate type as a separate generated target.
+feature is selected. Generated tests, benchmarks, and examples include the
+package's development dependencies, and hyphenated Cargo target names are
+normalized for the Rust compiler automatically. Multi-output libraries expose
+each declared Rust library crate type as a separate generated target.
+
+Generated tests keep the rest of what Cargo gives a test. Each one runs from
+its own package root, so a fixture opened through a package-relative path
+resolves. Each one receives a `CARGO_BIN_EXE_<name>` entry for every binary in
+its package, so a test that spawns the tool it exercises finds it. Each one
+also receives the package's `CARGO_*` description.
+
+Entries in the `[env]` table of Cargo configuration reach the compiler, the
+build scripts, the test processes, and `once run`, so a repository that pins
+something like its test thread count keeps that setting.
+
+Packages compile once for the execution host. A separate host-only build of a
+package appears only when it would actually differ: when a destination target
+is requested, or when `dep_rustc_flags` carries a panic strategy that
+procedural macros and build scripts must not inherit.
 
 ### Build, Run, and Test
 
@@ -182,9 +197,21 @@ the complete seed contract.
   the seed, and select those features explicitly.
 - Use `once query native-project cargo --package <path>` when more than one
   independent `Cargo.toml` matches the workspace.
-- Build scripts that invoke unsupported host tools fail as ordinary declared
-  actions. Add the required toolchain or move the exceptional operation into an
-  explicit target.
+- A build script that invokes a host tool needs that tool named in
+  `build_script_tools`. The seed already lists the build tools that packages
+  ending in `-sys` conventionally use, and each name is resolved on the search
+  path while the graph loads. A script reaching for something else fails as an
+  ordinary declared action until its tool is added.
+- Test and run processes start with a cleared environment: a private `HOME`
+  under the target's output directory, the standard system tool directories on
+  the search path, and the variables described above. A test that reads the
+  developer's real environment needs those variable names in `env_inherit` on
+  an explicit target.
+- A test that resolves `CARGO_BIN_EXE_<name>` with the `env!` macro captures
+  the path while compiling, which pins it to the compiling action's execution
+  root. That matches where the test runs for an ordinary local build but not
+  under a sandbox policy or remote execution. Reading the variable at run time
+  works in every mode.
 - Cargo configuration files participate in graph resolution. Keep the
   repository's source replacement and target configuration available when
   loading the graph.

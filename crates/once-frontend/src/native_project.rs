@@ -6,8 +6,6 @@ use crate::graph::GraphTarget;
 use crate::target::{AttrValue, Target};
 use serde::Serialize;
 use starlark::environment::Module;
-use starlark::eval::Evaluator;
-use starlark::syntax::{AstModule, Dialect};
 use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 
@@ -22,6 +20,15 @@ pub struct NativeProjectSchema {
     pub target_kind: String,
     pub inputs: Vec<String>,
     pub exclude: Vec<String>,
+    /// Directory names to skip when gathering the project's resolver inputs.
+    ///
+    /// Separate from `exclude`, which says where not to look for a project at
+    /// all. A vendored dependency's directory is excluded from discovery, so it
+    /// is not mistaken for a project of its own, while its manifest is still an
+    /// input to the project that vendored it. What belongs here is a directory
+    /// that cannot hold an input under any reading: a build output tree, a
+    /// version control directory.
+    pub input_exclude: Vec<String>,
     pub on_match: String,
     pub max_depth: usize,
     pub requires_tools: Vec<String>,
@@ -59,8 +66,13 @@ pub(crate) fn native_project_schemas_for_workspace_with_target_kinds(
     target_kinds: &[crate::graph::TargetKindSchema],
 ) -> Result<Vec<NativeProjectSchema>> {
     let source = crate::modules::combined_module_source_for_workspace(root)?;
-    let native_projects =
-        parse_native_project_schemas(crate::modules::COMBINED_MODULE_PATH, &source)?;
+    let native_projects = crate::graph::prelude_exports(&source)
+        .native_projects
+        .clone()
+        .map_err(|message| Error::Eval {
+            path: crate::modules::COMBINED_MODULE_PATH.to_string(),
+            message,
+        })?;
     let target_kinds = target_kinds
         .iter()
         .map(|schema| schema.kind.as_str())
@@ -226,102 +238,96 @@ fn seed_target(schema: &NativeProjectSchema, package: &str) -> Target {
             "resolver_inputs".to_string(),
             AttrValue::List(resolver_inputs),
         )]),
+        resolver_input_exclude: schema.input_exclude.clone(),
     }
 }
 
-fn parse_native_project_schemas(path: &str, source: &str) -> Result<Vec<NativeProjectSchema>> {
-    Module::with_temp_heap(|module| {
-        let ast =
-            AstModule::parse(path, source.to_string(), &Dialect::Standard).map_err(|error| {
-                Error::Parse {
-                    path: path.to_string(),
-                    message: format!("{error:?}"),
-                }
+/// Read the native project declarations out of an already-evaluated module.
+///
+/// Split from evaluation so one evaluation of a prelude source answers both
+/// this and the target kind schemas, which is what an invocation asks for.
+/// Errors come back as text because the caller knows which path to report them
+/// under: the same source reaches here under more than one name.
+pub(crate) fn native_project_schemas_from_module(
+    module: &Module<'_>,
+) -> std::result::Result<Vec<NativeProjectSchema>, String> {
+    let exports = crate::modules::exported_native_project_values(module);
+    let mut names = BTreeSet::new();
+    exports
+        .into_iter()
+        .map(|export| {
+            let dict = DictRef::from_value(export.value).ok_or_else(|| Error::Eval {
+                path: crate::modules::COMBINED_MODULE_PATH.to_string(),
+                message: format!("native project export `{}` should be a dict", export.name),
             })?;
-        let globals = crate::analysis::globals_for_prelude();
-        let mut eval = Evaluator::new(&module);
-        eval.eval_module(ast, &globals)
-            .map_err(|error| Error::Eval {
-                path: path.to_string(),
-                message: format!("{error:?}"),
-            })?;
-        let exports = crate::modules::exported_native_project_values(&module);
-        let mut names = BTreeSet::new();
-        exports
-            .into_iter()
-            .map(|export| {
-                let dict = DictRef::from_value(export.value).ok_or_else(|| Error::Eval {
-                    path: path.to_string(),
-                    message: format!("native project export `{}` should be a dict", export.name),
-                })?;
-                let name =
-                    optional_string(&dict, "name")?.unwrap_or_else(|| export.name.to_string());
-                if name.is_empty() {
-                    return Err(native_project_error(
-                        &name,
-                        format!("native project export `{}` has an empty name", export.name),
-                    ));
-                }
-                if !names.insert(name.clone()) {
-                    return Err(native_project_error(
-                        &name,
-                        format!("native project `{name}` is declared more than once"),
-                    ));
-                }
-                let markers = string_list(&dict, "markers")?;
-                if markers.is_empty() {
-                    return Err(native_project_error(
-                        &name,
-                        format!("native project `{name}` must declare markers"),
-                    ));
-                }
-                let target_kind = required_string(&dict, "target_kind")?;
-                if target_kind.is_empty() {
-                    return Err(native_project_error(
-                        &name,
-                        format!("native project `{name}` has an empty target kind"),
-                    ));
-                }
-                let target_name =
-                    optional_string(&dict, "target_name")?.unwrap_or_else(|| name.clone());
-                crate::target_ref::validate_target_name(&target_name)
-                    .map_err(|source| native_project_error(&name, source.to_string()))?;
-                let inputs = string_list(&dict, "inputs")?;
-                let exclude = string_list(&dict, "exclude")?;
-                let on_match = required_string(&dict, "on_match")?;
-                if on_match != "stop" && on_match != "descend" {
-                    return Err(native_project_error(
-                        &name,
-                        format!("native project `{name}` on_match must be `stop` or `descend`"),
-                    ));
-                }
-                let max_depth =
-                    positive_usize(required_i32(&dict, "max_depth")?, &name, "max_depth")?;
-                let requires_tools = string_list(&dict, "requires_tools")?;
-                for marker in &markers {
-                    validate_relative_literal(&name, "marker", marker)?;
-                }
-                for excluded in &exclude {
-                    validate_relative_literal(&name, "excluded directory", excluded)?;
-                }
-                for input in &inputs {
-                    validate_source_pattern(&name, input)?;
-                }
-                Ok(NativeProjectSchema {
-                    name,
-                    docs: required_string(&dict, "docs")?,
-                    markers,
-                    target_name,
-                    target_kind,
-                    inputs,
-                    exclude,
-                    on_match,
-                    max_depth,
-                    requires_tools,
-                })
+            let name = optional_string(&dict, "name")?.unwrap_or_else(|| export.name.to_string());
+            if name.is_empty() {
+                return Err(native_project_error(
+                    &name,
+                    format!("native project export `{}` has an empty name", export.name),
+                ));
+            }
+            if !names.insert(name.clone()) {
+                return Err(native_project_error(
+                    &name,
+                    format!("native project `{name}` is declared more than once"),
+                ));
+            }
+            let markers = string_list(&dict, "markers")?;
+            if markers.is_empty() {
+                return Err(native_project_error(
+                    &name,
+                    format!("native project `{name}` must declare markers"),
+                ));
+            }
+            let target_kind = required_string(&dict, "target_kind")?;
+            if target_kind.is_empty() {
+                return Err(native_project_error(
+                    &name,
+                    format!("native project `{name}` has an empty target kind"),
+                ));
+            }
+            let target_name =
+                optional_string(&dict, "target_name")?.unwrap_or_else(|| name.clone());
+            crate::target_ref::validate_target_name(&target_name)
+                .map_err(|source| native_project_error(&name, source.to_string()))?;
+            let inputs = string_list(&dict, "inputs")?;
+            let exclude = string_list(&dict, "exclude")?;
+            let input_exclude = string_list(&dict, "input_exclude")?;
+            let on_match = required_string(&dict, "on_match")?;
+            if on_match != "stop" && on_match != "descend" {
+                return Err(native_project_error(
+                    &name,
+                    format!("native project `{name}` on_match must be `stop` or `descend`"),
+                ));
+            }
+            let max_depth = positive_usize(required_i32(&dict, "max_depth")?, &name, "max_depth")?;
+            let requires_tools = string_list(&dict, "requires_tools")?;
+            for marker in &markers {
+                validate_relative_literal(&name, "marker", marker)?;
+            }
+            for excluded in exclude.iter().chain(input_exclude.iter()) {
+                validate_relative_literal(&name, "excluded directory", excluded)?;
+            }
+            for input in &inputs {
+                validate_source_pattern(&name, input)?;
+            }
+            Ok(NativeProjectSchema {
+                name,
+                docs: required_string(&dict, "docs")?,
+                markers,
+                target_name,
+                target_kind,
+                inputs,
+                exclude,
+                input_exclude,
+                on_match,
+                max_depth,
+                requires_tools,
             })
-            .collect()
-    })
+        })
+        .collect::<Result<Vec<_>>>()
+        .map_err(|error| error.to_string())
 }
 
 fn validate_relative_literal(native_project: &str, field: &str, value: &str) -> Result<()> {
@@ -453,7 +459,10 @@ mod tests {
             "{}\ndemo = native_project(target_kind = \"demo_workspace\", docs = \"Demo\", markers = [\"native.project\"])\n",
             crate::modules::common_module_source()
         );
-        let schemas = parse_native_project_schemas("demo.star", &source).unwrap();
+        let schemas = crate::graph::prelude_exports(&source)
+            .native_projects
+            .clone()
+            .unwrap();
         assert_eq!(schemas[0].name, "demo");
         assert_eq!(schemas[0].target_kind, "demo_workspace");
 
