@@ -26,6 +26,22 @@ pub struct ChangeSnapshot {
     pub output_changes: Option<Vec<String>>,
 }
 
+/// Opt out of the filesystem change tracker for one invocation.
+///
+/// A tracker earns its keep across a series of builds in one working copy. A
+/// one-shot container has no series to amortise it over, so there the daemon is
+/// startup cost with no payer. Setting this to `0` or `false` skips it, and the
+/// fast path validates from what the receipt recorded instead.
+const TRACKER_ENV: &str = "ONCE_CHANGE_TRACKER";
+
+#[must_use]
+pub fn tracker_enabled() -> bool {
+    !matches!(
+        std::env::var(TRACKER_ENV).ok().as_deref(),
+        Some("0" | "false")
+    )
+}
+
 #[cfg(unix)]
 pub async fn snapshot(
     workspace: &Path,
@@ -33,11 +49,39 @@ pub async fn snapshot(
     outputs: &[String],
     since: Option<&ChangePosition>,
 ) -> Option<ChangeSnapshot> {
+    if !tracker_enabled() {
+        return None;
+    }
     client::snapshot(workspace, &socket_path(workspace, xdg), outputs, since).await
 }
 
 #[cfg(not(unix))]
 pub async fn snapshot(
+    _workspace: &Path,
+    _xdg: &Xdg,
+    _outputs: &[String],
+    _since: Option<&ChangePosition>,
+) -> Option<ChangeSnapshot> {
+    None
+}
+
+/// Where the journal stands, without waiting for writes this process just made
+/// to be reported back to it. See [`client::position`].
+#[cfg(unix)]
+pub async fn position(
+    workspace: &Path,
+    xdg: &Xdg,
+    outputs: &[String],
+    since: Option<&ChangePosition>,
+) -> Option<ChangeSnapshot> {
+    if !tracker_enabled() {
+        return None;
+    }
+    client::position(workspace, &socket_path(workspace, xdg), outputs, since).await
+}
+
+#[cfg(not(unix))]
+pub async fn position(
     _workspace: &Path,
     _xdg: &Xdg,
     _outputs: &[String],

@@ -36,5 +36,8 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 walkdir.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [lints]
 workspace = true
