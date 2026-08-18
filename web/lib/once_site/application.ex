@@ -9,7 +9,6 @@ defmodule OnceSite.Application do
   def start(_type, _args) do
     children = [
       OnceSiteWeb.Telemetry,
-      OnceSite.Repo,
       {DNSCluster, query: Application.get_env(:once_site, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: OnceSite.PubSub},
       {OnceSite.RateLimit, [clean_period: :timer.minutes(1)]},

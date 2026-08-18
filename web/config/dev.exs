@@ -13,15 +13,6 @@ config :logger, :default_formatter, format: "[$level] $message\n"
 # The watchers configuration can be used to run external
 # watchers to your application. For example, we can use it
 # to bundle .js and .css sources.
-config :once_site, OnceSite.Repo,
-  username: "postgres",
-  password: "postgres",
-  hostname: "localhost",
-  database: DevInstance.database_name("once_site_dev"),
-  stacktrace: true,
-  show_sensitive_data_on_connection_error: true,
-  pool_size: 10
-
 config :once_site, OnceSiteWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.

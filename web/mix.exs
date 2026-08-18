@@ -41,10 +41,6 @@ defmodule OnceSite.MixProject do
   defp deps do
     [
       {:phoenix, "~> 1.8.4"},
-      {:phoenix_ecto, "~> 4.5"},
-      {:ecto_sql, "~> 3.13"},
-      {:postgrex, ">= 0.0.0"},
-      {:uuidv7, "~> 1.0"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.2.0"},
@@ -79,9 +75,7 @@ defmodule OnceSite.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
     [
-      setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
-      "ecto.setup": ["ecto.create", "ecto.migrate"],
-      "ecto.reset": ["ecto.drop", "ecto.setup"],
+      setup: ["deps.get", "assets.setup", "assets.build"],
       "assets.setup": ["esbuild.install --if-missing"],
       "assets.build": ["compile", "esbuild once_site", "esbuild docs"],
       "assets.deploy": [
@@ -92,8 +86,6 @@ defmodule OnceSite.MixProject do
         "esbuild docs --minify",
         "phx.digest"
       ],
-      "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       precommit: [
         "compile --warnings-as-errors",
         "deps.unlock --unused",

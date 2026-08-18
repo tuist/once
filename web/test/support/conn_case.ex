@@ -5,14 +5,7 @@ defmodule OnceSiteWeb.ConnCase do
 
   Such tests rely on `Phoenix.ConnTest` and also
   import other functionality to make it easier
-  to build common data structures and query the data layer.
-
-  Finally, if the test case interacts with the database,
-  we enable the SQL sandbox, so changes done to the database
-  are reverted at the end of every test. If you are using
-  PostgreSQL, you can even run database tests asynchronously
-  by setting `use OnceSiteWeb.ConnCase, async: true`, although
-  this option is not recommended for other databases.
+  to build common data structures.
   """
 
   use ExUnit.CaseTemplate
@@ -31,10 +24,7 @@ defmodule OnceSiteWeb.ConnCase do
     end
   end
 
-  setup tags do
-    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(OnceSite.Repo, shared: not tags[:async])
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
-
+  setup do
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 end
