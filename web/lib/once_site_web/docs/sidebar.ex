@@ -73,7 +73,14 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{label: "Configurations", slug: "/docs/guide/graph/configuration"},
           %Item{label: "Testing and Scheduling", slug: "/docs/guide/graph/testing"},
           %Item{label: "Linting", slug: "/docs/guide/graph/linting"},
-          %Item{label: "Apple", slug: "/docs/guide/graph/apple", icon: "apple"},
+          %Item{
+            label: "Apple",
+            slug: "/docs/guide/graph/apple",
+            icon: "apple",
+            items: [
+              %Item{label: "Xcode Projects", slug: "/docs/guide/graph/apple/xcode"}
+            ]
+          },
           %Item{label: "Swift Packages", slug: "/docs/guide/graph/swift-packages", icon: "swift"},
           %Item{label: "Android", slug: "/docs/guide/graph/android", icon: "android"},
           %Item{label: "C and C++", slug: "/docs/guide/graph/c", icon: "cplusplus"},
@@ -188,7 +195,9 @@ defmodule OnceSiteWeb.Docs.Sidebar do
                 ~w(ruff_lint eslint_lint golangci_lint swiftlint_lint detekt_lint credo_lint rubocop_lint)
               ),
               target_group("Apple", ~w(apple_library swift_macro apple_framework apple_application
-                apple_test_bundle swift_package_dependencies swift_package_pin)),
+                apple_resource_bundle apple_thinned_package apple_test_bundle
+                apple_xcframework_import swift_package_dependencies swift_package_pin)),
+              target_group("Xcode", ~w(xcode_workspace)),
               target_group("Android", ~w(android_resource android_library android_local_test
                 android_instrumentation_test android_binary)),
               target_group("Cross-platform", ~w(swift_android_library kotlin_apple_framework)),

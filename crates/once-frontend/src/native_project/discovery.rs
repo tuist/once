@@ -123,6 +123,7 @@ impl<'a> DiscoveryScan<'a> {
             };
             let package = entry.path().parent().unwrap_or(self.root);
             let package_name = display_relative(self.root, package);
+            let primary_markers = [name.to_string()];
             return retain_marker_matches(
                 self.root,
                 self.schemas,
@@ -131,7 +132,7 @@ impl<'a> DiscoveryScan<'a> {
                 &mut self.retained,
                 package,
                 &package_name,
-                name,
+                &primary_markers,
                 entry.depth(),
             );
         }
@@ -159,7 +160,8 @@ impl<'a> DiscoveryScan<'a> {
             }) {
                 continue;
             }
-            if !is_primary_marker(&package.join(primary_marker)) {
+            let primary_markers = resolve_marker(package, primary_marker);
+            if primary_markers.is_empty() {
                 continue;
             }
             let package_name =
@@ -172,7 +174,7 @@ impl<'a> DiscoveryScan<'a> {
                 &mut self.retained,
                 package,
                 package_name,
-                primary_marker,
+                &primary_markers,
                 marker_depth,
             )?;
         }
@@ -196,25 +198,40 @@ fn retain_marker_matches(
     retained: &mut RetainedMatches,
     package: &Path,
     package_name: &str,
-    primary_marker: &str,
+    primary_markers: &[String],
     marker_depth: usize,
 ) -> Result<()> {
     let manifest_path = package_child(package_name, crate::TOML_BUILD_FILE_NAME);
-    let marker_path = package_child(package_name, primary_marker);
+    let Some(first_marker) = primary_markers.first() else {
+        return Ok(());
+    };
+    let marker_path = package_child(package_name, first_marker);
     for index in schema_indices {
         let schema = &schemas[*index];
         if marker_depth > schema.max_depth
             || package_has_excluded_component(root, package, &schema.exclude)
             || !boundary.includes_native_project(&manifest_path, &marker_path)
-            || !schema
-                .markers
-                .iter()
-                .skip(1)
-                .all(|marker| package.join(marker).is_file())
         {
             continue;
         }
-        retained.insert(root, *index, schema, package_name)?;
+        // Every secondary marker must also be present. Resolving them here keeps
+        // a wildcard marker's concrete path in the match, so the seed's sources
+        // name the files that were actually found.
+        let mut markers = primary_markers.to_vec();
+        let mut satisfied = true;
+        for marker in schema.markers.iter().skip(1) {
+            let resolved = resolve_marker(package, marker);
+            if resolved.is_empty() {
+                satisfied = false;
+                break;
+            }
+            markers.extend(resolved);
+        }
+        if !satisfied {
+            continue;
+        }
+        markers.dedup();
+        retained.insert(root, *index, schema, package_name, markers)?;
     }
     Ok(())
 }
@@ -224,6 +241,57 @@ fn package_child(package: &str, child: &str) -> String {
         child.to_string()
     } else {
         format!("{package}/{child}")
+    }
+}
+
+/// Expand one marker against a package directory and return every package-
+/// relative path it matches, sorted for a stable graph. A literal marker
+/// resolves to itself when it is a file. A marker with wildcard segments, such
+/// as `*.xcodeproj/project.pbxproj`, resolves to each existing file whose
+/// bundle name ends with the segment's literal suffix.
+fn resolve_marker(package: &Path, marker: &str) -> Vec<String> {
+    let mut resolved = vec![(package.to_path_buf(), String::new())];
+    for segment in marker.split('/') {
+        let mut next = Vec::new();
+        for (directory, relative) in resolved {
+            match segment.strip_prefix('*') {
+                None => next.push((directory.join(segment), join_relative(&relative, segment))),
+                Some(suffix) => {
+                    let Ok(entries) = std::fs::read_dir(&directory) else {
+                        continue;
+                    };
+                    let mut names = entries
+                        .flatten()
+                        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+                        .filter(|name| !name.starts_with('.') && name.ends_with(suffix))
+                        .collect::<Vec<_>>();
+                    names.sort_unstable();
+                    for name in names {
+                        next.push((directory.join(&name), join_relative(&relative, &name)));
+                    }
+                }
+            }
+        }
+        resolved = next;
+        if resolved.is_empty() {
+            return Vec::new();
+        }
+    }
+    let mut matched = resolved
+        .into_iter()
+        .filter(|(path, _)| is_primary_marker(path))
+        .map(|(_, relative)| relative)
+        .collect::<Vec<_>>();
+    matched.sort_unstable();
+    matched.dedup();
+    matched
+}
+
+fn join_relative(prefix: &str, segment: &str) -> String {
+    if prefix.is_empty() {
+        segment.to_string()
+    } else {
+        format!("{prefix}/{segment}")
     }
 }
 

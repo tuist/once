@@ -1,0 +1,7 @@
+[[target]]
+name = "hello"
+kind = "xcode_workspace"
+srcs = ["Hello.xcodeproj/project.pbxproj"]
+
+[target.attrs]
+project = "Hello.xcodeproj"

@@ -511,15 +511,13 @@ fn resolver_files_recorded(
                 path: path.display().to_string(),
                 source,
             })?;
-            let contents = String::from_utf8(bytes).map_err(|_| {
-                resolution_error(
-                    &target.id(),
-                    format!(
-                        "resolver source `{}` is not valid UTF-8 text",
-                        display_path(&path)
-                    ),
-                )
-            })?;
+            // A resolver source glob can legitimately match binary assets (an
+            // image in an asset catalog, a compiled resource). A text resolver
+            // cannot use them, so skip rather than failing the whole graph load;
+            // real projects that build under Xcode routinely carry such files.
+            let Ok(contents) = String::from_utf8(bytes) else {
+                continue;
+            };
             files.insert(key, contents);
         }
     }
@@ -900,7 +898,7 @@ kind = "rust_library"
     }
 
     #[test]
-    fn resolver_files_reject_non_text_and_oversized_inputs() {
+    fn resolver_files_skip_non_text_and_reject_oversized_inputs() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("binary.lock"), [0xff, 0xfe]).unwrap();
         let oversized = std::fs::File::create(temp.path().join("large.lock")).unwrap();
@@ -918,8 +916,11 @@ kind = "rust_library"
             resolver_input_exclude: Vec::new(),
         };
 
-        let binary_error = resolver_files(temp.path(), &target("binary.lock")).unwrap_err();
-        assert!(binary_error.to_string().contains("not valid UTF-8 text"));
+        // A binary input is skipped rather than failing the load: a resolver
+        // source glob can legitimately match a project's binary assets.
+        let binary_files = resolver_files(temp.path(), &target("binary.lock")).unwrap();
+        assert!(!binary_files.contains_key("binary.lock"));
+        // An oversized input still fails: it signals a misconfigured glob.
         let large_error = resolver_files(temp.path(), &target("large.lock")).unwrap_err();
         assert!(large_error.to_string().contains("per-file limit"));
     }

@@ -229,6 +229,34 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(exists)
     }
 
+    /// Return whether one host path currently exists, including directories
+    /// and symbolic links. Use this when a resolver needs to probe a source
+    /// tree rather than read a regular file.
+    fn host_path_exists(path: &str) -> anyhow::Result<bool> {
+        if !analysis_active() {
+            return Ok(false);
+        }
+        observe_host_path(Path::new(path))?;
+        Ok(Path::new(path).exists())
+    }
+
+    /// Return whether one existing host path resolves within another existing
+    /// host path. Symbolic links are resolved before containment is checked.
+    fn host_path_is_within(path: &str, root: &str) -> anyhow::Result<bool> {
+        if !analysis_active() {
+            return Ok(false);
+        }
+        let path = Path::new(path);
+        let root = Path::new(root);
+        observe_host_path(path)?;
+        observe_host_path(root)?;
+        let canonical_path = std::fs::canonicalize(path)
+            .with_context(|| format!("canonicalizing host path `{}`", path.display()))?;
+        let canonical_root = std::fs::canonicalize(root)
+            .with_context(|| format!("canonicalizing host root `{}`", root.display()))?;
+        Ok(canonical_path.starts_with(canonical_root))
+    }
+
     /// Read one host file as UTF-8 text.
     fn host_file_read(path: &str) -> anyhow::Result<String> {
         if !analysis_active() {
@@ -344,6 +372,42 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(heap.alloc(resolved.as_ref().clone()))
     }
 
+    /// Walk a workspace-relative directory and return sorted, deduplicated,
+    /// workspace-relative file and symbolic-link paths. Unlike `glob`, this
+    /// does not follow symbolic links, so callers can inspect and explicitly
+    /// materialize links whose destinations live outside the workspace.
+    fn walk_workspace_files<'v>(
+        root: &str,
+        excluded_paths: Option<Value<'v>>,
+        excluded_names: Option<Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let heap = eval.heap();
+        if !analysis_active() {
+            return Ok(heap.alloc(Vec::<String>::new()));
+        }
+        let excluded_paths = excluded_paths
+            .map(|value| unpack_string_list(value, "excluded_paths"))
+            .transpose()?
+            .unwrap_or_default();
+        let excluded_names = excluded_names
+            .map(|value| unpack_string_list(value, "excluded_names"))
+            .transpose()?
+            .unwrap_or_default();
+        let resolved = with_store(|store| -> Result<Vec<String>> {
+            let store =
+                store.ok_or_else(|| anyhow!("walk_workspace_files called outside analysis"))?;
+            walk_package_files(
+                &store.workspace_root,
+                "",
+                root,
+                &excluded_paths,
+                &excluded_names,
+            )
+        })?;
+        Ok(heap.alloc(resolved))
+    }
+
     /// Reserve a workspace-relative output path under the active
     /// target's build directory and return it. Outside analysis this
     /// returns the bare name.
@@ -386,7 +450,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
-            depends_on_prior_actions: true,
+            depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(format!("write_path:{path}")),
         };
@@ -416,10 +480,13 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         }
         let mode = parse_copy_path_mode(kind.as_deref())?;
         let sources = unpack_copy_sources(source, mode)?;
-        let inputs = inputs
+        let mut inputs = inputs
             .map(|value| unpack_string_list(value, "inputs"))
             .transpose()?
             .unwrap_or_default();
+        inputs.extend(sources.iter().cloned());
+        inputs.sort();
+        inputs.dedup();
         let action = DeclaredAction {
             operation: Some(DeclaredActionOperation::CopyPath {
                 sources,
@@ -441,7 +508,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             success_exit_codes: vec![0],
             cacheable: cacheable.unwrap_or(true),
             inherit_parent_env: false,
-            depends_on_prior_actions: true,
+            depends_on_prior_actions: false,
             toolchain_identity,
             identifier: Some(identifier.unwrap_or_else(|| format!("copy_path:{destination}"))),
         };
@@ -502,7 +569,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
-            depends_on_prior_actions: true,
+            depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(format!("materialize_host_file:{destination}")),
         };
@@ -532,6 +599,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                 "materialize_host_tree source is not a directory: `{source}`"
             ));
         }
+        observe_host_path(source_path)?;
         // The trees this snapshots are package sources in a dependency
         // cache: large, numerous, and immutable once unpacked. Hashing every
         // one of them on every graph load is the bulk of what an unchanged
@@ -571,7 +639,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             success_exit_codes: vec![0],
             cacheable: true,
             inherit_parent_env: false,
-            depends_on_prior_actions: true,
+            depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(format!("materialize_host_tree:{destination}")),
         };
@@ -604,7 +672,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             }),
             argv: Vec::new(),
             arg_files: Vec::new(),
-            inputs: Vec::new(),
+            inputs: vec![source.to_string()],
             outputs: vec![destination.to_string()],
             stdout: None,
             stderr: None,
@@ -617,7 +685,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             success_exit_codes: vec![0],
             cacheable: false,
             inherit_parent_env: false,
-            depends_on_prior_actions: true,
+            depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(
                 identifier.unwrap_or_else(|| format!("link_path:{source}:{destination}")),
@@ -666,7 +734,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             success_exit_codes: vec![0],
             cacheable: false,
             inherit_parent_env: false,
-            depends_on_prior_actions: true,
+            depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("prepare_path:{kind}:{path}"))),
         };
@@ -696,10 +764,13 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .map(|value| unpack_string_list(value, "include_suffixes"))
             .transpose()?
             .unwrap_or_default();
-        let inputs = inputs
+        let mut inputs = inputs
             .map(|value| unpack_string_list(value, "inputs"))
             .transpose()?
             .unwrap_or_default();
+        inputs.push(root.to_string());
+        inputs.sort();
+        inputs.dedup();
         let action = DeclaredAction {
             operation: Some(DeclaredActionOperation::WriteTreeDigest {
                 root: root.to_string(),
@@ -721,7 +792,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             success_exit_codes: vec![0],
             cacheable: cacheable.unwrap_or(true),
             inherit_parent_env: false,
-            depends_on_prior_actions: true,
+            depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("write_tree_digest:{output}"))),
         };
@@ -784,7 +855,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             success_exit_codes: vec![0],
             cacheable: cacheable.unwrap_or(true),
             inherit_parent_env: false,
-            depends_on_prior_actions: true,
+            depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("write_archive:{output}"))),
         };

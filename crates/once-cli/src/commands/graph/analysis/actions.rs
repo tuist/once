@@ -32,6 +32,7 @@ use super::source_digest_cache::SourceDigestCache;
 use super::{AvailableInput, BuildOutcome};
 
 const FAILURE_OUTPUT_LIMIT: usize = 16 * 1024;
+const EVIDENCE_FLUSH_BATCH_SIZE: usize = 128;
 
 struct DeclaredActionRun<'a> {
     workspace: &'a Path,
@@ -61,6 +62,7 @@ struct DeclaredActionOutcome {
 
 struct DeclaredActionsState {
     action_digests: Vec<Digest>,
+    prior_actions_digest: Option<Digest>,
     input_digests: Vec<Digest>,
     input_fingerprints: Vec<InputFingerprintManifest>,
     available_inputs: BTreeMap<String, AvailableInput>,
@@ -75,6 +77,7 @@ impl DeclaredActionsState {
     fn new(available_inputs: &BTreeMap<String, AvailableInput>) -> Self {
         Self {
             action_digests: Vec::new(),
+            prior_actions_digest: None,
             input_digests: Vec::new(),
             input_fingerprints: Vec::new(),
             available_inputs: available_inputs.clone(),
@@ -94,21 +97,23 @@ impl DeclaredActionsState {
     fn input_action_digests(
         &self,
         declared: &DeclaredAction,
-        dependency_digests: &[(String, Digest)],
+        _dependency_digests: &[(String, Digest)],
     ) -> Vec<(String, Digest)> {
-        let mut input_digests = dependency_digests.to_vec();
+        let mut input_digests = Vec::new();
         if declared.depends_on_prior_actions {
-            input_digests.extend(
-                self.action_digests
-                    .iter()
-                    .enumerate()
-                    .map(|(index, digest)| (format!("same-target:{index}"), *digest)),
-            );
+            if let Some(digest) = self.prior_actions_digest {
+                input_digests.push(("same-target:prior-actions".to_string(), digest));
+            }
         }
         input_digests
     }
 
     fn record(&mut self, outcome: DeclaredActionOutcome, streams: bool) {
+        self.prior_actions_digest = Some(extend_prior_actions_digest(
+            self.prior_actions_digest,
+            self.action_digests.len(),
+            outcome.digest,
+        ));
         self.action_digests.push(outcome.digest);
         self.available_inputs
             .extend(outcome.result.outputs.iter().map(|(path, digest)| {
@@ -143,6 +148,10 @@ impl DeclaredActionsState {
         track_cached_result(&mut self.cached_results, &outcome);
         self.input_fingerprints.push(outcome.input_fingerprint);
         self.evidence_records.extend(outcome.evidence_record);
+    }
+
+    fn take_evidence_records(&mut self) -> Vec<EvidenceRecord> {
+        std::mem::take(&mut self.evidence_records)
     }
 
     fn finish(mut self, target_id: &str, provider: serde_json::Value) -> BuildOutcome {
@@ -213,7 +222,7 @@ pub(super) async fn validate_declared_actions(
     module_source_digest: Digest,
     target: &GraphTarget,
     analysis: AnalysisResult,
-    dep_action_digests: &[(String, Digest)],
+    _dep_action_digests: &[(String, Digest)],
     selected_index: Option<usize>,
 ) -> Result<Vec<DeclaredActionValidation>> {
     let mut actions = analysis.actions;
@@ -229,17 +238,15 @@ pub(super) async fn validate_declared_actions(
     }
 
     let mut action_digests = Vec::new();
+    let mut prior_actions_digest = None;
     let mut validations = Vec::new();
     for (index, declared) in actions.into_iter().enumerate() {
         let is_selected = selected_index.is_none_or(|selected| selected == index);
-        let mut input_action_digests = dep_action_digests.to_vec();
+        let mut input_action_digests = Vec::new();
         if declared.depends_on_prior_actions {
-            input_action_digests.extend(
-                action_digests
-                    .iter()
-                    .enumerate()
-                    .map(|(prior_index, digest)| (format!("same-target:{prior_index}"), *digest)),
-            );
+            if let Some(digest) = prior_actions_digest {
+                input_action_digests.push(("same-target:prior-actions".to_string(), digest));
+            }
         }
         materialize_declared_arg_files(workspace, &declared.arg_files).with_context(|| {
             format!(
@@ -279,6 +286,11 @@ pub(super) async fn validate_declared_actions(
             &input_action_digests,
             SandboxMode::Inputs,
         )?;
+        prior_actions_digest = Some(extend_prior_actions_digest(
+            prior_actions_digest,
+            action_digests.len(),
+            action.digest(),
+        ));
         action_digests.push(action.digest());
         if !is_selected {
             continue;
@@ -415,17 +427,35 @@ pub(super) fn run_declared_actions<'a>(
             let outcome = match outcome {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    crate::commands::evidence::append_records(workspace, &state.evidence_records)
-                        .await;
+                    let records = state.take_evidence_records();
+                    crate::commands::evidence::append_records(workspace, &records).await;
                     return Err(error);
                 }
             };
             state.record(outcome, !record_success_evidence);
+            if state.evidence_records.len() >= EVIDENCE_FLUSH_BATCH_SIZE {
+                let records = state.take_evidence_records();
+                crate::commands::evidence::append_records(workspace, &records).await;
+            }
         }
 
-        crate::commands::evidence::append_records(workspace, &state.evidence_records).await;
+        let records = state.take_evidence_records();
+        crate::commands::evidence::append_records(workspace, &records).await;
         Ok(state.finish(&target.label.id, provider))
     })
+}
+
+fn extend_prior_actions_digest(
+    prior: Option<Digest>,
+    index: usize,
+    action_digest: Digest,
+) -> Digest {
+    let mut builder = InputDigestBuilder::new(b"once.prior_actions.v1\0");
+    if let Some(prior) = prior {
+        builder.push_keyed(b"prior", &prior);
+    }
+    builder.push_keyed(format!("action:{index}").as_bytes(), &action_digest);
+    builder.finish()
 }
 
 fn track_cached_result(cached_results: &mut Vec<ActionResult>, outcome: &DeclaredActionOutcome) {
@@ -1960,9 +1990,51 @@ fn ensure_output_parent_dirs(workspace: &Path, outputs: &[WorkspacePath]) -> Res
     for output in outputs {
         let absolute = output.resolve(workspace);
         if let Some(parent) = absolute.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("creating parent directory for output `{}`", output.as_str())
-            })?;
+            let mut directories = parent
+                .ancestors()
+                .take_while(|directory| *directory != workspace)
+                .collect::<Vec<_>>();
+            directories.reverse();
+            for directory in directories {
+                if directory.is_dir() {
+                    continue;
+                }
+                let blocker = std::fs::symlink_metadata(directory).ok();
+                if blocker.as_ref().is_some_and(std::fs::Metadata::is_dir) {
+                    continue;
+                }
+                if blocker.is_some() {
+                    let path = output.as_str();
+                    let managed = path.starts_with(".once/out/")
+                        || path.contains("/.once/out/")
+                        || path.starts_with(".once/tmp/")
+                        || path.contains("/.once/tmp/");
+                    if !managed {
+                        anyhow::bail!(
+                            "output `{}` has a non-directory parent `{}`",
+                            output.as_str(),
+                            directory.display()
+                        );
+                    }
+                    std::fs::remove_file(directory).with_context(|| {
+                        format!(
+                            "removing stale non-directory parent for output `{}`",
+                            output.as_str()
+                        )
+                    })?;
+                }
+                match std::fs::create_dir(directory) {
+                    Ok(()) => {}
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::AlreadyExists
+                            && directory.is_dir() => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!("creating parent directory for output `{}`", output.as_str())
+                        });
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -2054,18 +2126,12 @@ fn enclosing_available_output<'a>(
 fn compose_input_fingerprint_with_available(
     workspace: &Path,
     declared: &DeclaredAction,
-    module_source_digest: Digest,
+    _module_source_digest: Digest,
     dep_action_digests: &[(String, Digest)],
     available_inputs: &BTreeMap<String, AvailableInput>,
     source_digest_cache: Option<&SourceDigestCache>,
 ) -> Result<InputFingerprintManifest> {
-    let mut builder = InputDigestBuilder::new(b"once.declared_action.input.v2\0");
-    builder.push_keyed_component(
-        "module",
-        "target-kind-source",
-        b"rules",
-        &module_source_digest,
-    );
+    let mut builder = InputDigestBuilder::new(b"once.declared_action.input.v4\0");
     push_declared_action_metadata(&mut builder, declared)?;
 
     let mut sorted_inputs = declared
@@ -2098,13 +2164,13 @@ fn compose_input_fingerprint_with_available(
         }
     }
 
-    let mut dep_order = (0..dep_action_digests.len()).collect::<Vec<_>>();
-    dep_order.sort_unstable_by(|&a, &b| dep_action_digests[a].0.cmp(&dep_action_digests[b].0));
-    for index in dep_order {
-        let (label, digest) = &dep_action_digests[index];
-        let key = format!("dep:{label}");
-        builder.push_keyed_component("dependency", label, key.as_bytes(), digest);
+    for (label, digest) in dep_action_digests {
+        if label.starts_with("same-target:") {
+            let key = format!("dep:{label}");
+            builder.push_keyed_component("dependency", label, key.as_bytes(), digest);
+        }
     }
+
     Ok(builder.finish_with_fingerprint())
 }
 
@@ -2412,6 +2478,49 @@ mod tests {
         assert!(inputs
             .iter()
             .any(|input| input.as_str() == ".once/tmp/work"));
+    }
+
+    #[test]
+    fn declared_action_replaces_stale_file_that_became_an_output_directory() {
+        let workspace = tempfile::tempdir().unwrap();
+        let stale = workspace
+            .path()
+            .join(".once/out/Framework/Modules/Feature.swiftmodule");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, b"old flat module").unwrap();
+        let output = WorkspacePath::try_from(
+            ".once/out/Framework/Modules/Feature.swiftmodule/arm64-apple-ios-simulator.swiftmodule",
+        )
+        .unwrap();
+
+        ensure_output_parent_dirs(workspace.path(), &[output]).unwrap();
+
+        assert!(stale.is_dir());
+    }
+
+    #[test]
+    fn concurrent_actions_can_create_shared_output_parents() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace = workspace.path().to_path_buf();
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            let mut tasks = Vec::new();
+            for index in 0..8 {
+                let workspace = &workspace;
+                let barrier = &barrier;
+                tasks.push(scope.spawn(move || {
+                    let output = WorkspacePath::try_from(format!(
+                        ".once/out/tests/test/batches/{index}/test_results.json"
+                    ))
+                    .unwrap();
+                    barrier.wait();
+                    ensure_output_parent_dirs(workspace, &[output])
+                }));
+            }
+            for task in tasks {
+                task.join().unwrap().unwrap();
+            }
+        });
     }
 
     #[tokio::test]
@@ -3416,6 +3525,27 @@ mod tests {
                         .any(|component| component.category == "dependency")
                 })
         }));
+        assert!(records.iter().all(|record| {
+            record.input_fingerprint.as_ref().is_none_or(|fingerprint| {
+                fingerprint
+                    .components
+                    .iter()
+                    .filter(|component| component.label.starts_with("same-target:"))
+                    .count()
+                    <= 1
+            })
+        }));
+        assert!(records.iter().any(|record| {
+            record
+                .input_fingerprint
+                .as_ref()
+                .is_some_and(|fingerprint| {
+                    fingerprint
+                        .components
+                        .iter()
+                        .any(|component| component.label == "same-target:prior-actions")
+                })
+        }));
         let aggregate = aggregate.expect("multi-action outcome should aggregate fingerprints");
         assert!(aggregate
             .components
@@ -3768,13 +3898,11 @@ mod tests {
 
         assert_eq!(fingerprint.input_digest, digest);
         for (category, label) in [
-            ("module", "target-kind-source"),
             ("toolchain", "identity"),
             ("action", "identifier"),
             ("command", "arguments"),
             ("environment", "declared"),
             ("source", "input.txt"),
-            ("dependency", "core"),
         ] {
             assert!(fingerprint
                 .components
@@ -3867,7 +3995,7 @@ mod tests {
     }
 
     #[test]
-    fn input_digest_changes_with_module_source_digest() {
+    fn input_digest_ignores_unrelated_module_source_changes() {
         let workspace = tempfile::tempdir().unwrap();
         std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
@@ -3906,7 +4034,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_ne!(one, two);
+        assert_eq!(one, two);
     }
 
     #[test]
@@ -4030,7 +4158,7 @@ mod tests {
     }
 
     #[test]
-    fn input_digest_stable_under_dep_reordering() {
+    fn input_digest_ignores_unconsumed_dependency_digests() {
         let workspace = tempfile::tempdir().unwrap();
         std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
@@ -4069,8 +4197,8 @@ mod tests {
             &declared,
             module_digest(),
             &[
-                ("dep2".to_string(), Digest::of_bytes(b"d2")),
-                ("dep1".to_string(), Digest::of_bytes(b"d1")),
+                ("dep1".to_string(), Digest::of_bytes(b"changed")),
+                ("dep3".to_string(), Digest::of_bytes(b"d3")),
             ],
         )
         .unwrap();

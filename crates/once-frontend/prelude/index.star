@@ -5,6 +5,7 @@ PRELUDE_SOURCES = [
     "android.star",
     "go.star",
     "rust.star",
+    "xcode.star",
     "c.star",
     "cmake.star",
     "zig.star",
@@ -21,6 +22,7 @@ PRELUDE_SOURCES = [
 
 PRELUDE_DEPENDENCIES = {
     "react_native.star": ["android.star"],
+    "xcode.star": ["apple.star"],
 }
 
 PRELUDE_TARGET_KINDS = {
@@ -45,6 +47,8 @@ PRELUDE_TARGET_KINDS = {
         "swift_package_dependencies",
         "swift_package_pin",
         "apple_library",
+        "apple_resource_bundle",
+        "apple_xcframework_import",
         "apple_framework",
         "apple_application",
         "apple_thinned_package",
@@ -68,6 +72,9 @@ PRELUDE_TARGET_KINDS = {
         "rust_test",
         "rust_crate",
         "rust_proc_macro",
+    ],
+    "xcode.star": [
+        "xcode_workspace",
     ],
     "c.star": ["c_library"],
     "cmake.star": [

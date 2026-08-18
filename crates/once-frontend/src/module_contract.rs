@@ -299,10 +299,16 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Run a trusted discovery command whose arguments, environment, and working directory participate in analysis caching. It may write scratch state only under .once/tmp.",
             ),
             entry("host_file_exists(path)", "Test whether a host file exists."),
+            entry("host_path_exists(path)", "Test whether a host file or directory exists."),
+            entry("host_path_is_within(path, root)", "Test canonical host-path containment, resolving symbolic links."),
             entry("host_file_read(path)", "Read a host text file during analysis."),
             entry("host_file_sha256(path)", "Digest a host file used during analysis."),
             entry("host_file_contains(path, needle)", "Search a host text file."),
             entry("host_read_dir(path)", "List sorted names in a host directory."),
+            entry(
+                "walk_workspace_files(root, excluded_paths = [], excluded_names = [])",
+                "Walk one workspace-relative directory without following symbolic links.",
+            ),
             entry("json_decode(source)", "Decode structured JSON data for a resolver."),
             entry("toml_decode(source)", "Decode structured TOML data for a resolver."),
         ],
@@ -315,7 +321,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry("write_path(path, content)", "Declare a portable file-writing action."),
             entry(
                 "copy_path(source, destination, kind = \"file\", inputs = [], toolchain_identity = None, identifier = None, cacheable = True)",
-                "Copy one workspace path by value, materializing a directory symlink at the destination, or merge directory contents while preserving their symlink layout.",
+                "Copy one workspace path by value, automatically hashing each source, materializing a directory symlink at the destination, or merge directory contents while preserving their symlink layout.",
             ),
             entry(
                 "materialize_host_file(source, destination)",
@@ -327,7 +333,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             ),
             entry(
                 "link_path(source, destination, identifier = None)",
-                "Declare an uncached relative workspace link from an existing source without copying or caching the linked contents.",
+                "Declare an uncached relative workspace link from an automatically hashed source without copying or caching the linked contents.",
             ),
             entry(
                 "prepare_path(path, kind, identifier = None)",
@@ -335,7 +341,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             ),
             entry(
                 "write_tree_digest(root, output, include_suffixes = [], inputs = [], identifier = None, cacheable = True)",
-                "Declare a deterministic workspace tree digest action.",
+                "Declare a deterministic workspace tree digest action that automatically hashes its root.",
             ),
             entry(
                 "write_archive(entries, output, sha256_output = None, format = \"tar\", inputs = [], identifier = None, cacheable = True)",

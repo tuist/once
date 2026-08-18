@@ -1,0 +1,19 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		CC000000 /* project */ = {isa = PBXProject; buildConfigurationList = CC100000; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = ("en", Base); mainGroup = CC200000; productRefGroup = CC200000; projectDirPath = ""; projectRoot = ""; targets = (CC300000); };
+		CC100000 /* Build configuration list for PBXProject */ = {isa = XCConfigurationList; buildConfigurations = (CC400000); defaultConfigurationName = Debug; };
+		CC200000 /* Root group */ = {isa = PBXGroup; children = (CC500000); sourceTree = "<group>"; };
+		CC300000 /* Hello */ = {isa = PBXNativeTarget; buildConfigurationList = CC110000; buildPhases = (CC600000); dependencies = (); name = Hello; productName = Hello; productType = "com.apple.product-type.framework"; };
+		CC110000 /* Build configuration list for PBXNativeTarget Hello */ = {isa = XCConfigurationList; buildConfigurations = (CC410000); defaultConfigurationName = Debug; };
+		CC400000 /* Debug project */ = {isa = XCBuildConfiguration; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 16.0; SWIFT_VERSION = 5.0; ALWAYS_SEARCH_USER_PATHS = NO; }; name = Debug; };
+		CC410000 /* Debug target */ = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = "dev.once.Hello"; PRODUCT_NAME = "$(TARGET_NAME)"; }; name = Debug; };
+		CC500000 /* Hello.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Hello.swift"; sourceTree = "<group>"; };
+		CC600000 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (CC700000); runOnlyForDeploymentPostprocessing = 0; };
+		CC700000 /* Hello.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC500000; };
+	};
+	rootObject = CC000000;
+}
