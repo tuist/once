@@ -35,11 +35,16 @@ use super::source_digest_cache::KnownChanges;
 use super::{AvailableInput, BuildOutcome};
 use crate::commands::change_tracker::ChangePosition;
 
-const SCHEMA: &str = "once.target-outcomes.v1";
+const SCHEMA: &str = "once.target-outcomes.v2";
 
 /// A pattern set one target's analysis expanded, and where it was anchored.
+///
+/// The kind is recorded because it decides how a changed path is matched: a
+/// walk is handed a directory and owns everything under it, while a glob owns
+/// what its patterns select.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Expansion {
+    kind: String,
     package: String,
     patterns: Vec<String>,
 }
@@ -196,8 +201,12 @@ impl TargetOutcomes {
                 .iter()
                 .filter_map(|observation| match observation {
                     Observation::Paths {
-                        package, patterns, ..
+                        expansion,
+                        package,
+                        patterns,
+                        ..
                     } => Some(Expansion {
+                        kind: expansion.clone(),
                         package: package.clone(),
                         patterns: patterns.clone(),
                     }),
@@ -283,27 +292,15 @@ impl Record {
         if touches_any_of(changed, &self.sources) {
             return true;
         }
+        // The same test the analysis replay uses, so the two cannot disagree
+        // about whether a change reaches an expansion.
         self.expansions.iter().any(|expansion| {
-            if expansion.patterns.iter().any(|p| p.contains("..")) {
-                return true;
-            }
-            let prefix = if expansion.package.is_empty() {
-                String::new()
-            } else {
-                format!("{}/", expansion.package)
-            };
-            let compiled = expansion
-                .patterns
-                .iter()
-                .filter_map(|pattern| {
-                    glob::Pattern::new(pattern.strip_prefix("./").unwrap_or(pattern)).ok()
-                })
-                .collect::<Vec<_>>();
-            changed.iter().any(|path| {
-                path.strip_prefix(prefix.as_str()).is_some_and(|relative| {
-                    compiled.iter().any(|pattern| pattern.matches(relative))
-                })
-            })
+            once_frontend::analysis::expansion_could_differ(
+                changed,
+                &expansion.kind,
+                &expansion.package,
+                &expansion.patterns,
+            )
         })
     }
 }

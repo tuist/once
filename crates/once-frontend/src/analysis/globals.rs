@@ -1623,42 +1623,64 @@ impl UnchangedWorkspace {
         let Self::Except(changed) = self else {
             return true;
         };
-        if changed.is_empty() {
-            return false;
-        }
-        // A pattern that climbs out of its package is expanded against the whole
-        // workspace, so there is no prefix that bounds what it can select.
-        if patterns.iter().any(|pattern| pattern.contains("..")) {
-            return true;
-        }
-        let prefix = if package.is_empty() {
-            String::new()
-        } else {
-            format!("{package}/")
-        };
-        let compiled = (expansion != "walk_files").then(|| {
-            patterns
-                .iter()
-                .filter_map(|pattern| {
-                    glob::Pattern::new(pattern.strip_prefix("./").unwrap_or(pattern)).ok()
-                })
-                .collect::<Vec<_>>()
-        });
-        changed.iter().any(|path| {
-            let Some(relative) = path.strip_prefix(prefix.as_str()) else {
-                return false;
-            };
-            match &compiled {
-                Some(patterns) => patterns.iter().any(|pattern| pattern.matches(relative)),
-                // A walk takes a directory rather than a pattern, so anything
-                // beneath that directory is part of its answer.
-                None => patterns.iter().any(|root| {
-                    let root = root.strip_prefix("./").unwrap_or(root);
-                    relative == root || relative.starts_with(&format!("{root}/"))
-                }),
-            }
-        })
+        expansion_could_differ(changed, expansion, package, patterns)
     }
+}
+
+/// Whether an expansion selects whole subtrees rather than matching patterns.
+///
+/// A walk is handed a directory and returns what is under it, so anything
+/// beneath that directory is part of its answer. Getting this wrong in the
+/// quiet direction means a file added under a walked directory looks
+/// irrelevant, and whatever read that walk is reused when it should not be.
+fn expansion_selects_subtrees(expansion: &str) -> bool {
+    matches!(expansion, "walk_files" | "walk_workspace_files")
+}
+
+/// Whether re-running one recorded expansion could produce a different answer,
+/// given everything that changed since it ran.
+///
+/// Shared so the two places that ask it, replaying an analysis and reusing a
+/// target's outcome, cannot answer it differently.
+pub fn expansion_could_differ(
+    changed: &std::collections::BTreeSet<String>,
+    expansion: &str,
+    package: &str,
+    patterns: &[String],
+) -> bool {
+    if changed.is_empty() {
+        return false;
+    }
+    // A pattern that climbs out of its package is expanded against the whole
+    // workspace, so there is no prefix that bounds what it can select.
+    if patterns.iter().any(|pattern| pattern.contains("..")) {
+        return true;
+    }
+    let prefix = if package.is_empty() {
+        String::new()
+    } else {
+        format!("{package}/")
+    };
+    let compiled = (!expansion_selects_subtrees(expansion)).then(|| {
+        patterns
+            .iter()
+            .filter_map(|pattern| {
+                glob::Pattern::new(pattern.strip_prefix("./").unwrap_or(pattern)).ok()
+            })
+            .collect::<Vec<_>>()
+    });
+    changed.iter().any(|path| {
+        let Some(relative) = path.strip_prefix(prefix.as_str()) else {
+            return false;
+        };
+        match &compiled {
+            Some(patterns) => patterns.iter().any(|pattern| pattern.matches(relative)),
+            None => patterns.iter().any(|root| {
+                let root = root.strip_prefix("./").unwrap_or(root);
+                relative == root || relative.starts_with(&format!("{root}/"))
+            }),
+        }
+    })
 }
 
 /// Name the first recorded answer that no longer matches, or `None` when they
@@ -2551,6 +2573,26 @@ mod unchanged_workspace_tests {
 
         assert!(changed.expansion_could_differ("walk_files", "", &patterns(&["assets"])));
         assert!(!changed.expansion_could_differ("walk_files", "", &patterns(&["docs"])));
+    }
+
+    /// Every kind of walk owns its subtree, not just the package-relative one.
+    /// Treating a workspace walk's directory as a glob pattern would match the
+    /// directory itself and nothing under it, so a header dropped into a
+    /// searched directory would look irrelevant.
+    #[test]
+    fn a_workspace_walk_covers_everything_beneath_its_root() {
+        let changed = since(&["apps/Hello/Sources/Extra.h"]);
+
+        assert!(changed.expansion_could_differ(
+            "walk_workspace_files",
+            "",
+            &patterns(&["apps/Hello/Sources"])
+        ));
+        assert!(!changed.expansion_could_differ(
+            "walk_workspace_files",
+            "",
+            &patterns(&["apps/Other/Sources"])
+        ));
     }
 
     /// A pattern that climbs out of its package is expanded against the whole

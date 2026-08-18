@@ -26,6 +26,7 @@ pub use engine::{
     AnalysisResult,
 };
 pub use globals::expand_globs_with_excludes;
+pub use globals::expansion_could_differ;
 pub use globals::globals_for_prelude;
 pub use globals::UnchangedWorkspace;
 pub use store::{

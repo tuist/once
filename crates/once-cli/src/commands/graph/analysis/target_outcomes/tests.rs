@@ -48,9 +48,17 @@ fn outcome(outputs: &[&str]) -> BuildOutcome {
 }
 
 fn observations(package: &str, patterns: &[&str]) -> AnalysisObservations {
+    expansion_observations("glob", package, patterns)
+}
+
+fn expansion_observations(
+    expansion: &str,
+    package: &str,
+    patterns: &[&str],
+) -> AnalysisObservations {
     let mut recorded = AnalysisObservations::default();
     recorded.push_for_test(Observation::Paths {
-        expansion: "glob".to_string(),
+        expansion: expansion.to_string(),
         package: package.to_string(),
         patterns: patterns.iter().map(|p| (*p).to_string()).collect(),
         excludes: Vec::new(),
@@ -261,5 +269,31 @@ fn an_unknown_window_reuses_nothing() {
 
     assert!(reopened
         .reuse(&target, "key", &KnownChanges::Unknown)
+        .is_none());
+}
+
+/// A walk owns everything under its directory, so a file dropped in there is a
+/// target that has to be visited again. Matching the directory as a glob
+/// pattern instead would quietly reuse the outcome.
+#[test]
+fn a_file_appearing_under_a_walked_directory_visits_it_again() {
+    let workspace = TempDir::new().unwrap();
+    let target = target("apps/Hello", "Hello");
+    let reopened = round_trip(&workspace, |outcomes| {
+        outcomes.record(
+            &target,
+            "key".to_string(),
+            &expansion_observations("walk_workspace_files", "", &["apps/Hello/Sources"]),
+            &inputs(&[]),
+            &outcome(&[".once/out/Hello/Hello"]),
+        );
+    });
+
+    assert!(reopened
+        .reuse(
+            &target,
+            "key",
+            &changed(&["apps/Hello/Sources/Extra.h"], &[])
+        )
         .is_none());
 }
