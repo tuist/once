@@ -165,8 +165,12 @@ impl TargetOutcomes {
             input_fingerprint: record.input_fingerprint.clone(),
             available_inputs: record.available_inputs.clone(),
             outputs: record.outputs.clone(),
-            cache_tag: record.cache_state.as_str(),
-            cache_state: record.cache_state,
+            // A reused record means nothing ran, which is a hit however the
+            // build that produced it went. Replaying the producing run's state
+            // would report a miss for work that did not happen, and tell the
+            // evidence the same untruth.
+            cache_tag: EvidenceCacheState::Hit.as_str(),
+            cache_state: EvidenceCacheState::Hit,
             result: record.result.clone(),
             cached_results: record.cached_results.clone(),
         })

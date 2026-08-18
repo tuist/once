@@ -297,3 +297,30 @@ fn a_file_appearing_under_a_walked_directory_visits_it_again() {
         )
         .is_none());
 }
+
+/// Reusing a record means this invocation did no work, so it reports a hit even
+/// when the build that produced the record had to compile.
+#[test]
+fn a_reused_outcome_reports_a_hit_however_it_was_produced() {
+    let workspace = TempDir::new().unwrap();
+    let target = target("apps/tool", "tool");
+    let mut compiled = outcome(&[".once/out/tool/tool"]);
+    compiled.cache_state = EvidenceCacheState::Miss;
+    compiled.cache_tag = "miss";
+    let reopened = round_trip(&workspace, |outcomes| {
+        outcomes.record(
+            &target,
+            "key".to_string(),
+            &AnalysisObservations::default(),
+            &inputs(&[]),
+            &compiled,
+        );
+    });
+
+    let reused = reopened
+        .reuse(&target, "key", &changed(&[], &[]))
+        .expect("nothing moved, so the record still describes this build");
+
+    assert_eq!(reused.cache_state, EvidenceCacheState::Hit);
+    assert_eq!(reused.cache_tag, "hit");
+}
