@@ -93,7 +93,11 @@ defmodule OnceSiteWeb.Docs.Sidebar do
       %Group{
         label: "Local Execution",
         items: [
-          %Item{label: "Memory Limits", slug: "/docs/guide/local-execution/memory-limits"}
+          %Item{label: "Memory Limits", slug: "/docs/guide/local-execution/memory-limits"},
+          %Item{
+            label: "Unchanged Builds",
+            slug: "/docs/guide/local-execution/unchanged-builds"
+          }
         ]
       },
       %Group{
