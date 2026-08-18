@@ -1,0 +1,9 @@
+[[target]]
+name = "Example"
+kind = "apple_xcframework_import"
+srcs = ["Example.xcframework/Info.plist"]
+
+[target.attrs]
+bundle = "Example.xcframework"
+platform = "macos"
+arch = "arm64"

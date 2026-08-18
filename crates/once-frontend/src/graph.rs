@@ -206,6 +206,11 @@ pub struct TargetKindExample {
     /// One-line "use this when..." hint that helps callers choose
     /// between examples for the same target kind.
     pub use_when: String,
+    /// Host platforms whose toolchain the starter's resolver needs to load.
+    /// Empty means the starter loads on any platform. Named platforms use
+    /// [`std::env::consts::OS`] values such as `macos`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub platforms: Vec<String>,
     /// Where the starter file tree lives. The wire schema omits this so
     /// discovery remains independent from local package layout.
     #[serde(skip_serializing)]
@@ -963,6 +968,7 @@ fn example_from_value(
     let name = non_empty_field_string(value, path, "name")?;
     let use_when = non_empty_field_string(value, path, "use_when")?;
     let example_path = non_empty_field_string(value, path, "path")?;
+    let platforms = field_string_list(value, path, "platforms").unwrap_or_default();
     let source = source_context
         .example_source(&example_path)
         .map_err(|message| format!("{path}.path {message}"))?;
@@ -970,6 +976,7 @@ fn example_from_value(
         name,
         slug,
         use_when,
+        platforms,
         source,
     })
 }

@@ -9,6 +9,11 @@ Once can build libraries, frameworks, applications, and test bundles for
 Apple platforms. This guide starts with one iOS application and a library it
 depends on, then queries, builds, runs, and tests that same project.
 
+If you already have an Xcode project or workspace, you do not need to declare
+these targets by hand. [Xcode Projects](/guide/graph/apple/xcode) shows how to point
+Once at an existing `.xcodeproj` or `.xcworkspace` and get the same targets
+derived for you.
+
 ## Prerequisites
 
 Apple targets require a macOS host with the Apple developer tools used by
@@ -185,9 +190,10 @@ once test apps/Hello/AppCoreTests
 ```
 
 Apple tests currently support macOS logic tests and iOS simulator bundles.
-Application-hosted tests, custom destinations, test plans, and device runners
-are not implemented. Non-empty unsupported attributes fail during graph
-analysis instead of being ignored. See the
+An application host discovered through dependency providers is supported,
+while direct `test_host` attributes, custom destinations, test plans, and
+device runners are not implemented. Non-empty unsupported attributes fail
+during graph analysis instead of being ignored. See the
 [`apple_test_bundle` reference](/reference/prelude/apple_test_bundle) before
 adding those features.
 
@@ -233,14 +239,15 @@ Use the target kind reference for the contract that matches the artifact:
 - [`apple_library`](/reference/prelude/apple_library)
 - [`apple_framework`](/reference/prelude/apple_framework)
 - [`apple_application`](/reference/prelude/apple_application)
+- [`apple_resource_bundle`](/reference/prelude/apple_resource_bundle)
 - [`apple_thinned_package`](/reference/prelude/apple_thinned_package)
 - [`apple_test_bundle`](/reference/prelude/apple_test_bundle)
+- [`apple_xcframework_import`](/reference/prelude/apple_xcframework_import)
 - [`swift_macro`](/reference/prelude/swift_macro)
 
-Application resource bundles, asset catalogs, custom property-list templates,
-entitlements, provisioning profiles, signing identities, and non-ad-hoc
-signing are accepted by the schema but are not supported yet. Using a non-empty
-value for one of these attributes fails validation before the build starts.
+Provisioning profiles, signing identities, and non-ad-hoc signing are accepted
+by the schema but are not supported yet. Using a non-empty value for one of
+these attributes fails validation before the build starts.
 
 ## Next
 

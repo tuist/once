@@ -121,6 +121,13 @@ fn metadata_provider(
     workspace: &Path,
     target: &GraphTarget,
 ) -> Option<serde_json::Value> {
+    if !target
+        .capabilities
+        .iter()
+        .any(|capability| capability.name == "metadata")
+    {
+        return None;
+    }
     let analyzer = analyzer?;
     let analysis = analyzer
         .analyze_target_capability(target, workspace, &[], "metadata")

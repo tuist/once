@@ -1,0 +1,55 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		ROOT = {isa = PBXProject; buildConfigurationList = PROJECT_CONFIGS; mainGroup = GROUP; targets = (SIGNAL_APP, SIGNAL_SHARE, SIGNAL_NOTIFICATION, SIGNAL_CORE, SIGNAL_APP_TESTS); };
+		PROJECT_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (PROJECT_DEBUG); defaultConfigurationName = Debug; };
+		PROJECT_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_VERSION = 5.0; }; };
+
+		GROUP = {isa = PBXGroup; children = (SIGNAL_CORE_FILE, SIGNAL_APP_FILE, SIGNAL_SHARE_FILE, SIGNAL_NOTIFICATION_FILE, SIGNAL_APP_TESTS_FILE); sourceTree = "<group>"; };
+
+		SIGNAL_CORE_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalCore/Sources/SignalCore.swift; sourceTree = "<group>"; };
+		SIGNAL_CORE_BUILD = {isa = PBXBuildFile; fileRef = SIGNAL_CORE_FILE; };
+		SIGNAL_CORE_SOURCES = {isa = PBXSourcesBuildPhase; files = (SIGNAL_CORE_BUILD); };
+		SIGNAL_CORE_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (SIGNAL_CORE_DEBUG); defaultConfigurationName = Debug; };
+		SIGNAL_CORE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; }; };
+		SIGNAL_CORE = {isa = PBXNativeTarget; buildConfigurationList = SIGNAL_CORE_CONFIGS; buildPhases = (SIGNAL_CORE_SOURCES); name = SignalCore; productType = "com.apple.product-type.library.static"; productName = SignalCore; };
+
+		SIGNAL_PRIVACY = {isa = PBXFileReference; lastKnownFileType = text.xml; path = SignalApp/Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		SIGNAL_PRIVACY_BUILD = {isa = PBXBuildFile; fileRef = SIGNAL_PRIVACY; };
+
+		SIGNAL_APP_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalApp/Sources/SignalApp.swift; sourceTree = "<group>"; };
+		SIGNAL_APP_BUILD = {isa = PBXBuildFile; fileRef = SIGNAL_APP_FILE; };
+		SIGNAL_APP_SOURCES = {isa = PBXSourcesBuildPhase; files = (SIGNAL_APP_BUILD); };
+		SIGNAL_APP_RESOURCES = {isa = PBXResourcesBuildPhase; files = (SIGNAL_PRIVACY_BUILD); };
+		SIGNAL_APP_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (SIGNAL_APP_DEBUG); defaultConfigurationName = Debug; };
+		SIGNAL_APP_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; CODE_SIGN_ENTITLEMENTS = SignalApp/SupportingFiles/Signal.entitlements; }; };
+		SIGNAL_APP_DEP_CORE = {isa = PBXTargetDependency; target = SIGNAL_CORE; };
+		SIGNAL_APP = {isa = PBXNativeTarget; buildConfigurationList = SIGNAL_APP_CONFIGS; buildPhases = (SIGNAL_APP_SOURCES, SIGNAL_APP_RESOURCES); dependencies = (SIGNAL_APP_DEP_CORE); name = SignalApp; productType = "com.apple.product-type.application"; productName = SignalApp; };
+
+		SIGNAL_SHARE_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalShare/Sources/ShareViewController.swift; sourceTree = "<group>"; };
+		SIGNAL_SHARE_BUILD = {isa = PBXBuildFile; fileRef = SIGNAL_SHARE_FILE; };
+		SIGNAL_SHARE_SOURCES = {isa = PBXSourcesBuildPhase; files = (SIGNAL_SHARE_BUILD); };
+		SIGNAL_SHARE_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (SIGNAL_SHARE_DEBUG); defaultConfigurationName = Debug; };
+		SIGNAL_SHARE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; CODE_SIGN_ENTITLEMENTS = SignalShare/SupportingFiles/Share.entitlements; }; };
+		SIGNAL_SHARE = {isa = PBXNativeTarget; buildConfigurationList = SIGNAL_SHARE_CONFIGS; buildPhases = (SIGNAL_SHARE_SOURCES); name = SignalShare; productType = "com.apple.product-type.app-extension"; productName = SignalShare; };
+
+		SIGNAL_NOTIFICATION_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalNotification/Sources/NotificationService.swift; sourceTree = "<group>"; };
+		SIGNAL_NOTIFICATION_BUILD = {isa = PBXBuildFile; fileRef = SIGNAL_NOTIFICATION_FILE; };
+		SIGNAL_NOTIFICATION_SOURCES = {isa = PBXSourcesBuildPhase; files = (SIGNAL_NOTIFICATION_BUILD); };
+		SIGNAL_NOTIFICATION_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (SIGNAL_NOTIFICATION_DEBUG); defaultConfigurationName = Debug; };
+		SIGNAL_NOTIFICATION_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; CODE_SIGN_ENTITLEMENTS = SignalNotification/SupportingFiles/Notification.entitlements; }; };
+		SIGNAL_NOTIFICATION = {isa = PBXNativeTarget; buildConfigurationList = SIGNAL_NOTIFICATION_CONFIGS; buildPhases = (SIGNAL_NOTIFICATION_SOURCES); name = SignalNotification; productType = "com.apple.product-type.app-extension"; productName = SignalNotification; };
+
+		SIGNAL_APP_TESTS_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalAppTests/Sources/SignalAppTests.swift; sourceTree = "<group>"; };
+		SIGNAL_APP_TESTS_BUILD = {isa = PBXBuildFile; fileRef = SIGNAL_APP_TESTS_FILE; };
+		SIGNAL_APP_TESTS_SOURCES = {isa = PBXSourcesBuildPhase; files = (SIGNAL_APP_TESTS_BUILD); };
+		SIGNAL_APP_TESTS_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (SIGNAL_APP_TESTS_DEBUG); defaultConfigurationName = Debug; };
+		SIGNAL_APP_TESTS_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SignalApp.app/SignalApp"; }; };
+		SIGNAL_APP_TESTS_DEP_APP = {isa = PBXTargetDependency; target = SIGNAL_APP; };
+		SIGNAL_APP_TESTS = {isa = PBXNativeTarget; buildConfigurationList = SIGNAL_APP_TESTS_CONFIGS; buildPhases = (SIGNAL_APP_TESTS_SOURCES); dependencies = (SIGNAL_APP_TESTS_DEP_APP); name = SignalAppTests; productType = "com.apple.product-type.bundle.unit-test"; productName = SignalAppTests; };
+	};
+	rootObject = ROOT;
+}
