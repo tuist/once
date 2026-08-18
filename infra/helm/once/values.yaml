@@ -100,22 +100,3 @@ externalSecrets:
     enabled: false
     item: "once-ghcr-pull"
     field: "notesPlain"
-
-postgres:
-  # Kept running but unused by the app today; a single instance frees a
-  # replica pod and its 20Gi volume. Dropping Postgres entirely needs app
-  # changes (Repo is started unconditionally and runtime.exs requires
-  # DATABASE_URL), so that is left for the larger restructure.
-  enabled: true
-  instances: 1
-  storageSize: 20Gi
-  storageClass: hcloud-volumes
-  imageName: ghcr.io/cloudnative-pg/postgresql:18.0
-  database: once
-  owner: once
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      memory: 512Mi

@@ -57,18 +57,9 @@ config :once_site, OnceSiteWeb.Endpoint,
   pubsub_server: OnceSite.PubSub,
   live_view: [signing_salt: "TloqJLzK"]
 
-config :once_site,
-  ecto_repos: [OnceSite.Repo],
-  generators: [
-    timestamp_type: :utc_datetime,
-    # Import environment specific config. This must remain at the bottom
-    migration_primary_key: [name: :id, type: :uuid],
-    migration_foreign_key: [type: :uuid],
-    binary_id_type: UUIDv7
-  ]
-
 # Use Jason for JSON parsing in Phoenix
-# of this file so it overrides the configuration defined above.
 config :phoenix, :json_library, Jason
 
+# Import environment specific config. This must remain at the bottom
+# of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
