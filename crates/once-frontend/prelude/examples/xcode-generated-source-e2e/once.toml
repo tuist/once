@@ -1,7 +1,12 @@
 [[target]]
 name = "generated"
 kind = "xcode_workspace"
-srcs = ["Generated.xcodeproj/project.pbxproj", "Hello.swift"]
+srcs = [
+    "Generated.xcodeproj/project.pbxproj",
+    "Hello.swift",
+    "Packages/Shared/Package.swift",
+    "Packages/Shared/Sources/Shared/Shared.swift",
+]
 
 [target.attrs]
 project = "Generated.xcodeproj"
