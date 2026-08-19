@@ -294,11 +294,11 @@ Lightweight discovery entry point. Returns matching target kinds with documentat
 ]
 ```
 
-## `once_list_native_projects`
+## `once_native_list`
 
-List native project declarations and the roots they currently recognize.
+List native integrations and the workspace roots they currently recognize.
 
-Returns each enabled native project's name, documentation, marker files, additional resolver inputs, seed target kind, and current package matches. Detection reads file names only and does not execute native project code. The matching command-line operation is `once query native-projects --format json`.
+Returns each enabled native integration's name, documentation, marker files, additional resolver inputs, seed target kind, and current matches. Detection reads file names only and does not execute native code. The matching command-line operation is `once native list --format json`.
 
 **Input schema**
 
@@ -322,11 +322,11 @@ Returns each enabled native project's name, documentation, marker files, additio
 }
 ```
 
-## `once_preview_native_project`
+## `once_native_show`
 
-Preview the seed target and complete typed graph derived by one detected native project.
+Preview the seed target and complete typed graph derived by one detected native integration.
 
-Runs the selected native project's ordinary target-kind resolver without writing a manifest, then returns its declaration, detection evidence, seed target, and expanded typed targets. Omit `package` when the native project has one match. Expanded dependency graphs can be very large. For a loaded project, prefer `once_query_workspace`, filtered `once_query_targets`, `once_query_tests`, and `once_get_target` when the complete graph is not needed. The matching command-line operation is `once query native-project <name> [--package <path>] --format json`.
+Runs the selected native integration's ordinary target-kind resolver without writing a manifest, then returns its declaration, detection evidence, seed target, and expanded typed targets. Omit `path` when it has one match. Expanded dependency graphs can be very large. For a loaded project, prefer `once_query_workspace`, filtered `once_query_targets`, `once_query_tests`, and `once_get_target` when the complete graph is not needed. The matching command-line operation is `once native show <name> [--path <path>] --format json`.
 
 **Input schema**
 
@@ -336,11 +336,11 @@ Runs the selected native project's ordinary target-kind resolver without writing
   "properties": {
     "name": {
       "type": "string",
-      "description": "Name discovered with `once_list_native_projects`."
+      "description": "Name discovered with `once_native_list`."
     },
-    "package": {
+    "path": {
       "type": "string",
-      "description": "Package path from the native project match. Use an empty string for the workspace root."
+      "description": "Workspace-relative root path from the native match. Use an empty string for the workspace root."
     }
   },
   "required": [
@@ -360,11 +360,11 @@ Runs the selected native project's ordinary target-kind resolver without writing
 }
 ```
 
-## `once_init_native_project`
+## `once_native_init`
 
-Initialize Once from one detected native project.
+Initialize Once from one detected native integration.
 
-This state-changing tool is available only when the server starts with `once mcp --allow-run`. It writes the native project's validated seed target through the manifest editor while preserving unrelated configuration and comments. Repeating an identical initialization is idempotent. A conflicting target with the same name is rejected. The matching command-line operation is `once edit init-native-project <name> [--package <path>]`.
+This state-changing tool is available only when the server starts with `once mcp --allow-run`. It writes the native integration's validated seed target through the manifest editor while preserving unrelated configuration and comments. Repeating an identical initialization is idempotent. A conflicting target with the same name is rejected. The matching command-line operation is `once native init <name> [--path <path>]`.
 
 **Input schema**
 
@@ -374,11 +374,11 @@ This state-changing tool is available only when the server starts with `once mcp
   "properties": {
     "name": {
       "type": "string",
-      "description": "Name discovered with `once_list_native_projects`."
+      "description": "Name discovered with `once_native_list`."
     },
-    "package": {
+    "path": {
       "type": "string",
-      "description": "Package path from the native project match. Use an empty string for the workspace root."
+      "description": "Workspace-relative root path from the native match. Use an empty string for the workspace root."
     }
   },
   "required": [

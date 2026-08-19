@@ -63,8 +63,8 @@ the same lockfile.
 From the directory that contains `mix.exs`, inspect the match and the graph:
 
 ```sh
-once query native-projects
-once query native-project mix
+once native list
+once native show mix
 once query targets
 ```
 
@@ -72,7 +72,7 @@ No `once.toml` is required, and these commands do not write one. If the
 workspace contains several Mix projects, select one explicitly:
 
 ```sh
-once query native-project mix --package apps/accounts
+once native show mix --path apps/accounts
 ```
 
 The identifiers printed by `once query targets` are the source of truth. For a
@@ -141,7 +141,7 @@ Initialization is optional. Use it when the repository should make its native
 project selection explicit:
 
 ```sh
-once edit init-native-project mix
+once native init mix
 ```
 
 This writes only the `mix_workspace` seed. The detailed targets remain derived
@@ -173,7 +173,7 @@ back to an opaque build.
   declare a `mix_release` target with `pre_tasks`. Once does not infer
   framework conventions.
 - Native project evaluation requires Erlang 27 or newer.
-- Use `once query native-project mix --package <path>` when more than one
+- Use `once native show mix --path <path>` when more than one
   `mix.exs` matches the workspace.
 
 ## Author a Graph When You Need More Control

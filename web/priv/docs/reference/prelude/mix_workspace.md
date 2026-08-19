@@ -52,17 +52,17 @@ The target emits `mix_workspace`.
 
 ## Direct Use
 
-Discover and preview the native project:
+Discover and preview the native integration:
 
 ```sh
-once query native-projects
-once query native-project mix
+once native list
+once native show mix
 ```
 
 Initialize the seed:
 
 ```sh
-once edit init-native-project mix
+once native init mix
 ```
 
 The imported target is equivalent to:

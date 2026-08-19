@@ -56,7 +56,7 @@ From the directory that contains the root `Cargo.toml`, inspect the match and
 the first-party targets:
 
 ```sh
-once query native-projects
+once native list
 once query targets --kind rust_binary
 once query targets --kind rust_library
 once query targets --kind rust_test
@@ -66,7 +66,7 @@ No `once.toml` is required, and these commands do not write one. If a
 repository contains several independent Cargo projects, select one explicitly:
 
 ```sh
-once query native-project cargo --package tools/linter
+once native show cargo --path tools/linter
 ```
 
 The `cargo_workspace` seed runs locked, offline Cargo metadata. It emits
@@ -77,7 +77,7 @@ The complete preview includes locked external packages, so it can be large.
 Request it only when you need to inspect the full expansion:
 
 ```sh
-once query native-project cargo
+once native show cargo
 ```
 
 The identifiers printed by `once query targets` are the source of truth.
@@ -87,7 +87,7 @@ normally derives `cargo_hello_bin_hello` and
 `cargo_hello_bin_hello_unit_tests`.
 
 Cargo workspaces use their shallowest matching `Cargo.toml`, so member
-manifests do not create duplicate native project seeds. Cargo remains
+manifests do not create duplicate native integration seeds. Cargo remains
 authoritative for workspace membership, default members, features, target
 metadata, and resolved versions. Local path packages outside the workspace
 remain dependency targets instead of becoming first-party workspace members.
@@ -169,7 +169,7 @@ Initialization is optional. Use it when the repository should make its native
 project selection explicit:
 
 ```sh
-once edit init-native-project cargo
+once native init cargo
 ```
 
 This writes only the `cargo_workspace` seed. The detailed targets remain
@@ -195,7 +195,7 @@ the complete seed contract.
   the same Cargo home and retry.
 - If a binary or example is absent, inspect its `required-features`, initialize
   the seed, and select those features explicitly.
-- Use `once query native-project cargo --package <path>` when more than one
+- Use `once native show cargo --path <path>` when more than one
   independent `Cargo.toml` matches the workspace.
 - A build script that invokes a host tool needs that tool named in
   `build_script_tools`. The seed already lists the build tools that packages

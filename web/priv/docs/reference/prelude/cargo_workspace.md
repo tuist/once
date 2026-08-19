@@ -70,17 +70,17 @@ cargo fetch --locked
 Once never performs that network operation while loading or building the
 graph.
 
-Discover and preview the native project:
+Discover and preview the native integration:
 
 ```sh
-once query native-projects
-once query native-project cargo
+once native list
+once native show cargo
 ```
 
 Initialize the seed:
 
 ```sh
-once edit init-native-project cargo
+once native init cargo
 ```
 
 The imported target is equivalent to:
@@ -104,6 +104,6 @@ express.
 ## Sources
 
 - [Cargo metadata](https://doc.rust-lang.org/stable/cargo/commands/cargo-metadata.html)
-  defines the native project graph.
+  defines the native integration graph.
 - [The Cargo lockfile](https://doc.rust-lang.org/cargo/reference/lockfile.html)
   defines resolved versions and checksums.

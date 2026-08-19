@@ -1,12 +1,12 @@
 # Guides
 
-Once meets a project where it is. Start from native project metadata, cache the
+Once meets a project where it is. Start from native workspace metadata, cache the
 automation that already works, and add a typed graph only where more structure
 helps.
 
 ## Start with an existing project
 
-Once can recognize supported native projects and make their build, test, and
+Once can recognize supported native workspaces and make their build, test, and
 run capabilities available without requiring changes to their project files.
 Native project descriptions and lockfiles remain authoritative. Read the
 [Typed Graph guide](/guide/graph/#start-from-a-native-project) to discover and

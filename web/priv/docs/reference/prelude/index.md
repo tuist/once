@@ -83,6 +83,8 @@ you already have.
 
 ## Swift target kinds
 
+- [`swift_package_workspace`](/reference/prelude/swift_package_workspace):
+  native Swift Package Manager workspace lowered into first-party Apple targets
 - [`swift_package_dependencies`](/reference/prelude/swift_package_dependencies):
   locked Swift package graph and selected static products exposed to Apple
   targets
@@ -106,7 +108,7 @@ you already have.
 
 ## Elixir target kinds
 
-- [`mix_workspace`](/reference/prelude/mix_workspace): native project seed
+- [`mix_workspace`](/reference/prelude/mix_workspace): native integration seed
   that derives development, test, production, lint, test, and release targets
   from `mix.exs`
 - [`mix_dependencies`](/reference/prelude/mix_dependencies): locked Mix and Hex
@@ -163,7 +165,7 @@ you already have.
 
 ## Rust target kinds
 
-- [`cargo_workspace`](/reference/prelude/cargo_workspace): native project seed
+- [`cargo_workspace`](/reference/prelude/cargo_workspace): native integration seed
   that derives first-party and locked external targets from `Cargo.toml`
 - [`cargo_dependencies`](/reference/prelude/cargo_dependencies): cacheable
   Cargo dependency set consumed by Rust targets

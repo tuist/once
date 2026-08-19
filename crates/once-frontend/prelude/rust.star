@@ -3468,7 +3468,7 @@ cargo_workspace = target_kind(
     attrs = [
         attr("manifest", "string", default = "Cargo.toml", docs = "Package-relative Cargo manifest path passed to `cargo metadata --manifest-path`.", configurable = False),
         attr("lockfile", "string", default = "Cargo.lock", docs = "Package-relative Cargo lockfile path read as a declared resolver input.", configurable = False),
-        attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native project resolution. Defaults to srcs when empty.", configurable = False),
+        attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native integration resolution. Defaults to srcs when empty.", configurable = False),
         attr("metadata_file", "string", docs = "Optional checked-in JavaScript Object Notation output from cargo metadata.", configurable = False),
         attr("host_metadata_file", "string", docs = "Optional checked-in host Cargo metadata snapshot.", configurable = False),
         attr("vendor_dir", "string", docs = "Optional package-relative directory containing pre-vendored crate sources. When omitted, Once snapshots locked sources from Cargo's local cache into target outputs.", configurable = False),
@@ -3480,14 +3480,14 @@ cargo_workspace = target_kind(
         attr("build_script_tools", "list<string>", default = str(_CARGO_BUILD_SCRIPT_TOOLS), docs = "Host tool names that package build scripts may invoke. Each name is resolved on PATH during graph loading and its directory joins the build script's search path; names that resolve to nothing are ignored. Set an empty list to give build scripts nothing beyond the Rust and C toolchains.", configurable = False),
     ],
     resolver = _cargo_workspace_resolver,
-    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_binary"], "Default first-party Cargo products emitted by native project discovery.")],
+    deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_binary"], "Default first-party Cargo products emitted by native integration discovery.")],
     providers = ["cargo_workspace"],
     capabilities = [capability("build", [])],
     tools = [_RUST_TOOL],
     examples = [
         example(
             "cargo-workspace-native-project",
-            name = "Cargo native project seed",
+            name = "Cargo native integration seed",
             use_when = "Use this when a Cargo project should derive first-party build and test targets from Cargo.toml.",
         ),
     ],

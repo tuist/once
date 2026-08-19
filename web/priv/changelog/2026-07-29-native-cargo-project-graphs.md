@@ -19,6 +19,6 @@ toolchain selected by the project's configuration. Test targets report their
 results through the same normalized shape as the other ecosystems, so scheduled
 runs, change-scoped selection, and summaries work the same way.
 
-Start by running `once query native-project cargo`, inspect the derived targets
+Start by running `once native show cargo`, inspect the derived targets
 with `once query targets`, then use `once build`, `once run`, and `once test`
 with the target identifiers Once reports.

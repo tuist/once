@@ -138,8 +138,8 @@ helps you decide when a typed target is a better fit than a script.
 
 ## Start From A Native Project
 
-Once can recognize supported native project descriptions before a package has
-an explicit target. A native project supplies an ephemeral seed target, then
+Once can recognize supported native workspace descriptions before a package has
+an explicit target. A native integration supplies an ephemeral seed target, then
 the seed's ordinary resolver derives the detailed typed graph from native
 metadata.
 
@@ -148,32 +148,34 @@ lockfile and locked dependency sources available. Detection only reads marker
 names, but preview and normal graph loading may run the native resolver and
 require those sources.
 
-Inspect the available native projects and their current matches:
+Inspect the available native integrations and their current matches:
 
 ```sh
-once query native-projects
+once native list
 ```
 
 Preview one match without changing the repository:
 
 ```sh
-once query native-project mix
-once query native-project cargo
-once query native-project xcode
+once native show mix
+once native show cargo
+once native show xcode
+once native show swift_package
 ```
 
 The preview includes the exact seed and every resolver-emitted target. Normal
 build, run, and test commands can use that ephemeral graph immediately.
 
-Initialize the seed when the native project selection should be reviewed and stored:
+Initialize the seed when the native integration selection should be reviewed and stored:
 
 ```sh
-once edit init-native-project mix
-once edit init-native-project cargo
-once edit init-native-project xcode
+once native init mix
+once native init cargo
+once native init xcode
+once native init swift_package
 ```
 
-Initialization writes only the seed target to `once.toml`. The native project
+Initialization writes only the seed target to `once.toml`. The native integration
 description and lockfile remain authoritative for dependencies, products,
 tests, and releases. Repeating an identical initialization makes no change.
 
@@ -183,7 +185,7 @@ and introduce a project Starlark module only when reusable behavior is missing
 from the built-in target kinds.
 
 An explicit Once target for the same target kind takes precedence in its
-package. Unrelated targets do not hide a native project in the same package or
+package. Unrelated targets do not hide a native integration in the same package or
 elsewhere in the workspace.
 
 An Xcode project checked in beside the repository root is recognized the same
@@ -192,7 +194,7 @@ frameworks, libraries, resource bundles, and test bundles, so a repository with
 no `once.toml` at all can be queried and built directly:
 
 ```sh
-once query native-project xcode
+once native show xcode
 once query targets
 once build MyApp
 ```
@@ -200,6 +202,21 @@ once build MyApp
 [Xcode Projects](/guide/graph/apple/xcode) walks through the full flow,
 including workspaces with several projects, build configurations, and current
 limitations.
+
+A Swift Package Manager workspace is recognized from `Package.swift`. Its
+native seed lowers first-party package targets into the existing Apple target
+kinds, without requiring an `once.toml` file:
+
+```sh
+once native show swift_package
+once query targets
+once build MyLibrary
+```
+
+For a repository with several packages, pass `--path` using the directory
+shown by `once native list`. The [Swift Packages](/guide/graph/swift-packages)
+guide covers native package workspaces, locked external package graphs, and
+network policy.
 
 Every built-in target kind also ships a complete starter with manifests and
 source files. Discover the available slugs, then materialize one directly:

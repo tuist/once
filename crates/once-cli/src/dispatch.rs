@@ -214,6 +214,7 @@ async fn run_command(
             run_query_command(workspace, output, expression.as_deref(), cmd).await
         }
         Cmd::Edit { cmd } => run_edit_command(workspace, output, cmd).await,
+        Cmd::Native { cmd } => run_native_command(workspace, output, cmd).await,
         Cmd::Runtime { cmd } => run_runtime_command(workspace, output, cmd).await,
         Cmd::Mcp {
             workspace: workspace_override,
@@ -443,14 +444,6 @@ async fn run_query_command(
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
-        Some(cli::QueryCmd::NativeProjects) => commands::query::native_projects(workspace, output)
-            .await
-            .map(|()| ExitCode::SUCCESS),
-        Some(cli::QueryCmd::NativeProject { name, package }) => {
-            commands::query::native_project(workspace, output, &name, package.as_deref())
-                .await
-                .map(|()| ExitCode::SUCCESS)
-        }
         Some(cli::QueryCmd::ModuleContract) => commands::query::module_contract(output)
             .await
             .map(|()| ExitCode::SUCCESS),
@@ -580,12 +573,30 @@ async fn run_edit_command(
         }) => commands::edit::materialize_example(workspace, output, &kind, &slug, &destination)
             .await
             .map(|()| ExitCode::SUCCESS),
-        Some(cli::EditCmd::InitNativeProject { name, package }) => {
-            commands::edit::init_native_project(workspace, output, &name, package.as_deref())
+        None => anyhow::bail!("edit subcommand required"),
+    }
+}
+
+async fn run_native_command(
+    workspace: &Path,
+    output: Output,
+    command: Option<cli::NativeCmd>,
+) -> Result<ExitCode> {
+    match command {
+        Some(cli::NativeCmd::List) => commands::query::native_projects(workspace, output)
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Some(cli::NativeCmd::Show { name, path }) => {
+            commands::query::native_project(workspace, output, &name, path.as_deref())
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
-        None => anyhow::bail!("edit subcommand required"),
+        Some(cli::NativeCmd::Init { name, path }) => {
+            commands::edit::init_native_project(workspace, output, &name, path.as_deref())
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        None => anyhow::bail!("native subcommand required"),
     }
 }
 

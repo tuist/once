@@ -97,7 +97,7 @@ one default dependency and reports an attribute-scoped repair before analysis.
 
 ## Native Project Discovery Contract
 
-`native_project(...)` lets a module recognize an ecosystem-native project and
+`native_project(...)` lets a module recognize an ecosystem-native integration and
 map it to one ordinary seed target. The seed target's resolver emits the
 detailed graph through the same typed resolver contract as
 manifest-authored targets.
@@ -107,7 +107,7 @@ native = native_project(
     name = "native",
     target_kind = "native_workspace",
     target_name = "native",
-    docs = "Recognizes a native project.",
+    docs = "Recognizes a native integration.",
     markers = ["project.native"],
     inputs = ["project.lock", "config/**/*"],
     exclude = ["build"],
@@ -119,7 +119,7 @@ native = native_project(
 ```
 
 - `target_kind` names the target kind instantiated by the seed. Schema loading
-  rejects a native project that references an unknown target kind.
+  rejects a native integration that references an unknown target kind.
 - `markers` lists files that must all exist in one directory. The first entry
   drives the bounded scan.
 - `inputs` adds optional text globs to the seed's resolver inputs. Markers are
@@ -148,23 +148,23 @@ error if a workspace produces more, rather than allowing repository size to
 drive unbounded memory growth. Narrow the workspace include or exclude patterns,
 or use `on_match = "stop"` when nested projects belong to one workspace.
 
-Native project discovery provides ephemeral seeds in packages that have no explicit Once
+Native discovery provides ephemeral seeds in workspace roots that have no explicit Once
 targets. Explicit targets take precedence only in their own package, so an
-unrelated root target does not hide native projects elsewhere in a monorepo.
+unrelated root target does not hide native roots elsewhere in a monorepo.
 The configured workspace include and exclude patterns still define the
 boundary.
 
-Discover and preview native projects from the command line:
+Discover and preview native roots from the command line:
 
 ```sh
-once query native-projects
-once query native-project native
+once native list
+once native show native
 ```
 
 Initialize only the stable seed when the repository should own the selection:
 
 ```sh
-once edit init-native-project native
+once native init native
 ```
 
 Initialization is idempotent and preserves unrelated `once.toml` configuration and
@@ -172,8 +172,7 @@ comments. Resolver-emitted dependency and product targets remain derived from
 the native manifest and lockfile.
 
 [Model Context Protocol](https://modelcontextprotocol.io/) callers use the
-matching `once_list_native_projects`, `once_preview_native_project`, and
-`once_init_native_project` tools.
+matching `once_native_list`, `once_native_show`, and `once_native_init` tools.
 
 ## Dependency Resolver Contract
 
