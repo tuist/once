@@ -5403,6 +5403,8 @@ def _swiftpm_swift_executable(requested_swift, xcode_developer_dir, swiftc_path)
 
 def _swift_package_dependencies_resolver(ctx):
     attrs = ctx["attrs"]
+    if attrs.get("_lazy_resolution") or False:
+        return {"targets": []}
     files = ctx["files"]
     resolved_file = _swiftpm_package_file(attrs, attrs.get("resolved_file") or "Package.resolved")
     resolved_content = files.get(resolved_file)
@@ -5518,7 +5520,7 @@ def _swift_package_dependencies_impl(ctx):
     if remote_identities and not vendor_path_attr and not allow_network:
         fail(ctx["label"]["id"] + ": locked remote Swift packages require vendor_path for a network-independent build or allow_network = true for explicit network access")
     build_inputs = list(all_srcs)
-    clean_paths = [scratch]
+    clean_paths = [bin_dir]
     if vendor_path_attr:
         vendor_path = _swiftpm_package_path(ctx, vendor_path_attr)
         copy_path(
@@ -5531,7 +5533,6 @@ def _swift_package_dependencies_impl(ctx):
         )
         build_inputs.append(scratch)
         # A tree copy replaces its destination, so removed vendor checkouts cannot persist.
-        clean_paths = [bin_dir]
 
     argv = [
         swift,
@@ -5634,6 +5635,7 @@ swift_package_dependencies = target_kind(
         attr("resolved_identities", "list<string>", default = "[]", docs = "Synthetic package identities populated by the resolver.", configurable = False),
         attr("_remote_identities", "list<string>", default = "[]", docs = "Remote package identities populated by the resolver for execution policy.", configurable = False),
         attr("_locked_pins", "list<string>", default = "[]", docs = "Resolver-owned immutable package state included in native build action identities.", configurable = False),
+        attr("_lazy_resolution", "bool", default = "false", docs = "Resolver-owned marker that defers remote package inspection until the build action.", configurable = False),
     ],
     deps = [
         dep("deps", ["swift_package_pin"], "Locked direct package dependencies emitted by the resolver."),

@@ -1,0 +1,93 @@
+# `swift_package_workspace`
+
+Native Swift Package Manager workspace seed.
+
+## Description
+
+`swift_package_workspace` reads `Package.swift` through Swift Package Manager
+and lowers first-party libraries, executables, macros, binary targets, and
+tests into the existing Apple target kinds. The package manifest remains
+authoritative for products, target dependencies, source layout, compiler
+settings, resources, and platform constraints.
+
+Once discovers a workspace automatically from `Package.swift`. A repository
+without `once.toml` can therefore query and build its first-party package
+targets directly. Discovery skips generated package-manager state such as
+`.build` and `.swiftpm`.
+
+Remote package metadata is not fetched during graph loading. When a first-party
+target needs a product from a locked remote package, the resolver adds a
+dependency action that fetches and builds that product only when a build needs
+it. The action is keyed by the package manifest, lock file, and Swift toolchain.
+
+## Attributes
+
+| Attribute | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `package_path` | string | no | `.` | Package-relative directory containing `Package.swift` |
+| `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Package-relative source globs available while deriving the graph |
+| `platform` | string | no | `macos` | Apple platform used when lowering package targets |
+| `minimum_os` | string | no | `13.0` | Minimum operating system version for lowered targets |
+| `sdk_variant` | string | no | `simulator` | Simulator or device software development kit selection; ignored for macOS |
+| `swift` | string | no | `swift` | Swift Package Manager executable; the default is paired with the selected Swift compiler |
+| `xcode_developer_dir` | string | no |  | Specific Xcode developer directory |
+
+## Providers and capabilities
+
+The target emits `swift_package_workspace` and exposes the `build` capability.
+The resolver emits the first-party Apple targets that implement the actual
+build products.
+
+## Direct use
+
+Discover and preview a package without writing a manifest:
+
+```sh
+once native list
+once native show swift_package
+```
+
+For a repository with several package roots, select one workspace-relative root
+path:
+
+```sh
+once native show swift_package --path modules/service
+```
+
+Store the generated seed only when it should be reviewed in `once.toml`:
+
+```sh
+once native init swift_package
+```
+
+The imported seed is equivalent to:
+
+```toml
+[[target]]
+name = "swift_package"
+kind = "swift_package_workspace"
+srcs = ["Package.swift"]
+
+[target.attrs]
+resolver_inputs = [
+  "Package.swift",
+  "Package.resolved",
+  "Sources/**/*",
+  "Tests/**/*",
+  "Plugins/**/*",
+  "Macros/**/*",
+  "**/Package.swift",
+  "**/Package.resolved",
+]
+```
+
+Use [`swift_package_dependencies`](/reference/prelude/swift_package_dependencies)
+when an explicit Apple target needs selected static products from a locked
+package graph rather than native first-party package lowering.
+
+## Sources
+
+- [Swift Package Manager](https://www.swift.org/documentation/package-manager/)
+  defines package manifests, products, and target metadata.
+- [`dump-package` documentation](https://github.com/swiftlang/swift-package-manager/blob/main/Documentation/Usage.md)
+  describes the package metadata command used during graph loading.

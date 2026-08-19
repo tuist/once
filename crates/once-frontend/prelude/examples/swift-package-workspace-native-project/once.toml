@@ -1,0 +1,7 @@
+[[target]]
+name = "swift_package"
+kind = "swift_package_workspace"
+srcs = ["Package.swift", "Sources/**/*.swift", "Tests/**/*.swift"]
+
+[target.attrs]
+resolver_inputs = ["Package.swift", "Sources/**/*.swift", "Tests/**/*.swift"]
