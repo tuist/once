@@ -9,6 +9,7 @@ use once_core::{LintSeverity, NetworkPolicy, SandboxMode, WorkspacePath};
 mod auth;
 mod cache;
 mod edit;
+mod native;
 mod query;
 mod runtime;
 mod toolchain;
@@ -16,6 +17,7 @@ mod toolchain;
 pub use auth::AuthCmd;
 pub use cache::{CacheActionCmd, CacheBlobCmd, CacheCmd};
 pub use edit::EditCmd;
+pub use native::NativeCmd;
 pub use query::QueryCmd;
 pub use runtime::RuntimeCmd;
 pub use toolchain::ToolchainCmd;
@@ -478,6 +480,13 @@ pub enum Cmd {
         cmd: Option<EditCmd>,
     },
 
+    /// Discover, inspect, and initialize native workspace roots.
+    #[command(arg_required_else_help = true)]
+    Native {
+        #[command(subcommand)]
+        cmd: Option<NativeCmd>,
+    },
+
     /// Expose Once's graph and memory queries to a coding agent.
     ///
     /// Speaks the Model Context Protocol over standard input and output so a
@@ -560,6 +569,13 @@ impl Cmd {
             }
             Self::Edit { cmd } => {
                 let mut path = vec!["edit"];
+                if let Some(cmd) = cmd {
+                    path.extend(cmd.surface_path());
+                }
+                path
+            }
+            Self::Native { cmd } => {
+                let mut path = vec!["native"];
                 if let Some(cmd) = cmd {
                     path.extend(cmd.surface_path());
                 }

@@ -1,4 +1,4 @@
-# Xcode native project reader.
+# Xcode native integration reader.
 #
 # The `xcode_workspace` target kind is a graph resolver: it reads an Xcode
 # project (`project.pbxproj`), flattens its layered build settings (project,
@@ -1731,7 +1731,7 @@ def _xcode_package_condition_allows(condition, platform):
     wanted = "macos" if platform == "macosx" else platform
     return wanted.lower() in [name.lower() for name in names]
 
-def _xcode_swift_package_dependencies(target, identity, target_ids, product_ids, platform):
+def _xcode_swift_package_dependencies(target, identity, target_ids, product_ids, platform, lazy_products = {}, lazy_dependency = ""):
     deps = []
     for dependency in target.get("dependencies") or []:
         for key in ["byName", "product", "target"]:
@@ -1751,6 +1751,8 @@ def _xcode_swift_package_dependencies(target, identity, target_ids, product_ids,
             dep_id = target_ids.get(package_identity + "\x1f" + name) or target_ids.get(package_identity.lower() + "\x1f" + name) or product_ids.get(package_identity + "\x1f" + name) or product_ids.get(package_identity.lower() + "\x1f" + name) or product_ids.get(name)
             if dep_id and dep_id not in deps:
                 deps.append("./" + dep_id)
+            elif lazy_dependency and lazy_products.get(package_identity.lower() + "\x1f" + name) and "./" + lazy_dependency not in deps:
+                deps.append("./" + lazy_dependency)
     return deps
 
 def _xcode_swift_imports(sources):
@@ -1832,7 +1834,7 @@ def _xcode_swift_package_target_flags(target, platform, default_language_mode):
         "language_mode": swift_language_mode,
     }
 
-def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant):
+def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant, lazy_products = {}, lazy_dependency = ""):
     # Lower source package targets as ordinary Apple libraries. Products merely
     # name one or more targets, so consumers depend on the product's primary
     # target while that target keeps its declared package dependencies.
@@ -1901,7 +1903,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
             uses_xctest = any(["import XCTest" in host_file_read(_xcode_abs(source)) for source in sources if source.endswith(".swift")])
             if target_type == "macro":
                 flags = _xcode_swift_package_target_flags(target, "macos", default_language_mode)
-                dependencies = _xcode_swift_package_dependencies(target, identity, host_target_ids, host_product_ids, "macos")
+                dependencies = _xcode_swift_package_dependencies(target, identity, host_target_ids, host_product_ids, "macos", lazy_products, lazy_dependency)
                 specs.append({
                     "name": target_id,
                     "kind": "swift_macro",
@@ -1941,7 +1943,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 resource_accessor = _xcode_swift_package_resource_accessor(package, target, variant_id, any([source.endswith(".swift") for source in sources]))
                 if resource_accessor:
                     prebuild_actions.append(resource_accessor)
-                dependencies = _xcode_swift_package_dependencies(target, identity, variant["target_ids"], variant["product_ids"], variant_platform)
+                dependencies = _xcode_swift_package_dependencies(target, identity, variant["target_ids"], variant["product_ids"], variant_platform, lazy_products, lazy_dependency)
                 resource_paths = _xcode_swift_package_resource_paths(package_path, target)
                 structured_resource_paths = _xcode_swift_package_structured_resource_paths(package_path, target)
                 resource_bundle_name = _xcode_swift_package_resource_bundle_name(package, target) if resource_paths else ""
@@ -3136,7 +3138,7 @@ def _xcode_workspace_impl(ctx):
     return {}
 
 # ---------------------------------------------------------------------------
-# Public target kind + native project
+# Public target kind + native integration
 # ---------------------------------------------------------------------------
 
 xcode_workspace = target_kind(
@@ -3146,7 +3148,7 @@ xcode_workspace = target_kind(
         attr("configuration", "string", default = "Debug", docs = "Xcode build configuration whose settings drive target lowering.", configurable = False),
         attr("sdk_variant", "string", default = "simulator", docs = "`simulator` or `device` SDK selection applied to lowered Apple targets on non-macOS platforms.", configurable = False),
         attr("xcode_developer_dir", "string", docs = "Optional `DEVELOPER_DIR` override folded into lowered Apple target cache keys.", configurable = False),
-        attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native project resolution. Defaults to srcs when empty.", configurable = False),
+        attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native integration resolution. Defaults to srcs when empty.", configurable = False),
     ],
     resolver = _xcode_workspace_resolver,
     deps = [dep("deps", ["apple_linkable", "apple_application", "apple_test_bundle", "native_linkable"], "Native Xcode targets lowered into Apple application, library, framework, and test targets.")],
@@ -3156,7 +3158,7 @@ xcode_workspace = target_kind(
     examples = [
         example(
             "xcode-workspace-native-project",
-            name = "Xcode native project seed",
+            name = "Xcode native integration seed",
             use_when = "Use this when an Xcode project should derive Apple application, framework, and test targets from project.pbxproj.",
             platforms = ["macos"],
         ),

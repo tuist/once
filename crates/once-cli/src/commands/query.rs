@@ -551,10 +551,10 @@ pub(crate) fn native_project_package(
     match packages.as_slice() {
         [package] => Ok(package.clone()),
         [] => anyhow::bail!(
-            "native project `{name}` does not match this workspace; inspect `once query native-projects`"
+            "native integration `{name}` does not match this workspace; inspect `once native list`"
         ),
         _ => anyhow::bail!(
-            "native project `{name}` has multiple matches; pass `--package` with one of: {}",
+            "native integration `{name}` has multiple matches; pass `--path` with one of: {}",
             packages
                 .iter()
                 .map(|package| if package.is_empty() {

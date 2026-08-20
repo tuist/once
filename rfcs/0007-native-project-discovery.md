@@ -12,7 +12,7 @@ resolver reads authoritative native metadata and emits the detailed Once
 targets. This keeps one graph expansion mechanism and keeps Rust independent
 of individual ecosystems.
 
-The discovered seed is ephemeral. `once edit init-native-project` can
+The discovered seed is ephemeral. `once native init` can
 materialize the same seed into `once.toml` when a repository wants to review
 and store that choice.
 
@@ -147,9 +147,9 @@ operations:
 
 | Command line | Model Context Protocol tool | Result |
 | --- | --- | --- |
-| `once query native-projects` | `once_list_native_projects` | List declarations and marker matches without running resolvers |
-| `once query native-project <name> [--package <path>]` | `once_preview_native_project` | Preview one exact seed and its expanded graph |
-| `once edit init-native-project <name> [--package <path>]` | `once_init_native_project` | Materialize one validated seed |
+| `once native list` | `once_native_list` | List declarations and marker matches without running resolvers |
+| `once native show <name> [--path <path>]` | `once_native_show` | Preview one exact seed and its expanded graph |
+| `once native init <name> [--path <path>]` | `once_native_init` | Materialize one validated seed |
 
 Initialization writes only the seed. Resolver-emitted dependency and product
 targets remain derived from native metadata.

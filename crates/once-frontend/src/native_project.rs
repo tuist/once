@@ -648,6 +648,39 @@ mod tests {
     }
 
     #[test]
+    fn built_in_native_projects_detect_swift_packages_without_execution() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::write(temporary.path().join("Package.swift"), "not Swift").unwrap();
+        std::fs::create_dir_all(temporary.path().join("Examples/Nested")).unwrap();
+        std::fs::write(
+            temporary.path().join("Examples/Nested/Package.swift"),
+            "not Swift",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temporary.path().join(".build/checkouts/Dependency")).unwrap();
+        std::fs::write(
+            temporary
+                .path()
+                .join(".build/checkouts/Dependency/Package.swift"),
+            "not Swift",
+        )
+        .unwrap();
+
+        let matches = detect_native_projects(temporary.path()).unwrap();
+
+        assert!(matches.iter().any(|matched| {
+            matched.native_project == "swift_package" && matched.package.is_empty()
+        }));
+        assert!(!matches.iter().any(|matched| {
+            matched.native_project == "swift_package" && matched.package == "Examples/Nested"
+        }));
+        assert!(!matches.iter().any(|matched| {
+            matched.native_project == "swift_package"
+                && matched.package == ".build/checkouts/Dependency"
+        }));
+    }
+
+    #[test]
     fn built_in_native_projects_detect_native_markers_without_execution() {
         let temporary = tempfile::tempdir().unwrap();
         std::fs::write(temporary.path().join("mix.exs"), "raise \"not executed\"\n").unwrap();

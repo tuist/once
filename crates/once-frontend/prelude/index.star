@@ -6,6 +6,7 @@ PRELUDE_SOURCES = [
     "go.star",
     "rust.star",
     "xcode.star",
+    "swift_package.star",
     "c.star",
     "cmake.star",
     "zig.star",
@@ -23,6 +24,7 @@ PRELUDE_SOURCES = [
 PRELUDE_DEPENDENCIES = {
     "react_native.star": ["android.star"],
     "xcode.star": ["apple.star"],
+    "swift_package.star": ["apple.star", "xcode.star"],
 }
 
 PRELUDE_TARGET_KINDS = {
@@ -55,6 +57,7 @@ PRELUDE_TARGET_KINDS = {
         "apple_test_bundle",
         "shellspec_test",
     ],
+    "swift_package.star": ["swift_package_workspace"],
     "go.star": [
         "go_dependencies",
         "go_module",

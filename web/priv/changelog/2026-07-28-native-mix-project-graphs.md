@@ -19,6 +19,6 @@ applications and nested Mix projects receive package-qualified targets, and
 structured diagnostics explain unsupported dependency build managers or
 missing materialized sources.
 
-Start by running `once query native-project mix`, inspect the derived targets
+Start by running `once native show mix`, inspect the derived targets
 with `once query targets`, then use `once build`, `once run`, and `once test`
 with the target identifiers Once reports.

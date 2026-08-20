@@ -38,7 +38,7 @@ project, so there is nothing to write. From the directory holding the
 `.xcodeproj`:
 
 ```sh
-once query native-projects
+once native list
 once query targets
 ```
 
@@ -49,7 +49,7 @@ immediately, with no `once.toml` in the repository.
 Persist the seed only when you want it under version control:
 
 ```sh
-once edit init-native-project xcode
+once native init xcode
 ```
 
 That writes the seed target and nothing else. The `.xcodeproj` stays

@@ -24,7 +24,7 @@ disk is skipped instead of failing the graph.
 
 A project checked in beside the workspace root is also a recognized native
 project named `xcode`, so its seed is supplied without any `once.toml`. Use
-`once edit init-native-project xcode` to persist the seed, or declare the
+`once native init xcode` to persist the seed, or declare the
 target explicitly when the project lives in a subdirectory.
 
 See [Xcode Projects](/guide/graph/apple/xcode) for a walkthrough.

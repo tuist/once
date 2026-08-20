@@ -207,6 +207,114 @@ fn cargo_native_project_loads_without_a_once_manifest() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn swift_package_native_project_loads_without_a_once_manifest() {
+    let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
+    let schema = schemas
+        .iter()
+        .find(|schema| schema.kind == "swift_package_workspace")
+        .expect("swift_package_workspace schema");
+    let bundle = load_target_kind_example(schema, "swift-package-workspace-native-project")
+        .expect("Swift Package Manager native project example materializes");
+    let tmp = TempDir::new().expect("tempdir");
+    materialize(tmp.path(), &bundle);
+    fs::remove_file(tmp.path().join("once.toml")).expect("remove explicit Once manifest");
+
+    let graph = once_frontend::load_graph_workspace(tmp.path())
+        .expect("Swift Package Manager native project graph loads without once.toml");
+    assert!(
+        !tmp.path().join(".build").exists(),
+        "Swift package graph loading must not create Swift Package Manager build state"
+    );
+    let kinds_by_id = graph
+        .iter()
+        .map(|target| (target.label.id.as_str(), target.kind.as_str()))
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(
+        kinds_by_id.get("swift_package"),
+        Some(&"swift_package_workspace")
+    );
+    assert_eq!(
+        kinds_by_id.get("SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackage"),
+        Some(&"apple_library")
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn swift_package_native_project_defers_remote_packages_until_build() {
+    let tmp = TempDir::new().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("Sources/App")).expect("source directory");
+    fs::write(
+        tmp.path().join("Package.swift"),
+        r#"// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "LazyRemote",
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
+    ],
+    targets: [
+        .target(name: "App", dependencies: [
+            .product(name: "ArgumentParser", package: "swift-argument-parser"),
+        ]),
+    ]
+)
+"#,
+    )
+    .expect("package manifest");
+    fs::write(
+        tmp.path().join("Package.resolved"),
+        r#"{
+  "version": 3,
+  "pins": [
+    {
+      "identity": "swift-argument-parser",
+      "kind": "remoteSourceControl",
+      "location": "https://github.com/apple/swift-argument-parser.git",
+      "state": {
+        "revision": "d3f6f4d8adfda4094733522fe7d4d0df8d67dbe0",
+        "version": "1.5.0"
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("package lock");
+    fs::write(
+        tmp.path().join("Sources/App/App.swift"),
+        "import ArgumentParser\n",
+    )
+    .expect("source file");
+
+    let graph = once_frontend::load_graph_workspace(tmp.path())
+        .expect("native graph loads without fetching remote packages");
+    assert!(
+        !tmp.path().join(".build").exists(),
+        "graph loading must not fetch remote Swift packages"
+    );
+    let remote = graph
+        .iter()
+        .find(|target| target.label.id == "SwiftPackage_LazyRemote_RemoteDependencies")
+        .expect("lazy remote dependency target");
+    assert_eq!(remote.kind, "swift_package_dependencies");
+    assert_eq!(
+        remote.attrs.get("_lazy_resolution"),
+        Some(&AttrValue::Bool(true))
+    );
+    let app = graph
+        .iter()
+        .find(|target| target.label.id == "SwiftPackage_LazyRemote_App")
+        .expect("first-party app target");
+    assert!(app
+        .deps
+        .contains(&"SwiftPackage_LazyRemote_RemoteDependencies".to_string()));
+}
+
 #[cfg(unix)]
 #[test]
 fn mix_native_project_lints_in_the_development_environment() {

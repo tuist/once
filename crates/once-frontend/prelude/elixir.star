@@ -3246,7 +3246,7 @@ _MIX_RELEASE_ATTRS = [
 _MIX_WORKSPACE_ATTRS = [
     attr("manifest", "string", default = "mix.exs", docs = "Package-relative Mix project file adapted into Once targets.", configurable = False),
     attr("lockfile", "string", default = "mix.lock", docs = "Package-relative Mix lockfile used when the project declares external dependencies.", configurable = False),
-    attr("resolver_inputs", "list<string>", default = "[]", docs = "Project files supplied to native project resolution. Defaults to srcs when empty.", configurable = False),
+    attr("resolver_inputs", "list<string>", default = "[]", docs = "Project files supplied to native integration resolution. Defaults to srcs when empty.", configurable = False),
 ]
 
 _MIX_DEPENDENCIES_ATTRS = [
@@ -3290,14 +3290,14 @@ _MIX_PACKAGE_ATTRS = _ELIXIR_LIBRARY_ATTRS + [
 mix_workspace = target_kind(
     docs = "Derives first-class Once dependency, application, lint, test, and release targets from a native Mix project.",
     attrs = _MIX_WORKSPACE_ATTRS,
-    deps = [dep("deps", ["mix_project", "mix_workspace"], "Default development application or nested workspace emitted by native project discovery.")],
+    deps = [dep("deps", ["mix_project", "mix_workspace"], "Default development application or nested workspace emitted by native integration discovery.")],
     providers = ["mix_workspace"],
     capabilities = [capability("build", [])],
     tools = _ELIXIR_TOOLS,
     examples = [
         example(
             "mix-workspace-native-project",
-            name = "Mix native project seed",
+            name = "Mix native integration seed",
             use_when = "Use this when a Mix project should derive build, lint, test, and release targets from mix.exs.",
         ),
     ],
